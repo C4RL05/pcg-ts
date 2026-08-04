@@ -1,7 +1,7 @@
 import type { DataCollection } from "./data.js";
 
-/** What a pin carries; `any` is a wildcard compatible with either kind. */
-export type PinKind = "geometry" | "value" | "any";
+/** What a pin carries; `any` is a wildcard compatible with every other kind. */
+export type PinKind = "geometry" | "value" | "instances" | "any";
 
 /** One input or output pin of a node definition. */
 export interface PinDef {

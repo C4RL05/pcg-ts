@@ -56,7 +56,10 @@ export interface CookResult {
 
 function isDataItemValue(v: object): v is DataItem {
   const it = v as { kind?: unknown; rev?: unknown };
-  return (it.kind === "geometry" || it.kind === "value") && typeof it.rev === "number";
+  return (
+    (it.kind === "geometry" || it.kind === "value" || it.kind === "instances") &&
+    typeof it.rev === "number"
+  );
 }
 
 const ACCEPTED =
