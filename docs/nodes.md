@@ -1,0 +1,381 @@
+# Node reference
+
+Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
+
+23 node types, alphabetical:
+
+- [copyToPoints](#copytopoints) — Copies the source point cloud onto every target point (output count = source points * target points, grouped by target).
+- [dataInput](#datainput) — Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph.
+- [filterByAttribute](#filterbyattribute) — Keeps points whose named point attribute satisfies a comparison.
+- [filterByBounds](#filterbybounds) — Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bounds inclusive).
+- [filterByDensity](#filterbydensity) — Filters points by their `density` point attribute (f32, tuple 1).
+- [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible.
+- [mergePoints](#mergepoints) — Concatenates the points of every connected geometry, in connection order, into one point cloud.
+- [partitionByAttribute](#partitionbyattribute) — Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1).
+- [pointGrid](#pointgrid) — Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis.
+- [pointLine](#pointline) — Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start).
+- [pointScatterInBounds](#pointscatterinbounds) — Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax].
+- [projectToPlane](#projecttoplane) — Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero).
+- [promoteAttribute](#promoteattribute) — Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain.
+- [selfPrune](#selfprune) — Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win).
+- [setAttribute](#setattribute) — Creates or overwrites an attribute on the chosen domain and fills it from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise).
+- [setBounds](#setbounds) — Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing.
+- [spawnInstances](#spawninstances) — Spawner terminal: converts the input point cloud into render-agnostic instance batches.
+- [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
+- [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
+- [transferAttribute](#transferattribute) — Copies a point attribute from the `source` geometry onto the main input's points: each destination point takes the value of its nearest source point in 3D (positions read from P; distance ties resolve to the lowest source index).
+- [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
+- [valueConstant](#valueconstant) — Emits a single constant number as a value item, for feeding value pins or tagging pipelines with plain data.
+- [volumeSample](#volumesample) — Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell.
+
+## copyToPoints
+
+Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity.
+
+**Inputs:** `source` (geometry), `target` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:** *(none)*
+
+## dataInput
+
+Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph. Items hash by rev in memo keys, so caching stays correct as items are swapped.
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (any)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `items` | string | `""` |  |  |  | The DataItem array to emit, set programmatically via graph.setParam. The declared schema type is a placeholder (the registry has no item-list param type); the actual default is an empty list and the value is not JSON-serializable. |
+
+## filterByAttribute
+
+Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `attribute` | string | `"density"` |  |  |  | Name of the point attribute to test. Must exist with tuple size 1. |
+| `comparison` | enum | `"ge"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | Comparison operator: eq (equal), ne (not equal), lt (<), le (<=), gt (>), ge (>=). String attributes allow only eq and ne. |
+| `value` | f32 | `0` |  |  |  | Right-hand side for numeric attributes. Ignored for string attributes. |
+| `stringValue` | string | `""` |  |  |  | Right-hand side for string attributes. Ignored for numeric attributes. |
+
+## filterByBounds
+
+Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bounds inclusive). mode 'inside' keeps points within the box, 'outside' keeps the rest. Output is a point cloud of the survivors with all attributes carried.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner of the box, in world units. |
+| `boundsMax` | vec3 | `[1,1,1]` |  |  |  | Maximum corner of the box, in world units. |
+| `mode` | enum | `"inside"` |  | `inside`, `outside` |  | 'inside' keeps points within the box (inclusive); 'outside' keeps points beyond it. |
+
+## filterByDensity
+
+Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). Output is a point cloud of the survivors with all attributes carried.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `mode` | enum | `"threshold"` |  | `threshold`, `probabilistic` |  | 'threshold' keeps density >= threshold; 'probabilistic' keeps each point with probability equal to its density. |
+| `threshold` | f32 | `0.5` |  |  |  | Minimum density a point needs to survive in 'threshold' mode. Ignored in 'probabilistic' mode. |
+| `seed` | u32 | `0` |  |  |  | Extra seed for 'probabilistic' mode; change it to re-roll which points survive. |
+
+## jitterPoints
+
+Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible. amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `amount` | vec3 | `[0.1,0.1,0.1]` |  |  | yes | Maximum offset per axis, in world units. Field-capable (tuple 1 broadcasts). |
+| `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the jitter. |
+
+## mergePoints
+
+Concatenates the points of every connected geometry, in connection order, into one point cloud. The output carries the union of all point attributes: an attribute missing on an input fills with its default over that input's range. Attributes sharing a name must agree on type and tuple size. Topology (vertices/primitives) is not carried — the result is points only. Output tags are the union of input tags.
+
+**Inputs:** `in` (geometry, multi)
+
+**Outputs:** `out` (geometry)
+
+**Params:** *(none)*
+
+## partitionByAttribute
+
+Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1). The output collection holds the groups in order of each value's first occurrence; every group carries all point attributes and is tagged `<name>=<value>` (plus the input's tags) so downstream nodes can route by tag.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `name` | string | `"name"` |  |  |  | Point attribute to partition by. Must be i32, u32, or string with tuple size 1. |
+
+## pointGrid
+
+Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis. Point order is X fastest, then Y, then Z. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `countX` | i32 | `10` | >= 1 |  |  | Number of points along X. Minimum 1. |
+| `countY` | i32 | `1` | >= 1 |  |  | Number of points along Y. Minimum 1. |
+| `countZ` | i32 | `10` | >= 1 |  |  | Number of points along Z. Minimum 1. |
+| `spacing` | vec3 | `[1,1,1]` |  |  |  | Distance between neighboring points along each axis, in world units. |
+| `origin` | vec3 | `[0,0,0]` |  |  |  | World position of the first point (index 0,0,0). |
+
+## pointLine
+
+Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start). Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `count` | i32 | `10` | >= 1 |  |  | Number of points to place. Minimum 1. |
+| `start` | vec3 | `[0,0,0]` |  |  |  | World position of the first point. |
+| `end` | vec3 | `[10,0,0]` |  |  |  | World position of the last point. |
+
+## pointScatterInBounds
+
+Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax]. Each coordinate is an independent deterministic hash of (seed, point index, axis) — same seed always reproduces the same points, independent of evaluation order. Emits a standard point cloud.
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `count` | i32 | `100` | >= 0 |  |  | Number of points to scatter. Minimum 0. |
+| `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner of the box, in world units. |
+| `boundsMax` | vec3 | `[1,1,1]` |  |  |  | Maximum corner of the box, in world units. Should be >= boundsMin per component. |
+| `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the scatter. |
+
+## projectToPlane
+
+Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero). With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `origin` | vec3 | `[0,0,0]` |  |  |  | A point on the plane, in world units. |
+| `normal` | vec3 | `[0,1,0]` |  |  |  | Plane normal; any non-zero vector (normalized internally). |
+| `keepOffset` | bool | `false` |  |  |  | When true, store each point's signed pre-projection distance to the plane in a `planeOffset` point attribute (f32). |
+
+## promoteAttribute
+
+Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain. Modes: 'first' keeps the first contribution in scan order (the only mode valid for string attributes); 'average', 'sum', 'min', 'max' aggregate all contributions. 'detail' broadcasts (from) or reduces over everything (to). Elements with no contributors keep the attribute default.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `name` | string | `"density"` |  |  |  | Name of the attribute to promote. Must exist on the `from` domain. |
+| `from` | enum | `"point"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain the attribute currently lives on. |
+| `to` | enum | `"primitive"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain to create the attribute on. |
+| `mode` | enum | `"average"` |  | `first`, `average`, `sum`, `min`, `max` |  | How multiple contributions collapse: first (scan order), average, sum, min, or max. String attributes support only 'first'. |
+
+## selfPrune
+
+Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win). Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `minDistance` | f32 | `1` | >= 0 |  |  | Minimum allowed distance between any two kept points, in world units. 0 keeps every point. |
+
+## setAttribute
+
+Creates or overwrites an attribute on the chosen domain and fills it from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise). The evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly. Values store with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. String attributes cannot be written this way.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `name` | string | `"value"` |  |  |  | Attribute name to create or overwrite (an existing attribute of any shape is replaced). |
+| `domain` | enum | `"point"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain the attribute lives on: point, vertex, primitive, or detail (one element). |
+| `type` | enum | `"f32"` |  | `f32`, `i32`, `u32`, `bool` |  | Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1). |
+| `tupleSize` | i32 | `1` | 1..4 |  |  | Components per element (1 = scalar, 3 = vector, 4 = color/quaternion). Range 1..4. |
+| `value` | f32 | `0` |  |  | yes | Value written to every element. Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. |
+
+## setBounds
+
+Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing. Downstream nodes and spawners read these as each point's axis-aligned extent.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner written to every point's boundsMin, in world units. |
+| `boundsMax` | vec3 | `[1,1,1]` |  |  |  | Maximum corner written to every point's boundsMax, in world units. |
+
+## spawnInstances
+
+Spawner terminal: converts the input point cloud into render-agnostic instance batches. Each point becomes one instance with world matrix T(P) * R(rot) * S(scale) (column-major 4x4, THREE.Matrix4.elements layout; missing rot/scale attributes are identity). Points are grouped into one batch per asset id, in first-occurrence order: assetAttr (when non-empty) names a string point attribute holding per-point asset ids — empty per-point values fall back to assetId. The 'instances' pin emits one instances item (input tags carried over); 'points' passes the input geometry through unchanged for chaining or debug rendering.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `instances` (instances), `points` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `assetId` | string | `"asset"` |  |  |  | Asset id stamped on every instance not overridden per point via assetAttr. The renderer resolves it to an actual renderable (e.g. the three adapter's asset map). |
+| `assetAttr` | string | `""` |  |  |  | Optional name of a string point attribute holding per-point asset ids; empty string disables the override. Points whose attribute value is empty use assetId instead. Errors when the named attribute is missing or not a string attribute. |
+
+## splineSample
+
+Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1].
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `mode` | enum | `"count"` |  | `count`, `spacing` |  | How samples are placed: 'count' distributes exactly `count` samples over the total arc length; 'spacing' steps every `spacing` units. |
+| `count` | i32 | `10` | >= 1 |  |  | Number of samples when mode is 'count'. Minimum 1. Ignored in 'spacing' mode. |
+| `spacing` | f32 | `1` | >= 0 |  |  | Distance between samples in world units when mode is 'spacing'. Must be > 0 in that mode. Ignored in 'count' mode. |
+
+## surfaceSample
+
+Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement). densityField (0..1) is then evaluated once over the candidate cloud and each candidate is accepted when a per-candidate hashed random < density — so the output count is at most `count` and exactly `count` when density is 1. Output points carry P, a flat per-triangle `normal` (f32 tuple 3), density 1, and a hashed per-point seed.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `count` | i32 | `100` | >= 0 |  |  | Number of candidate samples to place before density acceptance. Minimum 0. |
+| `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the sampling. |
+| `densityField` | f32 | `1` | 0..1 |  | yes | Acceptance probability in [0, 1] per candidate, evaluated on the candidate points after placement (so it can read P or noise). 1 keeps every candidate; 0 keeps none. |
+
+## transferAttribute
+
+Copies a point attribute from the `source` geometry onto the main input's points: each destination point takes the value of its nearest source point in 3D (positions read from P; distance ties resolve to the lowest source index). Creates or overwrites the attribute on the output. Accelerated with a uniform grid, so large clouds are fine.
+
+**Inputs:** `in` (geometry), `source` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `name` | string | `"density"` |  |  |  | Name of the point attribute to transfer. Must exist on the source's point domain. |
+
+## transformPoints
+
+Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX'). Composes with existing point transform attributes when present: rot becomes R * rot (quaternion product) and scale multiplies componentwise. All three params are field-capable and resolve per point on the input positions.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `translate` | vec3 | `[0,0,0]` |  |  | yes | Translation added after rotation and scale, in world units. Field-capable (tuple 1 broadcasts). |
+| `rotateEuler` | vec3 | `[0,0,0]` |  |  | yes | Rotation about the world origin in degrees per axis, applied extrinsically in XYZ order: world X first, then world Y, then world Z (equivalent to intrinsic ZYX; three.js Euler order 'ZYX'). Field-capable (tuple 1 broadcasts). |
+| `scale` | vec3 | `[1,1,1]` |  |  | yes | Componentwise scale about the world origin, applied before rotation. Field-capable (tuple 1 broadcasts). |
+
+## valueConstant
+
+Emits a single constant number as a value item, for feeding value pins or tagging pipelines with plain data.
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (value)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `value` | f32 | `0` |  |  |  | The number to emit. |
+
+## volumeSample
+
+Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell. jitter in [0, 1] scales a deterministic per-cell random offset (0 = exact centers, 1 = anywhere in the cell) and may be a field evaluated on the un-jittered centers. Bounds come from the optional input geometry's P extents when connected, else from boundsMin/boundsMax. Emits a standard point cloud.
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner of the box, in world units. Ignored when a geometry is connected. |
+| `boundsMax` | vec3 | `[1,1,1]` |  |  |  | Maximum corner of the box, in world units. Ignored when a geometry is connected. |
+| `cellSize` | f32 | `1` |  |  |  | Grid cell edge length in world units. Must be > 0. |
+| `jitter` | f32 | `0` | 0..1 |  | yes | Per-cell jitter amount in [0, 1]: fraction of the cell size each point may move from its cell center, per axis. Field-capable (evaluated on the grid centers). |
+| `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the jitter. |

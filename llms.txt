@@ -1,0 +1,206 @@
+# pcg-ts — agent guide
+
+pcg-ts is a deterministic procedural content generation library for
+TypeScript (browser + Node, ESM, package `pcg-ts`, optional three.js
+adapter `pcg-ts/three`). It combines a domain-based attribute data model
+(SoA typed arrays), deferred field expressions, a memoizing node-graph
+executor, and a hierarchical streaming runtime. It is designed to be
+driven programmatically: node capabilities are enumerable at runtime
+(`listNodeTypes()`), graphs round-trip through versioned JSON
+(`serializeGraph`/`deserializeGraph`), and all errors are actionable.
+
+## Core mental model
+
+- Data flows through graphs as collections of items: geometry items,
+  value items (plain numbers/strings/bools), instances items (transform
+  batches for renderers). Items carry tags and a revision id (`rev`).
+- A `Geometry` holds four attribute domains: point, vertex, primitive,
+  detail (always 1 element), plus topology (vertex->point map, primitive
+  vertex ranges). Point-only clouds are the common fast path.
+- Attributes are named typed-array columns (f32/i32/u32/bool/string)
+  with a tuple size. Standard point attributes: P (f32x3), rot (quat
+  f32x4, xyzw), scale (f32x3), density (f32), boundsMin/boundsMax
+  (f32x3), color (f32x4), seed (u32).
+- A `Field` is a deferred computation resolved per element of a domain.
+  Field-capable node params accept a constant OR a field expression;
+  scalars broadcast against tuples.
+- Cooking pulls from declared graph outputs, topologically, memoizing
+  each node on (type, param hash, node seed, input item revs).
+
+## Authoring a graph as JSON
+
+Format (`SerializedGraph`, formatVersion 1 — field names exactly):
+
+- `formatVersion`: 1
+- `seed`: number (graph seed; node seeds derive from it)
+- `nodes`: [{ `id`: string, `type`: registered type name, `params`: object }]
+  Omitted params take their schema defaults. Field-capable params accept
+  a field spec object (below) instead of a constant.
+- `connections`: [{ `from`: [nodeId, outputPin], `to`: [nodeId, inputPin] }]
+- `outputs`: [{ `id`: nodeId, `pin`: outputPin, `name`: result key }]
+
+Complete minimal example (deserializes and cooks as-is):
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 42,
+  "nodes": [
+    { "id": "scatter", "type": "pointScatterInBounds",
+      "params": { "count": 500, "boundsMin": [0, 0, 0], "boundsMax": [50, 0, 50] } },
+    { "id": "jitter", "type": "jitterPoints",
+      "params": { "amount": { "fn": "fbm", "base": "perlinNoise", "opts": { "frequency": 0.05 } } } }
+  ],
+  "connections": [ { "from": ["scatter", "out"], "to": ["jitter", "in"] } ],
+  "outputs": [ { "id": "jitter", "pin": "out", "name": "points" } ]
+}
+```
+
+```ts
+import { deserializeGraph, serializeGraph, cook, firstGeometry } from "pcg-ts";
+const graph = deserializeGraph(json);      // validates everything, names faults
+const result = await cook(graph);          // { outputs, stats }
+const geo = firstGeometry(result.outputs.points);
+serializeGraph(graph);                     // lossless round-trip back to JSON
+```
+
+## Authoring a graph in code
+
+```ts
+import { Graph, cook, pointScatterInBounds, jitterPoints } from "pcg-ts";
+const g = new Graph(42);
+const a = g.add(pointScatterInBounds, { count: 500 });
+const b = g.add(jitterPoints, { amount: [0.5, 0, 0.5] });
+g.connect(a, "out", b, "in");
+g.output(b, "out", "points");
+const { outputs, stats } = await cook(g); // stats: { cooked, cached, elapsedMs }
+```
+
+## Field-expression JSON grammar
+
+A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
+may be nested specs, finite numbers, or number arrays (plain values wrap
+into `constant`). All 33 fns (`listFieldFns()`):
+
+- Inputs:
+  - `{ fn: "constant", value: 1 | [1, 2, 3] }`
+  - `{ fn: "attribute", name: "density", tupleSize?: 1 }` (numeric attrs only)
+  - `{ fn: "position" }` — reads P (tuple 3); `{ fn: "index" }` — 0,1,2,...
+  - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
+- Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
+  - 2 args: `add sub mul div min max lt le gt ge eq dot`
+    (comparisons emit 1/0; `dot` reduces tuples to a scalar)
+  - 1 arg: `abs floor length normalize`
+  - 3 args: `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b)
+  - 5 args: `remap` (x, inMin, inMax, outMin, outMax; unclamped)
+- Structure:
+  - `{ fn: "vec", args: [x, y, z] }` — 1+ args, concatenates components
+  - `{ fn: "component", args: [tupleField], index: 0 }` — extract one component
+  - `{ fn: "ramp", args: [scalarField], stops: [[0, 0], [1, 1]] }` —
+    piecewise-linear through [position, value] stops, strictly ascending,
+    clamped at the ends
+- Noise (scalar fields of the sample position; pure function of seed +
+  position — the context seed does not affect them):
+  - `{ fn: "valueNoise" | "perlinNoise" | "simplexNoise", opts?: {
+      seed?: int, frequency?: number, offset?: [x, y, z], position?: spec } }`
+    valueNoise in [0,1); perlin/simplex approx [-1,1]
+  - `{ fn: "worleyNoise", opts?: { ...same, output?: "f1" | "f2" | "f2-f1" } }`
+    (distance to nearest/2nd-nearest feature point; f1 in [0, ~1.73))
+  - `{ fn: "fbm", base: "perlinNoise" | "valueNoise" | "simplexNoise" | "worleyNoise",
+      opts?: { ...same, octaves?: 4, lacunarity?: 2, gain?: 0.5 } }`
+    (sum not renormalized: range grows toward base * (1-gain^octaves)/(1-gain))
+
+Nested example — density in [0,1] from remapped 4-octave noise:
+
+```json
+{ "fn": "clamp", "args": [
+    { "fn": "remap", "args": [
+        { "fn": "fbm", "base": "perlinNoise", "opts": { "frequency": 0.03, "octaves": 4 } },
+        -1, 1, 0, 1 ] },
+    0, 1 ] }
+```
+
+In code, only fields built by `fieldFromJson(spec)` serialize back via
+`fieldToJson`; hand-composed combinator fields cook fine but cannot be
+serialized.
+
+## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
+
+- copyToPoints — copy a source cloud onto every target point, composing transforms and seeds
+- dataInput — emit externally injected DataItems (`items` set via graph.setParam; not JSON-serializable)
+- filterByAttribute — keep points where a scalar/string attribute passes a comparison
+- filterByBounds — keep points inside/outside an axis-aligned box
+- filterByDensity — keep points by `density` (threshold or probabilistic)
+- jitterPoints — deterministic random offset per point (field-capable amount)
+- mergePoints — concatenate point clouds (multi input), union of attributes
+- partitionByAttribute — split into per-value point clouds, tagged `name=value`
+- pointGrid — regular grid of points
+- pointLine — evenly spaced points on a segment
+- pointScatterInBounds — uniform random points in a box
+- projectToPlane — orthogonal projection of points onto a plane
+- promoteAttribute — move an attribute between domains (first/average/sum/min/max)
+- selfPrune — greedy minimum-distance thinning (lowest index wins)
+- setAttribute — create/overwrite an attribute from a field-capable value
+- setBounds — stamp boundsMin/boundsMax on every point
+- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms)
+- splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
+- surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
+- transferAttribute — copy a point attribute from the nearest source points
+- transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)
+- valueConstant — emit a constant number as a value item
+- volumeSample — jittered grid fill of a box or of the input geometry's bounds
+
+## Key invariants and contracts
+
+- Determinism: all randomness derives from seeds via PCG32 + 32-bit hash
+  combining. Same graph + seed = byte-identical output across runs,
+  platforms, cook orders, and streaming paths. Seed chain: graph seed ->
+  node seed = hashCombine(graphSeed, hashString(nodeId)) -> per-point
+  hashCombine(seed, index, axis). No Math.random anywhere.
+- Purity: node execute treats inputs as immutable and uses only its
+  derived seed. The executor memoizes on exactly (type, params, seed,
+  input revs); params hash structurally (Fields by their stable key,
+  DataItems by rev — geometry is never deep-hashed).
+- Cook results are immutable: `CookResult` collections alias live cache
+  internals. Clone with `cloneGeometry(geo)` before mutating. Arrays
+  bound into params (e.g. dataInput `items`) are captured by reference —
+  treat as frozen after binding; bind a fresh array to change data.
+- Column lifetime: an evaluated field Column may alias attribute storage
+  and is valid only until the geometry is mutated or resized; results
+  memoize per EvalContext object, so make a fresh context after mutation.
+- Cache invalidation is automatic via memo keys (param edits, seed
+  changes, input rev changes, subgraph inner-graph edits). Cancelling a
+  cook (AbortSignal -> CookCancelledError) keeps finished nodes' caches.
+
+## World streaming (hierarchical runtime)
+
+`new World({ seed, levels, maxCellsPerLevel?, onCellReady?, onCellEvicted? })`
+streams square XZ-plane cells per level around a viewpoint. Levels are
+ordered coarse to fine (optionally one leading "unbounded" level); each
+has `{ name, cellSize, generationRadius, retainRadius?, graph, bind }`.
+Before each cell cook, `bind(graph, ctx)` wires the `CellContext` into
+the graph — the only channel for cell data. Contract: derive params only
+from ctx (`coord`, `min`/`max`, `seed`, `parent`), and wire `ctx.seed`
+(= hashCombine(worldSeed, levelIndex, cx, cz)) into every stochastic
+node. Parent-cell outputs arrive as `ctx.parent.outputs`; inject them
+via a dataInput node. `await world.update([x, y, z], { budgetMs?,
+signal?, maxCooksPerUpdate? })` cooks nearest-first, evicts by
+retainRadius + LRU, and reports { cooked, evicted, pending }.
+`world.invalidate(level?, coord?)` forces recooks; parent recooks
+cascade staleness to children automatically.
+
+## Errors
+
+Read error messages: they name the offending node id, pin, or param and
+list the valid alternatives (e.g. unknown node type errors list all
+registered types; unknown field fn errors list all fns; pin errors list
+valid pins). Typed classes: GraphValidationError, GraphCycleError,
+NodeExecutionError (has .nodeId), CookCancelledError,
+GraphSerializationError, FieldJsonError, WorldValidationError.
+
+## Pointers
+
+- README.md — human tour with runnable examples
+- docs/nodes.md — full generated node reference (pins, params, defaults, ranges)
+- docs/nodes.json — the same registry metadata, machine-readable
+- docs/authoring.md — graph JSON spec, complete field grammar, recipes
