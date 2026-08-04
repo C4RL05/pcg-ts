@@ -1,0 +1,23 @@
+{
+  "project": "pcg-ts",
+  "updated": "2026-08-04",
+  "currentPhase": 1,
+  "phases": [
+    { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
+    { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
+    { "id": 1, "title": "Core data model — attributes, domains, promote/transfer", "state": "active" },
+    { "id": 2, "title": "RNG, noise, fields", "state": "pending" },
+    { "id": 3, "title": "Graph runtime — nodes, scheduler, caching", "state": "pending" },
+    { "id": 4, "title": "Standard node library", "state": "pending" },
+    { "id": 5, "title": "Hierarchical runtime — grids, streaming", "state": "pending" },
+    { "id": 6, "title": "three.js interop + spawners", "state": "pending" },
+    { "id": 7, "title": "Examples, docs, v0.1.0", "state": "pending" }
+  ],
+  "tests": { "passed": 86, "failed": 0, "total": 86, "lastRun": "2026-08-04" },
+  "blockers": [],
+  "log": [
+    { "time": "2026-08-04", "message": "Phase 1 implementation landed: SoA attribute storage over four domains, geometry/topology builders, point cloud with standard attributes, promote across all domain pairs, nearest-point transfer via grid hash. 86 tests green. Independent verification pending." },
+    { "time": "2026-08-04", "message": "Phase 0 complete: npm project scaffolded (typescript 6, vitest 4, tsup 8, vite 8, three 0.185 as optional peer). Build, typecheck, empty test run and status generator all verified. TS pinned to 6.x: tsup's dts bundler is incompatible with TS 7." },
+    { "time": "2026-08-04", "message": "Project planned: design pillars fixed (domain attribute data model, hierarchical real-time runtime, deferred fields). CLAUDE.md and PLAN.md written." }
+  ]
+}
