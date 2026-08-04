@@ -30,7 +30,7 @@ export interface TransformPointsParams {
 export const transformPoints = standardNode<TransformPointsParams>({
   type: "transformPoints",
   description:
-    "Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, intrinsic XYZ order — X applied first). Composes with existing point transform attributes when present: rot becomes R * rot (quaternion product) and scale multiplies componentwise. All three params are field-capable and resolve per point on the input positions.",
+    "Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX'). Composes with existing point transform attributes when present: rot becomes R * rot (quaternion product) and scale multiplies componentwise. All three params are field-capable and resolve per point on the input positions.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -45,7 +45,7 @@ export const transformPoints = standardNode<TransformPointsParams>({
       default: [0, 0, 0],
       acceptsField: true,
       description:
-        "Rotation about the world origin in degrees per axis, applied in XYZ order (X first). Field-capable (tuple 1 broadcasts).",
+        "Rotation about the world origin in degrees per axis, applied extrinsically in XYZ order: world X first, then world Y, then world Z (equivalent to intrinsic ZYX; three.js Euler order 'ZYX'). Field-capable (tuple 1 broadcasts).",
     },
     scale: {
       type: "vec3",

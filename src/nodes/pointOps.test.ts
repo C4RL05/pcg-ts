@@ -4,6 +4,7 @@ import { position, vec, component, constant } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import {
   copyToPoints,
+  getNodeType,
   jitterPoints,
   mergePoints,
   pointGrid,
@@ -84,6 +85,15 @@ describe("transformPoints", () => {
       [1, 1, 0],
       [2, 2, 0],
     ]);
+  });
+
+  it("documents rotateEuler as extrinsic XYZ (intrinsic ZYX / three.js 'ZYX')", () => {
+    // The math builds R = Rz * Ry * Rx — extrinsic XYZ. The metadata must
+    // say so precisely; the three.js interop phase depends on it.
+    const info = getNodeType("transformPoints").info;
+    expect(info.params.rotateEuler.description).toMatch(/extrinsic/);
+    expect(info.params.rotateEuler.description).toMatch(/ZYX/);
+    expect(info.description).toMatch(/extrinsic XYZ/);
   });
 
   it("does not mutate its input (purity)", async () => {

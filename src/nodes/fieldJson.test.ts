@@ -99,6 +99,28 @@ describe("fieldFromJson", () => {
     );
   });
 
+  it("rejects cyclic specs with an actionable FieldJsonError", () => {
+    const s: Record<string, unknown> = { fn: "abs" };
+    s.args = [s];
+    expect(() => fieldFromJson(s as unknown as FieldSpec)).toThrow(FieldJsonError);
+    expect(() => fieldFromJson(s as unknown as FieldSpec)).toThrow(/cyclic field spec/);
+    // Indirect (two-object) cycle.
+    const a: Record<string, unknown> = { fn: "abs" };
+    const b: Record<string, unknown> = { fn: "abs", args: [a] };
+    a.args = [b];
+    expect(() => fieldFromJson(a as unknown as FieldSpec)).toThrow(/cyclic field spec/);
+    // Diamond sharing (same object twice as siblings) is NOT a cycle.
+    const leaf: FieldSpec = { fn: "index" };
+    expect(() => fieldFromJson({ fn: "add", args: [leaf, leaf] })).not.toThrow();
+  });
+
+  it("rejects nesting past the depth cap with an actionable error", () => {
+    let spec: FieldSpec = { fn: "index" };
+    for (let i = 0; i < 400; i++) spec = { fn: "abs", args: [spec] };
+    expect(() => fieldFromJson(spec)).toThrow(FieldJsonError);
+    expect(() => fieldFromJson(spec)).toThrow(/deeper than 256 levels/);
+  });
+
   it("rejects a bad fbm base, listing valid bases", () => {
     expect(() => fieldFromJson({ fn: "fbm", base: "linen" })).toThrow(
       /fbm base must be one of: valueNoise, perlinNoise, simplexNoise, worleyNoise/,

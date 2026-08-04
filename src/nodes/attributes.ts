@@ -78,13 +78,22 @@ export const setAttribute = standardNode<SetAttributeParams>({
       );
     }
     const set = geo.attrs[domain];
+    // The evaluated column may be a zero-copy view of the very attribute
+    // being replaced (e.g. value = attribute(name), or position() writing
+    // onto "P"): replace() reuses matching storage and resets it to
+    // defaults, which would clobber the column before it is read.
+    // Snapshot the column when its buffer aliases the target attribute
+    // (same hazard transferNearest guards against in src/data).
+    const existing = set.get(params.name);
+    const colData =
+      existing && existing.data.buffer === col.data.buffer ? col.data.slice() : col.data;
     const attr = set.replace(params.name, type, ts);
     const data = attr.data;
     const n = set.count;
     const isBool = type === "bool";
     for (let i = 0; i < n; i++) {
       for (let k = 0; k < ts; k++) {
-        const v = col.tupleSize === 1 ? col.data[i] : col.data[i * ts + k];
+        const v = col.tupleSize === 1 ? colData[i] : colData[i * ts + k];
         data[i * ts + k] = isBool ? (v !== 0 ? 1 : 0) : v;
       }
     }

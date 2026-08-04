@@ -82,6 +82,53 @@ describe("setAttribute", () => {
     expect(detail.attrs.detail.require("globalScale").get(0)).toBeCloseTo(2.5, 6);
   });
 
+  it("self-copy via attribute(name) preserves values (aliasing regression)", async () => {
+    // value = attribute("density") returns a zero-copy view of the very
+    // storage replace() resets; without the aliasing snapshot this reads
+    // back defaults instead of the original values.
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    const density = cloud.attrs.point.require("density");
+    density.set(0, 0.25);
+    density.set(1, 0.5);
+    density.set(2, 0.75);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "density", value: fieldFromJson({ fn: "attribute", name: "density" }) },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const out = geo.attrs.point.require("density");
+    expect([out.get(0), out.get(1), out.get(2)]).toEqual([0.25, 0.5, 0.75]);
+  });
+
+  it("writing P from position() preserves positions (aliasing regression)", async () => {
+    const cloud = cloudAt([
+      [1, 2, 3],
+      [4, 5, 6],
+    ]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "P", tupleSize: 3, value: fieldFromJson({ fn: "position" }) },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const P = geo.attrs.point.require("P");
+    expect([P.getTuple(0), P.getTuple(1)]).toEqual([
+      [1, 2, 3],
+      [4, 5, 6],
+    ]);
+  });
+
   it("rejects tuple mismatches actionably", async () => {
     const cloud = cloudAt([[0, 0, 0]]);
     await expect(

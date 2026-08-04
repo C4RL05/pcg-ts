@@ -151,17 +151,34 @@ function requireArgs(spec: Record<string, unknown>, path: string, arity: number 
   return args;
 }
 
+/** Nesting cap for field specs; deeper trees are almost certainly a bug. */
+const MAX_SPEC_DEPTH = 256;
+
+/** Spec objects currently being built, for cycle detection (see buildSpec). */
+const inProgress = new Set<object>();
+
 function buildSpec(spec: Record<string, unknown>, path: string): Field {
-  const fn = spec.fn;
-  if (typeof fn !== "string") {
-    fail(path, `spec must have a string "fn" key; valid fns: ${listFieldFns().join(", ")}`);
+  if (inProgress.has(spec)) {
+    fail(path, "cyclic field spec: this spec object contains itself (directly or through its args)");
   }
-  const def = FNS.get(fn);
-  if (!def) {
-    fail(path, `unknown field fn "${fn}"; valid fns: ${listFieldFns().join(", ")}`);
+  if (inProgress.size >= MAX_SPEC_DEPTH) {
+    fail(path, `field spec nesting deeper than ${MAX_SPEC_DEPTH} levels; flatten the expression`);
   }
-  checkKeys(spec, def, path);
-  return def.build(spec, path);
+  inProgress.add(spec);
+  try {
+    const fn = spec.fn;
+    if (typeof fn !== "string") {
+      fail(path, `spec must have a string "fn" key; valid fns: ${listFieldFns().join(", ")}`);
+    }
+    const def = FNS.get(fn);
+    if (!def) {
+      fail(path, `unknown field fn "${fn}"; valid fns: ${listFieldFns().join(", ")}`);
+    }
+    checkKeys(spec, def, path);
+    return def.build(spec, path);
+  } finally {
+    inProgress.delete(spec);
+  }
 }
 
 function register(name: string, keys: readonly string[], usage: string, build: FnDef["build"]): void {

@@ -131,6 +131,24 @@ describe("deserializeGraph round trip", () => {
     expect(snapshotGeometry(geoB)).toEqual(snapshotGeometry(geoA));
   });
 
+  it("canonicalizes scalar values on vec field-capable params and cooks identically", async () => {
+    // amount: 0.5 is runtime-legal on the vec3 param via tuple-1
+    // broadcast; serialization canonicalizes it to [0.5, 0.5, 0.5].
+    const g = new Graph(3);
+    const src = g.add(pointScatterInBounds, { count: 40 }, "src");
+    const jit = g.add(jitterPoints, { amount: 0.5 }, "jit");
+    g.connect(src, "out", jit, "in");
+    g.output(jit, "out", "result");
+    const json = serializeGraph(g);
+    expect(json.nodes[1].params.amount).toEqual([0.5, 0.5, 0.5]);
+    const rebuilt = deserializeGraph(JSON.parse(JSON.stringify(json)));
+    const a = await cook(g);
+    const b = await cook(rebuilt);
+    const geoA = firstGeo(a.outputs.result);
+    expect(geoA.pointCount).toBe(40);
+    expect(snapshotGeometry(firstGeo(b.outputs.result))).toEqual(snapshotGeometry(geoA));
+  });
+
   it("fills omitted params with schema defaults", async () => {
     const g = deserializeGraph({
       formatVersion: 1,
@@ -218,6 +236,21 @@ describe("deserializeGraph validation", () => {
         ],
       }),
     ).toThrow(/node "s" param "value".*unknown field fn "warble"/);
+  });
+
+  it("wraps cyclic field specs as GraphSerializationError", () => {
+    const cyclic: Record<string, unknown> = { fn: "abs" };
+    cyclic.args = [cyclic];
+    const build = () =>
+      deserializeGraph({
+        ...base,
+        nodes: [
+          { id: "a", type: "pointScatterInBounds", params: {} },
+          { id: "s", type: "setAttribute", params: { value: cyclic } },
+        ],
+      });
+    expect(build).toThrow(GraphSerializationError);
+    expect(build).toThrow(/node "s" param "value".*cyclic field spec/);
   });
 
   it("rejects duplicate node ids", () => {

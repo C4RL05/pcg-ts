@@ -115,8 +115,10 @@ export function quatMul(
 }
 
 /**
- * Quaternion for intrinsic XYZ Euler rotation in degrees: the resulting
- * rotation applies X first, then Y, then Z (`R = Rz · Ry · Rx`).
+ * Quaternion for extrinsic XYZ Euler rotation in degrees: rotates about
+ * the world X axis first, then world Y, then world Z (`R = Rz · Ry · Rx`).
+ * This is equivalent to intrinsic ZYX; in three.js terms, Euler order
+ * "ZYX".
  */
 export function quatFromEulerDeg(out: number[], rx: number, ry: number, rz: number): number[] {
   const hx = (rx * Math.PI) / 360;

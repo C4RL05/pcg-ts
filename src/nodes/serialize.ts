@@ -176,8 +176,21 @@ export function serializeGraph(graph: Graph): SerializedGraph {
           fail(`${where}: ${err instanceof Error ? err.message : String(err)}`);
         }
       } else {
-        checkParamValue(schema, value, where);
-        params[key] = Array.isArray(value) ? [...(value as number[])] : value;
+        // Field-capable vec params accept a runtime-legal scalar (tuple-1
+        // broadcast); canonicalize it to the vec arity so the serialized
+        // form always matches the schema. Broadcast semantics make the
+        // cooked output identical.
+        let plain = value;
+        if (
+          (schema.type === "vec3" || schema.type === "vec4") &&
+          schema.acceptsField === true &&
+          typeof plain === "number" &&
+          Number.isFinite(plain)
+        ) {
+          plain = new Array<number>(schema.type === "vec3" ? 3 : 4).fill(plain);
+        }
+        checkParamValue(schema, plain, where);
+        params[key] = Array.isArray(plain) ? [...(plain as number[])] : plain;
       }
     }
     nodes.push({ id: state.id, type, params });
