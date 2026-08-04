@@ -5,3 +5,4 @@ export * from "./random/index.js";
 export * from "./fields/index.js";
 export * from "./noise/index.js";
 export * from "./graph/index.js";
+export * from "./nodes/index.js";
