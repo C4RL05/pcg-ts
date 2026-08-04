@@ -13,9 +13,10 @@
     { "id": 6, "title": "three.js interop + spawners", "state": "pending" },
     { "id": 7, "title": "Examples, docs, v0.1.0", "state": "pending" }
   ],
-  "tests": { "passed": 240, "failed": 0, "total": 240, "lastRun": "2026-08-04 22:26" },
+  "tests": { "passed": 334, "failed": 0, "total": 334, "lastRun": "2026-08-04 22:55" },
   "blockers": [],
   "log": [
+    { "time": "2026-08-04 22:55", "message": "Phase 4 implementation landed: 21 registered node types (sources, samplers, point ops, filtering, attribute ops), machine-readable node registry, declarative field-expression JSON, versioned graph serialization with actionable validation. 94 new tests; 334 total green. Independent verification pending." },
     { "time": "2026-08-04 22:26", "message": "Phase 3 verified and hardened: subgraph edits now invalidate outer caches via graph versioning, param hashing is a strict allowlist with actionable errors, Fields are brand-checked, overlapping cooks serialize, 20k-node chains cook without stack overflow. 240 tests green. Phase 4 (standard node library, registry, JSON serialization) started." },
     { "time": "2026-08-04 22:13", "message": "Phase 2 verified and hardened: simplex kernel r^2=0.5 removes a measured cell-boundary discontinuity (goldens regenerated), field keys made injection-proof, range() ulp clamp, dot() static check, lifetime contracts documented. Phase 3 audit findings (subgraph cache staleness, param-hash blind spots, cook reentrancy) queued for fixes. 228 tests green." },
     { "time": "2026-08-04 21:58", "message": "Phase 3 implementation landed: code-first graph builder with typed pins and cycle detection, pull-based executor with revision-keyed memo cache, time-budgeted cancellable cooking, subgraphs. 49 new tests; 223 total green. Independent verification pending." },
