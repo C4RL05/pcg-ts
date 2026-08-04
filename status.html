@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:33%; }
+  .bar > div { height:100%; background:var(--done); width:44%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -46,14 +46,14 @@
 <body>
   <h1>pcg-ts</h1>
   <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-04 21:58</p>
-  <div class="bar"><div style="width:33%"></div></div>
+  <div class="bar"><div style="width:44%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
     <li class="done"><span class="chip">done</span>Planning — design, CLAUDE.md, PLAN.md</li>
     <li class="done"><span class="chip">done</span>0 · Scaffolding — tooling, configs, status generator</li>
     <li class="done"><span class="chip">done</span>1 · Core data model — attributes, domains, promote/transfer</li>
-    <li class="active"><span class="chip">active</span>2 · RNG, noise, fields</li>
+    <li class="done"><span class="chip">done</span>2 · RNG, noise, fields</li>
     <li class="active"><span class="chip">active</span>3 · Graph runtime — nodes, scheduler, caching</li>
     <li class="pending"><span class="chip">pending</span>4 · Standard node library</li>
     <li class="pending"><span class="chip">pending</span>5 · Hierarchical runtime — grids, streaming</li>
@@ -63,9 +63,9 @@
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>223</b><span>passed</span></div>
+    <div><b>228</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-04 21:58</b><span>last run</span></div>
+    <div><b>2026-08-04 22:14</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -77,6 +77,7 @@
     <li><time>2026-08-04 21:35</time>Phase 2 implementation landed: PCG32 RNG (reference vectors verified), avalanche hash for seed derivation, deferred Field&lt;T&gt; system with combinators and anonymous capture, five noise types as fields with pinned golden values. 82 new tests; 174 total green.</li>
     <li><time>2026-08-04 21:56</time>Phase 2 audit returned: PCG32 bit-exact vs independent reference, hash/fields/noise determinism verified sound. Two minor defects (simplex cell-boundary discontinuity, injection-unsafe field keys) and small notes queued for fixes.</li>
     <li><time>2026-08-04 21:58</time>Phase 3 implementation landed: code-first graph builder with typed pins and cycle detection, pull-based executor with revision-keyed memo cache, time-budgeted cancellable cooking, subgraphs. 49 new tests; 223 total green. Independent verification pending.</li>
+    <li><time>2026-08-04 22:13</time>Phase 2 verified and hardened: simplex kernel r^2=0.5 removes a measured cell-boundary discontinuity (goldens regenerated), field keys made injection-proof, range() ulp clamp, dot() static check, lifetime contracts documented. Phase 3 audit findings (subgraph cache staleness, param-hash blind spots, cook reentrancy) queued for fixes. 228 tests green.</li>
   </ol>
 </body>
 </html>
