@@ -39,6 +39,17 @@ const portalDef = defineNode<PortalParams>({
  * across outer cooks. Exposed inputs feed inner input pins via injected
  * portal nodes; exposed outputs become inner output declarations.
  *
+ * Direct edits to the wrapped graph (setParam, connect, ...) bump its
+ * `version`, which this node folds into its memo key — so an edited inner
+ * graph recooks on the next outer cook instead of serving stale output.
+ * The node's own plumbing (seed derivation, portal feeding) uses quiet
+ * setters and does not count as an edit.
+ *
+ * The outer cook's signal and budgetMs are forwarded into the inner cook;
+ * onNodeDone is deliberately not — inner node completions are an
+ * implementation detail of the composite node (and their ids could shadow
+ * outer ones).
+ *
  * Note: instances of one definition share the inner graph. Two instances
  * get different seeds, so each cook of one invalidates the other's inner
  * caches — create separate definitions when independent caching matters.
@@ -92,14 +103,17 @@ export function subgraphNode(
     inputs: inputPins,
     outputs: outputPins,
     defaultParams: {},
-    async execute({ inputs, seed, signal }) {
+    memoKey: () => String(inner.version),
+    async execute({ inputs, seed, signal, budgetMs }) {
       // Same outer seed and inputs reproduce the same inner keys, so the
       // persisted inner caches serve unchanged nodes across outer cooks.
-      inner.setSeed(hashCombine(seed, hashString("subgraph")));
+      // Quiet setters: plumbing must not bump the inner version, or the
+      // memo key above would invalidate this node on every cook.
+      inner._setSeedQuiet(hashCombine(seed, hashString("subgraph")));
       for (const portal of portals) {
-        inner.setParam(portal.handle, "items", inputs[portal.name] ?? []);
+        inner._setParamQuiet(portal.handle, "items", inputs[portal.name] ?? []);
       }
-      const result = await cook(inner, { signal });
+      const result = await cook(inner, { signal, budgetMs });
       const out: Record<string, DataCollection> = {};
       for (const exp of exposedOutputs) {
         out[exp.name] = result.outputs[`__out_${exp.name}`] ?? [];

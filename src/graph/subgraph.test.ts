@@ -3,6 +3,7 @@ import { firstGeometry, type DataCollection } from "./data.js";
 import { CookCancelledError, GraphValidationError } from "./errors.js";
 import { cook } from "./execute.js";
 import { Graph } from "./graph.js";
+import { defineNode } from "./node.js";
 import { subgraphNode } from "./subgraph.js";
 import { counterNode, makePointsNode, slowNode, transformNode } from "./testNodes.js";
 
@@ -100,6 +101,67 @@ describe("subgraphNode", () => {
     expect(valueOf(r2.outputs.ob)).toBe(22);
     expect(ca.state.count).toBe(2); // affected chain recooked
     expect(cb.state.count).toBe(1); // untouched chain served from inner cache
+  });
+
+  it("recooks when the wrapped inner graph is edited directly", async () => {
+    const inner = new Graph();
+    const c = counterNode(5);
+    const h = inner.add(c.def, undefined, "c");
+    const def = subgraphNode(inner, [], [{ name: "res", node: h, pin: "out" }]);
+
+    const g = new Graph();
+    const s = g.add(def, undefined, "sub");
+    g.output(s, "res", "out");
+    const r1 = await cook(g);
+    expect(valueOf(r1.outputs.out)).toBe(5);
+
+    inner.setParam(h, "value", 7); // direct edit of the wrapped graph
+    const r2 = await cook(g);
+    expect(valueOf(r2.outputs.out)).toBe(7); // not the stale 5
+    expect(r2.stats.cached).toBe(0);
+    expect(r2.stats.cooked).toBe(1);
+    expect(c.state.count).toBe(2);
+
+    const r3 = await cook(g); // and it re-caches afterwards
+    expect(r3.stats.cached).toBe(1);
+    expect(c.state.count).toBe(2);
+  });
+
+  it("forwards budgetMs into the inner cook", async () => {
+    let timerFired = false;
+    const sawTimer: boolean[] = [];
+    const busy = defineNode<{ ms: number }>({
+      type: "busy",
+      inputs: [{ name: "in", kind: "any" }],
+      outputs: [{ name: "out", kind: "any" }],
+      defaultParams: { ms: 4 },
+      execute({ inputs, params }) {
+        sawTimer.push(timerFired);
+        const end = performance.now() + params.ms;
+        while (performance.now() < end) {
+          // spin
+        }
+        return { out: inputs.in };
+      },
+    });
+    const inner = new Graph();
+    const b1 = inner.add(busy, undefined, "b1");
+    const b2 = inner.add(busy, undefined, "b2");
+    const b3 = inner.add(busy, undefined, "b3");
+    inner.connect(b1, "out", b2, "in");
+    inner.connect(b2, "out", b3, "in");
+    const def = subgraphNode(inner, [], [{ name: "res", node: b3, pin: "out" }]);
+
+    const g = new Graph();
+    const s = g.add(def, undefined, "sub");
+    g.output(s, "res", "out");
+    setTimeout(() => {
+      timerFired = true;
+    }, 0);
+    await cook(g, { budgetMs: 1 });
+    // The inner cook yielded between inner nodes (the outer graph has only
+    // one node, so only a forwarded budget can explain the interleaving).
+    expect(sawTimer).toEqual([false, true, true]);
   });
 
   it("derives different inner seeds for different instances", async () => {

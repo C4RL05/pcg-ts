@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CookCancelledError } from "./errors.js";
+import { CookCancelledError, NodeExecutionError } from "./errors.js";
 import { cook } from "./execute.js";
 import { Graph } from "./graph.js";
 import { defineNode, type NodeDef } from "./node.js";
@@ -67,6 +67,44 @@ describe("cook: cancellation", () => {
     ac.abort();
     await expect(cook(g, { signal: ac.signal })).rejects.toBeInstanceOf(CookCancelledError);
     expect(a.state.count).toBe(0);
+  });
+
+  it("a node throwing CookCancelledError without an abort is a node failure", async () => {
+    const rogue = defineNode<Record<string, never>>({
+      type: "rogue",
+      inputs: [],
+      outputs: [{ name: "out", kind: "value" }],
+      defaultParams: {},
+      execute() {
+        throw new CookCancelledError();
+      },
+    });
+    const g = new Graph();
+    const h = g.add(rogue, undefined, "rogue_1");
+    g.output(h, "out");
+    const err = await cook(g).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NodeExecutionError);
+    expect((err as NodeExecutionError).nodeId).toBe("rogue_1");
+  });
+
+  it("onNodeDone exceptions reject the cook; the finished node stays cached", async () => {
+    const { g, a, b } = slowChain();
+    await expect(
+      cook(g, {
+        onNodeDone: () => {
+          throw new Error("callback boom");
+        },
+      }),
+    ).rejects.toThrow("callback boom");
+    expect(a.state.count).toBe(1); // first node finished and was cached
+    expect(b.state.count).toBe(0);
+    const r = await cook(g);
+    expect(r.stats.cached).toBe(1);
+    expect(r.stats.cooked).toBe(2);
+    expect(b.state.count).toBe(1);
   });
 });
 

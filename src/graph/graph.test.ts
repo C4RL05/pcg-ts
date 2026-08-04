@@ -106,6 +106,33 @@ describe("Graph builder", () => {
     g.output(p, "out", "alias"); // distinct name is fine
   });
 
+  it("bumps version on every mutating call, not on failed ones", () => {
+    const g = new Graph();
+    let v = g.version;
+    const p = g.add(makePointsNode());
+    expect(g.version).toBeGreaterThan(v);
+    v = g.version;
+    const t = g.add(transformNode());
+    v = g.version;
+    g.connect(p, "out", t, "in");
+    expect(g.version).toBeGreaterThan(v);
+    v = g.version;
+    g.setParam(p, "count", 7);
+    expect(g.version).toBeGreaterThan(v);
+    v = g.version;
+    g.setSeed(5);
+    expect(g.version).toBeGreaterThan(v);
+    v = g.version;
+    g.output(t, "out");
+    expect(g.version).toBeGreaterThan(v);
+    v = g.version;
+    g.disconnect(p, "out", t, "in");
+    expect(g.version).toBeGreaterThan(v);
+    v = g.version;
+    g.disconnect(p, "out", t, "in"); // no-op: nothing removed
+    expect(g.version).toBe(v);
+  });
+
   it("marks nodes dirty on add, setParam, connect, and disconnect", () => {
     const g = new Graph();
     const p = g.add(makePointsNode());

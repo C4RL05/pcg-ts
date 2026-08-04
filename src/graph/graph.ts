@@ -57,10 +57,15 @@ export class Graph {
   readonly _nodes = new Map<string, NodeState>();
   /** @internal All connections; per-pin order is order in this list. */
   readonly _connections: Connection[] = [];
+  /** @internal Incoming connections per target node id, in connection order. */
+  readonly _inTo = new Map<string, Connection[]>();
+  /** @internal Outgoing connections per source node id, in connection order. */
+  readonly _outFrom = new Map<string, Connection[]>();
   /** @internal Declared terminal outputs in declaration order. */
   readonly _outputs: OutputDecl[] = [];
 
   private _seed: number;
+  private _version = 0;
   private readonly typeCounts = new Map<string, number>();
 
   constructor(seed = 0) {
@@ -70,6 +75,16 @@ export class Graph {
   /** The graph seed all node seeds derive from. */
   get seed(): number {
     return this._seed;
+  }
+
+  /**
+   * Monotonic edit counter: bumps on every mutating call (add, connect,
+   * disconnect, setParam, setSeed, output). A subgraph node folds its
+   * inner graph's version into its memo key, so direct edits to a wrapped
+   * graph invalidate the wrapping node's cache.
+   */
+  get version(): number {
+    return this._version;
   }
 
   /**
@@ -102,6 +117,7 @@ export class Graph {
       dirty: true,
       cache: undefined,
     });
+    this._version++;
     return { id: nodeId };
   }
 
@@ -128,7 +144,7 @@ export class Graph {
     }
     if (
       inp.multi !== true &&
-      this._connections.some((c) => c.to === dst.id && c.toPin === toPin)
+      (this._inTo.get(dst.id) ?? []).some((c) => c.toPin === toPin)
     ) {
       throw new GraphValidationError(
         `input pin ${dst.id}.${toPin} is already connected (declare it multi to allow several)`,
@@ -139,8 +155,16 @@ export class Graph {
         `connecting ${src.id}.${fromPin} to ${dst.id}.${toPin} would create a cycle`,
       );
     }
-    this._connections.push({ from: src.id, fromPin, to: dst.id, toPin });
+    const conn: Connection = { from: src.id, fromPin, to: dst.id, toPin };
+    this._connections.push(conn);
+    let into = this._inTo.get(dst.id);
+    if (!into) this._inTo.set(dst.id, (into = []));
+    into.push(conn);
+    let outOf = this._outFrom.get(src.id);
+    if (!outOf) this._outFrom.set(src.id, (outOf = []));
+    outOf.push(conn);
     dst.dirty = true;
+    this._version++;
   }
 
   /**
@@ -152,13 +176,33 @@ export class Graph {
       (c) => c.from === from.id && c.fromPin === fromPin && c.to === to.id && c.toPin === toPin,
     );
     if (idx < 0) return false;
+    const conn = this._connections[idx];
     this._connections.splice(idx, 1);
+    const into = this._inTo.get(conn.to);
+    if (into) into.splice(into.indexOf(conn), 1);
+    const outOf = this._outFrom.get(conn.from);
+    if (outOf) outOf.splice(outOf.indexOf(conn), 1);
     this.require(to.id).dirty = true;
+    this._version++;
     return true;
   }
 
   /** Set one param and mark the node dirty. */
   setParam<P, K extends keyof P & string>(handle: NodeHandle<P>, key: K, value: P[K]): void {
+    this._setParamQuiet(handle, key, value);
+    this._version++;
+  }
+
+  /**
+   * @internal Param write that does not count as a user edit (no version
+   * bump) — used by subgraph plumbing, whose effects are already covered
+   * by the wrapping node's memo key (outer seed and input revs).
+   */
+  _setParamQuiet<P, K extends keyof P & string>(
+    handle: NodeHandle<P>,
+    key: K,
+    value: P[K],
+  ): void {
     const node = this.require(handle.id);
     node.params[key] = value;
     node.dirty = true;
@@ -171,6 +215,12 @@ export class Graph {
 
   /** Set the graph seed and mark every node dirty. */
   setSeed(seed: number): void {
+    this._setSeedQuiet(seed);
+    this._version++;
+  }
+
+  /** @internal Seed write without a version bump; see {@link Graph._setParamQuiet}. */
+  _setSeedQuiet(seed: number): void {
     this._seed = seed >>> 0;
     for (const node of this._nodes.values()) node.dirty = true;
   }
@@ -190,6 +240,7 @@ export class Graph {
       throw new GraphValidationError(`output "${outName}" is already declared`);
     }
     this._outputs.push({ name: outName, node: node.id, pin });
+    this._version++;
   }
 
   /** Whether the node has a pending change not yet validated by a cook. */
@@ -213,8 +264,10 @@ export class Graph {
     while (stack.length > 0) {
       const id = stack.pop() as string;
       if (id === target) return true;
-      for (const c of this._connections) {
-        if (c.from === id && !seen.has(c.to)) {
+      const outgoing = this._outFrom.get(id);
+      if (!outgoing) continue;
+      for (const c of outgoing) {
+        if (!seen.has(c.to)) {
           seen.add(c.to);
           stack.push(c.to);
         }

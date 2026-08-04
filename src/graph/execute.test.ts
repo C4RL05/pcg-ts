@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { constant, randomField } from "../fields/index.js";
-import { firstGeometry } from "./data.js";
-import { NodeExecutionError } from "./errors.js";
+import { firstGeometry, makeValueItem } from "./data.js";
+import { GraphValidationError, NodeExecutionError } from "./errors.js";
 import { cook } from "./execute.js";
 import { Graph } from "./graph.js";
 import { defineNode } from "./node.js";
@@ -262,6 +262,124 @@ describe("cook: determinism and purity", () => {
     for (let i = 0; i < before.length; i++) {
       expect(pointBytes(r2.outputs.res, 4)[i]).toBeCloseTo(before[i] + 2, 5);
     }
+  });
+});
+
+describe("cook: param hashing", () => {
+  function probeGraph(cfg: unknown) {
+    const state = { count: 0 };
+    const def = defineNode<{ cfg: unknown }>({
+      type: "probe",
+      inputs: [],
+      outputs: [{ name: "out", kind: "value" }],
+      defaultParams: { cfg: 0 },
+      execute() {
+        state.count++;
+        return { out: [makeValueItem(state.count)] };
+      },
+    });
+    const g = new Graph();
+    const h = g.add(def, { cfg }, "probe");
+    g.output(h, "out", "res");
+    return { g, h, state };
+  }
+
+  it("rejects Date params, naming the param path", async () => {
+    const { g } = probeGraph(new Date());
+    const err = await cook(g).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(GraphValidationError);
+    expect((err as Error).message).toContain("params.cfg");
+    expect((err as Error).message).toContain("Date");
+  });
+
+  it("rejects class instances", async () => {
+    class Widget {
+      x = 1;
+    }
+    const { g } = probeGraph(new Widget());
+    const err = await cook(g).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(GraphValidationError);
+    expect((err as Error).message).toContain("Widget");
+  });
+
+  it("rejects functions nested in params (duck-typed fake Fields)", async () => {
+    // Old duck-typing would have hashed this as a Field by its key.
+    const { g } = probeGraph({ key: "same", evaluate: () => 0, extra: 1 });
+    const err = await cook(g).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(GraphValidationError);
+    expect((err as Error).message).toContain("params.cfg.evaluate");
+  });
+
+  it("hashes non-Field objects sharing a key structurally, not by key", async () => {
+    const { g, h, state } = probeGraph({ key: "same", extra: 1 });
+    await cook(g);
+    g.setParam(h, "cfg", { key: "same", extra: 2 });
+    await cook(g);
+    expect(state.count).toBe(2); // no collision despite the identical "key"
+    // Genuine (branded) Fields with the same key do share the cache.
+    g.setParam(h, "cfg", constant([1, 2]));
+    await cook(g);
+    expect(state.count).toBe(3);
+    g.setParam(h, "cfg", constant([1, 2])); // fresh instance, same field key
+    const r = await cook(g);
+    expect(state.count).toBe(3);
+    expect(r.stats.cached).toBe(1);
+  });
+
+  it("distinguishes 0 from -0", async () => {
+    const { g, h, state } = probeGraph(0);
+    await cook(g);
+    g.setParam(h, "cfg", -0);
+    await cook(g);
+    expect(state.count).toBe(2);
+    g.setParam(h, "cfg", -0); // unchanged -0 stays cached
+    const r = await cook(g);
+    expect(state.count).toBe(2);
+    expect(r.stats.cached).toBe(1);
+  });
+});
+
+describe("cook: serialization and scale", () => {
+  it("serializes overlapping cooks of the same graph", async () => {
+    const g = new Graph();
+    const a = counterNode(1);
+    const b = counterNode(10);
+    const ha = g.add(a.def, undefined, "a");
+    const hb = g.add(b.def, undefined, "b");
+    g.connect(ha, "out", hb, "in");
+    g.output(hb, "out", "res");
+    const [r1, r2] = await Promise.all([cook(g), cook(g)]);
+    expect(a.state.count).toBe(1); // once total across both cooks
+    expect(b.state.count).toBe(1);
+    expect(r1.stats.cooked).toBe(2);
+    expect(r2.stats.cached).toBe(2);
+    expect(valueOf(r1.outputs.res)).toBe(11);
+    expect(valueOf(r2.outputs.res)).toBe(11);
+  });
+
+  it("cooks a 20k-node chain without stack overflow", { timeout: 20_000 }, async () => {
+    const g = new Graph();
+    const { def, state } = counterNode(1); // one shared def and state
+    let prev = g.add(def);
+    for (let i = 1; i < 20_000; i++) {
+      const next = g.add(def);
+      g.connect(prev, "out", next, "in");
+      prev = next;
+    }
+    g.output(prev, "out", "res");
+    const r = await cook(g);
+    expect(r.stats.cooked).toBe(20_000);
+    expect(state.count).toBe(20_000);
+    expect(valueOf(r.outputs.res)).toBe(20_000);
   });
 });
 

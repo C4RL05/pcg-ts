@@ -52,9 +52,24 @@ export interface Field<N extends number = number> {
 /** A value accepted wherever a field is: raw numbers wrap into `constant`. */
 export type FieldLike = number | readonly number[] | Field;
 
-/** Type guard: is this field-like value already a Field? */
-export function isField(v: FieldLike): v is Field {
-  return typeof v === "object" && v !== null && "evaluate" in v;
+/**
+ * @internal Brand stamped by {@link makeField} marking genuine Fields.
+ * Enumerable so structural copies (`{ ...field }`) keep the brand.
+ */
+export const FIELD_BRAND: unique symbol = Symbol("pcg-ts.field");
+
+/**
+ * Type guard: is this value a genuine Field (created by {@link makeField})?
+ * Brand-based, not duck-typed — a plain `{ key, evaluate }` object is not
+ * a Field (the graph executor relies on this to hash such objects
+ * structurally instead of by `key`).
+ */
+export function isField(v: unknown): v is Field {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as { [FIELD_BRAND]?: unknown })[FIELD_BRAND] === true
+  );
 }
 
 /**
@@ -80,7 +95,7 @@ export function makeField<N extends number = number>(
   tupleSize: N | undefined,
   evaluate: (ctx: EvalContext) => Column,
 ): Field<N> {
-  return { key, tupleSize, evaluate };
+  return { key, tupleSize, evaluate, [FIELD_BRAND]: true } as Field<N>;
 }
 
 const evalCaches = new WeakMap<EvalContext, Map<Field, Column>>();

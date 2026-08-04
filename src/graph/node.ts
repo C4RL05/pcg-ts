@@ -36,6 +36,12 @@ export interface NodeExecuteArgs<P> {
   /** Cook-scoped abort signal, when the cook was given one. */
   readonly signal?: AbortSignal;
   /**
+   * Soft time budget of the enclosing cook, when one was set. Composite
+   * nodes (e.g. subgraphs) forward it to nested cooks so inner work
+   * yields on the same policy.
+   */
+  readonly budgetMs?: number;
+  /**
    * Throws `CookCancelledError` if the cook was aborted. Nodes doing long
    * loops should call it periodically so cancellation stays responsive.
    */
@@ -58,6 +64,13 @@ export interface NodeDef<P = Record<string, unknown>> {
   readonly defaultParams: P;
   /** Produce one collection per output pin; may be async. */
   execute(args: NodeExecuteArgs<P>): NodeOutputs | Promise<NodeOutputs>;
+  /**
+   * Optional extra memo-key component, read before each cook of an
+   * instance. Use it to fold state living outside params into the cache
+   * key (e.g. a wrapped inner graph's edit version): an unchanged string
+   * lets the cache be served, a changed one forces a recook.
+   */
+  memoKey?(): string;
 }
 
 /** Identity helper that preserves the param type `P` of a node definition. */
