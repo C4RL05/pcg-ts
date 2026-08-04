@@ -14,6 +14,10 @@ import { Geometry, createPolyline, createTriangleMesh } from "../data/index.js";
  * interleaved and normalized attributes are handled. Triangles only:
  * throws when the index (or non-indexed position) count is not a
  * multiple of 3. Other attributes (normal, uv, ...) are not carried.
+ *
+ * The full position and index buffers are converted as-is: `drawRange`,
+ * material `groups`, and morph targets are ignored — a geometry relying
+ * on them converts to its complete, unmorphed base mesh.
  */
 export function fromBufferGeometry(bufferGeo: BufferGeometry): Geometry {
   const pos = bufferGeo.getAttribute("position");

@@ -57,6 +57,36 @@ describe("WorldThreeBinding", () => {
     expect(disposed).toBe(1);
   });
 
+  it("a failing rebuild leaves the previous cell content intact (swap semantics)", () => {
+    const root = new Group();
+    const assets = makeAssets();
+    const binding = new WorldThreeBinding({ group: root, assets, debugPoints: true });
+    binding.cellReady("ground", [4, 4], makeOutputs());
+    const oldCell = root.children[0];
+
+    // Recook whose outputs reference an unknown asset — after a batch that
+    // builds fine, so the partial-build disposal path is exercised too.
+    const badOutputs = {
+      main: [
+        makeInstancesItem(buildInstanceBatches(createPointCloud(2), { defaultAssetId: "tree" })),
+        makeInstancesItem([{ assetId: "unknown", count: 0, transforms: new Float32Array(0) }]),
+      ],
+    };
+    expect(() => binding.cellReady("ground", [4, 4], badOutputs)).toThrow(/unknown assetId/);
+
+    // The previous content is still visible and registered.
+    expect(binding.cellCount).toBe(1);
+    expect(root.children).toHaveLength(1);
+    expect(root.children[0]).toBe(oldCell);
+    expect(oldCell.children.filter((c) => c instanceof InstancedMesh)).toHaveLength(1);
+
+    // A later successful ready still replaces it.
+    binding.cellReady("ground", [4, 4], makeOutputs());
+    expect(binding.cellCount).toBe(1);
+    expect(root.children).toHaveLength(1);
+    expect(root.children[0]).not.toBe(oldCell);
+  });
+
   it("cellEvicted removes the group, disposes per-cell resources, and leaks no children", () => {
     const root = new Group();
     const assets = makeAssets();

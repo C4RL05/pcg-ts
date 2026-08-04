@@ -67,29 +67,40 @@ export class WorldThreeBinding {
   /**
    * Build (or rebuild) the scene-graph content of a cooked cell. Pass
    * this into `WorldOptions.onCellReady`.
+   *
+   * Swap semantics: the replacement group is built completely before the
+   * previous one is removed, so a throwing rebuild (e.g. an unknown
+   * assetId on recook) leaves the cell's existing content visible and
+   * registered — the error is rethrown after disposing whatever partial
+   * resources the failed build created.
    */
   cellReady(levelName: string, coord: CellCoord, outputs: CellOutputs): void {
     const key = cellKey(levelName, coord);
-    this.removeCell(key); // A recook replaces the cell's previous content.
     const group = new Group();
     group.name = key;
     const entry: CellEntry = { group, instanced: [], debug: [] };
-    for (const name of Object.keys(outputs)) {
-      for (const item of outputs[name]) {
-        if (item.kind === "instances") {
-          for (const mesh of toInstancedMeshes(item.batches, this.opts.assets)) {
-            entry.instanced.push(mesh);
-            group.add(mesh);
+    try {
+      for (const name of Object.keys(outputs)) {
+        for (const item of outputs[name]) {
+          if (item.kind === "instances") {
+            for (const mesh of toInstancedMeshes(item.batches, this.opts.assets)) {
+              entry.instanced.push(mesh);
+              group.add(mesh);
+            }
+          } else if (item.kind === "geometry" && this.opts.debugPoints === true) {
+            const points = toPointsObject(item.geo, {
+              size: this.opts.debugPointSize ?? 0.1,
+            });
+            entry.debug.push(points);
+            group.add(points);
           }
-        } else if (item.kind === "geometry" && this.opts.debugPoints === true) {
-          const points = toPointsObject(item.geo, {
-            size: this.opts.debugPointSize ?? 0.1,
-          });
-          entry.debug.push(points);
-          group.add(points);
         }
       }
+    } catch (err) {
+      this.disposeEntry(entry);
+      throw err;
     }
+    this.removeCell(key); // Only now replace the previous content, if any.
     this.opts.group.add(group);
     this.cells.set(key, entry);
   }
@@ -113,6 +124,10 @@ export class WorldThreeBinding {
     if (!entry) return;
     this.cells.delete(key);
     this.opts.group.remove(entry.group);
+    this.disposeEntry(entry);
+  }
+
+  private disposeEntry(entry: CellEntry): void {
     // Releases the per-mesh instance buffers; shared asset geometry and
     // material are intentionally left alone.
     for (const mesh of entry.instanced) mesh.dispose();
