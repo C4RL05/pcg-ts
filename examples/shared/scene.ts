@@ -1,0 +1,104 @@
+/**
+ * Shared three.js scene bootstrap for the examples: renderer, camera,
+ * lights, optional orbit controls, resize handling, and the animation
+ * loop. Every example gets the same dark look from here.
+ */
+import {
+  Color,
+  DirectionalLight,
+  Fog,
+  HemisphereLight,
+  PerspectiveCamera,
+  Scene,
+  WebGLRenderer,
+} from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+/** Shared dark background color (also used by page CSS). */
+export const BACKGROUND = 0x0d1117;
+
+/** Options for {@link createScene}. */
+export interface SceneOptions {
+  /** Initial camera position (default [28, 22, 28]). */
+  cameraPosition?: readonly [number, number, number];
+  /** Orbit/look target (default origin). */
+  target?: readonly [number, number, number];
+  /** Attach OrbitControls (default true). */
+  orbit?: boolean;
+  /** Add scene fog between the given distances. */
+  fog?: { near: number; far: number };
+  /** Camera far plane (default 2000). */
+  far?: number;
+}
+
+/** Handle returned by {@link createScene}. */
+export interface ExampleScene {
+  readonly scene: Scene;
+  readonly camera: PerspectiveCamera;
+  readonly renderer: WebGLRenderer;
+  readonly controls: OrbitControls | undefined;
+  /** Start the render loop; `tick` runs before each render. */
+  start(tick?: (dt: number, elapsed: number) => void): void;
+}
+
+/** Create renderer + scene + camera + lights and wire resize handling. */
+export function createScene(opts: SceneOptions = {}): ExampleScene {
+  const renderer = new WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new Scene();
+  scene.background = new Color(BACKGROUND);
+  if (opts.fog) scene.fog = new Fog(BACKGROUND, opts.fog.near, opts.fog.far);
+
+  const camera = new PerspectiveCamera(
+    55,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    opts.far ?? 2000,
+  );
+  const [cx, cy, cz] = opts.cameraPosition ?? [28, 22, 28];
+  camera.position.set(cx, cy, cz);
+  const [tx, ty, tz] = opts.target ?? [0, 0, 0];
+  camera.lookAt(tx, ty, tz);
+
+  const hemi = new HemisphereLight(0xa8bce0, 0x232a33, 0.9);
+  scene.add(hemi);
+  const sun = new DirectionalLight(0xfff1dc, 1.6);
+  sun.position.set(60, 90, 35);
+  scene.add(sun);
+
+  let controls: OrbitControls | undefined;
+  if (opts.orbit !== false) {
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(tx, ty, tz);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.update();
+  }
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  return {
+    scene,
+    camera,
+    renderer,
+    controls,
+    start(tick) {
+      let last = performance.now();
+      renderer.setAnimationLoop(() => {
+        const now = performance.now();
+        const dt = Math.min((now - last) / 1000, 0.1);
+        last = now;
+        controls?.update();
+        tick?.(dt, now / 1000);
+        renderer.render(scene, camera);
+      });
+    },
+  };
+}

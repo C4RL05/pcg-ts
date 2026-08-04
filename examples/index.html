@@ -4,10 +4,87 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>pcg-ts examples</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; min-height: 100%; background: #0d1117; }
+    body {
+      display: flex; justify-content: center;
+      color: #dbe4f0; font: 15px/1.5 system-ui, sans-serif;
+      padding: 48px 20px;
+    }
+    main { width: 100%; max-width: 660px; }
+    h1 { margin: 0; font-size: 26px; color: #f0f4fa; }
+    h1 code { color: #8fd0ff; font-family: ui-monospace, monospace; }
+    .sub { margin: 6px 0 28px; color: #8b98ab; }
+    a.card {
+      display: flex; align-items: baseline; gap: 14px;
+      margin: 10px 0; padding: 14px 18px;
+      background: #131a26; border: 1px solid #223047; border-radius: 10px;
+      text-decoration: none; color: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    a.card:hover { border-color: #4c8dff; background: #16202f; }
+    a.card .num { flex: 0 0 28px; color: #4c8dff; font: 600 15px ui-monospace, monospace; }
+    a.card .body { flex: 1; }
+    a.card .name { font-weight: 600; color: #eaf1fa; }
+    a.card .desc { margin-top: 2px; color: #8b98ab; font-size: 13px; }
+    footer { margin-top: 28px; color: #55617a; font-size: 12px; }
+    footer code { font-family: ui-monospace, monospace; }
+  </style>
 </head>
 <body>
-  <h1>pcg-ts examples</h1>
-  <p>No examples yet. Scatter, forest, spline-fence, infinite-world, and
-    fields-playground demos land in Phase 7 — see <code>PLAN.md</code>.</p>
+  <main>
+    <h1><code>pcg-ts</code> examples</h1>
+    <p class="sub">Deterministic procedural content generation — graphs, fields, spawners, and the
+      hierarchical runtime, rendered with three.js. Every demo re-cooks live from its seed.</p>
+
+    <a class="card" href="01-scatter-basic/">
+      <span class="num">01</span>
+      <span class="body">
+        <span class="name">Scatter basic</span>
+        <div class="desc">Uniform scatter in bounds, density from a JSON fbm field, probabilistic
+          filtering, instanced boxes + debug points.</div>
+      </span>
+    </a>
+
+    <a class="card" href="02-forest/">
+      <span class="num">02</span>
+      <span class="body">
+        <span class="name">Forest</span>
+        <div class="desc">fbm heightfield terrain, surface sampling, slope/treeline filters, and
+          pine/bush instancing split by a per-point species attribute.</div>
+      </span>
+    </a>
+
+    <a class="card" href="03-spline-fence/">
+      <span class="num">03</span>
+      <span class="body">
+        <span class="name">Spline fence</span>
+        <div class="desc">Closed CatmullRom loop sampled by arc length; posts oriented from the
+          tangent attribute, rails as tubes along the curve.</div>
+      </span>
+    </a>
+
+    <a class="card" href="04-infinite-world/">
+      <span class="num">04</span>
+      <span class="body">
+        <span class="name">Infinite world</span>
+        <div class="desc">Two-level hierarchical World streamed around a flying camera: unbounded
+          landmarks above seamless 20-unit rock cells.</div>
+      </span>
+    </a>
+
+    <a class="card" href="05-fields-playground/">
+      <span class="num">05</span>
+      <span class="body">
+        <span class="name">Fields playground</span>
+        <div class="desc">Svelte panel composing noise fields as live FieldSpec JSON, visualized as
+          a colored heightmap surface.</div>
+      </span>
+    </a>
+
+    <footer>Run with <code>npm run examples</code> · seeds are deterministic: the same seed always
+      rebuilds the same world.</footer>
+  </main>
 </body>
 </html>
