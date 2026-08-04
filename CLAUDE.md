@@ -20,6 +20,12 @@ Three foundations, each carried through the whole library:
   context (`Field<T>`), resolved only when it lands on a domain. Node
   params accept `T | Field<T>`. Anonymous attributes carry intermediate
   results.
+- **Agent and human ergonomics.** The library is built to be driven by
+  AI agents as well as humans: node types carry machine-readable metadata
+  (pins, param schemas, descriptions) in a registry; graphs serialize
+  to/from a stable JSON format; behavior is deterministic and
+  introspectable (cook stats, cache hits). Docs ship in human form
+  (README) and agent form (llms.txt + generated node/API reference).
 
 ## Layout
 
@@ -54,6 +60,8 @@ Three foundations, each carried through the whole library:
   dependency, exported as `pcg-ts/three`).
 - Prefer fields over eager values: node params accept `T | Field<T>`.
 - Any UI (editor tooling, example chrome beyond plain HTML) uses Svelte.
+- Error messages are part of the agent API: name the offending node, pin,
+  or param and state the valid alternatives or the fix.
 
 ## Unattended build protocol
 

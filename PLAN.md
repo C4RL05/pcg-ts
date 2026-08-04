@@ -3,7 +3,9 @@
 Goal: a deterministic, browser/Node PCG library in TypeScript combining
 a domain-based attribute data model, a hierarchical real-time generation
 runtime, and deferred fields — with a standard node library, three.js interop,
-examples, and tests. Built phase by phase, unattended, with `status.html`
+examples, and tests. Designed to be driven by AI agents as well as
+humans: self-describing node registry, stable JSON graph serialization,
+precise actionable errors, introspectable execution. Built phase by phase, unattended, with `status.html`
 regenerated and a commit after every phase (and after significant
 mid-phase milestones).
 
@@ -102,7 +104,14 @@ interface Field<T> { evaluate(ctx: EvalContext): Column<T>; }
   BoundsDifference/Intersection, Projection (onto surface).
 - Attribute ops: SetAttribute (field), PromoteAttribute, TransferAttribute,
   PartitionByAttribute.
-- Exit: golden + property tests per node; whole-library determinism suite.
+- Node registry: central registration with machine-readable metadata per
+  node type (type name, description, pins, param schema with types,
+  defaults, descriptions) so agents can enumerate capabilities at runtime.
+- Graph JSON serialization: stable, versioned format referencing
+  registered node types; round-trips builder-authored graphs; validation
+  errors name the node/pin/param at fault.
+- Exit: golden + property tests per node; registry metadata completeness
+  check; serialization round-trip tests; whole-library determinism suite.
   Commit.
 
 ### Phase 5 — Hierarchical runtime (grids and streaming)
@@ -127,11 +136,13 @@ interface Field<T> { evaluate(ctx: EvalContext): Column<T>; }
   03-spline-fence (spline sampling + copy points, oriented), 04-infinite-
   world (hierarchical streaming around camera), 05-fields-playground
   (compose fields, visualize as color/density).
-- README with API tour; final status.html; tag `v0.1.0`. Commit.
+- README with API tour; agent-facing docs: `llms.txt` plus a node/API
+  reference generated from registry metadata, written for LLM
+  consumption; final status.html; tag `v0.1.0`. Commit.
 
 ## Stretch (recorded, not scheduled)
-- WebGPU compute subgraphs; uv/raycast attribute transfer; graph
-  serialization format; interactive graph editor UI.
+- WebGPU compute subgraphs; uv/raycast attribute transfer; interactive
+  graph editor UI (Svelte).
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
