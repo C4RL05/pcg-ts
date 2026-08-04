@@ -140,6 +140,25 @@ interface Field<T> { evaluate(ctx: EvalContext): Column<T>; }
   reference generated from registry metadata, written for LLM
   consumption; final status.html; tag `v0.1.0`. Commit.
 
+## Post-v0.1 backlog (from example-building friction and audits)
+- String/enum-capable setAttribute (or dedicated node) so multi-asset
+  spawns (assetAttr) stay declarative in the graph.
+- Sanctioned per-cell seeding story for field-driven nodes: document
+  graph.setSeed-in-bind as supported, or give setAttribute a seed param.
+- Per-output cooking or optional outputs (staged pipelines currently
+  need two graphs when a terminal branch is not yet bound).
+- Field grammar: trig fns and an "orient along vector" node
+  (tangent-to-rotation currently drops to the data API).
+- `normalized` option on noise fields so remap authors (and agents) get
+  a uniform [0,1] contract; document per-noise ranges in the registry.
+- Serializable subgraphs (register via standardNode with an inner-graph
+  payload) — closes the "graphs serialize" pillar gap.
+- Item-list param type in the registry schema language (removes the
+  dataInput placeholder and makes dataInput graphs serializable).
+- 3D grid cells; exact (opt-in) worley search; unbounded levels without
+  a dummy generationRadius.
+- Align PLAN node-name sketch with shipped names (registry is the truth).
+
 ## Stretch (recorded, not scheduled)
 - WebGPU compute subgraphs; uv/raycast attribute transfer; interactive
   graph editor UI (Svelte).

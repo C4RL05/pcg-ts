@@ -1,6 +1,8 @@
 {
   "name": "pcg-ts",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "Deterministic procedural content generation for TypeScript: domain attributes, node graphs, deferred fields, hierarchical streaming. Optional three.js interop.",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": {
@@ -18,7 +20,8 @@
     "build": "tsup",
     "check": "tsc --noEmit",
     "examples": "vite --config examples/vite.config.ts",
-    "status": "node scripts/status.mjs"
+    "status": "node scripts/status.mjs",
+    "docs:nodes": "node scripts/gen-node-reference.mjs"
   },
   "peerDependencies": {
     "three": "^0.185.1"
@@ -29,8 +32,10 @@
     }
   },
   "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@types/node": "^26.1.2",
     "@types/three": "^0.185.3",
+    "svelte": "^5.56.8",
     "three": "^0.185.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
