@@ -1,25 +1,27 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-04",
-  "currentPhase": 2,
+  "updated": "2026-08-04 21:58",
+  "currentPhase": 3,
   "phases": [
     { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
     { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
     { "id": 1, "title": "Core data model — attributes, domains, promote/transfer", "state": "done" },
     { "id": 2, "title": "RNG, noise, fields", "state": "active" },
-    { "id": 3, "title": "Graph runtime — nodes, scheduler, caching", "state": "pending" },
+    { "id": 3, "title": "Graph runtime — nodes, scheduler, caching", "state": "active" },
     { "id": 4, "title": "Standard node library", "state": "pending" },
     { "id": 5, "title": "Hierarchical runtime — grids, streaming", "state": "pending" },
     { "id": 6, "title": "three.js interop + spawners", "state": "pending" },
     { "id": 7, "title": "Examples, docs, v0.1.0", "state": "pending" }
   ],
-  "tests": { "passed": 174, "failed": 0, "total": 174, "lastRun": "2026-08-04" },
+  "tests": { "passed": 223, "failed": 0, "total": 223, "lastRun": "2026-08-04 21:58" },
   "blockers": [],
   "log": [
-    { "time": "2026-08-04", "message": "Phase 2 implementation landed: PCG32 RNG (reference vectors verified), avalanche hash for seed derivation, deferred Field<T> system with combinators and anonymous capture, five noise types as fields with pinned golden values. 82 new tests; 174 total green. Independent verification pending." },
-    { "time": "2026-08-04", "message": "Phase 1 verified and hardened after independent audit: far-query grid-search cost fix (was linear in distance), consistent non-finite position policy, NaN propagation in promote min/max, defensive topology copies. 92 tests in src/data." },
-    { "time": "2026-08-04", "message": "Phase 1 implementation landed: SoA attribute storage over four domains, geometry/topology builders, point cloud with standard attributes, promote across all domain pairs, nearest-point transfer via grid hash. 86 tests green. Independent verification pending." },
-    { "time": "2026-08-04", "message": "Phase 0 complete: npm project scaffolded (typescript 6, vitest 4, tsup 8, vite 8, three 0.185 as optional peer). Build, typecheck, empty test run and status generator all verified. TS pinned to 6.x: tsup's dts bundler is incompatible with TS 7." },
-    { "time": "2026-08-04", "message": "Project planned: design pillars fixed (domain attribute data model, hierarchical real-time runtime, deferred fields). CLAUDE.md and PLAN.md written." }
+    { "time": "2026-08-04 21:58", "message": "Phase 3 implementation landed: code-first graph builder with typed pins and cycle detection, pull-based executor with revision-keyed memo cache, time-budgeted cancellable cooking, subgraphs. 49 new tests; 223 total green. Independent verification pending." },
+    { "time": "2026-08-04 21:56", "message": "Phase 2 audit returned: PCG32 bit-exact vs independent reference, hash/fields/noise determinism verified sound. Two minor defects (simplex cell-boundary discontinuity, injection-unsafe field keys) and small notes queued for fixes." },
+    { "time": "2026-08-04 21:35", "message": "Phase 2 implementation landed: PCG32 RNG (reference vectors verified), avalanche hash for seed derivation, deferred Field<T> system with combinators and anonymous capture, five noise types as fields with pinned golden values. 82 new tests; 174 total green." },
+    { "time": "2026-08-04 21:35", "message": "Phase 1 verified and hardened after independent audit: far-query grid-search cost fix (was linear in distance), consistent non-finite position policy, NaN propagation in promote min/max, defensive topology copies. 92 tests in src/data." },
+    { "time": "2026-08-04 21:01", "message": "Phase 1 implementation landed: SoA attribute storage over four domains, geometry/topology builders, point cloud with standard attributes, promote across all domain pairs, nearest-point transfer via grid hash. 86 tests green." },
+    { "time": "2026-08-04 21:01", "message": "Phase 0 complete: npm project scaffolded (typescript 6, vitest 4, tsup 8, vite 8, three 0.185 as optional peer). Build, typecheck, empty test run and status generator all verified. TS pinned to 6.x: tsup's dts bundler is incompatible with TS 7." },
+    { "time": "2026-08-04 21:00", "message": "Project planned: design pillars fixed (domain attribute data model, hierarchical real-time runtime, deferred fields). CLAUDE.md and PLAN.md written." }
   ]
 }

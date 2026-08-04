@@ -45,7 +45,7 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-04</p>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-04 21:58</p>
   <div class="bar"><div style="width:33%"></div></div>
 
   <h2>Phases</h2>
@@ -54,7 +54,7 @@
     <li class="done"><span class="chip">done</span>0 · Scaffolding — tooling, configs, status generator</li>
     <li class="done"><span class="chip">done</span>1 · Core data model — attributes, domains, promote/transfer</li>
     <li class="active"><span class="chip">active</span>2 · RNG, noise, fields</li>
-    <li class="pending"><span class="chip">pending</span>3 · Graph runtime — nodes, scheduler, caching</li>
+    <li class="active"><span class="chip">active</span>3 · Graph runtime — nodes, scheduler, caching</li>
     <li class="pending"><span class="chip">pending</span>4 · Standard node library</li>
     <li class="pending"><span class="chip">pending</span>5 · Hierarchical runtime — grids, streaming</li>
     <li class="pending"><span class="chip">pending</span>6 · three.js interop + spawners</li>
@@ -63,18 +63,20 @@
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>174</b><span>passed</span></div>
+    <div><b>223</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-04</b><span>last run</span></div>
+    <div><b>2026-08-04 21:58</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
   <ol class="log">
-    <li><time>2026-08-04</time>Project planned: design pillars fixed (domain attribute data model, hierarchical real-time runtime, deferred fields). CLAUDE.md and PLAN.md written.</li>
-    <li><time>2026-08-04</time>Phase 0 complete: npm project scaffolded (typescript 6, vitest 4, tsup 8, vite 8, three 0.185 as optional peer). Build, typecheck, empty test run and status generator all verified. TS pinned to 6.x: tsup&#39;s dts bundler is incompatible with TS 7.</li>
-    <li><time>2026-08-04</time>Phase 1 implementation landed: SoA attribute storage over four domains, geometry/topology builders, point cloud with standard attributes, promote across all domain pairs, nearest-point transfer via grid hash. 86 tests green. Independent verification pending.</li>
-    <li><time>2026-08-04</time>Phase 1 verified and hardened after independent audit: far-query grid-search cost fix (was linear in distance), consistent non-finite position policy, NaN propagation in promote min/max, defensive topology copies. 92 tests in src/data.</li>
-    <li><time>2026-08-04</time>Phase 2 implementation landed: PCG32 RNG (reference vectors verified), avalanche hash for seed derivation, deferred Field&lt;T&gt; system with combinators and anonymous capture, five noise types as fields with pinned golden values. 82 new tests; 174 total green. Independent verification pending.</li>
+    <li><time>2026-08-04 21:00</time>Project planned: design pillars fixed (domain attribute data model, hierarchical real-time runtime, deferred fields). CLAUDE.md and PLAN.md written.</li>
+    <li><time>2026-08-04 21:01</time>Phase 0 complete: npm project scaffolded (typescript 6, vitest 4, tsup 8, vite 8, three 0.185 as optional peer). Build, typecheck, empty test run and status generator all verified. TS pinned to 6.x: tsup&#39;s dts bundler is incompatible with TS 7.</li>
+    <li><time>2026-08-04 21:01</time>Phase 1 implementation landed: SoA attribute storage over four domains, geometry/topology builders, point cloud with standard attributes, promote across all domain pairs, nearest-point transfer via grid hash. 86 tests green.</li>
+    <li><time>2026-08-04 21:35</time>Phase 1 verified and hardened after independent audit: far-query grid-search cost fix (was linear in distance), consistent non-finite position policy, NaN propagation in promote min/max, defensive topology copies. 92 tests in src/data.</li>
+    <li><time>2026-08-04 21:35</time>Phase 2 implementation landed: PCG32 RNG (reference vectors verified), avalanche hash for seed derivation, deferred Field&lt;T&gt; system with combinators and anonymous capture, five noise types as fields with pinned golden values. 82 new tests; 174 total green.</li>
+    <li><time>2026-08-04 21:56</time>Phase 2 audit returned: PCG32 bit-exact vs independent reference, hash/fields/noise determinism verified sound. Two minor defects (simplex cell-boundary discontinuity, injection-unsafe field keys) and small notes queued for fixes.</li>
+    <li><time>2026-08-04 21:58</time>Phase 3 implementation landed: code-first graph builder with typed pins and cycle detection, pull-based executor with revision-keyed memo cache, time-budgeted cancellable cooking, subgraphs. 49 new tests; 223 total green. Independent verification pending.</li>
   </ol>
 </body>
 </html>

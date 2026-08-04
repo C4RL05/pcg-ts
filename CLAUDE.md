@@ -53,6 +53,7 @@ Three foundations, each carried through the whole library:
 - `src/three` is the only place allowed to import `three` (optional peer
   dependency, exported as `pcg-ts/three`).
 - Prefer fields over eager values: node params accept `T | Field<T>`.
+- Any UI (editor tooling, example chrome beyond plain HTML) uses Svelte.
 
 ## Unattended build protocol
 
