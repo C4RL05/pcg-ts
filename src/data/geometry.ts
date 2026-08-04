@@ -48,7 +48,9 @@ export class Geometry {
 
   /**
    * Replace the topology, validating references, and resize the vertex and
-   * primitive attribute sets to match. Point attributes are untouched.
+   * primitive attribute sets to match. The arrays are copied defensively,
+   * so later caller-side mutation cannot corrupt validated topology.
+   * Point attributes are untouched.
    */
   setTopology(
     vertexToPoint: Uint32Array,
@@ -70,9 +72,9 @@ export class Geometry {
         throw new Error(`setTopology: primitive ${p} vertex range exceeds ${nv} vertices`);
       }
     }
-    this.vertexToPoint = vertexToPoint;
-    this.primVertexStart = primVertexStart;
-    this.primVertexCount = primVertexCount;
+    this.vertexToPoint = vertexToPoint.slice();
+    this.primVertexStart = primVertexStart.slice();
+    this.primVertexCount = primVertexCount.slice();
     this.attrs.vertex.resize(nv);
     this.attrs.primitive.resize(primVertexStart.length);
   }

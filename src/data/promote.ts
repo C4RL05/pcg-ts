@@ -60,7 +60,8 @@ function forEachContribution(
  * Modes: `first` keeps the first contribution in deterministic scan
  * order (and is the only mode valid for string attributes);
  * `average`/`sum`/`min`/`max` accumulate in float64 and write back with
- * the attribute's typed-array conversion (integer types truncate).
+ * the attribute's typed-array conversion (integer types truncate). Any
+ * NaN contribution yields NaN in every aggregate mode.
  * Target elements with no contributors keep the attribute default.
  * `detail` participates as broadcast (from) or reduce-all (to).
  * Promoting to the same domain returns the existing attribute unchanged.
@@ -117,10 +118,15 @@ export function promote(
     const dofs = d * ts;
     for (let k = 0; k < ts; k++) {
       const v = srcData[so + k];
+      // NaN contributions propagate in every aggregate mode (sum/average
+      // do so arithmetically; min/max need it made explicit because NaN
+      // comparisons are always false).
       if (mode === "min") {
-        if (v < acc[dofs + k]) acc[dofs + k] = v;
+        if (Number.isNaN(v)) acc[dofs + k] = NaN;
+        else if (v < acc[dofs + k]) acc[dofs + k] = v;
       } else if (mode === "max") {
-        if (v > acc[dofs + k]) acc[dofs + k] = v;
+        if (Number.isNaN(v)) acc[dofs + k] = NaN;
+        else if (v > acc[dofs + k]) acc[dofs + k] = v;
       } else {
         acc[dofs + k] += v;
       }

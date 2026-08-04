@@ -15,6 +15,22 @@ describe("Geometry", () => {
     expect(geo.vertexToPoint.length).toBe(0);
   });
 
+  it("copies topology arrays defensively", () => {
+    const geo = new Geometry();
+    geo.attrs.point.resize(3);
+    const vertexToPoint = Uint32Array.of(0, 1, 2);
+    const primVertexStart = Uint32Array.of(0);
+    const primVertexCount = Uint32Array.of(3);
+    geo.setTopology(vertexToPoint, primVertexStart, primVertexCount);
+    // Caller-side mutation after the call must not corrupt the geometry.
+    vertexToPoint[0] = 99;
+    primVertexStart[0] = 7;
+    primVertexCount[0] = 1;
+    expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2]);
+    expect(Array.from(geo.primVertexStart)).toEqual([0]);
+    expect(Array.from(geo.primVertexCount)).toEqual([3]);
+  });
+
   it("validates topology references", () => {
     const geo = new Geometry();
     geo.attrs.point.resize(3);

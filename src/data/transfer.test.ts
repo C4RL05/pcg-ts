@@ -27,7 +27,11 @@ function seededCloud(count: number, seed: number, min: number, max: number): Geo
   return geo;
 }
 
-/** Reference nearest-neighbor indices by exhaustive scan (lowest index wins ties). */
+/**
+ * Reference nearest-neighbor indices by exhaustive scan, mirroring the
+ * documented policy: lowest index wins ties, non-finite source points are
+ * never candidates, non-finite queries map to source index 0.
+ */
 function bruteNearest(src: Geometry, dst: Geometry): number[] {
   const sp = src.attrs.point.require("P").data as Float32Array;
   const dp = dst.attrs.point.require("P").data as Float32Array;
@@ -35,12 +39,23 @@ function bruteNearest(src: Geometry, dst: Geometry): number[] {
   const nd = dst.attrs.point.count;
   const result: number[] = [];
   for (let j = 0; j < nd; j++) {
+    const qx = dp[j * 3];
+    const qy = dp[j * 3 + 1];
+    const qz = dp[j * 3 + 2];
+    if (!Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) {
+      result.push(0);
+      continue;
+    }
     let best = Infinity;
     let bestIdx = 0;
     for (let i = 0; i < ns; i++) {
-      const dx = sp[i * 3] - dp[j * 3];
-      const dy = sp[i * 3 + 1] - dp[j * 3 + 1];
-      const dz = sp[i * 3 + 2] - dp[j * 3 + 2];
+      const sx = sp[i * 3];
+      const sy = sp[i * 3 + 1];
+      const sz = sp[i * 3 + 2];
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) continue;
+      const dx = sx - qx;
+      const dy = sy - qy;
+      const dz = sz - qz;
       const d2 = dx * dx + dy * dy + dz * dz;
       if (d2 < best) {
         best = d2;
@@ -103,6 +118,67 @@ describe("transferNearest grid path", () => {
     const expected = bruteNearest(src, dst);
     transferNearest(dst, src, "seed", { bruteForceThreshold: 0 });
     expect(transferredSeeds(dst)).toEqual(expected);
+  });
+
+  it("completes quickly for queries at extreme distances", () => {
+    // Regression: the ring search used to start at r=0 and pay one empty
+    // ring per cell of distance, hanging on far-away (but valid) queries.
+    const src = seededCloud(100, 9, 0, 1);
+    const dst = createPointCloud(2);
+    const dp = dst.attrs.point.require("P").data as Float32Array;
+    dp.set([3e8, -3e8, 3e8, -1e7, 0.5, 0.5]);
+    const expected = bruteNearest(src, dst);
+    const t0 = performance.now();
+    transferNearest(dst, src, "seed", { bruteForceThreshold: 0 });
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(transferredSeeds(dst)).toEqual(expected);
+  });
+
+  it("ignores non-finite source points on both paths", () => {
+    const src = seededCloud(40, 81, 0, 4);
+    const sp = src.attrs.point.require("P").data as Float32Array;
+    // Original position of point 5, captured before poisoning: a query
+    // parked exactly there would pick index 5 if it were not skipped.
+    const parked = [sp[5 * 3], sp[5 * 3 + 1], sp[5 * 3 + 2]];
+    sp[5 * 3] = Number.NaN; // point 5: NaN x
+    sp[17 * 3 + 2] = Infinity; // point 17: +Inf z would poison the bounds
+    const expected: number[] = [];
+    for (const bruteForceThreshold of [0, Number.MAX_SAFE_INTEGER]) {
+      const dst = seededCloud(25, 82, 0, 4);
+      (dst.attrs.point.require("P").data as Float32Array).set(parked, 0);
+      if (expected.length === 0) {
+        expected.push(...bruteNearest(src, dst));
+        expect(expected).not.toContain(5);
+        expect(expected).not.toContain(17);
+      }
+      transferNearest(dst, src, "seed", { bruteForceThreshold });
+      expect(transferredSeeds(dst), `threshold ${bruteForceThreshold}`).toEqual(expected);
+    }
+  });
+
+  it("maps non-finite destination positions to source index 0", () => {
+    const src = seededCloud(50, 91, 0, 2);
+    for (const bruteForceThreshold of [0, Number.MAX_SAFE_INTEGER]) {
+      const dst = createPointCloud(3);
+      const dp = dst.attrs.point.require("P").data as Float32Array;
+      dp.set([Number.NaN, 0, 0, 1, Infinity, 1, 0.5, 0.5, 0.5]);
+      const expected = bruteNearest(src, dst);
+      transferNearest(dst, src, "seed", { bruteForceThreshold });
+      const got = transferredSeeds(dst);
+      expect(got[0], `threshold ${bruteForceThreshold}`).toBe(0);
+      expect(got[1], `threshold ${bruteForceThreshold}`).toBe(0);
+      expect(got, `threshold ${bruteForceThreshold}`).toEqual(expected);
+    }
+  });
+
+  it("throws when no source position is finite", () => {
+    const src = createPointCloud(5);
+    (src.attrs.point.require("P").data as Float32Array).fill(Number.NaN, 0, 15);
+    const dst = seededCloud(2, 93, 0, 1);
+    expect(() => transferNearest(dst, src, "seed", { bruteForceThreshold: 0 })).toThrow(
+      /no source point has a finite/,
+    );
+    expect(() => transferNearest(dst, src, "seed")).toThrow(/no source point has a finite/);
   });
 
   it("handles a single-point source and coincident sources", () => {

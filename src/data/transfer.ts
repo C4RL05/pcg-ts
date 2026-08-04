@@ -67,12 +67,20 @@ function nearestBrute(
     const qx = dp[j * ds];
     const qy = dp[j * ds + 1];
     const qz = dp[j * ds + 2];
+    if (!Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) {
+      result[j] = 0; // non-finite queries deterministically map to source 0
+      continue;
+    }
     let best = Infinity;
     let bestIdx = 0;
     for (let i = 0; i < ns; i++) {
-      const dx = sp[i * ss] - qx;
-      const dy = sp[i * ss + 1] - qy;
-      const dz = sp[i * ss + 2] - qz;
+      const sx = sp[i * ss];
+      const sy = sp[i * ss + 1];
+      const sz = sp[i * ss + 2];
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) continue;
+      const dx = sx - qx;
+      const dy = sy - qy;
+      const dz = sz - qz;
       const d2 = dx * dx + dy * dy + dz * dz;
       if (d2 < best) {
         best = d2;
@@ -103,6 +111,9 @@ function nearestGrid(
     const x = sp[i * ss];
     const y = sp[i * ss + 1];
     const z = sp[i * ss + 2];
+    // Non-finite source points are never valid nearest candidates; keep
+    // them out of the bounds so one bad point cannot poison the grid.
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
     if (y < minY) minY = y;
@@ -125,9 +136,13 @@ function nearestGrid(
   // Bucket source points by cell (linear key; exact — dims are capped).
   const cells = new Map<number, number[]>();
   for (let i = 0; i < ns; i++) {
-    const cx = Math.min(nx - 1, Math.floor((sp[i * ss] - minX) / cell));
-    const cy = Math.min(ny - 1, Math.floor((sp[i * ss + 1] - minY) / cell));
-    const cz = Math.min(nz - 1, Math.floor((sp[i * ss + 2] - minZ) / cell));
+    const x = sp[i * ss];
+    const y = sp[i * ss + 1];
+    const z = sp[i * ss + 2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const cx = Math.min(nx - 1, Math.floor((x - minX) / cell));
+    const cy = Math.min(ny - 1, Math.floor((y - minY) / cell));
+    const cz = Math.min(nz - 1, Math.floor((z - minZ) / cell));
     const key = cx + nx * (cy + ny * cz);
     let bucket = cells.get(key);
     if (!bucket) {
@@ -142,6 +157,10 @@ function nearestGrid(
     const qx = dp[j * ds];
     const qy = dp[j * ds + 1];
     const qz = dp[j * ds + 2];
+    if (!Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) {
+      result[j] = 0; // non-finite queries deterministically map to source 0
+      continue;
+    }
     // Query cell coordinates, deliberately unclamped (queries may lie
     // outside the source bounds).
     const qcx = Math.floor((qx - minX) / cell);
@@ -156,9 +175,17 @@ function nearestGrid(
       Math.abs(qcz),
       Math.abs(nz - 1 - qcz),
     );
+    // Rings closer than the Chebyshev cell distance from the query cell
+    // to the grid box are provably empty; starting there keeps far-away
+    // queries O(grid) instead of one empty ring per cell of distance.
+    const startR = Math.max(
+      qcx < 0 ? -qcx : qcx > nx - 1 ? qcx - (nx - 1) : 0,
+      qcy < 0 ? -qcy : qcy > ny - 1 ? qcy - (ny - 1) : 0,
+      qcz < 0 ? -qcz : qcz > nz - 1 ? qcz - (nz - 1) : 0,
+    );
     let best = Infinity;
     let bestIdx = -1;
-    for (let r = 0; r <= maxR; r++) {
+    for (let r = startR; r <= maxR; r++) {
       if (bestIdx >= 0) {
         // Any point in a ring-r cell is at least (r-1)*cell away; stop
         // once that lower bound strictly exceeds the best distance (>=
@@ -208,8 +235,11 @@ function nearestGrid(
  * Transfer a point-domain attribute from `src` to `dst` by nearest source
  * point in 3D (positions read from the `P` attribute by default). Uses a
  * uniform grid hash for the lookup (brute force below a small source
- * count); distance ties resolve to the lowest source point index. Creates
- * or overwrites the attribute on `dst`'s point domain and returns it.
+ * count); distance ties resolve to the lowest source point index.
+ * Source points with non-finite positions are never candidates;
+ * destination points with non-finite positions deterministically receive
+ * source index 0; throws when no source position is finite. Creates or
+ * overwrites the attribute on `dst`'s point domain and returns it.
  */
 export function transferNearest(
   dst: Geometry,
@@ -231,6 +261,20 @@ export function transferNearest(
   const nd = dstPoints.count;
   const srcP = requirePosition(srcPoints, positionAttr, "source");
   const dstP = requirePosition(dstPoints, positionAttr, "destination");
+
+  let anyFinite = false;
+  for (let i = 0; i < ns && !anyFinite; i++) {
+    const o = i * srcP.stride;
+    anyFinite =
+      Number.isFinite(srcP.data[o]) &&
+      Number.isFinite(srcP.data[o + 1]) &&
+      Number.isFinite(srcP.data[o + 2]);
+  }
+  if (!anyFinite) {
+    throw new Error(
+      `transferNearest: no source point has a finite "${positionAttr}" position`,
+    );
+  }
 
   const threshold = options.bruteForceThreshold ?? 32;
   const nearest =

@@ -75,6 +75,22 @@ describe("promote vertex -> point", () => {
     expect(values(geo, "point", "w")).toEqual([1, 7, 7, 6, 99]);
   });
 
+  it("propagates NaN through min and max like sum and average", () => {
+    for (const mode of ["min", "max"] as const) {
+      const geo = quad();
+      const w = geo.attrs.vertex.add("w", "f32");
+      w.data.set([NaN, 2, 3, 4, NaN, 6]);
+      promote(geo, "w", "vertex", "point", mode);
+      const got = values(geo, "point", "w");
+      // point0 <- [NaN] (all-NaN must not leak the ±Infinity fill);
+      // point1 <- [2, NaN]; point2 <- [3, 4]; point3 <- [6]
+      expect(Number.isNaN(got[0]), mode).toBe(true);
+      expect(Number.isNaN(got[1]), mode).toBe(true);
+      expect(got[2], mode).toBe(mode === "min" ? 3 : 4);
+      expect(got[3], mode).toBe(6);
+    }
+  });
+
   it("truncates integer averages via typed-array conversion", () => {
     const geo = quad();
     const w = geo.attrs.vertex.add("w", "u32");
