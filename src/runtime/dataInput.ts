@@ -15,13 +15,24 @@ export interface DataInputParams {
 function isDataItem(v: unknown): v is DataItem {
   if (typeof v !== "object" || v === null) return false;
   const it = v as { kind?: unknown; rev?: unknown };
-  return (it.kind === "geometry" || it.kind === "value") && typeof it.rev === "number";
+  return (
+    (it.kind === "geometry" || it.kind === "value" || it.kind === "instances") &&
+    typeof it.rev === "number"
+  );
 }
 
 /**
  * Emits exactly `params.items` on its `out` pin. Items keep their revs, and
  * revs are what param hashing keys on, so the memo cache stays correct:
  * re-injecting the same items is a cache hit, injecting fresh ones recooks.
+ *
+ * Aliasing contract: the emitted collection IS the bound array — cook
+ * results (and any cell store holding them) alias it. Treat the array as
+ * frozen once bound: mutating it in place changes stored "content" without
+ * any rev or staleness signal. To change the data, bind a fresh array
+ * (fresh item revs) or invalidate the affected cells. Outside production
+ * (`NODE_ENV !== "production"`), execute freezes the array so an in-place
+ * mutation throws instead of silently diverging.
  */
 export const dataInput = standardNode<DataInputParams>({
   type: "dataInput",
@@ -47,9 +58,17 @@ export const dataInput = standardNode<DataInputParams>({
     for (let i = 0; i < items.length; i++) {
       if (!isDataItem(items[i])) {
         throw new Error(
-          `dataInput param "items"[${i}] is not a DataItem (expected a geometry or value item; see makeGeometryItem/makeValueItem)`,
+          `dataInput param "items"[${i}] is not a DataItem (expected a geometry, value or instances item; see makeGeometryItem/makeValueItem/makeInstancesItem)`,
         );
       }
+    }
+    // Dev-mode guard for the aliasing contract (see the doc above): the
+    // emitted collection aliases the bound array, so late in-place
+    // mutation must fail loudly rather than tear stored outputs.
+    const env = (globalThis as { process?: { env?: { NODE_ENV?: string } } })
+      .process?.env?.NODE_ENV;
+    if (env !== "production") {
+      Object.freeze(items);
     }
     return { out: items };
   },

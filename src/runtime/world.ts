@@ -3,7 +3,7 @@
  * per level around a viewpoint, cooking each level's graph once per cell
  * with budgeted, cancellable, deterministic scheduling.
  */
-import { CookCancelledError, cook } from "../graph/index.js";
+import { CookCancelledError, cook, type Graph } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import type { CellContext, CellCoord, CellOutputs, LevelDef, ParentCellRef } from "./types.js";
 
@@ -37,9 +37,10 @@ export interface WorldOptions {
 /** Options for one {@link World.update} pass. */
 export interface UpdateOptions {
   /**
-   * Soft time budget for the whole update: once exceeded, no further cell
-   * cooks start (the in-flight cell completes) and remaining work is
-   * reported as `pending`. Also forwarded to each cell cook as its yield
+   * Soft time budget for the whole update, in ms (finite, >= 0): once
+   * elapsed time reaches it, no further cell cooks start (the in-flight
+   * cell completes) and remaining work is reported as `pending`. A budget
+   * of 0 cooks nothing. Also forwarded to each cell cook as its yield
    * budget.
    */
   budgetMs?: number;
@@ -49,7 +50,11 @@ export interface UpdateOptions {
    * stored; the next update resumes the remaining work.
    */
   signal?: AbortSignal;
-  /** Hard cap on the number of cell cooks in this update. */
+  /**
+   * Hard cap on the number of cell cooks in this update (non-negative
+   * integer). 0 cooks nothing: every missing or stale wanted cell is
+   * reported as `pending`.
+   */
   maxCooksPerUpdate?: number;
 }
 
@@ -154,8 +159,10 @@ function nz(n: number): number {
  * A cell recook also marks its stored child cells stale, so invalidation
  * propagates down the hierarchy. Stale cells recook only when wanted; a
  * stale cell in the hysteresis band keeps its old data until it is wanted
- * again. Evicting a parent cell does not evict its children — they keep
- * their generated data.
+ * again, and while a parent cell is stale its wanted children stay
+ * pending rather than cooking against outdated parent content. Evicting
+ * a parent cell does not evict its children — they keep their generated
+ * data.
  */
 export class World {
   private readonly worldSeed: number;
@@ -167,6 +174,8 @@ export class World {
   private useCounter = 0;
   private totalCooked = 0;
   private totalEvicted = 0;
+  /** Last update (settled-safe), for serializing overlapping updates. */
+  private inFlightUpdate: Promise<unknown> = Promise.resolve();
 
   constructor(opts: WorldOptions) {
     const levels = opts.levels;
@@ -219,6 +228,19 @@ export class World {
       }
       prevBounded = { name: def.name, size: def.cellSize };
     });
+    // Staleness tracking (baseline versions) is per level, so two levels
+    // must never share one Graph instance: each would see the other's
+    // binds as phantom user edits and recook everything forever.
+    const graphOwners = new Map<Graph, string>();
+    for (const def of levels) {
+      const owner = graphOwners.get(def.graph);
+      if (owner !== undefined) {
+        throw new WorldValidationError(
+          `levels "${owner}" and "${def.name}" share one Graph instance; give each level its own graph (staleness tracking is per level)`,
+        );
+      }
+      graphOwners.set(def.graph, def.name);
+    }
     const max = opts.maxCellsPerLevel ?? 256;
     if (!Number.isInteger(max) || max < 1) {
       throw new WorldValidationError(`maxCellsPerLevel must be an integer >= 1, got ${String(max)}`);
@@ -241,17 +263,56 @@ export class World {
    * Stream cells around `viewpoint` (`[x, y, z]`; only X and Z matter —
    * cells are 2D on the XZ plane). Levels are processed coarse to fine,
    * so a cell's parent cooks earlier in the same update; a wanted cell
-   * whose parent cell is not yet cooked stays pending instead of cooking
-   * with missing parent data. Rejects with `CookCancelledError` when
-   * `opts.signal` aborts (the store keeps every completed cell and the
-   * next update resumes).
+   * whose parent cell is not yet cooked (or is stale awaiting a recook)
+   * stays pending instead of cooking with missing or outdated parent
+   * data. Rejects with `CookCancelledError` when `opts.signal` aborts
+   * (the store keeps every completed cell and the next update resumes),
+   * and with `WorldValidationError` on a non-finite viewpoint or invalid
+   * options.
+   *
+   * Overlapping calls are serialized per World: a call waits for the
+   * in-flight update to settle before starting, so binds and cooks of
+   * different updates never interleave — fire-and-forget per-frame
+   * updates are safe.
    */
-  async update(
+  update(
     viewpoint: readonly [number, number, number],
     opts: UpdateOptions = {},
   ): Promise<UpdateStats> {
-    const start = performance.now();
+    const run = this.inFlightUpdate.then(() => this.updateRun(viewpoint, opts));
+    this.inFlightUpdate = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async updateRun(
+    viewpoint: readonly [number, number, number],
+    opts: UpdateOptions,
+  ): Promise<UpdateStats> {
     const { budgetMs, signal, maxCooksPerUpdate } = opts;
+    for (let i = 0; i < 3; i++) {
+      if (!Number.isFinite(viewpoint[i])) {
+        throw new WorldValidationError(
+          `viewpoint ${"xyz"[i]} must be a finite number, got ${String(viewpoint[i])}`,
+        );
+      }
+    }
+    if (budgetMs !== undefined && (!Number.isFinite(budgetMs) || budgetMs < 0)) {
+      throw new WorldValidationError(
+        `budgetMs must be a finite number >= 0, got ${String(budgetMs)}`,
+      );
+    }
+    if (
+      maxCooksPerUpdate !== undefined &&
+      (!Number.isInteger(maxCooksPerUpdate) || maxCooksPerUpdate < 0)
+    ) {
+      throw new WorldValidationError(
+        `maxCooksPerUpdate must be a non-negative integer, got ${String(maxCooksPerUpdate)}`,
+      );
+    }
+    const start = performance.now();
     if (signal?.aborted) throw new CookCancelledError();
     const vx = viewpoint[0];
     const vz = viewpoint[2];
@@ -285,7 +346,7 @@ export class World {
         if (signal?.aborted) throw new CookCancelledError();
         if (
           (maxCooksPerUpdate !== undefined && cooked.length >= maxCooksPerUpdate) ||
-          (budgetMs !== undefined && performance.now() - start > budgetMs)
+          (budgetMs !== undefined && performance.now() - start >= budgetMs)
         ) {
           pending++;
           continue;
@@ -404,13 +465,18 @@ export class World {
 
   /**
    * The cooked parent cell for a cell of `level`: undefined for the top
-   * level, "missing" when the parent cell has not been cooked yet.
+   * level, "missing" when the parent cell has not been cooked yet. A
+   * stale parent (e.g. edited while parked in its hysteresis band) also
+   * counts as missing: children wait for the recook rather than cooking
+   * against outdated parent content.
    */
   private parentFor(level: LevelState, coord: CellCoord): ParentCellRef | "missing" | undefined {
     if (level.index === 0) return undefined;
     const pcoord = this.parentCoordOf(level, coord);
     const rec = this.levels[level.index - 1].cells.get(cellKey(pcoord));
-    return rec === undefined ? "missing" : { coord: pcoord, outputs: rec.outputs };
+    return rec === undefined || rec.stale
+      ? "missing"
+      : { coord: pcoord, outputs: rec.outputs };
   }
 
   /** Bind the cell context, cook the level graph, and store the outputs. */
@@ -446,9 +512,16 @@ export class World {
         ...(parent !== undefined ? { parent } : {}),
       };
     }
+    // A version change since the level's last baseline means user code
+    // edited the graph mid-update (e.g. inside onCellReady): charge it
+    // now, so cells cooked earlier this update recook next update instead
+    // of silently keeping pre-edit content.
+    if (level.baselineVersion !== undefined && def.graph.version !== level.baselineVersion) {
+      for (const rec of level.cells.values()) rec.stale = true;
+    }
     def.bind(def.graph, ctx);
     // Re-baseline after the runtime's own writes: only user edits leave
-    // version and baseline disagreeing at the start of the next update.
+    // version and baseline disagreeing at the next check.
     level.baselineVersion = def.graph.version;
     const result = await cook(def.graph, { signal: opts.signal, budgetMs: opts.budgetMs });
 

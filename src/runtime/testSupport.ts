@@ -153,6 +153,25 @@ export function outputsDiff(a: CellOutputs, b: CellOutputs): string | null {
       } else if (x.kind === "geometry" && y.kind === "geometry") {
         const diff = geometryDiff(x.geo, y.geo);
         if (diff !== null) return `${name}[${i}]: ${diff}`;
+      } else if (x.kind === "instances" && y.kind === "instances") {
+        if (x.batches.length !== y.batches.length) {
+          return `${name}[${i}]: ${x.batches.length} batches vs ${y.batches.length}`;
+        }
+        for (let bi = 0; bi < x.batches.length; bi++) {
+          const ba = x.batches[bi];
+          const bb = y.batches[bi];
+          if (ba.assetId !== bb.assetId || ba.count !== bb.count) {
+            return `${name}[${i}]: batch ${bi} asset/count differs`;
+          }
+          if (ba.transforms.length !== bb.transforms.length) {
+            return `${name}[${i}]: batch ${bi} transform length differs`;
+          }
+          for (let t = 0; t < ba.transforms.length; t++) {
+            if (!Object.is(ba.transforms[t], bb.transforms[t])) {
+              return `${name}[${i}]: batch ${bi} transform[${t}] differs`;
+            }
+          }
+        }
       }
     }
   }

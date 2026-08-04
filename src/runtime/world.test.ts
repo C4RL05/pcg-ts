@@ -68,6 +68,14 @@ describe("World validation", () => {
     expect(() => new World({ seed: 1, levels })).toThrow(/duplicate level name "a"/);
   });
 
+  it("rejects two levels sharing one Graph instance", () => {
+    const shared = scatterLevel({ name: "a", cellSize: 20, generationRadius: 8 });
+    const b: LevelDef = { ...shared.def, name: "b", cellSize: 10 };
+    expect(() => new World({ seed: 1, levels: [shared.def, b] })).toThrow(
+      /levels "a" and "b" share one Graph instance/,
+    );
+  });
+
   it("rejects a non-positive LRU cap", () => {
     expect(() => new World({ seed: 1, levels: [lvl({})], maxCellsPerLevel: 0 })).toThrow(
       /maxCellsPerLevel/,
@@ -79,6 +87,47 @@ describe("World validation", () => {
     expect(() => world.getCell("nope", [0, 0])).toThrow(/unknown level "nope"; levels: chunk/);
     expect(() => world.cells("nope")).toThrow(WorldValidationError);
     expect(() => world.invalidate("nope")).toThrow(/unknown level/);
+  });
+});
+
+describe("update argument validation", () => {
+  function make(): World {
+    return new World({ seed: 1, levels: [lvl({ name: "chunk" })] });
+  }
+
+  it("rejects non-finite viewpoint components, naming the axis", async () => {
+    await expect(make().update([NaN, 0, 0])).rejects.toThrow(/viewpoint x must be a finite number/);
+    await expect(make().update([0, -Infinity, 0])).rejects.toThrow(/viewpoint y/);
+    await expect(make().update([0, 0, Infinity])).rejects.toThrow(WorldValidationError);
+  });
+
+  it("rejects invalid budgetMs (negative or NaN)", async () => {
+    const world = make();
+    await expect(world.update([0, 0, 0], { budgetMs: -1 })).rejects.toThrow(
+      /budgetMs must be a finite number >= 0, got -1/,
+    );
+    await expect(world.update([0, 0, 0], { budgetMs: NaN })).rejects.toThrow(WorldValidationError);
+  });
+
+  it("rejects invalid maxCooksPerUpdate (negative, fractional, or NaN)", async () => {
+    const world = make();
+    await expect(world.update([0, 0, 0], { maxCooksPerUpdate: -1 })).rejects.toThrow(
+      /maxCooksPerUpdate must be a non-negative integer/,
+    );
+    await expect(world.update([0, 0, 0], { maxCooksPerUpdate: 1.5 })).rejects.toThrow(
+      WorldValidationError,
+    );
+    await expect(world.update([0, 0, 0], { maxCooksPerUpdate: NaN })).rejects.toThrow(
+      WorldValidationError,
+    );
+  });
+
+  it("maxCooksPerUpdate 0 cooks nothing and reports everything pending", async () => {
+    const world = make();
+    const stats = await world.update([0, 0, 0], { maxCooksPerUpdate: 0 });
+    expect(stats.cooked).toEqual([]);
+    expect(stats.pending).toBe(4);
+    expect(world.cells("chunk")).toHaveLength(0);
   });
 });
 
@@ -114,6 +163,20 @@ describe("dataInput node", () => {
     graph.setParam(node, "items", [a, makeValueItem("two")]);
     const third = await cook(graph);
     expect(third.stats.cooked).toBe(1);
+  });
+
+  it("freezes the bound array outside production so late mutation throws", async () => {
+    const graph = new Graph();
+    const node = graph.add(dataInput);
+    graph.output(node, "out", "out");
+    const items = [makeValueItem(1)];
+    graph.setParam(node, "items", items);
+    const result = await cook(graph);
+    expect(result.outputs.out).toBe(items);
+    // The emitted collection aliases the bound array; mutating it in
+    // place must fail loudly (aliasing contract) rather than silently
+    // changing stored outputs.
+    expect(() => items.push(makeValueItem(2))).toThrow(TypeError);
   });
 
   it("rejects non-item values with a precise error", async () => {

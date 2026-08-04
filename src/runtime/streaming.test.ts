@@ -136,9 +136,9 @@ describe("budgets", () => {
       seed: 1,
       levels: [scatterLevel({ name: "chunk", cellSize: 10, generationRadius: 8 }).def],
     });
-    // A negative budget is exhausted before the first cook: everything
+    // A zero budget is exhausted before the first cook: everything
     // stays pending, and the store is untouched.
-    const first = await world.update([0, 0, 0], { budgetMs: -1 });
+    const first = await world.update([0, 0, 0], { budgetMs: 0 });
     expect(first.cooked).toEqual([]);
     expect(first.pending).toBe(4);
     expect(world.cells("chunk")).toHaveLength(0);

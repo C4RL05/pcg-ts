@@ -104,6 +104,13 @@ export interface LevelDef {
    * then depends only on (world seed, level index, coord, graph
    * structure+params, parent cell content) — never on cook order,
    * viewpoint path, or eviction history.
+   *
+   * Aliasing contract: arrays bound into params (e.g. a `dataInput`
+   * node's `items`) are captured by reference and end up aliased by the
+   * stored cell outputs. Treat them as frozen after binding — mutating
+   * one in place changes stored content with no staleness signal. To
+   * change data, bind a fresh array (fresh item revs) or invalidate the
+   * affected cells.
    */
   bind(graph: Graph, ctx: CellContext): void;
 }

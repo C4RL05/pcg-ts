@@ -61,6 +61,36 @@ describe("cook-order independence", () => {
     expect(sa.pending).toBe(sb.pending);
   });
 
+  it("overlapping update calls serialize and match a sequential run byte for byte", async () => {
+    // Fire-and-forget concurrency: both updates are started without
+    // awaiting. Without per-World serialization, update B's binds would
+    // interleave with update A's suspended cooks and tear cells.
+    const concurrent = makeWorld();
+    const [ra, rb] = await Promise.all([
+      concurrent.update([-15, 0, 0]),
+      concurrent.update([15, 0, 0]),
+    ]);
+
+    const sequential = makeWorld();
+    const sa = await sequential.update([-15, 0, 0]);
+    const sb = await sequential.update([15, 0, 0]);
+
+    expect(ra.cooked).toEqual(sa.cooked);
+    expect(rb.cooked).toEqual(sb.cooked);
+    expect(storedCoords(concurrent, "chunk")).toEqual(storedCoords(sequential, "chunk"));
+    for (const cell of sequential.cells("chunk")) {
+      const other = concurrent.getCell("chunk", cell.coord);
+      expect(other).toBeDefined();
+      expect(outputsDiff(cell.outputs, other?.outputs ?? {})).toBeNull();
+    }
+    expect(
+      outputsDiff(
+        concurrent.getCell("planet", [0, 0])?.outputs ?? {},
+        sequential.getCell("planet", [0, 0])?.outputs ?? {},
+      ),
+    ).toBeNull();
+  });
+
   it("an evicted then regenerated cell is byte-identical", async () => {
     const world = new World({
       seed: 42,
