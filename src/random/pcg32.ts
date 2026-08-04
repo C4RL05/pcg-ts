@@ -9,6 +9,32 @@ const MUL_LO_1 = MUL_LO >>> 16;
 const TWO32 = 0x100000000;
 const INV_2_24 = 2 ** -24;
 
+const NEXT_BELOW_VIEW = new DataView(new ArrayBuffer(8));
+
+/** Largest double strictly below a finite x (explicit big-endian access). */
+function nextBelow(x: number): number {
+  if (x === 0) return -Number.MIN_VALUE;
+  NEXT_BELOW_VIEW.setFloat64(0, x);
+  let hi = NEXT_BELOW_VIEW.getUint32(0);
+  let lo = NEXT_BELOW_VIEW.getUint32(4);
+  if (x > 0) {
+    if (lo === 0) {
+      hi--;
+      lo = 0xffffffff;
+    } else {
+      lo--;
+    }
+  } else if (lo === 0xffffffff) {
+    hi++;
+    lo = 0;
+  } else {
+    lo++;
+  }
+  NEXT_BELOW_VIEW.setUint32(0, hi);
+  NEXT_BELOW_VIEW.setUint32(4, lo);
+  return NEXT_BELOW_VIEW.getFloat64(0);
+}
+
 /**
  * PCG32 (PCG-XSH-RR 64/32): O'Neill's permuted congruential generator.
  * 64-bit state carried as two u32 halves — no BigInt on the hot path.
@@ -93,9 +119,17 @@ export class Pcg32 {
     return (this.nextU32() >>> 8) * INV_2_24;
   }
 
-  /** Next float in [min, max) (assuming max > min). */
+  /**
+   * Next float in [min, max) for max > min. f64 rounding at ulp-scale
+   * spans (e.g. `range(2**53, 2**53 + 2)`) is clamped strictly below max.
+   */
   range(min: number, max: number): number {
-    return min + this.nextF32() * (max - min);
+    const v = min + this.nextF32() * (max - min);
+    if (min < max && v >= max) {
+      const below = nextBelow(max);
+      return below < min ? min : below;
+    }
+    return v;
   }
 
   /**

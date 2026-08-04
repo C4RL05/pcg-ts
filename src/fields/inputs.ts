@@ -1,5 +1,12 @@
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
-import { type Field, type FieldLike, elementCount, isField, makeField } from "./types.js";
+import {
+  type Field,
+  type FieldLike,
+  elementCount,
+  isField,
+  keyNum,
+  makeField,
+} from "./types.js";
 
 /**
  * Constant field: the same scalar or tuple for every element. Values are
@@ -12,7 +19,7 @@ export function constant(value: number | readonly number[]): Field {
   const values = typeof value === "number" ? [value] : [...value];
   const ts = values.length;
   if (ts < 1) throw new Error("constant: tuple must have at least one component");
-  return makeField(`const(${values.join(",")})`, ts, (ctx) => {
+  return makeField(`const(${values.map(keyNum).join(",")})`, ts, (ctx) => {
     const n = elementCount(ctx);
     const data = new Float32Array(n * ts);
     for (let i = 0; i < n; i++) {
@@ -34,7 +41,10 @@ export function resolveField(v: FieldLike): Field {
  * When `tupleSize` is given, the attribute's tuple size must match.
  */
 export function attribute(name: string, tupleSize?: number): Field {
-  const key = tupleSize === undefined ? `attr(${name})` : `attr(${name},${tupleSize})`;
+  // JSON.stringify quotes and escapes the name, so keys stay
+  // injection-proof for arbitrary attribute names.
+  const quoted = JSON.stringify(name);
+  const key = tupleSize === undefined ? `attr(${quoted})` : `attr(${quoted},${tupleSize})`;
   return makeField(key, tupleSize, (ctx) => {
     const attr = ctx.geo.attrs[ctx.domain].require(name);
     if (attr.type === "string") {

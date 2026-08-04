@@ -3,6 +3,8 @@ import {
   type FieldLike,
   elementCount,
   evaluateField,
+  keyNum,
+  keyRef,
   makeField,
   position,
   resolveField,
@@ -79,7 +81,7 @@ export function makeNoiseField(
   const frequency = opts.frequency ?? 1;
   const [ox, oy, oz] = opts.offset ?? [0, 0, 0];
   const pos = resolveField(opts.position ?? position());
-  const key = `${kind}(${seed},${frequency},${ox},${oy},${oz};${pos.key})`;
+  const key = `${kind}(${seed},${keyNum(frequency)},${keyNum(ox)},${keyNum(oy)},${keyNum(oz)};${keyRef(pos.key)})`;
   const sample = makeSampler(hash2(kindSalt, seed));
   return makeField(key, 1, (ctx) => {
     const posCol = evaluateField(pos, ctx);

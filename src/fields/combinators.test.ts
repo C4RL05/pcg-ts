@@ -66,6 +66,7 @@ describe("arithmetic and broadcasting", () => {
 
   it("rejects incompatible tuple sizes at construction when known", () => {
     expect(() => add(constant([1, 2]), constant([1, 2, 3]))).toThrow(/tuple/);
+    expect(() => dot(constant([1, 2]), constant([1, 2, 3]))).toThrow(/tuple/);
   });
 
   it("rejects incompatible tuple sizes discovered at evaluation", () => {

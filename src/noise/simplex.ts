@@ -6,10 +6,23 @@ const SIMPLEX_SALT = 0x73696d70; // "simp"
 const F3 = 1 / 3;
 const G3 = 1 / 6;
 
+// Kernel radius² 0.5 (not Gustavson's 0.6): with 0.6 the kernel support
+// overruns the four traversed corners, producing a true C0 discontinuity
+// across skew-cell boundaries (measured |Δv| ≈ 0.005); with 0.5 the
+// support never reaches an omitted corner, so the field is continuous.
+const R2 = 0.5;
+
+// Output scale, derived empirically for R2 = 0.5: the largest |raw
+// kernel sum| observed over 1.28M samples (5 seeds x 4 frequencies) was
+// 0.013005, and 72 maps that to ~0.94 — inside [-1, 1] with ~6% headroom
+// for rarer, unobserved peaks.
+const SIMPLEX_SCALE = 72;
+
 /**
  * Simplex noise (Gustavson's 3D formulation with hash-selected
- * gradients instead of a permutation table). Output is in approximately
- * [-1, 1]. Deterministic from `seed`.
+ * gradients instead of a permutation table, kernel r² = 0.5 for
+ * continuity across skew cells). Output is in approximately [-1, 1].
+ * Deterministic from `seed`.
  */
 export function simplexNoise(opts: NoiseOpts = {}): Field<1> {
   return makeNoiseField("simplex", SIMPLEX_SALT, opts, (seed) => {
@@ -21,7 +34,7 @@ export function simplexNoise(opts: NoiseOpts = {}): Field<1> {
       y: number,
       z: number,
     ): number => {
-      const t = 0.6 - x * x - y * y - z * z;
+      const t = R2 - x * x - y * y - z * z;
       if (t <= 0) return 0;
       const g = (hash4(seed, i, j, k) % 12) * 3;
       const t2 = t * t;
@@ -71,7 +84,7 @@ export function simplexNoise(opts: NoiseOpts = {}): Field<1> {
       const y3 = y0 - 1 + 3 * G3;
       const z3 = z0 - 1 + 3 * G3;
       return (
-        32 *
+        SIMPLEX_SCALE *
         (corner(i, j, k, x0, y0, z0) +
           corner(i + i1, j + j1, k + k1, x1, y1, z1) +
           corner(i + i2, j + j2, k + k2, x2, y2, z2) +

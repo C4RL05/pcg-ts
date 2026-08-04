@@ -110,6 +110,29 @@ describe("randomField", () => {
   });
 });
 
+describe("structural keys", () => {
+  it("is injection-proof for attribute names embedded in combinator keys", () => {
+    // With naive string joins both trees would serialize identically.
+    const a = add(attribute('a");attr("b'), attribute("c"));
+    const b = add(attribute("a"), attribute('b");attr("c'));
+    expect(a.key).not.toBe(b.key);
+  });
+
+  it("distinguishes -0 from 0 in constants", () => {
+    expect(constant(-0).key).not.toBe(constant(0).key);
+    // The columns really do differ: Float32Array stores the sign.
+    const negZero = evaluateField(constant(-0), pointCtx(1));
+    expect(Object.is(negZero.data[0], -0)).toBe(true);
+  });
+
+  it("keeps nesting unambiguous via length-prefixed child keys", () => {
+    const x = constant(1);
+    const y = constant(2);
+    const z = constant(3);
+    expect(add(add(x, y), z).key).not.toBe(add(x, add(y, z)).key);
+  });
+});
+
 describe("memoization", () => {
   function countingField(): { field: Field; calls: () => number } {
     let calls = 0;

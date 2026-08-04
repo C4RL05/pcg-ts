@@ -130,6 +130,73 @@ describe.each(CASES)("$name noise", ({ make, lo, hi, smooth }) => {
   }
 });
 
+describe("simplex skew-cell continuity", () => {
+  // Regression for the r²=0.6 kernel: its support overran the four
+  // traversed corners, giving a true C0 jump (|Δv| ≈ 5e-3) across
+  // skew-cell boundaries. Construct pairs straddling skew-lattice faces
+  // and assert the difference vanishes with the straddle width.
+  const G3 = 1 / 6;
+  const unskew = (X: number, Y: number, Z: number): [number, number, number] => {
+    const t = (X + Y + Z) * G3;
+    return [X - t, Y - t, Z - t];
+  };
+
+  function straddlePairs(eps: number): { a: Float32Array; b: Float32Array; count: number } {
+    const cells: Array<[number, number, number]> = [
+      [0, 0, 0], [1, -2, 3], [-1, -1, -1], [2, 0, -3],
+      [-4, 5, 1], [0, 2, -2], [3, 3, 3], [-2, -3, 4],
+    ];
+    const fracs = [0.1, 0.35, 0.5, 0.65, 0.9];
+    const count = cells.length * fracs.length * fracs.length * 3;
+    const a = new Float32Array(count * 3);
+    const b = new Float32Array(count * 3);
+    let idx = 0;
+    for (const [ci, cj, ck] of cells) {
+      for (const fa of fracs) {
+        for (const fb of fracs) {
+          for (let axis = 0; axis < 3; axis++) {
+            // Skewed-space point exactly on the integer face of `axis`.
+            const S: [number, number, number] =
+              axis === 0
+                ? [ci, cj + fa, ck + fb]
+                : axis === 1
+                  ? [ci + fa, cj, ck + fb]
+                  : [ci + fa, cj + fb, ck];
+            const lo: [number, number, number] = [...S];
+            const hi: [number, number, number] = [...S];
+            lo[axis] -= eps / 2;
+            hi[axis] += eps / 2;
+            a.set(unskew(...lo), idx * 3);
+            b.set(unskew(...hi), idx * 3);
+            idx++;
+          }
+        }
+      }
+    }
+    return { a, b, count };
+  }
+
+  function maxJump(eps: number): number {
+    const field = simplexNoise({ seed: 8 });
+    const { a, b, count } = straddlePairs(eps);
+    const va = sample(field, a);
+    const vb = sample(field, b);
+    let worst = 0;
+    for (let i = 0; i < count; i++) {
+      worst = Math.max(worst, Math.abs(vb[i] - va[i]));
+    }
+    return worst;
+  }
+
+  it("has no jump across straddling pairs, shrinking with eps", () => {
+    const coarse = maxJump(1e-3);
+    const fine = maxJump(1e-5);
+    // A C0 discontinuity (~5e-3) would dwarf this bound.
+    expect(fine).toBeLessThan(1e-3);
+    expect(fine).toBeLessThan(coarse);
+  });
+});
+
 describe("perlin/simplex statistics", () => {
   it.each([
     ["perlin", perlinNoise],
@@ -221,8 +288,8 @@ describe("golden determinism", () => {
       "simplex",
       simplexNoise({ seed: 7 }),
       [
-        0.13836677372455597, -0.6992583274841309, 0.3192481994628906, -0.6599425673484802,
-        0.2972446382045746,
+        0.17185145616531372, -0.59765625, 0.21675285696983337, -0.46495112776756287,
+        0.18732710182666779,
       ],
     ],
     [

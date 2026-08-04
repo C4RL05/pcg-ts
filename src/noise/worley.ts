@@ -18,6 +18,11 @@ export interface WorleyNoiseOpts extends NoiseOpts {
  * one per unit cell, searched over the 3x3x3 neighborhood (the standard
  * approximation). F1 is in [0, ~√3); F2 >= F1, so `f2-f1` is >= 0.
  * Deterministic from `seed`.
+ *
+ * The 3x3x3 search can miss a closer feature just outside the searched
+ * block: measured over corner-adjacent queries, ~7e-5 return a wrong F1
+ * and ~7e-4 a wrong F2, with error magnitudes around 0.016. An exact
+ * wider search is a possible future opt-in.
  */
 export function worleyNoise(opts: WorleyNoiseOpts = {}): Field<1> {
   const output = opts.output ?? "f1";

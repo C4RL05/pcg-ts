@@ -5,6 +5,8 @@ import {
   type FieldLike,
   elementCount,
   evaluateField,
+  keyNum,
+  keyRef,
   makeField,
 } from "./types.js";
 
@@ -42,7 +44,7 @@ function elementwise(
 ): Field {
   const fields = inputs.map(resolveField);
   const staticTs = broadcastTupleSize(kind, fields.map((f) => f.tupleSize));
-  const key = `${kind}(${fields.map((f) => f.key).join(";")})`;
+  const key = `${kind}(${fields.map((f) => keyRef(f.key)).join(",")})`;
   return makeField(key, staticTs, (ctx) => {
     const cols = fields.map((f) => evaluateField(f, ctx));
     const ts = broadcastTupleSize(kind, cols.map((c) => c.tupleSize)) ?? 1;
@@ -162,7 +164,8 @@ export function eq(a: FieldLike, b: FieldLike): Field {
 export function dot(a: FieldLike, b: FieldLike): Field<1> {
   const fa = resolveField(a);
   const fb = resolveField(b);
-  return makeField(`dot(${fa.key};${fb.key})`, 1, (ctx) => {
+  broadcastTupleSize("dot", [fa.tupleSize, fb.tupleSize]); // static check
+  return makeField(`dot(${keyRef(fa.key)},${keyRef(fb.key)})`, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const cb = evaluateField(fb, ctx);
     const ts = broadcastTupleSize("dot", [ca.tupleSize, cb.tupleSize]) ?? 1;
@@ -180,7 +183,7 @@ export function dot(a: FieldLike, b: FieldLike): Field<1> {
 /** Euclidean length of each element tuple. */
 export function length(a: FieldLike): Field<1> {
   const fa = resolveField(a);
-  return makeField(`length(${fa.key})`, 1, (ctx) => {
+  return makeField(`length(${keyRef(fa.key)})`, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const ts = ca.tupleSize;
     const n = elementCount(ctx);
@@ -200,7 +203,7 @@ export function length(a: FieldLike): Field<1> {
 /** Normalize each element tuple to unit length (zero tuples stay zero). */
 export function normalize(a: FieldLike): Field {
   const fa = resolveField(a);
-  return makeField(`normalize(${fa.key})`, fa.tupleSize, (ctx) => {
+  return makeField(`normalize(${keyRef(fa.key)})`, fa.tupleSize, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const ts = ca.tupleSize;
     const n = elementCount(ctx);
@@ -229,7 +232,7 @@ export function vec(...components: FieldLike[]): Field {
   const staticTs = sizes.every((s) => s !== undefined)
     ? sizes.reduce<number>((acc, s) => acc + (s as number), 0)
     : undefined;
-  const key = `vec(${fields.map((f) => f.key).join(";")})`;
+  const key = `vec(${fields.map((f) => keyRef(f.key)).join(",")})`;
   return makeField(key, staticTs, (ctx) => {
     const cols = fields.map((f) => evaluateField(f, ctx));
     const ts = cols.reduce((acc, c) => acc + c.tupleSize, 0);
@@ -251,7 +254,7 @@ export function component(a: FieldLike, componentIndex: number): Field<1> {
     throw new Error(`component: index must be a non-negative integer, got ${componentIndex}`);
   }
   const fa = resolveField(a);
-  return makeField(`component(${fa.key};${componentIndex})`, 1, (ctx) => {
+  return makeField(`component(${keyRef(fa.key)},${componentIndex})`, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const ts = ca.tupleSize;
     if (componentIndex >= ts) {
@@ -282,7 +285,8 @@ export function ramp(
     }
   }
   const fa = resolveField(input);
-  const key = `ramp(${fa.key};${stops.map((s) => `${s[0]}:${s[1]}`).join(",")})`;
+  const stopsKey = stops.map((s) => `${keyNum(s[0])}:${keyNum(s[1])}`).join(",");
+  const key = `ramp(${keyRef(fa.key)};${stopsKey})`;
   return makeField(key, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     if (ca.tupleSize !== 1) {

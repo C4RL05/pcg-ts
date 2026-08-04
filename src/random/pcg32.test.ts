@@ -51,6 +51,26 @@ describe("Pcg32", () => {
     }
   });
 
+  it("range never returns max at ulp-scale spans (f64 rounding clamp)", () => {
+    // At 2^53 the double spacing is 2, so min + f * 2 rounds to either
+    // endpoint; unclamped this returned exactly max ~25% of the time.
+    const rng = new Pcg32(1);
+    const min = 2 ** 53;
+    const max = 2 ** 53 + 2;
+    for (let i = 0; i < 1000; i++) {
+      const v = rng.range(min, max);
+      expect(v).toBeGreaterThanOrEqual(min);
+      expect(v).toBeLessThan(max);
+    }
+    // Adjacent doubles: every draw clamps to min.
+    const rng2 = new Pcg32(2);
+    const lo = 1;
+    const hi = 1 + 2 ** -52;
+    for (let i = 0; i < 200; i++) {
+      expect(rng2.range(lo, hi)).toBe(lo);
+    }
+  });
+
   it("fork derives independent, deterministic streams", () => {
     const seq = (rng: Pcg32) => Array.from({ length: 8 }, () => rng.nextU32());
 

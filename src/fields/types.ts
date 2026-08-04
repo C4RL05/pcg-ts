@@ -6,7 +6,10 @@ export type ColumnData = Float32Array | Int32Array | Uint32Array;
 /**
  * The result of evaluating a field over a domain: `count * tupleSize`
  * scalars in SoA layout. Columns may alias live attribute storage —
- * treat them as read-only.
+ * treat them as read-only. They are snapshots-or-views valid only until
+ * the geometry is mutated or resized (resizing can reallocate attribute
+ * storage, leaving a held Column aliasing dead memory) — re-evaluate
+ * with a fresh context after mutating.
  */
 export interface Column {
   readonly data: ColumnData;
@@ -52,6 +55,23 @@ export type FieldLike = number | readonly number[] | Field;
 /** Type guard: is this field-like value already a Field? */
 export function isField(v: FieldLike): v is Field {
   return typeof v === "object" && v !== null && "evaluate" in v;
+}
+
+/**
+ * Serialize a number for use in a structural key. Object.is-aware: -0
+ * serializes as "-0" so it never collides with 0 (their columns differ).
+ */
+export function keyNum(v: number): string {
+  return Object.is(v, -0) ? "-0" : String(v);
+}
+
+/**
+ * Embed a child field's key inside a parent key, injection-proof: the
+ * length prefix makes the embedding unambiguous no matter what
+ * characters the child key contains (e.g. user attribute names).
+ */
+export function keyRef(key: string): string {
+  return `${key.length}#${key}`;
 }
 
 /** Build a Field from a structural key, static tuple size, and evaluator. */
