@@ -1,0 +1,40 @@
+{
+  "name": "pcg-ts",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./three": {
+      "types": "./dist/three/index.d.ts",
+      "import": "./dist/three/index.js"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "examples": "vite --config examples/vite.config.ts",
+    "status": "node scripts/status.mjs"
+  },
+  "peerDependencies": {
+    "three": "^0.185.1"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.185.3",
+    "three": "^0.185.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  }
+}
