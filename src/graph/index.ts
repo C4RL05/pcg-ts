@@ -10,5 +10,12 @@ export {
   type NodeDoneInfo,
 } from "./execute.js";
 export { cloneGeometry } from "./clone.js";
-export { subgraphNode, type ExposedPin } from "./subgraph.js";
+export {
+  getSubgraphPlumbing,
+  getSubgraphSpec,
+  subgraphNode,
+  type ExposedPin,
+  type SubgraphPlumbing,
+  type SubgraphSpec,
+} from "./subgraph.js";
 // testNodes.js is intentionally not exported: test-only utilities.

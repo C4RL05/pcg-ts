@@ -127,6 +127,62 @@ describe("subgraphNode", () => {
     expect(c.state.count).toBe(2);
   });
 
+  it("propagates nested inner edits to the outer memo key (2 deep)", async () => {
+    const inner2 = new Graph();
+    const c = counterNode(5);
+    const h2 = inner2.add(c.def, undefined, "c");
+    const def2 = subgraphNode(inner2, [], [{ name: "out", node: h2, pin: "out" }]);
+
+    const inner1 = new Graph();
+    const mid = inner1.add(def2, undefined, "mid");
+    const def1 = subgraphNode(inner1, [], [{ name: "out", node: mid, pin: "out" }]);
+
+    const g = new Graph();
+    const s = g.add(def1, undefined, "sub");
+    g.output(s, "out", "res");
+
+    const r1 = await cook(g);
+    expect(valueOf(r1.outputs.res)).toBe(5);
+    const r2 = await cook(g);
+    expect(r2.stats.cached).toBe(1); // unchanged: outer serves its cache
+
+    inner2.setParam(h2, "value", 9); // innermost edit, two levels down
+    const r3 = await cook(g);
+    expect(valueOf(r3.outputs.res)).toBe(9); // not the stale 5
+    expect(r3.stats.cooked).toBe(1);
+    expect(c.state.count).toBe(2);
+  });
+
+  it("folds inner-graph versions transitively at any depth (3 deep)", async () => {
+    const inner3 = new Graph();
+    const c = counterNode(1);
+    const h3 = inner3.add(c.def, undefined, "c");
+    const def3 = subgraphNode(inner3, [], [{ name: "out", node: h3, pin: "out" }]);
+    const inner2 = new Graph();
+    const n2 = inner2.add(def3, undefined, "deep");
+    const def2 = subgraphNode(inner2, [], [{ name: "out", node: n2, pin: "out" }]);
+    const inner1 = new Graph();
+    const n1 = inner1.add(def2, undefined, "mid");
+    const def1 = subgraphNode(inner1, [], [{ name: "out", node: n1, pin: "out" }]);
+    const g = new Graph();
+    const s = g.add(def1, undefined, "sub");
+    g.output(s, "out", "res");
+
+    expect(valueOf((await cook(g)).outputs.res)).toBe(1);
+    inner3.setParam(h3, "value", 7);
+    const r = await cook(g);
+    expect(valueOf(r.outputs.res)).toBe(7);
+    expect(r.stats.cooked).toBe(1);
+  });
+
+  it("memoKey terminates on adversarial cyclic wiring", () => {
+    const g = new Graph();
+    const t = g.add(transformNode(), undefined, "t");
+    const def = subgraphNode(g, [], [{ name: "out", node: t, pin: "out" }]);
+    g.add(def, undefined, "ouro"); // the graph wraps itself
+    expect(typeof def.memoKey?.()).toBe("string"); // no infinite recursion
+  });
+
   it("forwards budgetMs into the inner cook", async () => {
     let timerFired = false;
     const sawTimer: boolean[] = [];

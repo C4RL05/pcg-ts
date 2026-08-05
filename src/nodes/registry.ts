@@ -5,13 +5,18 @@
  * source — and so graphs referencing node types by name can be
  * serialized and deserialized (see serialize.ts).
  */
-import type { NodeDef, NodeExecuteArgs, NodeOutputs, PinDef, PinKind } from "../graph/index.js";
+import type { DataItem, NodeDef, NodeExecuteArgs, NodeOutputs, PinDef, PinKind } from "../graph/index.js";
 
-/** Value kinds a node param can declare in its schema. */
-export type ParamType = "f32" | "i32" | "u32" | "bool" | "string" | "vec3" | "vec4" | "enum";
+/**
+ * Value kinds a node param can declare in its schema. `items` is a list
+ * of runtime-injected {@link DataItem}s (bound via `graph.setParam`, e.g.
+ * by the World per cell): its default is always `[]` and serialized
+ * graphs carry an empty list — live items are never part of the JSON.
+ */
+export type ParamType = "f32" | "i32" | "u32" | "bool" | "string" | "vec3" | "vec4" | "enum" | "items";
 
 /** Plain (non-field) values a param can hold. */
-export type ParamValue = number | boolean | string | readonly number[];
+export type ParamValue = number | boolean | string | readonly number[] | readonly DataItem[];
 
 /**
  * Machine-readable schema of one node param. Descriptions are agent-facing
@@ -137,6 +142,19 @@ function validateSchema(type: string, name: string, schema: ParamSchema): void {
     case "vec4":
       if (!checkNumberVector(d, 4)) fail("default must be an array of 4 finite numbers");
       break;
+    case "items":
+      if (!Array.isArray(d) || d.length !== 0) {
+        fail(
+          "default must be an empty array ([]) — DataItems are injected at runtime and are never part of a schema default",
+        );
+      }
+      if (schema.acceptsField === true) {
+        fail("cannot accept fields — item lists carry runtime DataItems, not per-element values");
+      }
+      if (schema.min !== undefined || schema.max !== undefined) {
+        fail("cannot declare min/max — item lists have no numeric bounds");
+      }
+      break;
     default:
       fail(`has unknown type "${(schema as { type: string }).type}"`);
   }
@@ -144,7 +162,7 @@ function validateSchema(type: string, name: string, schema: ParamSchema): void {
     const b = schema[bound];
     if (b === undefined) continue;
     if (!isFiniteNumber(b)) fail(`${bound} must be a finite number`);
-    const components = typeof d === "number" ? [d] : Array.isArray(d) ? d : undefined;
+    const components = typeof d === "number" ? [d] : Array.isArray(d) ? d.filter(isFiniteNumber) : undefined;
     if (components) {
       for (const c of components) {
         if (bound === "min" && c < b) fail(`default ${c} is below min ${b}`);
@@ -152,6 +170,10 @@ function validateSchema(type: string, name: string, schema: ParamSchema): void {
       }
     }
   }
+}
+
+function copyParamValue(v: ParamValue): ParamValue {
+  return Array.isArray(v) ? ([...v] as ParamValue) : v;
 }
 
 function copySchema(schema: ParamSchema): ParamSchema {
@@ -165,7 +187,7 @@ function copySchema(schema: ParamSchema): ParamSchema {
     max?: number;
   } = {
     type: schema.type,
-    default: Array.isArray(schema.default) ? [...schema.default] : schema.default,
+    default: copyParamValue(schema.default),
     description: schema.description,
   };
   if (schema.enum !== undefined) copy.enum = [...schema.enum];
@@ -198,7 +220,7 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
   const defaultParams: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {
     validateSchema(spec.type, name, schema);
-    defaultParams[name] = Array.isArray(schema.default) ? [...schema.default] : schema.default;
+    defaultParams[name] = copyParamValue(schema.default);
   }
 
   const def: NodeDef<P> = {

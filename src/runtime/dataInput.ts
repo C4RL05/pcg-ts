@@ -42,10 +42,10 @@ export const dataInput = standardNode<DataInputParams>({
   outputs: [{ name: "out", kind: "any" }],
   params: {
     items: {
-      type: "string",
-      default: "",
+      type: "items",
+      default: [],
       description:
-        "The DataItem array to emit, set programmatically via graph.setParam. The declared schema type is a placeholder (the registry has no item-list param type); the actual default is an empty list and the value is not JSON-serializable.",
+        "Data items to emit, bound at runtime via graph.setParam (the World binds parent-cell outputs here, per cell, at bind time). Live DataItems are runtime-injected and never serialized: a serialized graph carries an empty item list, and items must be re-bound after deserialization.",
     },
   },
   execute({ params }) {
@@ -73,8 +73,3 @@ export const dataInput = standardNode<DataInputParams>({
     return { out: items };
   },
 });
-
-// The registry's param schema types cannot express an item list, so the
-// spec above declares a placeholder; the real default is an empty list.
-const NO_ITEMS: readonly DataItem[] = Object.freeze([]);
-(dataInput.defaultParams as { items: readonly DataItem[] }).items = NO_ITEMS;

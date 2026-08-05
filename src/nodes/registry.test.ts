@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { DataItem } from "../graph/index.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./index.js";
 
 const STANDARD_TYPES = [
@@ -134,6 +135,50 @@ describe("standardNode validation", () => {
         execute: () => ({}),
       }),
     ).toThrow(/already registered/);
+  });
+
+  it("validates item-list schemas: empty default, no bounds, no fields", () => {
+    expect(() =>
+      standardNode<{ items: readonly DataItem[] }>({
+        type: "__test_itemsBadDefault",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: { items: { type: "items", default: [1], description: "items" } },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "items".*empty array/);
+    expect(() =>
+      standardNode<{ items: readonly DataItem[] }>({
+        type: "__test_itemsBounds",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: { items: { type: "items", default: [], min: 0, description: "items" } },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "items".*min\/max/);
+    expect(() =>
+      standardNode<{ items: readonly DataItem[] }>({
+        type: "__test_itemsField",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: {
+          items: { type: "items", default: [], acceptsField: true, description: "items" },
+        },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "items".*cannot accept fields/);
+    const def = standardNode<{ items: readonly DataItem[] }>({
+      type: "__test_itemsOk",
+      description: "test",
+      inputs: [],
+      outputs: [],
+      params: { items: { type: "items", default: [], description: "items to emit" } },
+      execute: () => ({}),
+    });
+    expect(def.defaultParams).toEqual({ items: [] });
   });
 
   it("builds defaultParams from the schemas", () => {
