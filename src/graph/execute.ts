@@ -2,7 +2,7 @@ import { isField } from "../fields/index.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection, DataItem } from "./data.js";
 import { CookCancelledError, GraphCycleError, GraphValidationError, NodeExecutionError } from "./errors.js";
-import type { Graph } from "./graph.js";
+import type { Graph, OutputDecl } from "./graph.js";
 
 /** Progress callback payload: one entry per node visited by a cook. */
 export interface NodeDoneInfo {
@@ -31,6 +31,19 @@ export interface CookOptions {
    * wrapped); the node that just finished keeps its cache.
    */
   onNodeDone?: (info: NodeDoneInfo) => void;
+  /**
+   * Cook only these declared outputs (by name): the pass visits just the
+   * induced upstream subgraph, and the result contains exactly these
+   * names. Nodes outside the selection are untouched — their caches are
+   * neither recooked nor invalidated, so cooking output A and then
+   * output B reuses every shared upstream result via the normal memo
+   * cache. Selection order does not matter (cooking follows the graph's
+   * declaration order), duplicates are ignored, and an empty array cooks
+   * nothing. An unknown name rejects with `GraphValidationError` listing
+   * the declared outputs. Omit to cook every declared output (the
+   * default, byte-identical to the pre-option behavior).
+   */
+  outputs?: readonly string[];
 }
 
 /** Counters for one cook pass. */
@@ -132,17 +145,44 @@ function stableValueHash(v: unknown, path: string): string {
 }
 
 /**
- * Reachable nodes from the declared outputs, upstream-first (topological).
- * Deterministic: outputs in declaration order, inputs in connection order.
- * Iterative (explicit stack) so arbitrarily deep chains cannot overflow
- * the call stack.
+ * Resolve the outputs a cook pulls from: all declared outputs, or —
+ * when `names` is given — the declared subset carrying those names, in
+ * declaration order (so the visit order never depends on the order the
+ * caller listed them). Unknown names throw a GraphValidationError that
+ * states the valid alternatives.
  */
-function topoOrder(graph: Graph): string[] {
+function selectOutputs(graph: Graph, names: readonly string[] | undefined): readonly OutputDecl[] {
+  if (names === undefined) return graph._outputs;
+  const wanted = new Set(names);
+  for (const name of wanted) {
+    if (!graph._outputs.some((o) => o.name === name)) {
+      if (graph._outputs.length === 0) {
+        throw new GraphValidationError(
+          `unknown output "${name}": this graph declares no outputs; declare one with graph.output(node, pin, name) before cooking`,
+        );
+      }
+      throw new GraphValidationError(
+        `unknown output "${name}"; declared outputs: ${graph._outputs
+          .map((o) => `"${o.name}"`)
+          .join(", ")}`,
+      );
+    }
+  }
+  return graph._outputs.filter((o) => wanted.has(o.name));
+}
+
+/**
+ * Reachable nodes from the given output declarations, upstream-first
+ * (topological). Deterministic: outputs in declaration order, inputs in
+ * connection order. Iterative (explicit stack) so arbitrarily deep
+ * chains cannot overflow the call stack.
+ */
+function topoOrder(graph: Graph, decls: readonly OutputDecl[]): string[] {
   const order: string[] = [];
   const state = new Map<string, 1 | 2>();
   const stack: Array<{ id: string; entered: boolean }> = [];
-  for (let i = graph._outputs.length - 1; i >= 0; i--) {
-    stack.push({ id: graph._outputs[i].node, entered: false });
+  for (let i = decls.length - 1; i >= 0; i--) {
+    stack.push({ id: decls[i].node, entered: false });
   }
   while (stack.length > 0) {
     const frame = stack[stack.length - 1];
@@ -181,13 +221,16 @@ function yieldToEventLoop(): Promise<void> {
 const inFlight = new WeakMap<Graph, Promise<unknown>>();
 
 /**
- * Cook the graph: pull-based from its declared outputs, topological order,
- * sequential. Each node is memoized on (type, param hash, node seed, input
- * item revs, optional `NodeDef.memoKey`) — an unchanged key serves the
- * cached outputs, and unchanged outputs keep their revs so cleanliness
- * propagates downstream. Aborting rejects with {@link CookCancelledError}
- * but keeps completed nodes' caches, so a re-cook resumes where the
- * cancelled one left off.
+ * Cook the graph: pull-based from its declared outputs (or the subset
+ * selected via `opts.outputs`), topological order, sequential. Each node
+ * is memoized on (type, param hash, node seed, input item revs, optional
+ * `NodeDef.memoKey`) — an unchanged key serves the cached outputs, and
+ * unchanged outputs keep their revs so cleanliness propagates
+ * downstream. Because content is a pure function of the memo key,
+ * partial cooks compose deterministically: cooking output A then B
+ * yields the same bytes as B then A or one full cook. Aborting rejects
+ * with {@link CookCancelledError} but keeps completed nodes' caches, so
+ * a re-cook resumes where the cancelled one left off.
  *
  * Overlapping cooks of the same graph are serialized: a call waits for the
  * in-flight cook to settle before starting, so each node executes at most
@@ -222,7 +265,8 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   };
   checkCancelled();
 
-  const order = topoOrder(graph);
+  const decls = selectOutputs(graph, opts.outputs);
+  const order = topoOrder(graph, decls);
 
   for (const id of order) {
     checkCancelled();
@@ -296,7 +340,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   }
 
   const outputs: Record<string, DataCollection> = {};
-  for (const decl of graph._outputs) {
+  for (const decl of decls) {
     outputs[decl.name] = graph.require(decl.node).cache?.outputs[decl.pin] ?? [];
   }
   stats.elapsedMs = performance.now() - start;

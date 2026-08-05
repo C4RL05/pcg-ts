@@ -8,7 +8,7 @@ import { jitterPoints, type JitterPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
 import { dataInput, type DataInputParams } from "./dataInput.js";
-import type { CellCoord, CellOutputs, LevelDef } from "./types.js";
+import type { CellCoord, CellMode, CellOutputs, LevelDef } from "./types.js";
 
 /** A scatter level plus handles for edit/invalidation tests. */
 export interface ScatterLevel {
@@ -27,7 +27,8 @@ export interface ScatterLevel {
 export function scatterLevel(opts: {
   name: string;
   cellSize: number | "unbounded";
-  generationRadius: number;
+  cellMode?: CellMode;
+  generationRadius?: number;
   retainRadius?: number;
   count?: number;
   jitter?: boolean;
@@ -46,6 +47,7 @@ export function scatterLevel(opts: {
   const def: LevelDef = {
     name: opts.name,
     cellSize: opts.cellSize,
+    cellMode: opts.cellMode,
     generationRadius: opts.generationRadius,
     retainRadius: opts.retainRadius,
     graph,
@@ -53,6 +55,9 @@ export function scatterLevel(opts: {
       if (unbounded) {
         g.setParam(scatter, "boundsMin", [0, 0, 0]);
         g.setParam(scatter, "boundsMax", [100, 0, 100]);
+      } else if (ctx.cellMode === "xyz") {
+        g.setParam(scatter, "boundsMin", [ctx.min[0], ctx.min[1], ctx.min[2]]);
+        g.setParam(scatter, "boundsMax", [ctx.max[0], ctx.max[1], ctx.max[2]]);
       } else {
         g.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]]);
         g.setParam(scatter, "boundsMax", [ctx.max[0], 0, ctx.max[1]]);
@@ -78,6 +83,7 @@ export interface EchoLevel {
 export function childEchoLevel(opts: {
   name: string;
   cellSize: number;
+  cellMode?: CellMode;
   generationRadius: number;
   retainRadius?: number;
 }): EchoLevel {
@@ -87,6 +93,7 @@ export function childEchoLevel(opts: {
   const def: LevelDef = {
     name: opts.name,
     cellSize: opts.cellSize,
+    cellMode: opts.cellMode,
     generationRadius: opts.generationRadius,
     retainRadius: opts.retainRadius,
     graph,
@@ -190,7 +197,7 @@ export function outputsDiff(a: CellOutputs, b: CellOutputs): string | null {
   return null;
 }
 
-/** Coordinates as "cx,cz" strings, preserving list order. */
+/** Coordinates as joined strings ("cx,cz" or "cx,cy,cz"), preserving list order. */
 export function coordKeys(list: readonly { coord: CellCoord }[]): string[] {
-  return list.map((c) => `${c.coord[0]},${c.coord[1]}`);
+  return list.map((c) => c.coord.join(","));
 }

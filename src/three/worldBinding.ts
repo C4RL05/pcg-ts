@@ -140,5 +140,5 @@ export class WorldThreeBinding {
 }
 
 function cellKey(levelName: string, coord: CellCoord): string {
-  return `${levelName}|${coord[0]},${coord[1]}`;
+  return `${levelName}|${coord.join(",")}`;
 }

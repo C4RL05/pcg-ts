@@ -5,7 +5,15 @@
  */
 import { CookCancelledError, cook, type Graph } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
-import type { CellContext, CellCoord, CellOutputs, LevelDef, ParentCellRef } from "./types.js";
+import type {
+  CellContext,
+  CellCoord,
+  CellCoord3,
+  CellMode,
+  CellOutputs,
+  LevelDef,
+  ParentCellRef,
+} from "./types.js";
 
 /** A World configuration failed validation (levels, radii, caps). */
 export class WorldValidationError extends Error {
@@ -108,9 +116,13 @@ interface CellRecord {
 interface LevelState {
   readonly def: LevelDef;
   readonly index: number;
+  /** Resolved cell mode ("xz" for unbounded levels — one global cell). */
+  readonly mode: CellMode;
+  /** Validated generation radius (Infinity for an unbounded level, unused). */
+  readonly genRadius: number;
   /** Resolved retain radius (Infinity for an unbounded level). */
   readonly retainRadius: number;
-  /** Stored cells in insertion order, keyed by "cx,cz". */
+  /** Stored cells in insertion order, keyed by the joined coordinate. */
   readonly cells: Map<string, CellRecord>;
   /**
    * Staleness baseline: the graph version right after the runtime's own
@@ -129,7 +141,7 @@ interface WantedCell {
 }
 
 function cellKey(coord: CellCoord): string {
-  return `${coord[0]},${coord[1]}`;
+  return coord.join(",");
 }
 
 /** Normalize -0 (a Math.ceil/floor artifact) to +0 in cell coordinates. */
@@ -138,11 +150,38 @@ function nz(n: number): number {
 }
 
 /**
+ * Deterministic component-wise coordinate ordering (cx, then cz for 2D;
+ * cx, cy, cz for 3D). Only ever compares coords of one level, so both
+ * sides share a length.
+ */
+function coordCompare(a: CellCoord, b: CellCoord): number {
+  const aa = a as readonly number[];
+  const bb = b as readonly number[];
+  for (let i = 0; i < aa.length; i++) {
+    const d = aa[i] - (bb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** Component-wise coordinate equality across either arity. */
+function coordsEqual(a: CellCoord, b: CellCoord): boolean {
+  const aa = a as readonly number[];
+  const bb = b as readonly number[];
+  if (aa.length !== bb.length) return false;
+  for (let i = 0; i < aa.length; i++) {
+    if (aa[i] !== bb[i]) return false;
+  }
+  return true;
+}
+
+/**
  * Viewpoint-driven hierarchical cell streamer.
  *
- * Each level partitions the XZ plane into square cells (or is a single
- * unbounded cell). `update(viewpoint)` cooks, per level from coarse to
- * fine, every missing or stale cell whose center lies within the level's
+ * Each level partitions the XZ plane into square cells (default), space
+ * into cube cells (`cellMode: "xyz"`), or is a single unbounded cell.
+ * `update(viewpoint)` cooks, per level from coarse to fine, every
+ * missing or stale cell whose center lies within the level's
  * `generationRadius` of the viewpoint — nearest first — then evicts cells
  * whose center left `retainRadius` and LRU-trims each level to
  * `maxCellsPerLevel` (the unbounded cell never evicts).
@@ -178,10 +217,14 @@ export class World {
   private inFlightUpdate: Promise<unknown> = Promise.resolve();
 
   constructor(opts: WorldOptions) {
-    const levels = opts.levels;
-    if (!Array.isArray(levels) || levels.length === 0) {
+    // Guard on a separate `unknown` alias: Array.isArray-narrowing a
+    // readonly array intersects it with any[], which would silently strip
+    // LevelDef typing from the whole constructor body.
+    const levelsInput: unknown = opts.levels;
+    if (!Array.isArray(levelsInput) || levelsInput.length === 0) {
       throw new WorldValidationError("World requires at least one level in `levels`");
     }
+    const levels = opts.levels;
     const seen = new Set<string>();
     let prevBounded: { name: string; size: number } | undefined;
     levels.forEach((def, i) => {
@@ -193,6 +236,11 @@ export class World {
         throw new WorldValidationError(`duplicate level name "${def.name}"; level names must be unique`);
       }
       seen.add(def.name);
+      if (def.cellMode !== undefined && def.cellMode !== "xz" && def.cellMode !== "xyz") {
+        throw new WorldValidationError(
+          `${label}: cellMode must be "xz" or "xyz", got ${String(def.cellMode)}`,
+        );
+      }
       if (def.cellSize === "unbounded") {
         if (i !== 0) {
           throw new WorldValidationError(
@@ -206,6 +254,11 @@ export class World {
       if (typeof def.cellSize !== "number" || !Number.isFinite(def.cellSize) || def.cellSize <= 0) {
         throw new WorldValidationError(
           `${label}: cellSize must be a positive finite number or "unbounded", got ${String(def.cellSize)}`,
+        );
+      }
+      if (def.generationRadius === undefined) {
+        throw new WorldValidationError(
+          `${label}: a bounded level requires generationRadius (a positive finite number); only an unbounded level may omit it`,
         );
       }
       if (!Number.isFinite(def.generationRadius) || def.generationRadius <= 0) {
@@ -227,6 +280,38 @@ export class World {
         );
       }
       prevBounded = { name: def.name, size: def.cellSize };
+    });
+    // Nesting across cell modes: a 2D ("xz") level cannot sit under a 3D
+    // ("xyz") bounded parent — a 2D column crosses every Y layer of the
+    // parent, so no single parent cell contains it (see LevelDef.cellMode).
+    for (let i = 1; i < levels.length; i++) {
+      const parentDef = levels[i - 1];
+      const childDef = levels[i];
+      if (parentDef.cellSize === "unbounded") continue;
+      if ((parentDef.cellMode ?? "xz") === "xyz" && (childDef.cellMode ?? "xz") === "xz") {
+        throw new WorldValidationError(
+          `level ${i} ("${childDef.name}") uses 2D "xz" cells under the 3D "xyz" parent "${parentDef.name}": a 2D column spans every Y layer of the parent, so no single parent cell contains it; set the parent's cellMode to "xz" or this level's to "xyz"`,
+        );
+      }
+    }
+    // cookOutputs must name declared outputs of the level's graph.
+    levels.forEach((def, i) => {
+      if (def.cookOutputs === undefined) return;
+      if (def.cookOutputs.length === 0) {
+        throw new WorldValidationError(
+          `level ${i} ("${def.name}"): cookOutputs is an empty list, so every cell would cook nothing and store no outputs; omit cookOutputs to cook all declared outputs, or name at least one`,
+        );
+      }
+      const declared = def.graph._outputs.map((o) => o.name);
+      for (const name of def.cookOutputs) {
+        if (!declared.includes(name)) {
+          throw new WorldValidationError(
+            `level ${i} ("${def.name}"): cookOutputs names unknown output "${name}"; the level graph declares: ${
+              declared.length > 0 ? declared.map((n) => `"${n}"`).join(", ") : "(none)"
+            }`,
+          );
+        }
+      }
     });
     // Staleness tracking (baseline versions) is per level, so two levels
     // must never share one Graph instance: each would see the other's
@@ -252,16 +337,21 @@ export class World {
     this.levels = levels.map((def, index) => ({
       def,
       index,
+      mode: def.cellSize === "unbounded" ? "xz" : def.cellMode ?? "xz",
+      genRadius: def.generationRadius ?? Infinity,
       retainRadius:
-        def.cellSize === "unbounded" ? Infinity : def.retainRadius ?? def.generationRadius * 1.25,
+        def.cellSize === "unbounded"
+          ? Infinity
+          : def.retainRadius ?? (def.generationRadius ?? 0) * 1.25,
       cells: new Map<string, CellRecord>(),
       baselineVersion: undefined,
     }));
   }
 
   /**
-   * Stream cells around `viewpoint` (`[x, y, z]`; only X and Z matter —
-   * cells are 2D on the XZ plane). Levels are processed coarse to fine,
+   * Stream cells around `viewpoint` (`[x, y, z]`; `"xz"` levels use only
+   * X and Z, `"xyz"` levels use all three axes). Levels are processed
+   * coarse to fine,
    * so a cell's parent cooks earlier in the same update; a wanted cell
    * whose parent cell is not yet cooked (or is stale awaiting a recook)
    * stays pending instead of cooking with missing or outdated parent
@@ -315,6 +405,7 @@ export class World {
     const start = performance.now();
     if (signal?.aborted) throw new CookCancelledError();
     const vx = viewpoint[0];
+    const vy = viewpoint[1];
     const vz = viewpoint[2];
     const cooked: CellId[] = [];
     const evicted: CellId[] = [];
@@ -330,17 +421,14 @@ export class World {
       }
 
       // Wanted set, LRU touch, and the cook queue (missing or stale cells),
-      // nearest first with a deterministic (cx, cz) tie-break.
+      // nearest first with a deterministic component-wise coord tie-break.
       const queue: WantedCell[] = [];
-      for (const w of this.wantedCells(level, vx, vz)) {
+      for (const w of this.wantedCells(level, vx, vy, vz)) {
         const rec = level.cells.get(cellKey(w.coord));
         if (rec !== undefined) rec.lastUsed = ++this.useCounter;
         if (rec === undefined || rec.stale) queue.push(w);
       }
-      queue.sort(
-        (a, b) =>
-          a.distSq - b.distSq || a.coord[0] - b.coord[0] || a.coord[1] - b.coord[1],
-      );
+      queue.sort((a, b) => a.distSq - b.distSq || coordCompare(a.coord, b.coord));
 
       for (const w of queue) {
         if (signal?.aborted) throw new CookCancelledError();
@@ -364,12 +452,11 @@ export class World {
     // The unbounded level's single cell never evicts.
     for (const level of this.levels) {
       if (level.def.cellSize !== "unbounded") {
-        const size = level.def.cellSize;
         const rr2 = level.retainRadius * level.retainRadius;
         for (const rec of [...level.cells.values()]) {
-          const dx = (rec.coord[0] + 0.5) * size - vx;
-          const dz = (rec.coord[1] + 0.5) * size - vz;
-          if (dx * dx + dz * dz > rr2) this.evict(level, rec, evicted);
+          if (this.centerDistSq(level, rec.coord, vx, vy, vz) > rr2) {
+            this.evict(level, rec, evicted);
+          }
         }
         if (level.cells.size > this.maxCellsPerLevel) {
           const excess = [...level.cells.values()]
@@ -385,7 +472,9 @@ export class World {
 
   /** The stored cell at `coord`, if present. Outputs are immutable. */
   getCell(levelName: string, coord: CellCoord): Omit<CellSnapshot, "coord"> | undefined {
-    const rec = this.requireLevel(levelName).cells.get(cellKey(coord));
+    const level = this.requireLevel(levelName);
+    this.checkCoordArity(level, coord);
+    const rec = level.cells.get(cellKey(coord));
     return rec === undefined ? undefined : { outputs: rec.outputs, cookedAt: rec.cookedAt };
   }
 
@@ -416,6 +505,7 @@ export class World {
       for (const rec of level.cells.values()) rec.stale = true;
       return;
     }
+    this.checkCoordArity(level, coord);
     const rec = level.cells.get(cellKey(coord));
     if (rec !== undefined) rec.stale = true;
   }
@@ -430,16 +520,32 @@ export class World {
   }
 
   /** Cells whose center is within the level's generation radius (inclusive). */
-  private wantedCells(level: LevelState, vx: number, vz: number): WantedCell[] {
+  private wantedCells(level: LevelState, vx: number, vy: number, vz: number): WantedCell[] {
     if (level.def.cellSize === "unbounded") return [{ coord: [0, 0], distSq: 0 }];
     const s = level.def.cellSize;
-    const r = level.def.generationRadius;
+    const r = level.genRadius;
     const r2 = r * r;
     const cxMin = Math.ceil((vx - r) / s - 0.5);
     const cxMax = Math.floor((vx + r) / s - 0.5);
     const czMin = Math.ceil((vz - r) / s - 0.5);
     const czMax = Math.floor((vz + r) / s - 0.5);
     const out: WantedCell[] = [];
+    if (level.mode === "xyz") {
+      const cyMin = Math.ceil((vy - r) / s - 0.5);
+      const cyMax = Math.floor((vy + r) / s - 0.5);
+      for (let cz = czMin; cz <= czMax; cz++) {
+        for (let cy = cyMin; cy <= cyMax; cy++) {
+          for (let cx = cxMin; cx <= cxMax; cx++) {
+            const dx = (cx + 0.5) * s - vx;
+            const dy = (cy + 0.5) * s - vy;
+            const dz = (cz + 0.5) * s - vz;
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 <= r2) out.push({ coord: [nz(cx), nz(cy), nz(cz)], distSq: d2 });
+          }
+        }
+      }
+      return out;
+    }
     for (let cz = czMin; cz <= czMax; cz++) {
       for (let cx = cxMin; cx <= cxMax; cx++) {
         const dx = (cx + 0.5) * s - vx;
@@ -451,16 +557,65 @@ export class World {
     return out;
   }
 
-  /** Coordinate of the parent-level cell containing this cell's center. */
+  /**
+   * Squared distance from the viewpoint to a bounded cell's center, in
+   * the level's own metric: XZ for `"xz"` levels, XYZ for `"xyz"` — the
+   * same metric `wantedCells` applies, so generation and retention agree.
+   */
+  private centerDistSq(
+    level: LevelState,
+    coord: CellCoord,
+    vx: number,
+    vy: number,
+    vz: number,
+  ): number {
+    const size = level.def.cellSize as number;
+    const dx = (coord[0] + 0.5) * size - vx;
+    if (level.mode === "xyz") {
+      const c = coord as CellCoord3;
+      const dy = (c[1] + 0.5) * size - vy;
+      const dz = (c[2] + 0.5) * size - vz;
+      return dx * dx + dy * dy + dz * dz;
+    }
+    const dz = (coord[1] + 0.5) * size - vz;
+    return dx * dx + dz * dz;
+  }
+
+  /**
+   * Coordinate of the parent-level cell containing this cell's center.
+   * Modes map as documented on {@link LevelDef.cellMode}: like under
+   * like contains the center; a 3D child under a 2D parent maps to the
+   * XZ column cell; 2D under 3D was rejected at construction.
+   */
   private parentCoordOf(level: LevelState, coord: CellCoord): CellCoord {
     const parent = this.levels[level.index - 1];
     if (parent.def.cellSize === "unbounded") return [0, 0];
     const size = level.def.cellSize as number;
     const psize = parent.def.cellSize;
+    if (level.mode === "xyz") {
+      const c = coord as CellCoord3;
+      const px = nz(Math.floor(((c[0] + 0.5) * size) / psize));
+      const pz = nz(Math.floor(((c[2] + 0.5) * size) / psize));
+      return parent.mode === "xyz"
+        ? [px, nz(Math.floor(((c[1] + 0.5) * size) / psize)), pz]
+        : [px, pz];
+    }
     return [
       nz(Math.floor(((coord[0] + 0.5) * size) / psize)),
       nz(Math.floor(((coord[1] + 0.5) * size) / psize)),
     ];
+  }
+
+  /** Reject a coordinate whose arity does not match the level's mode. */
+  private checkCoordArity(level: LevelState, coord: CellCoord): void {
+    const expected = level.mode === "xyz" ? 3 : 2;
+    if (coord.length !== expected) {
+      throw new WorldValidationError(
+        level.mode === "xyz"
+          ? `level "${level.def.name}" uses 3D "xyz" cells addressed [cx, cy, cz]; got a ${coord.length}-component coordinate`
+          : `level "${level.def.name}" uses 2D "xz" cells addressed [cx, cz]; got a ${coord.length}-component coordinate`,
+      );
+    }
   }
 
   /**
@@ -494,10 +649,24 @@ export class World {
       ctx = {
         levelIndex: idx,
         levelName: def.name,
+        cellMode: "xz",
         coord: [0, 0],
         min: [-Infinity, -Infinity],
         max: [Infinity, Infinity],
         seed: hashCombine(this.worldSeed, idx),
+        ...(parent !== undefined ? { parent } : {}),
+      };
+    } else if (level.mode === "xyz") {
+      const s = def.cellSize;
+      const c = coord as CellCoord3;
+      ctx = {
+        levelIndex: idx,
+        levelName: def.name,
+        cellMode: "xyz",
+        coord: c,
+        min: [c[0] * s, c[1] * s, c[2] * s],
+        max: [(c[0] + 1) * s, (c[1] + 1) * s, (c[2] + 1) * s],
+        seed: hashCombine(this.worldSeed, idx, c[0], c[1], c[2]),
         ...(parent !== undefined ? { parent } : {}),
       };
     } else {
@@ -505,7 +674,8 @@ export class World {
       ctx = {
         levelIndex: idx,
         levelName: def.name,
-        coord,
+        cellMode: "xz",
+        coord: [coord[0], coord[1]],
         min: [coord[0] * s, coord[1] * s],
         max: [(coord[0] + 1) * s, (coord[1] + 1) * s],
         seed: hashCombine(this.worldSeed, idx, coord[0], coord[1]),
@@ -523,7 +693,11 @@ export class World {
     // Re-baseline after the runtime's own writes: only user edits leave
     // version and baseline disagreeing at the next check.
     level.baselineVersion = def.graph.version;
-    const result = await cook(def.graph, { signal: opts.signal, budgetMs: opts.budgetMs });
+    const result = await cook(def.graph, {
+      signal: opts.signal,
+      budgetMs: opts.budgetMs,
+      outputs: def.cookOutputs,
+    });
 
     const key = cellKey(coord);
     let rec = level.cells.get(key);
@@ -551,7 +725,7 @@ export class World {
     if (childLevel !== undefined) {
       for (const childRec of childLevel.cells.values()) {
         const pc = this.parentCoordOf(childLevel, childRec.coord);
-        if (pc[0] === coord[0] && pc[1] === coord[1]) childRec.stale = true;
+        if (coordsEqual(pc, coord)) childRec.stale = true;
       }
     }
 

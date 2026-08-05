@@ -1,15 +1,29 @@
 /**
  * Hierarchical runtime model: grid levels, cells, and the bind contract.
  *
- * Cells are 2D on the XZ plane: a bounded level partitions the plane into
- * square cells of `cellSize` world units, and a cell covers
+ * By default cells are 2D on the XZ plane: a bounded level partitions the
+ * plane into square cells of `cellSize` world units, and a cell covers
  * `[cx*size, (cx+1)*size) x [cz*size, (cz+1)*size)` in X and Z while being
- * unbounded in Y. Fully 3D (Y-partitioned) cells are future work.
+ * unbounded in Y. A level may opt into fully 3D cube cells with
+ * `cellMode: "xyz"` (see {@link LevelDef.cellMode}), partitioning Y the
+ * same way and addressing cells `[cx, cy, cz]`.
  */
 import type { CookResult, Graph } from "../graph/index.js";
 
-/** Integer grid coordinate of a cell on the XZ plane: `[cx, cz]`. */
-export type CellCoord = readonly [cx: number, cz: number];
+/** Integer grid coordinate of a 2D cell on the XZ plane: `[cx, cz]`. */
+export type CellCoord2 = readonly [cx: number, cz: number];
+
+/** Integer grid coordinate of a 3D cube cell: `[cx, cy, cz]`. */
+export type CellCoord3 = readonly [cx: number, cy: number, cz: number];
+
+/**
+ * Integer grid coordinate of a cell: `[cx, cz]` for `"xz"` levels,
+ * `[cx, cy, cz]` for `"xyz"` levels.
+ */
+export type CellCoord = CellCoord2 | CellCoord3;
+
+/** Cell partitioning mode of a level; see {@link LevelDef.cellMode}. */
+export type CellMode = "xz" | "xyz";
 
 /** Declared outputs of one cooked cell, keyed by output name. */
 export type CellOutputs = CookResult["outputs"];
@@ -26,28 +40,20 @@ export interface ParentCellRef {
   readonly outputs: CellOutputs;
 }
 
-/**
- * Everything a level's {@link LevelDef.bind} callback may derive per-cell
- * params from. For determinism, cell content must be a pure function of
- * this context (plus the level graph's structure and params): bind must
- * not read clocks, `Math.random`, viewpoint position, or any other state.
- */
-export interface CellContext {
+/** Fields shared by both cell-context shapes; see {@link CellContext}. */
+export interface CellContextBase {
   /** Index of the level in `WorldOptions.levels` (0 = coarsest). */
   readonly levelIndex: number;
   /** Name of the level. */
   readonly levelName: string;
-  /** Integer cell coordinate (`[0, 0]` for an unbounded level). */
-  readonly coord: CellCoord;
-  /** World-space cell rectangle minimum `[x, z]` (-Infinity when unbounded). */
-  readonly min: readonly [number, number];
-  /** World-space cell rectangle maximum `[x, z]` (+Infinity when unbounded). */
-  readonly max: readonly [number, number];
   /**
-   * Per-cell seed (u32): `hashCombine(worldSeed, levelIndex, cx, cz)`, or
-   * `hashCombine(worldSeed, levelIndex)` for an unbounded level. Bind must
-   * wire it into every stochastic node (e.g. its `seed` param) so
-   * different cells produce different, reproducible content.
+   * Per-cell seed (u32), hash-combined from the world seed, the level
+   * index, and every cell coordinate:
+   * `hashCombine(worldSeed, levelIndex, cx, cz)` for an `"xz"` cell,
+   * `hashCombine(worldSeed, levelIndex, cx, cy, cz)` for an `"xyz"`
+   * cell, and `hashCombine(worldSeed, levelIndex)` for an unbounded
+   * level. Bind must wire it into every stochastic node (e.g. its `seed`
+   * param) so different cells produce different, reproducible content.
    */
   readonly seed: number;
   /**
@@ -57,6 +63,41 @@ export interface CellContext {
    */
   readonly parent?: ParentCellRef;
 }
+
+/** Cell context of an `"xz"` (or unbounded) level; see {@link CellContext}. */
+export interface CellContextXZ extends CellContextBase {
+  /** Discriminant: this level uses 2D XZ cells. */
+  readonly cellMode: "xz";
+  /** Integer cell coordinate (`[0, 0]` for an unbounded level). */
+  readonly coord: CellCoord2;
+  /** World-space cell rectangle minimum `[x, z]` (-Infinity when unbounded). */
+  readonly min: readonly [number, number];
+  /** World-space cell rectangle maximum `[x, z]` (+Infinity when unbounded). */
+  readonly max: readonly [number, number];
+}
+
+/** Cell context of an `"xyz"` level; see {@link CellContext}. */
+export interface CellContextXYZ extends CellContextBase {
+  /** Discriminant: this level uses 3D cube cells. */
+  readonly cellMode: "xyz";
+  /** Integer cell coordinate `[cx, cy, cz]`. */
+  readonly coord: CellCoord3;
+  /** World-space cell cube minimum `[x, y, z]`. */
+  readonly min: readonly [number, number, number];
+  /** World-space cell cube maximum `[x, y, z]`. */
+  readonly max: readonly [number, number, number];
+}
+
+/**
+ * Everything a level's {@link LevelDef.bind} callback may derive per-cell
+ * params from — a discriminated union on `cellMode` (`"xz"` levels and
+ * the unbounded level get {@link CellContextXZ}, `"xyz"` levels get
+ * {@link CellContextXYZ}). For determinism, cell content must be a pure
+ * function of this context (plus the level graph's structure and
+ * params): bind must not read clocks, `Math.random`, viewpoint position,
+ * or any other state.
+ */
+export type CellContext = CellContextXZ | CellContextXYZ;
 
 /**
  * One level of the hierarchical runtime: a graph cooked once per cell.
@@ -73,14 +114,47 @@ export interface LevelDef {
   /** Cell edge length in world units, or `"unbounded"` (one global cell). */
   readonly cellSize: number | "unbounded";
   /**
-   * Cells generate when their center enters this radius (world units)
-   * around the viewpoint's XZ position. Ignored for an unbounded level.
+   * Cell partitioning mode (default `"xz"`).
+   *
+   * - `"xz"` (default): square cells on the XZ plane, unbounded in Y,
+   *   addressed `[cx, cz]` — the original behavior, bit-identical for
+   *   existing configs.
+   * - `"xyz"`: cube cells partitioning all three axes, addressed
+   *   `[cx, cy, cz]`. The generation/retain radii use the Euclidean XYZ
+   *   distance from the viewpoint to the cell center (the same metric
+   *   the `"xz"` mode applies in XZ), and the per-cell seed hashes all
+   *   three coordinates (see {@link CellContextBase.seed}).
+   *
+   * Nesting rules (the parent is the level above):
+   * - `"xz"` under `"xz"`: the parent is the XZ cell containing this
+   *   cell's center (original behavior).
+   * - `"xyz"` under `"xyz"`: the parent is the cube containing this
+   *   cell's center.
+   * - `"xyz"` under `"xz"`: the parent is the XZ column cell containing
+   *   this cell's XZ center (a 2D parent cell spans every Y).
+   * - `"xz"` under `"xyz"` is rejected at World construction: a 2D
+   *   column crosses every Y layer of a 3D parent, so no single parent
+   *   cell contains it — make the parent `"xz"` or the child `"xyz"`.
+   * - An unbounded parent (one global cell) accepts either mode below.
+   *
+   * Ignored for an unbounded level (a single global cell partitions
+   * nothing).
    */
-  readonly generationRadius: number;
+  readonly cellMode?: CellMode;
+  /**
+   * Cells generate when their center enters this radius (world units)
+   * around the viewpoint: distance in XZ for `"xz"` levels, in XYZ for
+   * `"xyz"` levels. Required for bounded levels (a positive finite
+   * number). Optional for an unbounded level: omit it, or pass a value
+   * and it is accepted and ignored — both spellings are valid, so
+   * configs written before it became optional keep working unchanged.
+   */
+  readonly generationRadius?: number;
   /**
    * Hysteresis: a generated cell is kept until its center exits this
-   * radius. Defaults to `generationRadius * 1.25`; must be >=
-   * `generationRadius`. Ignored for an unbounded level.
+   * radius (same distance metric as `generationRadius`). Defaults to
+   * `generationRadius * 1.25`; must be >= `generationRadius`. Ignored
+   * for an unbounded level.
    */
   readonly retainRadius?: number;
   /**
@@ -91,6 +165,16 @@ export interface LevelDef {
    * flight; edits between updates are detected and recook the level.
    */
   readonly graph: Graph;
+  /**
+   * Cook only these declared outputs of {@link graph} per cell (the
+   * per-output cooking of `CookOptions.outputs`): cell outputs then
+   * contain exactly these names and only their upstream subgraph cooks,
+   * so a terminal branch that is not relevant to this level costs
+   * nothing. Names are validated against the graph's declared outputs at
+   * World construction. Omit to cook every declared output (the
+   * default).
+   */
+  readonly cookOutputs?: readonly string[];
   /**
    * Wire one cell's context into the graph before it cooks — the only
    * channel through which cell data enters the graph. Typical bindings:
