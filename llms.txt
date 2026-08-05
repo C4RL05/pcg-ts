@@ -26,6 +26,9 @@ driven programmatically: node capabilities are enumerable at runtime
   scalars broadcast against tuples.
 - Cooking pulls from declared graph outputs, topologically, memoizing
   each node on (type, param hash, node seed, input item revs).
+  `cook(graph, { outputs: ["name"] })` cooks only the named outputs'
+  upstream subgraph; untouched nodes keep their caches, so staged
+  pipelines (cook output A, bind data, cook output B) fit in one graph.
 
 ## Authoring a graph as JSON
 
@@ -35,7 +38,12 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
 - `seed`: number (graph seed; node seeds derive from it)
 - `nodes`: [{ `id`: string, `type`: registered type name, `params`: object }]
   Omitted params take their schema defaults. Field-capable params accept
-  a field spec object (below) instead of a constant.
+  a field spec object (below) instead of a constant. A `subgraph` node
+  additionally carries `subgraph: { graph, inputs, outputs }` — the inner
+  graph recursively in this same format plus the exposed pin mappings
+  (`{ name, node, pin }` each) — so nested subgraphs round-trip. A
+  `dataInput` node serializes with `items: []` (live DataItems are
+  runtime-injected; re-bind after deserializing).
 - `connections`: [{ `from`: [nodeId, outputPin], `to`: [nodeId, inputPin] }]
 - `outputs`: [{ `id`: nodeId, `pin`: outputPin, `name`: result key }]
 
@@ -80,7 +88,7 @@ const { outputs, stats } = await cook(g); // stats: { cooked, cached, elapsedMs 
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 33 fns (`listFieldFns()`):
+into `constant`). All 40 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
@@ -88,9 +96,11 @@ into `constant`). All 33 fns (`listFieldFns()`):
   - `{ fn: "position" }` — reads P (tuple 3); `{ fn: "index" }` — 0,1,2,...
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
-  - 2 args: `add sub mul div min max lt le gt ge eq dot`
-    (comparisons emit 1/0; `dot` reduces tuples to a scalar)
-  - 1 arg: `abs floor length normalize`
+  - 2 args: `add sub mul div min max lt le gt ge eq dot atan2`
+    (comparisons emit 1/0; `dot` reduces tuples to a scalar; `atan2`
+    args are [y, x], radians)
+  - 1 arg: `abs floor length normalize sin cos tan asin acos atan`
+    (trig in radians, elementwise)
   - 3 args: `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b)
   - 5 args: `remap` (x, inMin, inMax, outMin, outMax; unclamped)
 - Structure:
@@ -102,13 +112,21 @@ into `constant`). All 33 fns (`listFieldFns()`):
 - Noise (scalar fields of the sample position; pure function of seed +
   position — the context seed does not affect them):
   - `{ fn: "valueNoise" | "perlinNoise" | "simplexNoise", opts?: {
-      seed?: int, frequency?: number, offset?: [x, y, z], position?: spec } }`
+      seed?: int, frequency?: number, offset?: [x, y, z], position?: spec,
+      normalized?: false } }`
     valueNoise in [0,1); perlin/simplex approx [-1,1]
-  - `{ fn: "worleyNoise", opts?: { ...same, output?: "f1" | "f2" | "f2-f1" } }`
-    (distance to nearest/2nd-nearest feature point; f1 in [0, ~1.73))
+  - `{ fn: "worleyNoise", opts?: { ...same, output?: "f1" | "f2" | "f2-f1",
+      exact?: false } }`
+    (distance to nearest/2nd-nearest feature point; f1 in [0, ~1.73);
+    `exact: true` widens the cell search until provably exhaustive —
+    slower, use when the fast approximation's rare artifacts matter)
   - `{ fn: "fbm", base: "perlinNoise" | "valueNoise" | "simplexNoise" | "worleyNoise",
       opts?: { ...same, octaves?: 4, lacunarity?: 2, gain?: 0.5 } }`
     (sum not renormalized: range grows toward base * (1-gain^octaves)/(1-gain))
+  - `normalized: true` (any noise, fbm included) affinely remaps the
+    documented raw range to exactly [0, 1]. Raw ranges are
+    machine-readable: `NOISE_RAW_RANGES` (per noise type) and
+    `noiseOutputRange(field)` (per field instance, fbm-aware).
 
 Nested example — density in [0,1] from remapped 4-octave noise:
 
@@ -127,12 +145,13 @@ serialized.
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 
 - copyToPoints — copy a source cloud onto every target point, composing transforms and seeds
-- dataInput — emit externally injected DataItems (`items` set via graph.setParam; not JSON-serializable)
+- dataInput — emit externally injected DataItems (`items` set via graph.setParam; serializes as `items: []`, re-bind live data after deserializing)
 - filterByAttribute — keep points where a scalar/string attribute passes a comparison
 - filterByBounds — keep points inside/outside an axis-aligned box
 - filterByDensity — keep points by `density` (threshold or probabilistic)
 - jitterPoints — deterministic random offset per point (field-capable amount)
 - mergePoints — concatenate point clouds (multi input), union of attributes
+- orientAlongVector — write `rot` quaternions so a local axis (default `+z`) follows a field-capable direction (e.g. a tangent/normal attribute), `up` hint fixes roll; zero directions keep their rot
 - partitionByAttribute — split into per-value point clouds, tagged `name=value`
 - pointGrid — regular grid of points
 - pointLine — evenly spaced points on a segment
@@ -140,10 +159,11 @@ serialized.
 - projectToPlane — orthogonal projection of points onto a plane
 - promoteAttribute — move an attribute between domains (first/average/sum/min/max)
 - selfPrune — greedy minimum-distance thinning (lowest index wins)
-- setAttribute — create/overwrite an attribute from a field-capable value
+- setAttribute — create/overwrite an attribute from a field-capable value; `type: "string"` picks per element from a `values` list by numeric selector (floor+clamp, total) or writes a constant `stringValue`; optional `seed` param folds into the field evaluation (0 = node seed unchanged)
 - setBounds — stamp boundsMin/boundsMax on every point
-- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms)
+- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`)
 - splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
+- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs)` (pins are per-instance), inspect with `getSubgraphSpec`, serializes recursively
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
 - transferAttribute — copy a point attribute from the nearest source points
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)
@@ -175,15 +195,41 @@ serialized.
 ## World streaming (hierarchical runtime)
 
 `new World({ seed, levels, maxCellsPerLevel?, onCellReady?, onCellEvicted? })`
-streams square XZ-plane cells per level around a viewpoint. Levels are
-ordered coarse to fine (optionally one leading "unbounded" level); each
-has `{ name, cellSize, generationRadius, retainRadius?, graph, bind }`.
+streams grid cells per level around a viewpoint. Levels are ordered
+coarse to fine (optionally one leading unbounded level); each is a
+`LevelDef`:
+
+- `name`, `graph`, `bind(graph, ctx)` — required.
+- `cellSize`: number (cell edge, world units) or `"unbounded"` (one
+  global cell, must be the first level).
+- `cellMode?`: `"xz"` (default — square XZ cells, unbounded in Y,
+  coords `[cx, cz]`) or `"xyz"` (cube cells, coords `[cx, cy, cz]`,
+  radii in full XYZ distance). Nesting: like under like; `"xyz"` under
+  `"xz"` uses the containing XZ column as parent; `"xz"` under a
+  bounded `"xyz"` parent is rejected at construction; an unbounded
+  parent accepts either mode.
+- `generationRadius?`: cells cook when their center enters this radius.
+  Required (positive) for bounded levels; omit for an unbounded level
+  (a value is accepted and ignored there).
+- `retainRadius?`: eviction hysteresis, default generationRadius * 1.25.
+- `cookOutputs?`: cook only these declared outputs of the graph per
+  cell (per-output cooking; names validated at construction). Omit to
+  cook all.
+
 Before each cell cook, `bind(graph, ctx)` wires the `CellContext` into
-the graph — the only channel for cell data. Contract: derive params only
-from ctx (`coord`, `min`/`max`, `seed`, `parent`), and wire `ctx.seed`
-(= hashCombine(worldSeed, levelIndex, cx, cz)) into every stochastic
-node. Parent-cell outputs arrive as `ctx.parent.outputs`; inject them
-via a dataInput node. `await world.update([x, y, z], { budgetMs?,
+the graph — the only channel for cell data. `ctx` is a discriminated
+union on `cellMode`: `{ cellMode, coord, min, max, levelIndex,
+levelName, seed, parent? }` with 2D coord/min/max for `"xz"` (and
+unbounded) levels, 3D for `"xyz"`. Contract: derive params only from
+ctx, and wire `ctx.seed` (= hashCombine(worldSeed, levelIndex,
+...coord) — every cell coordinate is hashed) into every stochastic
+node. Sanctioned seeding: set seed params per node (vary with
+hashCombine(ctx.seed, n); setAttribute's `seed` param folds in as
+hashCombine(nodeSeed, seed), 0 = unchanged), or reseed the whole graph
+via `graph.setSeed(...)` inside bind — memo keys include seeds and
+bind-time writes never count as user edits, so neither causes phantom
+recooks. Parent-cell outputs arrive as `ctx.parent.outputs`; inject
+them via a dataInput node. `await world.update([x, y, z], { budgetMs?,
 signal?, maxCooksPerUpdate? })` cooks nearest-first, evicts by
 retainRadius + LRU, and reports { cooked, evicted, pending }.
 `world.invalidate(level?, coord?)` forces recooks; parent recooks

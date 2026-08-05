@@ -24,7 +24,7 @@ A serialized graph is one JSON object (`SerializedGraph`):
 | --- | --- |
 | `formatVersion` | Always `1`. Other values are rejected with the supported version named. |
 | `seed` | Graph seed (finite number, used as u32). Every node's seed is `hashCombine(seed, hashString(nodeId))`. |
-| `nodes` | Node instances. `id` must be unique and non-empty; `type` must be a registered node type; `params` maps param names to values. Omitted params take their schema defaults. |
+| `nodes` | Node instances. `id` must be unique and non-empty; `type` must be a registered node type; `params` maps param names to values. Omitted params take their schema defaults. A `subgraph` node additionally carries a `subgraph` payload (below). |
 | `connections` | Directed edges `from: [nodeId, outputPin]` to `to: [nodeId, inputPin]`. Pin kinds must be compatible (`any` matches everything); an input pin accepts one connection unless declared `multi`; cycles are rejected. |
 | `outputs` | Declared terminal outputs. Cooking pulls from these (and cooks only what they reach); `name` keys the collection in `CookResult.outputs`. |
 
@@ -50,6 +50,22 @@ Numbers must be finite. A field-capable vec3/vec4 param set to a plain
 scalar is canonicalized to the full tuple on serialization (broadcast
 semantics keep the cooked output identical).
 
+### Subgraph and dataInput serialization
+
+Serialization is complete — two node types have special shapes:
+
+- A `subgraph` node (built with `subgraphNode`) serializes with empty
+  `params` plus a `subgraph: { graph, inputs, outputs }` payload: the
+  inner graph recursively in this same format, and the exposed pin
+  mappings as `{ name, node, pin }` (pin name on the wrapper, inner node
+  id, inner pin). Deserialization rebuilds the inner graph and re-wraps
+  it through `subgraphNode`, so nested subgraphs round-trip and cook
+  byte-identically.
+- A `dataInput` node serializes with `items: []`: live `DataItems` are
+  runtime-injected (via `graph.setParam` or a `World` bind), never
+  embedded in JSON. After deserializing, re-bind the items before
+  cooking.
+
 ## The field-expression grammar
 
 Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
@@ -57,7 +73,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 33 names at runtime.
+256 levels). `listFieldFns()` returns all 40 names at runtime.
 
 ### Inputs
 
@@ -77,8 +93,8 @@ store as f32.
 
 | Arity | fns |
 | --- | --- |
-| 1 | `abs`, `floor`, `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero) |
-| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), and comparisons `lt`, `le`, `gt`, `ge`, `eq` emitting 1/0 |
+| 1 | `abs`, `floor`, `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero), and trig `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (radians, elementwise) |
+| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq` emitting 1/0 |
 | 3 | `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b — cond non-zero picks a) |
 | 5 | `remap` (x, inMin, inMax, outMin, outMax — linear, unclamped; degenerate input range yields outMin) |
 
@@ -99,15 +115,26 @@ identical values on any domain.
 
 Common `opts`: `seed?` (integer, default 0), `frequency?` (position
 scale, default 1), `offset?` (`[x, y, z]` added after scaling),
-`position?` (a nested spec, tuple 3).
+`position?` (a nested spec, tuple 3), `normalized?` (boolean, default
+false).
 
-| fn | Extra opts | Output range |
+| fn | Extra opts | Raw output range |
 | --- | --- | --- |
 | `valueNoise` | — | [0, 1) |
 | `perlinNoise` | — | approximately [-1, 1] |
 | `simplexNoise` | — | approximately [-1, 1] |
-| `worleyNoise` | `output?: "f1" \| "f2" \| "f2-f1"` | f1 in [0, ~1.73); f2 >= f1 |
+| `worleyNoise` | `output?: "f1" \| "f2" \| "f2-f1"`, `exact?: false` | f1 in [0, ~1.73); f2 >= f1 |
 | `fbm` | `base` (required: one of the four noise fn names), `octaves?: 4`, `lacunarity?: 2`, `gain?: 0.5` | Sum is not renormalized: grows toward `baseRange * (1 - gain^octaves) / (1 - gain)` |
+
+`normalized: true` affinely remaps the noise's documented raw range to
+exactly [0, 1] — so a wrapper like
+`{ "fn": "remap", "args": [<noise>, -1, 1, 0, 1] }` collapses to the
+noise spec itself, with fbm's configuration-dependent range handled for
+you. The raw ranges are machine-readable: `NOISE_RAW_RANGES` per noise
+type, `noiseOutputRange(field)` per field instance (fbm-aware; returns
+the normalized or raw range as built). `exact: true` on worley widens
+the cell search until provably exhaustive — slower, for when the fast
+approximation's rare wrong-neighbor artifacts matter.
 
 ## Recipes
 
@@ -143,7 +170,10 @@ noise, then keep each point with probability equal to its density:
 ```
 
 The survivor count follows the noise (about half here); the same seed
-always keeps exactly the same points.
+always keeps exactly the same points. The `clamp(remap(...))` wrapper
+predates normalized noise — `{ "fn": "fbm", "base": "perlinNoise",
+"opts": { "frequency": 0.03, "octaves": 4, "normalized": true } }` is
+already in [0, 1] on its own.
 
 ### 2. Attribute pipeline: noise-driven instance scale (pure JSON)
 
@@ -213,10 +243,74 @@ Exposed inputs work the same way with input pins:
 `subgraphNode(inner, [{ name: "in", node: someInnerNode, pin: "in" }], ...)`
 adds an outer input pin wired into the inner node. The inner graph's
 seed derives from the outer node's seed, so two instances of a subgraph
-produce different (but reproducible) content. Note: `subgraphNode`
-definitions are not registered node types, so graphs containing them
-cook fine but do not serialize — for JSON-portable graphs, inline the
-nodes instead.
+produce different (but reproducible) content. Graphs containing
+subgraph nodes serialize like any other: the inner graph rides along as
+a nested `subgraph` payload (see above), recursively, and
+`getSubgraphSpec(def)` exposes a node definition's inner graph and pin
+mappings for inspection.
+
+### 4. Multi-asset spawn: per-point species (pure JSON)
+
+A string `setAttribute` keeps multi-asset spawns declarative: with
+`type: "string"` and a non-empty `values` list, the field-capable
+`value` acts as a per-element selector into the list. Point
+`spawnInstances`' `assetAttr` at the attribute and the output splits
+into one batch per asset id:
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 11,
+  "nodes": [
+    { "id": "scatter", "type": "pointScatterInBounds",
+      "params": { "count": 800, "boundsMin": [0, 0, 0], "boundsMax": [60, 0, 60] } },
+    { "id": "species", "type": "setAttribute",
+      "params": {
+        "name": "species", "domain": "point", "type": "string",
+        "values": ["pine", "pine", "birch", "bush"],
+        "value": { "fn": "mul", "args": [ { "fn": "randomField", "key": "species" }, 4 ] }
+      } },
+    { "id": "spawn", "type": "spawnInstances",
+      "params": { "assetId": "pine", "assetAttr": "species" } }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["species", "in"] },
+    { "from": ["species", "out"], "to": ["spawn", "in"] }
+  ],
+  "outputs": [ { "id": "spawn", "pin": "instances", "name": "instances" } ]
+}
+```
+
+The selector is total: floor(selector), then clamp into
+`[0, values.length - 1]`, NaN picks 0 — weighting by repetition works
+(50% pine here) and an out-of-range value never throws per element.
+Batches form in first-occurrence order of each asset id; an
+empty-string entry never names an asset — those points fall back to the
+spawner's `assetId`. With `values` empty, the constant `stringValue`
+param is written instead.
+
+## Staged pipelines (per-output cooking)
+
+`cook(graph, { outputs: ["name"] })` cooks only the named declared
+outputs: the pass visits just their upstream nodes, and the result
+contains exactly those names. Nodes outside the selection are neither
+cooked nor invalidated, so a later cook of the other outputs reuses
+every shared upstream result from the memo cache.
+
+One graph therefore suffices for staged pipelines that used to need
+two: cook an early output, let application code derive data from it and
+bind the result into a `dataInput`, then cook the terminal output — a
+still-unbound terminal branch is simply never pulled by the first cook:
+
+```ts
+const stage1 = await cook(graph, { outputs: ["samples"] });
+graph.setParam(input, "items", deriveItems(stage1.outputs.samples));
+const stage2 = await cook(graph, { outputs: ["instances"] }); // shared upstream cached
+```
+
+In a `World`, `LevelDef.cookOutputs` applies the same selection per
+cell: the level cooks and stores only those outputs (names are
+validated against the graph's declared outputs at World construction).
 
 ## Per-cell seeding
 
@@ -254,4 +348,41 @@ bind(g, ctx) {
 
 Either way, cell content stays a pure function of (world seed, level,
 coord, graph, parent content) — independent of cook order, viewpoint
-path, and eviction history.
+path, and eviction history. `ctx.seed` hashes every cell coordinate:
+`hashCombine(worldSeed, levelIndex, cx, cz)` for a 2D cell,
+`hashCombine(worldSeed, levelIndex, cx, cy, cz)` for a 3D one.
+
+## 3D cells (cellMode)
+
+Levels default to 2D cells on the XZ plane (`cellMode: "xz"`): square
+cells, unbounded in Y, addressed `[cx, cz]`. Set `cellMode: "xyz"` on a
+level for cube cells addressed `[cx, cy, cz]` — the generation/retain
+radii then measure full XYZ distance from the viewpoint, and the
+per-cell seed hashes all three coordinates. `CellContext` is a
+discriminated union on `cellMode`, so `bind` narrows to the right
+coord/bounds shape:
+
+```ts
+bind(g, ctx) {
+  if (ctx.cellMode === "xyz") {
+    // ctx.coord is [cx, cy, cz]; ctx.min/max are [x, y, z]
+    g.setParam(fill, "boundsMin", [...ctx.min]);
+    g.setParam(fill, "boundsMax", [...ctx.max]);
+  }
+  g.setParam(fill, "seed", ctx.seed);
+}
+```
+
+Nesting rules (the parent is the level above):
+
+- like under like: the parent is the cell containing this cell's center;
+- `"xyz"` under `"xz"`: the parent is the containing XZ column cell;
+- `"xz"` under a bounded `"xyz"` parent is rejected at World
+  construction — a 2D column spans every Y layer of the parent, so no
+  single parent cell contains it (make the parent `"xz"` or the child
+  `"xyz"`);
+- an unbounded parent (one global cell) accepts either mode below it.
+
+An unbounded level (`cellSize: "unbounded"`, first level only) needs no
+`generationRadius`; omit it — a value is accepted and ignored, so
+configs written before it became optional keep working.

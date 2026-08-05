@@ -13,7 +13,7 @@ Package name: `pcg-ts` (subpath exports `pcg-ts` and `pcg-ts/three`).
 Tooling: TypeScript strict, vitest, tsup (library build), vite (examples),
 npm. three.js is an optional peer dependency.
 
-## Core type sketch (anchor, refine during phases)
+## Core type sketch (aligned with the shipped v0.2 API; the registry and dist types are the truth)
 
 ```ts
 type Domain = 'point' | 'vertex' | 'primitive' | 'detail';
@@ -21,8 +21,9 @@ type AttrType = 'f32' | 'i32' | 'u32' | 'bool' | 'string';
 
 // SoA storage: one typed-array column per attribute, with tuple size.
 interface AttributeSet {
-  add(name: string, type: AttrType, tuple: number): Attribute;
+  add(name: string, type: AttrType, tupleSize?: number, defaultValue?: AttrDefault): Attribute;
   get(name: string): Attribute | undefined;
+  require(name: string): Attribute; // get, but throws naming the attribute
   count: number; // elements in this domain
 }
 
@@ -31,28 +32,42 @@ interface AttributeSet {
 // common fast path of the whole library.
 interface Geometry { attrs: Record<Domain, AttributeSet>; /* topology */ }
 
-// Standard point attributes: P (f32x3), rot (quat f32x4), scale (f32x3),
-// density (f32), boundsMin/Max (f32x3), color (f32x4), seed (u32).
+// Standard point attributes: P (f32x3), rot (quat f32x4 xyzw), scale
+// (f32x3), density (f32), boundsMin/Max (f32x3), color (f32x4), seed (u32).
 
 // Fields: deferred computation resolved on a domain.
 interface EvalContext { geo: Geometry; domain: Domain; seed: number; }
-interface Field<T> { evaluate(ctx: EvalContext): Column<T>; }
-// Node params accept T | Field<T>. Combinators: math, clamp/lerp/remap,
-// select, ramp; inputs: position(), attribute(name), index(), noise fields.
+interface Field<N extends number = number> {
+  key: string;                 // stable structural identity (memo key)
+  tupleSize: N | undefined;
+  evaluate(ctx: EvalContext): Column; // { data, tupleSize }
+}
+// Node params accept T | Field. Combinators: arithmetic, trig
+// (sin..atan2), compare, clamp/lerp/remap, select, ramp, vector ops;
+// inputs: position(), attribute(name), index(), randomField(key);
+// noise: value/perlin/simplex/worley/fbm ('normalized' [0,1] option,
+// raw ranges in NOISE_RAW_RANGES / noiseOutputRange()).
 
-// Graph: code-first builder, typed pins, multi-data pins carrying
-// DataCollection (tagged list of Geometry | spatial | param data).
-// Execution: pull-based topological, memoized by content hash of
-// (inputs, params, seed); async time-budgeted scheduler, cancellable.
+// Graph: code-first builder, typed pins ('multi' inputs concatenate),
+// data as DataCollection = readonly DataItem[] (geometry | value |
+// instances items, tagged, with revision ids).
+// Execution: pull-based topological; memoized per node on (type, param
+// hash, node seed, input item revs); async time-budgeted scheduler,
+// cancellable; per-output cooking via cook(graph, { outputs });
+// subgraph nodes wrap inner graphs and serialize recursively.
 
-// Hierarchical runtime: configurable grid levels (cell sizes) + one
-// unbounded level; per-cell seeds hashed from (graphSeed, level, cx, cy);
-// cells cook on demand around a viewpoint, LRU eviction, dirty
-// propagation for invalidation.
+// Hierarchical runtime: configurable grid levels (cellSize; optional
+// leading unbounded level with no generationRadius; cellMode 'xz' |
+// 'xyz' cube cells; optional cookOutputs subset per level); per-cell
+// seeds hashCombine(worldSeed, levelIndex, ...coord); cells cook on
+// demand around a viewpoint, LRU eviction, dirty propagation for
+// invalidation.
 
-// Spawner protocol (render-agnostic terminal): emits
-// InstanceBatch { assetId, transforms: Float32Array /* 4x4 per instance */ }.
-// The three adapter maps InstanceBatch -> THREE.InstancedMesh.
+// Spawner protocol (render-agnostic terminal): emits InstanceBatch
+// { assetId, count, transforms: Float32Array /* column-major 4x4 per
+// instance */ }; per-point asset ids via a string attribute
+// (spawnInstances assetAttr). The three adapter maps
+// InstanceBatch -> THREE.InstancedMesh.
 ```
 
 ## Phases

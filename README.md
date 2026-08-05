@@ -85,10 +85,10 @@ recooks. Same seed always reproduces the same bytes.
 A `Field` is a deferred computation: it resolves to one column of values
 when evaluated over a domain (`EvalContext` = geometry + domain + seed).
 Inputs (`position()`, `attribute(name)`, `index()`, `randomField(key)`),
-combinators (arithmetic, comparisons, `clamp`/`lerp`/`remap`, `select`,
-`ramp`, vector ops), and noise (`valueNoise`, `perlinNoise`,
-`simplexNoise`, `worleyNoise`, `fbm`) all return fields, so expressions
-compose before any geometry exists:
+combinators (arithmetic, comparisons, trig from `sin` through `atan2`,
+`clamp`/`lerp`/`remap`, `select`, `ramp`, vector ops), and noise
+(`valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise`, `fbm`) all
+return fields, so expressions compose before any geometry exists:
 
 ```ts
 import { createPointCloud, capture, attribute, clamp, add, mul, worleyNoise } from "pcg-ts";
@@ -107,6 +107,13 @@ Raw numbers and tuples coerce to constants wherever a field is accepted
 (scalars broadcast against tuples). Evaluated columns may alias live
 attribute storage: treat them as read-only, and re-evaluate with a fresh
 context after mutating the geometry.
+
+Every noise field takes `normalized: true` for a uniform [0, 1] output
+contract — an exact affine remap of the per-noise raw range, published
+in `NOISE_RAW_RANGES` and queryable per field via `noiseOutputRange()`.
+Worley additionally takes `exact: true` to widen its cell search until
+provably correct (property-tested against brute force) when the fast
+approximation's rare artifacts matter.
 
 ## The graph runtime
 
@@ -127,6 +134,10 @@ and pin named.
 - **Cancellation.** `cook(graph, { signal })` rejects with
   `CookCancelledError`; completed nodes keep their caches, so the next
   cook resumes where the cancelled one left off.
+- **Per-output cooking.** `cook(graph, { outputs: ["a"] })` cooks only
+  the named outputs' upstream subgraph; everything else is untouched and
+  keeps its caches. Staged pipelines fit in one graph — cook the early
+  output, bind data derived from it, then cook the rest.
 - **Subgraphs.** `subgraphNode(inner, exposedInputs, exposedOutputs)`
   wraps a whole graph as one node with its own persistent inner caches.
 
@@ -159,9 +170,13 @@ const roundTrip = serializeGraph(graph); // structurally equal JSON back
 const result = await cook(graph);
 ```
 
-Deserialization validates node types, param schemas, bounds, enum
-membership, pins, and connections — every error names the node, param,
-or pin at fault and lists what would be valid. See
+Serialization is complete: subgraph nodes carry their inner graph as a
+nested payload (`subgraph: { graph, inputs, outputs }`, recursively in
+the same format), and `dataInput` nodes serialize with an empty `items`
+list — live data items are runtime-injected, so re-bind them after
+deserializing. Deserialization validates node types, param schemas,
+bounds, enum membership, pins, and connections — every error names the
+node, param, or pin at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
@@ -208,12 +223,26 @@ const world = new World({
 await world.update([camera.x, camera.y, camera.z], { budgetMs: 8 });
 ```
 
-Each cell's seed is `hashCombine(worldSeed, levelIndex, cx, cz)`, so
-cell content is a pure function of (world seed, level, coordinate,
-graph, parent cell content) — never of cook order, viewpoint path, or
-eviction history. Lower levels see their parent cell's outputs via
-`ctx.parent` (typically injected through a `dataInput` node), and a
-parent recook automatically marks its children stale.
+Each cell's seed hashes the world seed, the level index, and every cell
+coordinate (`hashCombine(worldSeed, levelIndex, cx, cz)` above), so cell
+content is a pure function of (world seed, level, coordinate, graph,
+parent cell content) — never of cook order, viewpoint path, or eviction
+history. Wire `ctx.seed` into each stochastic node, or reseed the whole
+graph with `graph.setSeed(...)` inside `bind` — both are sanctioned
+(`setAttribute` also takes an optional `seed` param that folds a
+per-cell value into its field evaluation). Lower levels see their parent
+cell's outputs via `ctx.parent` (typically injected through a
+`dataInput` node), and a parent recook automatically marks its children
+stale.
+
+Levels use square XZ-plane cells by default; `cellMode: "xyz"` switches
+a level to cube cells addressed `[cx, cy, cz]`, with radii measured in
+full XYZ distance and all three coordinates hashed into the cell seed
+(`ctx` is a discriminated union on `cellMode`, so `bind` can narrow it).
+An optional leading `cellSize: "unbounded"` level covers the world with
+one global cell and needs no `generationRadius`. `cookOutputs: [...]` on
+a level cooks only those declared outputs per cell — a terminal branch
+another consumer uses costs the level nothing.
 
 ## three.js interop
 
@@ -246,6 +275,14 @@ for (const item of outputs.instances) {
   // meshes[i] is a THREE.InstancedMesh; add to your scene.
 }
 ```
+
+Multi-asset spawns stay declarative: write a per-point string attribute
+with `setAttribute` (`type: "string"`, a `values` list, and a
+field-capable selector that picks per point) and name it in
+`spawnInstances`' `assetAttr` — batches then split by asset id, and
+`orientAlongVector` turns a direction attribute (a surface normal, a
+spline tangent) into the standard `rot` quaternion without leaving the
+graph. See `examples/02-forest` and `examples/03-spline-fence`.
 
 Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 `splineSample`), `toPointsObject` (debug point rendering), and
@@ -303,7 +340,7 @@ npm test          # vitest: unit + integration + determinism suites
 npm run build     # tsup: dist/ with subpath exports ".", "./three"
 npm run check     # tsc --noEmit
 npm run examples  # vite dev server for examples/
-node scripts/gen-node-reference.mjs  # regenerate docs/nodes.{md,json} from the registry
+npm run docs:nodes  # regenerate docs/nodes.{md,json} from the registry
 ```
 
 ## License

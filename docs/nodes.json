@@ -36,9 +36,9 @@
     ],
     "params": {
       "items": {
-        "type": "string",
-        "default": "",
-        "description": "The DataItem array to emit, set programmatically via graph.setParam. The declared schema type is a placeholder (the registry has no item-list param type); the actual default is an empty list and the value is not JSON-serializable."
+        "type": "items",
+        "default": [],
+        "description": "Data items to emit, bound at runtime via graph.setParam (the World binds parent-cell outputs here, per cell, at bind time). Live DataItems are runtime-injected and never serialized: a serialized graph carries an empty item list, and items must be re-bound after deserialization."
       }
     }
   },
@@ -229,6 +229,58 @@
       }
     ],
     "params": {}
+  },
+  {
+    "type": "orientAlongVector",
+    "description": "Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll. The quaternion is right-handed and matches the spawner path's three.js Matrix4.compose conventions (and quatFromEulerDeg's frame), so with the default '+z' axis, spawned assets face the direction the way the spline-fence example's tangent yaw does. For axes ±x and ±z the local +Y axis turns as close to `up` as the direction allows; for axes ±y (which consume the up-like axis) local +Z takes that role. Points with a zero-length direction keep their existing rot (identity when the attribute is newly created). When direction and up are parallel or antiparallel (cross product squared length <= 1e-12, after normalizing both), the up hint deterministically falls back to [0, 0, 1], then [1, 0, 0].",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "direction": {
+        "type": "vec3",
+        "default": [
+          0,
+          0,
+          1
+        ],
+        "description": "World-space direction the chosen local axis should point along; need not be unit length. Field-capable (resolved per point on the input, e.g. a tangent attribute; tuple 1 broadcasts). Zero-length directions leave that point's rot unchanged (identity when the rot attribute did not exist before).",
+        "acceptsField": true
+      },
+      "up": {
+        "type": "vec3",
+        "default": [
+          0,
+          1,
+          0
+        ],
+        "description": "Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0]."
+      },
+      "axis": {
+        "type": "enum",
+        "default": "+z",
+        "description": "Which local axis maps onto the direction. Default '+z' — the forward axis assets face in the examples (a spline-fence style tangent yaw). For ±x/±z the local +Y follows the up hint; for ±y the local +Z follows it.",
+        "enum": [
+          "+x",
+          "-x",
+          "+y",
+          "-y",
+          "+z",
+          "-z"
+        ]
+      }
+    }
   },
   {
     "type": "partitionByAttribute",
@@ -516,7 +568,7 @@
   },
   {
     "type": "setAttribute",
-    "description": "Creates or overwrites an attribute on the chosen domain and fills it from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise). The evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly. Values store with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. String attributes cannot be written this way.",
+    "description": "Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in two modes: with a non-empty `values` list, `value` acts as a per-element numeric selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — choosing one entry per element (e.g. for per-point asset ids consumed by spawnInstances assetAttr); with `values` empty, the constant `stringValue` is written to every element.",
     "inputs": [
       {
         "name": "in",
@@ -551,12 +603,13 @@
       "type": {
         "type": "enum",
         "default": "f32",
-        "description": "Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1).",
+        "description": "Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1); string interns into the geometry's string table and writes via `values` + selector or `stringValue` (see those params).",
         "enum": [
           "f32",
           "i32",
           "u32",
-          "bool"
+          "bool",
+          "string"
         ]
       },
       "tupleSize": {
@@ -569,8 +622,23 @@
       "value": {
         "type": "f32",
         "default": 0,
-        "description": "Value written to every element. Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize.",
+        "description": "Numeric value written to every element — or, for type 'string' with a non-empty `values` list, the per-element selector into it: floor(selector) clamped into [0, values.length - 1], NaN selects 0 (a total function; out-of-range never errors per element). Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. Ignored for type 'string' with `values` empty.",
         "acceptsField": true
+      },
+      "values": {
+        "type": "stringList",
+        "default": [],
+        "description": "String values to choose among when type is 'string': `value` selects per element (floor, then clamp into range). Leave empty to write the constant `stringValue` instead. Setting this with a numeric type is an error. Note: when the attribute feeds spawnInstances via assetAttr, an empty-string entry never names an asset — the spawner falls back to its assetId param for those elements."
+      },
+      "stringValue": {
+        "type": "string",
+        "default": "",
+        "description": "Constant written to every element when type is 'string' and `values` is empty. Must stay \"\" for numeric types."
+      },
+      "seed": {
+        "type": "u32",
+        "default": 0,
+        "description": "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed), re-rolling field randomness (e.g. randomField). Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level."
       }
     }
   },
@@ -687,6 +755,13 @@
         "min": 0
       }
     }
+  },
+  {
+    "type": "subgraph",
+    "description": "Composite node wrapping an inner graph as a single node. Pins are per-instance, derived from the exposed inner pins, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs). Serialized subgraph nodes carry no params; their inner graph is a nested payload under \"subgraph\" ({ graph, inputs, outputs }), recursively in the same versioned format.",
+    "inputs": [],
+    "outputs": [],
+    "params": {}
   },
   {
     "type": "surfaceSample",

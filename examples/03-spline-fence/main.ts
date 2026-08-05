@@ -1,20 +1,21 @@
 /**
  * 03 — spline fence: a closed CatmullRom loop becomes pcg spline geometry
  * via fromCurve, splineSample places posts at fixed spacing along the arc
- * length, example code turns each sample's `tangent` attribute into a yaw
- * quaternion written straight into the `rot` attribute (data API), and a
- * second graph spawns the oriented posts as instances. Rails are three
- * TubeGeometry meshes along the same curve.
+ * length, orientAlongVector turns each sample's `tangent` attribute into
+ * the standard `rot` quaternion (default `+z` axis — posts face along the
+ * curve), and spawnInstances emits the oriented posts — one graph, one
+ * cook. Rails are two TubeGeometry meshes along the same curve.
  */
 import {
   Graph,
-  cloneGeometry,
+  attribute,
   cook,
   dataInput,
   firstGeometry,
   hashCombine,
   hashFloat,
   makeGeometryItem,
+  orientAlongVector,
   splineSample,
   spawnInstances,
   type InstancesItem,
@@ -55,22 +56,22 @@ function buildCurve(s: number): CatmullRomCurve3 {
   return new CatmullRomCurve3(pts, true, "centripetal");
 }
 
-// -- graphs ----------------------------------------------------------------
-// Stage 1 samples the spline; stage 2 spawns the posts after example code
-// has written per-post orientations. Two graphs, because a spawner with
-// no data bound yet must not be pulled by stage 1's cook.
+// -- graph -----------------------------------------------------------------
+// One graph end to end: sample the spline, orient each post along its
+// tangent (orientAlongVector reads the `tangent` attribute as a field and
+// writes `rot`), spawn instances. The spawner's `points` passthrough pin
+// doubles as the post-count output.
 
-const sampleGraph = new Graph(seed);
-const curveIn = sampleGraph.add(dataInput);
-const sampler = sampleGraph.add(splineSample, { mode: "spacing", spacing });
-sampleGraph.connect(curveIn, "out", sampler, "in");
-sampleGraph.output(sampler, "out", "posts");
-
-const spawnGraph = new Graph(seed);
-const postsIn = spawnGraph.add(dataInput);
-const spawner = spawnGraph.add(spawnInstances, { assetId: "post" });
-spawnGraph.connect(postsIn, "out", spawner, "in");
-spawnGraph.output(spawner, "instances", "instances");
+const graph = new Graph(seed);
+const curveIn = graph.add(dataInput);
+const sampler = graph.add(splineSample, { mode: "spacing", spacing });
+const orient = graph.add(orientAlongVector, { direction: attribute("tangent", 3) });
+const spawner = graph.add(spawnInstances, { assetId: "post" });
+graph.connect(curveIn, "out", sampler, "in");
+graph.connect(sampler, "out", orient, "in");
+graph.connect(orient, "out", spawner, "in");
+graph.output(spawner, "instances", "instances");
+graph.output(spawner, "points", "posts");
 
 // -- scene -----------------------------------------------------------------
 
@@ -105,12 +106,12 @@ let rails: Mesh[] = [];
 
 const overlay = createOverlay({
   title: "03 · spline fence",
-  info: "CatmullRom loop → fromCurve → splineSample (spacing) → yaw from tangent into rot → spawnInstances + tube rails",
+  info: "CatmullRom loop → fromCurve → splineSample (spacing) → orientAlongVector (tangent) → spawnInstances + tube rails",
 });
 const statFps = overlay.addStat("fps");
 const statPosts = overlay.addStat("posts");
 const statLength = overlay.addStat("fence length");
-const statCook = overlay.addStat("cook (sample+spawn)");
+const statCook = overlay.addStat("cook");
 
 // -- rebuild ---------------------------------------------------------------
 
@@ -134,26 +135,10 @@ function rebuildRails(): void {
 }
 
 const recook = makeRecooker(async () => {
-  const resA = await cook(sampleGraph);
-  const posts = firstGeometry(resA.outputs.posts);
+  const result = await cook(graph);
+  const posts = firstGeometry(result.outputs.posts);
   if (!posts) return;
-
-  // Orient each post: yaw from the tangent's XZ direction, written as a
-  // quaternion about +Y directly into the standard `rot` attribute.
-  const oriented = cloneGeometry(posts);
-  const tangent = oriented.attrs.point.require("tangent").data;
-  const rot = oriented.attrs.point.require("rot").data;
-  for (let i = 0; i < oriented.pointCount; i++) {
-    const yaw = Math.atan2(tangent[i * 3], tangent[i * 3 + 2]);
-    rot[i * 4] = 0;
-    rot[i * 4 + 1] = Math.sin(yaw / 2);
-    rot[i * 4 + 2] = 0;
-    rot[i * 4 + 3] = Math.cos(yaw / 2);
-  }
-
-  spawnGraph.setParam(postsIn, "items", [makeGeometryItem(oriented)]);
-  const resB = await cook(spawnGraph);
-  const instances = resB.outputs.instances.find(
+  const instances = result.outputs.instances.find(
     (i): i is InstancesItem => i.kind === "instances",
   );
 
@@ -164,16 +149,14 @@ const recook = makeRecooker(async () => {
   meshes = instances ? toInstancedMeshes(instances.batches, assets) : [];
   for (const m of meshes) fenceGroup.add(m);
 
-  statPosts(String(oriented.pointCount));
+  statPosts(String(posts.pointCount));
   statLength(`${curve.getLength().toFixed(1)} u`);
-  statCook(`${(resA.stats.elapsedMs + resB.stats.elapsedMs).toFixed(1)} ms`);
+  statCook(`${result.stats.elapsedMs.toFixed(1)} ms`);
 });
 
 function regenerate(): void {
   curve = buildCurve(seed);
-  sampleGraph.setParam(curveIn, "items", [
-    makeGeometryItem(fromCurve(curve, CURVE_SEGMENTS, true)),
-  ]);
+  graph.setParam(curveIn, "items", [makeGeometryItem(fromCurve(curve, CURVE_SEGMENTS, true))]);
   rebuildRails();
   recook();
 }
@@ -187,7 +170,7 @@ overlay.addSlider(
   { min: 0.8, max: 5, step: 0.1, value: spacing, format: (v) => `${v.toFixed(1)} u` },
   (v) => {
     spacing = v;
-    sampleGraph.setParam(sampler, "spacing", spacing);
+    graph.setParam(sampler, "spacing", spacing);
     recook();
   },
 );

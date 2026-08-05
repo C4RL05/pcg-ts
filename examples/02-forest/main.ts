@@ -3,15 +3,13 @@
  * API used directly, outside any graph), the displaced mesh feeds a graph
  * via fromBufferGeometry + dataInput, surfaceSample scatters candidates,
  * height/slope attributes are stamped from position/normal fields, low
- * slope + below-treeline filters keep the plantable points, and a
- * per-point string `species` attribute splits the spawn into pine and
- * bush instance batches.
+ * slope + below-treeline filters keep the plantable points, and a string
+ * setAttribute picks each point's `species` declaratively so spawnInstances
+ * splits the spawn into pine and bush instance batches — all in one graph.
  */
 import {
   Graph,
   attribute,
-  buildInstanceBatches,
-  cloneGeometry,
   component,
   cook,
   createPointCloud,
@@ -19,9 +17,8 @@ import {
   evaluateField,
   fbm,
   filterByAttribute,
-  firstGeometry,
+  ge,
   hashCombine,
-  hashFloat,
   makeGeometryItem,
   mul,
   perlinNoise,
@@ -29,10 +26,12 @@ import {
   randomField,
   remap,
   setAttribute,
+  spawnInstances,
   sub,
   surfaceSample,
   vec,
   type Field,
+  type InstancesItem,
 } from "pcg-ts";
 import { fromBufferGeometry, toInstancedMeshes, type AssetMap } from "pcg-ts/three";
 import {
@@ -149,13 +148,24 @@ const sizeAttr = graph.add(setAttribute, {
     return vec(s, s, s); // one field instance, evaluated once, uniform scale
   })(),
 });
+// Declarative species pick: a string setAttribute selects into `values`
+// per point (floor + clamp), so ~72% index 0 ("pine"), else "bush".
+const speciesAttr = graph.add(setAttribute, {
+  name: "species",
+  type: "string",
+  values: ["pine", "bush"],
+  value: ge(randomField("species"), 0.72),
+});
+const spawn = graph.add(spawnInstances, { assetId: "pine", assetAttr: "species" });
 graph.connect(terrainIn, "out", sample, "in");
 graph.connect(sample, "out", heightAttr, "in");
 graph.connect(heightAttr, "out", slopeAttr, "in");
 graph.connect(slopeAttr, "out", slopeFilter, "in");
 graph.connect(slopeFilter, "out", treelineFilter, "in");
 graph.connect(treelineFilter, "out", sizeAttr, "in");
-graph.output(sizeAttr, "out", "trees");
+graph.connect(sizeAttr, "out", speciesAttr, "in");
+graph.connect(speciesAttr, "out", spawn, "in");
+graph.output(spawn, "instances", "instances");
 
 // -- scene + assets --------------------------------------------------------
 
@@ -204,18 +214,11 @@ const statCache = overlay.addStat("nodes cooked/cached");
 
 const recook = makeRecooker(async () => {
   const result = await cook(graph);
-  const trees = firstGeometry(result.outputs.trees);
-  if (!trees) return;
-
-  // Species assignment happens on the data API: setAttribute cannot write
-  // string attributes, so the cooked cloud is cloned and stamped here.
-  const geo = cloneGeometry(trees);
-  const species = geo.attrs.point.add("species", "string", 1, "");
-  const seeds = geo.attrs.point.require("seed").data;
-  for (let i = 0; i < geo.pointCount; i++) {
-    species.setString(i, hashFloat(hashCombine(seeds[i], 101)) < 0.72 ? "pine" : "bush");
-  }
-  const batches = buildInstanceBatches(geo, { defaultAssetId: "pine", assetAttr: "species" });
+  const instances = result.outputs.instances.find(
+    (i): i is InstancesItem => i.kind === "instances",
+  );
+  if (!instances) return;
+  const batches = instances.batches;
 
   for (const m of meshes) {
     instGroup.remove(m);

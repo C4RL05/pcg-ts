@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-23 node types, alphabetical:
+25 node types, alphabetical:
 
 - [copyToPoints](#copytopoints) — Copies the source point cloud onto every target point (output count = source points * target points, grouped by target).
 - [dataInput](#datainput) — Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph.
@@ -11,6 +11,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [filterByDensity](#filterbydensity) — Filters points by their `density` point attribute (f32, tuple 1).
 - [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible.
 - [mergePoints](#mergepoints) — Concatenates the points of every connected geometry, in connection order, into one point cloud.
+- [orientAlongVector](#orientalongvector) — Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll.
 - [partitionByAttribute](#partitionbyattribute) — Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1).
 - [pointGrid](#pointgrid) — Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis.
 - [pointLine](#pointline) — Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start).
@@ -18,10 +19,11 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [projectToPlane](#projecttoplane) — Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero).
 - [promoteAttribute](#promoteattribute) — Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain.
 - [selfPrune](#selfprune) — Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win).
-- [setAttribute](#setattribute) — Creates or overwrites an attribute on the chosen domain and fills it from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise).
+- [setAttribute](#setattribute) — Creates or overwrites an attribute on the chosen domain.
 - [setBounds](#setbounds) — Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing.
 - [spawnInstances](#spawninstances) — Spawner terminal: converts the input point cloud into render-agnostic instance batches.
 - [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
+- [subgraph](#subgraph) — Composite node wrapping an inner graph as a single node.
 - [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
 - [transferAttribute](#transferattribute) — Copies a point attribute from the `source` geometry onto the main input's points: each destination point takes the value of its nearest source point in 3D (positions read from P; distance ties resolve to the lowest source index).
 - [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
@@ -50,7 +52,7 @@ Emits exactly the data items in its `items` param, unchanged — the bridge for 
 
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `items` | string | `""` |  |  |  | The DataItem array to emit, set programmatically via graph.setParam. The declared schema type is a placeholder (the registry has no item-list param type); the actual default is an empty list and the value is not JSON-serializable. |
+| `items` | items | `[]` |  |  |  | Data items to emit, bound at runtime via graph.setParam (the World binds parent-cell outputs here, per cell, at bind time). Live DataItems are runtime-injected and never serialized: a serialized graph carries an empty item list, and items must be re-bound after deserialization. |
 
 ## filterByAttribute
 
@@ -125,6 +127,22 @@ Concatenates the points of every connected geometry, in connection order, into o
 **Outputs:** `out` (geometry)
 
 **Params:** *(none)*
+
+## orientAlongVector
+
+Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll. The quaternion is right-handed and matches the spawner path's three.js Matrix4.compose conventions (and quatFromEulerDeg's frame), so with the default '+z' axis, spawned assets face the direction the way the spline-fence example's tangent yaw does. For axes ±x and ±z the local +Y axis turns as close to `up` as the direction allows; for axes ±y (which consume the up-like axis) local +Z takes that role. Points with a zero-length direction keep their existing rot (identity when the attribute is newly created). When direction and up are parallel or antiparallel (cross product squared length <= 1e-12, after normalizing both), the up hint deterministically falls back to [0, 0, 1], then [1, 0, 0].
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `direction` | vec3 | `[0,0,1]` |  |  | yes | World-space direction the chosen local axis should point along; need not be unit length. Field-capable (resolved per point on the input, e.g. a tangent attribute; tuple 1 broadcasts). Zero-length directions leave that point's rot unchanged (identity when the rot attribute did not exist before). |
+| `up` | vec3 | `[0,1,0]` |  |  |  | Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0]. |
+| `axis` | enum | `"+z"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | Which local axis maps onto the direction. Default '+z' — the forward axis assets face in the examples (a spline-fence style tangent yaw). For ±x/±z the local +Y follows the up hint; for ±y the local +Z follows it. |
 
 ## partitionByAttribute
 
@@ -240,7 +258,7 @@ Enforces a minimum distance between points: scans points in index order and keep
 
 ## setAttribute
 
-Creates or overwrites an attribute on the chosen domain and fills it from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise). The evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly. Values store with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. String attributes cannot be written this way.
+Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in two modes: with a non-empty `values` list, `value` acts as a per-element numeric selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — choosing one entry per element (e.g. for per-point asset ids consumed by spawnInstances assetAttr); with `values` empty, the constant `stringValue` is written to every element.
 
 **Inputs:** `in` (geometry)
 
@@ -252,9 +270,12 @@ Creates or overwrites an attribute on the chosen domain and fills it from `value
 | --- | --- | --- | --- | --- | --- | --- |
 | `name` | string | `"value"` |  |  |  | Attribute name to create or overwrite (an existing attribute of any shape is replaced). |
 | `domain` | enum | `"point"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain the attribute lives on: point, vertex, primitive, or detail (one element). |
-| `type` | enum | `"f32"` |  | `f32`, `i32`, `u32`, `bool` |  | Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1). |
+| `type` | enum | `"f32"` |  | `f32`, `i32`, `u32`, `bool`, `string` |  | Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1); string interns into the geometry's string table and writes via `values` + selector or `stringValue` (see those params). |
 | `tupleSize` | i32 | `1` | 1..4 |  |  | Components per element (1 = scalar, 3 = vector, 4 = color/quaternion). Range 1..4. |
-| `value` | f32 | `0` |  |  | yes | Value written to every element. Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. |
+| `value` | f32 | `0` |  |  | yes | Numeric value written to every element — or, for type 'string' with a non-empty `values` list, the per-element selector into it: floor(selector) clamped into [0, values.length - 1], NaN selects 0 (a total function; out-of-range never errors per element). Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. Ignored for type 'string' with `values` empty. |
+| `values` | stringList | `[]` |  |  |  | String values to choose among when type is 'string': `value` selects per element (floor, then clamp into range). Leave empty to write the constant `stringValue` instead. Setting this with a numeric type is an error. Note: when the attribute feeds spawnInstances via assetAttr, an empty-string entry never names an asset — the spawner falls back to its assetId param for those elements. |
+| `stringValue` | string | `""` |  |  |  | Constant written to every element when type is 'string' and `values` is empty. Must stay "" for numeric types. |
+| `seed` | u32 | `0` |  |  |  | Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed), re-rolling field randomness (e.g. randomField). Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level. |
 
 ## setBounds
 
@@ -301,6 +322,16 @@ Samples points along polyline primitives by arc length, treating all polylines o
 | `mode` | enum | `"count"` |  | `count`, `spacing` |  | How samples are placed: 'count' distributes exactly `count` samples over the total arc length; 'spacing' steps every `spacing` units. |
 | `count` | i32 | `10` | >= 1 |  |  | Number of samples when mode is 'count'. Minimum 1. Ignored in 'spacing' mode. |
 | `spacing` | f32 | `1` | >= 0 |  |  | Distance between samples in world units when mode is 'spacing'. Must be > 0 in that mode. Ignored in 'count' mode. |
+
+## subgraph
+
+Composite node wrapping an inner graph as a single node. Pins are per-instance, derived from the exposed inner pins, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs). Serialized subgraph nodes carry no params; their inner graph is a nested payload under "subgraph" ({ graph, inputs, outputs }), recursively in the same versioned format.
+
+**Inputs:** *(none)*
+
+**Outputs:** *(none)*
+
+**Params:** *(none)*
 
 ## surfaceSample
 
