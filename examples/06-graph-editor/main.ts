@@ -1,9 +1,10 @@
 /**
  * 06 — graph editor: a registry-driven node editor built entirely on the
  * public API. The Svelte panel edits an editor-side model; the controller
- * mirrors it into a real Graph via the serialized format, cooks debounced,
- * and this module renders the cook outputs into the shared three.js scene
- * (geometry as debug points, instances via toInstancedMeshes).
+ * applies each edit to a live Graph through the mutation API (no rebuild,
+ * so caches survive structural edits), cooks debounced, and this module
+ * renders the cook outputs into the shared three.js scene (geometry as
+ * debug points, instances via toInstancedMeshes).
  */
 import type { DataItem } from "pcg-ts";
 import { toInstancedMeshes, toPointsObject } from "pcg-ts/three";
@@ -72,7 +73,7 @@ function render(items: readonly DataItem[]): void {
 
 const overlay = createOverlay({
   title: "06 · graph editor",
-  info: "Palette → canvas → inspector; every change rebuilds and re-cooks the real graph. Unconnected output pins are the declared outputs.",
+  info: "Palette → canvas → inspector; every edit mutates the live graph in place (add/connect/disconnect/removeNode), so untouched branches re-cook from cache — watch nodes cooked/cached after deleting a node. Unconnected output pins are the declared outputs.",
 });
 const statFps = overlay.addStat("fps");
 const statOutputs = overlay.addStat("outputs");

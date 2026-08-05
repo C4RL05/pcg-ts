@@ -28,6 +28,7 @@ export interface SurfaceSampleParams {
  */
 export const surfaceSample = standardNode<SurfaceSampleParams>({
   type: "surfaceSample",
+  category: "sampler",
   description:
     "Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement). densityField (0..1) is then evaluated once over the candidate cloud and each candidate is accepted when a per-candidate hashed random < density — so the output count is at most `count` and exactly `count` when density is 1. Output points carry P, a flat per-triangle `normal` (f32 tuple 3), density 1, and a hashed per-point seed.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -163,6 +164,7 @@ export interface SplineSampleParams {
 /** Arc-length spline sampling over polyline primitives. */
 export const splineSample = standardNode<SplineSampleParams>({
   type: "splineSample",
+  category: "sampler",
   description:
     "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1].",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -304,6 +306,7 @@ const MAX_VOLUME_POINTS = 16_777_216;
 /** Regular jittered grid inside an axis-aligned box. */
 export const volumeSample = standardNode<VolumeSampleParams>({
   type: "volumeSample",
+  category: "sampler",
   description:
     "Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell. jitter in [0, 1] scales a deterministic per-cell random offset (0 = exact centers, 1 = anywhere in the cell) and may be a field evaluated on the un-jittered centers. Bounds come from the optional input geometry's P extents when connected, else from boundsMin/boundsMax. Emits a standard point cloud.",
   inputs: [{ name: "in", kind: "geometry" }],

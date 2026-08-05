@@ -1,7 +1,9 @@
 <script lang="ts">
   /**
-   * Node palette: registry-driven, grouped by pin signature, filtered by
-   * a substring search. Clicking an entry adds a node to the canvas.
+   * Node palette: registry-driven, grouped by the registry's `category`
+   * metadata (uncategorized types fall back to pin-signature "other"
+   * groups), filtered by a substring search. Clicking an entry adds a
+   * node to the canvas.
    */
   import type { PaletteGroup } from "./model.js";
 

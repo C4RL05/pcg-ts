@@ -30,6 +30,7 @@ export interface TransformPointsParams {
 /** Per-point SRT transform that composes with existing rot/scale attrs. */
 export const transformPoints = standardNode<TransformPointsParams>({
   type: "transformPoints",
+  category: "point op",
   description:
     "Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX'). Composes with existing point transform attributes when present: rot becomes R * rot (quaternion product) and scale multiplies componentwise. All three params are field-capable and resolve per point on the input positions.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -106,6 +107,7 @@ export interface JitterPointsParams {
 /** Deterministic random offset per point. */
 export const jitterPoints = standardNode<JitterPointsParams>({
   type: "jitterPoints",
+  category: "point op",
   description:
     "Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible. amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -159,6 +161,7 @@ export type CopyToPointsParams = Record<string, never>;
 /** Copy a source cloud onto every target point, composing transforms. */
 export const copyToPoints = standardNode<CopyToPointsParams>({
   type: "copyToPoints",
+  category: "point op",
   description:
     "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity.",
   inputs: [
@@ -264,6 +267,7 @@ export type MergePointsParams = Record<string, never>;
 /** Concatenate the point clouds of every connected input. */
 export const mergePoints = standardNode<MergePointsParams>({
   type: "mergePoints",
+  category: "point op",
   description:
     "Concatenates the points of every connected geometry, in connection order, into one point cloud. The output carries the union of all point attributes: an attribute missing on an input fills with its default over that input's range. Attributes sharing a name must agree on type and tuple size. Topology (vertices/primitives) is not carried — the result is points only. Output tags are the union of input tags.",
   inputs: [{ name: "in", kind: "geometry", multi: true }],
@@ -319,6 +323,7 @@ const ORIENT_PARALLEL_EPS = 1e-12;
 /** Build rot quaternions pointing a chosen local axis along a direction. */
 export const orientAlongVector = standardNode<OrientAlongVectorParams>({
   type: "orientAlongVector",
+  category: "point op",
   description:
     "Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll. The quaternion is right-handed and matches the spawner path's three.js Matrix4.compose conventions (and quatFromEulerDeg's frame), so with the default '+z' axis, spawned assets face the direction the way the spline-fence example's tangent yaw does. For axes ±x and ±z the local +Y axis turns as close to `up` as the direction allows; for axes ±y (which consume the up-like axis) local +Z takes that role. Points with a zero-length direction keep their existing rot (identity when the attribute is newly created). When direction and up are parallel or antiparallel (cross product squared length <= 1e-12, after normalizing both), the up hint deterministically falls back to [0, 0, 1], then [1, 0, 0].",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -458,6 +463,7 @@ export interface SetBoundsParams {
 /** Stamp the standard boundsMin/boundsMax point attributes. */
 export const setBounds = standardNode<SetBoundsParams>({
   type: "setBounds",
+  category: "point op",
   description:
     "Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing. Downstream nodes and spawners read these as each point's axis-aligned extent.",
   inputs: [{ name: "in", kind: "geometry" }],

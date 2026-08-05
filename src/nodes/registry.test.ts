@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { DataItem } from "../graph/index.js";
+// Side-effect imports: register the standard types living outside
+// src/nodes (spawnInstances, dataInput) so the category sweep sees the
+// whole standard library.
+import "../runtime/index.js";
+import "../spawn/index.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./index.js";
 
 const STANDARD_TYPES = [
@@ -300,5 +305,102 @@ describe("stringList schemas", () => {
     const info = getNodeType("__test_slOk").info;
     expect(info.params.list.type).toBe("stringList");
     expect(info.params.list.default).toEqual(["a", "b"]);
+  });
+});
+
+describe("category metadata", () => {
+  it("rejects an empty or non-string category", () => {
+    expect(() =>
+      standardNode<{ x: number }>({
+        type: "__test_catEmpty",
+        description: "test",
+        category: "  ",
+        inputs: [],
+        outputs: [],
+        params: { x: { type: "f32", default: 0, description: "x" } },
+        execute: () => ({}),
+      }),
+    ).toThrow(/category, when present, must be a non-empty string/);
+    expect(() =>
+      standardNode<{ x: number }>({
+        type: "__test_catNonString",
+        description: "test",
+        category: 5 as unknown as string,
+        inputs: [],
+        outputs: [],
+        params: { x: { type: "f32", default: 0, description: "x" } },
+        execute: () => ({}),
+      }),
+    ).toThrow(/category, when present, must be a non-empty string/);
+  });
+
+  it("an absent category stays valid and absent from the metadata", () => {
+    standardNode<{ x: number }>({
+      type: "__test_noCat",
+      description: "an uncategorized third-party node",
+      inputs: [],
+      outputs: [],
+      params: { x: { type: "f32", default: 0, description: "x" } },
+      execute: () => ({}),
+    });
+    expect(getNodeType("__test_noCat").info.category).toBeUndefined();
+    const listed = listNodeTypes().find((t) => t.type === "__test_noCat");
+    expect(listed).toBeDefined();
+    expect(listed && "category" in listed).toBe(false);
+  });
+
+  it("surfaces a declared category through getNodeType and listNodeTypes", () => {
+    standardNode<{ x: number }>({
+      type: "__test_cat",
+      description: "a categorized node",
+      category: "test things",
+      inputs: [],
+      outputs: [],
+      params: { x: { type: "f32", default: 0, description: "x" } },
+      execute: () => ({}),
+    });
+    expect(getNodeType("__test_cat").info.category).toBe("test things");
+    expect(listNodeTypes().find((t) => t.type === "__test_cat")?.category).toBe("test things");
+  });
+
+  it("categorizes the entire standard library", () => {
+    const expected: Record<string, string> = {
+      pointGrid: "source",
+      pointLine: "source",
+      pointScatterInBounds: "source",
+      surfaceSample: "sampler",
+      splineSample: "sampler",
+      volumeSample: "sampler",
+      transformPoints: "point op",
+      jitterPoints: "point op",
+      copyToPoints: "point op",
+      mergePoints: "point op",
+      orientAlongVector: "point op",
+      setBounds: "point op",
+      filterByDensity: "filter",
+      filterByBounds: "filter",
+      filterByAttribute: "filter",
+      selfPrune: "filter",
+      projectToPlane: "filter",
+      setAttribute: "attribute",
+      promoteAttribute: "attribute",
+      transferAttribute: "attribute",
+      partitionByAttribute: "attribute",
+      valueConstant: "value",
+      spawnInstances: "spawn",
+      dataInput: "io",
+      subgraph: "composite",
+    };
+    for (const [type, category] of Object.entries(expected)) {
+      expect(getNodeType(type).info.category, type).toBe(category);
+    }
+    // Nothing in the standard library is left uncategorized.
+    for (const info of listNodeTypes()) {
+      if (info.type.startsWith("__test_")) continue;
+      expect(info.category, `${info.type} category`).toBeDefined();
+      expect(expected[info.type], `${info.type} category is part of the scheme`).toBe(
+        info.category,
+      );
+    }
   });
 });

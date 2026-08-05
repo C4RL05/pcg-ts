@@ -2,8 +2,11 @@
   /**
    * Root editor panel (Svelte 5 runes): owns the reactive structure model
    * (nodes, edges, positions, seed), selection, toasts, and the modal.
-   * All graph semantics live in the controller; the panel only mirrors
-   * structure into it and displays what comes back.
+   * All graph semantics live in the controller, which applies every edit
+   * to the live graph through the mutation API (add/connect/disconnect/
+   * removeNode — no rebuild, so untouched branches keep their cook
+   * caches); the panel commits an edit to its view model only after the
+   * controller accepted it.
    */
   import { onMount } from "svelte";
   import Canvas from "./Canvas.svelte";
@@ -16,7 +19,6 @@
   import {
     STARTER_GRAPH_TEXT,
     allocateId,
-    nodePinsForType,
     paletteGroups,
     type EdgeView,
     type StructureModel,
@@ -44,11 +46,6 @@
     toastTimer = setTimeout(() => (toast = null), kind === "error" ? 7000 : 3500);
   }
 
-  function syncStructure(): void {
-    const err = controller.sync($state.snapshot(model) as StructureModel);
-    if (err) showToast(err, "error");
-  }
-
   onMount(() => {
     controller.setStatusListener((s) => {
       status = s;
@@ -71,7 +68,6 @@
       showToast(res.error, "error");
     } else {
       model = res.structure;
-      syncStructure();
     }
   });
 
@@ -80,18 +76,21 @@
   function addNode(type: string): void {
     const used = new Set(model.nodes.map((n) => n.id));
     const id = allocateId(type, used);
-    const pins = nodePinsForType(type);
+    const res = controller.addNode(id, type);
+    if ("error" in res) {
+      showToast(res.error, "error");
+      return;
+    }
     const n = model.nodes.length;
     model.nodes.push({
       id,
       type,
       x: 48 + (n % 4) * 36,
       y: 40 + (n % 6) * 32,
-      inputs: pins.inputs,
-      outputs: pins.outputs,
+      inputs: res.inputs,
+      outputs: res.outputs,
     });
     selectedId = id;
-    syncStructure();
   }
 
   function moveNode(id: string, x: number, y: number): void {
@@ -103,25 +102,39 @@
   }
 
   function connectEdge(edge: EdgeView): void {
-    const err = controller.tryConnect(edge);
+    const err = controller.connectEdge(edge);
     if (err) {
       showToast(err, "error");
       return;
     }
     model.edges.push(edge);
-    syncStructure();
   }
 
   function deleteEdge(index: number): void {
+    const edge = model.edges[index];
+    if (!edge) return;
+    const err = controller.disconnectEdge({
+      from: edge.from,
+      fromPin: edge.fromPin,
+      to: edge.to,
+      toPin: edge.toPin,
+    });
+    if (err) {
+      showToast(err, "error");
+      return;
+    }
     model.edges.splice(index, 1);
-    syncStructure();
   }
 
   function deleteNode(id: string): void {
+    const err = controller.deleteNode(id);
+    if (err) {
+      showToast(err, "error");
+      return;
+    }
     model.nodes = model.nodes.filter((n) => n.id !== id);
     model.edges = model.edges.filter((e) => e.from !== id && e.to !== id);
     if (selectedId === id) selectedId = null;
-    syncStructure();
   }
 
   function setSeed(seed: number): void {
@@ -145,7 +158,6 @@
     model = res.structure;
     selectedId = null;
     awaitingImportCook = true;
-    syncStructure();
     return null;
   }
 

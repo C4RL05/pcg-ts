@@ -13,6 +13,7 @@ export interface ValueConstantParams {
 /** Emit a constant number as a value item. */
 export const valueConstant = standardNode<ValueConstantParams>({
   type: "valueConstant",
+  category: "value",
   description:
     "Emits a single constant number as a value item, for feeding value pins or tagging pipelines with plain data.",
   inputs: [],

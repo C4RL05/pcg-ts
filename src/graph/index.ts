@@ -18,10 +18,13 @@ export {
 } from "./execute.js";
 export { cloneGeometry } from "./clone.js";
 export {
+  describeSubgraphPins,
   getSubgraphPlumbing,
   getSubgraphSpec,
   subgraphNode,
+  type DescribedSubgraphPin,
   type ExposedPin,
+  type SubgraphPins,
   type SubgraphPlumbing,
   type SubgraphSpec,
 } from "./subgraph.js";

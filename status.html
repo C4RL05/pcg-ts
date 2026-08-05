@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:90%; }
+  .bar > div { height:100%; background:var(--done); width:95%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 13:53</p>
-  <div class="bar"><div style="width:90%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 14:16</p>
+  <div class="bar"><div style="width:95%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -68,15 +68,15 @@
     <li class="done"><span class="chip">done</span>14 · Interactive graph editor (Svelte)</li>
     <li class="done"><span class="chip">done</span>15 · Docs and v0.3.0</li>
     <li class="done"><span class="chip">done</span>16 · Graph mutation and introspection API</li>
-    <li class="active"><span class="chip">active</span>17 · Registry metadata and editor adoption</li>
-    <li class="pending"><span class="chip">pending</span>18 · Docs and v0.4.0</li>
+    <li class="done"><span class="chip">done</span>17 · Registry metadata and editor adoption</li>
+    <li class="active"><span class="chip">active</span>18 · Docs and v0.4.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>618</b><span>passed</span></div>
+    <div><b>627</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-05 13:52</b><span>last run</span></div>
+    <div><b>2026-08-05 14:10</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -105,6 +105,7 @@
     <li><time>2026-08-05 10:38</time>v0.3.0 released. Phase 15 complete: node reference regenerated (transferAttribute&#39;s full mapping surface), README/llms.txt/authoring cover the transfer mappings and the graph editor, post-v0.3 backlog recorded (editor-grade graph APIs), VERSION export aligned. Overview site refreshed with the sixth live demo and the v0.3 roadmap; hosted demos rebuilt to include the editor. Final gate: 597 tests, clean typecheck, library and examples builds, idempotent docs.</li>
     <li><time>2026-08-05 13:29</time>v0.4 cycle started: editor-grade graph APIs scheduled as phases 16-18 (graph mutation + introspection with exact cache surgery; registry categories + subgraph pin introspection with the editor adopting the new APIs as proof; docs and v0.4.0). Repo is now public (user flipped visibility).</li>
     <li><time>2026-08-05 13:53</time>Phase 16 complete and audited (PASS): Graph gains removeNode (documented cascade over connections and declared outputs, structural cache eviction, single version bump), hardened disconnect (unknown pins now throw actionably; multi-input survivors keep insertion order), removeOutput, a frozen describe() structure snapshot in insertion order, and frozen getParams copies - with seeds served by the same helper the executor uses. Audit probed mid-cook removals, id reuse, version-bump discipline on every failure path, subgraph ghosts, and World staleness: no defects; one error-message hint improved (removed-node case). 618 tests green.</li>
+    <li><time>2026-08-05 14:16</time>Phase 17 complete and browser-verified: registry gains optional category metadata (all 25 standard types categorized: source/sampler/point op/filter/attribute/value/spawn/io/composite) and describeSubgraphPins resolves per-instance pins live from the recorded spec, recursing nested wrappers. The graph editor adopted the phase-16 APIs: deletes and disconnects mutate the live mirror instead of rebuilding through JSON. Verified interactively - adding a branch cooks 1 node with everything else cached; deleting it recooks ZERO nodes and the output hash returns to the exact starter value; the palette groups by category. 627 tests green.</li>
   </ol>
 </body>
 </html>

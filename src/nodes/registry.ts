@@ -72,6 +72,18 @@ export interface NodeSpec<P> {
   readonly type: string;
   /** What the node does — agent-facing documentation. */
   readonly description: string;
+  /**
+   * Optional grouping label for palettes and generated docs. Short and
+   * lowercase; the standard library uses "source" (emits points from
+   * nothing), "sampler" (points from existing geometry), "point op"
+   * (transforms a point cloud), "filter" (keeps a subset), "attribute"
+   * (attribute create/promote/transfer), "value" (plain value plumbing),
+   * "spawn" (graph terminals emitting instances), "io" (runtime data
+   * bridges), and "composite" (nodes wrapping inner graphs). Omit it to
+   * leave a type uncategorized (valid for third-party nodes; tools fall
+   * back to their own grouping).
+   */
+  readonly category?: string;
   readonly inputs: readonly PinDef[];
   readonly outputs: readonly PinDef[];
   /** One schema per param; keys must exactly match `P`. */
@@ -91,6 +103,8 @@ export interface PinInfo {
 export interface NodeTypeInfo {
   readonly type: string;
   readonly description: string;
+  /** Grouping label (see {@link NodeSpec.category}); absent when the type declared none. */
+  readonly category?: string;
   readonly inputs: readonly PinInfo[];
   readonly outputs: readonly PinInfo[];
   readonly params: Record<string, ParamSchema>;
@@ -247,6 +261,15 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
   if (typeof spec.description !== "string" || spec.description.trim() === "") {
     throw specError(spec.type, "must have a non-empty description");
   }
+  if (
+    spec.category !== undefined &&
+    (typeof spec.category !== "string" || spec.category.trim() === "")
+  ) {
+    throw specError(
+      spec.type,
+      "category, when present, must be a non-empty string (omit it to leave the type uncategorized)",
+    );
+  }
   const defaultParams: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {
     validateSchema(spec.type, name, schema);
@@ -270,6 +293,7 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
     info: {
       type: spec.type,
       description: spec.description,
+      ...(spec.category !== undefined ? { category: spec.category } : {}),
       inputs: copyPins(spec.inputs),
       outputs: copyPins(spec.outputs),
       params,
@@ -299,14 +323,16 @@ export function hasNodeType(type: string): boolean {
 
 /**
  * JSON-safe metadata for every registered node type, in registration
- * order: type name, description, pins, and per-param schemas (type,
- * default, description, enum values, field capability, bounds). This is
- * the runtime capability catalog for agents authoring graphs.
+ * order: type name, description, category (when declared), pins, and
+ * per-param schemas (type, default, description, enum values, field
+ * capability, bounds). This is the runtime capability catalog for agents
+ * authoring graphs.
  */
 export function listNodeTypes(): NodeTypeInfo[] {
   return [...registry.values()].map((entry) => ({
     type: entry.info.type,
     description: entry.info.description,
+    ...(entry.info.category !== undefined ? { category: entry.info.category } : {}),
     inputs: copyPins(entry.info.inputs),
     outputs: copyPins(entry.info.outputs),
     params: Object.fromEntries(

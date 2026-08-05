@@ -3,7 +3,7 @@ import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";
 import { cook } from "./execute.js";
 import type { Graph, NodeHandle } from "./graph.js";
-import { defineNode, type NodeDef, type PinDef } from "./node.js";
+import { defineNode, type NodeDef, type PinDef, type PinKind } from "./node.js";
 
 /** Maps an outer pin name onto a pin of a node inside the inner graph. */
 export interface ExposedPin {
@@ -79,6 +79,106 @@ export function getSubgraphSpec<P>(def: NodeDef<P>): SubgraphSpec | undefined {
 /** @internal See {@link SubgraphPlumbing}. `undefined` for unwrapped graphs. */
 export function getSubgraphPlumbing(graph: Graph): SubgraphPlumbing | undefined {
   return plumbingByGraph.get(graph);
+}
+
+/** One pin in a {@link SubgraphPins} description. */
+export interface DescribedSubgraphPin {
+  /** Pin name on the subgraph node (the exposed name). */
+  readonly name: string;
+  /** Kind of the exposed inner pin, resolved through nested subgraphs. */
+  readonly kind: PinKind;
+}
+
+/**
+ * Frozen per-instance pin description of a subgraph def; see
+ * {@link describeSubgraphPins}.
+ */
+export interface SubgraphPins {
+  readonly inputs: readonly DescribedSubgraphPin[];
+  readonly outputs: readonly DescribedSubgraphPin[];
+}
+
+/**
+ * Resolve the kind of one exposed pin against the live wrapped graph. When
+ * the exposed target is itself a subgraph instance, follow its recorded
+ * spec (the exposed pin of the nested wrapper) until a concrete pin is
+ * reached. `path` is the set of specs on the current resolution path,
+ * guarding against adversarial cyclic nesting.
+ */
+function resolveExposedKind(
+  spec: SubgraphSpec,
+  exp: ExposedPin,
+  side: "input" | "output",
+  path: Set<SubgraphSpec>,
+): PinKind {
+  const state = spec.graph._nodes.get(exp.node.id);
+  if (state === undefined) {
+    throw new GraphValidationError(
+      `describeSubgraphPins: exposed ${side} "${exp.name}" maps to inner node "${exp.node.id}", which no longer exists in the wrapped graph — removing an exposed inner node breaks the wrapper and is not supported`,
+    );
+  }
+  const nested = subgraphSpecs.get(state.def);
+  if (nested !== undefined) {
+    if (path.has(nested)) {
+      throw new GraphValidationError(
+        `describeSubgraphPins: exposed ${side} "${exp.name}" resolves through a cycle of nested subgraphs; subgraph nesting must be acyclic`,
+      );
+    }
+    const exposedList = side === "input" ? nested.inputs : nested.outputs;
+    const innerExp = exposedList.find((e) => e.name === exp.pin);
+    if (innerExp === undefined) {
+      throw new GraphValidationError(
+        `describeSubgraphPins: exposed ${side} "${exp.name}" maps to pin "${exp.pin}" of subgraph node "${state.id}", which exposes no such ${side}; exposed ${side}s: ${exposedList.map((e) => `"${e.name}"`).join(", ") || "(none)"}`,
+      );
+    }
+    path.add(nested);
+    const kind = resolveExposedKind(nested, innerExp, side, path);
+    path.delete(nested);
+    return kind;
+  }
+  const pins = side === "input" ? state.def.inputs : state.def.outputs;
+  const pin = pins.find((p) => p.name === exp.pin);
+  if (pin === undefined) {
+    throw new GraphValidationError(
+      `describeSubgraphPins: exposed ${side} "${exp.name}" maps to pin "${exp.pin}" of inner node "${state.id}", which has no such ${side} pin; ${side} pins: ${pins.map((p) => `"${p.name}"`).join(", ") || "(none)"}`,
+    );
+  }
+  return pin.kind;
+}
+
+/**
+ * Per-instance pin description of a def created by {@link subgraphNode}:
+ * the exposed pin names in exposure order, each with the kind of the
+ * inner pin it maps to — read live from the wrapped graph via the
+ * recorded {@link SubgraphSpec}, never guessed. An exposed pin that maps
+ * onto another subgraph instance's pin resolves recursively through that
+ * instance's spec until a concrete pin is reached, so nested subgraphs
+ * report exact kinds.
+ *
+ * Returns a frozen snapshot; returns `undefined` for any def not created
+ * by `subgraphNode` (consistent with {@link getSubgraphSpec}). Throws a
+ * `GraphValidationError` naming the pin and inner node when a wrapper was
+ * broken by later edits (an exposed inner node or pin no longer exists).
+ */
+export function describeSubgraphPins<P>(def: NodeDef<P>): SubgraphPins | undefined {
+  const spec = subgraphSpecs.get(def);
+  if (spec === undefined) return undefined;
+  const resolveSide = (
+    exposed: readonly ExposedPin[],
+    side: "input" | "output",
+  ): readonly DescribedSubgraphPin[] =>
+    Object.freeze(
+      exposed.map((exp) =>
+        Object.freeze({
+          name: exp.name,
+          kind: resolveExposedKind(spec, exp, side, new Set([spec])),
+        }),
+      ),
+    );
+  return Object.freeze({
+    inputs: resolveSide(spec.inputs, "input"),
+    outputs: resolveSide(spec.outputs, "output"),
+  });
 }
 
 /**

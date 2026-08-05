@@ -1,34 +1,44 @@
 /**
- * The non-reactive half of the editor: owns per-node params (which may
- * hold Fields), subgraph payloads, and a live Graph mirror rebuilt from
- * the editor structure through the library's own serialized format —
- * every structural change round-trips deserializeGraph, so the library
- * validates everything and its error messages surface verbatim. Cooks are
- * debounced and run per declared output so one failing branch doesn't
- * blank the rest of the preview.
+ * The non-reactive half of the editor: owns the live Graph mirror. Since
+ * phase 16/17 the mirror is mutated in place through the graph API —
+ * add/connect for creation, removeNode/disconnect for deletion — with no
+ * rebuild through the serialized format, so node caches on untouched
+ * branches survive every structural edit (the cook stats prove it).
+ * Params live on the graph itself (getParams/setParam; field-capable
+ * entries may hold Fields), subgraph pins come from describeSubgraphPins,
+ * and declared outputs follow the auto policy (every unconnected output
+ * pin) via output/removeOutput deltas. Import validates and rebuilds via
+ * deserializeGraph — the one place a fresh graph replaces the mirror —
+ * and export reads serializeGraph. Cooks are debounced and run per
+ * declared output so one failing branch doesn't blank the rest of the
+ * preview.
  */
 import {
   Graph,
   cook,
+  describeSubgraphPins,
   deserializeGraph,
   fieldFromJson,
   fieldToJson,
   getNodeType,
   isField,
   serializeGraph,
+  subgraphNode,
   type DataItem,
+  type ExposedPin,
   type FieldSpec,
   type NodeHandle,
   type ParamSchema,
+  type SerializedExposedPin,
   type SerializedGraph,
   type SerializedNode,
 } from "pcg-ts";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
 import {
-  autoOutputs,
-  pinsFromSerializedNode,
+  nodePinsForType,
   type NodeView,
+  type PinView,
   type StructureModel,
 } from "./model.js";
 
@@ -57,6 +67,14 @@ export interface ParamView {
   readonly specText: string | null;
 }
 
+/** One structural edge, as the canvas reports it. */
+export interface EdgeRef {
+  readonly from: string;
+  readonly fromPin: string;
+  readonly to: string;
+  readonly toPin: string;
+}
+
 /** Host callbacks: scene rendering and stats display. */
 export interface ControllerHooks {
   render(items: readonly DataItem[]): void;
@@ -75,16 +93,27 @@ function copyPlain(v: unknown): unknown {
   return Array.isArray(v) ? [...v] : v;
 }
 
+function copyPinViews(pins: { inputs: PinView[]; outputs: PinView[] }): {
+  inputs: PinView[];
+  outputs: PinView[];
+} {
+  return {
+    inputs: pins.inputs.map((p) => ({ ...p })),
+    outputs: pins.outputs.map((p) => ({ ...p })),
+  };
+}
+
 const COOK_DEBOUNCE_MS = 150;
 
 export class EditorController {
   private readonly hooks: ControllerHooks;
   private mirror = new Graph(0);
-  /** Node id → live param record; field-capable entries may hold Fields. */
-  private readonly params = new Map<string, Record<string, unknown>>();
-  /** Node id → original serialized payload for imported subgraph nodes. */
-  private readonly rawSubgraph = new Map<string, SerializedNode>();
+  /** Node id → pin views (registry pins; describeSubgraphPins for subgraphs). */
+  private readonly pins = new Map<string, { inputs: PinView[]; outputs: PinView[] }>();
+  /** Declared output names in canonical (node insertion) order. */
   private outputNames: string[] = [];
+  /** Bumped on every structural edit, so a stale cook pass abandons itself. */
+  private structureRev = 0;
   private cookTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly recook: () => void;
   private listener: ((s: CookStatus) => void) | undefined;
@@ -107,43 +136,76 @@ export class EditorController {
   // -- structure -----------------------------------------------------------
 
   /**
-   * Rebuild the Graph mirror from the editor structure by synthesizing the
-   * serialized format and running it through deserializeGraph. Returns the
-   * library's error message on failure (mirror unchanged), else null.
+   * Add a node instance to the live graph (graph.add with the registered
+   * def — defaults come from the registry schemas). Returns the pin views
+   * for the canvas, or the library's error message verbatim. No rebuild:
+   * every other node keeps its cache.
    */
-  sync(structure: StructureModel): string | null {
-    const ids = new Set(structure.nodes.map((n) => n.id));
-    for (const id of [...this.params.keys()]) if (!ids.has(id)) this.params.delete(id);
-    for (const id of [...this.rawSubgraph.keys()]) if (!ids.has(id)) this.rawSubgraph.delete(id);
-    for (const n of structure.nodes) {
-      if (n.type !== "subgraph" && !this.params.has(n.id)) {
-        this.params.set(n.id, this.defaultParamsFor(n.type));
-      }
+  addNode(id: string, type: string): { inputs: PinView[]; outputs: PinView[] } | { error: string } {
+    if (type === "subgraph") {
+      return {
+        error:
+          'the registered "subgraph" type is metadata-only; subgraph nodes enter the editor via import (their inner graph travels in the serialized payload)',
+      };
     }
-    let json: SerializedGraph;
     try {
-      json = this.buildJson(structure);
-      this.mirror = deserializeGraph(json);
+      this.mirror.add(getNodeType(type).def, undefined, id);
+    } catch (err) {
+      return { error: errorMessage(err) };
+    }
+    const view = nodePinsForType(type);
+    this.pins.set(id, view);
+    this.afterStructuralEdit();
+    return copyPinViews(view);
+  }
+
+  /**
+   * Connect two pins on the live graph — the real validation (pins,
+   * kinds, occupancy, cycles) with the library's error message verbatim,
+   * or null on success (commit the edge to the view model after).
+   */
+  connectEdge(edge: EdgeRef): string | null {
+    try {
+      this.mirror.connect({ id: edge.from }, edge.fromPin, { id: edge.to }, edge.toPin);
     } catch (err) {
       return errorMessage(err);
     }
-    this.outputNames = json.outputs.map((o) => o.name);
-    this.scheduleCook();
+    this.afterStructuralEdit();
     return null;
   }
 
   /**
-   * Attempt a connection on the live mirror — the real graph validation
-   * (pins, kinds, occupancy, cycles). Returns the library's error message
-   * verbatim, or null on success (commit the edge and call sync after).
+   * Remove one connection via graph.disconnect — no rebuild, so only the
+   * former target (and downstream) recooks; untouched branches serve
+   * their caches on the next cook. Returns an error message or null.
    */
-  tryConnect(edge: { from: string; fromPin: string; to: string; toPin: string }): string | null {
+  disconnectEdge(edge: EdgeRef): string | null {
+    let removed: boolean;
     try {
-      this.mirror.connect({ id: edge.from }, edge.fromPin, { id: edge.to }, edge.toPin);
-      return null;
+      removed = this.mirror.disconnect({ id: edge.from }, edge.fromPin, { id: edge.to }, edge.toPin);
     } catch (err) {
       return errorMessage(err);
     }
+    if (removed) this.afterStructuralEdit();
+    return null;
+  }
+
+  /**
+   * Remove a node via graph.removeNode (cascade: its connections and
+   * declared outputs go with it; former downstream targets are dirtied).
+   * No rebuild — every untouched branch keeps its cache, which the next
+   * cook's cooked/cached stats make visible. Returns an error message or
+   * null.
+   */
+  deleteNode(id: string): string | null {
+    try {
+      this.mirror.removeNode({ id });
+    } catch (err) {
+      return errorMessage(err);
+    }
+    this.pins.delete(id);
+    this.afterStructuralEdit();
+    return null;
   }
 
   setSeed(seed: number): void {
@@ -153,11 +215,20 @@ export class EditorController {
 
   // -- params --------------------------------------------------------------
 
-  /** Inspector rows for one node (plain data; Fields become spec text). */
+  /**
+   * Inspector rows for one node, read straight from the live graph
+   * (graph.getParams) — the graph is the single source of truth; Fields
+   * become spec text.
+   */
   paramViews(id: string, type: string): ParamView[] {
     if (type === "subgraph") return [];
     const schemas = getNodeType(type).info.params;
-    const rec = this.params.get(id) ?? {};
+    let rec: Readonly<Record<string, unknown>>;
+    try {
+      rec = this.mirror.getParams({ id } as NodeHandle<Record<string, unknown>>);
+    } catch {
+      rec = {};
+    }
     return Object.entries(schemas).map(([key, schema]) => {
       const v = rec[key];
       if (schema.type === "items") {
@@ -176,12 +247,13 @@ export class EditorController {
     });
   }
 
-  /** Set a plain (non-field) param on the model record and the mirror. */
+  /** Set a plain (non-field) param on the live graph. */
   setPlainParam(id: string, key: string, value: unknown): void {
-    const rec = this.params.get(id);
-    if (!rec) return;
-    rec[key] = copyPlain(value);
-    this.mirror.setParam({ id } as NodeHandle<Record<string, unknown>>, key, rec[key]);
+    try {
+      this.mirror.setParam({ id } as NodeHandle<Record<string, unknown>>, key, copyPlain(value));
+    } catch {
+      return; // node vanished between UI event and commit
+    }
     this.scheduleCook();
   }
 
@@ -191,8 +263,6 @@ export class EditorController {
    * null on success.
    */
   applyFieldParam(id: string, key: string, text: string): string | null {
-    const rec = this.params.get(id);
-    if (!rec) return `unknown node "${id}"`;
     let spec: unknown;
     try {
       spec = JSON.parse(text);
@@ -205,8 +275,11 @@ export class EditorController {
     } catch (err) {
       return errorMessage(err);
     }
-    rec[key] = field;
-    this.mirror.setParam({ id } as NodeHandle<Record<string, unknown>>, key, field);
+    try {
+      this.mirror.setParam({ id } as NodeHandle<Record<string, unknown>>, key, field);
+    } catch (err) {
+      return errorMessage(err);
+    }
     this.scheduleCook();
     return null;
   }
@@ -220,8 +293,11 @@ export class EditorController {
 
   /**
    * Validate pasted JSON with deserializeGraph (errors verbatim), then
-   * rebuild the editor model from the parsed serialized format with a
-   * deterministic topological layout. Declared outputs are re-derived by
+   * build a fresh mirror from it: standard nodes from their registered
+   * defs, subgraph nodes re-wrapped through subgraphNode with pins read
+   * from describeSubgraphPins (exact kinds, nested subgraphs resolved —
+   * no payload guessing). The editor model comes back with a
+   * deterministic topological layout; declared outputs are re-derived by
    * the auto policy (every unconnected output pin), which reproduces the
    * editor's own exports exactly.
    */
@@ -238,27 +314,26 @@ export class EditorController {
       return { error: errorMessage(err) };
     }
     const json = parsed as SerializedGraph;
-    this.params.clear();
-    this.rawSubgraph.clear();
-    const nodes: NodeView[] = json.nodes.map((sn) => {
-      const pins = pinsFromSerializedNode(sn);
-      if (sn.type === "subgraph") {
-        this.rawSubgraph.set(sn.id, sn);
-      } else {
-        const rec = this.defaultParamsFor(sn.type);
-        const schemas = getNodeType(sn.type).info.params;
-        for (const [key, value] of Object.entries(sn.params ?? {})) {
-          const schema = schemas[key];
-          if (!schema) continue;
-          rec[key] =
-            schema.acceptsField === true && isPlainObject(value)
-              ? fieldFromJson(value as FieldSpec)
-              : copyPlain(value);
-        }
-        this.params.set(sn.id, rec);
+    const mirror = new Graph(json.seed >>> 0);
+    const pins = new Map<string, { inputs: PinView[]; outputs: PinView[] }>();
+    const nodes: NodeView[] = [];
+    try {
+      for (const sn of json.nodes) {
+        const view = this.addImportedNode(mirror, sn);
+        pins.set(sn.id, view);
+        const copy = copyPinViews(view);
+        nodes.push({ id: sn.id, type: sn.type, x: 0, y: 0, inputs: copy.inputs, outputs: copy.outputs });
       }
-      return { id: sn.id, type: sn.type, x: 0, y: 0, inputs: pins.inputs, outputs: pins.outputs };
-    });
+      for (const c of json.connections ?? []) {
+        mirror.connect({ id: c.from[0] }, c.from[1], { id: c.to[0] }, c.to[1]);
+      }
+    } catch (err) {
+      return { error: errorMessage(err) };
+    }
+    this.mirror = mirror;
+    this.pins.clear();
+    for (const [id, view] of pins) this.pins.set(id, view);
+    this.afterStructuralEdit();
     const edges = (json.connections ?? []).map((c) => ({
       from: c.from[0],
       fromPin: c.from[1],
@@ -271,46 +346,85 @@ export class EditorController {
 
   // -- internals -------------------------------------------------------------
 
-  private defaultParamsFor(type: string): Record<string, unknown> {
-    const rec: Record<string, unknown> = {};
-    for (const [key, schema] of Object.entries(getNodeType(type).info.params)) {
-      rec[key] = copyPlain(schema.default);
+  /** Add one serialized node to a fresh mirror; returns its pin views. */
+  private addImportedNode(
+    mirror: Graph,
+    sn: SerializedNode,
+  ): { inputs: PinView[]; outputs: PinView[] } {
+    if (sn.type === "subgraph") {
+      const payload = sn.subgraph;
+      if (!payload) {
+        // Unreachable: deserializeGraph validated the payload above.
+        throw new Error(`node "${sn.id}": subgraph node without a subgraph payload`);
+      }
+      const toExposed = (e: SerializedExposedPin): ExposedPin => ({
+        name: e.name,
+        node: { id: e.node },
+        pin: e.pin,
+      });
+      const def = subgraphNode(
+        deserializeGraph(payload.graph),
+        payload.inputs.map(toExposed),
+        payload.outputs.map(toExposed),
+      );
+      mirror.add(def, undefined, sn.id);
+      const described = describeSubgraphPins(def);
+      const toView = (p: { name: string; kind: string }): PinView => ({
+        name: p.name,
+        kind: p.kind,
+        multi: false,
+      });
+      return {
+        inputs: (described?.inputs ?? []).map(toView),
+        outputs: (described?.outputs ?? []).map(toView),
+      };
     }
-    return rec;
+    const reg = getNodeType(sn.type);
+    const params: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(sn.params ?? {})) {
+      const schema = reg.info.params[key];
+      if (!schema) continue; // unreachable: deserializeGraph validated
+      params[key] =
+        schema.acceptsField === true && isPlainObject(value)
+          ? fieldFromJson(value as FieldSpec)
+          : copyPlain(value);
+    }
+    mirror.add(reg.def, params, sn.id);
+    return nodePinsForType(sn.type);
   }
 
-  private buildJson(structure: StructureModel): SerializedGraph {
-    const nodes: SerializedNode[] = structure.nodes.map((n) => {
-      if (n.type === "subgraph") {
-        const raw = this.rawSubgraph.get(n.id);
-        if (!raw) {
-          throw new Error(
-            `editor: subgraph node "${n.id}" has no stored payload; subgraph nodes can only enter the editor via import`,
-          );
-        }
-        return raw;
+  private afterStructuralEdit(): void {
+    this.structureRev++;
+    this.reconcileOutputs();
+    this.scheduleCook();
+  }
+
+  /**
+   * Diff the declared outputs against the auto policy (one output named
+   * `<nodeId>.<pin>` per unconnected output pin, in node insertion order)
+   * using the graph's own describe() snapshot, and apply the delta via
+   * output/removeOutput. Neither call touches node caches, so this keeps
+   * cache survival intact across structural edits.
+   */
+  private reconcileOutputs(): void {
+    const d = this.mirror.describe();
+    const connected = (id: string, pin: string): boolean =>
+      d.connections.some((c) => c.from[0] === id && c.from[1] === pin);
+    const desired = new Map<string, { id: string; pin: string }>();
+    for (const n of d.nodes) {
+      for (const p of this.pins.get(n.id)?.outputs ?? []) {
+        if (!connected(n.id, p.name)) desired.set(`${n.id}.${p.name}`, { id: n.id, pin: p.name });
       }
-      const schemas = getNodeType(n.type).info.params;
-      const rec = this.params.get(n.id) ?? this.defaultParamsFor(n.type);
-      const params: Record<string, unknown> = {};
-      for (const [key, schema] of Object.entries(schemas)) {
-        const v = rec[key];
-        if (schema.type === "items") params[key] = [];
-        else if (isField(v)) params[key] = fieldToJson(v);
-        else params[key] = copyPlain(v);
-      }
-      return { id: n.id, type: n.type, params };
-    });
-    return {
-      formatVersion: 1,
-      seed: structure.seed >>> 0,
-      nodes,
-      connections: structure.edges.map((e) => ({
-        from: [e.from, e.fromPin] as const,
-        to: [e.to, e.toPin] as const,
-      })),
-      outputs: autoOutputs(structure),
-    };
+    }
+    const have = new Set<string>();
+    for (const o of d.outputs) {
+      if (desired.has(o.name)) have.add(o.name);
+      else this.mirror.removeOutput(o.name);
+    }
+    for (const [name, { id, pin }] of desired) {
+      if (!have.has(name)) this.mirror.output({ id }, pin, name);
+    }
+    this.outputNames = [...desired.keys()];
   }
 
   private scheduleCook(): void {
@@ -328,14 +442,16 @@ export class EditorController {
    */
   private async cookAll(): Promise<void> {
     const graph = this.mirror;
+    const rev = this.structureRev;
     const names = [...this.outputNames];
+    const stale = (): boolean => graph !== this.mirror || rev !== this.structureRev;
     const errors: string[] = [];
     const items: DataItem[] = [];
     let cooked = 0;
     let cached = 0;
     const t0 = performance.now();
     for (const name of names) {
-      if (graph !== this.mirror) return; // structure changed mid-pass; a newer cook follows
+      if (stale()) return; // structure changed mid-pass; a newer cook follows
       try {
         const r = await cook(graph, { outputs: [name] });
         cooked += r.stats.cooked;
@@ -394,7 +510,7 @@ export class EditorController {
       outputs: names.length,
       hash: (h >>> 0).toString(16).padStart(8, "0"),
     };
-    if (graph === this.mirror) this.hooks.render(items);
+    if (!stale()) this.hooks.render(items);
     this.hooks.status(status);
     this.listener?.(status);
   }

@@ -36,6 +36,7 @@ function isDataItem(v: unknown): v is DataItem {
  */
 export const dataInput = standardNode<DataInputParams>({
   type: "dataInput",
+  category: "io",
   description:
     "Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph. Items hash by rev in memo keys, so caching stays correct as items are swapped.",
   inputs: [],

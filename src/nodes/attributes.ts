@@ -42,6 +42,7 @@ export interface SetAttributeParams {
 /** Create or overwrite an attribute from a field. */
 export const setAttribute = standardNode<SetAttributeParams>({
   type: "setAttribute",
+  category: "attribute",
   description:
     "Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in two modes: with a non-empty `values` list, `value` acts as a per-element numeric selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — choosing one entry per element (e.g. for per-point asset ids consumed by spawnInstances assetAttr); with `values` empty, the constant `stringValue` is written to every element.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -199,6 +200,7 @@ export interface PromoteAttributeParams {
 /** Promote an attribute between domains (wraps data promote). */
 export const promoteAttribute = standardNode<PromoteAttributeParams>({
   type: "promoteAttribute",
+  category: "attribute",
   description:
     "Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain. Modes: 'first' keeps the first contribution in scan order (the only mode valid for string attributes); 'average', 'sum', 'min', 'max' aggregate all contributions. 'detail' broadcasts (from) or reduces over everything (to). Elements with no contributors keep the attribute default.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -251,6 +253,7 @@ export interface TransferAttributeParams {
 /** Transfer an attribute from a source geometry (nearest / uv / raycast). */
 export const transferAttribute = standardNode<TransferAttributeParams>({
   type: "transferAttribute",
+  category: "attribute",
   description:
     "Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.",
   inputs: [
@@ -353,6 +356,7 @@ export interface PartitionByAttributeParams {
 /** Split one geometry into per-value point clouds, tagged. */
 export const partitionByAttribute = standardNode<PartitionByAttributeParams>({
   type: "partitionByAttribute",
+  category: "attribute",
   description:
     "Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1). The output collection holds the groups in order of each value's first occurrence; every group carries all point attributes and is tagged `<name>=<value>` (plus the input's tags) so downstream nodes can route by tag.",
   inputs: [{ name: "in", kind: "geometry" }],

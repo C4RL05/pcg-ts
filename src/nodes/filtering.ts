@@ -18,6 +18,7 @@ export interface FilterByDensityParams {
 /** Keep points by their `density` attribute. */
 export const filterByDensity = standardNode<FilterByDensityParams>({
   type: "filterByDensity",
+  category: "filter",
   description:
     "Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -75,6 +76,7 @@ export interface FilterByBoundsParams {
 /** Keep points inside (or outside) an axis-aligned box. */
 export const filterByBounds = standardNode<FilterByBoundsParams>({
   type: "filterByBounds",
+  category: "filter",
   description:
     "Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bounds inclusive). mode 'inside' keeps points within the box, 'outside' keeps the rest. Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -120,6 +122,7 @@ export interface FilterByAttributeParams {
 /** Keep points by comparing a scalar or string point attribute. */
 export const filterByAttribute = standardNode<FilterByAttributeParams>({
   type: "filterByAttribute",
+  category: "filter",
   description:
     "Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -205,6 +208,7 @@ export interface SelfPruneParams {
 /** Greedy minimum-distance pruning in point-index order. */
 export const selfPrune = standardNode<SelfPruneParams>({
   type: "selfPrune",
+  category: "filter",
   description:
     "Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win). Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
@@ -279,6 +283,7 @@ export interface ProjectToPlaneParams {
 /** Orthogonally project points onto a plane. */
 export const projectToPlane = standardNode<ProjectToPlaneParams>({
   type: "projectToPlane",
+  category: "filter",
   description:
     "Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero). With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible.",
   inputs: [{ name: "in", kind: "geometry" }],

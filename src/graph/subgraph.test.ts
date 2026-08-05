@@ -4,7 +4,7 @@ import { CookCancelledError, GraphValidationError } from "./errors.js";
 import { cook } from "./execute.js";
 import { Graph } from "./graph.js";
 import { defineNode } from "./node.js";
-import { subgraphNode } from "./subgraph.js";
+import { describeSubgraphPins, subgraphNode } from "./subgraph.js";
 import { counterNode, makePointsNode, slowNode, transformNode } from "./testNodes.js";
 
 function pointBytes(coll: DataCollection, count: number): number[] {
@@ -269,5 +269,115 @@ describe("subgraphNode", () => {
         [],
       ),
     ).toThrow(GraphValidationError);
+  });
+});
+
+describe("describeSubgraphPins", () => {
+  it("describes pins with the exposed inner pins' actual kinds", () => {
+    const inner = new Graph();
+    const t = inner.add(transformNode(), undefined, "t");
+    const c = inner.add(counterNode(0).def, undefined, "c");
+    const def = subgraphNode(
+      inner,
+      [
+        { name: "geo", node: t, pin: "in" },
+        { name: "num", node: c, pin: "in" },
+      ],
+      [
+        { name: "res", node: t, pin: "out" },
+        { name: "n", node: c, pin: "out" },
+      ],
+    );
+    const pins = describeSubgraphPins(def);
+    expect(pins).toEqual({
+      inputs: [
+        { name: "geo", kind: "geometry" },
+        { name: "num", kind: "value" },
+      ],
+      outputs: [
+        { name: "res", kind: "geometry" },
+        { name: "n", kind: "value" },
+      ],
+    });
+  });
+
+  it("returns a frozen snapshot", () => {
+    const inner = new Graph();
+    const t = inner.add(transformNode(), undefined, "t");
+    const def = subgraphNode(inner, [{ name: "geo", node: t, pin: "in" }], [
+      { name: "res", node: t, pin: "out" },
+    ]);
+    const pins = describeSubgraphPins(def);
+    if (pins === undefined) throw new Error("expected a pin description");
+    expect(Object.isFrozen(pins)).toBe(true);
+    expect(Object.isFrozen(pins.inputs)).toBe(true);
+    expect(Object.isFrozen(pins.outputs)).toBe(true);
+    expect(Object.isFrozen(pins.inputs[0])).toBe(true);
+    expect(() => {
+      (pins.inputs as unknown as unknown[]).push({ name: "x", kind: "any" });
+    }).toThrow();
+    expect(() => {
+      (pins.inputs[0] as { name: string }).name = "clobbered";
+    }).toThrow();
+  });
+
+  it("resolves nested subgraph pins through the recorded specs", () => {
+    const innermost = new Graph();
+    const t = innermost.add(transformNode(), undefined, "t");
+    const c = innermost.add(counterNode(0).def, undefined, "c");
+    const defInner = subgraphNode(
+      innermost,
+      [
+        { name: "a", node: t, pin: "in" },
+        { name: "v", node: c, pin: "in" },
+      ],
+      [
+        { name: "b", node: t, pin: "out" },
+        { name: "w", node: c, pin: "out" },
+      ],
+    );
+    const mid = new Graph();
+    const s1 = mid.add(defInner, undefined, "s1");
+    const defOuter = subgraphNode(
+      mid,
+      [
+        { name: "outerGeo", node: s1, pin: "a" },
+        { name: "outerVal", node: s1, pin: "v" },
+      ],
+      [
+        { name: "outGeo", node: s1, pin: "b" },
+        { name: "outVal", node: s1, pin: "w" },
+      ],
+    );
+    expect(describeSubgraphPins(defOuter)).toEqual({
+      inputs: [
+        { name: "outerGeo", kind: "geometry" },
+        { name: "outerVal", kind: "value" },
+      ],
+      outputs: [
+        { name: "outGeo", kind: "geometry" },
+        { name: "outVal", kind: "value" },
+      ],
+    });
+  });
+
+  it("returns undefined for defs not created by subgraphNode", () => {
+    expect(describeSubgraphPins(transformNode())).toBeUndefined();
+    expect(describeSubgraphPins(makePointsNode(1))).toBeUndefined();
+  });
+
+  it("throws actionably when a later edit removed an exposed inner node", () => {
+    const inner = new Graph();
+    const t = inner.add(transformNode(), undefined, "t");
+    const p = inner.add(makePointsNode(1), undefined, "keep");
+    const def = subgraphNode(inner, [], [
+      { name: "res", node: t, pin: "out" },
+      { name: "pts", node: p, pin: "out" },
+    ]);
+    inner.removeNode(t);
+    expect(() => describeSubgraphPins(def)).toThrow(GraphValidationError);
+    expect(() => describeSubgraphPins(def)).toThrow(
+      /exposed output "res".*inner node "t".*no longer exists/,
+    );
   });
 });

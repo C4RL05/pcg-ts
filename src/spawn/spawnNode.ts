@@ -16,6 +16,7 @@ export interface SpawnInstancesParams {
 /** Spawner terminal: points → instance batches (plus point pass-through). */
 export const spawnInstances = standardNode<SpawnInstancesParams>({
   type: "spawnInstances",
+  category: "spawn",
   description:
     "Spawner terminal: converts the input point cloud into render-agnostic instance batches. " +
     "Each point becomes one instance with world matrix T(P) * R(rot) * S(scale) (column-major " +

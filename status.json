@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-05 13:53",
-  "currentPhase": 17,
+  "updated": "2026-08-05 14:16",
+  "currentPhase": 18,
   "phases": [
     { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
     { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
@@ -21,12 +21,13 @@
     { "id": 14, "title": "Interactive graph editor (Svelte)", "state": "done" },
     { "id": 15, "title": "Docs and v0.3.0", "state": "done" },
     { "id": 16, "title": "Graph mutation and introspection API", "state": "done" },
-    { "id": 17, "title": "Registry metadata and editor adoption", "state": "active" },
-    { "id": 18, "title": "Docs and v0.4.0", "state": "todo" }
+    { "id": 17, "title": "Registry metadata and editor adoption", "state": "done" },
+    { "id": 18, "title": "Docs and v0.4.0", "state": "active" }
   ],
-  "tests": { "passed": 618, "failed": 0, "total": 618, "lastRun": "2026-08-05 13:52" },
+  "tests": { "passed": 627, "failed": 0, "total": 627, "lastRun": "2026-08-05 14:10" },
   "blockers": [],
   "log": [
+    { "time": "2026-08-05 14:16", "message": "Phase 17 complete and browser-verified: registry gains optional category metadata (all 25 standard types categorized: source/sampler/point op/filter/attribute/value/spawn/io/composite) and describeSubgraphPins resolves per-instance pins live from the recorded spec, recursing nested wrappers. The graph editor adopted the phase-16 APIs: deletes and disconnects mutate the live mirror instead of rebuilding through JSON. Verified interactively - adding a branch cooks 1 node with everything else cached; deleting it recooks ZERO nodes and the output hash returns to the exact starter value; the palette groups by category. 627 tests green." },
     { "time": "2026-08-05 13:53", "message": "Phase 16 complete and audited (PASS): Graph gains removeNode (documented cascade over connections and declared outputs, structural cache eviction, single version bump), hardened disconnect (unknown pins now throw actionably; multi-input survivors keep insertion order), removeOutput, a frozen describe() structure snapshot in insertion order, and frozen getParams copies - with seeds served by the same helper the executor uses. Audit probed mid-cook removals, id reuse, version-bump discipline on every failure path, subgraph ghosts, and World staleness: no defects; one error-message hint improved (removed-node case). 618 tests green." },
     { "time": "2026-08-05 13:29", "message": "v0.4 cycle started: editor-grade graph APIs scheduled as phases 16-18 (graph mutation + introspection with exact cache surgery; registry categories + subgraph pin introspection with the editor adopting the new APIs as proof; docs and v0.4.0). Repo is now public (user flipped visibility)." },
     { "time": "2026-08-05 10:38", "message": "v0.3.0 released. Phase 15 complete: node reference regenerated (transferAttribute's full mapping surface), README/llms.txt/authoring cover the transfer mappings and the graph editor, post-v0.3 backlog recorded (editor-grade graph APIs), VERSION export aligned. Overview site refreshed with the sixth live demo and the v0.3 roadmap; hosted demos rebuilt to include the editor. Final gate: 597 tests, clean typecheck, library and examples builds, idempotent docs." },

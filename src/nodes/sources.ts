@@ -23,6 +23,7 @@ export interface PointGridParams {
  */
 export const pointGrid = standardNode<PointGridParams>({
   type: "pointGrid",
+  category: "source",
   description:
     "Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis. Point order is X fastest, then Y, then Z. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
   inputs: [],
@@ -76,6 +77,7 @@ export interface PointLineParams {
 /** Evenly spaced points on the segment from `start` to `end`, inclusive. */
 export const pointLine = standardNode<PointLineParams>({
   type: "pointLine",
+  category: "source",
   description:
     "Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start). Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
   inputs: [],
@@ -114,6 +116,7 @@ export interface PointScatterInBoundsParams {
 /** Uniform random points inside an axis-aligned box, hash-seeded. */
 export const pointScatterInBounds = standardNode<PointScatterInBoundsParams>({
   type: "pointScatterInBounds",
+  category: "source",
   description:
     "Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax]. Each coordinate is an independent deterministic hash of (seed, point index, axis) — same seed always reproduces the same points, independent of evaluation order. Emits a standard point cloud.",
   inputs: [],

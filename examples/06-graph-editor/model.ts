@@ -2,19 +2,10 @@
  * Editor-side view model for the graph editor. Node positions and pin
  * views are editor state only — the library's graph JSON never carries
  * them. Everything here is plain, structured-clone-safe data so it can
- * live inside Svelte `$state`; Fields and subgraph payloads stay in the
- * controller.
+ * live inside Svelte `$state`; Fields and subgraph internals live on the
+ * controller's live Graph.
  */
-import {
-  getNodeType,
-  hasNodeType,
-  listNodeTypes,
-  type NodeTypeInfo,
-  type PinInfo,
-  type SerializedGraph,
-  type SerializedNode,
-  type SerializedOutput,
-} from "pcg-ts";
+import { getNodeType, listNodeTypes, type NodeTypeInfo, type PinInfo } from "pcg-ts";
 
 /** One pin as the canvas renders it. */
 export interface PinView {
@@ -71,66 +62,38 @@ export function nodePinsForType(type: string): { inputs: PinView[]; outputs: Pin
 }
 
 /**
- * Pin views for a serialized node. Standard types read the registry;
- * `subgraph` nodes derive per-instance pins from their payload's exposed
- * pin mappings (kind looked up on the inner node when it is a registered
- * standard type, otherwise `any`).
- */
-export function pinsFromSerializedNode(sn: SerializedNode): {
-  inputs: PinView[];
-  outputs: PinView[];
-} {
-  if (sn.type !== "subgraph") return nodePinsForType(sn.type);
-  const payload = sn.subgraph;
-  if (!payload) return { inputs: [], outputs: [] };
-  const kindOf = (graph: SerializedGraph, nodeId: string, pin: string, side: "in" | "out"): string => {
-    const inner = graph.nodes.find((n) => n.id === nodeId);
-    if (!inner || inner.type === "subgraph" || !hasNodeType(inner.type)) return "any";
-    const info = getNodeType(inner.type).info;
-    const pins = side === "in" ? info.inputs : info.outputs;
-    return pins.find((p) => p.name === pin)?.kind ?? "any";
-  };
-  return {
-    inputs: payload.inputs.map((e) => ({
-      name: e.name,
-      kind: kindOf(payload.graph, e.node, e.pin, "in"),
-      multi: false,
-    })),
-    outputs: payload.outputs.map((e) => ({
-      name: e.name,
-      kind: kindOf(payload.graph, e.node, e.pin, "out"),
-      multi: false,
-    })),
-  };
-}
-
-/**
- * Palette groups derived from registry pin metadata (the registry has no
- * category field, so grouping is a pin-signature heuristic): spawners
- * emit instances, values emit only value items, sources have no inputs,
- * everything else is an operator. The metadata-only `subgraph` composite
- * is excluded — instances exist only via import.
+ * Palette groups driven by the registry's `category` metadata: every
+ * categorized type lands under its category name, categories ordered by
+ * first registration. Uncategorized types (e.g. third-party
+ * registrations, which may legally omit `category`) fall back to the old
+ * pin-signature heuristic, clearly separated in trailing
+ * `other · <bucket>` groups. The metadata-only `subgraph` composite is
+ * excluded — instances exist only via import.
  */
 export function paletteGroups(): PaletteGroup[] {
-  const groups: Record<string, PaletteEntry[]> = {
-    sources: [],
-    operators: [],
-    spawners: [],
-    values: [],
-  };
+  const categorized = new Map<string, PaletteEntry[]>();
+  const fallback = new Map<string, PaletteEntry[]>();
   const bucket = (info: NodeTypeInfo): string => {
     if (info.outputs.some((p) => p.kind === "instances")) return "spawners";
     if (info.outputs.length > 0 && info.outputs.every((p) => p.kind === "value")) return "values";
     if (info.inputs.length === 0) return "sources";
     return "operators";
   };
+  const push = (groups: Map<string, PaletteEntry[]>, name: string, entry: PaletteEntry): void => {
+    let list = groups.get(name);
+    if (!list) groups.set(name, (list = []));
+    list.push(entry);
+  };
   for (const info of listNodeTypes()) {
     if (info.type === "subgraph") continue;
-    groups[bucket(info)].push({ type: info.type, description: info.description });
+    const entry = { type: info.type, description: info.description };
+    if (info.category !== undefined) push(categorized, info.category, entry);
+    else push(fallback, `other · ${bucket(info)}`, entry);
   }
-  return Object.entries(groups)
-    .filter(([, entries]) => entries.length > 0)
-    .map(([name, entries]) => ({ name, entries }));
+  return [...categorized.entries(), ...fallback.entries()].map(([name, entries]) => ({
+    name,
+    entries,
+  }));
 }
 
 /** First free `type_N` id (deterministic counter, no randomness). */
@@ -142,22 +105,6 @@ export function allocateId(type: string, used: ReadonlySet<string>): string {
     id = `${type}_${n}`;
   }
   return id;
-}
-
-/**
- * Automatic terminal outputs: every output pin with no outgoing edge is
- * declared as a graph output named `<nodeId>.<pin>`. Deterministic in
- * model order, so an export → import round trip re-derives the same set.
- */
-export function autoOutputs(model: StructureModel): SerializedOutput[] {
-  const outs: SerializedOutput[] = [];
-  for (const node of model.nodes) {
-    for (const pin of node.outputs) {
-      const connected = model.edges.some((e) => e.from === node.id && e.fromPin === pin.name);
-      if (!connected) outs.push({ id: node.id, pin: pin.name, name: `${node.id}.${pin.name}` });
-    }
-  }
-  return outs;
 }
 
 /**

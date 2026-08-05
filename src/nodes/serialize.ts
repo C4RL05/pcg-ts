@@ -103,6 +103,7 @@ function fail(message: string): never {
  */
 standardNode<Record<string, never>>({
   type: "subgraph",
+  category: "composite",
   description:
     "Composite node wrapping an inner graph as a single node. Pins are per-instance, derived from the exposed inner pins, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs). Serialized subgraph nodes carry no params; their inner graph is a nested payload under \"subgraph\" ({ graph, inputs, outputs }), recursively in the same versioned format.",
   inputs: [],
