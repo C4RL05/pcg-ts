@@ -8,6 +8,9 @@ errors name the offending node, pin, or param. Agent-facing entry points:
 [llms.txt](./llms.txt), [docs/nodes.md](./docs/nodes.md),
 [docs/authoring.md](./docs/authoring.md).
 
+**One-page overview:** <https://c4rl05.github.io/pcg-ts/> — what it is,
+architecture and pipeline diagrams, and the roadmap.
+
 Three foundations, carried through the whole library:
 
 - **The data model.** Attributes live on domains (point / vertex /

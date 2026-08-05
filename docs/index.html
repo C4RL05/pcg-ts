@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pcg-ts — deterministic PCG for TypeScript</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌱</text></svg>" />
+</head>
+<body>
+<style>
+  :root {
+    --bg: #fafbf8;
+    --ink: #1b241e;
+    --muted: #5c6b61;
+    --faint: #8a978d;
+    --accent: #2e7d4f;
+    --accent-ink: #22623d;
+    --amber: #a07d1c;
+    --line: #dfe6df;
+    --card: #f1f5f0;
+    --code-bg: #14201a;
+    --code-ink: #d8e6da;
+    --plate: #f7f9f5;
+    --mono: "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101612;
+      --ink: #e5ede6;
+      --muted: #92a296;
+      --faint: #6c7b70;
+      --accent: #58be8a;
+      --accent-ink: #6fcf9d;
+      --amber: #d9b84a;
+      --line: #232e26;
+      --card: #161f19;
+      --code-bg: #0b110d;
+      --code-ink: #cfe0d2;
+      --plate: #eef2ec;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #fafbf8; --ink: #1b241e; --muted: #5c6b61; --faint: #8a978d;
+    --accent: #2e7d4f; --accent-ink: #22623d; --amber: #a07d1c;
+    --line: #dfe6df; --card: #f1f5f0; --code-bg: #14201a; --code-ink: #d8e6da;
+    --plate: #f7f9f5;
+  }
+  :root[data-theme="dark"] {
+    --bg: #101612; --ink: #e5ede6; --muted: #92a296; --faint: #6c7b70;
+    --accent: #58be8a; --accent-ink: #6fcf9d; --amber: #d9b84a;
+    --line: #232e26; --card: #161f19; --code-bg: #0b110d; --code-ink: #cfe0d2;
+    --plate: #eef2ec;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 26px; font-weight: 600; margin: 0 0 8px; }
+  h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+  p { margin: 0 0 14px; max-width: 70ch; }
+  a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  a:hover, a:focus-visible { border-bottom-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin: 0 0 10px;
+  }
+  section { padding: 44px 0 20px; }
+  section + section { border-top: 1px solid var(--line); }
+  .lead { font-size: 17.5px; color: var(--muted); }
+  .lead strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- hero ---------- */
+  header { border-bottom: 1px solid var(--line); }
+  .hero { position: relative; }
+  .hero canvas { display: block; width: 100%; height: 340px; }
+  .hero-overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; justify-content: center;
+    pointer-events: none;
+  }
+  .hero-overlay .wrap { width: 100%; }
+  .hero-title {
+    font-family: var(--mono);
+    font-size: clamp(40px, 7vw, 64px);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    margin: 0;
+    line-height: 1.05;
+  }
+  .hero-title .dot { color: var(--accent); }
+  .hero-sub {
+    font-size: clamp(15px, 2.2vw, 18px);
+    color: var(--muted);
+    margin: 10px 0 0;
+    max-width: 46ch;
+  }
+  .hero-bar {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+    padding: 14px 0;
+    font-family: var(--mono); font-size: 13px;
+  }
+  .hero-bar .install {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--ink);
+  }
+  .hero-bar .install::before { content: "$ "; color: var(--faint); }
+  .seed-ctl { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
+  .seed-ctl label { color: var(--muted); }
+  .seed-ctl input {
+    font-family: var(--mono); font-size: 13px;
+    width: 76px; padding: 5px 8px;
+    color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .seed-note { color: var(--faint); }
+
+  /* ---------- stats strip ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 26px 0 6px;
+  }
+  .stat { background: var(--card); padding: 14px 16px; }
+  .stat b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .stat span { font-size: 12.5px; color: var(--muted); }
+
+  /* ---------- pillar cards ---------- */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+    margin: 18px 0 8px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 18px 14px;
+  }
+  .card h3 { color: var(--ink); }
+  .card h3 code { color: var(--accent-ink); }
+  .card p { font-size: 14.5px; color: var(--muted); margin: 0; }
+
+  /* ---------- diagrams as plates ---------- */
+  .plate {
+    background: var(--plate);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 14px 8px;
+    margin: 18px 0 10px;
+    overflow-x: auto;
+  }
+  .plate pre.mermaid { margin: 0; display: flex; justify-content: center; min-width: 560px; }
+  /* The plate is a fixed light ground in both themes, so pin the diagram
+     ink explicitly — transparent node fills, outlines matching the text —
+     overriding whatever theme mermaid's runtime injects. */
+  .plate svg .node rect, .plate svg .node circle, .plate svg .node ellipse,
+  .plate svg .node polygon, .plate svg .node path {
+    fill: transparent !important;
+    stroke: #1b241e !important;
+    stroke-width: 1.1px !important;
+  }
+  .plate svg .nodeLabel, .plate svg .nodeLabel p, .plate svg .label text, .plate svg text {
+    color: #1b241e !important;
+    fill: #1b241e !important;
+  }
+  .plate svg .cluster rect {
+    fill: transparent !important;
+    stroke: #a7b3a9 !important;
+    stroke-dasharray: 4 3 !important;
+  }
+  .plate svg .cluster-label text, .plate svg .cluster-label .nodeLabel,
+  .plate svg .cluster-label p {
+    color: #5c6b61 !important;
+    fill: #5c6b61 !important;
+  }
+  .plate svg .edgePath path, .plate svg path.flowchart-link {
+    stroke: #4a5a4f !important;
+  }
+  .plate svg marker path { fill: #4a5a4f !important; stroke: #4a5a4f !important; }
+  .plate svg .edgeLabel, .plate svg .edgeLabel p {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #4a5a4f !important;
+    fill: #4a5a4f !important;
+  }
+  .plate svg .edgeLabel rect { fill: transparent !important; opacity: 0 !important; }
+  .caption {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    letter-spacing: 0.04em;
+    margin: 8px 0 0;
+  }
+  .caption b { color: var(--muted); font-weight: 600; }
+
+  /* ---------- module list ---------- */
+  .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 4px 28px; margin: 16px 0 8px; padding: 0; list-style: none; }
+  .modules li { display: flex; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+  .modules code { font-family: var(--mono); font-size: 13px; color: var(--accent-ink); white-space: nowrap; }
+  .modules span { color: var(--muted); }
+
+  /* ---------- code ---------- */
+  .codeblock {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 16px 0 10px;
+  }
+  .codeblock pre { margin: 0; font-family: var(--mono); font-size: 13.5px; line-height: 1.65; }
+  .codeblock .k { color: #7fd4a8; }
+  .codeblock .s { color: #d8c078; }
+  .codeblock .c { color: #6d8577; font-style: italic; }
+  .codeblock .n { color: #a8ccf0; }
+
+  /* ---------- feature columns ---------- */
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 32px; margin: 14px 0; padding: 0; list-style: none; }
+  .features li { padding: 7px 0 7px 20px; position: relative; font-size: 14.5px; color: var(--muted); }
+  .features li::before { content: "▸"; position: absolute; left: 0; color: var(--accent); }
+  .features li b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- examples ---------- */
+  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 16px 0 8px; }
+  .example {
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px;
+    background: var(--bg);
+  }
+  .example b { font-family: var(--mono); font-size: 13px; display: block; margin-bottom: 4px; }
+  .example span { font-size: 13px; color: var(--muted); }
+
+  /* ---------- roadmap ---------- */
+  .roadmap { list-style: none; margin: 20px 0 8px; padding: 0; }
+  .roadmap li {
+    display: grid; grid-template-columns: 120px 1fr; gap: 18px;
+    padding: 16px 0; border-top: 1px dashed var(--line);
+  }
+  .roadmap li:first-child { border-top: none; }
+  .rm-ver { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+  .rm-ver small { display: block; font-weight: 400; color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+  .rm-body p { font-size: 14.5px; color: var(--muted); margin: 6px 0 0; }
+  .chip {
+    display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 2px 9px; border-radius: 99px; vertical-align: 2px;
+  }
+  .chip.shipped { color: var(--accent-ink); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .chip.next { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 30px; padding: 24px 0 40px;
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 8px 28px;
+  }
+  @media (max-width: 560px) {
+    .hero canvas { height: 280px; }
+    .roadmap li { grid-template-columns: 1fr; gap: 6px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header>
+  <div class="hero">
+    <canvas id="field" aria-hidden="true"></canvas>
+    <div class="hero-overlay">
+      <div class="wrap">
+        <h1 class="hero-title">pcg<span class="dot">-</span>ts</h1>
+        <p class="hero-sub">Deterministic procedural content generation for TypeScript — in the browser and Node, with optional three.js interop.</p>
+      </div>
+    </div>
+  </div>
+  <div class="wrap hero-bar">
+    <span class="install">npm install pcg-ts</span>
+    <span class="seed-ctl">
+      <label for="seed">seed</label>
+      <input id="seed" type="number" value="42" step="1" />
+      <span class="seed-note">← this header is cooked from it. Same seed, same field — always.</span>
+    </span>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <p class="eyebrow">What it is</p>
+    <h2>A node-graph PCG library, deterministic by construction</h2>
+    <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
+
+    <div class="stats">
+      <div class="stat"><b>562</b><span>tests, all green</span></div>
+      <div class="stat"><b>25</b><span>registered node types</span></div>
+      <div class="stat"><b>40</b><span>field-grammar functions</span></div>
+      <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
+      <div class="stat"><b>0</b><span>required dependencies</span></div>
+      <div class="stat"><b>v0.2</b><span>MIT · ESM · strict TS</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Foundations</p>
+    <h2>Four ideas, carried through everything</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Attribute data model</h3>
+        <p>Attributes live on four domains — point, vertex, primitive, detail — as SoA typed-array columns, with promote and transfer between them. The standard point carries transform, density, bounds, color, and its own seed.</p>
+      </div>
+      <div class="card">
+        <h3>Deferred fields — <code>Field&lt;T&gt;</code></h3>
+        <p>A value can be a function of evaluation context, resolved only when it lands on a domain. Node params accept <code>T | Field&lt;T&gt;</code>; noise, trig, and combinators compose into expression trees that also serialize to JSON.</p>
+      </div>
+      <div class="card">
+        <h3>Graph runtime</h3>
+        <p>A pull-based executor with revision-keyed memoization, time-budgeted and cancellable cooking, per-output partial cooks, and serializable subgraphs. Recook an unchanged graph and every node is a cache hit.</p>
+      </div>
+      <div class="card">
+        <h3>Streaming world</h3>
+        <p>Hierarchical grid levels — 2D or 3D cells, plus an unbounded level — cook cells around a viewpoint with hysteresis and LRU eviction. Cell content is provably independent of cook order, path, and evictions.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Architecture</p>
+    <h2>Layered core, one optional adapter</h2>
+    <p>The core has zero dependencies and never imports three.js — a guard test enforces that only the adapter may. Each layer depends only on the ones before it.</p>
+
+    <div class="plate">
+      <pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
+flowchart TB
+  subgraph L1["foundation"]
+    direction LR
+    RANDOM["src/random — PCG32 · hashing"]
+    DATA["src/data — SoA attributes · domains"]
+  end
+  subgraph L2["values"]
+    direction LR
+    FIELDS["src/fields — deferred values · combinators"]
+    NOISE["src/noise — 5 noise types as fields"]
+  end
+  subgraph L3["execution"]
+    direction LR
+    GRAPH["src/graph — executor · memo cache · subgraphs"]
+    NODES["src/nodes — 25 types · registry · JSON"]
+  end
+  subgraph L4["orchestration"]
+    direction LR
+    RUNTIME["src/runtime — World · streaming"]
+    SPAWN["src/spawn — InstanceBatch protocol"]
+  end
+  THREE["src/three — optional adapter, the only module importing three"]
+  L1 --> L2 --> L3 --> L4
+  L4 -. render-agnostic boundary .-> THREE
+      </pre>
+      <p class="caption"><b>Fig. 1</b> — module layers; arrows are the only allowed dependency direction.</p>
+    </div>
+
+    <ul class="modules">
+      <li><code>src/data</code><span>typed-array attribute storage, geometry, promote/transfer</span></li>
+      <li><code>src/random</code><span>PCG32 RNG and seed hashing — no Math.random anywhere</span></li>
+      <li><code>src/fields</code><span>deferred values, evaluation contexts, memoization</span></li>
+      <li><code>src/noise</code><span>five noise fields with published raw ranges + normalized mode</span></li>
+      <li><code>src/graph</code><span>nodes, pins, scheduler, caching, subgraph composition</span></li>
+      <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
+      <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
+      <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
+      <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">How a world gets made</p>
+    <h2>From a seed to instances on screen</h2>
+
+    <div class="plate">
+      <pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
+flowchart LR
+  SEED(["seed + viewpoint"]) --> WORLD["World: coarse to fine levels"]
+  WORLD --> CELLS["wanted cells: hysteresis · LRU"]
+  CELLS --> COOK["cook per cell, seeded by coords"]
+  COOK <--> CACHE[("memo cache")]
+  COOK --> ITEMS["DataItems: geometry · instances"]
+  ITEMS --> BATCH["InstanceBatch: assetId · transforms"]
+  BATCH --> ADAPTER["three adapter"]
+  ADAPTER --> MESH(["InstancedMesh in the scene"])
+      </pre>
+      <p class="caption"><b>Fig. 2</b> — the streaming cook path. Budgeted, cancellable, resumable; identical results in any cook order.</p>
+    </div>
+
+    <div class="codeblock"><pre><span class="c">// Scatter points in a box, displace them with a noise field.</span>
+<span class="k">import</span> { Graph, cook, firstGeometry, pointScatterInBounds,
+         jitterPoints, fbm, perlinNoise, remap } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> graph = <span class="k">new</span> <span class="n">Graph</span>(<span class="s">42</span>);  <span class="c">// every node seed derives from this</span>
+
+<span class="k">const</span> scatter = graph.<span class="n">add</span>(pointScatterInBounds, {
+  count: <span class="s">500</span>, boundsMin: [<span class="s">0</span>, <span class="s">0</span>, <span class="s">0</span>], boundsMax: [<span class="s">50</span>, <span class="s">0</span>, <span class="s">50</span>],
+});
+
+<span class="c">// `amount` is field-capable: scalar noise, evaluated per point.</span>
+<span class="k">const</span> jitter = graph.<span class="n">add</span>(jitterPoints, {
+  amount: <span class="n">remap</span>(<span class="n">fbm</span>(perlinNoise, { seed: <span class="s">7</span>, frequency: <span class="s">0.05</span> }), -<span class="s">1</span>, <span class="s">1</span>, <span class="s">0</span>, <span class="s">1</span>),
+});
+
+graph.<span class="n">connect</span>(scatter, <span class="s">"out"</span>, jitter, <span class="s">"in"</span>);
+graph.<span class="n">output</span>(jitter, <span class="s">"out"</span>, <span class="s">"points"</span>);
+
+<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
+<span class="k">const</span> geo = <span class="n">firstGeometry</span>(result.outputs.points);
+console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 2, cached: 0, elapsedMs: … }</span></pre></div>
+    <p class="caption">Cook again: both nodes are cache hits. Change one param: only its dependents recook.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Built for agents</p>
+    <h2>The library is its own documentation</h2>
+    <ul class="features">
+      <li><b>Self-describing registry</b> — every node type exposes pins, param schemas, defaults, and prose descriptions at runtime; the node reference is generated from it, never hand-written.</li>
+      <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
+      <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
+      <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
+      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>nodes.json</code>, and an authoring guide with recipes.</li>
+      <li><b>Adversarially audited</b> — every release phase was probed by an independent audit agent before landing; the defects it found shipped fixed, with regression tests.</li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Examples</p>
+    <h2>Five browser-verified demos</h2>
+    <div class="examples">
+      <div class="example"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></div>
+      <div class="example"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, declarative multi-asset instancing</span></div>
+      <div class="example"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></div>
+      <div class="example"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></div>
+      <div class="example"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Roadmap</p>
+    <h2>Shipped fast, audited always</h2>
+    <ul class="roadmap">
+      <li>
+        <div class="rm-ver">v0.1.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The full foundation in one unattended build: attribute data model, PCG32 + fields + five noise types, graph executor with budgeted cooking, 23-node standard library, streaming World, three.js adapter, five demos, agent docs. 429 tests; every phase independently audited.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.2.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The entire post-v0.1 backlog: serializable subgraphs and dataInput, trig + orient-along-vector in the field grammar, normalized noise with published raw ranges, exact worley, string attributes for declarative multi-asset spawns, sanctioned per-cell seeding, per-output cooking, 3D cube cells, unbounded levels without dummy radii. 562 tests; old graphs cook byte-identically.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">next <small>unscheduled</small></div>
+        <div class="rm-body">
+          <span class="chip next">exploring</span>
+          <p>WebGPU compute subgraphs for GPU-side generation · uv/raycast attribute transfer · an interactive node-graph editor (Svelte) built on the registry metadata and JSON serialization · npm publish and a public repository.</p>
+        </div>
+      </li>
+    </ul>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
+    <span>pcg-ts v0.2.0</span>
+    <span>MIT license</span>
+    <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
+    <span>ESM · TypeScript strict · three.js optional</span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  // Deterministic 32-bit hash chain — the same construction idea the
+  // library uses (seed → hash → per-point decisions). No Math.random.
+  const M = Math.imul;
+  function hash(...xs) {
+    let h = 0x9e3779b9 >>> 0;
+    for (const x of xs) {
+      h ^= (x | 0) + 0x9e3779b9 + ((h << 6) | 0) + (h >>> 2);
+      h = M(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+      h = M(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+    }
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+  const f01 = (h) => h / 4294967296;
+  const smooth = (t) => t * t * (3 - 2 * t);
+  function valueNoise(seed, x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const tx = smooth(x - xi), ty = smooth(y - yi);
+    const c00 = f01(hash(seed, xi, yi)),     c10 = f01(hash(seed, xi + 1, yi));
+    const c01 = f01(hash(seed, xi, yi + 1)), c11 = f01(hash(seed, xi + 1, yi + 1));
+    return (c00 * (1 - tx) + c10 * tx) * (1 - ty) + (c01 * (1 - tx) + c11 * tx) * ty;
+  }
+  function fbm(seed, x, y) {
+    let v = 0, amp = 0.62, f = 1;
+    for (let o = 0; o < 4; o++) { v += amp * valueNoise(seed + o, x * f, y * f); amp *= 0.5; f *= 2.1; }
+    return v;
+  }
+
+  const canvas = document.getElementById("field");
+  const input = document.getElementById("seed");
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  function hexToRgb(hex) {
+    const n = parseInt(hex.replace("#", ""), 16);
+    return [ (n >> 16) & 255, (n >> 8) & 255, n & 255 ];
+  }
+
+  function draw() {
+    const seed = (parseInt(input.value, 10) || 0) >>> 0;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const [ar, ag, ab] = hexToRgb(css("--accent") || "#2e7d4f");
+    const [mr, mg, mb] = hexToRgb(css("--faint") || "#8a978d");
+
+    // Deterministic scatter: grid cells, one candidate per cell, kept and
+    // sized by an fbm density field — a miniature of the library's model.
+    const cell = 13;
+    const cols = Math.ceil(w / cell), rows = Math.ceil(h / cell);
+    for (let gy = 0; gy < rows; gy++) {
+      for (let gx = 0; gx < cols; gx++) {
+        const hh = hash(seed, gx, gy);
+        const px = gx * cell + f01(hash(hh, 1)) * cell;
+        const py = gy * cell + f01(hash(hh, 2)) * cell;
+        const d = fbm(seed, px * 0.012, py * 0.012);
+        if (f01(hash(hh, 3)) > d * d * 1.35) continue;      // density keep-test
+        const r = 0.7 + d * 2.4 * f01(hash(hh, 4));
+        const edge = Math.min(py / (h * 0.55), 1);          // fade under the title
+        const alpha = (0.10 + 0.55 * d) * (0.35 + 0.65 * edge);
+        const t = f01(hash(hh, 5));
+        const cr = Math.round(mr + (ar - mr) * t);
+        const cg = Math.round(mg + (ag - mg) * t);
+        const cb = Math.round(mb + (ab - mb) * t);
+        ctx.fillStyle = `rgba(${cr},${cg},${cb},${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, 6.2832);
+        ctx.fill();
+      }
+    }
+  }
+
+  input.addEventListener("input", draw);
+  window.addEventListener("resize", draw);
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  if (window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  }
+  draw();
+})();
+</script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true });
+</script>
+</body>
+</html>
