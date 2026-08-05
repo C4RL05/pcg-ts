@@ -11,13 +11,15 @@
  * - `{ fn: "position" }` / `{ fn: "index" }`
  * - `{ fn: "randomField", key?: 0 | "salt" }`
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
- *   lt, le, gt, ge, eq, dot (2 args); abs, floor, length, normalize
- *   (1 arg); clamp, lerp, select (3); remap (5); vec (1+)
+ *   lt, le, gt, ge, eq, dot, atan2 (2 args); abs, floor, length,
+ *   normalize, sin, cos, tan, asin, acos, atan (1 arg); clamp, lerp,
+ *   select (3); remap (5); vec (1+)
  * - `{ fn: "component", args: [a], index: 0 }`
  * - `{ fn: "ramp", args: [a], stops: [[0, 0], [1, 1]] }`
  * - `{ fn: "valueNoise" | "perlinNoise" | "simplexNoise", opts?: { seed?,
- *   frequency?, offset?: [x,y,z], position?: spec } }`
- * - `{ fn: "worleyNoise", opts?: { ...noise opts, output?: "f1" | "f2" | "f2-f1" } }`
+ *   frequency?, offset?: [x,y,z], position?: spec, normalized?: false } }`
+ * - `{ fn: "worleyNoise", opts?: { ...noise opts, output?: "f1" | "f2" | "f2-f1",
+ *   exact?: false } }`
  * - `{ fn: "fbm", base: "perlinNoise", opts?: { ...noise opts, octaves?,
  *   lacunarity?, gain? } }`
  */
@@ -25,11 +27,16 @@ import {
   type Field,
   type FieldLike,
   abs,
+  acos,
   add,
+  asin,
+  atan,
+  atan2,
   attribute,
   clamp,
   component,
   constant,
+  cos,
   div,
   dot,
   eq,
@@ -51,7 +58,9 @@ import {
   randomField,
   remap,
   select,
+  sin,
   sub,
+  tan,
   vec,
 } from "../fields/index.js";
 import {
@@ -250,6 +259,13 @@ registerFixed("eq", 2, (f) => eq(f[0], f[1]));
 registerFixed("dot", 2, (f) => dot(f[0], f[1]));
 registerFixed("length", 1, (f) => length(f[0]));
 registerFixed("normalize", 1, (f) => normalize(f[0]));
+registerFixed("sin", 1, (f) => sin(f[0]));
+registerFixed("cos", 1, (f) => cos(f[0]));
+registerFixed("tan", 1, (f) => tan(f[0]));
+registerFixed("asin", 1, (f) => asin(f[0]));
+registerFixed("acos", 1, (f) => acos(f[0]));
+registerFixed("atan", 1, (f) => atan(f[0]));
+registerFixed("atan2", 2, (f) => atan2(f[0], f[1]));
 
 register("vec", ["args"], `{ fn: "vec", args: [x, y, z] }`, (spec, path) => {
   const args = requireArgs(spec, path, "variadic");
@@ -308,7 +324,7 @@ const NOISE_FACTORIES: Record<string, NoiseFactory> = {
   worleyNoise,
 };
 
-const NOISE_OPT_KEYS = ["seed", "frequency", "offset", "position"] as const;
+const NOISE_OPT_KEYS = ["seed", "frequency", "offset", "position", "normalized"] as const;
 const WORLEY_OUTPUTS = ["f1", "f2", "f2-f1"] as const;
 
 function parseNoiseOpts(
@@ -330,6 +346,7 @@ function parseNoiseOpts(
     frequency?: number;
     offset?: readonly [number, number, number];
     position?: FieldLike;
+    normalized?: boolean;
   } = {};
   if (rawOpts.seed !== undefined) {
     if (typeof rawOpts.seed !== "number" || !Number.isInteger(rawOpts.seed)) {
@@ -353,6 +370,12 @@ function parseNoiseOpts(
   if (rawOpts.position !== undefined) {
     opts.position = buildArg(rawOpts.position, `${path}.opts.position`);
   }
+  if (rawOpts.normalized !== undefined) {
+    if (typeof rawOpts.normalized !== "boolean") {
+      fail(`${path}.opts.normalized`, "normalized must be a boolean");
+    }
+    opts.normalized = rawOpts.normalized;
+  }
   return { opts, raw: rawOpts };
 }
 
@@ -360,7 +383,7 @@ for (const name of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
   register(
     name,
     ["opts"],
-    `{ fn: "${name}", opts?: { seed?, frequency?, offset?: [x,y,z], position? } }`,
+    `{ fn: "${name}", opts?: { seed?, frequency?, offset?: [x,y,z], position?, normalized? } }`,
     (spec, path) => NOISE_FACTORIES[name](parseNoiseOpts(spec, path, []).opts),
   );
 }
@@ -368,15 +391,21 @@ for (const name of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
 register(
   "worleyNoise",
   ["opts"],
-  `{ fn: "worleyNoise", opts?: { seed?, frequency?, offset?, position?, output?: "f1" | "f2" | "f2-f1" } }`,
+  `{ fn: "worleyNoise", opts?: { seed?, frequency?, offset?, position?, normalized?, output?: "f1" | "f2" | "f2-f1", exact? } }`,
   (spec, path) => {
-    const { opts, raw } = parseNoiseOpts(spec, path, ["output"]);
+    const { opts, raw } = parseNoiseOpts(spec, path, ["output", "exact"]);
     const worleyOpts: WorleyNoiseOpts = { ...opts };
     if (raw.output !== undefined) {
       if (typeof raw.output !== "string" || !(WORLEY_OUTPUTS as readonly string[]).includes(raw.output)) {
         fail(`${path}.opts.output`, `output must be one of: ${WORLEY_OUTPUTS.join(", ")}`);
       }
       worleyOpts.output = raw.output as WorleyNoiseOpts["output"];
+    }
+    if (raw.exact !== undefined) {
+      if (typeof raw.exact !== "boolean") {
+        fail(`${path}.opts.exact`, "exact must be a boolean");
+      }
+      worleyOpts.exact = raw.exact;
     }
     return worleyNoise(worleyOpts);
   },
@@ -385,7 +414,7 @@ register(
 register(
   "fbm",
   ["base", "opts"],
-  `{ fn: "fbm", base: "perlinNoise", opts?: { seed?, frequency?, offset?, position?, octaves?, lacunarity?, gain? } }`,
+  `{ fn: "fbm", base: "perlinNoise", opts?: { seed?, frequency?, offset?, position?, normalized?, octaves?, lacunarity?, gain? } }`,
   (spec, path) => {
     const base = spec.base;
     if (typeof base !== "string" || !(base in NOISE_FACTORIES)) {

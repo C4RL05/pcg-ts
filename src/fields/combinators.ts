@@ -102,6 +102,83 @@ export function floor(a: FieldLike): Field {
   return elementwise("floor", [a], (v) => Math.floor(v[0]));
 }
 
+// -- trigonometry ----------------------------------------------------------
+//
+// Determinism note shared by sin/cos/tan/asin/acos/atan/atan2: JS engines
+// have converged on fdlibm-derived implementations of these Math
+// functions, but unlike Math.sqrt they are not mandated by IEEE 754 /
+// ECMA-262 to be correctly rounded. Bit-exactness within one engine is
+// guaranteed (same input → same output); across engines it is the
+// practical norm, not a spec guarantee. Do not replace these with
+// hand-rolled polynomial approximations.
+
+/**
+ * Elementwise sine (radians). Bit-exact within one engine; across
+ * engines fdlibm convergence makes identical results the practical norm,
+ * not a spec guarantee (see the trig determinism note in this module).
+ */
+export function sin(a: FieldLike): Field {
+  return elementwise("sin", [a], (v) => Math.sin(v[0]));
+}
+
+/**
+ * Elementwise cosine (radians). Bit-exact within one engine; across
+ * engines fdlibm convergence makes identical results the practical norm,
+ * not a spec guarantee (see the trig determinism note in this module).
+ */
+export function cos(a: FieldLike): Field {
+  return elementwise("cos", [a], (v) => Math.cos(v[0]));
+}
+
+/**
+ * Elementwise tangent (radians). Bit-exact within one engine; across
+ * engines fdlibm convergence makes identical results the practical norm,
+ * not a spec guarantee (see the trig determinism note in this module).
+ */
+export function tan(a: FieldLike): Field {
+  return elementwise("tan", [a], (v) => Math.tan(v[0]));
+}
+
+/**
+ * Elementwise arcsine, in radians. Inputs outside [-1, 1] produce NaN,
+ * which propagates like any other elementwise result (no clamping).
+ * Bit-exact within one engine; across engines fdlibm convergence makes
+ * identical results the practical norm, not a spec guarantee.
+ */
+export function asin(a: FieldLike): Field {
+  return elementwise("asin", [a], (v) => Math.asin(v[0]));
+}
+
+/**
+ * Elementwise arccosine, in radians. Inputs outside [-1, 1] produce NaN,
+ * which propagates like any other elementwise result (no clamping).
+ * Bit-exact within one engine; across engines fdlibm convergence makes
+ * identical results the practical norm, not a spec guarantee.
+ */
+export function acos(a: FieldLike): Field {
+  return elementwise("acos", [a], (v) => Math.acos(v[0]));
+}
+
+/**
+ * Elementwise arctangent, in radians (range (-π/2, π/2)). Bit-exact
+ * within one engine; across engines fdlibm convergence makes identical
+ * results the practical norm, not a spec guarantee (see the trig
+ * determinism note in this module).
+ */
+export function atan(a: FieldLike): Field {
+  return elementwise("atan", [a], (v) => Math.atan(v[0]));
+}
+
+/**
+ * Elementwise two-argument arctangent atan2(y, x), in radians (range
+ * [-π, π]), broadcasting like the other binary combinators. Bit-exact
+ * within one engine; across engines fdlibm convergence makes identical
+ * results the practical norm, not a spec guarantee.
+ */
+export function atan2(y: FieldLike, x: FieldLike): Field {
+  return elementwise("atan2", [y, x], (v) => Math.atan2(v[0], v[1]));
+}
+
 /** Elementwise clamp of x to [lo, hi]. */
 export function clamp(x: FieldLike, lo: FieldLike, hi: FieldLike): Field {
   return elementwise("clamp", [x, lo, hi], (v) => Math.min(Math.max(v[0], v[1]), v[2]));

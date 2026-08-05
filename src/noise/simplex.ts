@@ -1,5 +1,5 @@
 import type { Field } from "../fields/index.js";
-import { GRAD3, type NoiseOpts, hash4, makeNoiseField } from "./util.js";
+import { GRAD3, NOISE_RAW_RANGES, type NoiseOpts, hash4, makeNoiseField } from "./util.js";
 
 const SIMPLEX_SALT = 0x73696d70; // "simp"
 
@@ -21,11 +21,12 @@ const SIMPLEX_SCALE = 72;
 /**
  * Simplex noise (Gustavson's 3D formulation with hash-selected
  * gradients instead of a permutation table, kernel r² = 0.5 for
- * continuity across skew cells). Output is in approximately [-1, 1].
- * Deterministic from `seed`.
+ * continuity across skew cells). Raw output is in approximately [-1, 1]
+ * (empirical scale with ~6% headroom, see SIMPLEX_SCALE — documented
+ * range `NOISE_RAW_RANGES.simplexNoise`). Deterministic from `seed`.
  */
 export function simplexNoise(opts: NoiseOpts = {}): Field<1> {
-  return makeNoiseField("simplex", SIMPLEX_SALT, opts, (seed) => {
+  return makeNoiseField("simplex", SIMPLEX_SALT, opts, NOISE_RAW_RANGES.simplexNoise, (seed) => {
     const corner = (
       i: number,
       j: number,

@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { createPointCloud } from "../data/index.js";
-import { position, vec, component, constant } from "../fields/index.js";
-import { makeGeometryItem } from "../graph/index.js";
+import { Geometry, createPointCloud } from "../data/index.js";
+import { attribute, position, vec, component, constant } from "../fields/index.js";
+import { Graph, makeGeometryItem } from "../graph/index.js";
 import {
   copyToPoints,
+  deserializeGraph,
+  fieldFromJson,
   getNodeType,
   jitterPoints,
   mergePoints,
+  orientAlongVector,
   pointGrid,
+  serializeGraph,
   setBounds,
   transformPoints,
 } from "./index.js";
+import { rotateVec } from "./util.js";
 import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
 
 function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
@@ -252,5 +257,234 @@ describe("setBounds", () => {
       expect(geo.attrs.point.require("boundsMin").getTuple(i)).toEqual([-1, -2, -3]);
       expect(geo.attrs.point.require("boundsMax").getTuple(i)).toEqual([4, 5, 6]);
     }
+  });
+});
+
+describe("orientAlongVector", () => {
+  const AXES: ReadonlyArray<[string, [number, number, number]]> = [
+    ["+x", [1, 0, 0]],
+    ["-x", [-1, 0, 0]],
+    ["+y", [0, 1, 0]],
+    ["-y", [0, -1, 0]],
+    ["+z", [0, 0, 1]],
+    ["-z", [0, 0, -1]],
+  ];
+
+  async function orient(
+    positions: number[][],
+    params: Record<string, unknown>,
+  ): Promise<number[][]> {
+    const input = cloudAt(positions);
+    const geo = firstGeo(
+      (await runNode(orientAlongVector, params, { in: [makeGeometryItem(input)] })).out,
+    );
+    const rot = geo.attrs.point.require("rot");
+    return positions.map((_, i) => rot.getTuple(i));
+  }
+
+  function rotate(q: number[], v: [number, number, number]): number[] {
+    return rotateVec([0, 0, 0], q[0], q[1], q[2], q[3], v[0], v[1], v[2]);
+  }
+
+  function normalized(v: number[]): number[] {
+    const len = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / len, v[1] / len, v[2] / len];
+  }
+
+  it("maps every axis option onto the direction with a unit quaternion", async () => {
+    const dirs: Array<[number, number, number]> = [
+      [1, 2, 3],
+      [-1, 0.5, 2],
+      [0.25, -4, 0.75],
+      [5, 0, 0],
+    ];
+    for (const [axis, axisVec] of AXES) {
+      for (const dir of dirs) {
+        const [q] = await orient([[0, 0, 0]], { direction: dir, axis });
+        expect(Math.hypot(q[0], q[1], q[2], q[3]), `axis ${axis} unit`).toBeCloseTo(1, 5);
+        const rotated = rotate(q, axisVec);
+        const expected = normalized(dir);
+        for (let k = 0; k < 3; k++) {
+          expect(rotated[k], `axis ${axis} dir ${dir.join(",")} comp ${k}`).toBeCloseTo(
+            expected[k],
+            5,
+          );
+        }
+      }
+    }
+  });
+
+  it("default +z matches the spline-fence tangent yaw convention", async () => {
+    // The spline-fence example writes rot = [0, sin(yaw/2), 0, cos(yaw/2)]
+    // with yaw = atan2(tangent.x, tangent.z): the asset's +Z faces the
+    // tangent. orientAlongVector with defaults must reproduce it.
+    const tangents: Array<[number, number, number]> = [
+      [1, 0, 1],
+      [-0.6, 0, 0.8],
+      [0, 0, 1],
+      [3, 0, -1],
+    ];
+    for (const t of tangents) {
+      const [q] = await orient([[0, 0, 0]], { direction: t });
+      const yaw = Math.atan2(t[0], t[2]);
+      const expected = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+      // q and -q encode the same rotation; align signs before comparing.
+      const dotQE = q[0] * expected[0] + q[1] * expected[1] + q[2] * expected[2] + q[3] * expected[3];
+      const sign = dotQE < 0 ? -1 : 1;
+      for (let k = 0; k < 4; k++) {
+        expect(sign * q[k], `tangent ${t.join(",")} comp ${k}`).toBeCloseTo(expected[k], 5);
+      }
+    }
+  });
+
+  it("turns the up-following axis toward the up hint", async () => {
+    const dir: [number, number, number] = [1, 0.3, -2];
+    const up = [0, 1, 0];
+    // Expected up-image: the component of up orthogonal to the direction.
+    const f = normalized(dir);
+    const dotUpF = up[0] * f[0] + up[1] * f[1] + up[2] * f[2];
+    const expectedUp = normalized([
+      up[0] - dotUpF * f[0],
+      up[1] - dotUpF * f[1],
+      up[2] - dotUpF * f[2],
+    ]);
+    for (const axis of ["+x", "-x", "+z", "-z"] as const) {
+      const [q] = await orient([[0, 0, 0]], { direction: dir, axis, up });
+      const rotY = rotate(q, [0, 1, 0]);
+      for (let k = 0; k < 3; k++) {
+        expect(rotY[k], `axis ${axis} comp ${k}`).toBeCloseTo(expectedUp[k], 5);
+      }
+    }
+    // For ±y the up-like slot is taken by the direction; +Z follows up.
+    for (const axis of ["+y", "-y"] as const) {
+      const [q] = await orient([[0, 0, 0]], { direction: dir, axis, up });
+      const rotZ = rotate(q, [0, 0, 1]);
+      for (let k = 0; k < 3; k++) {
+        expect(rotZ[k], `axis ${axis} comp ${k}`).toBeCloseTo(expectedUp[k], 5);
+      }
+    }
+  });
+
+  it("keeps the prior rot for zero-length directions (identity when newly created)", async () => {
+    // Per-point directions via an attribute: point 0 zero, point 1 set.
+    const input = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    input.attrs.point.add("dir", "f32", 3, [0, 0, 0]);
+    input.attrs.point.require("dir").setTuple(1, [1, 0, 0]);
+    const custom = [0.5, 0.5, 0.5, 0.5];
+    input.attrs.point.require("rot").setTuple(0, custom);
+    input.attrs.point.require("rot").setTuple(1, custom);
+    const geo = firstGeo(
+      (
+        await runNode(orientAlongVector, { direction: attribute("dir", 3) }, {
+          in: [makeGeometryItem(input)],
+        })
+      ).out,
+    );
+    const rot = geo.attrs.point.require("rot");
+    expect(rot.getTuple(0)).toEqual(custom); // untouched
+    expect(rot.getTuple(1)).not.toEqual(custom); // oriented
+    // A geometry without a rot attribute gets identity for zero dirs.
+    const bare = new Geometry();
+    bare.attrs.point.add("P", "f32", 3, [0, 0, 0]);
+    bare.attrs.point.resize(1);
+    const out = firstGeo(
+      (await runNode(orientAlongVector, { direction: [0, 0, 0] }, { in: [makeGeometryItem(bare)] }))
+        .out,
+    );
+    expect(out.attrs.point.require("rot").getTuple(0)).toEqual([0, 0, 0, 1]);
+  });
+
+  it("falls back deterministically when direction is (anti)parallel to up", async () => {
+    // Documented fallback chain: up -> [0, 0, 1] -> [1, 0, 0]. For
+    // direction +Y with default up, the frame becomes X=(-1,0,0),
+    // Y=(0,0,1), Z=(0,1,0); antiparallel flips the direction image.
+    const round = (v: number[]): number[] => v.map((x) => Math.round(x * 1e6) / 1e6);
+    const [qPar] = await orient([[0, 0, 0]], { direction: [0, 2, 0] });
+    expect(round(rotate(qPar, [0, 0, 1]))).toEqual([0, 1, 0]);
+    expect(round(rotate(qPar, [0, 1, 0]))).toEqual([0, 0, 1]);
+    expect(round(rotate(qPar, [1, 0, 0]))).toEqual([-1, 0, 0]);
+    const [qAnti] = await orient([[0, 0, 0]], { direction: [0, -2, 0] });
+    expect(round(rotate(qAnti, [0, 0, 1]))).toEqual([0, -1, 0]);
+    expect(round(rotate(qAnti, [0, 1, 0]))).toEqual([0, 0, 1]);
+    // Up parallel to Z falls through to the [1, 0, 0] fallback.
+    const [qz] = await orient([[0, 0, 0]], { direction: [0, 0, 3], up: [0, 0, 1] });
+    expect(rotate(qz, [0, 0, 1])[2]).toBeCloseTo(1, 5);
+    // Determinism: identical runs produce identical quaternions.
+    const [qAgain] = await orient([[0, 0, 0]], { direction: [0, 2, 0] });
+    expect(qAgain).toEqual(qPar);
+  });
+
+  it("resolves a field direction per point", async () => {
+    const input = cloudAt([
+      [0, 0, 0],
+      [0, 0, 0],
+    ]);
+    input.attrs.point.add("tangent", "f32", 3, [0, 0, 1]);
+    input.attrs.point.require("tangent").setTuple(0, [1, 0, 0]);
+    input.attrs.point.require("tangent").setTuple(1, [0, 0, -1]);
+    const geo = firstGeo(
+      (
+        await runNode(orientAlongVector, { direction: attribute("tangent", 3) }, {
+          in: [makeGeometryItem(input)],
+        })
+      ).out,
+    );
+    const rot = geo.attrs.point.require("rot");
+    expect(rotate(rot.getTuple(0), [0, 0, 1])[0]).toBeCloseTo(1, 5);
+    expect(rotate(rot.getTuple(1), [0, 0, 1])[2]).toBeCloseTo(-1, 5);
+  });
+
+  it("does not mutate its input (purity)", async () => {
+    const input = cloudAt([[1, 2, 3]]);
+    const before = snapshotGeometry(input);
+    await runNode(orientAlongVector, { direction: [1, 1, 0] }, { in: [makeGeometryItem(input)] });
+    expect(snapshotGeometry(input)).toEqual(before);
+  });
+
+  it("rejects a bad axis or up actionably", async () => {
+    const input = cloudAt([[0, 0, 0]]);
+    await expect(
+      runNode(orientAlongVector, { axis: "z" }, { in: [makeGeometryItem(input)] }),
+    ).rejects.toThrow(/"axis" must be one of \+x, -x, \+y, -y, \+z, -z/);
+    await expect(
+      runNode(orientAlongVector, { up: [0, 1] }, { in: [makeGeometryItem(input)] }),
+    ).rejects.toThrow(/"up" must be an array of 3 finite numbers/);
+  });
+
+  it("registers complete metadata documenting the conventions and degenerate cases", () => {
+    const info = getNodeType("orientAlongVector").info;
+    expect(info.description).toMatch(/right-handed/);
+    expect(info.description).toMatch(/Matrix4\.compose/);
+    expect(info.params.direction.acceptsField).toBe(true);
+    expect(info.params.direction.default).toEqual([0, 0, 1]);
+    expect(info.params.direction.description).toMatch(/Zero-length/);
+    expect(info.params.up.default).toEqual([0, 1, 0]);
+    expect(info.params.up.description).toMatch(/\[0, 0, 1\], then \[1, 0, 0\]/);
+    expect(info.params.axis.enum).toEqual(["+x", "-x", "+y", "-y", "+z", "-z"]);
+    expect(info.params.axis.default).toBe("+z");
+  });
+
+  it("serializes and round-trips through graph JSON with a field direction", () => {
+    const g = new Graph(5);
+    const n = g.add(
+      orientAlongVector,
+      {
+        direction: fieldFromJson({ fn: "attribute", name: "tangent", tupleSize: 3 }),
+        up: [0, 0, 1],
+        axis: "+x",
+      },
+      "orient",
+    );
+    g.output(n, "out", "result");
+    const json = serializeGraph(g);
+    const rebuilt = deserializeGraph(JSON.parse(JSON.stringify(json)));
+    expect(serializeGraph(rebuilt)).toEqual(json);
+    const node = json.nodes.find((entry) => entry.id === "orient");
+    expect(node?.params.axis).toBe("+x");
+    expect(node?.params.up).toEqual([0, 0, 1]);
+    expect(node?.params.direction).toEqual({ fn: "attribute", name: "tangent", tupleSize: 3 });
   });
 });

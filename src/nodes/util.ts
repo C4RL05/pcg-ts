@@ -138,6 +138,64 @@ export function quatFromEulerDeg(out: number[], rx: number, ry: number, rz: numb
   return out;
 }
 
+/**
+ * Quaternion ([x, y, z, w]) from an orthonormal right-handed basis given
+ * as the images of the local +X, +Y, +Z axes (the rotation matrix's
+ * columns). Uses the trace-based branch structure of three.js
+ * `Quaternion.setFromRotationMatrix`, so the result composes with
+ * three.js `Matrix4.compose` exactly like quaternions built by three.
+ */
+export function quatFromBasis(
+  out: number[],
+  xx: number,
+  xy: number,
+  xz: number,
+  yx: number,
+  yy: number,
+  yz: number,
+  zx: number,
+  zy: number,
+  zz: number,
+): number[] {
+  // Row-major element names (m<row><col>) over columns X, Y, Z.
+  const m11 = xx;
+  const m12 = yx;
+  const m13 = zx;
+  const m21 = xy;
+  const m22 = yy;
+  const m23 = zy;
+  const m31 = xz;
+  const m32 = yz;
+  const m33 = zz;
+  const trace = m11 + m22 + m33;
+  if (trace > 0) {
+    const s = 0.5 / Math.sqrt(trace + 1);
+    out[0] = (m32 - m23) * s;
+    out[1] = (m13 - m31) * s;
+    out[2] = (m21 - m12) * s;
+    out[3] = 0.25 / s;
+  } else if (m11 > m22 && m11 > m33) {
+    const s = 2 * Math.sqrt(1 + m11 - m22 - m33);
+    out[0] = 0.25 * s;
+    out[1] = (m12 + m21) / s;
+    out[2] = (m13 + m31) / s;
+    out[3] = (m32 - m23) / s;
+  } else if (m22 > m33) {
+    const s = 2 * Math.sqrt(1 + m22 - m11 - m33);
+    out[0] = (m12 + m21) / s;
+    out[1] = 0.25 * s;
+    out[2] = (m23 + m32) / s;
+    out[3] = (m13 - m31) / s;
+  } else {
+    const s = 2 * Math.sqrt(1 + m33 - m11 - m22);
+    out[0] = (m13 + m31) / s;
+    out[1] = (m23 + m32) / s;
+    out[2] = 0.25 * s;
+    out[3] = (m21 - m12) / s;
+  }
+  return out;
+}
+
 /** Rotate vector v by unit quaternion q, writing into out (xyz). */
 export function rotateVec(
   out: number[],

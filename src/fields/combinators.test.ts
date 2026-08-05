@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import {
   abs,
+  acos,
   add,
+  asin,
+  atan,
+  atan2,
   clamp,
   component,
+  cos,
   div,
   dot,
   eq,
@@ -22,7 +27,9 @@ import {
   ramp,
   remap,
   select,
+  sin,
   sub,
+  tan,
   vec,
 } from "./combinators.js";
 import { attribute, constant, position } from "./inputs.js";
@@ -91,6 +98,88 @@ describe("arithmetic and broadcasting", () => {
     const ctx = cloudCtx([-1, 0, 1]);
     expect(asArray(ctx, remap(position(), -1, 1, 0, 10))).toEqual([0, 5, 10]);
     expect(asArray(ctx, remap(position(), 2, 2, 3, 7))).toEqual([3, 3, 3]);
+  });
+});
+
+describe("trigonometry", () => {
+  // Six probe inputs, stored as f32 by the P attribute (π rounds to
+  // 3.1415927410125732); each combinator computes in f64 and stores f32.
+  const INPUTS = [0, 0.5, 1, -1.25, 2.5, Math.PI];
+  const trigCtx = () => cloudCtx(INPUTS.flatMap((v) => [v, 0, 0]));
+  const x = () => component(position(), 0);
+
+  it("matches pinned golden values (engine fdlibm determinism canary)", () => {
+    // fround(Math.fn(fround(input))), pinned from this implementation.
+    // Trig Math functions are fdlibm-derived in every major engine but,
+    // unlike Math.sqrt, not spec-mandated to be correctly rounded — a
+    // mismatch here means the running engine diverged from that norm.
+    const ctx = trigCtx();
+    expect(asArray(ctx, sin(x()))).toEqual([
+      0, 0.4794255495071411, 0.8414709568023682, -0.9489846229553223, 0.5984721183776855,
+      -8.742277657347586e-8,
+    ]);
+    expect(asArray(ctx, cos(x()))).toEqual([
+      1, 0.8775825500488281, 0.5403022766113281, 0.3153223693370819, -0.8011435866355896, -1,
+    ]);
+    expect(asArray(ctx, tan(x()))).toEqual([
+      0, 0.5463024973869324, 1.5574077367782593, -3.0095696449279785, -0.747022271156311,
+      8.742277657347586e-8,
+    ]);
+    expect(asArray(ctx, atan(x()))).toEqual([
+      0, 0.46364760398864746, 0.7853981852531433, -0.8960554003715515, 1.1902899742126465,
+      1.2626272439956665,
+    ]);
+  });
+
+  it("matches pinned atan2 goldens over (y, x) pairs including negative quadrants", () => {
+    const pairs = [
+      [0, 1],
+      [1, 0],
+      [-1, -1],
+      [0.5, -2],
+      [3, 4],
+    ];
+    const ctx = cloudCtx(pairs.flatMap(([y, xv]) => [y, xv, 0]));
+    const field = atan2(component(position(), 0), component(position(), 1));
+    expect(asArray(ctx, field)).toEqual([
+      0, 1.5707963705062866, -2.356194496154785, 2.8966140747070312, 0.6435011029243469,
+    ]);
+  });
+
+  it("propagates NaN for asin/acos outside [-1, 1] like other combinators (no clamping)", () => {
+    const ctx = trigCtx();
+    // Inputs -1.25, 2.5, and π are outside the domain; in-domain values pin.
+    expect(asArray(ctx, asin(x()))).toEqual([
+      0, 0.5235987901687622, 1.5707963705062866, NaN, NaN, NaN,
+    ]);
+    expect(asArray(ctx, acos(x()))).toEqual([
+      1.5707963705062866, 1.0471975803375244, 0, NaN, NaN, NaN,
+    ]);
+    // NaN inputs propagate through downstream combinators unchanged.
+    expect(asArray(ctx, add(asin(x()), 1)).slice(3)).toEqual([NaN, NaN, NaN]);
+  });
+
+  it("broadcasts scalars against tuples like the other elementwise combinators", () => {
+    const ctx = cloudCtx([0, 0.5, 1]);
+    // Unary over a tuple: componentwise.
+    expect(asArray(ctx, sin(position()))).toEqual(
+      [0, 0.5, 1].map((v) => Math.fround(Math.sin(v))),
+    );
+    // Binary with a broadcast scalar on either side.
+    expect(asArray(ctx, atan2(position(), 1))).toEqual(
+      [0, 0.5, 1].map((v) => Math.fround(Math.atan2(v, 1))),
+    );
+    expect(asArray(ctx, atan2(1, position()))).toEqual(
+      [0, 0.5, 1].map((v) => Math.fround(Math.atan2(1, v))),
+    );
+    // Static tuple mismatch throws at construction, same as add.
+    expect(() => atan2(constant([1, 2]), constant([1, 2, 3]))).toThrow(/tuple/);
+  });
+
+  it("builds structural keys equal across identical constructions (memoization-friendly)", () => {
+    expect(sin(component(position(), 0)).key).toBe(sin(component(position(), 0)).key);
+    expect(atan2(position(), 2).key).toBe(atan2(position(), 2).key);
+    expect(sin(position()).key).not.toBe(cos(position()).key);
   });
 });
 

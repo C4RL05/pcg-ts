@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:71%; }
+  .bar > div { height:100%; background:var(--done); width:79%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 05:59</p>
-  <div class="bar"><div style="width:71%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 06:42</p>
+  <div class="bar"><div style="width:79%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -60,17 +60,17 @@
     <li class="done"><span class="chip">done</span>6 · three.js interop + spawners</li>
     <li class="done"><span class="chip">done</span>7 · Examples, docs, v0.1.0</li>
     <li class="done"><span class="chip">done</span>8 · Serialization completeness — subgraphs, item-list params</li>
-    <li class="active"><span class="chip">active</span>9 · Field grammar and noise contract — trig, orient, normalized, exact worley</li>
-    <li class="pending"><span class="chip">pending</span>10 · Attribute ergonomics and seeding — string setAttribute, seed story</li>
+    <li class="done"><span class="chip">done</span>9 · Field grammar and noise contract — trig, orient, normalized, exact worley</li>
+    <li class="active"><span class="chip">active</span>10 · Attribute ergonomics and seeding — string setAttribute, seed story</li>
     <li class="pending"><span class="chip">pending</span>11 · Cooking and runtime — per-output cook, 3D cells, unbounded levels</li>
     <li class="pending"><span class="chip">pending</span>12 · Docs alignment and v0.2.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>461</b><span>passed</span></div>
+    <div><b>513</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-05 05:59</b><span>last run</span></div>
+    <div><b>2026-08-05 06:42</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -89,6 +89,7 @@
     <li><time>2026-08-05 00:25</time>v0.1.0 released. Phase 6 audit hardening applied (layering guard detector, scene-binding swap semantics). Phase 7 complete: five browser-verified examples (including the Svelte fields playground and the streaming infinite world), README, llms.txt, generated node reference (23 types). Final gate: 429 tests, clean typecheck, library + examples builds, idempotent docs generator. Post-v0.1 backlog recorded in PLAN.md.</li>
     <li><time>2026-08-05 05:25</time>v0.2 cycle started: post-v0.1 backlog promoted to phases 8-12 in PLAN.md (serialization completeness; field grammar and noise contract; attribute ergonomics and seeding; cooking and runtime upgrades; docs and v0.2.0 release). Phase 8 (serializable subgraphs, item-list param type) underway.</li>
     <li><time>2026-08-05 05:59</time>Phase 8 complete and audited: graphs containing subgraph nodes now serialize (recursive versioned payload, cycle-safe both directions, plumbing excluded by recorded id) and deserialize to real code-first subgraph instances that cook byte-identically. New items param type; dataInput has a real schema and serializes (live items stay runtime-injected). Audit found and fixed: canonical wrap-time seed so JSON is stable across cooks, transitive memo-key versioning so nested inner edits invalidate outer caches, reserved-prefix collision errors that state the fix. 461 tests green.</li>
+    <li><time>2026-08-05 06:42</time>Phase 9 complete and audited: trig functions (sin/cos/tan/asin/acos/atan/atan2) in field combinators and the JSON grammar; orientAlongVector node whose default +z convention reproduces the spline-fence example&#39;s quaternion through the spawner compose path; normalized [0,1] option on all noise fields with machine-readable raw-range metadata (NOISE_RAW_RANGES, noiseOutputRange); exact opt-in worley via ring expansion with a proven r&lt;=3 bound. Audit independently re-derived the range and ring math (all sound) and caught an exact-worley infinite loop on non-finite positions — fixed with a provably-unreachable-for-finite-inputs cap so garbage input degrades like the approximate path. 513 tests green; no goldens moved.</li>
   </ol>
 </body>
 </html>

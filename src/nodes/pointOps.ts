@@ -10,6 +10,7 @@ import { standardNode } from "./registry.js";
 import {
   type FieldParam,
   geometryItems,
+  quatFromBasis,
   quatFromEulerDeg,
   quatMul,
   readComp,
@@ -299,6 +300,152 @@ export const mergePoints = standardNode<MergePointsParams>({
     const tags = new Set<string>();
     for (const item of items) for (const tag of item.tags) tags.add(tag);
     return { out: [makeGeometryItem(out, tags)] };
+  },
+});
+
+/** Params of {@link orientAlongVector}. */
+export interface OrientAlongVectorParams {
+  direction: FieldParam;
+  up: readonly number[];
+  axis: string;
+}
+
+/** Axis enum values accepted by {@link orientAlongVector}. */
+const ORIENT_AXES = ["+x", "-x", "+y", "-y", "+z", "-z"] as const;
+
+/** Squared-length threshold below which up and direction count as parallel. */
+const ORIENT_PARALLEL_EPS = 1e-12;
+
+/** Build rot quaternions pointing a chosen local axis along a direction. */
+export const orientAlongVector = standardNode<OrientAlongVectorParams>({
+  type: "orientAlongVector",
+  description:
+    "Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll. The quaternion is right-handed and matches the spawner path's three.js Matrix4.compose conventions (and quatFromEulerDeg's frame), so with the default '+z' axis, spawned assets face the direction the way the spline-fence example's tangent yaw does. For axes ±x and ±z the local +Y axis turns as close to `up` as the direction allows; for axes ±y (which consume the up-like axis) local +Z takes that role. Points with a zero-length direction keep their existing rot (identity when the attribute is newly created). When direction and up are parallel or antiparallel (cross product squared length <= 1e-12, after normalizing both), the up hint deterministically falls back to [0, 0, 1], then [1, 0, 0].",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    direction: {
+      type: "vec3",
+      default: [0, 0, 1],
+      acceptsField: true,
+      description:
+        "World-space direction the chosen local axis should point along; need not be unit length. Field-capable (resolved per point on the input, e.g. a tangent attribute; tuple 1 broadcasts). Zero-length directions leave that point's rot unchanged (identity when the rot attribute did not exist before).",
+    },
+    up: {
+      type: "vec3",
+      default: [0, 1, 0],
+      description:
+        "Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0].",
+    },
+    axis: {
+      type: "enum",
+      default: "+z",
+      enum: [...ORIENT_AXES],
+      description:
+        "Which local axis maps onto the direction. Default '+z' — the forward axis assets face in the examples (a spline-fence style tangent yaw). For ±x/±z the local +Y follows the up hint; for ±y the local +Z follows it.",
+    },
+  },
+  execute({ inputs, params, seed }) {
+    const geo = cloneGeometry(requireGeometry(inputs, "in", "orientAlongVector"));
+    const axis = params.axis;
+    if (!(ORIENT_AXES as readonly string[]).includes(axis)) {
+      throw new Error(
+        `orientAlongVector: param "axis" must be one of ${ORIENT_AXES.join(", ")}; got "${axis}"`,
+      );
+    }
+    const dir = requireTuple(
+      resolveOn(geo, "point", params.direction, seed),
+      [1, 3],
+      "orientAlongVector",
+      "direction",
+    );
+    const up = params.up;
+    if (!Array.isArray(up) || up.length !== 3 || !up.every((v) => Number.isFinite(v))) {
+      throw new Error(
+        'orientAlongVector: param "up" must be an array of 3 finite numbers (e.g. [0, 1, 0])',
+      );
+    }
+    // Normalize the up hint once so the parallel test is scale-invariant.
+    const upLenSq = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
+    const upInv = upLenSq > 0 ? 1 / Math.sqrt(upLenSq) : 0;
+    const upx = up[0] * upInv;
+    const upy = up[1] * upInv;
+    const upz = up[2] * upInv;
+
+    const set = geo.attrs.point;
+    let rotAttr = set.get("rot");
+    if (!rotAttr || rotAttr.type !== "f32" || rotAttr.tupleSize !== 4) {
+      if (rotAttr) set.remove("rot");
+      rotAttr = set.add("rot", "f32", 4, [0, 0, 0, 1]);
+    }
+    const rot = rotAttr.data;
+    const q: number[] = [0, 0, 0, 1];
+    const n = geo.pointCount;
+    for (let i = 0; i < n; i++) {
+      const dx = readComp(dir, i, 0);
+      const dy = readComp(dir, i, 1);
+      const dz = readComp(dir, i, 2);
+      const dl = dx * dx + dy * dy + dz * dz;
+      if (dl === 0) continue; // zero direction: keep the prior rot
+      const dInv = 1 / Math.sqrt(dl);
+      const fx = dx * dInv;
+      const fy = dy * dInv;
+      const fz = dz * dInv;
+      // right = up x forward, falling back when (anti)parallel.
+      let rx = upy * fz - upz * fy;
+      let ry = upz * fx - upx * fz;
+      let rz = upx * fy - upy * fx;
+      let rl = rx * rx + ry * ry + rz * rz;
+      if (rl <= ORIENT_PARALLEL_EPS) {
+        // [0, 0, 1] x f
+        rx = -fy;
+        ry = fx;
+        rz = 0;
+        rl = rx * rx + ry * ry;
+        if (rl <= ORIENT_PARALLEL_EPS) {
+          // f is (anti)parallel to Z too; [1, 0, 0] x f always works here.
+          rx = 0;
+          ry = -fz;
+          rz = fy;
+          rl = ry * ry + rz * rz;
+        }
+      }
+      const rInv = 1 / Math.sqrt(rl);
+      rx *= rInv;
+      ry *= rInv;
+      rz *= rInv;
+      // u = forward x right (unit: forward and right are orthonormal).
+      const ux = fy * rz - fz * ry;
+      const uy = fz * rx - fx * rz;
+      const uz = fx * ry - fy * rx;
+      // Assign (right, u, forward) to basis columns so the chosen local
+      // axis maps to forward and the frame stays right-handed.
+      switch (axis) {
+        case "+x":
+          quatFromBasis(q, fx, fy, fz, ux, uy, uz, -rx, -ry, -rz);
+          break;
+        case "-x":
+          quatFromBasis(q, -fx, -fy, -fz, ux, uy, uz, rx, ry, rz);
+          break;
+        case "+y":
+          quatFromBasis(q, -rx, -ry, -rz, fx, fy, fz, ux, uy, uz);
+          break;
+        case "-y":
+          quatFromBasis(q, rx, ry, rz, -fx, -fy, -fz, ux, uy, uz);
+          break;
+        case "+z":
+          quatFromBasis(q, rx, ry, rz, ux, uy, uz, fx, fy, fz);
+          break;
+        default: // "-z"
+          quatFromBasis(q, -rx, -ry, -rz, ux, uy, uz, -fx, -fy, -fz);
+          break;
+      }
+      rot[i * 4] = q[0];
+      rot[i * 4 + 1] = q[1];
+      rot[i * 4 + 2] = q[2];
+      rot[i * 4 + 3] = q[3];
+    }
+    return { out: [makeGeometryItem(geo)] };
   },
 });
 

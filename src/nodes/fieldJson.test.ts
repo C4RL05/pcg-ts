@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
-import { add, evaluateField, mul, position, remap, type EvalContext } from "../fields/index.js";
-import { fbm, perlinNoise } from "../noise/index.js";
+import {
+  add,
+  atan2,
+  component,
+  cos,
+  evaluateField,
+  mul,
+  position,
+  remap,
+  sin,
+  type EvalContext,
+} from "../fields/index.js";
+import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
 import { FieldJsonError, fieldFromJson, fieldToJson, listFieldFns, type FieldSpec } from "./fieldJson.js";
 
 function testCloud(n = 16): EvalContext {
@@ -76,6 +87,83 @@ describe("fieldFromJson", () => {
     const ctx = testCloud();
     expect(Array.from(evaluateField(rebuilt, ctx).data)).toEqual(
       Array.from(evaluateField(field, ctx).data),
+    );
+  });
+
+  it("builds trig expressions matching the hand-built combinators, with round-trip", () => {
+    const spec: FieldSpec = {
+      fn: "atan2",
+      args: [
+        { fn: "sin", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }] },
+        { fn: "cos", args: [0.5] },
+      ],
+    };
+    const fromJson = fieldFromJson(spec);
+    const handBuilt = atan2(sin(component(position(), 0)), cos(0.5));
+    expect(fromJson.key).toBe(handBuilt.key);
+    const ctx = testCloud();
+    const col = evaluateField(fromJson, ctx);
+    expect(col.tupleSize).toBe(1);
+    expect(Array.from(col.data)).toEqual(Array.from(evaluateField(handBuilt, ctx).data));
+    // Round-trips losslessly and rebuilds to identical values.
+    expect(fieldToJson(fromJson)).toEqual(spec);
+    const rebuilt = fieldFromJson(fieldToJson(fromJson));
+    expect(Array.from(evaluateField(rebuilt, ctx).data)).toEqual(Array.from(col.data));
+    // Every trig fn parses with its arity; wrong arity is named.
+    for (const name of ["sin", "cos", "tan", "asin", "acos", "atan"]) {
+      expect(fieldFromJson({ fn: name, args: [0.25] }).tupleSize).toBe(1);
+      expect(() => fieldFromJson({ fn: name, args: [] })).toThrow(/expects exactly 1 arg/);
+    }
+    expect(() => fieldFromJson({ fn: "atan2", args: [1] })).toThrow(/expects exactly 2 args/);
+  });
+
+  it("accepts normalized on noise specs and matches the factory-built field", () => {
+    const spec: FieldSpec = { fn: "simplexNoise", opts: { seed: 11, normalized: true } };
+    const fromJson = fieldFromJson(spec);
+    expect(fromJson.key).toBe(simplexNoise({ seed: 11, normalized: true }).key);
+    expect(fieldToJson(fromJson)).toEqual(spec);
+    const ctx = testCloud();
+    const values = evaluateField(fromJson, ctx).data;
+    const handBuilt = evaluateField(simplexNoise({ seed: 11, normalized: true }), ctx).data;
+    expect(Array.from(values)).toEqual(Array.from(handBuilt));
+    // fbm accepts it too (shared noise opts).
+    const fbmSpec: FieldSpec = {
+      fn: "fbm",
+      base: "perlinNoise",
+      opts: { seed: 2, octaves: 2, normalized: true },
+    };
+    const fbmField = fieldFromJson(fbmSpec);
+    expect(fbmField.key).toBe(fbm(perlinNoise, { seed: 2, octaves: 2, normalized: true }).key);
+    expect(fieldToJson(fbmField)).toEqual(fbmSpec);
+    // Non-boolean normalized is rejected with a path.
+    expect(() => fieldFromJson({ fn: "perlinNoise", opts: { normalized: 1 } })).toThrow(
+      /normalized must be a boolean/,
+    );
+  });
+
+  it("accepts exact on worley specs (only), matching the factory-built field", () => {
+    const spec: FieldSpec = {
+      fn: "worleyNoise",
+      opts: { seed: 3, output: "f2", exact: true, normalized: true },
+    };
+    const fromJson = fieldFromJson(spec);
+    expect(fromJson.key).toBe(
+      worleyNoise({ seed: 3, output: "f2", exact: true, normalized: true }).key,
+    );
+    expect(fieldToJson(fromJson)).toEqual(spec);
+    const ctx = testCloud();
+    const values = evaluateField(fromJson, ctx).data;
+    const handBuilt = evaluateField(
+      worleyNoise({ seed: 3, output: "f2", exact: true, normalized: true }),
+      ctx,
+    ).data;
+    expect(Array.from(values)).toEqual(Array.from(handBuilt));
+    expect(() => fieldFromJson({ fn: "worleyNoise", opts: { exact: "yes" } })).toThrow(
+      /exact must be a boolean/,
+    );
+    // exact is worley-only: other noises reject it as unknown.
+    expect(() => fieldFromJson({ fn: "perlinNoise", opts: { exact: true } })).toThrow(
+      /unknown noise option "exact"/,
     );
   });
 
@@ -155,6 +243,13 @@ describe("fieldFromJson", () => {
       "dot",
       "length",
       "normalize",
+      "sin",
+      "cos",
+      "tan",
+      "asin",
+      "acos",
+      "atan",
+      "atan2",
       "vec",
       "component",
       "ramp",

@@ -1,5 +1,5 @@
 import type { Field } from "../fields/index.js";
-import { GRAD3, type NoiseOpts, fade, hash4, makeNoiseField, mix } from "./util.js";
+import { GRAD3, NOISE_RAW_RANGES, type NoiseOpts, fade, hash4, makeNoiseField, mix } from "./util.js";
 
 const PERLIN_SALT = 0x7065726c; // "perl"
 
@@ -9,11 +9,13 @@ const PERLIN_SCALE = 2 / Math.sqrt(6);
 
 /**
  * Perlin gradient noise: hash-selected cube-edge gradients, quintic
- * fade, trilinear blend. Output is in approximately [-1, 1] (never
- * outside it; typical values well inside). Deterministic from `seed`.
+ * fade, trilinear blend. Raw output is in [-1, 1] (the kernel bound
+ * √6/2 times the 2/√6 output scale; typical values well inside —
+ * documented range `NOISE_RAW_RANGES.perlinNoise`). Deterministic from
+ * `seed`.
  */
 export function perlinNoise(opts: NoiseOpts = {}): Field<1> {
-  return makeNoiseField("perlin", PERLIN_SALT, opts, (seed) => {
+  return makeNoiseField("perlin", PERLIN_SALT, opts, NOISE_RAW_RANGES.perlinNoise, (seed) => {
     const gdot = (xi: number, yi: number, zi: number, dx: number, dy: number, dz: number) => {
       const g = (hash4(seed, xi, yi, zi) % 12) * 3;
       return GRAD3[g] * dx + GRAD3[g + 1] * dy + GRAD3[g + 2] * dz;

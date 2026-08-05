@@ -1,4 +1,5 @@
-export type { NoiseFactory, NoiseOpts } from "./util.js";
+export type { NoiseFactory, NoiseOpts, NoiseRange } from "./util.js";
+export { NOISE_RAW_RANGES, noiseOutputRange } from "./util.js";
 export { valueNoise } from "./value.js";
 export { perlinNoise } from "./perlin.js";
 export { simplexNoise } from "./simplex.js";

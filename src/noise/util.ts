@@ -25,6 +25,97 @@ export interface NoiseOpts {
   offset?: readonly [number, number, number];
   /** Position input field (tuple 3). Defaults to `position()`. */
   position?: FieldLike;
+  /**
+   * When true, map the raw output affinely to [0, 1] using the noise
+   * type's documented raw range `[lo, hi]` (see {@link NOISE_RAW_RANGES}):
+   * `out = (raw - lo) / (hi - lo)`. Default false — the raw output is
+   * returned unchanged (bit-identical to builds without this option).
+   */
+  normalized?: boolean;
+}
+
+/** Inclusive `[lo, hi]` output range of a noise field. */
+export type NoiseRange = readonly [number, number];
+
+/**
+ * Documented raw output ranges of the standard noise fields, as
+ * machine-readable metadata. These are the documented bounds of each
+ * implementation — derived theoretically, except simplex's, which is
+ * empirical with headroom (see the per-factory doc comments) — and the
+ * exact affine endpoints used by the `normalized` option:
+ *
+ * - `valueNoise`: [0, 1] — lattice values in [0, 1) blended convexly.
+ * - `perlinNoise`: [-1, 1] — kernel bound √6/2 scaled by 2/√6.
+ * - `simplexNoise`: [-1, 1] — empirical kernel-sum scale with headroom.
+ * - `worleyNoise.f1`: [0, √3] — a feature always lies in the query's own
+ *   unit cell, at most a cube diagonal away.
+ * - `worleyNoise.f2` and `worleyNoise["f2-f1"]`: [0, √6] — a second
+ *   feature always lies in a face-adjacent cell, at most √6 away, and
+ *   f2-f1 ∈ [0, f2]. Valid for both the approximate and `exact` search
+ *   (the exact search can only find nearer features).
+ *
+ * fbm ranges are per-configuration; see {@link noiseOutputRange}.
+ */
+export const NOISE_RAW_RANGES: {
+  readonly valueNoise: NoiseRange;
+  readonly perlinNoise: NoiseRange;
+  readonly simplexNoise: NoiseRange;
+  readonly worleyNoise: {
+    readonly f1: NoiseRange;
+    readonly f2: NoiseRange;
+    readonly "f2-f1": NoiseRange;
+  };
+} = {
+  valueNoise: [0, 1],
+  perlinNoise: [-1, 1],
+  simplexNoise: [-1, 1],
+  worleyNoise: {
+    f1: [0, Math.sqrt(3)],
+    f2: [0, Math.sqrt(6)],
+    "f2-f1": [0, Math.sqrt(6)],
+  },
+};
+
+const OUTPUT_RANGES = new WeakMap<Field, NoiseRange>();
+
+/**
+ * The documented inclusive output range of a field built by this
+ * module's noise factories: the raw range when `normalized` is off,
+ * `[0, 1]` when it is on, and the per-configuration amplitude-summed
+ * range for `fbm`. Returns undefined for fields not built by a noise
+ * factory (e.g. combinator results).
+ */
+export function noiseOutputRange(field: Field): NoiseRange | undefined {
+  return OUTPUT_RANGES.get(field);
+}
+
+/** @internal Record a field's documented output range for {@link noiseOutputRange}. */
+export function setNoiseOutputRange(field: Field, range: NoiseRange): void {
+  OUTPUT_RANGES.set(field, range);
+}
+
+/**
+ * @internal Affine map of a scalar field from `[lo, hi]` to [0, 1]:
+ * `out = (v - lo) / (hi - lo)`, endpoints kept in f64 so the result is
+ * exactly the affine image of the (f32) raw output.
+ */
+export function normalize01(inner: Field<1>, range: NoiseRange): Field<1> {
+  const [lo, hi] = range;
+  const span = hi - lo;
+  const field = makeField<1>(
+    `norm01(${keyRef(inner.key)},${keyNum(lo)},${keyNum(hi)})`,
+    1,
+    (ctx) => {
+      const col = evaluateField(inner, ctx);
+      const n = elementCount(ctx);
+      const out = new Float32Array(n);
+      const d = col.data;
+      for (let i = 0; i < n; i++) out[i] = (d[i] - lo) / span;
+      return { data: out, tupleSize: 1 };
+    },
+  );
+  setNoiseOutputRange(field, [0, 1]);
+  return field;
 }
 
 /** A noise constructor usable as an fbm base (e.g. `perlinNoise`). */
@@ -70,11 +161,15 @@ export const GRAD3: Float32Array = new Float32Array([
  * applies frequency/offset, and evaluates `sample` per element into an
  * f32 scalar column. `kindSalt` decorrelates noise types sharing a seed;
  * the effective seed passed to `makeSampler` is `hash2(kindSalt, seed)`.
+ * `rawRange` is the sampler's documented output range; when
+ * `opts.normalized` is set the raw field is wrapped with
+ * {@link normalize01} (the raw path stays bit-identical).
  */
 export function makeNoiseField(
   kind: string,
   kindSalt: number,
   opts: NoiseOpts,
+  rawRange: NoiseRange,
   makeSampler: (seed: number) => (x: number, y: number, z: number) => number,
 ): Field<1> {
   const seed = (opts.seed ?? 0) >>> 0;
@@ -83,7 +178,7 @@ export function makeNoiseField(
   const pos = resolveField(opts.position ?? position());
   const key = `${kind}(${seed},${keyNum(frequency)},${keyNum(ox)},${keyNum(oy)},${keyNum(oz)};${keyRef(pos.key)})`;
   const sample = makeSampler(hash2(kindSalt, seed));
-  return makeField(key, 1, (ctx) => {
+  const raw = makeField<1>(key, 1, (ctx) => {
     const posCol = evaluateField(pos, ctx);
     if (posCol.tupleSize !== 3) {
       throw new Error(`${kind}: position field must have tupleSize 3, got ${posCol.tupleSize}`);
@@ -100,4 +195,6 @@ export function makeNoiseField(
     }
     return { data: out, tupleSize: 1 };
   });
+  setNoiseOutputRange(raw, rawRange);
+  return opts.normalized === true ? normalize01(raw, rawRange) : raw;
 }

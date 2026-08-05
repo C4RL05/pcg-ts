@@ -1,16 +1,18 @@
 import type { Field } from "../fields/index.js";
 import { hashFloat } from "../random/hash.js";
-import { type NoiseOpts, fade, hash4, makeNoiseField, mix } from "./util.js";
+import { NOISE_RAW_RANGES, type NoiseOpts, fade, hash4, makeNoiseField, mix } from "./util.js";
 
 const VALUE_SALT = 0x76616c75; // "valu"
 
 /**
  * Value noise: random lattice values in [0, 1) interpolated with a
- * quintic fade. Output is in [0, 1). Deterministic from `seed` — lattice
- * values come from `hashCombine(seed', xi, yi, zi)`.
+ * quintic fade. Raw output is in [0, 1) — a convex blend of lattice
+ * values (documented range `NOISE_RAW_RANGES.valueNoise` = [0, 1], so
+ * `normalized: true` is the identity map). Deterministic from `seed` —
+ * lattice values come from `hashCombine(seed', xi, yi, zi)`.
  */
 export function valueNoise(opts: NoiseOpts = {}): Field<1> {
-  return makeNoiseField("value", VALUE_SALT, opts, (seed) => (x, y, z) => {
+  return makeNoiseField("value", VALUE_SALT, opts, NOISE_RAW_RANGES.valueNoise, (seed) => (x, y, z) => {
     const x0 = Math.floor(x);
     const y0 = Math.floor(y);
     const z0 = Math.floor(z);

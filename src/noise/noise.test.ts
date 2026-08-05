@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { type EvalContext, type Field, evaluateField, mul, position } from "../fields/index.js";
+import { hashCombine, hashFloat } from "../random/index.js";
 import { fbm } from "./fbm.js";
 import { perlinNoise } from "./perlin.js";
 import { simplexNoise } from "./simplex.js";
-import type { NoiseFactory } from "./util.js";
+import { NOISE_RAW_RANGES, hash2, hash5, noiseOutputRange, type NoiseFactory } from "./util.js";
 import { valueNoise } from "./value.js";
-import { worleyNoise } from "./worley.js";
+import { worleyNoise, type WorleyNoiseOpts } from "./worley.js";
 
 /** Context over a point cloud with P set from a flat xyz array. */
 function cloudCtx(positions: ArrayLike<number>): EvalContext {
@@ -252,6 +253,318 @@ describe("fbm", () => {
   it("validates octaves", () => {
     expect(() => fbm(perlinNoise, { octaves: 0 })).toThrow(/octaves/);
     expect(() => fbm(perlinNoise, { octaves: 1.5 })).toThrow(/octaves/);
+  });
+});
+
+describe("normalized noise contract", () => {
+  const positions = gridPositions(13, 0.29); // 2197 samples
+  const TOL = 1e-6; // the family's established range tolerance
+
+  interface NormCase {
+    name: string;
+    make: (normalized: boolean, seed: number) => Field<1>;
+    /** Documented range; fbm cases derive theirs from noiseOutputRange. */
+    range?: readonly [number, number];
+  }
+
+  const NORM_CASES: NormCase[] = [
+    {
+      name: "value",
+      make: (normalized, seed) => valueNoise({ seed, normalized }),
+      range: NOISE_RAW_RANGES.valueNoise,
+    },
+    {
+      name: "perlin",
+      make: (normalized, seed) => perlinNoise({ seed, normalized }),
+      range: NOISE_RAW_RANGES.perlinNoise,
+    },
+    {
+      name: "simplex",
+      make: (normalized, seed) => simplexNoise({ seed, normalized }),
+      range: NOISE_RAW_RANGES.simplexNoise,
+    },
+    {
+      name: "worley f1",
+      make: (normalized, seed) => worleyNoise({ seed, normalized }),
+      range: NOISE_RAW_RANGES.worleyNoise.f1,
+    },
+    {
+      name: "worley f2",
+      make: (normalized, seed) => worleyNoise({ seed, output: "f2", normalized }),
+      range: NOISE_RAW_RANGES.worleyNoise.f2,
+    },
+    {
+      name: "worley f2-f1",
+      make: (normalized, seed) => worleyNoise({ seed, output: "f2-f1", normalized }),
+      range: NOISE_RAW_RANGES.worleyNoise["f2-f1"],
+    },
+    {
+      name: "fbm(perlin) 3 octaves",
+      make: (normalized, seed) => fbm(perlinNoise, { seed, octaves: 3, normalized }),
+    },
+    {
+      name: "fbm(value) gain 0.7",
+      make: (normalized, seed) => fbm(valueNoise, { seed, octaves: 4, gain: 0.7, normalized }),
+    },
+  ];
+
+  /** The case's documented range: explicit, or the field's own metadata. */
+  function caseRange(c: NormCase, seed: number): readonly [number, number] {
+    const range = c.range ?? noiseOutputRange(c.make(false, seed));
+    if (!range) throw new Error(`case ${c.name}: no range`);
+    return range;
+  }
+
+  describe.each(NORM_CASES)("$name", (c) => {
+    it("raw output stays in the documented raw range across seeds", () => {
+      for (const seed of [0, 5, 42]) {
+        const [lo, hi] = caseRange(c, seed);
+        const values = sample(c.make(false, seed), positions);
+        for (let i = 0; i < values.length; i++) {
+          expect(values[i]).toBeGreaterThanOrEqual(lo - TOL);
+          expect(values[i]).toBeLessThanOrEqual(hi + TOL);
+        }
+      }
+    });
+
+    it("normalized output lands in [0, 1] and is exactly the affine image of raw", () => {
+      for (const seed of [5, 21]) {
+        const [lo, hi] = caseRange(c, seed);
+        const span = hi - lo;
+        const raw = sample(c.make(false, seed), positions);
+        const norm = sample(c.make(true, seed), positions);
+        for (let i = 0; i < raw.length; i++) {
+          expect(norm[i]).toBeGreaterThanOrEqual(0 - TOL);
+          expect(norm[i]).toBeLessThanOrEqual(1 + TOL);
+          expect(norm[i]).toBe(Math.fround((raw[i] - lo) / span));
+        }
+      }
+    });
+
+    it("normalized and raw fields have distinct keys (cache correctness)", () => {
+      expect(c.make(true, 5).key).not.toBe(c.make(false, 5).key);
+    });
+  });
+
+  it("value noise normalization is the identity map (raw range is already [0, 1])", () => {
+    const raw = sample(valueNoise({ seed: 3 }), positions);
+    const norm = sample(valueNoise({ seed: 3, normalized: true }), positions);
+    expect(Array.from(norm)).toEqual(Array.from(raw));
+  });
+
+  it("exposes machine-readable output ranges via noiseOutputRange", () => {
+    expect(noiseOutputRange(valueNoise({ seed: 1 }))).toEqual([0, 1]);
+    expect(noiseOutputRange(perlinNoise({ seed: 1 }))).toEqual([-1, 1]);
+    expect(noiseOutputRange(simplexNoise({ seed: 1 }))).toEqual([-1, 1]);
+    expect(noiseOutputRange(worleyNoise({ seed: 1 }))).toEqual([0, Math.sqrt(3)]);
+    expect(noiseOutputRange(worleyNoise({ seed: 1, output: "f2" }))).toEqual([0, Math.sqrt(6)]);
+    expect(noiseOutputRange(worleyNoise({ seed: 1, output: "f2-f1", exact: true }))).toEqual([
+      0,
+      Math.sqrt(6),
+    ]);
+    // Normalized fields report the [0, 1] contract.
+    expect(noiseOutputRange(perlinNoise({ seed: 1, normalized: true }))).toEqual([0, 1]);
+    // fbm reports its per-configuration amplitude-summed range.
+    expect(noiseOutputRange(fbm(perlinNoise, { seed: 1, octaves: 3 }))).toEqual([-1.75, 1.75]);
+    expect(noiseOutputRange(fbm(valueNoise, { seed: 1, octaves: 2, gain: 0.25 }))).toEqual([
+      0, 1.25,
+    ]);
+    // Fields not built by a noise factory carry no range.
+    expect(noiseOutputRange(mul(perlinNoise({ seed: 1 }), 2))).toBeUndefined();
+  });
+
+  it("fbm with normalized: true rejects a base without range metadata, actionably", () => {
+    const rangeless: NoiseFactory = (opts) => mul(perlinNoise(opts), 1) as Field<1>;
+    expect(() => fbm(rangeless, { normalized: true })).toThrow(/output-range metadata/);
+    // Without normalized the same base is fine (range just stays unknown).
+    expect(noiseOutputRange(fbm(rangeless, { octaves: 2 }))).toBeUndefined();
+  });
+});
+
+describe("worley exact mode", () => {
+  // The worley kind salt ("worl"); the effective sampler seed is
+  // hash2(salt, seed), mirrored here for the brute-force reference.
+  const WORLEY_SALT = 0x776f726c;
+
+  /** f64 brute force over a Chebyshev-radius-4 block (9^3 cells) — more
+   * than sufficient: features beyond ring r are at distance >= r-1, and
+   * f2 <= sqrt(6) < 3. Same arithmetic as the implementation, so results
+   * are bit-comparable after fround. */
+  function bruteForce(seed: number, x: number, y: number, z: number): { f1: number; f2: number } {
+    const s = hash2(WORLEY_SALT, seed >>> 0);
+    const qx = Math.fround(x); // P storage rounds positions to f32
+    const qy = Math.fround(y);
+    const qz = Math.fround(z);
+    const cx = Math.floor(qx);
+    const cy = Math.floor(qy);
+    const cz = Math.floor(qz);
+    let f1 = Infinity;
+    let f2 = Infinity;
+    for (let dz = -4; dz <= 4; dz++) {
+      for (let dy = -4; dy <= 4; dy++) {
+        for (let dx = -4; dx <= 4; dx++) {
+          const gx = cx + dx;
+          const gy = cy + dy;
+          const gz = cz + dz;
+          const px = gx + hashFloat(hash5(s, gx, gy, gz, 0));
+          const py = gy + hashFloat(hash5(s, gx, gy, gz, 1));
+          const pz = gz + hashFloat(hash5(s, gx, gy, gz, 2));
+          const ddx = px - qx;
+          const ddy = py - qy;
+          const ddz = pz - qz;
+          const d = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+          if (d < f1) {
+            f2 = f1;
+            f1 = d;
+          } else if (d < f2) {
+            f2 = d;
+          }
+        }
+      }
+    }
+    return { f1, f2 };
+  }
+
+  /** Deterministic query mix: corner-adjacent (the known 3x3x3 failure
+   * style), uniform, and near-cell-center points, spread over cells. */
+  function queryPositions(seed: number, count: number): number[] {
+    const pts: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const kind = i % 3;
+      for (let k = 0; k < 3; k++) {
+        const cell = Math.floor(hashFloat(hashCombine(seed, i, k)) * 20) - 10;
+        const u = hashFloat(hashCombine(seed, i, k + 3));
+        const frac = kind === 0 ? 0.002 * u : kind === 1 ? u : 0.5 + 0.1 * (u - 0.5);
+        pts.push(cell + frac);
+      }
+    }
+    return pts;
+  }
+
+  it("equals brute force for f1, f2, and f2-f1 across seeds and query styles", () => {
+    for (const seed of [0, 1, 2, 7, 123]) {
+      const pts = queryPositions(seed, 120);
+      const n = pts.length / 3;
+      const f1 = sample(worleyNoise({ seed, output: "f1", exact: true }), pts);
+      const f2 = sample(worleyNoise({ seed, output: "f2", exact: true }), pts);
+      const diff = sample(worleyNoise({ seed, output: "f2-f1", exact: true }), pts);
+      for (let i = 0; i < n; i++) {
+        const b = bruteForce(seed, pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]);
+        expect(f1[i], `seed ${seed} pt ${i} f1`).toBe(Math.fround(b.f1));
+        expect(f2[i], `seed ${seed} pt ${i} f2`).toBe(Math.fround(b.f2));
+        expect(diff[i], `seed ${seed} pt ${i} f2-f1`).toBe(Math.fround(b.f2 - b.f1));
+        expect(f2[i]).toBeGreaterThanOrEqual(f1[i]);
+      }
+    }
+  });
+
+  it("regression: the 3x3x3 approximation misses features the exact search finds", () => {
+    // Found by scanning corner-adjacent queries; documents why `exact`
+    // exists. Pinned from this implementation (f32-exact).
+    const p = [-4.998670892715454, -8.998210570454598, -8.999643901944161];
+    const approxF1 = sample(worleyNoise({ seed: 2, output: "f1" }), p)[0];
+    const exactF1 = sample(worleyNoise({ seed: 2, output: "f1", exact: true }), p)[0];
+    expect(approxF1).toBe(1.08261239528656);
+    expect(exactF1).toBe(1.0463942289352417);
+    expect(exactF1).toBeLessThan(approxF1);
+    const approxF2 = sample(worleyNoise({ seed: 2, output: "f2" }), p)[0];
+    const exactF2 = sample(worleyNoise({ seed: 2, output: "f2", exact: true }), p)[0];
+    expect(approxF2).toBe(1.0957316160202026);
+    expect(exactF2).toBe(1.08261239528656);
+    // Both agree with brute force in exact mode.
+    const b = bruteForce(2, p[0], p[1], p[2]);
+    expect(exactF1).toBe(Math.fround(b.f1));
+    expect(exactF2).toBe(Math.fround(b.f2));
+  });
+
+  it("keeps the approximate path bit-identical and keyed apart from exact", () => {
+    const opts: WorleyNoiseOpts = { seed: 4, output: "f2" };
+    expect(worleyNoise(opts).key).not.toBe(worleyNoise({ ...opts, exact: true }).key);
+    expect(worleyNoise(opts).key).toBe(worleyNoise({ ...opts, exact: false }).key);
+    // Away from cell corners the two modes agree.
+    const pts = gridPositions(6, 0.5);
+    const approx = sample(worleyNoise(opts), pts);
+    const exact = sample(worleyNoise({ ...opts, exact: true }), pts);
+    let agree = 0;
+    for (let i = 0; i < approx.length; i++) {
+      if (approx[i] === exact[i]) agree++;
+      expect(exact[i]).toBeLessThanOrEqual(approx[i]); // exact can only shrink
+    }
+    expect(agree).toBeGreaterThan(approx.length * 0.99);
+  });
+
+  it("degrades non-finite positions to the approximate path's GIGO result instead of hanging", () => {
+    // NaN/±Inf coordinates make every candidate distance NaN, which never
+    // lowers f1/f2 — without the r = 3 ring cap the exact search would
+    // expand forever. It must return promptly with the same Infinity/NaN
+    // output the approximate path produces on identical input.
+    const badPositions = [
+      [NaN, 0, 0],
+      [Infinity, 0, 0],
+      [0, -Infinity, 2.5],
+      [NaN, Infinity, -1],
+    ];
+    for (const p of badPositions) {
+      for (const output of ["f1", "f2", "f2-f1"] as const) {
+        const approx = sample(worleyNoise({ seed: 6, output }), p)[0];
+        const exact = sample(worleyNoise({ seed: 6, output, exact: true }), p)[0];
+        expect(exact, `p ${p.join(",")} ${output}`).toEqual(approx);
+        // GIGO, not a number: Infinity for f1/f2, NaN for the difference.
+        expect(Number.isFinite(exact)).toBe(false);
+      }
+    }
+  });
+
+  it("ring cap never alters finite-input results (still bit-equal to brute force)", () => {
+    // Adversarial corner-adjacent points where the 3x3x3 block is wrong
+    // and the expansion must still run to completion under the cap.
+    const cases: Array<{ seed: number; p: number[] }> = [
+      { seed: 2, p: [-4.998670892715454, -8.998210570454598, -8.999643901944161] },
+      { seed: 0, p: [-1.998649707555771, -9.999446158885956, -4.998861848115921] },
+      { seed: 1, p: [6.000710737228394, -7.9989544306993485, -6.999742455005646] },
+      { seed: 1, p: [-2.9987929607629775, 0.00018293261528015136, 0.0008445199728012085] },
+    ];
+    for (const { seed, p } of cases) {
+      const b = bruteForce(seed, p[0], p[1], p[2]);
+      const f1 = sample(worleyNoise({ seed, output: "f1", exact: true }), p)[0];
+      const f2 = sample(worleyNoise({ seed, output: "f2", exact: true }), p)[0];
+      const diff = sample(worleyNoise({ seed, output: "f2-f1", exact: true }), p)[0];
+      expect(f1, `seed ${seed} f1`).toBe(Math.fround(b.f1));
+      expect(f2, `seed ${seed} f2`).toBe(Math.fround(b.f2));
+      expect(diff, `seed ${seed} f2-f1`).toBe(Math.fround(b.f2 - b.f1));
+    }
+  });
+
+  it("composes with normalized (bounds hold for the exact search too)", () => {
+    const pts = queryPositions(9, 60);
+    const raw = sample(worleyNoise({ seed: 9, output: "f2", exact: true }), pts);
+    const norm = sample(worleyNoise({ seed: 9, output: "f2", exact: true, normalized: true }), pts);
+    const [lo, hi] = NOISE_RAW_RANGES.worleyNoise.f2;
+    for (let i = 0; i < raw.length; i++) {
+      expect(raw[i]).toBeGreaterThanOrEqual(lo);
+      expect(raw[i]).toBeLessThanOrEqual(hi);
+      expect(norm[i]).toBe(Math.fround((raw[i] - lo) / (hi - lo)));
+      expect(norm[i]).toBeGreaterThanOrEqual(0);
+      expect(norm[i]).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("composes with fbm through a factory closure, including normalized", () => {
+    const base: NoiseFactory = (opts) => worleyNoise({ ...opts, exact: true });
+    const pts = gridPositions(8, 0.41);
+    const raw = sample(fbm(base, { seed: 3, octaves: 2 }), pts);
+    const again = sample(fbm(base, { seed: 3, octaves: 2 }), pts);
+    expect(again).toEqual(raw);
+    // Range metadata flows through the closure: f1 ∈ [0, √3] per octave.
+    const rawField = fbm(base, { seed: 3, octaves: 2 });
+    expect(noiseOutputRange(rawField)).toEqual([0, Math.sqrt(3) * 1.5]);
+    const norm = sample(fbm(base, { seed: 3, octaves: 2, normalized: true }), pts);
+    const hi = Math.sqrt(3) * 1.5;
+    for (let i = 0; i < raw.length; i++) {
+      expect(norm[i]).toBe(Math.fround(raw[i] / hi));
+      expect(norm[i]).toBeGreaterThanOrEqual(0);
+      expect(norm[i]).toBeLessThanOrEqual(1);
+    }
   });
 });
 
