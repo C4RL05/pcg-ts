@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:100%; }
+  .bar > div { height:100%; background:var(--done); width:64%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 00:25</p>
-  <div class="bar"><div style="width:100%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 05:25</p>
+  <div class="bar"><div style="width:64%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -59,6 +59,11 @@
     <li class="done"><span class="chip">done</span>5 · Hierarchical runtime — grids, streaming</li>
     <li class="done"><span class="chip">done</span>6 · three.js interop + spawners</li>
     <li class="done"><span class="chip">done</span>7 · Examples, docs, v0.1.0</li>
+    <li class="active"><span class="chip">active</span>8 · Serialization completeness — subgraphs, item-list params</li>
+    <li class="pending"><span class="chip">pending</span>9 · Field grammar and noise contract — trig, orient, normalized, exact worley</li>
+    <li class="pending"><span class="chip">pending</span>10 · Attribute ergonomics and seeding — string setAttribute, seed story</li>
+    <li class="pending"><span class="chip">pending</span>11 · Cooking and runtime — per-output cook, 3D cells, unbounded levels</li>
+    <li class="pending"><span class="chip">pending</span>12 · Docs alignment and v0.2.0</li>
   </ul>
 
   <h2>Tests</h2>
@@ -82,6 +87,7 @@
     <li><time>2026-08-04 23:52</time>Phase 3 verified and hardened: subgraph edits now invalidate outer caches via graph versioning, param hashing is a strict allowlist with actionable errors, Fields are brand-checked, overlapping cooks serialize, 20k-node chains cook without stack overflow. 240 tests green. Phase 4 (standard node library, registry, JSON serialization) started.</li>
     <li><time>2026-08-04 23:58</time>Phases 4 and 5 verified and hardened (setAttribute aliasing, cyclic field specs, World update serialization, stale-parent blocking, input validation). Phase 6 landed: instance spawner protocol in core plus three.js adapters (InstancedMesh emission bit-matching three&#39;s own matrix compose, streaming scene binding, layering guard test). 426 tests green. Phase 6 audit and Phase 7 (examples + docs) running.</li>
     <li><time>2026-08-05 00:25</time>v0.1.0 released. Phase 6 audit hardening applied (layering guard detector, scene-binding swap semantics). Phase 7 complete: five browser-verified examples (including the Svelte fields playground and the streaming infinite world), README, llms.txt, generated node reference (23 types). Final gate: 429 tests, clean typecheck, library + examples builds, idempotent docs generator. Post-v0.1 backlog recorded in PLAN.md.</li>
+    <li><time>2026-08-05 05:25</time>v0.2 cycle started: post-v0.1 backlog promoted to phases 8-12 in PLAN.md (serialization completeness; field grammar and noise contract; attribute ergonomics and seeding; cooking and runtime upgrades; docs and v0.2.0 release). Phase 8 (serializable subgraphs, item-list param type) underway.</li>
   </ol>
 </body>
 </html>

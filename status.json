@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-05 00:25",
-  "currentPhase": "released",
+  "updated": "2026-08-05 05:25",
+  "currentPhase": 8,
   "phases": [
     { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
     { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
@@ -11,11 +11,17 @@
     { "id": 4, "title": "Standard node library", "state": "done" },
     { "id": 5, "title": "Hierarchical runtime — grids, streaming", "state": "done" },
     { "id": 6, "title": "three.js interop + spawners", "state": "done" },
-    { "id": 7, "title": "Examples, docs, v0.1.0", "state": "done" }
+    { "id": 7, "title": "Examples, docs, v0.1.0", "state": "done" },
+    { "id": 8, "title": "Serialization completeness — subgraphs, item-list params", "state": "active" },
+    { "id": 9, "title": "Field grammar and noise contract — trig, orient, normalized, exact worley", "state": "todo" },
+    { "id": 10, "title": "Attribute ergonomics and seeding — string setAttribute, seed story", "state": "todo" },
+    { "id": 11, "title": "Cooking and runtime — per-output cook, 3D cells, unbounded levels", "state": "todo" },
+    { "id": 12, "title": "Docs alignment and v0.2.0", "state": "todo" }
   ],
   "tests": { "passed": 429, "failed": 0, "total": 429, "lastRun": "2026-08-05 00:21" },
   "blockers": [],
   "log": [
+    { "time": "2026-08-05 05:25", "message": "v0.2 cycle started: post-v0.1 backlog promoted to phases 8-12 in PLAN.md (serialization completeness; field grammar and noise contract; attribute ergonomics and seeding; cooking and runtime upgrades; docs and v0.2.0 release). Phase 8 (serializable subgraphs, item-list param type) underway." },
     { "time": "2026-08-05 00:25", "message": "v0.1.0 released. Phase 6 audit hardening applied (layering guard detector, scene-binding swap semantics). Phase 7 complete: five browser-verified examples (including the Svelte fields playground and the streaming infinite world), README, llms.txt, generated node reference (23 types). Final gate: 429 tests, clean typecheck, library + examples builds, idempotent docs generator. Post-v0.1 backlog recorded in PLAN.md." },
     { "time": "2026-08-04 23:58", "message": "Phases 4 and 5 verified and hardened (setAttribute aliasing, cyclic field specs, World update serialization, stale-parent blocking, input validation). Phase 6 landed: instance spawner protocol in core plus three.js adapters (InstancedMesh emission bit-matching three's own matrix compose, streaming scene binding, layering guard test). 426 tests green. Phase 6 audit and Phase 7 (examples + docs) running." },
     { "time": "2026-08-04 23:52", "message": "Phase 3 verified and hardened: subgraph edits now invalidate outer caches via graph versioning, param hashing is a strict allowlist with actionable errors, Fields are brand-checked, overlapping cooks serialize, 20k-node chains cook without stack overflow. 240 tests green. Phase 4 (standard node library, registry, JSON serialization) started." },

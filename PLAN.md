@@ -140,24 +140,64 @@ interface Field<T> { evaluate(ctx: EvalContext): Column<T>; }
   reference generated from registry metadata, written for LLM
   consumption; final status.html; tag `v0.1.0`. Commit.
 
-## Post-v0.1 backlog (from example-building friction and audits)
-- String/enum-capable setAttribute (or dedicated node) so multi-asset
-  spawns (assetAttr) stay declarative in the graph.
-- Sanctioned per-cell seeding story for field-driven nodes: document
-  graph.setSeed-in-bind as supported, or give setAttribute a seed param.
-- Per-output cooking or optional outputs (staged pipelines currently
-  need two graphs when a terminal branch is not yet bound).
-- Field grammar: trig fns and an "orient along vector" node
-  (tangent-to-rotation currently drops to the data API).
-- `normalized` option on noise fields so remap authors (and agents) get
-  a uniform [0,1] contract; document per-noise ranges in the registry.
-- Serializable subgraphs (register via standardNode with an inner-graph
-  payload) — closes the "graphs serialize" pillar gap.
-- Item-list param type in the registry schema language (removes the
-  dataInput placeholder and makes dataInput graphs serializable).
-- 3D grid cells; exact (opt-in) worley search; unbounded levels without
-  a dummy generationRadius.
-- Align PLAN node-name sketch with shipped names (registry is the truth).
+## Phases (v0.2) — backlog promoted 2026-08-05
+
+The post-v0.1 backlog (example-building friction + audit findings),
+grouped by subsystem into phases 8–12. Same protocol as v0.1: delegated
+implementation, independent adversarial audit per nontrivial phase,
+tests + status.html + commit after each phase.
+
+### Phase 8 — Serialization completeness
+- Serializable subgraphs: register subgraphs via `standardNode` with an
+  inner-graph payload so a graph containing subgraph nodes round-trips
+  through `serializeGraph`/`deserializeGraph` (recursive, versioned,
+  cycle-safe). Closes the "graphs serialize" pillar gap.
+- Item-list param type in the registry schema language; `dataInput`
+  loses its placeholder schema and becomes serializable.
+- Exit: round-trip tests for nested subgraphs and dataInput graphs;
+  deserialized graphs cook to byte-identical outputs; validation errors
+  name the node/param/pin at fault. Commit.
+
+### Phase 9 — Field grammar and noise contract
+- Trig functions (sin/cos/tan/asin/acos/atan/atan2) in field
+  combinators and the field-expression JSON grammar.
+- "Orient along vector" node: build rot quaternions from a direction
+  (+ up hint) so tangent-to-rotation stays in the graph instead of
+  dropping to the data API.
+- `normalized: true` option on noise fields for a uniform [0,1] output
+  contract; per-noise raw ranges documented in registry metadata.
+- Exact (opt-in) worley mode that widens the cell search until correct,
+  property-tested against brute force.
+- Exit: trig goldens; orient node matches quaternion reference; noise
+  normalization property tests; exact-worley equivalence tests. Commit.
+
+### Phase 10 — Attribute ergonomics and seeding
+- String/enum-capable `setAttribute` (string-table backed) so
+  multi-asset spawns (assetAttr) stay declarative in the graph.
+- Sanctioned per-cell seeding: `seed` param on setAttribute (hashed with
+  the cell/graph seed) and document graph.setSeed-in-bind as supported.
+- Exit: string attribute round-trips through cook + serialization;
+  forest-style multi-asset graph needs no imperative escape hatch;
+  per-cell seed determinism tests. Commit.
+
+### Phase 11 — Cooking and runtime upgrades
+- Per-output cooking (cook a chosen output pin) or optional outputs, so
+  staged pipelines no longer need two graphs when a terminal branch is
+  unbound.
+- 3D grid cells (cube cells, XYZ addressing) as a level option.
+- Unbounded levels without a dummy generationRadius.
+- Exit: single-graph staged pipeline test; 3D cell determinism + seam
+  tests; unbounded-level API test; cook-order independence retained.
+  Commit.
+
+### Phase 12 — Docs alignment and v0.2.0
+- Align the PLAN core-type sketch and node-name mentions with shipped
+  names (registry is the truth).
+- Regenerate node reference; update README/llms.txt/authoring docs for
+  new capabilities; example updates where new nodes simplify them.
+- Version 0.2.0, tag, GitHub release.
+- Exit: full suite green, docs regenerated and idempotent, release
+  tagged. Commit.
 
 ## Stretch (recorded, not scheduled)
 - WebGPU compute subgraphs; uv/raycast attribute transfer; interactive
