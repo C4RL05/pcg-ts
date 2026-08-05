@@ -41,7 +41,7 @@
       --card: #161f19;
       --code-bg: #0b110d;
       --code-ink: #cfe0d2;
-      --plate: #eef2ec;
+      --plate: #151d18;
     }
   }
   :root[data-theme="light"] {
@@ -54,7 +54,7 @@
     --bg: #101612; --ink: #e5ede6; --muted: #92a296; --faint: #6c7b70;
     --accent: #58be8a; --accent-ink: #6fcf9d; --amber: #d9b84a;
     --line: #232e26; --card: #161f19; --code-bg: #0b110d; --code-ink: #cfe0d2;
-    --plate: #eef2ec;
+    --plate: #151d18;
   }
 
   * { box-sizing: border-box; }
@@ -188,38 +188,39 @@
     overflow-x: auto;
   }
   .plate pre.mermaid { margin: 0; display: flex; justify-content: center; min-width: 560px; }
-  /* The plate is a fixed light ground in both themes, so pin the diagram
-     ink explicitly — transparent node fills, outlines matching the text —
-     overriding whatever theme mermaid's runtime injects. */
+  /* Diagram ink follows the page theme tokens — transparent node fills,
+     outlines matching the text — overriding whatever theme mermaid's
+     runtime injects. Tokens (not pinned hex) keep the diagram coherent
+     even under forced-dark/inverter extensions. */
   .plate svg .node rect, .plate svg .node circle, .plate svg .node ellipse,
   .plate svg .node polygon, .plate svg .node path {
     fill: transparent !important;
-    stroke: #1b241e !important;
+    stroke: var(--ink) !important;
     stroke-width: 1.1px !important;
   }
   .plate svg .nodeLabel, .plate svg .nodeLabel p, .plate svg .label text, .plate svg text {
-    color: #1b241e !important;
-    fill: #1b241e !important;
+    color: var(--ink) !important;
+    fill: var(--ink) !important;
   }
   .plate svg .cluster rect {
     fill: transparent !important;
-    stroke: #a7b3a9 !important;
+    stroke: var(--faint) !important;
     stroke-dasharray: 4 3 !important;
   }
   .plate svg .cluster-label text, .plate svg .cluster-label .nodeLabel,
   .plate svg .cluster-label p {
-    color: #5c6b61 !important;
-    fill: #5c6b61 !important;
+    color: var(--muted) !important;
+    fill: var(--muted) !important;
   }
   .plate svg .edgePath path, .plate svg path.flowchart-link {
-    stroke: #4a5a4f !important;
+    stroke: var(--muted) !important;
   }
-  .plate svg marker path { fill: #4a5a4f !important; stroke: #4a5a4f !important; }
+  .plate svg marker path { fill: var(--muted) !important; stroke: var(--muted) !important; }
   .plate svg .edgeLabel, .plate svg .edgeLabel p {
     background: transparent !important;
     background-color: transparent !important;
-    color: #4a5a4f !important;
-    fill: #4a5a4f !important;
+    color: var(--muted) !important;
+    fill: var(--muted) !important;
   }
   .plate svg .edgeLabel rect { fill: transparent !important; opacity: 0 !important; }
   .caption {
