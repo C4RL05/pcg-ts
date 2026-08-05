@@ -214,9 +214,53 @@ tests + status.html + commit after each phase.
 - Exit: full suite green, docs regenerated and idempotent, release
   tagged. Commit.
 
+## Phases (v0.3) — stretch tier scheduled 2026-08-05
+
+The two schedulable stretch items, plus release polish. Same protocol:
+delegated implementation, independent adversarial audit per nontrivial
+phase, tests + status.html + commit after each phase.
+
+### Phase 13 — uv/raycast attribute transfer
+- Extend `transfer` beyond nearest: `uv` mapping (locate each
+  destination element's UV in the source triangulation's UV space,
+  barycentric-interpolate the attribute) and `raycast` mapping (cast a
+  ray per destination point along a direction against the source
+  triangle mesh, interpolate at the hit).
+- Deterministic acceleration structures (uniform grids over triangles,
+  2D for UV and 3D for raycast) with documented deterministic
+  tie-breaking (nearest hit, then lowest triangle index).
+- Documented policies: misses (keep prior value + report count, or
+  documented fill), degenerate triangles, non-interpolatable types
+  (string/int use the dominant/nearest vertex, documented).
+- Node exposure through the existing transfer node family with full
+  registry metadata and serialization; errors name node/param and fix.
+- Exit: equivalence vs brute-force reference on adversarial meshes
+  (shared edges, degenerate tris, misses); determinism suites;
+  round-trip tests; existing nearest-transfer goldens unmoved. Commit.
+
+### Phase 14 — Interactive graph editor (Svelte)
+- New example `06-graph-editor`: a registry-driven editor built
+  entirely on the public API — node palette from `listNodeTypes()`,
+  schema-driven param forms (including field-expression JSON), pin
+  connections validated by the existing graph validation, live cook
+  into a three.js viewport, JSON import/export via
+  serializeGraph/deserializeGraph.
+- Svelte 5 (runes), matching the fields-playground conventions; no new
+  runtime dependencies in the library itself.
+- Exit: examples build + typecheck; browser-verified flows (add node,
+  connect, edit param, cook preview updates, export → import →
+  identical cook); library source untouched except genuine public-API
+  gaps found by the editor (each reported and tested). Commit.
+
+### Phase 15 — Docs and v0.3.0
+- README/llms.txt/authoring updates for transfer mappings and the
+  editor; regenerate node reference; overview site (docs/index.html)
+  roadmap refreshed.
+- Version 0.3.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, release tagged. Commit.
+
 ## Stretch (recorded, not scheduled)
-- WebGPU compute subgraphs; uv/raycast attribute transfer; interactive
-  graph editor UI (Svelte).
+- WebGPU compute subgraphs.
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
