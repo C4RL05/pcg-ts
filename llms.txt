@@ -84,6 +84,52 @@ g.output(b, "out", "points");
 const { outputs, stats } = await cook(g); // stats: { cooked, cached, elapsedMs }
 ```
 
+## Graph mutation and introspection (editor/tooling surface)
+
+Every mutation bumps the graph version; the introspection reads are
+frozen snapshots with no mutation path that bypasses version bumps.
+
+- `graph.removeNode(handle)` — removes the node, every connection
+  touching it, and every output declared on it (documented cascade); one
+  version bump; the removed node's cached outputs are dropped
+  immediately. Next cook: former downstream nodes recook, untouched
+  branches keep serving their caches. Unknown handles (another graph's,
+  or already removed) throw. Removing a subgraph *instance* leaves its
+  def and inner graph intact.
+- `graph.disconnect(from, "pin", to, "pin")` — removes one matching
+  connection, returns `true`. Unknown nodes or pins THROW (naming the
+  offender, listing valid pins); a missing connection between valid
+  endpoints returns `false` with no version bump. On a `multi` input the
+  remaining connections keep insertion order (order is part of
+  determinism). Cache contract as removeNode: target and downstream
+  recook, untouched branches stay cached.
+- `graph.removeOutput(name)` — undeclares a terminal output; the name is
+  free to redeclare; unknown names throw, listing declared outputs. Node
+  caches untouched (outputs change what a cook pulls, not memo keys), so
+  the next cook serves every unchanged node from cache.
+- `graph.describe()` — frozen structural snapshot: `{ nodes: [{ id,
+  seed, defType }], connections: [{ from: [id, pin], to: [id, pin] }],
+  outputs: [{ id, pin, name }] }` in insertion/creation/declaration
+  order. `seed` is the derived per-node seed the executor uses; `defType`
+  is `undefined` when a def carries no usable type string. Cheap enough
+  to call per UI frame. Reports structure verbatim — for a
+  subgraph-wrapped graph that includes injected plumbing, which
+  serialization excludes.
+- `graph.getParams(handle)` — frozen shallow copy of the node's current
+  params at call time (later setParam calls not reflected). Nested
+  values are live references under the library-wide aliasing rule: treat
+  them as frozen, change params only through `setParam`.
+- `describeSubgraphPins(def)` — per-instance pins of a `subgraphNode`
+  def: frozen `{ inputs, outputs }` of `{ name, kind }` in exposure
+  order, kinds resolved live from the recorded spec through nested
+  subgraphs. Returns `undefined` for non-subgraph defs; throws
+  (GraphValidationError, naming pin and inner node) when later edits
+  broke the wrapper.
+
+Mutations keep serialization consistent: `serializeGraph` of a mutated
+graph round-trips and cooks identically. Rebuilding via
+`deserializeGraph` instead of mutating discards all warm caches.
+
 ## Field-expression JSON grammar
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
@@ -144,6 +190,11 @@ serialized.
 
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 
+`listNodeTypes()` entries carry an optional `category` grouping label
+(absent when a type declared none); the standard library is fully
+categorized: source, sampler, point op, filter, attribute, value,
+spawn, io, composite.
+
 - copyToPoints — copy a source cloud onto every target point, composing transforms and seeds
 - dataInput — emit externally injected DataItems (`items` set via graph.setParam; serializes as `items: []`, re-bind live data after deserializing)
 - filterByAttribute — keep points where a scalar/string attribute passes a comparison
@@ -163,7 +214,7 @@ serialized.
 - setBounds — stamp boundsMin/boundsMax on every point
 - spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`)
 - splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
-- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs)` (pins are per-instance), inspect with `getSubgraphSpec`, serializes recursively
+- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs)` (pins are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins`, serializes recursively
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
 - transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail); `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)

@@ -145,13 +145,29 @@ and pin named.
   output, bind data derived from it, then cook the rest.
 - **Subgraphs.** `subgraphNode(inner, exposedInputs, exposedOutputs)`
   wraps a whole graph as one node with its own persistent inner caches.
+- **Live editing.** `removeNode` cascades: every connection touching the
+  node and every output declared on it go with it, in a single version
+  bump — downstream nodes recook on the next cook, untouched branches
+  keep their caches. `disconnect` and `removeOutput` follow the same
+  cache contract; unknown nodes, pins, or output names throw actionably,
+  while disconnecting a connection that simply isn't there returns
+  `false`.
+- **Introspection.** For tooling, `describe()` returns a frozen
+  structural snapshot of the live graph (nodes with their derived seeds,
+  connections, declared outputs — insertion order) and `getParams` a
+  frozen snapshot of a node's current params: reads that cannot mutate
+  the graph behind the version counter.
 
 ## JSON authoring (for agents, editors, tools)
 
 Everything needed to author a graph without reading source is available
 at runtime: `listNodeTypes()` returns every registered node type with
-pins and per-param schemas (type, default, range, enum values, field
-capability, description). Graphs round-trip through a stable, versioned
+pins, per-param schemas (type, default, range, enum values, field
+capability, description), and an optional grouping `category` — the
+standard library is fully categorized (source, sampler, point op,
+filter, attribute, value, spawn, io, composite), so palettes and
+generated docs group without heuristics. Graphs round-trip through a
+stable, versioned
 JSON format, and field-valued params are expressed as declarative JSON
 specs (`fieldFromJson` / `fieldToJson`):
 
@@ -187,8 +203,11 @@ node, param, or pin at fault and lists what would be valid. See
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
 reference (generated from the registry). The `06-graph-editor` example
 is this section as an app: an interactive node editor built entirely on
-`listNodeTypes()`, the live graph's validation, and
-`serializeGraph`/`deserializeGraph`.
+`listNodeTypes()` (palette grouped by category), the live graph's
+validation, and `serializeGraph`/`deserializeGraph` — and it edits the
+live graph through the mutation API rather than rebuilding from JSON,
+so deleting or rewiring one branch leaves every untouched branch's
+caches warm.
 
 ## Hierarchical streaming
 

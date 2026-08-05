@@ -2,37 +2,65 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-25 node types, alphabetical:
+25 node types, grouped by `category` (node sections below are alphabetical):
 
-- [copyToPoints](#copytopoints) — Copies the source point cloud onto every target point (output count = source points * target points, grouped by target).
-- [dataInput](#datainput) — Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph.
+**attribute**
+
+- [partitionByAttribute](#partitionbyattribute) — Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1).
+- [promoteAttribute](#promoteattribute) — Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain.
+- [setAttribute](#setattribute) — Creates or overwrites an attribute on the chosen domain.
+- [transferAttribute](#transferattribute) — Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain.
+
+**composite**
+
+- [subgraph](#subgraph) — Composite node wrapping an inner graph as a single node.
+
+**filter**
+
 - [filterByAttribute](#filterbyattribute) — Keeps points whose named point attribute satisfies a comparison.
 - [filterByBounds](#filterbybounds) — Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bounds inclusive).
 - [filterByDensity](#filterbydensity) — Filters points by their `density` point attribute (f32, tuple 1).
+- [projectToPlane](#projecttoplane) — Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero).
+- [selfPrune](#selfprune) — Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win).
+
+**io**
+
+- [dataInput](#datainput) — Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph.
+
+**point op**
+
+- [copyToPoints](#copytopoints) — Copies the source point cloud onto every target point (output count = source points * target points, grouped by target).
 - [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible.
 - [mergePoints](#mergepoints) — Concatenates the points of every connected geometry, in connection order, into one point cloud.
 - [orientAlongVector](#orientalongvector) — Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll.
-- [partitionByAttribute](#partitionbyattribute) — Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1).
+- [setBounds](#setbounds) — Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing.
+- [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
+
+**sampler**
+
+- [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
+- [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
+- [volumeSample](#volumesample) — Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell.
+
+**source**
+
 - [pointGrid](#pointgrid) — Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis.
 - [pointLine](#pointline) — Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start).
 - [pointScatterInBounds](#pointscatterinbounds) — Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax].
-- [projectToPlane](#projecttoplane) — Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero).
-- [promoteAttribute](#promoteattribute) — Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain.
-- [selfPrune](#selfprune) — Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win).
-- [setAttribute](#setattribute) — Creates or overwrites an attribute on the chosen domain.
-- [setBounds](#setbounds) — Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing.
+
+**spawn**
+
 - [spawnInstances](#spawninstances) — Spawner terminal: converts the input point cloud into render-agnostic instance batches.
-- [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
-- [subgraph](#subgraph) — Composite node wrapping an inner graph as a single node.
-- [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
-- [transferAttribute](#transferattribute) — Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain.
-- [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
+
+**value**
+
 - [valueConstant](#valueconstant) — Emits a single constant number as a value item, for feeding value pins or tagging pipelines with plain data.
-- [volumeSample](#volumesample) — Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell.
 
 ## copyToPoints
 
 Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity.
+
+**Category:** point op
 
 **Inputs:** `source` (geometry), `target` (geometry)
 
@@ -43,6 +71,8 @@ Copies the source point cloud onto every target point (output count = source poi
 ## dataInput
 
 Emits exactly the data items in its `items` param, unchanged — the bridge for injecting externally produced data (for example parent-cell outputs in the hierarchical runtime) into a graph. Items hash by rev in memo keys, so caching stays correct as items are swapped.
+
+**Category:** io
 
 **Inputs:** *(none)*
 
@@ -57,6 +87,8 @@ Emits exactly the data items in its `items` param, unchanged — the bridge for 
 ## filterByAttribute
 
 Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried.
+
+**Category:** filter
 
 **Inputs:** `in` (geometry)
 
@@ -75,6 +107,8 @@ Keeps points whose named point attribute satisfies a comparison. Numeric attribu
 
 Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bounds inclusive). mode 'inside' keeps points within the box, 'outside' keeps the rest. Output is a point cloud of the survivors with all attributes carried.
 
+**Category:** filter
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -90,6 +124,8 @@ Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bo
 ## filterByDensity
 
 Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). Output is a point cloud of the survivors with all attributes carried.
+
+**Category:** filter
 
 **Inputs:** `in` (geometry)
 
@@ -107,6 +143,8 @@ Filters points by their `density` point attribute (f32, tuple 1). mode 'threshol
 
 Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible. amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).
 
+**Category:** point op
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -122,6 +160,8 @@ Offsets each point by a deterministic random vector: each axis moves by a unifor
 
 Concatenates the points of every connected geometry, in connection order, into one point cloud. The output carries the union of all point attributes: an attribute missing on an input fills with its default over that input's range. Attributes sharing a name must agree on type and tuple size. Topology (vertices/primitives) is not carried — the result is points only. Output tags are the union of input tags.
 
+**Category:** point op
+
 **Inputs:** `in` (geometry, multi)
 
 **Outputs:** `out` (geometry)
@@ -131,6 +171,8 @@ Concatenates the points of every connected geometry, in connection order, into o
 ## orientAlongVector
 
 Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll. The quaternion is right-handed and matches the spawner path's three.js Matrix4.compose conventions (and quatFromEulerDeg's frame), so with the default '+z' axis, spawned assets face the direction the way the spline-fence example's tangent yaw does. For axes ±x and ±z the local +Y axis turns as close to `up` as the direction allows; for axes ±y (which consume the up-like axis) local +Z takes that role. Points with a zero-length direction keep their existing rot (identity when the attribute is newly created). When direction and up are parallel or antiparallel (cross product squared length <= 1e-12, after normalizing both), the up hint deterministically falls back to [0, 0, 1], then [1, 0, 0].
+
+**Category:** point op
 
 **Inputs:** `in` (geometry)
 
@@ -148,6 +190,8 @@ Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so 
 
 Splits the input into one point cloud per distinct value of an i32, u32, or string point attribute (tuple 1). The output collection holds the groups in order of each value's first occurrence; every group carries all point attributes and is tagged `<name>=<value>` (plus the input's tags) so downstream nodes can route by tag.
 
+**Category:** attribute
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -161,6 +205,8 @@ Splits the input into one point cloud per distinct value of an i32, u32, or stri
 ## pointGrid
 
 Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis. Point order is X fastest, then Y, then Z. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
+
+**Category:** source
 
 **Inputs:** *(none)*
 
@@ -180,6 +226,8 @@ Creates a regular grid of points: countX * countY * countZ points starting at or
 
 Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start). Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
 
+**Category:** source
+
 **Inputs:** *(none)*
 
 **Outputs:** `out` (geometry)
@@ -195,6 +243,8 @@ Creates `count` evenly spaced points on the straight segment from start to end, 
 ## pointScatterInBounds
 
 Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax]. Each coordinate is an independent deterministic hash of (seed, point index, axis) — same seed always reproduces the same points, independent of evaluation order. Emits a standard point cloud.
+
+**Category:** source
 
 **Inputs:** *(none)*
 
@@ -213,6 +263,8 @@ Scatters `count` points uniformly inside the axis-aligned box [boundsMin, bounds
 
 Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero). With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible.
 
+**Category:** filter
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -228,6 +280,8 @@ Projects every point orthogonally onto the plane through `origin` with normal `n
 ## promoteAttribute
 
 Moves an attribute between domains using the geometry's topology, creating or overwriting it on the target domain. Modes: 'first' keeps the first contribution in scan order (the only mode valid for string attributes); 'average', 'sum', 'min', 'max' aggregate all contributions. 'detail' broadcasts (from) or reduces over everything (to). Elements with no contributors keep the attribute default.
+
+**Category:** attribute
 
 **Inputs:** `in` (geometry)
 
@@ -246,6 +300,8 @@ Moves an attribute between domains using the geometry's topology, creating or ov
 
 Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win). Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.
 
+**Category:** filter
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -259,6 +315,8 @@ Enforces a minimum distance between points: scans points in index order and keep
 ## setAttribute
 
 Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in two modes: with a non-empty `values` list, `value` acts as a per-element numeric selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — choosing one entry per element (e.g. for per-point asset ids consumed by spawnInstances assetAttr); with `values` empty, the constant `stringValue` is written to every element.
+
+**Category:** attribute
 
 **Inputs:** `in` (geometry)
 
@@ -281,6 +339,8 @@ Creates or overwrites an attribute on the chosen domain. Numeric types fill from
 
 Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing. Downstream nodes and spawners read these as each point's axis-aligned extent.
 
+**Category:** point op
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -296,6 +356,8 @@ Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f
 
 Spawner terminal: converts the input point cloud into render-agnostic instance batches. Each point becomes one instance with world matrix T(P) * R(rot) * S(scale) (column-major 4x4, THREE.Matrix4.elements layout; missing rot/scale attributes are identity). Points are grouped into one batch per asset id, in first-occurrence order: assetAttr (when non-empty) names a string point attribute holding per-point asset ids — empty per-point values fall back to assetId. The 'instances' pin emits one instances item (input tags carried over); 'points' passes the input geometry through unchanged for chaining or debug rendering.
 
+**Category:** spawn
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `instances` (instances), `points` (geometry)
@@ -310,6 +372,8 @@ Spawner terminal: converts the input point cloud into render-agnostic instance b
 ## splineSample
 
 Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1].
+
+**Category:** sampler
 
 **Inputs:** `in` (geometry)
 
@@ -327,6 +391,8 @@ Samples points along polyline primitives by arc length, treating all polylines o
 
 Composite node wrapping an inner graph as a single node. Pins are per-instance, derived from the exposed inner pins, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs). Serialized subgraph nodes carry no params; their inner graph is a nested payload under "subgraph" ({ graph, inputs, outputs }), recursively in the same versioned format.
 
+**Category:** composite
+
 **Inputs:** *(none)*
 
 **Outputs:** *(none)*
@@ -336,6 +402,8 @@ Composite node wrapping an inner graph as a single node. Pins are per-instance, 
 ## surfaceSample
 
 Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement). densityField (0..1) is then evaluated once over the candidate cloud and each candidate is accepted when a per-candidate hashed random < density — so the output count is at most `count` and exactly `count` when density is 1. Output points carry P, a flat per-triangle `normal` (f32 tuple 3), density 1, and a hashed per-point seed.
+
+**Category:** sampler
 
 **Inputs:** `in` (geometry)
 
@@ -352,6 +420,8 @@ Scatters points on a triangle mesh: each of `count` candidates picks a triangle 
 ## transferAttribute
 
 Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.
+
+**Category:** attribute
 
 **Inputs:** `in` (geometry), `source` (geometry)
 
@@ -374,6 +444,8 @@ Transfers an attribute from the `source` geometry onto the main input's points, 
 
 Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX'). Composes with existing point transform attributes when present: rot becomes R * rot (quaternion product) and scale multiplies componentwise. All three params are field-capable and resolve per point on the input positions.
 
+**Category:** point op
+
 **Inputs:** `in` (geometry)
 
 **Outputs:** `out` (geometry)
@@ -390,6 +462,8 @@ Transforms every point: P' = R * (scale * P) + translate, with R from rotateEule
 
 Emits a single constant number as a value item, for feeding value pins or tagging pipelines with plain data.
 
+**Category:** value
+
 **Inputs:** *(none)*
 
 **Outputs:** `out` (value)
@@ -403,6 +477,8 @@ Emits a single constant number as a value item, for feeding value pins or taggin
 ## volumeSample
 
 Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell. jitter in [0, 1] scales a deterministic per-cell random offset (0 = exact centers, 1 = anywhere in the cell) and may be a field evaluated on the un-jittered centers. Bounds come from the optional input geometry's P extents when connected, else from boundsMin/boundsMax. Emits a standard point cloud.
+
+**Category:** sampler
 
 **Inputs:** `in` (geometry)
 

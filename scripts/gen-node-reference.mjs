@@ -71,15 +71,17 @@ function canonicalSchema(schema) {
 }
 
 function canonicalType(t) {
-  return {
+  const out = {
     type: t.type,
     description: t.description,
-    inputs: t.inputs.map(canonicalPin),
-    outputs: t.outputs.map(canonicalPin),
-    params: Object.fromEntries(
-      Object.entries(t.params).map(([name, schema]) => [name, canonicalSchema(schema)]),
-    ),
   };
+  if (t.category !== undefined) out.category = t.category;
+  out.inputs = t.inputs.map(canonicalPin);
+  out.outputs = t.outputs.map(canonicalPin);
+  out.params = Object.fromEntries(
+    Object.entries(t.params).map(([name, schema]) => [name, canonicalSchema(schema)]),
+  );
+  return out;
 }
 
 const json = JSON.stringify(types.map(canonicalType), null, 2) + "\n";
@@ -114,6 +116,25 @@ function formatPins(pins) {
     .join(", ");
 }
 
+/** Category buckets in first-appearance-agnostic (alphabetical) order; uncategorized last. */
+const UNCATEGORIZED = "(uncategorized)";
+const byCategory = new Map();
+for (const t of types) {
+  const cat = t.category !== undefined ? t.category : UNCATEGORIZED;
+  let bucket = byCategory.get(cat);
+  if (!bucket) byCategory.set(cat, (bucket = []));
+  bucket.push(t);
+}
+const categories = [...byCategory.keys()].sort((a, b) => {
+  if (a === UNCATEGORIZED) return 1;
+  if (b === UNCATEGORIZED) return -1;
+  return a < b ? -1 : a > b ? 1 : 0;
+});
+
+function firstSentence(description) {
+  return description.split(". ")[0].replace(/\.$/, "");
+}
+
 const lines = [];
 lines.push("# Node reference");
 lines.push("");
@@ -125,19 +146,28 @@ lines.push(
     "[authoring.md](./authoring.md).",
 );
 lines.push("");
-lines.push(`${types.length} node types, alphabetical:`);
+lines.push(
+  `${types.length} node types, grouped by \`category\` (node sections below are alphabetical):`,
+);
 lines.push("");
-for (const t of types) {
-  const firstSentence = t.description.split(". ")[0].replace(/\.$/, "");
-  lines.push(`- [${t.type}](#${t.type.toLowerCase()}) — ${firstSentence}.`);
+for (const cat of categories) {
+  lines.push(`**${cat}**`);
+  lines.push("");
+  for (const t of byCategory.get(cat)) {
+    lines.push(`- [${t.type}](#${t.type.toLowerCase()}) — ${firstSentence(t.description)}.`);
+  }
+  lines.push("");
 }
-lines.push("");
 
 for (const t of types) {
   lines.push(`## ${t.type}`);
   lines.push("");
   lines.push(t.description);
   lines.push("");
+  if (t.category !== undefined) {
+    lines.push(`**Category:** ${t.category}`);
+    lines.push("");
+  }
   lines.push(`**Inputs:** ${formatPins(t.inputs)}`);
   lines.push("");
   lines.push(`**Outputs:** ${formatPins(t.outputs)}`);

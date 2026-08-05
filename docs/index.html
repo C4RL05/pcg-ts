@@ -331,12 +331,12 @@
     <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>597</b><span>tests, all green</span></div>
+      <div class="stat"><b>627</b><span>tests, all green</span></div>
       <div class="stat"><b>25</b><span>registered node types</span></div>
       <div class="stat"><b>40</b><span>field-grammar functions</span></div>
       <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b>v0.3</b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b>v0.4</b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -509,10 +509,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.4.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Editor-grade graph APIs: removeNode / disconnect / removeOutput with exact cache surgery (delete a branch, everything else serves from cache), frozen describe() and getParams introspection, registry categories across all 25 node types, and per-instance subgraph pin introspection — proven by the graph editor adopting them wholesale. 627 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>WebGPU compute subgraphs for GPU-side generation · editor-grade graph APIs (node removal, structural introspection, category metadata) · npm publish and a public repository.</p>
+          <p>WebGPU compute subgraphs for GPU-side generation · npm publish.</p>
         </div>
       </li>
     </ul>
@@ -522,7 +529,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.3.0</span>
+    <span>pcg-ts v0.4.0</span>
     <span>MIT license</span>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>

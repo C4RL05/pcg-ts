@@ -6,9 +6,10 @@ live in [nodes.md](./nodes.md) (generated; machine-readable twin:
 [nodes.json](./nodes.json)); at runtime the same metadata comes from
 `listNodeTypes()`. For authoring this format interactively, the
 `06-graph-editor` example (`npm run examples`) is a node editor built on
-the same metadata: registry palette, connections checked by the live
-graph's validation, schema-driven param forms, live cook, and JSON
-import/export.
+the same metadata: registry palette (grouped by node `category`),
+connections checked by the live graph's validation, schema-driven param
+forms, live cook, JSON import/export, and in-place edits through the
+mutation API (see [Editing live graphs](#editing-live-graphs)).
 
 ## The graph JSON format
 
@@ -292,6 +293,46 @@ Batches form in first-occurrence order of each asset id; an
 empty-string entry never names an asset — those points fall back to the
 spawner's `assetId`. With `values` empty, the constant `stringValue`
 param is written instead.
+
+## Editing live graphs
+
+JSON is the interchange format, not the only way to change a graph. A
+tool that keeps one live `Graph` (as the `06-graph-editor` example does)
+edits it in place with the mutation API and reads it back with the
+introspection API — preserving node caches that a rebuild through
+`deserializeGraph` would discard:
+
+- `removeNode(handle)` removes the node plus every connection touching
+  it and every output declared on it, in one version bump. On the next
+  cook, former downstream nodes recook; untouched branches serve their
+  caches. Removing a subgraph *instance* leaves its def and inner graph
+  intact for other instances.
+- `disconnect(from, pin, to, pin)` removes one matching connection and
+  returns whether one existed. Unknown nodes or pins throw (naming the
+  offender, listing valid pins); a missing connection between valid
+  endpoints returns `false` and bumps nothing.
+- `removeOutput(name)` undeclares a terminal output (unknown names
+  throw, listing what is declared). Node caches are untouched — an
+  output changes what a cook pulls, not any memo key — so the next cook
+  serves every unchanged node from cache.
+- `describe()` returns a frozen structural snapshot: nodes (`id`,
+  derived `seed`, `defType`), connections, and declared outputs, in
+  insertion order. `getParams(handle)` returns a frozen shallow copy of
+  a node's current params — nested values by reference, so treat them
+  as frozen and change params only through `setParam`. Neither offers a
+  mutation path that bypasses the graph's version counter.
+- `describeSubgraphPins(def)` resolves a subgraph def's per-instance
+  pins — exposed name plus the concrete kind of the inner pin, through
+  nested subgraphs — live from the recorded spec; `undefined` for
+  non-subgraph defs.
+
+When to mutate vs rebuild: mutate while a live graph is being edited and
+warm caches matter (tweaking one branch of an expensive graph must not
+recook its siblings); rebuild through `serializeGraph` /
+`deserializeGraph` when loading a document or handing a graph across a
+boundary — a rebuilt graph is fully validated but starts with cold
+caches. The two stay consistent: after any mutation,
+`serializeGraph(graph)` reflects the current structure and round-trips.
 
 ## Transfer mappings
 
