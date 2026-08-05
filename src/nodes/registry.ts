@@ -12,11 +12,30 @@ import type { DataItem, NodeDef, NodeExecuteArgs, NodeOutputs, PinDef, PinKind }
  * of runtime-injected {@link DataItem}s (bound via `graph.setParam`, e.g.
  * by the World per cell): its default is always `[]` and serialized
  * graphs carry an empty list — live items are never part of the JSON.
+ * `stringList` is an ordered list of strings that is authoring data
+ * (e.g. the value list of a string `setAttribute`): unlike `items`, its
+ * contents serialize with the graph.
  */
-export type ParamType = "f32" | "i32" | "u32" | "bool" | "string" | "vec3" | "vec4" | "enum" | "items";
+export type ParamType =
+  | "f32"
+  | "i32"
+  | "u32"
+  | "bool"
+  | "string"
+  | "vec3"
+  | "vec4"
+  | "enum"
+  | "items"
+  | "stringList";
 
 /** Plain (non-field) values a param can hold. */
-export type ParamValue = number | boolean | string | readonly number[] | readonly DataItem[];
+export type ParamValue =
+  | number
+  | boolean
+  | string
+  | readonly number[]
+  | readonly string[]
+  | readonly DataItem[];
 
 /**
  * Machine-readable schema of one node param. Descriptions are agent-facing
@@ -153,6 +172,17 @@ function validateSchema(type: string, name: string, schema: ParamSchema): void {
       }
       if (schema.min !== undefined || schema.max !== undefined) {
         fail("cannot declare min/max — item lists have no numeric bounds");
+      }
+      break;
+    case "stringList":
+      if (!Array.isArray(d) || !d.every((v) => typeof v === "string")) {
+        fail("default must be an array of strings ([] for an empty list)");
+      }
+      if (schema.acceptsField === true) {
+        fail("cannot accept fields — string lists are authoring data, not per-element values");
+      }
+      if (schema.min !== undefined || schema.max !== undefined) {
+        fail("cannot declare min/max — string lists have no numeric bounds");
       }
       break;
     default:

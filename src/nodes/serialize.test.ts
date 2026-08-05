@@ -313,3 +313,72 @@ describe("deserializeGraph validation", () => {
     );
   });
 });
+
+describe("string setAttribute serialization", () => {
+  /** scatter -> string species from a random selector -> output. */
+  function buildStringGraph(seed: number): Graph {
+    const g = new Graph(seed);
+    const scatter = g.add(
+      pointScatterInBounds,
+      { count: 60, boundsMin: [0, 0, 0], boundsMax: [10, 0, 10] },
+      "scatter",
+    );
+    const species = g.add(
+      setAttribute,
+      {
+        name: "species",
+        type: "string",
+        values: ["pine", "bush", "rock"],
+        value: fieldFromJson({
+          fn: "floor",
+          args: [{ fn: "mul", args: [{ fn: "randomField", key: 2 }, 3] }],
+        }),
+        seed: 11,
+      },
+      "species",
+    );
+    g.connect(scatter, "out", species, "in");
+    g.output(species, "out", "pts");
+    return g;
+  }
+
+  it("serializes string-list contents (authoring data, unlike items)", () => {
+    const json = serializeGraph(buildStringGraph(21));
+    const species = json.nodes[1];
+    expect(species.params.values).toEqual(["pine", "bush", "rock"]);
+    expect(species.params.type).toBe("string");
+    expect(species.params.stringValue).toBe("");
+    expect(species.params.seed).toBe(11);
+    expect(JSON.parse(JSON.stringify(json))).toEqual(json);
+    expect(serializeGraph(deserializeGraph(JSON.parse(JSON.stringify(json))))).toEqual(json);
+  });
+
+  it("deserialized graph cooks byte-identically, string table and indices included", async () => {
+    const original = buildStringGraph(77);
+    const rebuilt = deserializeGraph(JSON.parse(JSON.stringify(serializeGraph(original))));
+    const a = await cook(original);
+    const b = await cook(rebuilt);
+    const geoA = firstGeo(a.outputs.pts);
+    const geoB = firstGeo(b.outputs.pts);
+    const attr = geoA.attrs.point.require("species");
+    expect(attr.type).toBe("string");
+    // The selector actually spreads over multiple values.
+    const distinct = new Set<string>();
+    for (let i = 0; i < geoA.pointCount; i++) distinct.add(attr.getString(i));
+    expect(distinct.size).toBeGreaterThan(1);
+    // snapshotGeometry captures raw indices AND resolved strings.
+    expect(snapshotGeometry(geoB)).toEqual(snapshotGeometry(geoA));
+  });
+
+  it("rejects non-string entries in stringList params, naming node and param", () => {
+    expect(() =>
+      deserializeGraph({
+        formatVersion: 1,
+        seed: 0,
+        nodes: [{ id: "s", type: "setAttribute", params: { type: "string", values: [1] } }],
+        connections: [],
+        outputs: [],
+      }),
+    ).toThrow(/node "s" param "values": expected an array of strings/);
+  });
+});

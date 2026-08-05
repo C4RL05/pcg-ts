@@ -11,6 +11,7 @@ import {
   type DataItem,
   type GeometryItem,
 } from "../graph/index.js";
+import { fieldFromJson, setAttribute } from "../nodes/index.js";
 import { getNodeType } from "../nodes/registry.js";
 import { snapshotGeometry } from "../nodes/testSupport.js";
 import { spawnInstances } from "./spawnNode.js";
@@ -111,6 +112,56 @@ describe("spawnInstances cook", () => {
     const spawn = graph.add(spawnInstances);
     graph.output(spawn, "instances");
     await expect(cook(graph)).rejects.toThrow(/no geometry connected/);
+  });
+});
+
+describe("multi-asset spawn from a graph-written string attribute", () => {
+  it("points -> setAttribute(string) -> spawnInstances batches keyed per point, no escape hatch", async () => {
+    const graph = new Graph(7);
+    const src = graph.add(sourceOf(makeGeometryItem(testCloud(4))));
+    // Per-point species from the element index: 0 -> pine, 1+ -> bush
+    // (indices past the list clamp to the last entry).
+    const species = graph.add(setAttribute, {
+      name: "species",
+      type: "string",
+      values: ["pine", "bush"],
+      value: fieldFromJson({ fn: "index" }),
+    });
+    const spawn = graph.add(spawnInstances, { assetId: "fallback", assetAttr: "species" });
+    graph.connect(src, "out", species, "in");
+    graph.connect(species, "out", spawn, "in");
+    graph.output(spawn, "instances", "instances");
+    const result = await cook(graph);
+    const item = result.outputs.instances[0];
+    if (item.kind !== "instances") throw new Error("expected an instances item");
+    // One batch per asset id, first-occurrence order; every point matched
+    // its string value, so the fallback assetId never appears.
+    expect(item.batches.map((b) => b.assetId)).toEqual(["pine", "bush"]);
+    expect(item.batches.map((b) => b.count)).toEqual([1, 3]);
+    // Instances carry the right points: bush batch starts at point 1
+    // (translation 1, 2, 3 in the transform's last column).
+    expect(Array.from(item.batches[1].transforms.subarray(12, 15))).toEqual([1, 2, 3]);
+  });
+
+  it("empty per-point values fall back to assetId (numeric-path contract intact)", async () => {
+    const graph = new Graph(7);
+    const src = graph.add(sourceOf(makeGeometryItem(testCloud(3))));
+    // "" for index 0, "bush" for the rest: the empty string defers to assetId.
+    const species = graph.add(setAttribute, {
+      name: "species",
+      type: "string",
+      values: ["", "bush"],
+      value: fieldFromJson({ fn: "index" }),
+    });
+    const spawn = graph.add(spawnInstances, { assetId: "pine", assetAttr: "species" });
+    graph.connect(src, "out", species, "in");
+    graph.connect(species, "out", spawn, "in");
+    graph.output(spawn, "instances", "instances");
+    const result = await cook(graph);
+    const item = result.outputs.instances[0];
+    if (item.kind !== "instances") throw new Error("expected an instances item");
+    expect(item.batches.map((b) => b.assetId)).toEqual(["pine", "bush"]);
+    expect(item.batches.map((b) => b.count)).toEqual([1, 2]);
   });
 });
 

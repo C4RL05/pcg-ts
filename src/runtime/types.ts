@@ -105,6 +105,13 @@ export interface LevelDef {
    * structure+params, parent cell content) — never on cook order,
    * viewpoint path, or eviction history.
    *
+   * Reseeding the whole graph per cell is also sanctioned:
+   * `graph.setSeed(hashCombine(ctx.seed, salt))` inside bind
+   * deterministically re-derives every node's seed (memo keys include the
+   * seed, so caching stays correct), and the runtime counts bind-time
+   * writes — `setSeed` and `setParam` alike — as its own, never as user
+   * edits, so no phantom staleness results.
+   *
    * Aliasing contract: arrays bound into params (e.g. a `dataInput`
    * node's `items`) are captured by reference and end up aliased by the
    * stored cell outputs. Treat them as frozen after binding — mutating

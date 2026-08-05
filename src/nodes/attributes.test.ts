@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud, createTriangleMesh } from "../data/index.js";
+import { evaluateField, randomField } from "../fields/index.js";
 import { makeGeometryItem, type GeometryItem } from "../graph/index.js";
+import { hashCombine } from "../random/index.js";
 import {
   fieldFromJson,
   partitionByAttribute,
@@ -138,6 +140,238 @@ describe("setAttribute", () => {
         { in: [makeGeometryItem(cloud)] },
       ),
     ).rejects.toThrow(/tuple size 3.*neither 1.*tupleSize 2/);
+  });
+});
+
+describe("setAttribute string attributes", () => {
+  it("writes a constant string to every element (constant mode)", async () => {
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "species", type: "string", stringValue: "pine" },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("species");
+    expect(attr.type).toBe("string");
+    expect([attr.getString(0), attr.getString(1), attr.getString(2)]).toEqual([
+      "pine",
+      "pine",
+      "pine",
+    ]);
+    // One interned entry per distinct string: all elements share an index.
+    expect(attr.data[0]).toBe(attr.data[1]);
+  });
+
+  it("selects from the value list with a constant selector", async () => {
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "species", type: "string", values: ["pine", "bush", "rock"], value: 1 },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("species");
+    expect([attr.getString(0), attr.getString(1)]).toEqual(["bush", "bush"]);
+  });
+
+  it("selects per element with a field selector, clamping past the end", async () => {
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          {
+            name: "species",
+            type: "string",
+            values: ["pine", "bush"],
+            value: fieldFromJson({ fn: "index" }),
+          },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("species");
+    // Index 2 clamps to the last entry.
+    expect([attr.getString(0), attr.getString(1), attr.getString(2)]).toEqual([
+      "pine",
+      "bush",
+      "bush",
+    ]);
+  });
+
+  it("applies the total floor+clamp selector (negatives, fractions, NaN)", async () => {
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+      [3, 0, 0],
+      [4, 0, 0],
+    ]);
+    const sel = cloud.attrs.point.add("sel", "f32", 1, 0);
+    [-5, 0.9, 1.5, 7, Number.NaN].forEach((v, i) => sel.set(i, v));
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          {
+            name: "kind",
+            type: "string",
+            values: ["a", "b", "c"],
+            value: fieldFromJson({ fn: "attribute", name: "sel" }),
+          },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("kind");
+    expect(
+      [0, 1, 2, 3, 4].map((i) => attr.getString(i)),
+    ).toEqual(["a", "a", "b", "c", "a"]);
+  });
+
+  it("broadcasts a scalar selector across string tuples", async () => {
+    const cloud = cloudAt([[0, 0, 0]]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "pair", type: "string", tupleSize: 2, values: ["x", "y"], value: 1 },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("pair");
+    expect([attr.getString(0, 0), attr.getString(0, 1)]).toEqual(["y", "y"]);
+  });
+
+  it("replaces a numeric attribute the selector reads (aliasing safety)", async () => {
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    const density = cloud.attrs.point.require("density");
+    [0, 1, 0].forEach((v, i) => density.set(i, v));
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          {
+            name: "density",
+            type: "string",
+            values: ["off", "on"],
+            value: fieldFromJson({ fn: "attribute", name: "density" }),
+          },
+          { in: [makeGeometryItem(cloud)] },
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("density");
+    expect(attr.type).toBe("string");
+    expect([attr.getString(0), attr.getString(1), attr.getString(2)]).toEqual([
+      "off",
+      "on",
+      "off",
+    ]);
+  });
+
+  it("rejects values/stringValue on numeric types actionably", async () => {
+    const item = makeGeometryItem(cloudAt([[0, 0, 0]]));
+    await expect(
+      runNode(setAttribute, { name: "x", values: ["a"] }, { in: [item] }),
+    ).rejects.toThrow(/"values".*only used when type is "string".*got type "f32"/);
+    await expect(
+      runNode(setAttribute, { name: "x", stringValue: "a" }, { in: [item] }),
+    ).rejects.toThrow(/"stringValue".*only used when type is "string"/);
+  });
+
+  it("rejects selector tuple mismatches for string attributes", async () => {
+    const cloud = cloudAt([[0, 0, 0]]);
+    await expect(
+      runNode(
+        setAttribute,
+        {
+          name: "s",
+          type: "string",
+          tupleSize: 2,
+          values: ["a", "b"],
+          value: fieldFromJson({ fn: "position" }),
+        },
+        { in: [makeGeometryItem(cloud)] },
+      ),
+    ).rejects.toThrow(/tuple size 3.*neither 1.*tupleSize 2/);
+  });
+});
+
+describe("setAttribute seed param", () => {
+  const positions = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [2, 0, 0],
+    [3, 0, 0],
+  ];
+
+  it("seed 0 evaluates value with the node's derived seed unchanged (regression)", async () => {
+    const cloud = cloudAt(positions);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "r", value: randomField(3) },
+          { in: [makeGeometryItem(cloud)] },
+          5,
+        )
+      ).out,
+    );
+    // Pre-seed-param behavior: the field saw the raw node seed. seed 0
+    // (the default) must reproduce it bit for bit.
+    const expected = evaluateField(randomField(3), { geo: cloud, domain: "point", seed: 5 });
+    const attr = geo.attrs.point.require("r");
+    expect(Array.from(attr.data.subarray(0, 4))).toEqual(
+      Array.from(expected.data.subarray(0, 4)),
+    );
+  });
+
+  it("nonzero seed folds via hashCombine(nodeSeed, seed) like sampler nodes", async () => {
+    const cloud = cloudAt(positions);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setAttribute,
+          { name: "r", value: randomField(3), seed: 9 },
+          { in: [makeGeometryItem(cloud)] },
+          5,
+        )
+      ).out,
+    );
+    const attr = geo.attrs.point.require("r");
+    const got = Array.from(attr.data.subarray(0, 4));
+    const folded = evaluateField(randomField(3), {
+      geo: cloud,
+      domain: "point",
+      seed: hashCombine(5, 9),
+    });
+    expect(got).toEqual(Array.from(folded.data.subarray(0, 4)));
+    const unfolded = evaluateField(randomField(3), { geo: cloud, domain: "point", seed: 5 });
+    expect(got).not.toEqual(Array.from(unfolded.data.subarray(0, 4)));
   });
 });
 

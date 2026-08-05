@@ -5,6 +5,7 @@
  */
 import { promote, transferNearest, type AttrType, type Domain, type PromoteMode } from "../data/index.js";
 import { cloneGeometry, makeGeometryItem, type DataItem } from "../graph/index.js";
+import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import {
   type FieldParam,
@@ -23,13 +24,16 @@ export interface SetAttributeParams {
   type: string;
   tupleSize: number;
   value: FieldParam;
+  values: readonly string[];
+  stringValue: string;
+  seed: number;
 }
 
 /** Create or overwrite an attribute from a field. */
 export const setAttribute = standardNode<SetAttributeParams>({
   type: "setAttribute",
   description:
-    "Creates or overwrites an attribute on the chosen domain and fills it from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise). The evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly. Values store with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. String attributes cannot be written this way.",
+    "Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in two modes: with a non-empty `values` list, `value` acts as a per-element numeric selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — choosing one entry per element (e.g. for per-point asset ids consumed by spawnInstances assetAttr); with `values` empty, the constant `stringValue` is written to every element.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -47,9 +51,9 @@ export const setAttribute = standardNode<SetAttributeParams>({
     type: {
       type: "enum",
       default: "f32",
-      enum: ["f32", "i32", "u32", "bool"],
+      enum: ["f32", "i32", "u32", "bool", "string"],
       description:
-        "Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1).",
+        "Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1); string interns into the geometry's string table and writes via `values` + selector or `stringValue` (see those params).",
     },
     tupleSize: {
       type: "i32",
@@ -63,21 +67,94 @@ export const setAttribute = standardNode<SetAttributeParams>({
       default: 0,
       acceptsField: true,
       description:
-        "Value written to every element. Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize.",
+        "Numeric value written to every element — or, for type 'string' with a non-empty `values` list, the per-element selector into it: floor(selector) clamped into [0, values.length - 1], NaN selects 0 (a total function; out-of-range never errors per element). Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. Ignored for type 'string' with `values` empty.",
+    },
+    values: {
+      type: "stringList",
+      default: [],
+      description:
+        "String values to choose among when type is 'string': `value` selects per element (floor, then clamp into range). Leave empty to write the constant `stringValue` instead. Setting this with a numeric type is an error. Note: when the attribute feeds spawnInstances via assetAttr, an empty-string entry never names an asset — the spawner falls back to its assetId param for those elements.",
+    },
+    stringValue: {
+      type: "string",
+      default: "",
+      description:
+        "Constant written to every element when type is 'string' and `values` is empty. Must stay \"\" for numeric types.",
+    },
+    seed: {
+      type: "u32",
+      default: 0,
+      description:
+        "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed), re-rolling field randomness (e.g. randomField). Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level.",
     },
   },
-  execute({ inputs, params, seed }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "setAttribute"));
     const domain = params.domain as Domain;
     const type = params.type as AttrType;
     const ts = params.tupleSize;
+    // seed 0 keeps the node's derived seed byte-compatible with graphs
+    // authored before this param existed; nonzero folds in exactly like
+    // the sampler nodes fold their seed params.
+    const seed = params.seed === 0 ? nodeSeed : hashCombine(nodeSeed, params.seed);
+    const set = geo.attrs[domain];
+    if (type === "string") {
+      if (params.values.length === 0) {
+        // Constant-string mode: intern once, fill every element with it.
+        const attr = set.replace(params.name, "string", ts);
+        attr.fill(params.stringValue, 0, set.count);
+        return { out: [makeGeometryItem(geo)] };
+      }
+      // Value-list mode: `value` selects per element among `values`.
+      const col = resolveOn(geo, domain, params.value, seed);
+      if (col.tupleSize !== 1 && col.tupleSize !== ts) {
+        throw new Error(
+          `setAttribute: value evaluates to tuple size ${col.tupleSize}, which is neither 1 (broadcast) nor tupleSize ${ts}`,
+        );
+      }
+      // No aliasing snapshot needed here: the selector column can only view
+      // numeric storage (string attributes are not readable as fields), and
+      // replace() either reuses string storage or allocates fresh — it never
+      // resets a numeric buffer the column could alias.
+      const attr = set.replace(params.name, "string", ts);
+      // Intern each list entry once up front; the loop then writes plain
+      // table indices — no per-element string work.
+      const values = params.values;
+      const tableIdx = new Uint32Array(values.length);
+      for (let v = 0; v < values.length; v++) tableIdx[v] = attr.internString(values[v]);
+      const last = values.length - 1;
+      const data = attr.data;
+      const n = set.count;
+      for (let i = 0; i < n; i++) {
+        for (let k = 0; k < ts; k++) {
+          const s = col.tupleSize === 1 ? col.data[i] : col.data[i * ts + k];
+          // Total selection: floor, then clamp into [0, last]. NaN and
+          // -Infinity land on 0 (via `!(idx > 0)`), +Infinity on last —
+          // never a per-element throw.
+          let idx = Math.floor(s);
+          if (!(idx > 0)) idx = 0;
+          else if (idx > last) idx = last;
+          data[i * ts + k] = tableIdx[idx];
+        }
+      }
+      return { out: [makeGeometryItem(geo)] };
+    }
+    if (params.values.length > 0) {
+      throw new Error(
+        `setAttribute: param "values" (${params.values.length} strings) is only used when type is "string", got type "${type}"; set type to "string" or clear values`,
+      );
+    }
+    if (params.stringValue !== "") {
+      throw new Error(
+        `setAttribute: param "stringValue" is only used when type is "string", got type "${type}"; set type to "string" or clear stringValue`,
+      );
+    }
     const col = resolveOn(geo, domain, params.value, seed);
     if (col.tupleSize !== 1 && col.tupleSize !== ts) {
       throw new Error(
         `setAttribute: value evaluates to tuple size ${col.tupleSize}, which is neither 1 (broadcast) nor tupleSize ${ts}`,
       );
     }
-    const set = geo.attrs[domain];
     // The evaluated column may be a zero-copy view of the very attribute
     // being replaced (e.g. value = attribute(name), or position() writing
     // onto "P"): replace() reuses matching storage and resets it to

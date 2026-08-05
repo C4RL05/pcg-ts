@@ -197,6 +197,13 @@ function checkParamValue(schema: ParamSchema, value: unknown, where: string): vo
         );
       }
       break;
+    case "stringList":
+      // Unlike `items`, string lists are authoring data: their contents
+      // serialize with the graph.
+      if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+        fail(`${where}: expected an array of strings, got ${JSON.stringify(value)}`);
+      }
+      break;
   }
 }
 
@@ -333,7 +340,7 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
             plain = new Array<number>(schema.type === "vec3" ? 3 : 4).fill(plain);
           }
           checkParamValue(schema, plain, where);
-          params[key] = Array.isArray(plain) ? [...(plain as number[])] : plain;
+          params[key] = Array.isArray(plain) ? [...(plain as unknown[])] : plain;
         }
       }
       nodes.push({ id: state.id, type, params });
@@ -551,7 +558,7 @@ function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
         }
       } else {
         checkParamValue(schema, value, where);
-        params[key] = Array.isArray(value) ? [...(value as number[])] : value;
+        params[key] = Array.isArray(value) ? [...(value as unknown[])] : value;
       }
     }
     handles.set(id, graph.add(reg.def, params, id));

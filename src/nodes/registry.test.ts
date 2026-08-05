@@ -232,3 +232,73 @@ describe("registry metadata", () => {
     expect(() => getNodeType("noSuchNode")).toThrow(/pointGrid/);
   });
 });
+
+describe("stringList schemas", () => {
+  it("validates string-list schemas: string-array default, no bounds, no fields", () => {
+    expect(() =>
+      standardNode<{ list: readonly string[] }>({
+        type: "__test_slBadDefault",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: {
+          list: { type: "stringList", default: "a" as unknown as string[], description: "list" },
+        },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "list".*array of strings/);
+    expect(() =>
+      standardNode<{ list: readonly string[] }>({
+        type: "__test_slBadEntry",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: {
+          list: { type: "stringList", default: [1] as unknown as string[], description: "list" },
+        },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "list".*array of strings/);
+    expect(() =>
+      standardNode<{ list: readonly string[] }>({
+        type: "__test_slBounds",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: { list: { type: "stringList", default: [], min: 0, description: "list" } },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "list".*min\/max/);
+    expect(() =>
+      standardNode<{ list: readonly string[] }>({
+        type: "__test_slField",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: {
+          list: { type: "stringList", default: [], acceptsField: true, description: "list" },
+        },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "list".*cannot accept fields/);
+  });
+
+  it("derives defaultParams as a detached copy of the default list", () => {
+    const source = ["a", "b"];
+    const def = standardNode<{ list: readonly string[] }>({
+      type: "__test_slOk",
+      description: "test",
+      inputs: [],
+      outputs: [],
+      params: { list: { type: "stringList", default: source, description: "list of names" } },
+      execute: () => ({}),
+    });
+    expect(def.defaultParams).toEqual({ list: ["a", "b"] });
+    source.push("clobbered");
+    expect(def.defaultParams).toEqual({ list: ["a", "b"] });
+    // Registry metadata carries the schema, JSON-safe.
+    const info = getNodeType("__test_slOk").info;
+    expect(info.params.list.type).toBe("stringList");
+    expect(info.params.list.default).toEqual(["a", "b"]);
+  });
+});

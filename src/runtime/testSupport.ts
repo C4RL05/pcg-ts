@@ -123,6 +123,18 @@ export function geometryDiff(a: Geometry, b: Geometry): string | null {
           return `${domain}.${attr.name}[${i}]: ${attr.data[i]} vs ${other.data[i]}`;
         }
       }
+      if (attr.type === "string") {
+        // Equal table indices do not imply equal strings — the two sides
+        // may carry different string tables. Resolve every stored index
+        // through its own table and compare the actual values too.
+        for (let i = 0; i < n; i++) {
+          const va = attr.stringTable[attr.data[i]] ?? "";
+          const vb = other.stringTable[other.data[i]] ?? "";
+          if (va !== vb) {
+            return `${domain}.${attr.name}[${i}]: "${va}" vs "${vb}"`;
+          }
+        }
+      }
     }
   }
   return null;

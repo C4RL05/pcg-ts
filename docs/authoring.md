@@ -217,3 +217,41 @@ produce different (but reproducible) content. Note: `subgraphNode`
 definitions are not registered node types, so graphs containing them
 cook fine but do not serialize — for JSON-portable graphs, inline the
 nodes instead.
+
+## Per-cell seeding
+
+A `World` cooks one graph per cell of each level, and the level's
+`bind` callback is the only channel through which cell data enters the
+graph (see `LevelDef`). Two sanctioned, deterministic ways to vary
+content per cell, both driven by `ctx.seed`:
+
+**Seed params.** Wire `ctx.seed` into each stochastic node's `seed`
+param, varying per node with `hashCombine`:
+
+```ts
+bind(g, ctx) {
+  g.setParam(scatter, "seed", ctx.seed);
+  g.setParam(species, "seed", hashCombine(ctx.seed, 1));
+}
+```
+
+`setAttribute`'s `seed` param reseeds its `value` field evaluation
+(`randomField` streams included): 0 — the default — keeps the node's
+derived seed untouched, so graphs authored without it cook bit-identically;
+any nonzero value folds in via `hashCombine(nodeSeed, seed)`.
+
+**Whole-graph reseed.** Calling `graph.setSeed(...)` inside `bind` is a
+supported pattern. Every node's seed derives from the graph seed
+(`hashCombine(graphSeed, hashString(nodeId))`), node memo keys include
+it, and the runtime counts bind-time writes (`setSeed` and `setParam`
+alike) as its own, so reseeding causes no phantom invalidation:
+
+```ts
+bind(g, ctx) {
+  g.setSeed(hashCombine(ctx.seed, 7));
+}
+```
+
+Either way, cell content stays a pure function of (world seed, level,
+coord, graph, parent content) — independent of cook order, viewpoint
+path, and eviction history.
