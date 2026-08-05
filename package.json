@@ -3,7 +3,36 @@
   "version": "0.4.0",
   "description": "Deterministic procedural content generation for TypeScript: domain attributes, node graphs, deferred fields, hierarchical streaming. Optional three.js interop.",
   "license": "MIT",
+  "author": "C4RL05 <carlos@helloenjoy.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/C4RL05/pcg-ts.git"
+  },
+  "homepage": "https://c4rl05.github.io/pcg-ts/",
+  "bugs": "https://github.com/C4RL05/pcg-ts/issues",
+  "keywords": [
+    "procedural-generation",
+    "pcg",
+    "node-graph",
+    "deterministic",
+    "noise",
+    "scattering",
+    "instancing",
+    "threejs",
+    "typescript",
+    "ai-agents"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "llms.txt",
+    "docs/nodes.md",
+    "docs/nodes.json",
+    "docs/authoring.md"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -12,7 +41,8 @@
     "./three": {
       "types": "./dist/three/index.d.ts",
       "import": "./dist/three/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "test": "vitest run",
@@ -22,7 +52,8 @@
     "examples": "vite --config examples/vite.config.ts",
     "examples:pages": "vite build --config examples/vite.config.ts --base=./ --outDir ../docs/examples --emptyOutDir",
     "status": "node scripts/status.mjs",
-    "docs:nodes": "node scripts/gen-node-reference.mjs"
+    "docs:nodes": "node scripts/gen-node-reference.mjs",
+    "prepublishOnly": "npm run check && npm test && npm run build"
   },
   "peerDependencies": {
     "three": "^0.185.1"
