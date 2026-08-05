@@ -1,4 +1,4 @@
-# pcg.ts
+# pcg-ts
 
 A procedural content generation (PCG) library for TypeScript with
 optional three.js interop, built for real-time use. Runs in the browser

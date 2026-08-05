@@ -1,4 +1,4 @@
-# pcg.ts — build plan
+# pcg-ts — build plan
 
 Goal: a deterministic, browser/Node PCG library in TypeScript combining
 a domain-based attribute data model, a hierarchical real-time generation
