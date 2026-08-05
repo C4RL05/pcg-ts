@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-05 10:38",
-  "currentPhase": "released",
+  "updated": "2026-08-05 13:29",
+  "currentPhase": 16,
   "phases": [
     { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
     { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
@@ -19,11 +19,15 @@
     { "id": 12, "title": "Docs alignment and v0.2.0", "state": "done" },
     { "id": 13, "title": "uv/raycast attribute transfer", "state": "done" },
     { "id": 14, "title": "Interactive graph editor (Svelte)", "state": "done" },
-    { "id": 15, "title": "Docs and v0.3.0", "state": "done" }
+    { "id": 15, "title": "Docs and v0.3.0", "state": "done" },
+    { "id": 16, "title": "Graph mutation and introspection API", "state": "active" },
+    { "id": 17, "title": "Registry metadata and editor adoption", "state": "todo" },
+    { "id": 18, "title": "Docs and v0.4.0", "state": "todo" }
   ],
   "tests": { "passed": 597, "failed": 0, "total": 597, "lastRun": "2026-08-05 10:37" },
   "blockers": [],
   "log": [
+    { "time": "2026-08-05 13:29", "message": "v0.4 cycle started: editor-grade graph APIs scheduled as phases 16-18 (graph mutation + introspection with exact cache surgery; registry categories + subgraph pin introspection with the editor adopting the new APIs as proof; docs and v0.4.0). Repo is now public (user flipped visibility)." },
     { "time": "2026-08-05 10:38", "message": "v0.3.0 released. Phase 15 complete: node reference regenerated (transferAttribute's full mapping surface), README/llms.txt/authoring cover the transfer mappings and the graph editor, post-v0.3 backlog recorded (editor-grade graph APIs), VERSION export aligned. Overview site refreshed with the sixth live demo and the v0.3 roadmap; hosted demos rebuilt to include the editor. Final gate: 597 tests, clean typecheck, library and examples builds, idempotent docs." },
     { "time": "2026-08-05 10:29", "message": "Phase 14 complete and browser-verified: examples/06-graph-editor, a Svelte 5 node-graph editor built entirely on the public API - registry-driven palette, schema-generated inspector (including field-expression JSON editing), pin connections validated by the live graph with library errors shown verbatim, debounced per-output cooking into the three.js viewport, JSON export/import. Verified interactively: starter graph cooks and renders 350 instances; seed round-trips restore the exact output hash; export-import recooks byte-identically; invalid connections toast the library's message; palette add and node delete recook correctly with the hash returning to the exact starter value. Four public-API gaps recorded for phase 15 (node category metadata, removeNode, structural read API, subgraph pin introspection). 597 tests green; library source untouched." },
     { "time": "2026-08-05 09:58", "message": "Phase 13 complete and audited: transferUv (UV-space triangle lookup, barycentric interpolation, seam-correct vertex-domain UVs) and transferRaycast (float64 ray-triangle intersection, DDA grid walk, per-point direction override, maxDistance) join nearest in the transferAttribute node, with deterministic tie rules, exported epsilon policies, and miss-count reporting. Audit fuzzed ~33k queries against an independent brute-force reference and constructed a real sliver-triangle counterexample breaking the cellSize-neutrality invariant - fixed by making the padded-bbox test part of the containment policy on both mappings, restoring grid = brute-force by construction. 597 tests green. Also: live demos now hosted on the Pages site and linked from the overview page." },

@@ -259,21 +259,55 @@ phase, tests + status.html + commit after each phase.
 - Version 0.3.0, tag, GitHub release.
 - Exit: full suite green, docs idempotent, release tagged. Commit.
 
-## Post-v0.3 backlog (recorded 2026-08-05, not scheduled)
+## Phases (v0.4) — editor-grade graph APIs, scheduled 2026-08-05
 
-Public-API gaps recorded while building the phase-14 editor strictly on
-the public surface — none blocked it, each cost a workaround:
+The public-API gaps recorded while building the phase-14 editor
+strictly on the public surface. Same protocol: delegated
+implementation, independent adversarial audit per nontrivial phase,
+tests + status.html + commit after each phase.
 
-- Optional node category metadata in the registry. The editor palette
-  groups by a pin-signature heuristic today.
-- `Graph.removeNode` / `Graph.removeOutput`. Deletions currently mean
-  rebuilding the graph through the serialized format.
-- A public read API for graph structure (nodes, connections, outputs,
-  current params), so editors don't have to treat the serialized JSON
-  as the source of truth for a live graph.
-- Registry introspection for per-instance subgraph pins.
-  `getSubgraphSpec` covers a definition's inner graph and mappings, but
-  the generic registry listing cannot describe an instance's pins.
+### Phase 16 — Graph mutation and introspection
+- `Graph.removeNode(node)`: removes the node, all its connections, and
+  any outputs declared on it (documented cascade); bumps the graph
+  version and invalidates exactly what depends on the removal —
+  downstream nodes recook, untouched branches keep their caches.
+- `Graph.disconnect(from, pin, to, pin)` and
+  `Graph.removeOutput(name)` with the same versioning/cache contract.
+- Public read API for live graph structure: enumerate nodes (id, type
+  where known, seed), connections, declared outputs, and current param
+  values as read-only snapshots with deterministic (insertion) order —
+  no mutation path that bypasses version bumps.
+- Errors actionable: removing/disconnecting things that don't exist
+  names the node/pin/output and lists what does exist.
+- Exit: cache-surgery tests (remove upstream → downstream recooks,
+  siblings stay cached, stats prove it); serialization consistency
+  after every mutation (serialize(mutated) round-trips and cooks
+  byte-identically); subgraph and World interplay regression-free;
+  introspection snapshots cannot mutate graph state. Commit.
+
+### Phase 17 — Registry metadata and editor adoption
+- Optional `category` on node registration, surfaced through
+  `listNodeTypes()`; categorize the standard library; palette grouping
+  becomes metadata-driven (heuristic stays as fallback for uncategorized
+  third-party nodes).
+- Public introspection for per-instance subgraph pins (describe an
+  instance's pins + their kinds from its def), replacing the editor's
+  payload re-derivation.
+- Editor adoption as proof the APIs suffice: deletes/disconnects use
+  the new mutation API (no full rebuild — cook stats must show
+  untouched branches staying cached across edits), palette uses
+  categories, subgraph pins use the new introspection, and the
+  serialized-JSON-as-source-of-truth workaround is retired where the
+  read API now serves.
+- Exit: editor flows re-verified in the browser (delete/reconnect keeps
+  sibling caches; palette groups by category); library tests green;
+  registry docs regenerate with categories. Commit.
+
+### Phase 18 — Docs and v0.4.0
+- README/llms.txt/authoring updates (mutation + introspection APIs,
+  categories); regenerate node reference; overview site + hosted demos
+  refreshed; version 0.4.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, release tagged. Commit.
 
 Node-level exposure of the transfer tuning options (`uvDomain`,
 `cellSize`) stays out until a real graph needs it — the data-layer
