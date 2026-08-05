@@ -261,11 +261,15 @@
 
   /* ---------- examples ---------- */
   .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 16px 0 8px; }
-  .example {
+  a.example {
+    display: block;
     border: 1px solid var(--line); border-radius: 10px; padding: 14px;
     background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    transition: border-color 0.15s ease;
   }
-  .example b { font-family: var(--mono); font-size: 13px; display: block; margin-bottom: 4px; }
+  a.example:hover, a.example:focus-visible { border-color: var(--accent); }
+  .example b { font-family: var(--mono); font-size: 13px; display: block; margin-bottom: 4px; color: var(--accent-ink); }
   .example span { font-size: 13px; color: var(--muted); }
 
   /* ---------- roadmap ---------- */
@@ -467,13 +471,14 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   <section>
     <p class="eyebrow">Examples</p>
-    <h2>Five browser-verified demos</h2>
+    <h2>Five demos, live in your browser</h2>
+    <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
     <div class="examples">
-      <div class="example"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></div>
-      <div class="example"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, declarative multi-asset instancing</span></div>
-      <div class="example"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></div>
-      <div class="example"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></div>
-      <div class="example"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></div>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, declarative multi-asset instancing</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></a>
     </div>
   </section>
 

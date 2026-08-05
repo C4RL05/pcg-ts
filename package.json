@@ -20,6 +20,7 @@
     "build": "tsup",
     "check": "tsc --noEmit",
     "examples": "vite --config examples/vite.config.ts",
+    "examples:pages": "vite build --config examples/vite.config.ts --base=./ --outDir ../docs/examples --emptyOutDir",
     "status": "node scripts/status.mjs",
     "docs:nodes": "node scripts/gen-node-reference.mjs"
   },
