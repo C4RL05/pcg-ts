@@ -15,9 +15,11 @@ Three foundations, carried through the whole library:
 
 - **The data model.** Attributes live on domains (point / vertex /
   primitive / detail) as SoA typed-array columns, with promote and
-  transfer between domains. The standard "point with attributes" is the
-  point domain plus transform (`P`, `rot`, `scale`), `density`, bounds,
-  `color`, and a per-point `seed`.
+  transfer between domains — transfer maps by nearest source point, by
+  barycentric lookup in the source triangulation's UV space, or by
+  raycast against the source mesh. The standard "point with attributes"
+  is the point domain plus transform (`P`, `rot`, `scale`), `density`,
+  bounds, `color`, and a per-point `seed`.
 - **Fields.** A value can be a deferred function of evaluation context
   (`Field<T>`), resolved only when it lands on a domain. Node params
   accept `T | Field<T>`; combinators and noise compose into expression
@@ -183,7 +185,10 @@ node, param, or pin at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
-reference (generated from the registry).
+reference (generated from the registry). The `06-graph-editor` example
+is this section as an app: an interactive node editor built entirely on
+`listNodeTypes()`, the live graph's validation, and
+`serializeGraph`/`deserializeGraph`.
 
 ## Hierarchical streaming
 
@@ -328,9 +333,10 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-The `examples/` directory contains vite multi-page demos (scatter with
-density noise, forest instancing, spline sampling, infinite streaming
-world, field composition playground):
+The `examples/` directory contains six vite multi-page demos (scatter
+with density noise, forest instancing, spline sampling, infinite
+streaming world, field composition playground, and a registry-driven
+node-graph editor):
 
 ```sh
 npm run examples

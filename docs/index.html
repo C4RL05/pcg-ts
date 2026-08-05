@@ -331,12 +331,12 @@
     <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>562</b><span>tests, all green</span></div>
+      <div class="stat"><b>597</b><span>tests, all green</span></div>
       <div class="stat"><b>25</b><span>registered node types</span></div>
       <div class="stat"><b>40</b><span>field-grammar functions</span></div>
       <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b>v0.2</b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b>v0.3</b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -471,7 +471,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   <section>
     <p class="eyebrow">Examples</p>
-    <h2>Five demos, live in your browser</h2>
+    <h2>Six demos, live in your browser</h2>
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
     <div class="examples">
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></a>
@@ -479,6 +479,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/"><b>06 · graph editor</b><span>build and cook node graphs interactively — palette, inspector, JSON round-trip</span></a>
     </div>
   </section>
 
@@ -501,10 +502,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.3.0 <small>2026-08-05</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The stretch tier: uv and raycast attribute transfer (barycentric interpolation, robust ray-triangle intersection, deterministic tie rules, acceleration grids provably equivalent to brute force) and the interactive graph editor — a Svelte node editor built entirely on the public registry, validation, and serialization APIs, with live cooking and byte-identical JSON round-trips. 597 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>WebGPU compute subgraphs for GPU-side generation · uv/raycast attribute transfer · an interactive node-graph editor (Svelte) built on the registry metadata and JSON serialization · npm publish and a public repository.</p>
+          <p>WebGPU compute subgraphs for GPU-side generation · editor-grade graph APIs (node removal, structural introspection, category metadata) · npm publish and a public repository.</p>
         </div>
       </li>
     </ul>
@@ -514,7 +522,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.2.0</span>
+    <span>pcg-ts v0.3.0</span>
     <span>MIT license</span>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>

@@ -259,6 +259,27 @@ phase, tests + status.html + commit after each phase.
 - Version 0.3.0, tag, GitHub release.
 - Exit: full suite green, docs idempotent, release tagged. Commit.
 
+## Post-v0.3 backlog (recorded 2026-08-05, not scheduled)
+
+Public-API gaps recorded while building the phase-14 editor strictly on
+the public surface — none blocked it, each cost a workaround:
+
+- Optional node category metadata in the registry. The editor palette
+  groups by a pin-signature heuristic today.
+- `Graph.removeNode` / `Graph.removeOutput`. Deletions currently mean
+  rebuilding the graph through the serialized format.
+- A public read API for graph structure (nodes, connections, outputs,
+  current params), so editors don't have to treat the serialized JSON
+  as the source of truth for a live graph.
+- Registry introspection for per-instance subgraph pins.
+  `getSubgraphSpec` covers a definition's inner graph and mappings, but
+  the generic registry listing cannot describe an instance's pins.
+
+Node-level exposure of the transfer tuning options (`uvDomain`,
+`cellSize`) stays out until a real graph needs it — the data-layer
+functions already accept them, and `cellSize` is result-neutral by
+construction.
+
 ## Stretch (recorded, not scheduled)
 - WebGPU compute subgraphs.
 

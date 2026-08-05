@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:94%; }
+  .bar > div { height:100%; background:var(--done); width:100%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 10:29</p>
-  <div class="bar"><div style="width:94%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 10:38</p>
+  <div class="bar"><div style="width:100%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -66,14 +66,14 @@
     <li class="done"><span class="chip">done</span>12 · Docs alignment and v0.2.0</li>
     <li class="done"><span class="chip">done</span>13 · uv/raycast attribute transfer</li>
     <li class="done"><span class="chip">done</span>14 · Interactive graph editor (Svelte)</li>
-    <li class="active"><span class="chip">active</span>15 · Docs and v0.3.0</li>
+    <li class="done"><span class="chip">done</span>15 · Docs and v0.3.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
     <div><b>597</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-05 09:58</b><span>last run</span></div>
+    <div><b>2026-08-05 10:37</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -99,6 +99,7 @@
     <li><time>2026-08-05 09:03</time>v0.3 cycle started: stretch tier scheduled as phases 13-15 (uv/raycast attribute transfer; interactive Svelte graph editor built on the registry and serialization; docs and v0.3.0 release). WebGPU compute subgraphs remain recorded, not scheduled. Also since release: public one-page overview site on GitHub Pages (docs/index.html) with theme-token diagrams that survive forced-dark inverters. Phase 13 underway.</li>
     <li><time>2026-08-05 09:58</time>Phase 13 complete and audited: transferUv (UV-space triangle lookup, barycentric interpolation, seam-correct vertex-domain UVs) and transferRaycast (float64 ray-triangle intersection, DDA grid walk, per-point direction override, maxDistance) join nearest in the transferAttribute node, with deterministic tie rules, exported epsilon policies, and miss-count reporting. Audit fuzzed ~33k queries against an independent brute-force reference and constructed a real sliver-triangle counterexample breaking the cellSize-neutrality invariant - fixed by making the padded-bbox test part of the containment policy on both mappings, restoring grid = brute-force by construction. 597 tests green. Also: live demos now hosted on the Pages site and linked from the overview page.</li>
     <li><time>2026-08-05 10:29</time>Phase 14 complete and browser-verified: examples/06-graph-editor, a Svelte 5 node-graph editor built entirely on the public API - registry-driven palette, schema-generated inspector (including field-expression JSON editing), pin connections validated by the live graph with library errors shown verbatim, debounced per-output cooking into the three.js viewport, JSON export/import. Verified interactively: starter graph cooks and renders 350 instances; seed round-trips restore the exact output hash; export-import recooks byte-identically; invalid connections toast the library&#39;s message; palette add and node delete recook correctly with the hash returning to the exact starter value. Four public-API gaps recorded for phase 15 (node category metadata, removeNode, structural read API, subgraph pin introspection). 597 tests green; library source untouched.</li>
+    <li><time>2026-08-05 10:38</time>v0.3.0 released. Phase 15 complete: node reference regenerated (transferAttribute&#39;s full mapping surface), README/llms.txt/authoring cover the transfer mappings and the graph editor, post-v0.3 backlog recorded (editor-grade graph APIs), VERSION export aligned. Overview site refreshed with the sixth live demo and the v0.3 roadmap; hosted demos rebuilt to include the editor. Final gate: 597 tests, clean typecheck, library and examples builds, idempotent docs.</li>
   </ol>
 </body>
 </html>

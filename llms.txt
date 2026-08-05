@@ -165,7 +165,7 @@ serialized.
 - splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
 - subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs)` (pins are per-instance), inspect with `getSubgraphSpec`, serializes recursively
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
-- transferAttribute — copy a point attribute from the nearest source points
+- transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail); `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)
 - valueConstant — emit a constant number as a value item
 - volumeSample — jittered grid fill of a box or of the input geometry's bounds
@@ -250,3 +250,5 @@ GraphSerializationError, FieldJsonError, WorldValidationError.
 - docs/nodes.md — full generated node reference (pins, params, defaults, ranges)
 - docs/nodes.json — the same registry metadata, machine-readable
 - docs/authoring.md — graph JSON spec, complete field grammar, recipes
+- examples/ — six vite demos; 06-graph-editor is an interactive node
+  editor built on this same registry metadata and JSON format

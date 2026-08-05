@@ -4,7 +4,11 @@ How to author pcg-ts graphs as JSON (the interchange format used by
 `serializeGraph` / `deserializeGraph`) and in code. Node-by-node schemas
 live in [nodes.md](./nodes.md) (generated; machine-readable twin:
 [nodes.json](./nodes.json)); at runtime the same metadata comes from
-`listNodeTypes()`.
+`listNodeTypes()`. For authoring this format interactively, the
+`06-graph-editor` example (`npm run examples`) is a node editor built on
+the same metadata: registry palette, connections checked by the live
+graph's validation, schema-driven param forms, live cook, and JSON
+import/export.
 
 ## The graph JSON format
 
@@ -288,6 +292,50 @@ Batches form in first-occurrence order of each asset id; an
 empty-string entry never names an asset — those points fall back to the
 spawner's `assetId`. With `values` empty, the constant `stringValue`
 param is written instead.
+
+## Transfer mappings
+
+`transferAttribute` copies an attribute from a second geometry (its
+`source` input) onto the main input's points. The `mapping` param picks
+how each destination point finds its source value:
+
+| mapping | Source needs | Use when | A point misses when |
+| --- | --- | --- | --- |
+| `nearest` (default) | any points | Both sides live in the same 3D space; closest source point (ties → lowest index) is the right answer | never |
+| `uv` | triangle mesh + UVs | The geometries share a UV parameterization but not a position — transfer between differently tessellated meshes, or read texture-space data | its UV lies in no source triangle |
+| `raycast` | triangle mesh | The value should come from a surface along a spatial direction — drape scattered points onto the terrain below, probe walls sideways | its ray hits nothing (or nothing within `maxDistance`) |
+
+For `uv`, destination UVs are read from the point-domain `uvAttr` (f32,
+tupleSize ≥ 2); source UVs come from the vertex domain when present
+(per-corner, seam-correct) and fall back to the point domain. For
+`raycast`, rays start at each point along the constant `direction` — or
+a per-point `directionAttr` — normalized, forward-only, nearest hit;
+exactly tied hit distances (like a UV on a shared edge) resolve to the
+lowest source primitive index.
+
+The policies both mesh mappings share:
+
+- **Interpolation by type.** `f32` attributes interpolate
+  barycentrically; `i32`/`u32`/`bool`/`string` cannot, so they take the
+  value at the triangle corner with the largest barycentric weight
+  (ties → the first such corner in vertex order). `attrDomain:
+  "vertex"` reads per-corner source values (seam-accurate) instead of
+  point values; the result always lands on the destination's point
+  domain.
+- **The miss contract.** A missed point keeps the value it already had
+  (the attribute default if the attribute is newly created) — it is
+  never invented. Name a `missCountAttr` and the node writes the miss
+  total into a u32 detail attribute so a graph can assert on it;
+  `nearest` assigns every point and always reports 0.
+- **Determinism.** Degenerate triangles are skipped, tie-breaks are by
+  lowest index, and the acceleration grids are provably result-neutral;
+  the epsilon policy is exported (`TRANSFER_BARY_EPS`,
+  `TRANSFER_AREA_EPS`, `TRANSFER_DET_EPS`, `TRANSFER_BOX_PAD_REL`).
+
+The node covers the common cases; the data-layer functions
+(`transferNearest`, `transferUv`, `transferRaycast`) additionally
+accept a `cellSize` grid hint (lookup cost only — never results), and
+`transferUv` a `uvDomain` override forcing the source UV domain.
 
 ## Staged pipelines (per-output cooking)
 

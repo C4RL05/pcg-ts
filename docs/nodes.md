@@ -25,7 +25,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
 - [subgraph](#subgraph) — Composite node wrapping an inner graph as a single node.
 - [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
-- [transferAttribute](#transferattribute) — Copies a point attribute from the `source` geometry onto the main input's points: each destination point takes the value of its nearest source point in 3D (positions read from P; distance ties resolve to the lowest source index).
+- [transferAttribute](#transferattribute) — Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain.
 - [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
 - [valueConstant](#valueconstant) — Emits a single constant number as a value item, for feeding value pins or tagging pipelines with plain data.
 - [volumeSample](#volumesample) — Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell.
@@ -351,7 +351,7 @@ Scatters points on a triangle mesh: each of `count` candidates picks a triangle 
 
 ## transferAttribute
 
-Copies a point attribute from the `source` geometry onto the main input's points: each destination point takes the value of its nearest source point in 3D (positions read from P; distance ties resolve to the lowest source index). Creates or overwrites the attribute on the output. Accelerated with a uniform grid, so large clouds are fine.
+Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.
 
 **Inputs:** `in` (geometry), `source` (geometry)
 
@@ -361,7 +361,14 @@ Copies a point attribute from the `source` geometry onto the main input's points
 
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `name` | string | `"density"` |  |  |  | Name of the point attribute to transfer. Must exist on the source's point domain. |
+| `name` | string | `"density"` |  |  |  | Name of the attribute to transfer. Must exist on the source domain selected by attrDomain (always the point domain for mapping 'nearest'). |
+| `mapping` | enum | `"nearest"` |  | `nearest`, `uv`, `raycast` |  | How destination points find their source value: 'nearest' (closest source point in 3D), 'uv' (barycentric lookup of the destination UV in the source triangulation's UV space), or 'raycast' (nearest triangle hit along a ray from each destination point). |
+| `attrDomain` | enum | `"point"` |  | `point`, `vertex` |  | Source domain the transferred attribute is read from (uv/raycast only): 'point' reads triangle corners through the topology, 'vertex' reads per-corner values (seam-accurate). Mapping 'nearest' supports only 'point'. The result always lands on the destination's point domain. |
+| `uvAttr` | string | `"uv"` |  |  |  | UV attribute name for mapping 'uv' (ignored otherwise). On the destination it must live on the point domain (f32, tupleSize >= 2; extra components ignored). On the source it is read from the vertex domain when present (per-corner UVs, supports seams), else from the point domain. Destination UVs with non-finite components miss. |
+| `direction` | vec3 | `[0,-1,0]` |  |  |  | Constant ray direction for mapping 'raycast' (ignored otherwise, and ignored when directionAttr is set). Normalized internally so maxDistance is world-space; must be non-zero. |
+| `directionAttr` | string | `""` |  |  |  | Optional per-point ray direction attribute on the destination point domain (f32, tupleSize >= 3) for mapping 'raycast'; overrides `direction` when non-empty. Each direction is normalized per point; points with a zero or non-finite direction miss. Empty = use `direction`. |
+| `maxDistance` | f32 | `0` | >= 0 |  |  | Maximum world-space hit distance for mapping 'raycast' (ignored otherwise). 0 (the default) means unlimited; a positive value ignores hits farther along the ray. Rays are forward-only regardless (hits need t >= 0). |
+| `missCountAttr` | string | `""` |  |  |  | When non-empty, writes the number of missed destination points into a u32 detail attribute of this name on the output (mapping 'nearest' always writes 0 — every point is assigned). Empty = don't record. |
 
 ## transformPoints
 
