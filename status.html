@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:82%; }
+  .bar > div { height:100%; background:var(--done); width:88%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 09:03</p>
-  <div class="bar"><div style="width:82%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-05 09:58</p>
+  <div class="bar"><div style="width:88%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -64,16 +64,16 @@
     <li class="done"><span class="chip">done</span>10 · Attribute ergonomics and seeding — string setAttribute, seed story</li>
     <li class="done"><span class="chip">done</span>11 · Cooking and runtime — per-output cook, 3D cells, unbounded levels</li>
     <li class="done"><span class="chip">done</span>12 · Docs alignment and v0.2.0</li>
-    <li class="active"><span class="chip">active</span>13 · uv/raycast attribute transfer</li>
-    <li class="pending"><span class="chip">pending</span>14 · Interactive graph editor (Svelte)</li>
+    <li class="done"><span class="chip">done</span>13 · uv/raycast attribute transfer</li>
+    <li class="active"><span class="chip">active</span>14 · Interactive graph editor (Svelte)</li>
     <li class="pending"><span class="chip">pending</span>15 · Docs and v0.3.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>562</b><span>passed</span></div>
+    <div><b>597</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-05 07:59</b><span>last run</span></div>
+    <div><b>2026-08-05 09:58</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -97,6 +97,7 @@
     <li><time>2026-08-05 07:43</time>Phase 11 complete and audited (PASS): per-output cooking — cook(graph, { outputs }) walks only the induced upstream subgraph with exact cache reuse (A-then-B recooks only B&#39;s exclusive nodes), sound under cancel/resume with changed selections, surfaced in the World as LevelDef.cookOutputs; opt-in 3D cube cells with the 2D hash chain locked byte-identical, floor-correct negative-coordinate nesting, and documented mixed-mode rules; generationRadius optional on unbounded levels. Audit probed cache staleness, hash collisions (length-prefixed chains, zero found), and boundary metrics — no defects; empty-cookOutputs now rejected at construction and the three.js binding keys all three cell coords. 562 tests green.</li>
     <li><time>2026-08-05 08:01</time>v0.2.0 released. Phase 12 complete: node reference regenerated (25 types, idempotent); README, llms.txt, and authoring guide cover the full v0.2 surface; PLAN sketch aligned with the shipped API. Examples simplified with the new nodes and re-verified live in the browser: 03-spline-fence is one graph via orientAlongVector (rendered instances byte-identical), 02-forest selects species declaratively via string setAttribute + assetAttr (71.8/28.2 split on target). Final gate: 562 tests, clean typecheck, library + examples builds.</li>
     <li><time>2026-08-05 09:03</time>v0.3 cycle started: stretch tier scheduled as phases 13-15 (uv/raycast attribute transfer; interactive Svelte graph editor built on the registry and serialization; docs and v0.3.0 release). WebGPU compute subgraphs remain recorded, not scheduled. Also since release: public one-page overview site on GitHub Pages (docs/index.html) with theme-token diagrams that survive forced-dark inverters. Phase 13 underway.</li>
+    <li><time>2026-08-05 09:58</time>Phase 13 complete and audited: transferUv (UV-space triangle lookup, barycentric interpolation, seam-correct vertex-domain UVs) and transferRaycast (float64 ray-triangle intersection, DDA grid walk, per-point direction override, maxDistance) join nearest in the transferAttribute node, with deterministic tie rules, exported epsilon policies, and miss-count reporting. Audit fuzzed ~33k queries against an independent brute-force reference and constructed a real sliver-triangle counterexample breaking the cellSize-neutrality invariant - fixed by making the padded-bbox test part of the containment policy on both mappings, restoring grid = brute-force by construction. 597 tests green. Also: live demos now hosted on the Pages site and linked from the overview page.</li>
   </ol>
 </body>
 </html>

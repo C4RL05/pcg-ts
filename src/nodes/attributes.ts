@@ -3,7 +3,17 @@
  * promote between domains, transfer between geometries, and partition
  * geometry by attribute value.
  */
-import { promote, transferNearest, type AttrType, type Domain, type PromoteMode } from "../data/index.js";
+import {
+  promote,
+  transferNearest,
+  transferRaycast,
+  transferUv,
+  type AttrType,
+  type Domain,
+  type PromoteMode,
+  type TransferAttrDomain,
+  type TransferRaycastOptions,
+} from "../data/index.js";
 import { cloneGeometry, makeGeometryItem, type DataItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
@@ -229,13 +239,20 @@ export const promoteAttribute = standardNode<PromoteAttributeParams>({
 /** Params of {@link transferAttribute}. */
 export interface TransferAttributeParams {
   name: string;
+  mapping: string;
+  attrDomain: string;
+  uvAttr: string;
+  direction: readonly number[];
+  directionAttr: string;
+  maxDistance: number;
+  missCountAttr: string;
 }
 
-/** Transfer a point attribute from a source geometry by nearest point. */
+/** Transfer an attribute from a source geometry (nearest / uv / raycast). */
 export const transferAttribute = standardNode<TransferAttributeParams>({
   type: "transferAttribute",
   description:
-    "Copies a point attribute from the `source` geometry onto the main input's points: each destination point takes the value of its nearest source point in 3D (positions read from P; distance ties resolve to the lowest source index). Creates or overwrites the attribute on the output. Accelerated with a uniform grid, so large clouds are fine.",
+    "Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.",
   inputs: [
     { name: "in", kind: "geometry" },
     { name: "source", kind: "geometry" },
@@ -245,13 +262,85 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
     name: {
       type: "string",
       default: "density",
-      description: "Name of the point attribute to transfer. Must exist on the source's point domain.",
+      description:
+        "Name of the attribute to transfer. Must exist on the source domain selected by attrDomain (always the point domain for mapping 'nearest').",
+    },
+    mapping: {
+      type: "enum",
+      default: "nearest",
+      enum: ["nearest", "uv", "raycast"],
+      description:
+        "How destination points find their source value: 'nearest' (closest source point in 3D), 'uv' (barycentric lookup of the destination UV in the source triangulation's UV space), or 'raycast' (nearest triangle hit along a ray from each destination point).",
+    },
+    attrDomain: {
+      type: "enum",
+      default: "point",
+      enum: ["point", "vertex"],
+      description:
+        "Source domain the transferred attribute is read from (uv/raycast only): 'point' reads triangle corners through the topology, 'vertex' reads per-corner values (seam-accurate). Mapping 'nearest' supports only 'point'. The result always lands on the destination's point domain.",
+    },
+    uvAttr: {
+      type: "string",
+      default: "uv",
+      description:
+        "UV attribute name for mapping 'uv' (ignored otherwise). On the destination it must live on the point domain (f32, tupleSize >= 2; extra components ignored). On the source it is read from the vertex domain when present (per-corner UVs, supports seams), else from the point domain. Destination UVs with non-finite components miss.",
+    },
+    direction: {
+      type: "vec3",
+      default: [0, -1, 0],
+      description:
+        "Constant ray direction for mapping 'raycast' (ignored otherwise, and ignored when directionAttr is set). Normalized internally so maxDistance is world-space; must be non-zero.",
+    },
+    directionAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Optional per-point ray direction attribute on the destination point domain (f32, tupleSize >= 3) for mapping 'raycast'; overrides `direction` when non-empty. Each direction is normalized per point; points with a zero or non-finite direction miss. Empty = use `direction`.",
+    },
+    maxDistance: {
+      type: "f32",
+      default: 0,
+      min: 0,
+      description:
+        "Maximum world-space hit distance for mapping 'raycast' (ignored otherwise). 0 (the default) means unlimited; a positive value ignores hits farther along the ray. Rays are forward-only regardless (hits need t >= 0).",
+    },
+    missCountAttr: {
+      type: "string",
+      default: "",
+      description:
+        "When non-empty, writes the number of missed destination points into a u32 detail attribute of this name on the output (mapping 'nearest' always writes 0 — every point is assigned). Empty = don't record.",
     },
   },
   execute({ inputs, params }) {
     const dst = cloneGeometry(requireGeometry(inputs, "in", "transferAttribute"));
     const src = requireGeometry(inputs, "source", "transferAttribute");
-    transferNearest(dst, src, params.name);
+    const attrDomain = params.attrDomain as TransferAttrDomain;
+    let missCount = 0;
+    if (params.mapping === "nearest") {
+      if (attrDomain !== "point") {
+        throw new Error(
+          `transferAttribute: attrDomain "${params.attrDomain}" is only valid for the "uv" and "raycast" mappings — mapping "nearest" transfers point-domain attributes; set attrDomain to "point" or switch mapping`,
+        );
+      }
+      transferNearest(dst, src, params.name);
+    } else if (params.mapping === "uv") {
+      missCount = transferUv(dst, src, params.name, {
+        uvAttr: params.uvAttr,
+        attrDomain,
+      }).missCount;
+    } else if (params.mapping === "raycast") {
+      const opts: TransferRaycastOptions = { direction: params.direction, attrDomain };
+      if (params.directionAttr !== "") opts.directionAttr = params.directionAttr;
+      if (params.maxDistance > 0) opts.maxDistance = params.maxDistance;
+      missCount = transferRaycast(dst, src, params.name, opts).missCount;
+    } else {
+      throw new Error(
+        `transferAttribute: unknown mapping "${params.mapping}"; valid mappings: nearest, uv, raycast`,
+      );
+    }
+    if (params.missCountAttr !== "") {
+      dst.attrs.detail.replace(params.missCountAttr, "u32", 1).set(0, missCount);
+    }
     return { out: [makeGeometryItem(dst)] };
   },
 });

@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-05 09:03",
-  "currentPhase": 13,
+  "updated": "2026-08-05 09:58",
+  "currentPhase": 14,
   "phases": [
     { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
     { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
@@ -17,13 +17,14 @@
     { "id": 10, "title": "Attribute ergonomics and seeding — string setAttribute, seed story", "state": "done" },
     { "id": 11, "title": "Cooking and runtime — per-output cook, 3D cells, unbounded levels", "state": "done" },
     { "id": 12, "title": "Docs alignment and v0.2.0", "state": "done" },
-    { "id": 13, "title": "uv/raycast attribute transfer", "state": "active" },
-    { "id": 14, "title": "Interactive graph editor (Svelte)", "state": "todo" },
+    { "id": 13, "title": "uv/raycast attribute transfer", "state": "done" },
+    { "id": 14, "title": "Interactive graph editor (Svelte)", "state": "active" },
     { "id": 15, "title": "Docs and v0.3.0", "state": "todo" }
   ],
-  "tests": { "passed": 562, "failed": 0, "total": 562, "lastRun": "2026-08-05 07:59" },
+  "tests": { "passed": 597, "failed": 0, "total": 597, "lastRun": "2026-08-05 09:58" },
   "blockers": [],
   "log": [
+    { "time": "2026-08-05 09:58", "message": "Phase 13 complete and audited: transferUv (UV-space triangle lookup, barycentric interpolation, seam-correct vertex-domain UVs) and transferRaycast (float64 ray-triangle intersection, DDA grid walk, per-point direction override, maxDistance) join nearest in the transferAttribute node, with deterministic tie rules, exported epsilon policies, and miss-count reporting. Audit fuzzed ~33k queries against an independent brute-force reference and constructed a real sliver-triangle counterexample breaking the cellSize-neutrality invariant - fixed by making the padded-bbox test part of the containment policy on both mappings, restoring grid = brute-force by construction. 597 tests green. Also: live demos now hosted on the Pages site and linked from the overview page." },
     { "time": "2026-08-05 09:03", "message": "v0.3 cycle started: stretch tier scheduled as phases 13-15 (uv/raycast attribute transfer; interactive Svelte graph editor built on the registry and serialization; docs and v0.3.0 release). WebGPU compute subgraphs remain recorded, not scheduled. Also since release: public one-page overview site on GitHub Pages (docs/index.html) with theme-token diagrams that survive forced-dark inverters. Phase 13 underway." },
     { "time": "2026-08-05 08:01", "message": "v0.2.0 released. Phase 12 complete: node reference regenerated (25 types, idempotent); README, llms.txt, and authoring guide cover the full v0.2 surface; PLAN sketch aligned with the shipped API. Examples simplified with the new nodes and re-verified live in the browser: 03-spline-fence is one graph via orientAlongVector (rendered instances byte-identical), 02-forest selects species declaratively via string setAttribute + assetAttr (71.8/28.2 split on target). Final gate: 562 tests, clean typecheck, library + examples builds." },
     { "time": "2026-08-05 07:43", "message": "Phase 11 complete and audited (PASS): per-output cooking — cook(graph, { outputs }) walks only the induced upstream subgraph with exact cache reuse (A-then-B recooks only B's exclusive nodes), sound under cancel/resume with changed selections, surfaced in the World as LevelDef.cookOutputs; opt-in 3D cube cells with the 2D hash chain locked byte-identical, floor-correct negative-coordinate nesting, and documented mixed-mode rules; generationRadius optional on unbounded levels. Audit probed cache staleness, hash collisions (length-prefixed chains, zero found), and boundary metrics — no defects; empty-cookOutputs now rejected at construction and the three.js binding keys all three cell coords. 562 tests green." },

@@ -4,3 +4,4 @@ export * from "./geometry.js";
 export * from "./points.js";
 export * from "./promote.js";
 export * from "./transfer.js";
+export * from "./transferMapping.js";
