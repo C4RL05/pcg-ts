@@ -3,12 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
 <title>pcg-ts — deterministic PCG for TypeScript</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌱</text></svg>" />
 </head>
 <body>
 <style>
   :root {
+    /* Declare native light+dark support so Chrome's forced/auto dark mode
+       (desktop flag and Android "Dark theme") never inverts the page. */
+    color-scheme: light dark;
     --bg: #fafbf8;
     --ink: #1b241e;
     --muted: #5c6b61;
