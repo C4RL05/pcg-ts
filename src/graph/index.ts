@@ -1,7 +1,14 @@
 export * from "./errors.js";
 export * from "./data.js";
 export * from "./node.js";
-export { Graph, type NodeHandle } from "./graph.js";
+export {
+  Graph,
+  type DescribedConnection,
+  type DescribedNode,
+  type DescribedOutput,
+  type GraphDescription,
+  type NodeHandle,
+} from "./graph.js";
 export {
   cook,
   type CookOptions,

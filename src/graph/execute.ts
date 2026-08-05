@@ -1,8 +1,7 @@
 import { isField } from "../fields/index.js";
-import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection, DataItem } from "./data.js";
 import { CookCancelledError, GraphCycleError, GraphValidationError, NodeExecutionError } from "./errors.js";
-import type { Graph, OutputDecl } from "./graph.js";
+import { deriveNodeSeed, type Graph, type OutputDecl } from "./graph.js";
 
 /** Progress callback payload: one entry per node visited by a cook. */
 export interface NodeDoneInfo {
@@ -290,7 +289,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
       inputSig.push(`${pin.name}=${items.map((it) => it.rev).join(",")}`);
     }
 
-    const seed = hashCombine(graph.seed, hashString(id));
+    const seed = deriveNodeSeed(graph.seed, id);
     const extra = def.memoKey?.() ?? "";
     const key = `${def.type}|s${seed}|p${stableValueHash(node.params, "params")}|i${inputSig.join(
       ";",
