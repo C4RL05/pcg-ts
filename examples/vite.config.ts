@@ -24,6 +24,7 @@ export default defineConfig({
         "03-spline-fence": here("03-spline-fence/index.html"),
         "04-infinite-world": here("04-infinite-world/index.html"),
         "05-fields-playground": here("05-fields-playground/index.html"),
+        "06-graph-editor": here("06-graph-editor/index.html"),
       },
     },
   },
