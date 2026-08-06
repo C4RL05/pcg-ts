@@ -535,10 +535,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.6.1 <small>2026-08-06</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Constant node params ride the run uniform instead of a device column: a plain <code>translate: [0, 0, 0]</code> now costs a 16-byte slot and no dispatch, cutting the demo chain's working set 23% and its member kernels from 12 to 9. Values live in the uniform and never in the generated WGSL, so editing a constant hits the pipeline cache instead of recompiling. 853 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>Constant params broadcast through the run uniform instead of a full device column · GPU-resident World streaming (cell cooks that keep instance transforms device-side end to end) · npm publish.</p>
+          <p>GPU-resident World streaming (cell cooks that keep instance transforms device-side end to end) · npm publish.</p>
         </div>
       </li>
     </ul>
@@ -548,7 +555,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.6.0</span>
+    <span>pcg-ts v0.6.1</span>
     <span>MIT license</span>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>

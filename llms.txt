@@ -367,7 +367,7 @@ Surface:
   cache hits across the toggle. The marker is conservative: it applies
   for spec'd-but-ineligible fields too (over-invalidation; bytes stay
   CPU-identical). `GpuFieldEvaluator`'s salt is
-  `"gpu1|<vendor>|<architecture>|<device>|<description>"` (format
+  `"gpu2|<vendor>|<architecture>|<device>|<description>"` (format
   version + adapter identity; missing fields become `?`) — bytes from
   different devices never serve each other.
 - `GpuFieldEvaluatorOptions`: `adapterInfo?` (salt identity when the
@@ -442,14 +442,15 @@ Device-resident runs (fusion):
   member) + readback staging bytes, checked against `maxResidentBytes`
   at plan time. Logical bytes only: pow2 pool bucketing can allocate up
   to 2×, and the 12-byte per-chunk uniforms are not counted.
-- Cost model caveat: a CONSTANT param still materializes a full device
-  column and a dispatch inside a run — `translate: [0,0,0]` costs
-  `n × 12` bytes exactly as a noise field would. In the
-  `examples/08-gpu-fields` chain the seven param columns are 76 of 212
-  bytes per point (36% of the working set). So a constant-heavy fused
-  chain can be SLOWER than per-node GPU and hits `run-too-large`
-  earlier than its point count suggests. Broadcasting constants through
-  the uniform is a recorded, unscheduled optimization.
+- Cost model: a CONSTANT param (plain number or number tuple) costs a
+  16-byte uniform slot and NO dispatch — only field-valued params
+  materialize an `n`-element column. Since v0.6.1 the
+  `examples/08-gpu-fields` chain holds 120 bytes per point (was 212)
+  and issues 9 member kernels (was 12). Constant values live in the
+  uniform, never in generated WGSL: the apply-kernel key encodes only
+  which params are constant, their tuple sizes, and their slots, so
+  editing a constant hits the pipeline cache instead of recompiling.
+  A kernel carries at most `MAX_APPLY_CONST_SLOTS` (4) constant slots.
 - Third-party `resident` kinds: `NodeDef.resident?: { kind: string;
   eligible?(params): boolean }`. `eligible` runs outside the executor's
   error wrapping — it must be cheap, pure, and total; an exception

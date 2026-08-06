@@ -401,15 +401,16 @@ member kernels; only the run's terminal reads back.
 
 Three things to know before reading a benchmark:
 
-- **Constant params still cost a full device column and a dispatch.**
-  Inside a run, a plain `translate: [0, 0, 0]` materializes an
-  `n × 12`-byte temporary exactly as a noise field would. In the
-  `examples/08-gpu-fields` chain the seven param columns are 76 of the
-  212 bytes per point the run holds — 36% of the working set — so a
-  constant-heavy chain can be **slower** than per-node GPU cooking and
-  reaches `run-too-large` sooner than its point count suggests.
-  Broadcasting constants through the uniform instead is the obvious
-  next optimization; it is recorded, not scheduled.
+- **Constant params ride the run uniform, not a column.** A plain
+  `translate: [0, 0, 0]` costs a 16-byte uniform slot and no dispatch;
+  only field-valued params materialize an `n`-element temporary. In
+  the `examples/08-gpu-fields` chain that is 120 of the 156 bytes per
+  point the run used to hold (−23%) and 9 member kernels instead of
+  12. Constant *values* live in the uniform and never in the generated
+  WGSL, so editing one rebinds a buffer and hits the pipeline cache
+  instead of recompiling. (Before v0.6.1 constants cost a full column
+  each, which is why older notes describe constant-heavy chains as a
+  fusion hazard.)
 - **`stats.dispatches` counts member kernels, not `dispatchWorkgroups`
   calls** — one per field-capable param plus one apply kernel per
   member. A kernel chunked across several dispatches still counts

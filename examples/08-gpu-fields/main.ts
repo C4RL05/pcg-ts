@@ -87,10 +87,10 @@ let residentBudget: ResidentBudget = "default";
  * exactly the five nodes after it, and its terminal (`psize`) is the
  * declared output, which is where the single readback lands.
  *
- * `transformPoints` runs on plain vec3 constants on purpose: constants
- * still materialize a full device column and a dispatch each inside a
- * run (three of them here), which is the honest picture of what fusion
- * costs today.
+ * `transformPoints` runs on plain vec3 constants on purpose: since
+ * v0.6.1 a constant param rides a uniform slot instead of a device
+ * column, so those three cost one apply kernel between them rather
+ * than four dispatches and 36 MB of temporaries at a million points.
  */
 function buildRig() {
   const graph = new Graph(seed);

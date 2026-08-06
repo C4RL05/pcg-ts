@@ -103,7 +103,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("evaluator + cook integrati
   });
 
   it("cache salt carries the format version and adapter identity", () => {
-    expect(scenario.salt.startsWith("gpu1|")).toBe(true);
+    expect(scenario.salt.startsWith("gpu2|")).toBe(true);
     expect(scenario.salt.split("|").length).toBe(5);
   });
 

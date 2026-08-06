@@ -46,7 +46,9 @@ import {
   makeSetAttributeApply,
   makeTransformPointsApply,
   type ApplyColRef,
+  type ApplyConstRef,
   type ApplyKernel,
+  type ApplyParamRef,
 } from "./applyKernels.js";
 import type { GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
@@ -285,54 +287,94 @@ interface KernelDiag {
   readonly linePos: number;
 }
 
+/**
+ * A param source before slot assignment: either a bound column or a
+ * constant of the given tuple size. Slots are assigned in param order,
+ * exactly as the planner assigns them.
+ */
+type ParamShape = { readonly col: ApplyColRef } | { readonly constTuple: number };
+
+/** Resolve param shapes to refs, numbering constant slots in order. */
+function assignSlots(shapes: readonly ParamShape[]): ApplyParamRef[] {
+  let slot = 0;
+  return shapes.map((s) =>
+    "col" in s ? s.col : ({ kind: "const", tupleSize: s.constTuple, slot: slot++ } as ApplyParamRef),
+  );
+}
+
 /** Every apply-kernel variant the planner can generate. */
 function allApplyKernels(): ApplyKernel[] {
   const kernels: ApplyKernel[] = [];
-  const col = (type: GpuScalarType, tupleSize: number): ApplyColRef => ({ type, tupleSize });
+  const col = (type: GpuScalarType, tupleSize: number): ApplyColRef => ({
+    kind: "column",
+    type,
+    tupleSize,
+  });
+  const konst = (tupleSize: number, slot: number): ApplyConstRef => ({
+    kind: "const",
+    tupleSize,
+    slot,
+  });
 
-  // setAttribute: full cross product. The planner allows a value column
-  // of tuple 1 (broadcast) or exactly the target tuple size.
+  // setAttribute: full cross product. The planner allows a value source
+  // of tuple 1 (broadcast) or exactly the target tuple size, as a column
+  // of any scalar type or as an f32 uniform constant.
   for (const targetType of ["f32", "i32", "u32", "bool"] as const) {
     for (let ts = 1; ts <= 4; ts++) {
-      const colTuples = ts === 1 ? [1] : [1, ts];
-      for (const ct of colTuples) {
+      const valueTuples = ts === 1 ? [1] : [1, ts];
+      for (const vt of valueTuples) {
         for (const colType of SCALARS) {
-          kernels.push(makeSetAttributeApply(col(colType, ct), targetType, ts));
+          kernels.push(makeSetAttributeApply(col(colType, vt), targetType, ts));
         }
+        kernels.push(makeSetAttributeApply(konst(vt, 0), targetType, ts));
       }
     }
   }
 
-  // transformPoints: each param column shape in each role (others f32x3)
-  // crossed with the rot/scale composition flags, plus the all-same
-  // diagonal — a covering design over the 6^3 x 4 space.
-  const shapes: ApplyColRef[] = [];
-  for (const t of SCALARS) for (const ts of [1, 3]) shapes.push(col(t, ts));
-  const base = col("f32", 3);
+  // transformPoints: each param shape in each role (others f32x3
+  // columns) crossed with the rot/scale composition flags, plus the
+  // all-same diagonal and every two-constant pairing — a covering design
+  // over the shape space that also exercises each binding remap a
+  // constant param causes (one, two or three params declaring no
+  // storage binding, in every position).
+  const shapes: ParamShape[] = [];
+  for (const t of SCALARS) for (const ts of [1, 3]) shapes.push({ col: col(t, ts) });
+  for (const ts of [1, 3]) shapes.push({ constTuple: ts });
+  const base: ParamShape = { col: col("f32", 3) };
+  const xform = (a: ParamShape, b: ParamShape, c: ParamShape, hasRot: boolean, hasScale: boolean): void => {
+    const [t, r, s] = assignSlots([a, b, c]);
+    kernels.push(makeTransformPointsApply(t, r, s, hasRot, hasScale));
+  };
   for (const hasRot of [false, true]) {
     for (const hasScale of [false, true]) {
       for (const shape of shapes) {
-        kernels.push(makeTransformPointsApply(shape, base, base, hasRot, hasScale));
-        kernels.push(makeTransformPointsApply(base, shape, base, hasRot, hasScale));
-        kernels.push(makeTransformPointsApply(base, base, shape, hasRot, hasScale));
-        kernels.push(makeTransformPointsApply(shape, shape, shape, hasRot, hasScale));
+        xform(shape, base, base, hasRot, hasScale);
+        xform(base, shape, base, hasRot, hasScale);
+        xform(base, base, shape, hasRot, hasScale);
+        xform(shape, shape, shape, hasRot, hasScale);
+      }
+      // Two constants, one column, in all three arrangements.
+      for (const ts of [1, 3]) {
+        const k: ParamShape = { constTuple: ts };
+        xform(k, k, base, hasRot, hasScale);
+        xform(k, base, k, hasRot, hasScale);
+        xform(base, k, k, hasRot, hasScale);
       }
     }
   }
 
-  // jitterPoints: one kernel per amount-column shape.
-  for (const shape of shapes) kernels.push(makeJitterPointsApply(shape));
+  // jitterPoints: one kernel per amount shape.
+  for (const shape of shapes) kernels.push(makeJitterPointsApply(assignSlots([shape])[0]));
 
-  // orientAlongVector: every axis x every direction-column shape, plus
-  // the degenerate/normalizing up hints.
+  // orientAlongVector: every axis x every direction shape. The up hint
+  // rides a uniform slot (after the direction's, when that is constant
+  // too), so its VALUE no longer specializes the kernel — the up
+  // variants that used to multiply this space now collapse into one
+  // pipeline, which is the point.
   for (const axis of ORIENT_AXES) {
-    for (const shape of shapes) kernels.push(makeOrientApply(shape, axis, [0, 1, 0]));
-    for (const up of [
-      [0, 0, 0],
-      [0, -2, 0],
-      [1, 1, 1],
-    ] as const) {
-      kernels.push(makeOrientApply(base, axis, up));
+    for (const shape of shapes) {
+      const refs = assignSlots([shape, { constTuple: 3 }]);
+      kernels.push(makeOrientApply(refs[0], axis, refs[1] as ApplyConstRef));
     }
   }
 
@@ -367,8 +409,20 @@ async function validateKernels(
   warnings: number;
   pipelines: number;
   pipelineErrors: string[];
+  constVariantsByKind: Record<string, number>;
+  maxConstSlots: number;
 }> {
   const kernels = allApplyKernels();
+  // Constant-carrying variants per node kind (the key's second field),
+  // so "every kind compiles with constants" is counted, not assumed.
+  const constVariantsByKind: Record<string, number> = {};
+  let maxConstSlots = 0;
+  for (const k of kernels) {
+    if (k.constSlots === 0) continue;
+    const kind = k.key.split("|")[1];
+    constVariantsByKind[kind] = (constVariantsByKind[kind] ?? 0) + 1;
+    maxConstSlots = Math.max(maxConstSlots, k.constSlots);
+  }
   const errors: KernelDiag[] = [];
   const pipelineErrors: string[] = [];
   let warnings = 0;
@@ -398,7 +452,15 @@ async function validateKernels(
       pipelineErrors.push(`${kernel.key}: ${err.message ?? String(err)}`);
     }
   }
-  return { variants: kernels.length, errors, warnings, pipelines, pipelineErrors };
+  return {
+    variants: kernels.length,
+    errors,
+    warnings,
+    pipelines,
+    pipelineErrors,
+    constVariantsByKind,
+    maxConstSlots,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -915,7 +977,88 @@ function chainCases(): ChainCase[] {
       ],
     },
     {
-      // Plain-value params only (constant columns) + a fresh rot.
+      // Binding remap: constant params declare no storage binding, so
+      // the attribute bindings shift. Member 2 puts its only column in
+      // the MIDDLE role (const, column, const) and member 4 puts it
+      // LAST (const, const, column) — the two arrangements a positional
+      // binding assumption would mis-bind. Every constant is a power of
+      // two (or a sum of them) and every rotation is the identity, so
+      // the whole chain stays exact in f32.
+      name: "remapConst5",
+      bitExact: true,
+      count: 800,
+      geo: makeTransformGeometry,
+      steps: [
+        {
+          def: anyDef(setAttribute),
+          params: { name: "z3", type: "f32", tupleSize: 3, value: [0, 0, 0] },
+        },
+        {
+          def: anyDef(transformPoints),
+          params: {
+            translate: [0.5, 0.25, 0.125],
+            rotateEuler: spec({ fn: "attribute", name: "z3" }),
+            scale: [2, 0.5, 4],
+          },
+        },
+        {
+          def: anyDef(setAttribute),
+          params: { name: "two3", type: "f32", tupleSize: 3, value: [2, 0.5, 4] },
+        },
+        {
+          def: anyDef(transformPoints),
+          params: {
+            translate: [0, 0, 0],
+            rotateEuler: [0, 0, 0],
+            scale: spec({ fn: "attribute", name: "two3" }),
+          },
+        },
+        {
+          // A scalar constant broadcast across a wider target.
+          def: anyDef(setAttribute),
+          params: { name: "q4", type: "f32", tupleSize: 4, value: 0.25 },
+        },
+      ],
+    },
+    {
+      // Constant STORES of every target type, including values that do
+      // not round-trip a decimal exactly: a store is a copy, so the
+      // f32-rounded uniform value must land byte-for-byte on the CPU's.
+      name: "constStores4",
+      bitExact: true,
+      count: 256,
+      geo: makeCorpusGeometry,
+      steps: [
+        {
+          def: anyDef(setAttribute),
+          params: { name: "cf", type: "f32", tupleSize: 3, value: [0.1, 1 / 3, 12345.6789] },
+        },
+        { def: anyDef(setAttribute), params: { name: "ci", type: "i32", tupleSize: 1, value: -7 } },
+        // A scalar constant broadcast into a wider integer target.
+        { def: anyDef(setAttribute), params: { name: "cu", type: "u32", tupleSize: 2, value: 9 } },
+        { def: anyDef(setAttribute), params: { name: "cb", type: "bool", tupleSize: 1, value: 3 } },
+      ],
+    },
+    {
+      // A CONSTANT direction: orientAlongVector's kernel then binds only
+      // rot, with both the direction and the up hint in uniform slots.
+      name: "constDir2",
+      bitExact: false,
+      count: 600,
+      geo: makeCorpusGeometry,
+      steps: [
+        {
+          def: anyDef(orientAlongVector),
+          params: { direction: [1, 0, 0], axis: "+z", up: [0, 1, 0] },
+        },
+        {
+          def: anyDef(setAttribute),
+          params: { name: "t", type: "u32", tupleSize: 1, value: spec({ fn: "index" }) },
+        },
+      ],
+    },
+    {
+      // Plain-value params only (uniform constant slots) + a fresh rot.
       name: "const3",
       bitExact: false,
       count: 1000,
@@ -1583,6 +1726,135 @@ async function memoryBound(
   };
 }
 
+/**
+ * The one input class where phase 25 MOVES bytes, isolated and pinned.
+ * A WGSL front end may flush an f32 LITERAL that is `-0` or subnormal to
+ * `+0` (the D3D12 back end does), so the constant column a run used to
+ * materialize from `wgslF32(v)` carried `+0` where the CPU carries the
+ * true bits. A value read from a uniform buffer is not a literal and is
+ * not flushed, so the same constant now survives — the fused chain moves
+ * ONTO the CPU reference rather than away from it.
+ *
+ * Both halves are measured here on identical values: the plain param
+ * (uniform slot) and the same constant authored as a Field (still a
+ * baked-literal column, the pre-phase-25 path, unchanged by this phase).
+ */
+async function constantEdges(ev: GpuFieldEvaluator): Promise<Record<string, unknown>> {
+  // -0, a subnormal, and the smallest positive subnormal f32.
+  const EDGE = [-0, 1e-40, 1.401298464324817e-45];
+  const chain = (value: unknown): ChainStep[] => [
+    { def: anyDef(setAttribute), params: { name: "edge", type: "f32", tupleSize: 3, value } },
+    {
+      def: anyDef(setAttribute),
+      params: { name: "t", type: "u32", tupleSize: 1, value: spec({ fn: "index" }) },
+    },
+  ];
+  const words = (snap: Map<string, AttrSnapshot>): string[] => {
+    const bytes = snap.get("edge")!.bytes;
+    const u32 = new Uint32Array(bytes.buffer, bytes.byteOffset, 3);
+    return [...u32].map((w) => `0x${w.toString(16).padStart(8, "0")}`);
+  };
+  const count = 64;
+  const cpu = snapshot(await cook(chainGraph(makeCorpusGeometry(count), chain([...EDGE])).g));
+  const uniform = snapshot(
+    await cook(chainGraph(makeCorpusGeometry(count), chain([...EDGE])).g, { gpu: ev }),
+  );
+  const literal = snapshot(
+    await cook(
+      chainGraph(makeCorpusGeometry(count), chain(spec({ fn: "constant", value: [...EDGE] }))).g,
+      { gpu: ev },
+    ),
+  );
+  return {
+    cpuWords: words(cpu),
+    uniformWords: words(uniform),
+    literalWords: words(literal),
+    uniformEqualsCpu: allAttrsEqual(cpu, uniform),
+    literalEqualsCpu: allAttrsEqual(cpu, literal),
+  };
+}
+
+/**
+ * The uniform-constant payoff: editing a constant param (or the up
+ * hint, which also rides the uniform) must rebind a uniform and reuse
+ * the pipeline — never recompile — while still producing the bytes the
+ * NEW value should produce. A stale uniform would pass the cache
+ * assertions alone, so every edit is additionally checked against a
+ * fused cook of a graph BUILT with the new value (same node ids, so the
+ * same seeds and the same expected bytes). The CPU reference for
+ * constants riding the uniform lives in the bit-exact chains
+ * (`constStores4`, `remapConst5`) and in `constantEdges`, not here.
+ */
+async function constantEdits(
+  structural: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  const ev = new GpuFieldEvaluator(structural, { adapterInfo });
+  // Fixed node ids so a rebuilt graph derives the same node seeds and
+  // must produce byte-identical output for the same params.
+  // Handle types stay inferred: annotating them erases each node's param
+  // type and makes `setParam`'s key parameter `never`.
+  const build = (translate: readonly number[], up: readonly number[]) => {
+    const g = new Graph(7);
+    const din = g.add(dataInput, { items: [makeGeometryItem(makeCorpusGeometry(1024))] }, "din");
+    const sa = g.add(setAttribute, { name: "d", value: spec({ fn: "randomField", key: "c" }) }, "sa");
+    const tr = g.add(
+      transformPoints,
+      { translate: [...translate], rotateEuler: [0, 90, 0], scale: [2, 2, 2] },
+      "tr",
+    );
+    const jit = g.add(jitterPoints, { amount: [0.25, 0.5, 0.125], seed: 3 }, "jit");
+    const or = g.add(
+      orientAlongVector,
+      { direction: spec({ fn: "position" }), axis: "+z", up: [...up] },
+      "or",
+    );
+    g.connect(din, "out", sa, "in");
+    g.connect(sa, "out", tr, "in");
+    g.connect(tr, "out", jit, "in");
+    g.connect(jit, "out", or, "in");
+    g.output(or, "out", "out");
+    return { g, tr, or };
+  };
+
+  const live = build([1, 2, 3], [0, 1, 0]);
+  const first = await cook(live.g, { gpu: ev });
+  const firstSnap = snapshot(first);
+  const cacheAfterFirst = ev.pipelineCacheSize;
+
+  // Edit a transformPoints constant: same kernels, new uniform values.
+  live.g.setParam(live.tr, "translate", [-4.5, 0.25, 7]);
+  const edited = await cook(live.g, { gpu: ev });
+  const editedSnap = snapshot(edited);
+  const cacheAfterEdit = ev.pipelineCacheSize;
+  // The authoritative check on the rebound uniform: a graph BUILT with
+  // the new value cooks to the same bytes (a stale uniform would not).
+  const freshEdited = snapshot(await cook(build([-4.5, 0.25, 7], [0, 1, 0]).g, { gpu: ev }));
+
+  // Edit the up hint (a uniform slot since phase 25, a baked literal
+  // before it): also a cache hit now.
+  live.g.setParam(live.or, "up", [1, 0, 0]);
+  const upEdited = await cook(live.g, { gpu: ev });
+  const upSnap = snapshot(upEdited);
+  const cacheAfterUp = ev.pipelineCacheSize;
+  const freshUpEdited = snapshot(await cook(build([-4.5, 0.25, 7], [1, 0, 0]).g, { gpu: ev }));
+
+  return {
+    firstStats: statsOf(first),
+    editStats: statsOf(edited),
+    upEditStats: statsOf(upEdited),
+    cacheAfterFirst,
+    cacheAfterEdit,
+    cacheAfterUp,
+    // The edits must actually change the output...
+    editChangedP: !bytesEqual(firstSnap.get("P")!.bytes, editedSnap.get("P")!.bytes),
+    upEditChangedRot: !bytesEqual(editedSnap.get("rot")!.bytes, upSnap.get("rot")!.bytes),
+    // ...to exactly the bytes the new values produce from scratch.
+    editMatchesFresh: allAttrsEqual(freshEdited, editedSnap),
+    upEditMatchesFresh: allAttrsEqual(freshUpEdited, upSnap),
+  };
+}
+
 async function statsSemantics(
   structural: GpuDeviceLike,
   adapterInfo: { vendor?: string },
@@ -1690,6 +1962,8 @@ async function main(): Promise<void> {
   out.cancellation = await cancellation(evaluator);
   out.memoryBound = await memoryBound(structural, adapter.info, perNode);
   out.stats = await statsSemantics(structural, adapter.info);
+  out.constantEdits = await constantEdits(structural, adapter.info);
+  out.constantEdges = await constantEdges(evaluator);
 
   process.stdout.write(JSON.stringify(out));
 }

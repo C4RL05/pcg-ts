@@ -37,6 +37,25 @@
  * before the apply dispatch, and chunked dispatches partition the
  * element range exactly — so read_write attribute buffers are raced by
  * nothing.
+ *
+ * Constant params (phase 25): a param that is a plain number or number
+ * tuple needs no column and no field kernel — its components ride the
+ * kernel's own `PcgParams` uniform as `consts[slot]` ({@link
+ * ApplyConstRef}), read with the same scalar-broadcast rule columns use.
+ * A constant source is always f32 (exactly what the constant column it
+ * replaces produced), and a JS number written through a `Float32Array`
+ * rounds identically to the `wgslF32` literal that column's kernel
+ * stored — so moving a param from a column to a slot does not move an
+ * output byte, with one measured exception: a WGSL front end may flush
+ * an f32 LITERAL that is `-0` or subnormal to `+0` (the D3D12 back end
+ * does), while a uniform load is not a literal and keeps the bits. Those
+ * constants therefore now land on the CPU's exact bytes where the column
+ * landed `+0` — a move onto the reference, pinned by the device suite's
+ * "carries -0 and subnormal constants" case. Values live in the uniform,
+ * never in the WGSL text: the
+ * specialization key encodes only which params are constant, their
+ * tuple sizes, and their slots, so editing a constant rebinds a uniform
+ * and hits the pipeline cache instead of compiling.
  */
 import type { GpuScalarType } from "./types.js";
 import { libClosure, wgslF32 } from "./wgslLib.js";
@@ -50,13 +69,60 @@ export const APPLY_WORKGROUP_SIZE = 64;
  * produced bytes, ALSO bump the evaluator's `SALT_VERSION` so memo
  * caches never serve stale fused output.
  */
-const APPLY_VERSION = "apply1";
+const APPLY_VERSION = "apply2";
+
+/**
+ * Uniform constant slots one apply kernel may carry. The maximum any
+ * kind takes today is 3 (transformPoints' translate / rotateEuler /
+ * scale, all constant); orientAlongVector takes 2 (direction + the
+ * normalized up hint). Raising this costs 16 bytes per slot per chunk
+ * uniform and nothing else.
+ */
+export const MAX_APPLY_CONST_SLOTS = 4;
+
+/** Byte size of the scalar `PcgParams` header {count, seed, chunkOffset}. */
+export const APPLY_UNIFORM_HEADER_BYTES = 12;
+
+/**
+ * Byte offset of the `consts` array inside `PcgParams`. `array<vec4<f32>>`
+ * requires 16-byte alignment (and a 16-byte element stride) in the
+ * uniform address space, so the 12-byte scalar header is padded to 16.
+ */
+export const APPLY_CONST_OFFSET = 16;
+
+/** Byte stride of one constant slot (`vec4<f32>`). */
+export const APPLY_CONST_STRIDE = 16;
+
+/** Components one constant slot holds (`vec4<f32>`), zero-padded. */
+export const APPLY_CONST_COMPONENTS = 4;
+
+/** Uniform byte size of an apply kernel carrying `constSlots` slots. */
+export function applyUniformBytes(constSlots: number): number {
+  return constSlots === 0
+    ? APPLY_UNIFORM_HEADER_BYTES
+    : APPLY_CONST_OFFSET + constSlots * APPLY_CONST_STRIDE;
+}
 
 /** Shape of a bound field column (the producing kernel's output). */
 export interface ApplyColRef {
+  readonly kind: "column";
   readonly type: GpuScalarType;
   readonly tupleSize: number;
 }
+
+/**
+ * A constant param riding uniform slot `slot` as f32 components. The
+ * planner allocates slots per apply kernel, in param order, and writes
+ * the values into the per-chunk uniform.
+ */
+export interface ApplyConstRef {
+  readonly kind: "const";
+  readonly tupleSize: number;
+  readonly slot: number;
+}
+
+/** Where an apply kernel reads a node param from. */
+export type ApplyParamRef = ApplyColRef | ApplyConstRef;
 
 /** One storage binding of an apply kernel, in binding-index order. */
 export interface ApplyBinding {
@@ -72,17 +138,49 @@ export interface ApplyKernel {
   readonly entryPoint: "main";
   readonly workgroupSize: number;
   readonly bindings: readonly ApplyBinding[];
+  /** Constant slots the kernel's `PcgParams` declares (0 = none). */
+  readonly constSlots: number;
+  /** Byte size of this kernel's `PcgParams` uniform. */
+  readonly uniformBytes: number;
   /** Stable specialization key (pipeline cache). */
   readonly key: string;
 }
 
-/** Read component k of column var `v`, broadcasting scalars, as f32. */
-function colReadF32(v: string, col: ApplyColRef, k: number): string {
-  const e = colReadRaw(v, col, k);
-  return col.type === "f32" ? e : `f32(${e})`;
+const XYZW = ["x", "y", "z", "w"] as const;
+
+/**
+ * Read component k of a param as f32, broadcasting scalar sources.
+ * Columns read their storage buffer (`v` is the bound variable name and
+ * non-f32 elements convert); constants read their uniform slot, which
+ * is f32 by construction.
+ */
+function paramReadF32(v: string, p: ApplyParamRef, k: number): string {
+  if (p.kind === "const") return constRead(p, k);
+  const e = colReadRaw(v, p, k);
+  return p.type === "f32" ? e : `f32(${e})`;
 }
 
-/** Raw (unconverted) component read with scalar broadcast. */
+/**
+ * Raw (unconverted) component read with scalar broadcast: identical to
+ * {@link paramReadF32} for constants, which carry no other type.
+ */
+function paramReadRaw(v: string, p: ApplyParamRef, k: number): string {
+  return p.kind === "const" ? constRead(p, k) : colReadRaw(v, p, k);
+}
+
+/** Uniform-slot component read; tuple 1 broadcasts component 0. */
+function constRead(p: ApplyConstRef, k: number): string {
+  const c = p.tupleSize === 1 ? 0 : k;
+  if (c >= APPLY_CONST_COMPONENTS) {
+    throw new Error(
+      `apply codegen: constant slot ${p.slot} has no component ${c} ` +
+        `(a uniform slot holds ${APPLY_CONST_COMPONENTS} f32 components)`,
+    );
+  }
+  return `params.consts[${p.slot}].${XYZW[c]}`;
+}
+
+/** Raw column component read with scalar broadcast. */
 function colReadRaw(v: string, col: ApplyColRef, k: number): string {
   if (col.tupleSize === 1) return `${v}[i]`;
   return k === 0 ? `${v}[i * ${col.tupleSize}u]` : `${v}[i * ${col.tupleSize}u + ${k}u]`;
@@ -93,8 +191,44 @@ function flatIdx(v: string, ts: number, k: number): string {
   return k === 0 ? `${v}[i * ${ts}u]` : `${v}[i * ${ts}u + ${k}u]`;
 }
 
+/**
+ * Positional storage-binding allocator: bindings are numbered from 1 in
+ * declaration order (0 is always the uniform), and a constant param
+ * consumes none — so a kernel's binding indices depend on which of its
+ * params are columns. The role each index carries is what the planner
+ * maps to a buffer, so callers must add bindings in the order the
+ * generated body expects and use the returned variable names.
+ */
+class BindingList {
+  readonly items: { role: string; access: "read" | "read_write"; elem: GpuScalarType; comment: string }[] = [];
+
+  /** Declare the next storage binding; returns its WGSL variable name. */
+  add(role: string, access: "read" | "read_write", elem: GpuScalarType, comment: string): string {
+    this.items.push({ role, access, elem, comment });
+    return `b${this.items.length}`;
+  }
+}
+
+/** Constant slots a kernel needs to declare, given its param refs. */
+function constSlotsOf(params: readonly ApplyParamRef[]): number {
+  let slots = 0;
+  for (const p of params) {
+    if (p.kind !== "const") continue;
+    if (p.slot < 0 || p.slot >= MAX_APPLY_CONST_SLOTS) {
+      throw new Error(
+        `apply codegen: constant slot ${p.slot} is out of range; an apply kernel carries at ` +
+          `most ${MAX_APPLY_CONST_SLOTS} uniform constant slots (raise MAX_APPLY_CONST_SLOTS ` +
+          "in applyKernels.ts if a new node kind needs more)",
+      );
+    }
+    slots = Math.max(slots, p.slot + 1);
+  }
+  return slots;
+}
+
 function assemble(
   kindKey: string,
+  constSlots: number,
   bindings: readonly { role: string; access: "read" | "read_write"; elem: GpuScalarType; comment: string }[],
   helpers: readonly string[],
   body: string,
@@ -109,6 +243,14 @@ function assemble(
     );
     out.push({ binding, role: b.role, access: b.access });
   });
+  // The scalar header pads to 16 bytes so the vec4 array lands on its
+  // required alignment; slot values are written per chunk, never baked.
+  const constMembers =
+    constSlots === 0
+      ? ""
+      : `
+  _pad0: u32,
+  consts: array<vec4<f32>, ${constSlots}>,`;
   const wgsl = `// Generated by pcg-ts resident-run apply codegen.
 // Dispatch: 1D, chunked; element index i = chunkOffset + gid.x, one
 // invocation per element; only element i's slots are accessed.
@@ -116,7 +258,7 @@ function assemble(
 struct PcgParams {
   count: u32,
   seed: u32,
-  chunkOffset: u32,
+  chunkOffset: u32,${constMembers}
 }
 
 ${decls.join("\n")}
@@ -135,15 +277,24 @@ ${body}
     entryPoint: "main",
     workgroupSize: APPLY_WORKGROUP_SIZE,
     bindings: out,
+    constSlots,
+    uniformBytes: applyUniformBytes(constSlots),
     key: `${APPLY_VERSION}|${kindKey}`,
   };
 }
 
-const colKey = (c: ApplyColRef): string => `${c.type}x${c.tupleSize}`;
+/**
+ * Specialization-key fragment for a param source. Constants contribute
+ * their tuple size and slot — never their values, so a constant edit
+ * rebinds the uniform and reuses the pipeline.
+ */
+const paramKey = (p: ApplyParamRef): string =>
+  p.kind === "column" ? `${p.type}x${p.tupleSize}` : `constx${p.tupleSize}@${p.slot}`;
 
 // ---------------------------------------------------------------------------
-// setAttribute (numeric mode): store the field column into the target.
-// Roles: "value" (the column), "target" (the attribute being written).
+// setAttribute (numeric mode): store the value source into the target.
+// Roles: "value" (present only when the value is a column), "target"
+// (the attribute being written).
 
 /**
  * Store conversions mirror the CPU typed-array stores: same-type f32
@@ -155,43 +306,56 @@ const colKey = (c: ApplyColRef): string => `${c.type}x${c.tupleSize}`;
  * true in both).
  */
 export function makeSetAttributeApply(
-  col: ApplyColRef,
+  value: ApplyParamRef,
   targetType: "f32" | "i32" | "u32" | "bool",
   tupleSize: number,
 ): ApplyKernel {
   // Bind element types: bool targets are u32 0/1 buffers; the bit-exact
-  // f32→f32 copy binds both sides as u32. The raw u32 copy is in fact
-  // *more* bit-preserving than the CPU store, which canonicalizes
-  // non-canonical NaN payloads on the way through a Float32Array.
-  const rawF32Copy = targetType === "f32" && col.type === "f32";
-  const colElem: GpuScalarType = rawF32Copy ? "u32" : col.type;
+  // f32→f32 column copy binds both sides as u32. The raw u32 copy is in
+  // fact *more* bit-preserving than the CPU store, which canonicalizes
+  // non-canonical NaN payloads on the way through a Float32Array. A
+  // constant source is f32 in the uniform and stores through the f32
+  // path — same bits, since its value round-trips a Float32Array too.
+  const srcType: GpuScalarType = value.kind === "const" ? "f32" : value.type;
+  const rawF32Copy = targetType === "f32" && value.kind === "column" && value.type === "f32";
+  const colElem: GpuScalarType = rawF32Copy ? "u32" : srcType;
   const outElem: GpuScalarType = targetType === "bool" || rawF32Copy ? "u32" : targetType;
-  const boundCol: ApplyColRef = { type: colElem, tupleSize: col.tupleSize };
+  const bindings = new BindingList();
+  const valueVar =
+    value.kind === "column"
+      ? bindings.add("value", "read", colElem, `value column ${paramKey(value)}`)
+      : "";
+  // The raw f32 copy rebinds the column as u32; constants are unchanged.
+  const src: ApplyParamRef = value.kind === "column" ? { ...value, type: colElem } : value;
+  const targetVar = bindings.add(
+    "target",
+    "read_write",
+    outElem,
+    `target attribute ${targetType} tupleSize ${tupleSize}`,
+  );
   const conv = (raw: string, f32: string): string => {
     switch (targetType) {
       case "f32":
         return rawF32Copy ? raw : f32; // f32(int) matches fround(Number(v))
       case "i32":
-        return col.type === "f32" ? `i32(${raw})` : col.type === "i32" ? raw : `bitcast<i32>(${raw})`;
+        return srcType === "f32" ? `i32(${raw})` : srcType === "i32" ? raw : `bitcast<i32>(${raw})`;
       case "u32":
-        return col.type === "f32" ? `u32(${raw})` : col.type === "u32" ? raw : `bitcast<u32>(${raw})`;
+        return srcType === "f32" ? `u32(${raw})` : srcType === "u32" ? raw : `bitcast<u32>(${raw})`;
       default: {
-        const zero = col.type === "f32" ? "0f" : col.type === "i32" ? "0i" : "0u";
+        const zero = srcType === "f32" ? "0f" : srcType === "i32" ? "0i" : "0u";
         return `select(0u, 1u, ${raw} != ${zero})`;
       }
     }
   };
   const lines: string[] = [];
   for (let k = 0; k < tupleSize; k++) {
-    const raw = colReadRaw("b1", boundCol, k);
-    lines.push(`  ${flatIdx("b2", tupleSize, k)} = ${conv(raw, colReadF32("b1", boundCol, k))};`);
+    const raw = paramReadRaw(valueVar, src, k);
+    lines.push(`  ${flatIdx(targetVar, tupleSize, k)} = ${conv(raw, paramReadF32(valueVar, src, k))};`);
   }
   return assemble(
-    `setAttribute|col=${colKey(col)}|out=${targetType}x${tupleSize}`,
-    [
-      { role: "value", access: "read", elem: colElem, comment: `value column ${colKey(col)}` },
-      { role: "target", access: "read_write", elem: outElem, comment: `target attribute ${targetType} tupleSize ${tupleSize}` },
-    ],
+    `setAttribute|val=${paramKey(value)}|out=${targetType}x${tupleSize}`,
+    constSlotsOf([value]),
+    bindings.items,
     [],
     lines.join("\n"),
   );
@@ -258,40 +422,46 @@ const QUAT_HELPERS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // transformPoints: P' = R * (scale * P) + translate, composing with
 // existing rot (quaternion product) / scale (componentwise) attributes.
-// Roles: "translate", "rotateEuler", "scale" (columns), "P", then
-// "rot" / "scaleAttr" when composed (all f32 buffers).
+// Roles: "translate", "rotateEuler", "scale" (each present only when
+// that param is a column), "P", then "rot" / "scaleAttr" when composed
+// (all f32 buffers).
 
 export function makeTransformPointsApply(
-  translate: ApplyColRef,
-  rotateEuler: ApplyColRef,
-  scale: ApplyColRef,
+  translate: ApplyParamRef,
+  rotateEuler: ApplyParamRef,
+  scale: ApplyParamRef,
   hasRot: boolean,
   hasScale: boolean,
 ): ApplyKernel {
-  const bindings: { role: string; access: "read" | "read_write"; elem: GpuScalarType; comment: string }[] = [
-    { role: "translate", access: "read", elem: translate.type, comment: `translate column ${colKey(translate)}` },
-    { role: "rotateEuler", access: "read", elem: rotateEuler.type, comment: `rotateEuler column ${colKey(rotateEuler)}` },
-    { role: "scale", access: "read", elem: scale.type, comment: `scale column ${colKey(scale)}` },
-    { role: "P", access: "read_write", elem: "f32", comment: "attribute P: f32 tupleSize 3" },
-  ];
-  let next = 5;
-  let rotVar = "";
-  let sclVar = "";
-  if (hasRot) {
-    rotVar = `b${next++}`;
-    bindings.push({ role: "rot", access: "read_write", elem: "f32", comment: "attribute rot: f32 tupleSize 4" });
-  }
-  if (hasScale) {
-    sclVar = `b${next++}`;
-    bindings.push({ role: "scaleAttr", access: "read_write", elem: "f32", comment: "attribute scale: f32 tupleSize 3" });
-  }
+  // Declaration order is param order then attributes; constant params
+  // declare nothing, so the attribute bindings shift down accordingly.
+  const bindings = new BindingList();
+  const tVar =
+    translate.kind === "column"
+      ? bindings.add("translate", "read", translate.type, `translate column ${paramKey(translate)}`)
+      : "";
+  const rVar =
+    rotateEuler.kind === "column"
+      ? bindings.add("rotateEuler", "read", rotateEuler.type, `rotateEuler column ${paramKey(rotateEuler)}`)
+      : "";
+  const sVar =
+    scale.kind === "column"
+      ? bindings.add("scale", "read", scale.type, `scale column ${paramKey(scale)}`)
+      : "";
+  const pVar = bindings.add("P", "read_write", "f32", "attribute P: f32 tupleSize 3");
+  const rotVar = hasRot
+    ? bindings.add("rot", "read_write", "f32", "attribute rot: f32 tupleSize 4")
+    : "";
+  const sclVar = hasScale
+    ? bindings.add("scaleAttr", "read_write", "f32", "attribute scale: f32 tupleSize 3")
+    : "";
   const lines: string[] = [];
-  lines.push(`  let s = vec3<f32>(${[0, 1, 2].map((k) => colReadF32("b3", scale, k)).join(", ")});`);
-  lines.push(`  let q = pcg_quat_from_euler_deg(vec3<f32>(${[0, 1, 2].map((k) => colReadF32("b2", rotateEuler, k)).join(", ")}));`);
-  lines.push(`  let v = pcg_rotate_vec(q, vec3<f32>(b4[i * 3u] * s.x, b4[i * 3u + 1u] * s.y, b4[i * 3u + 2u] * s.z));`);
-  lines.push(`  b4[i * 3u] = v.x + ${colReadF32("b1", translate, 0)};`);
-  lines.push(`  b4[i * 3u + 1u] = v.y + ${colReadF32("b1", translate, 1)};`);
-  lines.push(`  b4[i * 3u + 2u] = v.z + ${colReadF32("b1", translate, 2)};`);
+  lines.push(`  let s = vec3<f32>(${[0, 1, 2].map((k) => paramReadF32(sVar, scale, k)).join(", ")});`);
+  lines.push(`  let q = pcg_quat_from_euler_deg(vec3<f32>(${[0, 1, 2].map((k) => paramReadF32(rVar, rotateEuler, k)).join(", ")}));`);
+  lines.push(`  let v = pcg_rotate_vec(q, vec3<f32>(${pVar}[i * 3u] * s.x, ${pVar}[i * 3u + 1u] * s.y, ${pVar}[i * 3u + 2u] * s.z));`);
+  lines.push(`  ${pVar}[i * 3u] = v.x + ${paramReadF32(tVar, translate, 0)};`);
+  lines.push(`  ${pVar}[i * 3u + 1u] = v.y + ${paramReadF32(tVar, translate, 1)};`);
+  lines.push(`  ${pVar}[i * 3u + 2u] = v.z + ${paramReadF32(tVar, translate, 2)};`);
   if (hasRot) {
     lines.push(`  let q2 = pcg_quat_mul(q, vec4<f32>(${rotVar}[i * 4u], ${rotVar}[i * 4u + 1u], ${rotVar}[i * 4u + 2u], ${rotVar}[i * 4u + 3u]));`);
     lines.push(`  ${rotVar}[i * 4u] = q2.x;`);
@@ -305,8 +475,9 @@ export function makeTransformPointsApply(
     lines.push(`  ${sclVar}[i * 3u + 2u] = ${sclVar}[i * 3u + 2u] * s.z;`);
   }
   return assemble(
-    `transformPoints|t=${colKey(translate)}|r=${colKey(rotateEuler)}|s=${colKey(scale)}|rot=${hasRot ? 1 : 0}|scl=${hasScale ? 1 : 0}`,
-    bindings,
+    `transformPoints|t=${paramKey(translate)}|r=${paramKey(rotateEuler)}|s=${paramKey(scale)}|rot=${hasRot ? 1 : 0}|scl=${hasScale ? 1 : 0}`,
+    constSlotsOf([translate, rotateEuler, scale]),
+    bindings.items,
     [QUAT_HELPERS.euler, QUAT_HELPERS.mul, QUAT_HELPERS.rotate],
     lines.join("\n"),
   );
@@ -314,25 +485,29 @@ export function makeTransformPointsApply(
 
 // ---------------------------------------------------------------------------
 // jitterPoints: P[i][k] += (hashFloat(hashCombine(seed, i, k)) * 2 - 1)
-// * amount[i][k]. Roles: "amount" (column), "P". The seed uniform is the
+// * amount[i][k]. Roles: "amount" (when a column), "P". The seed is the
 // node's jitter-combined seed; CPU `hashCombine(seed, i, k)` is exactly
 // the library's `pcg_hash3` (both chain hashSeed(3) through the same
 // murmur rounds) — bit-exact, pinned by the device parity suite.
 
-export function makeJitterPointsApply(amount: ApplyColRef): ApplyKernel {
+export function makeJitterPointsApply(amount: ApplyParamRef): ApplyKernel {
+  const bindings = new BindingList();
+  const aVar =
+    amount.kind === "column"
+      ? bindings.add("amount", "read", amount.type, `amount column ${paramKey(amount)}`)
+      : "";
+  const pVar = bindings.add("P", "read_write", "f32", "attribute P: f32 tupleSize 3");
   const lines: string[] = [];
   for (let k = 0; k < 3; k++) {
     const idx = k === 0 ? "i * 3u" : `i * 3u + ${k}u`;
     lines.push(
-      `  b2[${idx}] = b2[${idx}] + (pcg_hash_float(pcg_hash3(params.seed, i, ${k}u)) * 2f - 1f) * ${colReadF32("b1", amount, k)};`,
+      `  ${pVar}[${idx}] = ${pVar}[${idx}] + (pcg_hash_float(pcg_hash3(params.seed, i, ${k}u)) * 2f - 1f) * ${paramReadF32(aVar, amount, k)};`,
     );
   }
   return assemble(
-    `jitterPoints|a=${colKey(amount)}`,
-    [
-      { role: "amount", access: "read", elem: amount.type, comment: `amount column ${colKey(amount)}` },
-      { role: "P", access: "read_write", elem: "f32", comment: "attribute P: f32 tupleSize 3" },
-    ],
+    `jitterPoints|a=${paramKey(amount)}`,
+    constSlotsOf([amount]),
+    bindings.items,
     libClosure(["pcg_hash3", "pcg_hash_float"]),
     lines.join("\n"),
   );
@@ -342,8 +517,11 @@ export function makeJitterPointsApply(amount: ApplyColRef): ApplyKernel {
 // orientAlongVector: build rot quaternions pointing `axis` along the
 // direction column, up hint fixing roll, with the CPU's fallback and
 // keep-prior-rot-on-zero-direction semantics. Roles: "direction"
-// (column), "rot" (read_write; prior values pre-loaded so skipped
-// lanes keep them). The axis and the f64-normalized up are baked.
+// (column, when it is not constant), "rot" (read_write; prior values
+// pre-loaded so skipped lanes keep them). The axis is baked (it selects
+// a basis permutation); the up hint rides a uniform slot, normalized in
+// f64 by the planner exactly as the CPU normalizes it, so editing it
+// rebinds the uniform instead of recompiling the pipeline.
 
 const ORIENT_BASIS_ARGS: Record<string, string> = {
   "+x": "f, u, -r",
@@ -355,23 +533,24 @@ const ORIENT_BASIS_ARGS: Record<string, string> = {
 };
 
 export function makeOrientApply(
-  direction: ApplyColRef,
+  direction: ApplyParamRef,
   axis: "+x" | "-x" | "+y" | "-y" | "+z" | "-z",
-  up: readonly [number, number, number],
+  up: ApplyConstRef,
 ): ApplyKernel {
-  // Normalize the up hint in f64 exactly as the CPU does, then bake the
-  // f32-rounded components (single rounding).
-  const upLenSq = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
-  const upInv = upLenSq > 0 ? 1 / Math.sqrt(upLenSq) : 0;
-  const upLit = (k: number): string => wgslF32(up[k] * upInv, "orientAlongVector up");
+  const bindings = new BindingList();
+  const dVar =
+    direction.kind === "column"
+      ? bindings.add("direction", "read", direction.type, `direction column ${paramKey(direction)}`)
+      : "";
+  const rotVar = bindings.add("rot", "read_write", "f32", "attribute rot: f32 tupleSize 4");
   const eps = wgslF32(1e-12, "internal ORIENT_PARALLEL_EPS");
-  const body = `  let d = vec3<f32>(${[0, 1, 2].map((k) => colReadF32("b1", direction, k)).join(", ")});
+  const body = `  let d = vec3<f32>(${[0, 1, 2].map((k) => paramReadF32(dVar, direction, k)).join(", ")});
   let dl = dot(d, d);
   if (dl == 0f) {
     return; // zero direction: keep the prior rot
   }
   let f = d * (1f / sqrt(dl));
-  let up = vec3<f32>(${upLit(0)}, ${upLit(1)}, ${upLit(2)});
+  let up = vec3<f32>(${[0, 1, 2].map((k) => paramReadF32("", up, k)).join(", ")});
   // right = up x forward, falling back when (anti)parallel.
   var r = cross(up, f);
   var rl = dot(r, r);
@@ -389,16 +568,14 @@ export function makeOrientApply(
   // u = forward x right (unit: forward and right are orthonormal).
   let u = cross(f, r);
   let q = pcg_quat_from_basis(${ORIENT_BASIS_ARGS[axis]});
-  b2[i * 4u] = q.x;
-  b2[i * 4u + 1u] = q.y;
-  b2[i * 4u + 2u] = q.z;
-  b2[i * 4u + 3u] = q.w;`;
+  ${rotVar}[i * 4u] = q.x;
+  ${rotVar}[i * 4u + 1u] = q.y;
+  ${rotVar}[i * 4u + 2u] = q.z;
+  ${rotVar}[i * 4u + 3u] = q.w;`;
   return assemble(
-    `orientAlongVector|d=${colKey(direction)}|axis=${axis}|up=${[0, 1, 2].map(upLit).join(",")}`,
-    [
-      { role: "direction", access: "read", elem: direction.type, comment: `direction column ${colKey(direction)}` },
-      { role: "rot", access: "read_write", elem: "f32", comment: "attribute rot: f32 tupleSize 4" },
-    ],
+    `orientAlongVector|d=${paramKey(direction)}|axis=${axis}|up=${paramKey(up)}`,
+    constSlotsOf([direction, up]),
+    bindings.items,
     [QUAT_HELPERS.basis],
     body,
   );

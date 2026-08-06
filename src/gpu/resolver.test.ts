@@ -248,20 +248,20 @@ describe("GpuFieldEvaluator cache salt", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice(), {
       adapterInfo: { vendor: "acme", architecture: "gen9", device: "gpu-1", description: "Acme GPU" },
     });
-    expect(ev.cacheSalt).toBe("gpu1|acme|gen9|gpu-1|Acme GPU");
+    expect(ev.cacheSalt).toBe("gpu2|acme|gen9|gpu-1|Acme GPU");
   });
 
   it("falls back to the device's own adapterInfo, then to placeholders", () => {
     const fromDevice = new GpuFieldEvaluator(untouchableDevice({ vendor: "acme", description: "" }));
-    expect(fromDevice.cacheSalt).toBe("gpu1|acme|?|?|?");
+    expect(fromDevice.cacheSalt).toBe("gpu2|acme|?|?|?");
     const bare = new GpuFieldEvaluator(untouchableDevice());
-    expect(bare.cacheSalt).toBe("gpu1|?|?|?|?");
+    expect(bare.cacheSalt).toBe("gpu2|?|?|?|?");
   });
 
   it("explicit adapter info wins over the device's", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice({ vendor: "device-side" }), {
       adapterInfo: { vendor: "explicit" },
     });
-    expect(ev.cacheSalt).toBe("gpu1|explicit|?|?|?");
+    expect(ev.cacheSalt).toBe("gpu2|explicit|?|?|?");
   });
 });

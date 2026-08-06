@@ -481,6 +481,51 @@ through the CPU. Design decisions fixed up front:
 - Exit: full suite green, docs idempotent, demo browser-verified,
   release tagged. Commit.
 
+## Phase 25 — Uniform constant params (v0.6.1), scheduled 2026-08-06
+
+The cost v0.6.0 shipped documented: inside a resident run, a plain
+constant node param (`translate: [0,0,0]`) compiles like a field —
+a full `count x tupleSize x 4` device column plus a dispatch to fill
+it with the same value every element. In a mixed chain that is ~36%
+of the working set (36 MB at 1M points for transformPoints' three
+constants alone), it inflates `totalBytes` toward `run-too-large`,
+and it is why a constant-heavy fused chain can trail per-node GPU.
+
+- Constants ride the apply kernel's uniform instead: the planner
+  allocates a uniform slot rather than a column and emits no field
+  kernel; the apply kernel reads `params.consts[slot][k]` with the
+  same scalar-broadcast rule columns use.
+- **Values live in the uniform, never in the WGSL text.** The apply
+  kernel key encodes only which params are constant and their tuple
+  sizes — so editing a constant (a slider, an animated param) rebinds
+  a uniform and never recompiles a pipeline. Baking values as
+  literals is explicitly rejected: it would trade one cost for
+  pipeline-cache thrash.
+- Byte-exactness is the acceptance bar, not a hope: a JS number
+  written through a `Float32Array` uniform rounds exactly as the
+  constant column it replaces, so every existing bit-exact fused
+  chain must stay bit-exact. If any output byte moves, the change is
+  wrong — *unless* it moves onto the CPU reference, which is the one
+  admissible direction. Measured instance: a `-0` or subnormal f32
+  baked as a WGSL literal is flushed to `+0` by the D3D12 back end,
+  so the old constant column diverged from the CPU there; a uniform
+  load is not flushed, so those cases now match. Bytes changed, so
+  `SALT_VERSION` bumps per its own rule.
+- Compiled-artifact identities (apply-kernel version, run-plan
+  format) bump because the WGSL and plan shape change. The device
+  `cacheSalt` (`SALT_VERSION`) was expected to stay put — the whole
+  point being that bytes do not move — but the literal-flush finding
+  above means they can, so it bumps too.
+- Optional, same mechanism: `orientAlongVector`'s `up` is currently
+  baked as a WGSL literal, so editing it recompiles. Move it to the
+  uniform if it falls out cleanly.
+- Exit: device tests prove the previously-bit-exact chains are still
+  bit-exact byte-for-byte; working-set bytes and dispatch counts drop
+  measurably (record before/after for the demo chain); a constant
+  edit shows a pipeline cache hit, not a compile; `run-too-large`
+  boundary moves accordingly; full suite green with pinned counts
+  updated to the new (lower) numbers. Commit, release v0.6.1.
+
 ## Stretch (recorded, not scheduled)
 - GPU-resident World streaming: cell cooks that keep instance
   transforms device-side end to end (spawner-to-renderer without a

@@ -632,18 +632,21 @@ That is by design, not a bug; benchmark from cold caches.
   uniforms are not counted. Field temporaries live for the whole run,
   not just their member, so an 8-member run holds 8 columns at once.
 
-**Cost model.** A *constant* param still materializes a full device
-column and a dispatch inside a run: `translate: [0, 0, 0]` costs
-`n × 12` bytes exactly as a noise field would. In the
-`examples/08-gpu-fields` chain (five members: `setAttribute` →
-`jitterPoints` → `transformPoints` → `setAttribute` → `setAttribute`)
-the seven param columns are 76 of the 212 bytes per point the run
-holds — 36% of the working set — and the run issues 12 member kernels
-where the per-node path issues 4 field dispatches. A constant-heavy
-fused chain can therefore be **slower** than per-node GPU cooking and
-reaches `run-too-large` earlier than its point count suggests.
-Broadcasting constants through the uniform is a recorded, unscheduled
-optimization.
+**Cost model.** A *constant* param — a plain number or number tuple —
+costs a 16-byte uniform slot and no dispatch; only field-valued params
+materialize an `n`-element column. In the `examples/08-gpu-fields`
+chain (five members: `setAttribute` → `jitterPoints` →
+`transformPoints` → `setAttribute` → `setAttribute`) that is 120 bytes
+per point and 9 member kernels, down from 212 bytes and 12 kernels
+before v0.6.1, when every constant cost a full column. A kernel
+carries at most `MAX_APPLY_CONST_SLOTS` (4) constant slots.
+
+Constant *values* live in the uniform and never in the generated WGSL:
+the apply-kernel specialization key encodes only which params are
+constant, their tuple sizes, and their slots. Editing a constant —
+dragging a slider, animating a transform — therefore rebinds a uniform
+and hits the pipeline cache, where baking values into the shader text
+would recompile on every change.
 
 **Third-party resident kinds.** `NodeDef.resident?: { kind: string;
 eligible?(params): boolean }` marks a node fusable. `eligible` runs
@@ -656,7 +659,7 @@ an exception thrown there escapes `cook()` unwrapped rather than as a
 GPU floats are not byte-identical to CPU floats, so when a cook has a
 resolver and a node would resolve a live spec'd Field param on device,
 that node's memo key gains `|gpu:<cacheSalt>` — the evaluator's salt is
-`"gpu1|<vendor>|<architecture>|<device>|<description>"`. Toggling gpu
+`"gpu2|<vendor>|<architecture>|<device>|<description>"`. Toggling gpu
 on or off (or switching devices) therefore never serves bytes produced
 by the other path, while nodes without live spec'd field params keep
 their cache hits across the toggle. The marker is conservative: a

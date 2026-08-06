@@ -65,6 +65,8 @@ interface ScenarioOutput {
     warnings: number;
     pipelines: number;
     pipelineErrors: string[];
+    constVariantsByKind: Record<string, number>;
+    maxConstSlots: number;
   };
   chains: ChainResult[];
   semantics: {
@@ -154,33 +156,58 @@ interface ScenarioOutput {
     twoRunStats: GpuStats;
     twoRunEqualsCpu: boolean;
   };
+  constantEdges: {
+    cpuWords: string[];
+    uniformWords: string[];
+    literalWords: string[];
+    uniformEqualsCpu: boolean;
+    literalEqualsCpu: boolean;
+  };
+  constantEdits: {
+    firstStats: GpuStats;
+    editStats: GpuStats;
+    upEditStats: GpuStats;
+    cacheAfterFirst: number;
+    cacheAfterEdit: number;
+    cacheAfterUp: number;
+    editChangedP: boolean;
+    upEditChangedRot: boolean;
+    editMatchesFresh: boolean;
+    upEditMatchesFresh: boolean;
+  };
 }
 
 /**
  * Expected fused-run shape per chain: member count and the number of
- * dispatched member kernels (one per field-capable param plus one apply
- * kernel per member — setAttribute/jitterPoints/orientAlongVector 2 each,
- * transformPoints 4).
+ * dispatched member kernels — one apply kernel per member, plus one
+ * field kernel per param that is a Field. Since phase 25 a param that
+ * is a plain constant costs NO kernel (it rides the apply kernel's
+ * uniform), so a member's dispatches are 1 + its Field params: an
+ * all-constant transformPoints is 1 where it used to be 4, and the
+ * counts below are the post-phase-25 (lower) numbers.
  */
 const CHAIN_SHAPE: Record<string, { members: number; dispatches: number }> = {
-  hash2: { members: 2, dispatches: 4 },
-  hash4: { members: 4, dispatches: 8 },
-  retype3: { members: 3, dispatches: 6 },
-  float4: { members: 4, dispatches: 10 },
+  hash2: { members: 2, dispatches: 3 },
+  hash4: { members: 4, dispatches: 6 },
+  retype3: { members: 3, dispatches: 5 },
+  float4: { members: 4, dispatches: 8 },
   types5: { members: 6, dispatches: 12 },
   selfRetype5: { members: 5, dispatches: 10 },
-  long8: { members: 8, dispatches: 16 },
-  seeds3: { members: 3, dispatches: 8 },
+  long8: { members: 8, dispatches: 12 },
+  seeds3: { members: 3, dispatches: 6 },
   orientSeed2: { members: 2, dispatches: 4 },
-  exactTransform3: { members: 3, dispatches: 8 },
-  rotOnly2: { members: 2, dispatches: 6 },
-  scaleOnly2: { members: 2, dispatches: 6 },
-  aliasTranslate2: { members: 2, dispatches: 6 },
-  replaceP2: { members: 2, dispatches: 4 },
-  epochP3: { members: 3, dispatches: 6 },
+  exactTransform3: { members: 3, dispatches: 6 },
+  rotOnly2: { members: 2, dispatches: 2 },
+  scaleOnly2: { members: 2, dispatches: 2 },
+  aliasTranslate2: { members: 2, dispatches: 4 },
+  replaceP2: { members: 2, dispatches: 3 },
+  epochP3: { members: 3, dispatches: 4 },
   badRot2: { members: 2, dispatches: 4 },
-  orientThenTransform2: { members: 2, dispatches: 6 },
-  const3: { members: 3, dispatches: 8 },
+  orientThenTransform2: { members: 2, dispatches: 3 },
+  const3: { members: 3, dispatches: 5 },
+  remapConst5: { members: 5, dispatches: 7 },
+  constStores4: { members: 4, dispatches: 4 },
+  constDir2: { members: 2, dispatches: 3 },
 };
 
 /**
@@ -196,7 +223,13 @@ const CHAIN_SHAPE: Record<string, { members: number; dispatches: number }> = {
  * keeps an f64 interior throughout. Measured (rangeUlp / minQuatDot):
  * float4 P 4.83, d 4.27, rot 0.99999957; const3 P 1.69, h 1.71, rot
  * 0.99999986; badRot2 rot 0.99999990; orientThenTransform2 P 1.33, rot
- * 0.99999980. A different adapter exceeding one is a finding, not noise.
+ * 0.99999980; constDir2 rot 0.99999997. A different adapter exceeding
+ * one is a finding, not noise.
+ *
+ * Phase 25 moved constant params (and orientAlongVector's up hint) from
+ * device columns into the kernel uniform: every one of these measured
+ * values is unchanged to full printed precision, which is what "no
+ * output byte moved" looks like for the chains that carry float slack.
  */
 const CHAIN_BUDGETS: Record<string, number> = {
   float4: 6,
@@ -204,6 +237,7 @@ const CHAIN_BUDGETS: Record<string, number> = {
   const3: 3,
   badRot2: 3,
   orientThenTransform2: 3,
+  constDir2: 3,
 };
 
 /** Minimum per-lane |dot| between the CPU and fused rot quaternions. */
@@ -271,9 +305,16 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device-resident runs"), ()
       v.errors.map((e) => `${e.key} @${e.lineNum}:${e.linePos} ${e.message}`).join("\n"),
     ).toEqual([]);
     expect(v.pipelineErrors, v.pipelineErrors.join("\n")).toEqual([]);
-    // All four kinds x every column/attribute shape they support.
-    expect(v.variants).toBeGreaterThanOrEqual(220);
+    // All four kinds x every column/constant/attribute shape they
+    // support, including the binding remaps constant params cause.
+    expect(v.variants).toBeGreaterThanOrEqual(300);
     expect(v.pipelines).toBe(v.variants);
+    // Every kind compiles with uniform constants, up to the three slots
+    // an all-constant transformPoints takes.
+    for (const kind of ["setAttribute", "transformPoints", "jitterPoints", "orientAlongVector"]) {
+      expect(v.constVariantsByKind[kind], `${kind}: constant-carrying variants`).toBeGreaterThan(0);
+    }
+    expect(v.maxConstSlots).toBe(3);
   });
 
   it("every chain fuses into exactly one run with the expected member kernels", () => {
@@ -308,7 +349,11 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device-resident runs"), ()
 
   it("hash-only chains are BIT-EXACT vs the CPU cook, attribute for attribute", () => {
     const exact = scenario.chains.filter((c) => c.bitExact);
-    expect(exact.length).toBeGreaterThanOrEqual(8);
+    // The phase-25 acceptance bar: every chain that was bit-exact before
+    // constants moved into the uniform is still bit-exact, byte for
+    // byte, plus `remapConst5` (constant-heavy binding remaps) and
+    // `constStores4` (a constant stored into every target type).
+    expect(exact.length).toBeGreaterThanOrEqual(15);
     for (const c of exact) {
       for (const a of c.attrs) {
         expect(a.equalCpu, `${c.name}.${a.name} (${a.type}x${a.tupleSize}) vs CPU bytes`).toBe(true);
@@ -514,5 +559,47 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device-resident runs"), ()
     expect(s.twoRunStats.readbacksSaved).toBe(2);
     expect(s.twoRunStats.cooked).toBe(6);
     expect(s.twoRunEqualsCpu, "both runs match the CPU cook byte-for-byte").toBe(true);
+  });
+
+  it("carries -0 and subnormal constants that a baked literal loses", () => {
+    // The one class where phase 25 moved bytes — onto the CPU reference,
+    // not away from it. A `-0`/subnormal f32 LITERAL is flushed to `+0`
+    // by (at least) the D3D12 back end, so the constant column a run used
+    // to materialize carried `+0`; a uniform load is not a literal and
+    // keeps the bits. The contract asserted here is the CPU one.
+    const e = scenario.constantEdges;
+    expect(e.uniformWords, "uniform constants vs the CPU bit pattern").toEqual(e.cpuWords);
+    expect(e.uniformEqualsCpu, "the whole fused output matches the CPU").toBe(true);
+    console.log(
+      `[constant edges ${testDevice!.label}] cpu=${e.cpuWords.join(" ")} ` +
+        `uniform=${e.uniformWords.join(" ")} bakedLiteral=${e.literalWords.join(" ")} ` +
+        `(literal path matches CPU: ${e.literalEqualsCpu})`,
+    );
+  });
+
+  it("editing a constant param rebinds a uniform and NEVER recompiles a pipeline", () => {
+    const c = scenario.constantEdits;
+    // The first cook compiles the run's kernels...
+    expect(c.firstStats.residentRuns).toBe(1);
+    expect(c.firstStats.pipelinesCompiled).toBe(c.firstStats.dispatches);
+    // ...and an edited constant re-executes the whole run with zero
+    // compiles: every kernel is a pipeline-cache hit, because the apply
+    // key encodes which params are constant, never their values.
+    expect(c.editStats.residentRuns).toBe(1);
+    expect(c.editStats.pipelinesCompiled, "a constant edit must not compile").toBe(0);
+    expect(c.editStats.pipelineCacheHits).toBe(c.editStats.dispatches);
+    expect(c.cacheAfterEdit).toBe(c.cacheAfterFirst);
+    // Same for orientAlongVector's up hint, a baked WGSL literal before
+    // phase 25 and a uniform slot since.
+    expect(c.upEditStats.residentRuns).toBe(1);
+    expect(c.upEditStats.pipelinesCompiled, "an up-hint edit must not compile").toBe(0);
+    expect(c.upEditStats.pipelineCacheHits).toBe(c.upEditStats.dispatches);
+    expect(c.cacheAfterUp).toBe(c.cacheAfterFirst);
+    // The rebound uniforms carry the NEW values: the output changes, to
+    // exactly the bytes a graph built with those values produces.
+    expect(c.editChangedP, "the edited constant must change the output").toBe(true);
+    expect(c.upEditChangedRot, "the edited up hint must change the output").toBe(true);
+    expect(c.editMatchesFresh, "edited run bytes vs a fresh build of the same params").toBe(true);
+    expect(c.upEditMatchesFresh, "up-edited run bytes vs a fresh build").toBe(true);
   });
 });

@@ -232,8 +232,8 @@
     are bit-exact) but each path is deterministic: recook cold and the same hash comes back. A warm
     recook reports <code>nodes 0 / 6</code> in ~0 ms and does no device work at all — the fused run
     comes back from its terminal's single memo entry — so the counters above stay the cold ones. The
-    fused chain's three constant <code>transformPoints</code> params each still cost a device column
-    and a dispatch, which is why a constant-heavy chain can trail per-node GPU.
+    fused chain's three constant <code>transformPoints</code> params ride the run's uniform rather
+    than device columns, so they add no dispatch and no per-point memory.
   </p>
 </div>
 

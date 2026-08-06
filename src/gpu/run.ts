@@ -30,13 +30,27 @@
  *   multiples, so chunks partition the element range and no element is
  *   ever written twice.
  *
+ * Constant params (phase 25): a param that is a plain number or number
+ * tuple compiles to neither a column nor a field kernel — the planner
+ * allocates a slot in the apply kernel's own uniform and the executor
+ * writes the values there per chunk. That removes `count * tupleSize *
+ * 4` bytes and one dispatch per constant param from the working set
+ * (transformPoints with three constants at 1M points: 36 MB and three
+ * dispatches), without moving an output byte: a JS number written
+ * through a `Float32Array` uniform rounds exactly as the `wgslF32`
+ * literal the constant column's kernel stored. The one exception is a
+ * constant that is `-0` or subnormal, which a WGSL front end may flush
+ * to `+0` as a literal but never as a uniform load — those now match
+ * the CPU's bytes where the column did not (see applyKernels.ts).
+ *
  * Memory bound: a run's working set — resident attribute buffers
  * (every epoch) + field temp columns (held for the whole run) + the
  * readback staging buffer — is computed at plan time and compared
  * against the evaluator's `maxResidentBytes` (default 512 MiB);
  * over-budget runs return null (`run-too-large`) and the per-node path
  * serves. The bound counts logical bytes: pow2 pool bucketing can
- * allocate up to 2x, and per-chunk 12-byte uniforms are not counted.
+ * allocate up to 2x, and the per-chunk uniforms (12 bytes, or 16 + 16
+ * per constant slot) are not counted.
  *
  * Pool discipline: every buffer is released in a `finally` (never
  * mapped — the readback unmaps in its own `finally`), on success,
@@ -56,12 +70,16 @@ import { CookCancelledError } from "../graph/errors.js";
 import { getFieldSpec, type FieldSpecArg } from "../nodes/fieldJson.js";
 import { hashCombine } from "../random/index.js";
 import {
+  APPLY_CONST_COMPONENTS,
+  APPLY_CONST_OFFSET,
+  MAX_APPLY_CONST_SLOTS,
   makeJitterPointsApply,
   makeOrientApply,
   makeSetAttributeApply,
   makeTransformPointsApply,
-  type ApplyColRef,
+  type ApplyConstRef,
   type ApplyKernel,
+  type ApplyParamRef,
 } from "./applyKernels.js";
 import { compileFieldSpec } from "./compile.js";
 import {
@@ -74,7 +92,12 @@ import {
 import type { BufferPool } from "./pool.js";
 import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./types.js";
 
-/** Byte size of the kernel uniform struct {count, seed, chunkOffset}. */
+/**
+ * Byte size of the field-kernel uniform struct {count, seed,
+ * chunkOffset}. Apply kernels carrying constant slots declare a larger
+ * `PcgParams` (see `applyUniformBytes`); every step carries its own
+ * `uniformBytes`.
+ */
 export const UNIFORM_BYTES = 12;
 
 /**
@@ -125,6 +148,14 @@ interface KernelStep {
   /** Uniform seed for this kernel (u32-coerced at dispatch). */
   readonly seed: number;
   readonly uniformsBinding: number;
+  /** Byte size of this step's uniform struct. */
+  readonly uniformBytes: number;
+  /**
+   * Constant slot values: {@link APPLY_CONST_COMPONENTS} f32 per slot
+   * (zero-padded), in slot order, written into the uniform after the
+   * scalar header. Empty for field kernels and constant-free applies.
+   */
+  readonly consts: readonly number[];
   readonly bindings: readonly { readonly binding: number; readonly ref: BufRef }[];
 }
 
@@ -153,7 +184,7 @@ type LayoutOp =
   | { readonly op: "replace"; readonly name: string; readonly type: AttrType; readonly tupleSize: number }
   | { readonly op: "ensure-rot" };
 
-const PLAN_FORMAT = "pcg-resident-run/1";
+const PLAN_FORMAT = "pcg-resident-run/2";
 
 /** Opaque (to the executor) compiled run plan. */
 export interface ResidentRunPlan {
@@ -196,6 +227,9 @@ function isVec3(v: unknown): v is readonly [number, number, number] {
 
 /** Internal planning failure signal (never escapes planResidentRun). */
 class PlanFail extends Error {}
+
+/** Shared empty constant list for steps carrying no uniform slots. */
+const NO_CONSTS: readonly number[] = [];
 
 /**
  * Plan a resident run: synchronous, device-free. Simulates the chain's
@@ -252,23 +286,54 @@ export function planResidentRun(
   };
 
   /**
-   * Compile one field-capable param into a field kernel step writing a
-   * temp column; plain values compile as constants. Returns the column
-   * ref for the apply kernel.
+   * Allocate a uniform constant slot for `values` in the apply kernel's
+   * accumulating `consts` array (4 f32 per slot, zero-padded). Values
+   * are stored as authored: the executor's `Float32Array` write rounds
+   * them exactly as the `wgslF32` literal a constant column would have.
+   */
+  const constSlot = (values: readonly number[], consts: number[], kind: string): ApplyConstRef => {
+    const slot = consts.length / APPLY_CONST_COMPONENTS;
+    if (slot >= MAX_APPLY_CONST_SLOTS) {
+      throw new Error(
+        `resident run: "${kind}" needs more than ${MAX_APPLY_CONST_SLOTS} uniform constant slots ` +
+          "for its constant params; raise MAX_APPLY_CONST_SLOTS in applyKernels.ts (each slot " +
+          "costs 16 bytes of the per-chunk uniform and nothing else)",
+      );
+    }
+    for (let k = 0; k < APPLY_CONST_COMPONENTS; k++) consts.push(k < values.length ? values[k] : 0);
+    return { kind: "const", tupleSize: values.length, slot };
+  };
+
+  /**
+   * Compile one field-capable param. A Field with a spec becomes a field
+   * kernel step writing a temp column (returning that column's buffer
+   * ref); a plain number or number tuple becomes a uniform constant slot
+   * — no column, no kernel, no dispatch, and so no buffer ref.
    */
   const compileParam = (
     value: unknown,
     seed: number,
     steps: KernelStep[],
     allowedTuples: readonly number[] | null,
-  ): { col: ApplyColRef; ref: BufRef } => {
+    consts: number[],
+    kind: string,
+  ): { param: ApplyParamRef; ref: BufRef | null } => {
     let spec: FieldSpecArg;
     if (isField(value)) {
       const s = getFieldSpec(value);
       if (s === undefined) throw new PlanFail("no spec");
       spec = s;
     } else if (typeof value === "number" || (Array.isArray(value) && value.every((x) => typeof x === "number"))) {
-      spec = value as FieldSpecArg;
+      // Same acceptance as the constant column this replaces: tuple 1-4
+      // (wider constants never compiled) and every component finite as
+      // an f32 (`wgslF32` rejected the rest, rejecting the whole run).
+      const values: readonly number[] = typeof value === "number" ? [value] : (value as readonly number[]);
+      if (values.length < 1 || values.length > APPLY_CONST_COMPONENTS) throw new PlanFail("tuple");
+      if (allowedTuples !== null && !allowedTuples.includes(values.length)) throw new PlanFail("tuple");
+      for (const v of values) {
+        if (!Number.isFinite(Math.fround(v))) throw new PlanFail("f32 range");
+      }
+      return { param: constSlot(values, consts, kind), ref: null };
     } else {
       throw new PlanFail("bad param value");
     }
@@ -289,32 +354,61 @@ export function planResidentRun(
       workgroupSize: kernel.workgroupSize,
       seed,
       uniformsBinding: kernel.bindings.uniforms,
+      uniformBytes: UNIFORM_BYTES,
+      consts: NO_CONSTS,
       bindings: [
         ...kernel.inputs.map((inp) => ({ binding: inp.binding, ref: { kind: "slot", index: slotFor(inp.name) } as BufRef })),
         { binding: kernel.bindings.output, ref: { kind: "col", index: colIndex } },
       ],
     });
-    return { col: { type: kernel.outType, tupleSize: kernel.outTupleSize }, ref: { kind: "col", index: colIndex } };
+    return {
+      param: { kind: "column", type: kernel.outType, tupleSize: kernel.outTupleSize },
+      ref: { kind: "col", index: colIndex },
+    };
   };
 
-  /** Apply-kernel step from a generated kernel + role→buffer mapping. */
-  const applyStep = (kernel: ApplyKernel, seed: number, refs: Record<string, BufRef>): KernelStep => ({
-    key: kernel.key,
-    wgsl: kernel.wgsl,
-    entryPoint: kernel.entryPoint,
-    workgroupSize: kernel.workgroupSize,
-    seed,
-    uniformsBinding: 0,
-    bindings: kernel.bindings.map((b) => {
-      const ref = refs[b.role];
-      if (ref === undefined) throw new PlanFail(`unmapped role ${b.role}`);
-      return { binding: b.binding, ref };
-    }),
-  });
+  /**
+   * Apply-kernel step from a generated kernel + role→buffer mapping.
+   * Binding indices are positional and constant params declare none, so
+   * the mapping is by role, never by position; a role the kernel
+   * declares but the planner did not map is a codegen/planner
+   * disagreement, not a user input, and rejects the run.
+   */
+  const applyStep = (
+    kernel: ApplyKernel,
+    seed: number,
+    refs: Record<string, BufRef>,
+    consts: readonly number[],
+  ): KernelStep => {
+    if (kernel.constSlots * APPLY_CONST_COMPONENTS !== consts.length) {
+      throw new Error(
+        `resident run: apply kernel "${kernel.key}" declares ${kernel.constSlots} constant slots ` +
+          `but the planner allocated ${consts.length / APPLY_CONST_COMPONENTS}`,
+      );
+    }
+    return {
+      key: kernel.key,
+      wgsl: kernel.wgsl,
+      entryPoint: kernel.entryPoint,
+      workgroupSize: kernel.workgroupSize,
+      seed,
+      uniformsBinding: 0,
+      uniformBytes: kernel.uniformBytes,
+      consts,
+      bindings: kernel.bindings.map((b) => {
+        const ref = refs[b.role];
+        if (ref === undefined) throw new PlanFail(`unmapped role ${b.role}`);
+        return { binding: b.binding, ref };
+      }),
+    };
+  };
 
   try {
     for (const m of members) {
       const steps: KernelStep[] = [];
+      // Uniform constant slots for THIS member's apply kernel, filled in
+      // param order by compileParam.
+      const consts: number[] = [];
       const p = m.params;
       switch (m.kind) {
         case "setAttribute": {
@@ -326,37 +420,32 @@ export function planResidentRun(
           if (typeof ts !== "number" || !Number.isInteger(ts) || ts < 1 || ts > 4) throw new PlanFail("tupleSize");
           const extraSeed = typeof p.seed === "number" ? p.seed : Number.NaN;
           const seed = extraSeed === 0 ? m.seed : hashCombine(m.seed, extraSeed);
-          // The CPU accepts col tuple 1 (broadcast) or exactly ts.
-          const { col, ref } = compileParam(p.value, seed, steps, ts === 1 ? [1] : [1, ts]);
+          // The CPU accepts a value tuple of 1 (broadcast) or exactly ts.
+          const { param, ref } = compileParam(p.value, seed, steps, ts === 1 ? [1] : [1, ts], consts, m.kind);
           const target = freshSlot(name, ts, "none");
           layout.set(name, { type, tupleSize: ts });
           written.set(name, target);
           layoutOps.push({ op: "replace", name, type, tupleSize: ts });
-          steps.push(
-            applyStep(makeSetAttributeApply(col, type, ts), 0, {
-              value: ref,
-              target: { kind: "slot", index: target },
-            }),
-          );
+          const refs: Record<string, BufRef> = { target: { kind: "slot", index: target } };
+          if (ref !== null) refs.value = ref;
+          steps.push(applyStep(makeSetAttributeApply(param, type, ts), 0, refs, consts));
           break;
         }
         case "transformPoints": {
           expectAttr("P", "f32", 3);
-          const t = compileParam(p.translate, m.seed, steps, [1, 3]);
-          const r = compileParam(p.rotateEuler, m.seed, steps, [1, 3]);
-          const s = compileParam(p.scale, m.seed, steps, [1, 3]);
+          const t = compileParam(p.translate, m.seed, steps, [1, 3], consts, m.kind);
+          const r = compileParam(p.rotateEuler, m.seed, steps, [1, 3], consts, m.kind);
+          const s = compileParam(p.scale, m.seed, steps, [1, 3], consts, m.kind);
           const rotAttr = layout.get("rot");
           const hasRot = rotAttr !== undefined && rotAttr.type === "f32" && rotAttr.tupleSize === 4;
           const sclAttr = layout.get("scale");
           const hasScale = sclAttr !== undefined && sclAttr.type === "f32" && sclAttr.tupleSize === 3;
           const pSlot = slotFor("P");
           written.set("P", pSlot);
-          const refs: Record<string, BufRef> = {
-            translate: t.ref,
-            rotateEuler: r.ref,
-            scale: s.ref,
-            P: { kind: "slot", index: pSlot },
-          };
+          const refs: Record<string, BufRef> = { P: { kind: "slot", index: pSlot } };
+          if (t.ref !== null) refs.translate = t.ref;
+          if (r.ref !== null) refs.rotateEuler = r.ref;
+          if (s.ref !== null) refs.scale = s.ref;
           if (hasRot) {
             const rotSlot = slotFor("rot");
             written.set("rot", rotSlot);
@@ -367,40 +456,53 @@ export function planResidentRun(
             written.set("scale", sclSlot);
             refs.scaleAttr = { kind: "slot", index: sclSlot };
           }
-          steps.push(applyStep(makeTransformPointsApply(t.col, r.col, s.col, hasRot, hasScale), 0, refs));
+          steps.push(
+            applyStep(
+              makeTransformPointsApply(t.param, r.param, s.param, hasRot, hasScale),
+              0,
+              refs,
+              consts,
+            ),
+          );
           break;
         }
         case "jitterPoints": {
           expectAttr("P", "f32", 3);
           const extraSeed = typeof p.seed === "number" ? p.seed : Number.NaN;
           const seed = hashCombine(m.seed, extraSeed);
-          const a = compileParam(p.amount, seed, steps, [1, 3]);
+          const a = compileParam(p.amount, seed, steps, [1, 3], consts, m.kind);
           const pSlot = slotFor("P");
           written.set("P", pSlot);
-          steps.push(
-            applyStep(makeJitterPointsApply(a.col), seed, {
-              amount: a.ref,
-              P: { kind: "slot", index: pSlot },
-            }),
-          );
+          const refs: Record<string, BufRef> = { P: { kind: "slot", index: pSlot } };
+          if (a.ref !== null) refs.amount = a.ref;
+          steps.push(applyStep(makeJitterPointsApply(a.param), seed, refs, consts));
           break;
         }
         case "orientAlongVector": {
           const axis = p.axis;
           if (!(ORIENT_AXES as readonly unknown[]).includes(axis)) throw new PlanFail("axis");
           if (!isVec3(p.up)) throw new PlanFail("up");
-          const d = compileParam(p.direction, m.seed, steps, [1, 3]);
+          const d = compileParam(p.direction, m.seed, steps, [1, 3], consts, m.kind);
+          // The up hint normalizes in f64 exactly as the CPU node does;
+          // the f32 rounding then happens once, in the uniform write.
+          const up = p.up;
+          const upLenSq = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
+          const upInv = upLenSq > 0 ? 1 / Math.sqrt(upLenSq) : 0;
+          const upUnit = [up[0] * upInv, up[1] * upInv, up[2] * upInv];
+          for (const v of upUnit) {
+            if (!Number.isFinite(Math.fround(v))) throw new PlanFail("up range");
+          }
+          const upRef = constSlot(upUnit, consts, m.kind);
           const rotAttr = layout.get("rot");
           const keepExisting = rotAttr !== undefined && rotAttr.type === "f32" && rotAttr.tupleSize === 4;
           const rotSlot = keepExisting ? slotFor("rot") : freshSlot("rot", 4, "quat-default");
           layout.set("rot", { type: "f32", tupleSize: 4 });
           written.set("rot", rotSlot);
           layoutOps.push({ op: "ensure-rot" });
+          const refs: Record<string, BufRef> = { rot: { kind: "slot", index: rotSlot } };
+          if (d.ref !== null) refs.direction = d.ref;
           steps.push(
-            applyStep(makeOrientApply(d.col, axis as OrientAxis, p.up), 0, {
-              direction: d.ref,
-              rot: { kind: "slot", index: rotSlot },
-            }),
+            applyStep(makeOrientApply(d.param, axis as OrientAxis, upRef), 0, refs, consts),
           );
           break;
         }
@@ -544,9 +646,23 @@ export async function executeResidentRun(
         // are exact workgroup multiples — chunks partition the range.
         const chunk = chunkCapacity(step.workgroupSize, env.maxElementsPerDispatch);
         const chunkCount = Math.ceil(count / chunk);
+        // Uniform bytes for this step: the scalar header, plus the
+        // step's constant slots when it has any. Constants are
+        // chunk-invariant, so only chunkOffset changes between writes;
+        // the f32 view rounds each value exactly once, matching the
+        // constant column these slots replace.
+        const uniformData = new ArrayBuffer(step.uniformBytes);
+        const uniformBytes = new Uint8Array(uniformData);
+        const header = new Uint32Array(uniformData, 0, 3);
+        header[0] = count;
+        header[1] = step.seed >>> 0;
+        if (step.consts.length > 0) {
+          new Float32Array(uniformData, APPLY_CONST_OFFSET, step.consts.length).set(step.consts);
+        }
         for (let c = 0; c < chunkCount; c++) {
-          const uniformBuf = acquire(UNIFORM_BYTES, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
-          device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([count, step.seed >>> 0, c * chunk]));
+          const uniformBuf = acquire(step.uniformBytes, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
+          header[2] = c * chunk;
+          device.queue.writeBuffer(uniformBuf, 0, uniformBytes);
           const bindGroup = device.createBindGroup({
             layout: pipeline.getBindGroupLayout(0),
             entries: [

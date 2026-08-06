@@ -73,8 +73,16 @@ import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./type
  * Bump when the codegen or the marshalling contract changes in a way
  * that can change produced bytes, so memo caches never serve stale
  * device output across library versions.
+ *
+ * `gpu2` (constant params moved to uniform slots): the bytes a fused
+ * run produces are unchanged for every ordinary value, but a `-0` or
+ * subnormal constant is no longer flushed to `+0` — a baked WGSL
+ * literal was, a uniform load is not — so those cases now match the
+ * CPU reference where they previously did not. That is a byte change,
+ * so the rule above applies even though it moved output toward the
+ * reference rather than away from it.
  */
-const SALT_VERSION = "gpu1";
+const SALT_VERSION = "gpu2";
 
 /**
  * Default bound on bytes RETAINED by the buffer pool (idle buffers
