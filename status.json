@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-06 09:12",
-  "currentPhase": 20,
+  "updated": "2026-08-06 11:05",
+  "currentPhase": 21,
   "phases": [
     { "id": "plan", "title": "Planning — design, CLAUDE.md, PLAN.md", "state": "done" },
     { "id": 0, "title": "Scaffolding — tooling, configs, status generator", "state": "done" },
@@ -24,12 +24,13 @@
     { "id": 17, "title": "Registry metadata and editor adoption", "state": "done" },
     { "id": 18, "title": "Docs and v0.4.0", "state": "done" },
     { "id": 19, "title": "WGSL field compiler — codegen for the field-expression grammar", "state": "done" },
-    { "id": 20, "title": "GPU device runtime — evaluator, cook integration, parity suite", "state": "active" },
-    { "id": 21, "title": "GPU example, docs, v0.5.0", "state": "pending" }
+    { "id": 20, "title": "GPU device runtime — evaluator, cook integration, parity suite", "state": "done" },
+    { "id": 21, "title": "GPU example, docs, v0.5.0", "state": "active" }
   ],
-  "tests": { "passed": 728, "failed": 0, "total": 728, "lastRun": "2026-08-06 09:12" },
+  "tests": { "passed": 769, "failed": 0, "total": 769, "lastRun": "2026-08-06 11:04" },
   "blockers": [],
   "log": [
+    { "time": "2026-08-06 11:05", "message": "Phase 20 complete and audited (PASS-with-fixes): GpuFieldEvaluator runs compiled field kernels on a real device behind the core GpuFieldResolver interface — structural device typing (browser and Node bindings both assignable), instance-lifetime pipeline cache, complete fallback vocabulary (no-spec / compile-error / too-many-buffers / dispatch-too-large), CookOptions.gpu threaded through setAttribute, subgraphs, captureAsync, and World. Memo keys gain |gpu:<device salt> exactly when a node would resolve a spec'd field on device, so caches stay provenance-pure across toggles (stats-proven) while the CPU path stays byte-identical. Parity measured on hardware and asserted as budgets: u32/hash/compare families byte-exact across counts and seeds; floats from 1-2 ULP (arith) to the WGSL absolute-error class (asin/acos); four GIGO-class divergences pinned as contract lines. Load-bearing discovery: Dawn destabilizes vitest workers, so all device work runs in plain-Node children (deterministic across 6+ full runs); suites skip visibly without an adapter. Audit re-derived the zero-regression and layering claims, simulated the no-adapter path, and fixed one test-only defect (NaN-blind parity comparator). 769 tests green (41 new)." },
     { "time": "2026-08-06 09:12", "message": "Phase 19 complete and audited (PASS, zero fixes): compileFieldSpec compiles the complete field-expression grammar to WGSL compute kernels behind the new pcg-ts/gpu subpath — SSA subtree dedup, static broadcast/tuple inference, fused fbm loops, worley exact ring walk, normalized wrapping; the u32 hash library ports bit-exactly (audit re-derived the murmur chains by hand) with all constants imported from the CPU source of truth. getFieldSpec joins fieldToJson as a non-throwing accessor. Audit line-checked six generated kernels as a human WGSL front end: no invalid literals, no layout traps, no identifier collisions. Separately, a Dawn smoke test on the host GPU confirmed the design's core bet empirically: a murmur round dispatched on device is bit-exact vs Math.imul and run-to-run stable, and Dawn's getCompilationInfo can validate every generated kernel in phase 20. 728 tests green (101 new)." },
     { "time": "2026-08-06 07:30", "message": "v0.5 cycle started: the recorded WebGPU stretch goal scheduled as phases 19-21 (WGSL compiler for the field-expression grammar; opt-in GPU device runtime with cook integration, cache provenance, and a measured parity contract; example + docs + v0.5.0). Design fixed up front from an architecture audit: the serializable field grammar is the GPU surface, pcg-ts/gpu is a guarded subpath, CPU stays the bit-exact reference, u32 hash/random streams port exactly, floats match within documented tolerances. Also committed: example 07-galaxy (streamed spiral galaxy with clickable star systems)." },
     { "time": "2026-08-05 14:24", "message": "v0.4.0 released. Phase 18 complete: node reference regenerated with category grouping; README/llms.txt/authoring document the mutation and introspection contracts (including disconnect's unknown-pin behavior change); overview site and hosted demos refreshed. Final gate: 627 tests, clean typecheck, idempotent docs." },

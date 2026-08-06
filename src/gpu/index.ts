@@ -1,10 +1,14 @@
 /**
- * `pcg-ts/gpu` — WGSL compiler for the serializable field-expression
- * grammar. Phase 19 scope: pure codegen. `compileFieldSpec` turns a
- * field JSON spec (see `fieldFromJson`) plus a concrete attribute
- * layout into a complete WGSL compute kernel with a bind-layout plan
- * and a stable specialization key; nothing in this subpath touches a
- * GPU device, imports WebGPU types, or imports three.
+ * `pcg-ts/gpu` — WGSL compiler and device runtime for the serializable
+ * field-expression grammar. `compileFieldSpec` turns a field JSON spec
+ * (see `fieldFromJson`) plus a concrete attribute layout into a
+ * complete WGSL compute kernel with a bind-layout plan and a stable
+ * specialization key. `GpuFieldEvaluator` runs those kernels on a
+ * WebGPU device (typed structurally — see {@link GpuDeviceLike} — so
+ * this subpath needs no WebGPU type dependency and never imports
+ * three): pass one to `cook(graph, { gpu })`, `WorldOptions.gpu`, or
+ * `captureAsync` and eligible spec'd Field params resolve on the
+ * device, falling back to the CPU otherwise.
  *
  * Use `getFieldSpec(field)` (exported from the package root) to check
  * whether a live Field carries a compilable spec: JSON-authored fields
@@ -29,3 +33,21 @@ export {
   type KernelInput,
 } from "./types.js";
 export { compileFieldSpec, supportedGpuFieldFns } from "./compile.js";
+export {
+  BUFFER_USAGE,
+  MAP_MODE,
+  type GpuAdapterInfoLike,
+  type GpuBindGroupLayoutLike,
+  type GpuBindGroupLike,
+  type GpuBufferLike,
+  type GpuCommandBufferLike,
+  type GpuCommandEncoderLike,
+  type GpuCompilationInfoLike,
+  type GpuCompilationMessageLike,
+  type GpuComputePassLike,
+  type GpuComputePipelineLike,
+  type GpuDeviceLike,
+  type GpuQueueLike,
+  type GpuShaderModuleLike,
+} from "./device.js";
+export { GpuFieldEvaluator, type GpuFieldEvaluatorOptions } from "./evaluator.js";

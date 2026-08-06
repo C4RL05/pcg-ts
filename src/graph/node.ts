@@ -1,3 +1,4 @@
+import type { GpuFieldResolver } from "../fields/index.js";
 import type { DataCollection } from "./data.js";
 
 /** What a pin carries; `any` is a wildcard compatible with every other kind. */
@@ -42,6 +43,16 @@ export interface NodeExecuteArgs<P> {
    */
   readonly budgetMs?: number;
   /**
+   * GPU field resolver of the enclosing cook, when one was passed via
+   * `CookOptions.gpu` (already wrapped so its counters land in this
+   * cook's `CookStats.gpu`). Nodes that adopt GPU resolution try it for
+   * spec'd Field params and fall back to the synchronous CPU evaluation
+   * when it returns null; composite nodes (subgraphs) forward it to
+   * nested cooks. Absent on CPU-only cooks — behavior and bytes are then
+   * exactly the pre-GPU ones.
+   */
+  readonly gpu?: GpuFieldResolver;
+  /**
    * Throws `CookCancelledError` if the cook was aborted. Nodes doing long
    * loops should call it periodically so cancellation stays responsive.
    */
@@ -64,6 +75,22 @@ export interface NodeDef<P = Record<string, unknown>> {
   readonly defaultParams: P;
   /** Produce one collection per output pin; may be async. */
   execute(args: NodeExecuteArgs<P>): NodeOutputs | Promise<NodeOutputs>;
+  /**
+   * Declares how the node participates in GPU field resolution, for memo
+   * key provenance: when a cook carries a `gpu` resolver, the executor
+   * appends the resolver's cache salt to this node's memo key so bytes
+   * cooked with and without (or with a different) device never serve
+   * each other. `"fields"` (adopting nodes like setAttribute) appends
+   * only when a live param holds a Field carrying a serializable spec —
+   * params without spec'd fields cook identically either way and keep
+   * their cache across the toggle. `"always"` (composite nodes that
+   * forward the resolver into an inner cook, i.e. subgraphs) appends
+   * whenever a resolver is present — deliberately conservative
+   * over-invalidation, since the wrapper cannot see which inner nodes
+   * adopt. Omit for nodes that never touch GPU resolution: their memo
+   * keys ignore the resolver entirely.
+   */
+  readonly gpu?: "fields" | "always";
   /**
    * Optional extra memo-key component, read before each cook of an
    * instance. Use it to fold state living outside params into the cache

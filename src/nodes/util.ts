@@ -8,6 +8,7 @@ import {
   type Column,
   type Field,
   type FieldLike,
+  type GpuFieldResolver,
   evaluateField,
   isField,
   resolveField,
@@ -49,6 +50,26 @@ export function resolveOn(
 ): Column {
   const field: Field = isField(value) ? value : resolveField(value);
   return evaluateField(field, { geo, domain, seed });
+}
+
+/**
+ * Try to resolve a field-capable param on the GPU. Returns the resolved
+ * column, or `null` when the param is a plain value (constants are
+ * cheaper on the CPU than a dispatch) or the resolver declares the field
+ * ineligible — the caller then falls back to {@link resolveOn}, which
+ * must produce the same bytes the GPU path would have. Counter recording
+ * happens inside the resolver (the cook's stats view).
+ */
+export async function tryResolveOnGpu(
+  gpu: GpuFieldResolver,
+  geo: Geometry,
+  domain: "point" | "vertex" | "primitive" | "detail",
+  value: FieldLike,
+  seed: number,
+): Promise<Column | null> {
+  if (!isField(value)) return null;
+  const pending = gpu.resolveField(value, { geo, domain, seed });
+  return pending === null ? null : await pending;
 }
 
 /**

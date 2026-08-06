@@ -23,6 +23,7 @@ import {
   geometryItems,
   requireGeometry,
   resolveOn,
+  tryResolveOnGpu,
 } from "./util.js";
 
 const DOMAIN_ENUM = ["point", "vertex", "primitive", "detail"] as const;
@@ -99,7 +100,12 @@ export const setAttribute = standardNode<SetAttributeParams>({
         "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed), re-rolling field randomness (e.g. randomField). Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level.",
     },
   },
-  execute({ inputs, params, seed: nodeSeed }) {
+  // Numeric mode resolves `value` on the GPU when a cook carries a
+  // resolver ("fields": the memo key gains device provenance only when
+  // `value` is a spec'd Field — plain values keep their cache across the
+  // gpu toggle).
+  gpu: "fields",
+  async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "setAttribute"));
     const domain = params.domain as Domain;
     const type = params.type as AttrType;
@@ -160,7 +166,12 @@ export const setAttribute = standardNode<SetAttributeParams>({
         `setAttribute: param "stringValue" is only used when type is "string", got type "${type}"; set type to "string" or clear stringValue`,
       );
     }
-    const col = resolveOn(geo, domain, params.value, seed);
+    // GPU adoption (numeric mode only): an eligible spec'd field resolves
+    // on the device; null (plain value, no spec, incompatible layout)
+    // falls back to the byte-identical CPU evaluation.
+    const gpuCol =
+      gpu !== undefined ? await tryResolveOnGpu(gpu, geo, domain, params.value, seed) : null;
+    const col = gpuCol ?? resolveOn(geo, domain, params.value, seed);
     if (col.tupleSize !== 1 && col.tupleSize !== ts) {
       throw new Error(
         `setAttribute: value evaluates to tuple size ${col.tupleSize}, which is neither 1 (broadcast) nor tupleSize ${ts}`,

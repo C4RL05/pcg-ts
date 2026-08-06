@@ -90,6 +90,8 @@ export interface NodeSpec<P> {
   readonly params: { readonly [K in keyof P]-?: ParamSchema };
   execute(args: NodeExecuteArgs<P>): NodeOutputs | Promise<NodeOutputs>;
   memoKey?(): string;
+  /** GPU adoption declaration, copied onto the def; see {@link NodeDef.gpu}. */
+  readonly gpu?: "fields" | "always";
 }
 
 /** JSON-safe pin metadata. */
@@ -283,6 +285,7 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
     defaultParams: defaultParams as P,
     execute: (args) => spec.execute(args),
     ...(spec.memoKey !== undefined ? { memoKey: spec.memoKey.bind(spec) } : {}),
+    ...(spec.gpu !== undefined ? { gpu: spec.gpu } : {}),
   };
   const params: Record<string, ParamSchema> = {};
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {

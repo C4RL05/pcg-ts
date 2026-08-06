@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:91%; }
+  .bar > div { height:100%; background:var(--done); width:96%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 09:12</p>
-  <div class="bar"><div style="width:91%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 11:05</p>
+  <div class="bar"><div style="width:96%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -71,15 +71,15 @@
     <li class="done"><span class="chip">done</span>17 · Registry metadata and editor adoption</li>
     <li class="done"><span class="chip">done</span>18 · Docs and v0.4.0</li>
     <li class="done"><span class="chip">done</span>19 · WGSL field compiler — codegen for the field-expression grammar</li>
-    <li class="active"><span class="chip">active</span>20 · GPU device runtime — evaluator, cook integration, parity suite</li>
-    <li class="pending"><span class="chip">pending</span>21 · GPU example, docs, v0.5.0</li>
+    <li class="done"><span class="chip">done</span>20 · GPU device runtime — evaluator, cook integration, parity suite</li>
+    <li class="active"><span class="chip">active</span>21 · GPU example, docs, v0.5.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>728</b><span>passed</span></div>
+    <div><b>769</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-06 09:12</b><span>last run</span></div>
+    <div><b>2026-08-06 11:04</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -112,6 +112,7 @@
     <li><time>2026-08-05 14:24</time>v0.4.0 released. Phase 18 complete: node reference regenerated with category grouping; README/llms.txt/authoring document the mutation and introspection contracts (including disconnect&#39;s unknown-pin behavior change); overview site and hosted demos refreshed. Final gate: 627 tests, clean typecheck, idempotent docs.</li>
     <li><time>2026-08-06 07:30</time>v0.5 cycle started: the recorded WebGPU stretch goal scheduled as phases 19-21 (WGSL compiler for the field-expression grammar; opt-in GPU device runtime with cook integration, cache provenance, and a measured parity contract; example + docs + v0.5.0). Design fixed up front from an architecture audit: the serializable field grammar is the GPU surface, pcg-ts/gpu is a guarded subpath, CPU stays the bit-exact reference, u32 hash/random streams port exactly, floats match within documented tolerances. Also committed: example 07-galaxy (streamed spiral galaxy with clickable star systems).</li>
     <li><time>2026-08-06 09:12</time>Phase 19 complete and audited (PASS, zero fixes): compileFieldSpec compiles the complete field-expression grammar to WGSL compute kernels behind the new pcg-ts/gpu subpath — SSA subtree dedup, static broadcast/tuple inference, fused fbm loops, worley exact ring walk, normalized wrapping; the u32 hash library ports bit-exactly (audit re-derived the murmur chains by hand) with all constants imported from the CPU source of truth. getFieldSpec joins fieldToJson as a non-throwing accessor. Audit line-checked six generated kernels as a human WGSL front end: no invalid literals, no layout traps, no identifier collisions. Separately, a Dawn smoke test on the host GPU confirmed the design&#39;s core bet empirically: a murmur round dispatched on device is bit-exact vs Math.imul and run-to-run stable, and Dawn&#39;s getCompilationInfo can validate every generated kernel in phase 20. 728 tests green (101 new).</li>
+    <li><time>2026-08-06 11:05</time>Phase 20 complete and audited (PASS-with-fixes): GpuFieldEvaluator runs compiled field kernels on a real device behind the core GpuFieldResolver interface — structural device typing (browser and Node bindings both assignable), instance-lifetime pipeline cache, complete fallback vocabulary (no-spec / compile-error / too-many-buffers / dispatch-too-large), CookOptions.gpu threaded through setAttribute, subgraphs, captureAsync, and World. Memo keys gain |gpu:&lt;device salt&gt; exactly when a node would resolve a spec&#39;d field on device, so caches stay provenance-pure across toggles (stats-proven) while the CPU path stays byte-identical. Parity measured on hardware and asserted as budgets: u32/hash/compare families byte-exact across counts and seeds; floats from 1-2 ULP (arith) to the WGSL absolute-error class (asin/acos); four GIGO-class divergences pinned as contract lines. Load-bearing discovery: Dawn destabilizes vitest workers, so all device work runs in plain-Node children (deterministic across 6+ full runs); suites skip visibly without an adapter. Audit re-derived the zero-regression and layering claims, simulated the no-adapter path, and fixed one test-only defect (NaN-blind parity comparator). 769 tests green (41 new).</li>
   </ol>
 </body>
 </html>

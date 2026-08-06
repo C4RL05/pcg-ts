@@ -295,8 +295,14 @@ export function subgraphNode(
     inputs: inputPins,
     outputs: outputPins,
     defaultParams: {},
+    // The outer cook's resolver is forwarded into the inner cook, so the
+    // wrapper's memo key must carry GPU provenance whenever a resolver
+    // is present — the wrapper cannot see which inner nodes adopt, so
+    // "always" over-invalidates conservatively (inner nodes apply their
+    // own precise "fields" rule inside the nested cook).
+    gpu: "always",
     memoKey: () => transitiveVersionKey(inner, new Set()),
-    async execute({ inputs, seed, signal, budgetMs }) {
+    async execute({ inputs, seed, signal, budgetMs, gpu }) {
       // Same outer seed and inputs reproduce the same inner keys, so the
       // persisted inner caches serve unchanged nodes across outer cooks.
       // Quiet setters: plumbing must not bump the inner version, or the
@@ -305,7 +311,10 @@ export function subgraphNode(
       for (const portal of portals) {
         inner._setParamQuiet(portal.handle, "items", inputs[portal.name] ?? []);
       }
-      const result = await cook(inner, { signal, budgetMs });
+      // gpu forwards like signal/budgetMs: the inner cook applies the
+      // same policy (its per-cook stats view reports into the outer
+      // cook's sink; see gpuStatsView in execute.ts).
+      const result = await cook(inner, { signal, budgetMs, gpu });
       const out: Record<string, DataCollection> = {};
       for (const exp of exposedOutputs) {
         out[exp.name] = result.outputs[`__out_${exp.name}`] ?? [];

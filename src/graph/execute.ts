@@ -1,4 +1,10 @@
-import { isField } from "../fields/index.js";
+import {
+  createGpuCookStats,
+  isField,
+  type GpuCookStats,
+  type GpuFieldResolver,
+} from "../fields/index.js";
+import { getFieldSpec } from "../nodes/fieldJson.js";
 import type { DataCollection, DataItem } from "./data.js";
 import { CookCancelledError, GraphCycleError, GraphValidationError, NodeExecutionError } from "./errors.js";
 import { deriveNodeSeed, type Graph, type OutputDecl } from "./graph.js";
@@ -43,6 +49,17 @@ export interface CookOptions {
    * default, byte-identical to the pre-option behavior).
    */
   outputs?: readonly string[];
+  /**
+   * GPU field resolver (see `GpuFieldResolver`; the concrete
+   * `GpuFieldEvaluator` lives in `pcg-ts/gpu`). When present, nodes that
+   * adopt GPU resolution evaluate eligible spec'd Field params on the
+   * device and fall back to the CPU otherwise, `CookStats.gpu` reports
+   * the counters, and adopting nodes' memo keys gain the resolver's
+   * cache salt (so bytes never mix across devices or with CPU-only
+   * cooks). Omitted: cook behavior and every produced byte are identical
+   * to a build without GPU support.
+   */
+  gpu?: GpuFieldResolver;
 }
 
 /** Counters for one cook pass. */
@@ -52,6 +69,13 @@ export interface CookStats {
   /** Nodes served from their memo cache. */
   cached: number;
   elapsedMs: number;
+  /**
+   * GPU counters, present exactly when the cook was given
+   * `CookOptions.gpu`. Includes work done by nested cooks this cook
+   * spawned (subgraph nodes) — their forwarding views report into the
+   * outermost cook's sink.
+   */
+  gpu?: GpuCookStats;
 }
 
 /**
@@ -141,6 +165,40 @@ function stableValueHash(v: unknown, path: string): string {
   throw new GraphValidationError(
     `param "${path}": ${name} instances are not hashable; accepted: ${ACCEPTED}`,
   );
+}
+
+/**
+ * Does the param tree hold at least one genuine Field carrying a
+ * serializable spec (`getFieldSpec`)? Only such fields can ever be
+ * GPU-resolved, so only they make a node's output depend on the
+ * resolver. Walks the same containers `stableValueHash` accepts; other
+ * values cannot contain Fields (or fail hashing first).
+ */
+function paramsHaveSpecField(v: unknown): boolean {
+  if (typeof v !== "object" || v === null) return false;
+  if (isField(v)) return getFieldSpec(v) !== undefined;
+  if (Array.isArray(v)) return v.some(paramsHaveSpecField);
+  if (v instanceof Set) return [...v].some(paramsHaveSpecField);
+  if (v instanceof Map) return [...v.values()].some(paramsHaveSpecField);
+  const proto = Object.getPrototypeOf(v) as object | null;
+  if (proto === Object.prototype || proto === null) {
+    return Object.values(v as Record<string, unknown>).some(paramsHaveSpecField);
+  }
+  return false;
+}
+
+/**
+ * Per-cook view of a resolver: same salt and resolution, but counters
+ * land in this cook's sink. The view deliberately ignores sinks passed
+ * by its own callers — a nested cook (subgraph) wraps this view with its
+ * own (discarded) sink, and dropping it here routes all counts to the
+ * outermost cook that owns a real `CookStats.gpu`.
+ */
+function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResolver {
+  return {
+    cacheSalt: base.cacheSalt,
+    resolveField: (field, ctx) => base.resolveField(field, ctx, sink),
+  };
 }
 
 /**
@@ -258,7 +316,11 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   const { budgetMs, signal, onNodeDone } = opts;
   const start = performance.now();
   let sliceStart = start;
+  const gpuStats = opts.gpu !== undefined ? createGpuCookStats() : undefined;
+  const gpu =
+    opts.gpu !== undefined && gpuStats !== undefined ? gpuStatsView(opts.gpu, gpuStats) : undefined;
   const stats: CookStats = { cooked: 0, cached: 0, elapsedMs: 0 };
+  if (gpuStats !== undefined) stats.gpu = gpuStats;
   const checkCancelled = (): void => {
     if (signal?.aborted) throw new CookCancelledError();
   };
@@ -291,9 +353,18 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
 
     const seed = deriveNodeSeed(graph.seed, id);
     const extra = def.memoKey?.() ?? "";
+    // GPU provenance: when this cook carries a resolver and the node
+    // declares adoption, fold the device identity into the key — see
+    // NodeDef.gpu for the "fields" vs "always" rule. Without a resolver
+    // (or for non-adopting nodes) the key is byte-identical to before.
+    const gpuMark =
+      gpu !== undefined &&
+      (def.gpu === "always" || (def.gpu === "fields" && paramsHaveSpecField(node.params)))
+        ? `|gpu:${gpu.cacheSalt}`
+        : "";
     const key = `${def.type}|s${seed}|p${stableValueHash(node.params, "params")}|i${inputSig.join(
       ";",
-    )}|x${extra}`;
+    )}|x${extra}${gpuMark}`;
 
     if (node.cache !== undefined && node.cache.key === key) {
       node.dirty = false;
@@ -308,6 +379,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
           seed,
           signal,
           budgetMs,
+          gpu,
           checkCancelled,
         });
       } catch (err) {

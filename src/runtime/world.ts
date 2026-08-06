@@ -3,6 +3,7 @@
  * per level around a viewpoint, cooking each level's graph once per cell
  * with budgeted, cancellable, deterministic scheduling.
  */
+import type { GpuFieldResolver } from "../fields/index.js";
 import { CookCancelledError, cook, type Graph } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import type {
@@ -40,6 +41,14 @@ export interface WorldOptions {
   onCellReady?: (level: string, coord: CellCoord, outputs: CellOutputs) => void;
   /** Called when a cell is evicted (radius exit or LRU trim). */
   onCellEvicted?: (level: string, coord: CellCoord) => void;
+  /**
+   * GPU field resolver passed to every cell cook (`CookOptions.gpu`):
+   * adopting nodes resolve eligible spec'd fields on the device, and
+   * cell memo provenance keeps device and CPU bytes apart. Overridable
+   * per update via `UpdateOptions.gpu` (the update's value wins). Omit
+   * for CPU-only cooking, byte-identical to a build without GPU support.
+   */
+  gpu?: GpuFieldResolver;
 }
 
 /** Options for one {@link World.update} pass. */
@@ -64,6 +73,11 @@ export interface UpdateOptions {
    * reported as `pending`.
    */
   maxCooksPerUpdate?: number;
+  /**
+   * GPU field resolver for this update's cell cooks, overriding
+   * `WorldOptions.gpu` when both are set. See that option for semantics.
+   */
+  gpu?: GpuFieldResolver;
 }
 
 /** One cell identified by its level name and coordinate. */
@@ -209,6 +223,7 @@ export class World {
   private readonly maxCellsPerLevel: number;
   private readonly onCellReady: WorldOptions["onCellReady"];
   private readonly onCellEvicted: WorldOptions["onCellEvicted"];
+  private readonly gpu: GpuFieldResolver | undefined;
   private cookCounter = 0;
   private useCounter = 0;
   private totalCooked = 0;
@@ -334,6 +349,7 @@ export class World {
     this.maxCellsPerLevel = max;
     this.onCellReady = opts.onCellReady;
     this.onCellEvicted = opts.onCellEvicted;
+    this.gpu = opts.gpu;
     this.levels = levels.map((def, index) => ({
       def,
       index,
@@ -697,6 +713,9 @@ export class World {
       signal: opts.signal,
       budgetMs: opts.budgetMs,
       outputs: def.cookOutputs,
+      // Update-level resolver wins over the world-level one; both absent
+      // means a CPU-only cook (byte-identical to pre-GPU behavior).
+      gpu: opts.gpu ?? this.gpu,
     });
 
     const key = cellKey(coord);
