@@ -314,8 +314,100 @@ Node-level exposure of the transfer tuning options (`uvDomain`,
 functions already accept them, and `cellSize` is result-neutral by
 construction.
 
+## Phases (v0.5) — WebGPU field kernels, scheduled 2026-08-06
+
+The recorded WebGPU stretch goal, scheduled. Design decisions fixed up
+front, grounded in an architecture audit of the shipped code:
+
+- **What compiles.** The serializable field-expression grammar (the
+  closed set of inputs, combinators, and noise fns in `fieldJson`) is
+  the GPU surface. A compilable field evaluates over a whole domain in
+  one compute dispatch. Code-authored fields (no spec) stay on CPU.
+- **Where it lives.** New `pcg-ts/gpu` subpath. Core never imports it
+  (guard-tested, same pattern as `src/three`); the graph layer sees
+  only a structural resolver interface expressed in core types.
+- **Determinism contract** (documented prominently; CPU remains the
+  bit-exact reference and existing goldens never move): u32 hash and
+  random streams (hashCombine, hashFloat, randomField) are bit-exact
+  between CPU and WGSL; float arithmetic matches within documented
+  per-op tolerances (CPU computes in f64 and stores f32; WGSL computes
+  in f32); on a single device results are run-to-run deterministic;
+  branchy ops (select/compare/ramp stops) may flip at knife-edge inputs
+  whose operands differ within tolerance.
+- **Cache provenance.** GPU output is not byte-identical to CPU, so
+  gpu participation folds into the memo key for nodes that would
+  resolve a live Field on device; toggling gpu never serves bytes
+  produced by the other path, and nodes without live Field params keep
+  their cache hits across the toggle.
+
+### Phase 19 — WGSL field compiler (codegen only, no device)
+- `src/gpu` + `pcg-ts/gpu` subpath: tsup entry, exports map, examples
+  vite alias, `noGpuInCore`-style guard test; `@webgpu/types` as a dev
+  dependency only.
+- `compileFieldSpec`: FieldSpec → WGSL compute kernel + bind-layout
+  plan covering the complete grammar: constant, attribute (numeric +
+  bool-as-f32; string attrs are actionable errors), position, index,
+  randomField; all elementwise combinators including trig; dot/length/
+  normalize/vec/component/ramp; clamp/lerp/remap/select/compares;
+  value/perlin/simplex/worley (f1, f2, f2-f1; exact mode via the
+  bounded r≤3 ring walk) and fbm as a fused octave loop; `normalized`
+  wrapping with the same range endpoints.
+- WGSL library ports, bit-faithful where integer: hashMix/hashFinalize/
+  hashSeed chains (hash2/hash4/hash5 equivalents), hashFloat (exact by
+  construction), GRAD3, fade, PERLIN_SCALE / SIMPLEX_SCALE / R2 / F3 /
+  G3 constants imported from the CPU source of truth, not duplicated.
+- Static tuple-size inference mirroring `broadcastTupleSize`;
+  shared-subtree dedup so a spec DAG computes each subtree once;
+  pipeline specialization key = (field key, input column layout).
+- `getFieldSpec(field)` non-throwing public accessor beside
+  `fieldToJson` so compilability is queryable without try/catch.
+- Errors actionable: unsupported fn, string attribute, unresolvable
+  tuple size name the offending spec node and list what is supported.
+- Exit: golden WGSL snapshots per grammar family; tuple inference +
+  broadcast + dedup unit tests; error-message tests; build and guard
+  tests green. No device required. Commit.
+
+### Phase 20 — Device runtime + cook integration
+- `GpuFieldEvaluator`: wraps a GPUDevice; pipeline cache, SoA column →
+  storage-buffer marshalling (f32/i32/u32 columns), uniform params,
+  dispatch, async readback to Column. Implements the core-side
+  resolver interface; returns null for ineligible fields (CPU
+  fallback) with the reason recorded.
+- Threading: `CookOptions.gpu` → `NodeExecuteArgs` → async field
+  resolution in setAttribute (the density workhorse) and a public
+  capture-level API; forwarded explicitly through subgraph execute and
+  World (`WorldOptions`/`UpdateOptions`) to the world cook call site.
+- Cook stats gain gpu counters: dispatches, compiled pipelines, cache
+  hits, fallbacks with reasons — introspectable per the agent pillar.
+- Adapter strategy: device suite runs on Node WebGPU bindings if
+  installable, else vitest browser mode (Chromium); without any
+  adapter it skips visibly, never silently passes.
+- Parity suite: bit-exact u32/randomField streams; measured per-op-
+  family float tolerances vs CPU (then documented verbatim in the
+  contract); run-to-run byte-equality on one device; ineligible-field
+  cooks byte-identical to CPU-only cooks.
+- Exit: parity, provenance (cache-surgery across gpu toggle with stats
+  proving it), and threading tests green; device suite green on an
+  adapter and skipped-not-failed without one; existing goldens
+  unmoved; CPU-only suite untouched. Commit.
+
+### Phase 21 — Example, docs, v0.5.0
+- New example 08-gpu-fields: large-N scatter (order 10⁶ points) driven
+  by a chunky field expression, CPU/GPU toggle, cook timing + gpu stat
+  overlay, live max-deviation readout vs CPU on a sample window.
+  Browser-verified on a real adapter.
+- README/llms.txt/authoring: the `pcg-ts/gpu` API and the determinism
+  contract with the measured tolerances; node/API reference
+  regenerated if metadata changed; overview site + hosted demos
+  refreshed.
+- Version 0.5.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, example browser-verified,
+  release tagged. Commit.
+
 ## Stretch (recorded, not scheduled)
-- WebGPU compute subgraphs.
+- GPU-resident node pipelines: fusing chains of field-driven nodes
+  into device-resident subgraphs without per-node readback (the
+  natural successor once field kernels ship).
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
