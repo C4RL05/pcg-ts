@@ -42,6 +42,10 @@
       "types": "./dist/three/index.d.ts",
       "import": "./dist/three/index.js"
     },
+    "./gpu": {
+      "types": "./dist/gpu/index.d.ts",
+      "import": "./dist/gpu/index.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

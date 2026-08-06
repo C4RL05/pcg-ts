@@ -1,11 +1,13 @@
 import type { Field } from "../fields/index.js";
 import { GRAD3, NOISE_RAW_RANGES, type NoiseOpts, fade, hash4, makeNoiseField, mix } from "./util.js";
 
-const PERLIN_SALT = 0x7065726c; // "perl"
+/** Kind salt decorrelating perlin noise from other noise types ("perl"). */
+export const PERLIN_SALT = 0x7065726c;
 
 // Gradients have length √2 and the unit-gradient bound for 3D Perlin is
 // √3/2, so values fall in ±√6/2; this normalizes to ±1.
-const PERLIN_SCALE = 2 / Math.sqrt(6);
+/** Output scale mapping the raw perlin kernel sum into [-1, 1]. */
+export const PERLIN_SCALE = 2 / Math.sqrt(6);
 
 /**
  * Perlin gradient noise: hash-selected cube-edge gradients, quintic

@@ -1,0 +1,849 @@
+/**
+ * WGSL compiler for the serializable field-expression grammar
+ * (`fieldJson`). Codegen only: `compileFieldSpec` lowers a FieldSpec to
+ * a complete WGSL compute kernel plus a bind-layout plan — nothing here
+ * touches a GPU device (that is the phase-20 runtime).
+ *
+ * Semantics are ported from the CPU field implementations
+ * (`src/fields`, `src/noise`), which remain the bit-exact reference:
+ *
+ * - Integer and hash paths (`randomField`, noise lattice hashing) are
+ *   bit-exact u32 ports.
+ * - Float arithmetic computes in f32 where the CPU computes in f64 and
+ *   stores f32. For + − × this yields identical f32 results by IEEE
+ *   double-rounding innocuousness; division, sqrt, and transcendental
+ *   builtins may differ within tolerances phase 20 measures.
+ * - Branchy ops (select, compares, ramp stops, worley cell walks) can
+ *   flip at knife-edge inputs whose operands differ within tolerance.
+ *
+ * Tuple sizes 1–4 map to f32 / vecN<f32>. The CPU grammar can build
+ * wider tuples (via `vec` concatenation, wide constants, or wide
+ * attributes); those are rejected with an actionable error — evaluate
+ * such fields on the CPU. `index` is exact up to 2^24 on GPU when used
+ * inside float arithmetic (f32 mantissa); as the kernel root it is
+ * written as raw u32 and exact everywhere.
+ */
+import type { FieldSpec, FieldSpecArg } from "../nodes/fieldJson.js";
+import { fieldFromJson } from "../nodes/fieldJson.js";
+import { hashCombine, hashString } from "../random/hash.js";
+import { NOISE_RAW_RANGES, type NoiseRange, hash2 } from "../noise/util.js";
+import { VALUE_SALT } from "../noise/value.js";
+import { PERLIN_SALT } from "../noise/perlin.js";
+import { SIMPLEX_SALT } from "../noise/simplex.js";
+import { WORLEY_SALT } from "../noise/worley.js";
+import {
+  type CompiledFieldKernel,
+  type FieldKernelAttr,
+  type FieldKernelLayout,
+  GpuCompileError,
+  type GpuScalarType,
+  type KernelInput,
+} from "./types.js";
+import { libClosure, wgslF32, wgslHexU32, wgslU32 } from "./wgslLib.js";
+
+/** 1D workgroup size every generated kernel dispatches with. */
+const WORKGROUP_SIZE = 64;
+
+/** Codegen version prefix folded into specialization keys. */
+const CODEGEN_VERSION = "wgsl1";
+
+const XYZW = ["x", "y", "z", "w"] as const;
+
+// ---------------------------------------------------------------------------
+// small predicates (kept local; fieldJson has validated shapes already)
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function tupleError(path: string, what: string, size: number): GpuCompileError {
+  return new GpuCompileError(
+    `${path}: ${what} has tupleSize ${size}, but GPU kernels support tuple sizes 1 to 4; ` +
+      "evaluate this field on the CPU instead, or split it into components",
+  );
+}
+
+/**
+ * Static broadcast rule, mirroring the CPU `broadcastTupleSize`: scalars
+ * broadcast against any size; non-scalar sizes must match exactly. All
+ * sizes are statically known on the GPU path (attributes come from the
+ * layout), so this always resolves or throws.
+ */
+function broadcastSizes(kind: string, path: string, sizes: readonly number[]): number {
+  let ts = 1;
+  for (const s of sizes) {
+    if (s === 1) continue;
+    if (ts !== 1 && ts !== s) {
+      throw new GpuCompileError(`${path}: ${kind}: incompatible tuple sizes ${ts} and ${s}`);
+    }
+    ts = s;
+  }
+  return ts;
+}
+
+// ---------------------------------------------------------------------------
+// compile context
+
+/** An SSA value in the kernel body: a `let` name and its tuple size. */
+interface Val {
+  readonly ref: string;
+  readonly size: number;
+}
+
+interface BoundAttr {
+  readonly name: string;
+  readonly varName: string;
+  readonly binding: number;
+  readonly attr: FieldKernelAttr;
+}
+
+class CompileCtx {
+  readonly layout: FieldKernelLayout;
+  readonly lines: string[] = [];
+  readonly libRoots = new Set<string>();
+  usesSeed = false;
+
+  private readonly valueNumbers = new Map<string, Val>();
+  private readonly bindings = new Map<string, BoundAttr>();
+  private readonly helpers = new Map<string, string>(); // content key -> fn name
+  private readonly helperTexts: string[] = [];
+  private readonly helperCounters = new Map<string, number>();
+  private varCounter = 0;
+
+  constructor(layout: FieldKernelLayout, boundNames: readonly string[]) {
+    this.layout = layout;
+    boundNames.forEach((name, i) => {
+      this.bindings.set(name, {
+        name,
+        varName: `in${i}`,
+        binding: i + 1,
+        attr: layout.attributes[name],
+      });
+    });
+  }
+
+  /** Emit (or reuse) an SSA `let` for a canonical expression. */
+  emit(expr: string, size: number): Val {
+    const hit = this.valueNumbers.get(expr);
+    if (hit) return hit;
+    const val: Val = { ref: `v${this.varCounter++}`, size };
+    this.lines.push(`  let ${val.ref} = ${expr};`);
+    this.valueNumbers.set(expr, val);
+    return val;
+  }
+
+  /** The pre-assigned binding for an attribute known to be eligible. */
+  binding(name: string): BoundAttr {
+    const b = this.bindings.get(name);
+    if (!b) throw new Error(`internal: attribute ${JSON.stringify(name)} was not pre-bound`);
+    return b;
+  }
+
+  boundAttrs(): BoundAttr[] {
+    return [...this.bindings.values()];
+  }
+
+  /**
+   * Register a helper function (ramp / fbm instance) deduplicated by
+   * body content. `body` uses the placeholder `@NAME@` for its own name.
+   */
+  helper(kind: string, body: string): string {
+    const existing = this.helpers.get(body);
+    if (existing) return existing;
+    const n = this.helperCounters.get(kind) ?? 0;
+    this.helperCounters.set(kind, n + 1);
+    const name = `pcg_${kind}_${n}`;
+    this.helpers.set(body, name);
+    this.helperTexts.push(body.replaceAll("@NAME@", name));
+    return name;
+  }
+
+  helperBlocks(): readonly string[] {
+    return this.helperTexts;
+  }
+}
+
+/** Reference `v` at tuple size `size`, splatting scalars into vectors. */
+function splat(v: Val, size: number): string {
+  return v.size === size ? v.ref : `vec${size}<f32>(${v.ref})`;
+}
+
+function zeroLit(size: number): string {
+  return size === 1 ? "0f" : `vec${size}<f32>(0f)`;
+}
+
+function oneLit(size: number): string {
+  return size === 1 ? "1f" : `vec${size}<f32>(1f)`;
+}
+
+// ---------------------------------------------------------------------------
+// attribute access
+
+function describeLayout(layout: FieldKernelLayout): string {
+  const names = Object.keys(layout.attributes).sort();
+  if (names.length === 0) return "the layout declares no attributes";
+  return `layout attributes: ${names.map((n) => JSON.stringify(n)).join(", ")}`;
+}
+
+/**
+ * Validate an attribute reference against the layout. `origin` prefixes
+ * the message for indirect reads (`position` reads `P`).
+ */
+function resolveLayoutAttr(
+  ctx: CompileCtx,
+  path: string,
+  name: string,
+  expectTupleSize: number | undefined,
+  origin: string,
+): FieldKernelAttr {
+  const attrs = ctx.layout.attributes;
+  if (!Object.hasOwn(attrs, name)) {
+    throw new GpuCompileError(
+      `${path}: ${origin}attribute ${JSON.stringify(name)} is not in the kernel layout; ${describeLayout(ctx.layout)}`,
+    );
+  }
+  const attr = attrs[name];
+  if (attr.type === "string") {
+    throw new GpuCompileError(
+      `${path}: ${origin}attribute ${JSON.stringify(name)} has type "string"; string attributes ` +
+        "cannot be read as fields and are CPU-only — use a numeric or bool attribute",
+    );
+  }
+  if (expectTupleSize !== undefined && attr.tupleSize !== expectTupleSize) {
+    throw new GpuCompileError(
+      `${path}: ${origin}attribute ${JSON.stringify(name)}: expected tupleSize ${expectTupleSize}, ` +
+        `got ${attr.tupleSize} in the kernel layout`,
+    );
+  }
+  if (attr.tupleSize > 4) {
+    throw tupleError(path, `${origin}attribute ${JSON.stringify(name)}`, attr.tupleSize);
+  }
+  return attr;
+}
+
+/**
+ * Load an attribute as an f32 expression value (i32/u32/bool lanes are
+ * converted with `f32(...)`, mirroring the CPU number/bool→f32 read).
+ */
+function loadAttribute(
+  ctx: CompileCtx,
+  path: string,
+  name: string,
+  expectTupleSize: number | undefined,
+  origin: string,
+): Val {
+  const attr = resolveLayoutAttr(ctx, path, name, expectTupleSize, origin);
+  const b = ctx.binding(name);
+  const ts = attr.tupleSize;
+  const conv = (e: string): string => (attr.type === "f32" ? e : `f32(${e})`);
+  if (ts === 1) return ctx.emit(conv(`${b.varName}[i]`), 1);
+  const lanes: string[] = [];
+  for (let k = 0; k < ts; k++) {
+    lanes.push(conv(`${b.varName}[${flatIndex(ts, k)}]`));
+  }
+  return ctx.emit(`vec${ts}<f32>(${lanes.join(", ")})`, ts);
+}
+
+function flatIndex(ts: number, k: number): string {
+  if (ts === 1) return "i";
+  return k === 0 ? `i * ${ts}u` : `i * ${ts}u + ${k}u`;
+}
+
+// ---------------------------------------------------------------------------
+// handlers
+
+type Handler = (spec: Record<string, unknown>, path: string, ctx: CompileCtx) => Val;
+
+const HANDLERS = new Map<string, Handler>();
+
+/** Field fns the WGSL compiler supports, sorted (derived from its handler table). */
+export function supportedGpuFieldFns(): string[] {
+  return [...HANDLERS.keys()].sort();
+}
+
+function compileNode(spec: Record<string, unknown>, path: string, ctx: CompileCtx): Val {
+  const fn = String(spec.fn);
+  const handler = HANDLERS.get(fn);
+  if (!handler) {
+    throw new GpuCompileError(
+      `${path}: field fn "${fn}" is not supported by the WGSL compiler; ` +
+        `supported fns: ${supportedGpuFieldFns().join(", ")}`,
+    );
+  }
+  return handler(spec, path, ctx);
+}
+
+function compileArg(v: unknown, path: string, ctx: CompileCtx): Val {
+  if (typeof v === "number") return ctx.emit(wgslF32(v, path), 1);
+  if (Array.isArray(v)) return compileConstantTuple(v as number[], path, ctx);
+  return compileNode(v as Record<string, unknown>, path, ctx);
+}
+
+function compileConstantTuple(values: readonly number[], path: string, ctx: CompileCtx): Val {
+  const ts = values.length;
+  if (ts > 4) throw tupleError(path, "constant", ts);
+  if (ts === 1) return ctx.emit(wgslF32(values[0], path), 1);
+  const lits = values.map((v) => wgslF32(v, path));
+  return ctx.emit(`vec${ts}<f32>(${lits.join(", ")})`, ts);
+}
+
+function specArgs(spec: Record<string, unknown>): unknown[] {
+  return spec.args as unknown[];
+}
+
+// -- inputs -----------------------------------------------------------------
+
+HANDLERS.set("constant", (spec, path, ctx) => {
+  const v = spec.value;
+  if (typeof v === "number") return ctx.emit(wgslF32(v, `${path}.value`), 1);
+  return compileConstantTuple(v as number[], `${path}.value`, ctx);
+});
+
+HANDLERS.set("attribute", (spec, path, ctx) => {
+  const name = spec.name as string;
+  const expect = spec.tupleSize as number | undefined;
+  return loadAttribute(ctx, path, name, expect, "");
+});
+
+HANDLERS.set("position", (_spec, path, ctx) => {
+  return loadAttribute(ctx, path, "P", 3, "position reads ");
+});
+
+HANDLERS.set("index", (_spec, _path, ctx) => ctx.emit("f32(i)", 1));
+
+HANDLERS.set("randomField", (spec, _path, ctx) => {
+  const key = spec.key;
+  const keyHash = typeof key === "string" ? hashString(key) : ((key as number | undefined) ?? 0) >>> 0;
+  ctx.usesSeed = true;
+  ctx.libRoots.add("pcg_hash3");
+  ctx.libRoots.add("pcg_hash_float");
+  return ctx.emit(`pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, i))`, 1);
+});
+
+// -- elementwise combinators ------------------------------------------------
+
+/**
+ * Register an elementwise combinator: children broadcast per the scalar
+ * rule and the template receives size-matched operand references.
+ */
+function registerElementwise(name: string, arity: number, template: (refs: string[], size: number) => string): void {
+  HANDLERS.set(name, (spec, path, ctx) => {
+    const args = specArgs(spec);
+    const vals: Val[] = [];
+    for (let i = 0; i < arity; i++) {
+      vals.push(compileArg(args[i], `${path}.args[${i}]`, ctx));
+    }
+    const size = broadcastSizes(name, path, vals.map((v) => v.size));
+    const refs = vals.map((v) => splat(v, size));
+    return ctx.emit(template(refs, size), size);
+  });
+}
+
+registerElementwise("add", 2, (a) => `${a[0]} + ${a[1]}`);
+registerElementwise("sub", 2, (a) => `${a[0]} - ${a[1]}`);
+registerElementwise("mul", 2, (a) => `${a[0]} * ${a[1]}`);
+registerElementwise("div", 2, (a) => `${a[0]} / ${a[1]}`);
+registerElementwise("min", 2, (a) => `min(${a[0]}, ${a[1]})`);
+registerElementwise("max", 2, (a) => `max(${a[0]}, ${a[1]})`);
+registerElementwise("abs", 1, (a) => `abs(${a[0]})`);
+registerElementwise("floor", 1, (a) => `floor(${a[0]})`);
+registerElementwise("sin", 1, (a) => `sin(${a[0]})`);
+registerElementwise("cos", 1, (a) => `cos(${a[0]})`);
+registerElementwise("tan", 1, (a) => `tan(${a[0]})`);
+registerElementwise("asin", 1, (a) => `asin(${a[0]})`);
+registerElementwise("acos", 1, (a) => `acos(${a[0]})`);
+registerElementwise("atan", 1, (a) => `atan(${a[0]})`);
+registerElementwise("atan2", 2, (a) => `atan2(${a[0]}, ${a[1]})`);
+registerElementwise("clamp", 3, (a) => `clamp(${a[0]}, ${a[1]}, ${a[2]})`);
+// CPU lerp is a + (b - a) * t; WGSL mix() is specified as a*(1-t)+b*t,
+// which rounds differently — emit the CPU formula.
+registerElementwise("lerp", 3, (a) => `${a[0]} + (${a[1]} - ${a[0]}) * ${a[2]}`);
+// CPU select takes a where cond != 0; WGSL select(f, t, cond).
+registerElementwise("select", 3, (a, size) => `select(${a[2]}, ${a[1]}, ${a[0]} != ${zeroLit(size)})`);
+registerElementwise("lt", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} < ${a[1]})`);
+registerElementwise("le", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} <= ${a[1]})`);
+registerElementwise("gt", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} > ${a[1]})`);
+registerElementwise("ge", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} >= ${a[1]})`);
+registerElementwise("eq", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} == ${a[1]})`);
+
+// remap needs intermediate values (degenerate input span maps to outMin,
+// mirroring the CPU; the divisor is guarded so no Inf/NaN is produced in
+// the discarded lane).
+HANDLERS.set("remap", (spec, path, ctx) => {
+  const args = specArgs(spec);
+  const vals = args.map((a, i) => compileArg(a, `${path}.args[${i}]`, ctx));
+  const size = broadcastSizes("remap", path, vals.map((v) => v.size));
+  const [x, inMin, inMax, outMin, outMax] = vals.map((v) => splat(v, size));
+  const span = ctx.emit(`${inMax} - ${inMin}`, size);
+  const zero = zeroLit(size);
+  const safe = ctx.emit(`select(${span.ref}, ${oneLit(size)}, ${span.ref} == ${zero})`, size);
+  return ctx.emit(
+    `select(${outMin} + ((${x} - ${inMin}) / ${safe.ref}) * (${outMax} - ${outMin}), ${outMin}, ${span.ref} == ${zero})`,
+    size,
+  );
+});
+
+// -- vector / structural ----------------------------------------------------
+
+HANDLERS.set("dot", (spec, path, ctx) => {
+  const args = specArgs(spec);
+  const a = compileArg(args[0], `${path}.args[0]`, ctx);
+  const b = compileArg(args[1], `${path}.args[1]`, ctx);
+  const size = broadcastSizes("dot", path, [a.size, b.size]);
+  if (size === 1) return ctx.emit(`${a.ref} * ${b.ref}`, 1);
+  return ctx.emit(`dot(${splat(a, size)}, ${splat(b, size)})`, 1);
+});
+
+HANDLERS.set("length", (spec, path, ctx) => {
+  const a = compileArg(specArgs(spec)[0], `${path}.args[0]`, ctx);
+  // Scalar: the CPU's sqrt(a*a) in f64 is exactly |a|.
+  if (a.size === 1) return ctx.emit(`abs(${a.ref})`, 1);
+  const s = ctx.emit(`dot(${a.ref}, ${a.ref})`, 1);
+  return ctx.emit(`sqrt(${s.ref})`, 1);
+});
+
+HANDLERS.set("normalize", (spec, path, ctx) => {
+  const a = compileArg(specArgs(spec)[0], `${path}.args[0]`, ctx);
+  const s = a.size === 1 ? ctx.emit(`${a.ref} * ${a.ref}`, 1) : ctx.emit(`dot(${a.ref}, ${a.ref})`, 1);
+  // CPU: inv = sum > 0 ? 1 / sqrt(sum) : 0 — zero tuples stay zero.
+  const inv = ctx.emit(`select(0f, 1f / sqrt(${s.ref}), ${s.ref} > 0f)`, 1);
+  return ctx.emit(`${a.ref} * ${inv.ref}`, a.size);
+});
+
+HANDLERS.set("vec", (spec, path, ctx) => {
+  const args = specArgs(spec);
+  const vals = args.map((a, i) => compileArg(a, `${path}.args[${i}]`, ctx));
+  const total = vals.reduce((acc, v) => acc + v.size, 0);
+  if (total > 4) throw tupleError(path, "vec result", total);
+  if (vals.length === 1) return vals[0];
+  return ctx.emit(`vec${total}<f32>(${vals.map((v) => v.ref).join(", ")})`, total);
+});
+
+HANDLERS.set("component", (spec, path, ctx) => {
+  const a = compileArg(specArgs(spec)[0], `${path}.args[0]`, ctx);
+  const idx = spec.index as number;
+  if (idx >= a.size) {
+    throw new GpuCompileError(`${path}: component: index ${idx} out of range for tupleSize ${a.size}`);
+  }
+  if (a.size === 1) return a;
+  return ctx.emit(`${a.ref}.${XYZW[idx]}`, 1);
+});
+
+HANDLERS.set("ramp", (spec, path, ctx) => {
+  const a = compileArg(specArgs(spec)[0], `${path}.args[0]`, ctx);
+  if (a.size !== 1) {
+    throw new GpuCompileError(`${path}: ramp: input must be scalar, got tupleSize ${a.size}`);
+  }
+  const stops = spec.stops as Array<[number, number]>;
+  const name = ctx.helper("ramp", rampHelperBody(stops, `${path}.stops`));
+  return ctx.emit(`${name}(${a.ref})`, 1);
+});
+
+/**
+ * Per-instance piecewise-linear ramp helper, mirroring the CPU: clamp
+ * outside the stop range, otherwise interpolate the segment whose upper
+ * stop is the first with position >= t. Stop positions/values and the
+ * per-segment spans are precomputed in f64 (as on CPU) and serialized
+ * as f32. NaN inputs fall through every comparison and return NaN, as
+ * on the CPU.
+ */
+function rampHelperBody(stops: ReadonlyArray<readonly [number, number]>, context: string): string {
+  const L = (v: number): string => wgslF32(v, context);
+  const last = stops.length - 1;
+  const lines: string[] = [];
+  lines.push("fn @NAME@(t: f32) -> f32 {");
+  lines.push(`  if (t <= ${L(stops[0][0])}) {`);
+  lines.push(`    return ${L(stops[0][1])};`);
+  lines.push("  }");
+  lines.push(`  if (t >= ${L(stops[last][0])}) {`);
+  lines.push(`    return ${L(stops[last][1])};`);
+  lines.push("  }");
+  const interp = (j: number): string => {
+    const tPrev = stops[j - 1][0];
+    const vPrev = stops[j - 1][1];
+    const tSpan = stops[j][0] - tPrev;
+    const vDiff = stops[j][1] - vPrev;
+    return `${L(vPrev)} + ${L(vDiff)} * ((t - ${L(tPrev)}) / ${L(tSpan)})`;
+  };
+  for (let j = 1; j < last; j++) {
+    lines.push(`  if (t <= ${L(stops[j][0])}) {`);
+    lines.push(`    return ${interp(j)};`);
+    lines.push("  }");
+  }
+  if (last >= 1) {
+    lines.push(`  return ${interp(last)};`);
+  } else {
+    // Single stop: only NaN reaches this point; propagate it (CPU does).
+    lines.push("  return t;");
+  }
+  lines.push("}");
+  return lines.join("\n");
+}
+
+// -- noise ------------------------------------------------------------------
+
+interface NoiseOptsSpec {
+  readonly seed?: number;
+  readonly frequency?: number;
+  readonly offset?: readonly number[];
+  readonly position?: unknown;
+  readonly normalized?: boolean;
+  readonly output?: "f1" | "f2" | "f2-f1";
+  readonly exact?: boolean;
+  readonly octaves?: number;
+  readonly lacunarity?: number;
+  readonly gain?: number;
+}
+
+const NOISE_SALTS: Record<string, number> = {
+  valueNoise: VALUE_SALT,
+  perlinNoise: PERLIN_SALT,
+  simplexNoise: SIMPLEX_SALT,
+  worleyNoise: WORLEY_SALT,
+};
+
+const NOISE_LIB_FN: Record<string, string> = {
+  valueNoise: "pcg_value_noise",
+  perlinNoise: "pcg_perlin_noise",
+  simplexNoise: "pcg_simplex_noise",
+};
+
+function noiseOpts(spec: Record<string, unknown>): NoiseOptsSpec {
+  return (spec.opts ?? {}) as NoiseOptsSpec;
+}
+
+/**
+ * Compile the position input of a noise fn (default: `position`) and
+ * the frequency/offset transform into the noise-space sample point.
+ * The transform is always emitted — the CPU computes `p * frequency +
+ * offset` even at the defaults, which normalizes -0 to +0.
+ */
+function compileSamplePoint(fnName: string, spec: Record<string, unknown>, path: string, ctx: CompileCtx): Val {
+  const opts = noiseOpts(spec);
+  const posPath = opts.position === undefined ? path : `${path}.opts.position`;
+  const pos =
+    opts.position === undefined
+      ? loadAttribute(ctx, path, "P", 3, `${fnName} position reads `)
+      : compileArg(opts.position, posPath, ctx);
+  if (pos.size !== 3) {
+    throw new GpuCompileError(`${posPath}: ${fnName}: position field must have tupleSize 3, got ${pos.size}`);
+  }
+  const freq = wgslF32(opts.frequency ?? 1, `${path}.opts.frequency`);
+  const [ox, oy, oz] = opts.offset ?? [0, 0, 0];
+  const off = `vec3<f32>(${wgslF32(ox, `${path}.opts.offset`)}, ${wgslF32(oy, `${path}.opts.offset`)}, ${wgslF32(oz, `${path}.opts.offset`)})`;
+  return ctx.emit(`${pos.ref} * ${freq} + ${off}`, 3);
+}
+
+/** Effective sampler seed, exactly as makeNoiseField derives it. */
+function effectiveSeed(fnName: string, seed: number | undefined): number {
+  return hash2(NOISE_SALTS[fnName], (seed ?? 0) >>> 0);
+}
+
+/** Wrap a raw noise value with the CPU normalize01 affine map. */
+function emitNormalized(ctx: CompileCtx, raw: Val, range: NoiseRange, context: string): Val {
+  const [lo, hi] = range;
+  const span = hi - lo; // f64, as in normalize01
+  return ctx.emit(`(${raw.ref} - ${wgslF32(lo, context)}) / ${wgslF32(span, context)}`, 1);
+}
+
+for (const fnName of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
+  HANDLERS.set(fnName, (spec, path, ctx) => {
+    const opts = noiseOpts(spec);
+    const sp = compileSamplePoint(fnName, spec, path, ctx);
+    ctx.libRoots.add(NOISE_LIB_FN[fnName]);
+    const raw = ctx.emit(`${NOISE_LIB_FN[fnName]}(${wgslHexU32(effectiveSeed(fnName, opts.seed))}, ${sp.ref})`, 1);
+    if (opts.normalized !== true) return raw;
+    return emitNormalized(ctx, raw, NOISE_RAW_RANGES[fnName], `${path}.opts.normalized`);
+  });
+}
+
+HANDLERS.set("worleyNoise", (spec, path, ctx) => {
+  const opts = noiseOpts(spec);
+  const output = opts.output ?? "f1";
+  const exact = opts.exact === true;
+  const sp = compileSamplePoint("worleyNoise", spec, path, ctx);
+  ctx.libRoots.add("pcg_worley");
+  const needsF2 = output !== "f1";
+  const pair = ctx.emit(
+    `pcg_worley(${wgslHexU32(effectiveSeed("worleyNoise", opts.seed))}, ${sp.ref}, ${exact}, ${needsF2})`,
+    2,
+  );
+  const raw =
+    output === "f1"
+      ? ctx.emit(`${pair.ref}.x`, 1)
+      : output === "f2"
+        ? ctx.emit(`${pair.ref}.y`, 1)
+        : ctx.emit(`${pair.ref}.y - ${pair.ref}.x`, 1);
+  if (opts.normalized !== true) return raw;
+  return emitNormalized(ctx, raw, NOISE_RAW_RANGES.worleyNoise[output], `${path}.opts.normalized`);
+});
+
+/** Raw output range of an fbm base factory (worley defaults to f1). */
+function baseRawRange(base: string): NoiseRange {
+  if (base === "worleyNoise") return NOISE_RAW_RANGES.worleyNoise.f1;
+  return NOISE_RAW_RANGES[base as "valueNoise" | "perlinNoise" | "simplexNoise"];
+}
+
+/** Call expression for one fbm octave of the given base. */
+function baseCall(base: string, seedExpr: string, posExpr: string): string {
+  if (base === "worleyNoise") return `pcg_worley(${seedExpr}, ${posExpr}, false, false).x`;
+  return `${NOISE_LIB_FN[base]}(${seedExpr}, ${posExpr})`;
+}
+
+HANDLERS.set("fbm", (spec, path, ctx) => {
+  const base = spec.base as string;
+  const opts = noiseOpts(spec);
+  const octaves = opts.octaves ?? 4;
+  const lacunarity = opts.lacunarity ?? 2;
+  const gain = opts.gain ?? 0.5;
+  const seed = opts.seed ?? 0;
+  const frequency = opts.frequency ?? 1;
+  const [ox, oy, oz] = opts.offset ?? [0, 0, 0];
+
+  const posPath = opts.position === undefined ? path : `${path}.opts.position`;
+  const pos =
+    opts.position === undefined
+      ? loadAttribute(ctx, path, "P", 3, "fbm position reads ")
+      : compileArg(opts.position, posPath, ctx);
+  if (pos.size !== 3) {
+    throw new GpuCompileError(`${posPath}: fbm: position field must have tupleSize 3, got ${pos.size}`);
+  }
+
+  // Per-octave seed / frequency / amplitude chains, computed in f64
+  // exactly as the CPU fbm does, then serialized as compile-time
+  // constants; the summed output range follows the same accumulation.
+  const range = baseRawRange(base);
+  const seeds: string[] = [];
+  const freqs: string[] = [];
+  const amps: string[] = [];
+  let amplitude = 1;
+  let octaveFrequency = frequency;
+  let lo = 0;
+  let hi = 0;
+  for (let o = 0; o < octaves; o++) {
+    seeds.push(wgslHexU32(effectiveSeed(base, hashCombine(seed, o))));
+    freqs.push(wgslF32(octaveFrequency, `${path}.opts.frequency`));
+    amps.push(wgslF32(amplitude, `${path}.opts.gain`));
+    lo += amplitude >= 0 ? amplitude * range[0] : amplitude * range[1];
+    hi += amplitude >= 0 ? amplitude * range[1] : amplitude * range[0];
+    amplitude *= gain;
+    octaveFrequency *= lacunarity;
+  }
+
+  ctx.libRoots.add(base === "worleyNoise" ? "pcg_worley" : NOISE_LIB_FN[base]);
+  const off = `vec3<f32>(${wgslF32(ox, `${path}.opts.offset`)}, ${wgslF32(oy, `${path}.opts.offset`)}, ${wgslF32(oz, `${path}.opts.offset`)})`;
+  const body = `fn @NAME@(p: vec3<f32>) -> f32 {
+  var seeds = array<u32, ${octaves}>(${seeds.join(", ")});
+  var freqs = array<f32, ${octaves}>(${freqs.join(", ")});
+  var amps = array<f32, ${octaves}>(${amps.join(", ")});
+  var sum = 0f;
+  for (var o = 0u; o < ${wgslU32(octaves)}; o++) {
+    sum = sum + ${baseCall(base, "seeds[o]", "p * freqs[o] + " + off)} * amps[o];
+  }
+  return sum;
+}`;
+  const name = ctx.helper("fbm", body);
+  const raw = ctx.emit(`${name}(${pos.ref})`, 1);
+  if (opts.normalized !== true) return raw;
+  if (!(hi > lo)) {
+    // Unreachable through the JSON grammar (every base has a positive
+    // raw span and octave 0 has amplitude 1), kept as a guard mirroring
+    // the CPU fbm error.
+    throw new GpuCompileError(
+      `${path}: fbm: normalized: true needs a non-degenerate output range, got [${lo}, ${hi}] ` +
+        "for this octaves/gain configuration",
+    );
+  }
+  return emitNormalized(ctx, raw, [lo, hi], `${path}.opts.normalized`);
+});
+
+// ---------------------------------------------------------------------------
+// attribute collection (pre-pass)
+
+const NOISE_LIKE = new Set(["valueNoise", "perlinNoise", "simplexNoise", "worleyNoise", "fbm"]);
+
+/** Collect every attribute name the spec reads (position/noise imply "P"). */
+function collectAttrNames(v: unknown, out: Set<string>): void {
+  if (!isPlainObject(v)) return; // numbers and number arrays read nothing
+  const fn = v.fn;
+  if (fn === "attribute") {
+    if (typeof v.name === "string") out.add(v.name);
+    return;
+  }
+  if (fn === "position") {
+    out.add("P");
+    return;
+  }
+  if (typeof fn === "string" && NOISE_LIKE.has(fn)) {
+    const opts = v.opts;
+    if (isPlainObject(opts) && opts.position !== undefined) {
+      collectAttrNames(opts.position, out);
+    } else {
+      out.add("P");
+    }
+    return;
+  }
+  const args = v.args;
+  if (Array.isArray(args)) {
+    for (const a of args) collectAttrNames(a, out);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// layout validation and kernel assembly
+
+const VALID_ATTR_TYPES = new Set(["f32", "i32", "u32", "bool", "string"]);
+
+function validateLayout(layout: FieldKernelLayout): void {
+  if (!isPlainObject(layout) || !isPlainObject(layout.attributes)) {
+    throw new GpuCompileError(
+      "compileFieldSpec: layout must be { attributes: { name: { type, tupleSize } } }",
+    );
+  }
+  for (const [name, attr] of Object.entries(layout.attributes)) {
+    if (!isPlainObject(attr) || !VALID_ATTR_TYPES.has(attr.type as string)) {
+      throw new GpuCompileError(
+        `kernel layout attribute ${JSON.stringify(name)}: unknown type ${JSON.stringify(
+          (attr as { type?: unknown })?.type,
+        )}; valid types: "f32", "i32", "u32", "bool" ("string" is accepted but CPU-only)`,
+      );
+    }
+    const ts = (attr as { tupleSize?: unknown }).tupleSize;
+    if (typeof ts !== "number" || !Number.isInteger(ts) || ts < 1) {
+      throw new GpuCompileError(
+        `kernel layout attribute ${JSON.stringify(name)}: tupleSize must be a positive integer, got ${String(ts)}`,
+      );
+    }
+  }
+}
+
+function normalizeRootSpec(spec: FieldSpecArg): FieldSpec {
+  if (typeof spec === "number") return { fn: "constant", value: spec };
+  if (Array.isArray(spec)) return { fn: "constant", value: [...(spec as readonly number[])] };
+  return spec as FieldSpec;
+}
+
+/** Storage buffer element type an attribute binds as (bool → u32). */
+function bufferType(attr: FieldKernelAttr): GpuScalarType {
+  return attr.type === "bool" ? "u32" : (attr.type as GpuScalarType);
+}
+
+/**
+ * Compile a field spec to a WGSL compute kernel specialized to the
+ * given layout. See the module doc for the semantics contract. Throws
+ * `FieldJsonError` for malformed specs (shared validator) and
+ * {@link GpuCompileError} for GPU-specific constraints (unknown fn,
+ * missing/string attribute, tuple sizes above 4).
+ */
+export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout): CompiledFieldKernel {
+  validateLayout(layout);
+  const rootSpec = normalizeRootSpec(spec);
+  // Full grammar validation plus the canonical structural key (spec JSON
+  // key order and defaulted options do not affect it).
+  const field = fieldFromJson(rootSpec);
+
+  // Pre-pass: find every attribute the spec reads and pre-assign binding
+  // slots (sorted by name) so codegen is single-pass and deterministic.
+  const attrNames = new Set<string>();
+  collectAttrNames(rootSpec, attrNames);
+  const eligible = [...attrNames]
+    .filter((n) => Object.hasOwn(layout.attributes, n) && layout.attributes[n].type !== "string")
+    .sort();
+  const ctx = new CompileCtx(layout, eligible);
+
+  // Root special cases mirror the CPU output column types: index → u32,
+  // i32/u32 attributes → their own type; everything else lands as f32.
+  let outType: GpuScalarType = "f32";
+  let outTupleSize = 0;
+  const storeLines: string[] = [];
+  const storeExpression = (root: Val): void => {
+    outTupleSize = root.size;
+    if (root.size === 1) {
+      storeLines.push(`  outBuf[i] = ${root.ref};`);
+    } else {
+      for (let k = 0; k < root.size; k++) {
+        storeLines.push(`  outBuf[${flatIndex(root.size, k)}] = ${root.ref}.${XYZW[k]};`);
+      }
+    }
+  };
+  const rootAttrName =
+    rootSpec.fn === "attribute" ? (rootSpec.name as string) : rootSpec.fn === "position" ? "P" : undefined;
+  if (rootSpec.fn === "index") {
+    outType = "u32";
+    outTupleSize = 1;
+    storeLines.push("  outBuf[i] = i;");
+  } else if (rootAttrName !== undefined) {
+    const expect = rootSpec.fn === "position" ? 3 : (rootSpec.tupleSize as number | undefined);
+    const origin = rootSpec.fn === "position" ? "position reads " : "";
+    const attr = resolveLayoutAttr(ctx, "$", rootAttrName, expect, origin);
+    if (attr.type === "i32" || attr.type === "u32") {
+      // Raw integer copy, preserving the CPU zero-copy column type.
+      outType = attr.type;
+      outTupleSize = attr.tupleSize;
+      const b = ctx.binding(rootAttrName);
+      for (let k = 0; k < attr.tupleSize; k++) {
+        storeLines.push(`  outBuf[${flatIndex(attr.tupleSize, k)}] = ${b.varName}[${flatIndex(attr.tupleSize, k)}];`);
+      }
+    } else {
+      // f32 and bool attributes read as f32 columns on CPU too.
+      storeExpression(compileNode(rootSpec as unknown as Record<string, unknown>, "$", ctx));
+    }
+  } else {
+    storeExpression(compileNode(rootSpec as unknown as Record<string, unknown>, "$", ctx));
+  }
+
+  const bound = ctx.boundAttrs();
+  const inputs: KernelInput[] = bound.map((b) => ({
+    name: b.name,
+    type: bufferType(b.attr),
+    tupleSize: b.attr.tupleSize,
+    binding: b.binding,
+  }));
+  const outputBinding = bound.length + 1;
+
+  const decls: string[] = [`@group(0) @binding(0) var<uniform> params: PcgParams;`];
+  for (const b of bound) {
+    decls.push(
+      `@group(0) @binding(${b.binding}) var<storage, read> ${b.varName}: array<${bufferType(b.attr)}>; ` +
+        `// attribute ${JSON.stringify(b.name)}: ${b.attr.type} tupleSize ${b.attr.tupleSize}`,
+    );
+  }
+  decls.push(`@group(0) @binding(${outputBinding}) var<storage, read_write> outBuf: array<${outType}>;`);
+
+  const blocks: string[] = [
+    `// Generated by pcg-ts compileFieldSpec (WGSL field kernel).
+// Dispatch: 1D, ceil(count / ${WORKGROUP_SIZE}) workgroups of ${WORKGROUP_SIZE}; one invocation per element.
+
+struct PcgParams {
+  count: u32,
+  seed: u32,
+}
+
+${decls.join("\n")}`,
+    ...libClosure(ctx.libRoots),
+    ...ctx.helperBlocks(),
+    `@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= params.count) {
+    return;
+  }
+${[...ctx.lines, ...storeLines].join("\n")}
+}`,
+  ];
+
+  const layoutKey = bound
+    .map((b) => `${JSON.stringify(b.name)}:${b.attr.type}x${b.attr.tupleSize}`)
+    .join(",");
+  return {
+    wgsl: `${blocks.join("\n\n")}\n`,
+    entryPoint: "main",
+    workgroupSize: WORKGROUP_SIZE,
+    outTupleSize,
+    outType,
+    inputs,
+    bindings: { uniforms: 0, output: outputBinding },
+    usesSeed: ctx.usesSeed,
+    key: `${CODEGEN_VERSION}|spec=${field.key}|layout=[${layoutKey}]`,
+  };
+}

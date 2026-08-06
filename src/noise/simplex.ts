@@ -1,22 +1,27 @@
 import type { Field } from "../fields/index.js";
 import { GRAD3, NOISE_RAW_RANGES, type NoiseOpts, hash4, makeNoiseField } from "./util.js";
 
-const SIMPLEX_SALT = 0x73696d70; // "simp"
+/** Kind salt decorrelating simplex noise from other noise types ("simp"). */
+export const SIMPLEX_SALT = 0x73696d70;
 
-const F3 = 1 / 3;
-const G3 = 1 / 6;
+/** Simplex skew factor for 3D. */
+export const F3 = 1 / 3;
+/** Simplex unskew factor for 3D. */
+export const G3 = 1 / 6;
 
 // Kernel radius² 0.5 (not Gustavson's 0.6): with 0.6 the kernel support
 // overruns the four traversed corners, producing a true C0 discontinuity
 // across skew-cell boundaries (measured |Δv| ≈ 0.005); with 0.5 the
 // support never reaches an omitted corner, so the field is continuous.
-const R2 = 0.5;
+/** Simplex kernel radius squared. */
+export const R2 = 0.5;
 
 // Output scale, derived empirically for R2 = 0.5: the largest |raw
 // kernel sum| observed over 1.28M samples (5 seeds x 4 frequencies) was
 // 0.013005, and 72 maps that to ~0.94 — inside [-1, 1] with ~6% headroom
 // for rarer, unobserved peaks.
-const SIMPLEX_SCALE = 72;
+/** Simplex output scale mapping raw kernel sums into [-1, 1]. */
+export const SIMPLEX_SCALE = 72;
 
 /**
  * Simplex noise (Gustavson's 3D formulation with hash-selected

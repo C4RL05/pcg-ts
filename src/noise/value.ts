@@ -2,7 +2,8 @@ import type { Field } from "../fields/index.js";
 import { hashFloat } from "../random/hash.js";
 import { NOISE_RAW_RANGES, type NoiseOpts, fade, hash4, makeNoiseField, mix } from "./util.js";
 
-const VALUE_SALT = 0x76616c75; // "valu"
+/** Kind salt decorrelating value noise from other noise types ("valu"). */
+export const VALUE_SALT = 0x76616c75;
 
 /**
  * Value noise: random lattice values in [0, 1) interpolated with a

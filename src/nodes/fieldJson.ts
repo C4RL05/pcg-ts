@@ -467,9 +467,25 @@ export function fieldFromJson(spec: FieldSpec): Field {
 }
 
 /**
+ * The JSON spec a field was built from, or undefined: the non-throwing
+ * counterpart of {@link fieldToJson}, so compilability (e.g. for the
+ * `pcg-ts/gpu` WGSL compiler) is queryable without try/catch. Returns a
+ * defensive copy for fields constructed by {@link fieldFromJson} —
+ * mutating it does not affect the field or later calls — and undefined
+ * for code-authored fields (which carry no spec) or non-Field values.
+ */
+export function getFieldSpec(field: Field): FieldSpec | undefined {
+  if (!isField(field)) return undefined;
+  const spec = (field as unknown as Record<symbol, unknown>)[FIELD_SPEC];
+  if (spec === undefined) return undefined;
+  return structuredClone(spec) as FieldSpec;
+}
+
+/**
  * Serialize a field back to the JSON spec it was built from. Only fields
  * constructed by {@link fieldFromJson} carry a spec; code-authored fields
- * throw an actionable error.
+ * throw an actionable error. See {@link getFieldSpec} for the
+ * non-throwing variant.
  */
 export function fieldToJson(field: Field): FieldSpec {
   if (!isField(field)) {

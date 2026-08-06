@@ -2,7 +2,8 @@ import type { Field } from "../fields/index.js";
 import { hashFloat } from "../random/hash.js";
 import { NOISE_RAW_RANGES, type NoiseOpts, hash5, makeNoiseField } from "./util.js";
 
-const WORLEY_SALT = 0x776f726c; // "worl"
+/** Kind salt decorrelating worley noise from other noise types ("worl"). */
+export const WORLEY_SALT = 0x776f726c;
 
 /** Options for {@link worleyNoise}. */
 export interface WorleyNoiseOpts extends NoiseOpts {

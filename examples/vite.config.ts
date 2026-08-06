@@ -12,6 +12,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "pcg-ts/three": here("../src/three/index.ts"),
+      "pcg-ts/gpu": here("../src/gpu/index.ts"),
       "pcg-ts": here("../src/index.ts"),
     },
   },

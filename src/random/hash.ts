@@ -4,31 +4,64 @@
  * integer math — identical results across runs and platforms.
  */
 
+// Murmur3 constants, exported as the single source of truth so the WGSL
+// port (src/gpu) serializes these exact values instead of duplicating
+// literals that could drift.
+
+/** Murmur3 mix-round first multiplier (c1). */
+export const HASH_MIX_MUL1 = 0xcc9e2d51;
+/** Murmur3 mix-round rotate amount for the folded value (r1). */
+export const HASH_MIX_ROT1 = 15;
+/** Murmur3 mix-round second multiplier (c2). */
+export const HASH_MIX_MUL2 = 0x1b873593;
+/** Murmur3 mix-round rotate amount for the running hash (r2). */
+export const HASH_MIX_ROT2 = 13;
+/** Murmur3 mix-round hash multiplier (m). */
+export const HASH_MIX_ROUND_MUL = 5;
+/** Murmur3 mix-round hash addend (n). */
+export const HASH_MIX_ROUND_ADD = 0xe6546b64;
+/** Murmur3 finalizer (fmix32) first xor-shift amount. */
+export const HASH_FINAL_SHIFT1 = 16;
+/** Murmur3 finalizer (fmix32) first multiplier. */
+export const HASH_FINAL_MUL1 = 0x85ebca6b;
+/** Murmur3 finalizer (fmix32) second xor-shift amount. */
+export const HASH_FINAL_SHIFT2 = 13;
+/** Murmur3 finalizer (fmix32) second multiplier. */
+export const HASH_FINAL_MUL2 = 0xc2b2ae35;
+/** Murmur3 finalizer (fmix32) final xor-shift amount. */
+export const HASH_FINAL_SHIFT3 = 16;
+/** hashSeed basis (golden-ratio constant). */
+export const HASH_SEED_BASIS = 0x9e3779b9;
+/** hashSeed length multiplier (shared with the fmix32 first multiplier). */
+export const HASH_SEED_MUL = 0x85ebca6b;
+/** hashFloat scale: 2^-24, mapping the top 24 hash bits into [0, 1). */
+export const HASH_FLOAT_SCALE = 2 ** -24;
+
 /** One murmur3 mix round: fold a 32-bit value into the running hash. */
 export function hashMix(h: number, value: number): number {
   let k = value >>> 0;
-  k = Math.imul(k, 0xcc9e2d51);
-  k = (k << 15) | (k >>> 17);
-  k = Math.imul(k, 0x1b873593);
+  k = Math.imul(k, HASH_MIX_MUL1);
+  k = (k << HASH_MIX_ROT1) | (k >>> (32 - HASH_MIX_ROT1));
+  k = Math.imul(k, HASH_MIX_MUL2);
   h = (h ^ k) >>> 0;
-  h = (h << 13) | (h >>> 19);
-  h = (Math.imul(h, 5) + 0xe6546b64) >>> 0;
+  h = (h << HASH_MIX_ROT2) | (h >>> (32 - HASH_MIX_ROT2));
+  h = (Math.imul(h, HASH_MIX_ROUND_MUL) + HASH_MIX_ROUND_ADD) >>> 0;
   return h;
 }
 
 /** Murmur3 finalizer (fmix32): avalanche the running hash into a u32. */
 export function hashFinalize(h: number): number {
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
+  h ^= h >>> HASH_FINAL_SHIFT1;
+  h = Math.imul(h, HASH_FINAL_MUL1);
+  h ^= h >>> HASH_FINAL_SHIFT2;
+  h = Math.imul(h, HASH_FINAL_MUL2);
+  h ^= h >>> HASH_FINAL_SHIFT3;
   return h >>> 0;
 }
 
 /** Initial hash state for a value sequence of the given length. */
 export function hashSeed(count: number): number {
-  return (0x9e3779b9 ^ Math.imul(count, 0x85ebca6b)) >>> 0;
+  return (HASH_SEED_BASIS ^ Math.imul(count, HASH_SEED_MUL)) >>> 0;
 }
 
 /**
@@ -48,7 +81,7 @@ export function hashCombine(...values: number[]): number {
  * in a Float32Array.
  */
 export function hashFloat(hash: number): number {
-  return (hash >>> 8) * 2 ** -24;
+  return (hash >>> 8) * HASH_FLOAT_SCALE;
 }
 
 /** FNV-1a hash of a string to an unsigned 32-bit integer. */
