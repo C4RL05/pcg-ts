@@ -40,6 +40,10 @@ import type {
   Field,
   GpuCookStats,
   GpuFieldResolver,
+  ResidentMemberDesc,
+  ResidentRunContext,
+  ResidentRunInput,
+  ResidentRunResult,
 } from "../fields/index.js";
 import { getFieldSpec } from "../nodes/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
@@ -48,9 +52,20 @@ import {
   MAP_MODE,
   type GpuAdapterInfoLike,
   type GpuBufferLike,
+  type GpuComputePipelineLike,
   type GpuDeviceLike,
 } from "./device.js";
 import { BufferPool, type GpuPoolStats } from "./pool.js";
+import {
+  DEFAULT_MAX_RESIDENT_BYTES,
+  MAX_STORAGE_BUFFERS,
+  MAX_WORKGROUPS,
+  UNIFORM_BYTES,
+  asResidentRunPlan,
+  chunkCapacity,
+  executeResidentRun,
+  planResidentRun,
+} from "./run.js";
 import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./types.js";
 
 /**
@@ -62,30 +77,12 @@ import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./type
 const SALT_VERSION = "gpu1";
 
 /**
- * Baseline WebGPU limit `maxStorageBuffersPerShaderStage`: kernels
- * needing more storage buffers (inputs + output) fall back to the CPU
- * rather than risking device-dependent validation errors.
- */
-const MAX_STORAGE_BUFFERS = 8;
-
-/**
- * Baseline WebGPU limit `maxComputeWorkgroupsPerDimension`: the kernel
- * dispatches on one dimension, so one `dispatchWorkgroups` call covers
- * at most `65535 * workgroupSize` elements; larger counts split into
- * multiple chunked dispatches (see `chunkOffset` in the kernel uniform).
- */
-const MAX_WORKGROUPS = 65535;
-
-/**
  * Default bound on bytes RETAINED by the buffer pool (idle buffers
  * only; in-flight buffers are unbounded exactly as without pooling).
  * 256 MiB comfortably holds the working set of repeated multi-million-
  * element dispatches while staying far below typical device memory.
  */
 const DEFAULT_MAX_POOLED_BYTES = 256 * 1024 * 1024;
-
-/** Byte size of the kernel uniform struct {count, seed, chunkOffset}. */
-const UNIFORM_BYTES = 12;
 
 const OUT_CTORS: Record<GpuScalarType, new (buffer: ArrayBuffer) => Column["data"]> = {
   f32: Float32Array,
@@ -98,11 +95,6 @@ const EMPTY_CTORS: Record<GpuScalarType, new (length: number) => Column["data"]>
   i32: Int32Array,
   u32: Uint32Array,
 };
-
-interface PipelineEntry {
-  readonly pipeline: ReturnType<GpuDeviceLike["createComputePipeline"]>;
-  readonly kernel: CompiledFieldKernel;
-}
 
 /** Options for {@link GpuFieldEvaluator}. */
 export interface GpuFieldEvaluatorOptions {
@@ -129,6 +121,14 @@ export interface GpuFieldEvaluatorOptions {
    * buffer is destroyed on release — the pre-pooling behavior).
    */
   readonly maxPooledBytes?: number;
+  /**
+   * Bound on the working set of a single device-resident run (resident
+   * attribute buffers across every epoch, field temporaries held for
+   * the run, and the readback staging buffer). Runs planning above the
+   * bound are rejected (`run-too-large`) and cook per-node instead.
+   * Default 512 MiB.
+   */
+  readonly maxResidentBytes?: number;
 }
 
 function saltFrom(info: GpuAdapterInfoLike | undefined): string {
@@ -170,11 +170,16 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
   private readonly device: GpuDeviceLike;
   /** Compiled kernels (or compile failures) by field key + full layout. */
   private readonly kernels = new Map<string, CompiledFieldKernel | Error>();
-  /** Pipelines by kernel specialization key; persists across cooks. */
-  private readonly pipelines = new Map<string, PipelineEntry>();
+  /**
+   * Pipelines by kernel specialization key; persists across cooks and
+   * is shared with resident runs (whose apply kernels are keyed the
+   * same way), so a chain reuses whatever the per-node path compiled.
+   */
+  private readonly pipelines = new Map<string, GpuComputePipelineLike>();
   /** Size-bucketed reuse of uniform/storage/readback buffers. */
   private readonly pool: BufferPool;
   private readonly maxElementsPerDispatch: number | undefined;
+  private readonly maxResidentBytes: number;
 
   constructor(device: GpuDeviceLike, opts: GpuFieldEvaluatorOptions = {}) {
     if (opts.maxElementsPerDispatch !== undefined && !Number.isFinite(opts.maxElementsPerDispatch)) {
@@ -188,6 +193,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     this.cacheSalt = saltFrom(opts.adapterInfo ?? device.adapterInfo);
     this.pool = new BufferPool(device, opts.maxPooledBytes ?? DEFAULT_MAX_POOLED_BYTES);
     this.maxElementsPerDispatch = opts.maxElementsPerDispatch;
+    this.maxResidentBytes = opts.maxResidentBytes ?? DEFAULT_MAX_RESIDENT_BYTES;
   }
 
   /** Number of cached pipelines (introspection for tools and tests). */
@@ -265,29 +271,88 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
       return Promise.resolve({ data: new EMPTY_CTORS[kernel.outType](0), tupleSize: kernel.outTupleSize });
     }
 
-    let entry = this.pipelines.get(kernel.key);
-    if (entry === undefined) {
-      const module = this.device.createShaderModule({ code: kernel.wgsl });
-      const pipeline = this.device.createComputePipeline({
-        layout: "auto",
-        compute: { module, entryPoint: kernel.entryPoint },
-      });
-      entry = { pipeline, kernel };
-      this.pipelines.set(kernel.key, entry);
-      if (stats !== undefined) stats.pipelinesCompiled++;
-    } else if (stats !== undefined) {
-      stats.pipelineCacheHits++;
-    }
-
+    const pipeline = this.getPipeline(kernel.key, kernel.wgsl, kernel.entryPoint, stats);
     if (stats !== undefined) stats.dispatches++;
-    return this.dispatch(field, ctx, kernel, entry, count);
+    return this.dispatch(field, ctx, kernel, pipeline, count);
+  }
+
+  /**
+   * Compute pipeline for a kernel key, compiling on miss and counting
+   * the compile or hit into `stats`. Shared by the per-field path and
+   * the resident-run executor ({@link RunExecEnv}).
+   */
+  getPipeline(
+    key: string,
+    wgsl: string,
+    entryPoint: string,
+    stats?: GpuCookStats,
+  ): GpuComputePipelineLike {
+    const cached = this.pipelines.get(key);
+    if (cached !== undefined) {
+      if (stats !== undefined) stats.pipelineCacheHits++;
+      return cached;
+    }
+    const module = this.device.createShaderModule({ code: wgsl });
+    const pipeline = this.device.createComputePipeline({
+      layout: "auto",
+      compute: { module, entryPoint },
+    });
+    this.pipelines.set(key, pipeline);
+    if (stats !== undefined) stats.pipelinesCompiled++;
+    return pipeline;
+  }
+
+  /**
+   * Plan a device-resident run (synchronous, device-free). Returns the
+   * opaque plan, or null with the rejection reason counted in
+   * `stats.fallbacks` — the executor then cooks the members per-node.
+   */
+  planRun(
+    members: readonly ResidentMemberDesc[],
+    ctx: ResidentRunContext,
+    stats?: GpuCookStats,
+  ): object | null {
+    const outcome = planResidentRun(members, ctx, this.maxResidentBytes);
+    if ("plan" in outcome) return outcome.plan;
+    if (stats !== undefined) {
+      stats.fallbacks[outcome.reason] = (stats.fallbacks[outcome.reason] ?? 0) + 1;
+    }
+    return null;
+  }
+
+  /** Execute a plan from this evaluator's {@link planRun}. */
+  executeRun(
+    plan: object,
+    input: ResidentRunInput,
+    stats?: GpuCookStats,
+  ): Promise<ResidentRunResult> {
+    const compiled = asResidentRunPlan(plan);
+    if (compiled === null) {
+      return Promise.reject(
+        new Error(
+          "GpuFieldEvaluator.executeRun: plan was not produced by this library's planRun; " +
+            "pass the object returned by planRun on the same resolver",
+        ),
+      );
+    }
+    return executeResidentRun(
+      {
+        device: this.device,
+        pool: this.pool,
+        maxElementsPerDispatch: this.maxElementsPerDispatch,
+        getPipeline: (key, wgsl, entryPoint, s) => this.getPipeline(key, wgsl, entryPoint, s),
+      },
+      compiled,
+      input,
+      stats,
+    );
   }
 
   private async dispatch(
     field: Field,
     ctx: EvalContext,
     kernel: CompiledFieldKernel,
-    entry: PipelineEntry,
+    pipeline: GpuComputePipelineLike,
     count: number,
   ): Promise<Column> {
     const device = this.device;
@@ -347,7 +412,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
         device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([count, ctx.seed >>> 0, c * chunk]));
         bindGroups.push(
           device.createBindGroup({
-            layout: entry.pipeline.getBindGroupLayout(0),
+            layout: pipeline.getBindGroupLayout(0),
             entries: [
               { binding: kernel.bindings.uniforms, resource: { buffer: uniformBuf } },
               ...bindEntries,
@@ -358,7 +423,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
-      pass.setPipeline(entry.pipeline);
+      pass.setPipeline(pipeline);
       for (let c = 0; c < chunkCount; c++) {
         const elements = Math.min(chunk, count - c * chunk);
         pass.setBindGroup(0, bindGroups[c]);

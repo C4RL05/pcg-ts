@@ -3,13 +3,21 @@ import {
   isField,
   type GpuCookStats,
   type GpuFieldResolver,
+  type ResidentAttrDesc,
+  type ResidentMemberDesc,
 } from "../fields/index.js";
 import { getFieldSpec } from "../nodes/fieldJson.js";
-import type { DataCollection, DataItem } from "./data.js";
+import { makeGeometryItem, type DataCollection, type DataItem } from "./data.js";
 import { CookCancelledError, GraphCycleError, GraphValidationError, NodeExecutionError } from "./errors.js";
-import { deriveNodeSeed, type Graph, type OutputDecl } from "./graph.js";
+import { deriveNodeSeed, type Graph, type NodeState, type OutputDecl } from "./graph.js";
 
-/** Progress callback payload: one entry per node visited by a cook. */
+/**
+ * Progress callback payload: one entry per node visited by a cook.
+ * Nodes fused into a device-resident run report once per member in
+ * chain order when the run completes (or is served from cache):
+ * interior members carry elapsedMs 0 and the run's terminal carries
+ * the whole run's elapsed time.
+ */
 export interface NodeDoneInfo {
   readonly id: string;
   readonly type: string;
@@ -56,13 +64,24 @@ export interface CookOptions {
    * device and fall back to the CPU otherwise, `CookStats.gpu` reports
    * the counters, and adopting nodes' memo keys gain the resolver's
    * cache salt (so bytes never mix across devices or with CPU-only
-   * cooks). Omitted: cook behavior and every produced byte are identical
-   * to a build without GPU support.
+   * cooks). Resolvers that additionally implement the optional run
+   * methods (`planRun`/`executeRun`) get maximal linear chains of
+   * resident-capable nodes fused into device-resident runs with a
+   * single readback at each run's terminal; resolvers without them
+   * degrade cleanly to the per-node behavior. Omitted: cook behavior
+   * and every produced byte are identical to a build without GPU
+   * support.
    */
   gpu?: GpuFieldResolver;
 }
 
-/** Counters for one cook pass. */
+/**
+ * Counters for one cook pass. Nodes fused into a device-resident run
+ * count member-wise: every member counts in `cooked` when its run
+ * executes and in `cached` when the run is served from the terminal's
+ * cache, so `cooked + cached` always equals the number of visited
+ * nodes.
+ */
 export interface CookStats {
   /** Nodes whose execute ran. */
   cooked: number;
@@ -192,13 +211,126 @@ function paramsHaveSpecField(v: unknown): boolean {
  * land in this cook's sink. The view deliberately ignores sinks passed
  * by its own callers — a nested cook (subgraph) wraps this view with its
  * own (discarded) sink, and dropping it here routes all counts to the
- * outermost cook that owns a real `CookStats.gpu`.
+ * outermost cook that owns a real `CookStats.gpu`. The optional run
+ * methods are forwarded with the same sink binding (and only when the
+ * base implements both), so nested cooks fuse resident runs too and
+ * their counters land in the outermost sink.
  */
 function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResolver {
-  return {
+  const view: GpuFieldResolver = {
     cacheSalt: base.cacheSalt,
     resolveField: (field, ctx) => base.resolveField(field, ctx, sink),
   };
+  if (base.planRun !== undefined && base.executeRun !== undefined) {
+    view.planRun = (members, ctx) => base.planRun!(members, ctx, sink);
+    view.executeRun = (plan, input) => base.executeRun!(plan, input, sink);
+  }
+  return view;
+}
+
+/**
+ * Version prefix of the fused-run memo key format. Bump when the key
+ * composition itself changes so stale run entries can never be served
+ * across library versions (device/kernel byte changes are covered by
+ * the resolver's own `cacheSalt`).
+ */
+const RUN_KEY_VERSION = "run1";
+
+/**
+ * Are all Fields in the param tree spec'd (`getFieldSpec`)? A spec-less
+ * (code-authored) Field would force a CPU fallback inside a fused run,
+ * so nodes carrying one never join a run. Trees without any Field are
+ * trivially true — plain values compile as constants.
+ */
+function paramsFieldsAllSpecd(v: unknown): boolean {
+  if (typeof v !== "object" || v === null) return true;
+  if (isField(v)) return getFieldSpec(v) !== undefined;
+  if (Array.isArray(v)) return v.every(paramsFieldsAllSpecd);
+  if (ArrayBuffer.isView(v)) return true;
+  if (v instanceof Set) return [...v].every(paramsFieldsAllSpecd);
+  if (v instanceof Map) return [...v.values()].every(paramsFieldsAllSpecd);
+  const proto = Object.getPrototypeOf(v) as object | null;
+  if (proto === Object.prototype || proto === null) {
+    return Object.values(v as Record<string, unknown>).every(paramsFieldsAllSpecd);
+  }
+  return true;
+}
+
+/**
+ * May this node join a device-resident run? Declarative gate only —
+ * whether the resolver can actually compile the member is decided by
+ * `planRun` at cook time. Requirements: a `resident` descriptor whose
+ * `eligible` predicate (when present) accepts the live params, exactly
+ * one non-multi geometry input pin and one geometry output pin (the
+ * linear-chain shape), and every Field param spec'd.
+ */
+function isFusable(node: NodeState): boolean {
+  const def = node.def;
+  if (def.resident === undefined) return false;
+  if (
+    def.inputs.length !== 1 ||
+    def.inputs[0].kind !== "geometry" ||
+    def.inputs[0].multi === true ||
+    def.outputs.length !== 1 ||
+    def.outputs[0].kind !== "geometry"
+  ) {
+    return false;
+  }
+  if (def.resident.eligible !== undefined && !def.resident.eligible(node.params)) return false;
+  return paramsFieldsAllSpecd(node.params);
+}
+
+/** One detected device-resident run: member node ids in chain order. */
+interface ResidentRun {
+  readonly members: readonly string[];
+  readonly terminal: string;
+}
+
+/**
+ * Detect maximal device-resident runs over the induced cooked subgraph
+ * (`order`). A run is a linear chain of fusable nodes where each
+ * member's sole geometry input is the previous member's output and
+ * every interior member has exactly one consumer and no declared
+ * output; any violation (external tap, declared output, non-fusable or
+ * out-of-selection consumer) ends the run at that boundary — the
+ * boundary node becomes the run's terminal with a readback. Runs of a
+ * single node are not runs: they cook on the (identical-cost) per-node
+ * path, keeping their phase-independent memo keys.
+ *
+ * Maximality: `order` is topological, so a chain's earliest fusable
+ * node is visited before its downstream members; the first un-membered
+ * fusable node therefore starts its chain's maximal run.
+ */
+function detectResidentRuns(graph: Graph, order: readonly string[]): Map<string, ResidentRun> {
+  const byFirst = new Map<string, ResidentRun>();
+  const inOrder = new Set(order);
+  const membered = new Set<string>();
+  const hasOutputDecl = (id: string): boolean => graph._outputs.some((o) => o.node === id);
+  for (const id of order) {
+    if (membered.has(id)) continue;
+    if (!isFusable(graph.require(id))) continue;
+    const chain: string[] = [id];
+    let tail = id;
+    for (;;) {
+      const outgoing = graph._outFrom.get(tail) ?? [];
+      if (outgoing.length !== 1) break; // multi-consumer tap (or dead end)
+      if (hasOutputDecl(tail)) break; // interior members must not be declared outputs
+      const next = outgoing[0].to;
+      if (!inOrder.has(next)) break; // consumer outside this cook's selection
+      const nextNode = graph.require(next);
+      if (!isFusable(nextNode)) break;
+      const incoming = graph._inTo.get(next) ?? [];
+      if (incoming.length !== 1 || incoming[0].from !== tail) break; // sole input must be the chain
+      chain.push(next);
+      tail = next;
+    }
+    if (chain.length >= 2) {
+      const run: ResidentRun = { members: chain, terminal: tail };
+      byFirst.set(id, run);
+      for (const m of chain) membered.add(m);
+    }
+  }
+  return byFirst;
 }
 
 /**
@@ -329,14 +461,21 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   const decls = selectOutputs(graph, opts.outputs);
   const order = topoOrder(graph, decls);
 
-  for (const id of order) {
-    checkCancelled();
-    const node = graph.require(id);
-    const def = node.def;
-    const nodeStart = performance.now();
+  // Device-resident runs exist only when the resolver implements both
+  // optional run methods; otherwise (including CPU-only cooks and
+  // v0.5-style resolvers) every code path below is exactly the per-node
+  // one and produced bytes and memo keys are unchanged.
+  const runsByFirst =
+    gpu !== undefined && gpu.planRun !== undefined && gpu.executeRun !== undefined
+      ? detectResidentRuns(graph, order)
+      : undefined;
+  const handled = runsByFirst !== undefined && runsByFirst.size > 0 ? new Set<string>() : undefined;
 
-    // Assemble inputs (multi pins concatenate in connection order) and the
-    // input part of the memo key from item revs.
+  /** Inputs (multi pins concatenate in connection order) + rev signature. */
+  const assembleInputs = (
+    id: string,
+    def: NodeState["def"],
+  ): { inputs: Record<string, DataCollection>; inputSig: string[] } => {
     const inputs: Record<string, DataCollection> = {};
     const inputSig: string[] = [];
     const incoming = graph._inTo.get(id) ?? [];
@@ -350,6 +489,15 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
       inputs[pin.name] = items;
       inputSig.push(`${pin.name}=${items.map((it) => it.rev).join(",")}`);
     }
+    return { inputs, inputSig };
+  };
+
+  /** The unchanged per-node cook: memoize on the node key, else execute. */
+  const cookNode = async (id: string): Promise<void> => {
+    const node = graph.require(id);
+    const def = node.def;
+    const nodeStart = performance.now();
+    const { inputs, inputSig } = assembleInputs(id, def);
 
     const seed = deriveNodeSeed(graph.seed, id);
     const extra = def.memoKey?.() ?? "";
@@ -402,6 +550,139 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
       stats.cooked++;
       onNodeDone?.({ id, type: def.type, cached: false, elapsedMs: performance.now() - nodeStart });
     }
+  };
+
+  /**
+   * Cook a detected run fused: memoize on the composite run key (which
+   * caches ONLY the terminal's output — interior members get no cache
+   * entries while fused, so any interior change recooks the whole run),
+   * else plan + execute on the device. Returns false when fusion cannot
+   * proceed this cook (plan rejected, no/empty input geometry) — the
+   * caller then cooks every member on the per-node path, which surfaces
+   * identical bytes and identical errors.
+   *
+   * Stats/progress semantics (pinned by tests): every member counts in
+   * `stats.cooked` when the run executes and in `stats.cached` when the
+   * run is served from the terminal's cache, so cooked + cached still
+   * equals the number of visited nodes. `onNodeDone` fires once per
+   * member in chain order at run completion; interior members report
+   * elapsedMs 0 and the terminal carries the run's total time.
+   */
+  const cookResidentRun = async (run: ResidentRun): Promise<boolean> => {
+    const first = graph.require(run.members[0]);
+    const terminal = graph.require(run.terminal);
+    const runStart = performance.now();
+    const { inputs, inputSig } = assembleInputs(run.members[0], first.def);
+
+    // Composite run memo key: run-format version + device salt + the
+    // first member's input signature + ordered member tuples
+    // (type | seed | param hash | def memoKey). The per-node and run
+    // key formats can never collide (distinct prefixes), so a CPU-only
+    // or run-less cook never serves run-cached bytes and vice versa.
+    const memberKeys: string[] = [];
+    const memberDescs: ResidentMemberDesc[] = [];
+    for (const id of run.members) {
+      const node = graph.require(id);
+      const seed = deriveNodeSeed(graph.seed, id);
+      const extra = node.def.memoKey?.() ?? "";
+      memberKeys.push(
+        `[${node.def.type}|s${seed}|p${stableValueHash(node.params, "params")}|x${extra}]`,
+      );
+      memberDescs.push({
+        id,
+        type: node.def.type,
+        kind: node.def.resident!.kind,
+        params: node.params,
+        seed,
+      });
+    }
+    const key = `${RUN_KEY_VERSION}|gpu:${gpu!.cacheSalt}|i${inputSig.join(";")}|m${memberKeys.join("")}`;
+
+    if (terminal.cache !== undefined && terminal.cache.key === key) {
+      const elapsed = performance.now() - runStart;
+      for (const id of run.members) {
+        const node = graph.require(id);
+        // Terminal-only caching: an interior member must hold NO entry
+        // while fused. It can still carry one from an earlier per-node
+        // cook (gpu off, or a cook where planning was rejected); drop it
+        // so the contract holds literally and the retained geometry is
+        // released instead of living on unreadable.
+        if (id !== run.terminal) node.cache = undefined;
+        node.dirty = false;
+        stats.cached++;
+        onNodeDone?.({
+          id,
+          type: node.def.type,
+          cached: true,
+          elapsedMs: id === run.terminal ? elapsed : 0,
+        });
+      }
+      return true;
+    }
+
+    // Plan against the input geometry's point layout. Planning is
+    // synchronous and device-free. No geometry connected or an empty
+    // cloud skips fusion: the per-node path is trivially cheap there
+    // and surfaces the identical CPU error for missing inputs.
+    let geo;
+    for (const item of inputs[first.def.inputs[0].name]) {
+      if (item.kind === "geometry") {
+        geo = item.geo;
+        break;
+      }
+    }
+    if (geo === undefined || geo.attrs.point.count === 0) return false;
+    const attributes: Record<string, ResidentAttrDesc> = {};
+    for (const attr of geo.attrs.point) {
+      attributes[attr.name] = { type: attr.type, tupleSize: attr.tupleSize };
+    }
+    const plan = gpu!.planRun!(memberDescs, { attributes, count: geo.attrs.point.count });
+    if (plan === null) return false;
+
+    let resultGeo;
+    try {
+      resultGeo = (await gpu!.executeRun!(plan, { geo, signal, budgetMs })).geo;
+    } catch (err) {
+      // Post-plan failures are errors, never silent fallbacks — except
+      // genuine cancellation, which propagates as such.
+      if (err instanceof CookCancelledError && signal?.aborted) throw err;
+      throw new NodeExecutionError(run.terminal, err);
+    }
+    terminal.cache = {
+      key,
+      outputs: { [terminal.def.outputs[0].name]: [makeGeometryItem(resultGeo)] },
+    };
+    const elapsed = performance.now() - runStart;
+    for (const id of run.members) {
+      const node = graph.require(id);
+      // Terminal-only caching (see the cache-hit branch above).
+      if (id !== run.terminal) node.cache = undefined;
+      node.dirty = false;
+      stats.cooked++;
+      onNodeDone?.({
+        id,
+        type: node.def.type,
+        cached: false,
+        elapsedMs: id === run.terminal ? elapsed : 0,
+      });
+    }
+    return true;
+  };
+
+  for (const id of order) {
+    checkCancelled();
+    if (handled !== undefined && handled.has(id)) continue;
+    const run = runsByFirst?.get(id);
+    let fused = false;
+    if (run !== undefined) {
+      fused = await cookResidentRun(run);
+      if (fused) {
+        for (const m of run.members) handled!.add(m);
+      }
+      // Not fused: fall through — this member (and, at their own loop
+      // positions, the rest of the chain) cooks on the per-node path.
+    }
+    if (!fused) await cookNode(id);
 
     if (budgetMs !== undefined && performance.now() - sliceStart > budgetMs) {
       await yieldToEventLoop();

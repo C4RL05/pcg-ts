@@ -112,8 +112,8 @@ describe.skipIf(testDevice === null)(deviceSuiteName("evaluator + cook integrati
     expect(b.resolved).toBe(true);
     expect(b.bitExact).toBe(true);
     expect(b.secondBitExact).toBe(true);
-    expect(b.stats1).toEqual({ dispatches: 1, pipelinesCompiled: 1, pipelineCacheHits: 0, fallbacks: {} });
-    expect(b.stats2).toEqual({ dispatches: 1, pipelinesCompiled: 0, pipelineCacheHits: 1, fallbacks: {} });
+    expect(b.stats1).toEqual({ dispatches: 1, pipelinesCompiled: 1, pipelineCacheHits: 0, residentRuns: 0, fusedNodes: 0, readbacksSaved: 0, fallbacks: {} });
+    expect(b.stats2).toEqual({ dispatches: 1, pipelinesCompiled: 0, pipelineCacheHits: 1, residentRuns: 0, fusedNodes: 0, readbacksSaved: 0, fallbacks: {} });
     expect(b.pipelineCacheSize).toBeGreaterThanOrEqual(1);
   });
 

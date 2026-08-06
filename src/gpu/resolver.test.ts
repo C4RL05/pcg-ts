@@ -41,6 +41,9 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
       dispatches: 0,
       pipelinesCompiled: 0,
       pipelineCacheHits: 0,
+      residentRuns: 0,
+      fusedNodes: 0,
+      readbacksSaved: 0,
       fallbacks: { "no-spec": 1 },
     });
   });
@@ -137,7 +140,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     expect(u32.data.length).toBe(0);
     const vec = await ev.resolveField(fieldFromJson({ fn: "position" }), ctx, stats)!;
     expect(vec.tupleSize).toBe(3);
-    expect(stats).toEqual({ dispatches: 0, pipelinesCompiled: 0, pipelineCacheHits: 0, fallbacks: {} });
+    expect(stats).toEqual({ dispatches: 0, pipelinesCompiled: 0, pipelineCacheHits: 0, residentRuns: 0, fusedNodes: 0, readbacksSaved: 0, fallbacks: {} });
     expect(ev.pipelineCacheSize).toBe(0);
   });
 

@@ -60,6 +60,38 @@ export interface NodeExecuteArgs<P> {
 }
 
 /**
+ * Declares that a node type can be fused into a device-resident run: a
+ * linear chain of such nodes whose intermediate geometry stays on the
+ * GPU, with a single readback at the chain's terminal. Purely
+ * declarative — core never contains device code; a resolver that
+ * implements the optional run methods (see `GpuFieldResolver.planRun`)
+ * receives the `kind` string and decides whether it can compile the
+ * node's semantics. Unknown kinds simply fail planning and fall back to
+ * the per-node path, so third-party nodes may declare kinds a future
+ * resolver understands.
+ *
+ * A resident-capable node must be element-count-preserving on its
+ * single geometry input → single geometry output, and its semantics for
+ * a given `kind` must match the CPU `execute` exactly (the CPU path
+ * remains the bit-exact reference).
+ */
+export interface ResidentDesc<P = Record<string, unknown>> {
+  /**
+   * Machine-readable semantic identity of the node's device-resident
+   * form (e.g. `"setAttribute"`, `"transformPoints"`). The resolver's
+   * planner maps this to an apply kernel.
+   */
+  readonly kind: string;
+  /**
+   * Optional param-dependent gate: return false for param combinations
+   * whose execute takes a path the resident kind does not model (e.g.
+   * setAttribute's string modes). Ineligible nodes cook on the normal
+   * per-node path and never join a run. Must be cheap and pure.
+   */
+  eligible?(params: P): boolean;
+}
+
+/**
  * A node type: typed pins, default params, and a pure execute function.
  *
  * Purity contract: execute must treat its inputs as immutable and derive
@@ -91,6 +123,16 @@ export interface NodeDef<P = Record<string, unknown>> {
    * keys ignore the resolver entirely.
    */
   readonly gpu?: "fields" | "always";
+  /**
+   * Declares the node fusable into device-resident runs; see
+   * {@link ResidentDesc}. Only consulted when a cook's resolver
+   * implements the optional run methods; otherwise (and on CPU-only
+   * cooks) it is inert and behavior is byte-identical to a build
+   * without it. Structural requirements checked by the executor:
+   * exactly one non-multi geometry input pin and exactly one geometry
+   * output pin.
+   */
+  readonly resident?: ResidentDesc<P>;
   /**
    * Optional extra memo-key component, read before each cook of an
    * instance. Use it to fold state living outside params into the cache

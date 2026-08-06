@@ -5,7 +5,7 @@
  * source — and so graphs referencing node types by name can be
  * serialized and deserialized (see serialize.ts).
  */
-import type { DataItem, NodeDef, NodeExecuteArgs, NodeOutputs, PinDef, PinKind } from "../graph/index.js";
+import type { DataItem, NodeDef, NodeExecuteArgs, NodeOutputs, PinDef, PinKind, ResidentDesc } from "../graph/index.js";
 
 /**
  * Value kinds a node param can declare in its schema. `items` is a list
@@ -92,6 +92,8 @@ export interface NodeSpec<P> {
   memoKey?(): string;
   /** GPU adoption declaration, copied onto the def; see {@link NodeDef.gpu}. */
   readonly gpu?: "fields" | "always";
+  /** Resident-fusion declaration, copied onto the def; see {@link NodeDef.resident}. */
+  readonly resident?: ResidentDesc<P>;
 }
 
 /** JSON-safe pin metadata. */
@@ -286,6 +288,7 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
     execute: (args) => spec.execute(args),
     ...(spec.memoKey !== undefined ? { memoKey: spec.memoKey.bind(spec) } : {}),
     ...(spec.gpu !== undefined ? { gpu: spec.gpu } : {}),
+    ...(spec.resident !== undefined ? { resident: spec.resident } : {}),
   };
   const params: Record<string, ParamSchema> = {};
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {

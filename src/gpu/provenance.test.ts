@@ -80,6 +80,9 @@ describe("gpu memo-key provenance (stub resolver)", () => {
       dispatches: 1,
       pipelinesCompiled: 0,
       pipelineCacheHits: 0,
+      residentRuns: 0,
+      fusedNodes: 0,
+      readbacksSaved: 0,
       fallbacks: {},
     });
     expect(outAttrBytes(r2)).toEqual(outAttrBytes(r1)); // stub is CPU-backed
@@ -115,6 +118,9 @@ describe("gpu memo-key provenance (stub resolver)", () => {
       dispatches: 0,
       pipelinesCompiled: 0,
       pipelineCacheHits: 0,
+      residentRuns: 0,
+      fusedNodes: 0,
+      readbacksSaved: 0,
       fallbacks: {},
     });
     expect(stub.calls).toBe(0); // plain values never reach the resolver
@@ -139,6 +145,9 @@ describe("gpu memo-key provenance (stub resolver)", () => {
       dispatches: 0,
       pipelinesCompiled: 0,
       pipelineCacheHits: 0,
+      residentRuns: 0,
+      fusedNodes: 0,
+      readbacksSaved: 0,
       fallbacks: { "no-spec": 1 },
     });
     const gCpu = makeSetAttributeGraph(randomField("authored"));
@@ -194,6 +203,9 @@ describe("gpu memo-key provenance (stub resolver)", () => {
       dispatches: 1,
       pipelinesCompiled: 0,
       pipelineCacheHits: 0,
+      residentRuns: 0,
+      fusedNodes: 0,
+      readbacksSaved: 0,
       fallbacks: {},
     });
   });

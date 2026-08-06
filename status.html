@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:92%; }
+  .bar > div { height:100%; background:var(--done); width:96%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 13:35</p>
-  <div class="bar"><div style="width:92%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 21:40</p>
+  <div class="bar"><div style="width:96%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -74,15 +74,15 @@
     <li class="done"><span class="chip">done</span>20 · GPU device runtime — evaluator, cook integration, parity suite</li>
     <li class="done"><span class="chip">done</span>21 · GPU example, docs, v0.5.0</li>
     <li class="done"><span class="chip">done</span>22 · Pervasive GPU adoption — all field nodes, chunked dispatch, buffer pooling</li>
-    <li class="active"><span class="chip">active</span>23 · Device-resident pipeline core — fused runs, one readback</li>
-    <li class="pending"><span class="chip">pending</span>24 · Demo, docs, v0.6.0</li>
+    <li class="done"><span class="chip">done</span>23 · Device-resident pipeline core — fused runs, one readback</li>
+    <li class="active"><span class="chip">active</span>24 · Demo, docs, v0.6.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>801</b><span>passed</span></div>
+    <div><b>842</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-06 13:34</b><span>last run</span></div>
+    <div><b>2026-08-06 21:38</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -119,6 +119,7 @@
     <li><time>2026-08-06 11:45</time>v0.5.0 released. Phase 21 complete: example 08-gpu-fields (million-point scatter whose JSON field expressions cook through WGSL compute kernels; CPU/GPU toggle, live CookStats.gpu, per-path FNV hashes, live parity readout) verified interactively in Chrome on the host adapter — 1M GPU cook in ~0.8s with 2 dispatches and zero fallbacks vs ~5s CPU at 100k, GPU hash byte-stable across cold reloads and cold-cache recooks, CPU/GPU hashes distinct as documented, live deviation 5.9 range-ULP within budgets, and toggling paths recooked exactly the field nodes while the scatter source stayed cached (provenance surgery visible in the stats line). One in-browser defect found and fixed: the pre-cook paint wait hung forever in hidden tabs (rAF never fires); now races a timeout. README/llms.txt/authoring document the GPU surface and the measured parity contract; overview site refreshed with the eighth demo; hosted demos rebuilt. Final gate: 769 tests, clean typecheck, library and examples builds. npm publish remains a separate user-driven step.</li>
     <li><time>2026-08-06 12:20</time>v0.6 cycle started (phases 22-24): make the GPU path pervasive (transformPoints/jitterPoints/orientAlongVector/surfaceSample/volumeSample adopt the resolver; chunked dispatch retires dispatch-too-large; pooled buffers), then device-resident pipelines fusing count-preserving field-node chains into single-readback runs under a fixed cache contract (terminal-only caching, boundary splits at external consumers), then demo/docs/v0.6.0. User confirmed the 08-gpu-fields demo renders correctly (visual check that was pending window visibility). npm publish explicitly deferred by user.</li>
     <li><time>2026-08-06 13:35</time>Phase 22 complete and audited (PASS-with-fixes): transformPoints, jitterPoints, orientAlongVector, surfaceSample, and volumeSample now resolve field params on device through a shared resolveOnMaybeGpu helper with gpu:fields provenance — the samplers hand the resolver the exact internal-cloud contexts the CPU path uses, and audit-built adversarial specs (fields reading the very attributes the nodes write) proved CPU and GPU cooks byte-identical in every case. Chunked dispatch (chunkOffset uniform, non-final chunks exact workgroup multiples) retires dispatch-too-large: a 4.3M-element resolve byte-equals CPU in 10 ms; audit re-derived the partition math and fuzzed adversarial chunk overrides. Pow2-bucketed buffer pooling (256 MiB bound, poolStats, dispose) proven observationally invisible across interleaved shapes. Audit fixed two real evaluator defects: NaN dispatch-limit silently produced all-zero uncomputed columns (now rejected at construction), and an OOM-class readback failure returned a still-mapped buffer to the pool, poisoning its bucket (unmap now in finally). 801 tests green (32 new).</li>
+    <li><time>2026-08-06 21:40</time>Phase 23 complete and audited (PASS-with-fixes): device-resident runs fuse linear chains of setAttribute/transformPoints/jitterPoints/orientAlongVector into one round trip — attribute columns live in storage buffers across member kernels (in-place, with field temporaries materialized before each apply kernel so a param column can never alias the buffer it writes) and a single readback materializes only written attributes. Verified on hardware: 228 apply-kernel variants compile with zero WGSL diagnostics; 17 chains of 2-8 members execute correctly, 11 of them BIT-EXACT vs CPU on every attribute (incl. mid-run retype, self-read rewrite, 8-member run); float chains 1.33-4.83 rangeUlp against budget 6; a 4.3M-point run fuses in 421 ms byte-identical to CPU; cancellation leaves zero buffers in flight. The audit led with mutation testing — 11 deliberate kernel/planner defects injected one at a time — and the suite as delivered caught 10, the survivor being SSA-epoch rebinding (invisible because the probe&#39;s replacement field was the identity), now closed by a new bit-exact chain. The audit also falsified the implementer&#39;s zero-bug claim by finding a real contract violation: interior members retained stale per-node cache entries while fused, each pinning an unreachable Geometry — fixed. Implementation note: the first implementation agent was interrupted by credit exhaustion mid-file; the evaluator wiring (shared pipeline cache, getPipeline, planRun/executeRun, maxResidentBytes) was completed by hand. 842 tests green (41 new).</li>
   </ol>
 </body>
 </html>

@@ -105,6 +105,15 @@ export const setAttribute = standardNode<SetAttributeParams>({
   // `value` is a spec'd Field — plain values keep their cache across the
   // gpu toggle).
   gpu: "fields",
+  // Fusable into device-resident runs in numeric point-domain mode
+  // only: string modes, other domains, and the values/stringValue
+  // misuse errors keep the per-node path so behavior (including the
+  // exact CPU error messages) is unchanged.
+  resident: {
+    kind: "setAttribute",
+    eligible: (p) =>
+      p.type !== "string" && p.domain === "point" && p.values.length === 0 && p.stringValue === "",
+  },
   async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "setAttribute"));
     const domain = params.domain as Domain;

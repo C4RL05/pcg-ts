@@ -63,6 +63,11 @@ export const transformPoints = standardNode<TransformPointsParams>({
   // GPU (fresh) and CPU (possibly zero-copy view) columns read the same
   // pre-transform bytes.
   gpu: "fields",
+  // Fusable into device-resident runs (count-preserving, single
+  // geometry in/out); the resolver's planner ports the SRT loop —
+  // including the conditional rot/scale composition — as an apply
+  // kernel and falls back per-node for layouts it does not model.
+  resident: { kind: "transformPoints" },
   async execute({ inputs, params, seed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "transformPoints"));
     const n = geo.pointCount;
@@ -136,6 +141,10 @@ export const jitterPoints = standardNode<JitterPointsParams>({
   // input's positions with the jitter-derived seed BEFORE any point
   // moves — exactly the CPU path's context.
   gpu: "fields",
+  // Fusable into device-resident runs; the apply kernel reproduces the
+  // hashFloat(hashCombine(seed, i, k)) offset chain bit-for-bit (the
+  // hash is exact in f32), with the final multiply-add in f32.
+  resident: { kind: "jitterPoints" },
   async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "jitterPoints"));
     const seed = hashCombine(nodeSeed, params.seed);
@@ -366,6 +375,11 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
   // written, so the resolver sees the same attribute layout and bytes
   // the CPU evaluation would.
   gpu: "fields",
+  // Fusable into device-resident runs; the apply kernel ports the
+  // basis construction (up fallbacks, zero-direction keep-prior rot,
+  // quatFromBasis trace branches) with the axis and normalized up
+  // baked as constants.
+  resident: { kind: "orientAlongVector" },
   async execute({ inputs, params, seed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "orientAlongVector"));
     const axis = params.axis;
