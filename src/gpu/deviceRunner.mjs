@@ -77,12 +77,14 @@ async function main() {
     result.runs = [];
     for (let run = 0; run < (task.runs ?? 1); run++) {
       const buffers = [];
+      // Uniform struct {count, seed, chunkOffset}; the runner always
+      // dispatches a single chunk at offset 0 (its counts are small).
       const uniformBuf = device.createBuffer({
-        size: 8,
+        size: 12,
         usage: USAGE.UNIFORM | USAGE.COPY_DST,
       });
       buffers.push(uniformBuf);
-      device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([task.count, task.seed >>> 0]));
+      device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([task.count, task.seed >>> 0, 0]));
       const entries = [{ binding: task.uniformsBinding, resource: { buffer: uniformBuf } }];
       for (const inputDesc of task.inputs) {
         const bytes = Buffer.from(inputDesc.data, "base64");

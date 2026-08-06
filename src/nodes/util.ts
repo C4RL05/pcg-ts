@@ -73,6 +73,31 @@ export async function tryResolveOnGpu(
 }
 
 /**
+ * The standard optional-GPU resolution pattern for adopting nodes
+ * (`NodeDef.gpu: "fields"`): try the resolver when the cook carries one
+ * ({@link tryResolveOnGpu}), otherwise — or on ineligibility — fall
+ * back to the CPU {@link resolveOn} with the exact same geometry,
+ * domain, and seed, so fallback bytes are what the CPU-only cook
+ * produces. GPU columns are freshly allocated where CPU columns may be
+ * zero-copy views of attribute storage; callers must therefore resolve
+ * every field-capable param BEFORE mutating any attribute a param
+ * could read (all adopters do — see their execute bodies).
+ */
+export async function resolveOnMaybeGpu(
+  gpu: GpuFieldResolver | undefined,
+  geo: Geometry,
+  domain: "point" | "vertex" | "primitive" | "detail",
+  value: FieldLike,
+  seed: number,
+): Promise<Column> {
+  if (gpu !== undefined) {
+    const col = await tryResolveOnGpu(gpu, geo, domain, value, seed);
+    if (col !== null) return col;
+  }
+  return resolveOn(geo, domain, value, seed);
+}
+
+/**
  * Require the column's tuple size to be one of `allowed`; error names the
  * node type and param.
  */

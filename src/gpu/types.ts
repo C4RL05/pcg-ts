@@ -45,9 +45,13 @@ export interface KernelInput {
 
 /**
  * A compiled WGSL field kernel. Pure data — nothing here touches a GPU
- * device; the phase-20 runtime creates the pipeline from `wgsl`, binds
- * buffers per `inputs`/`bindings`, and dispatches
- * `ceil(count / workgroupSize)` workgroups on one dimension.
+ * device; the runtime creates the pipeline from `wgsl`, binds buffers
+ * per `inputs`/`bindings`, and dispatches on one dimension in chunks of
+ * up to 65535 workgroups: each chunk runs
+ * `ceil(chunkElements / workgroupSize)` workgroups with its start index
+ * in the `chunkOffset` uniform member (0 for the common single-chunk
+ * case), so element counts are unbounded by the per-dispatch workgroup
+ * limit.
  */
 export interface CompiledFieldKernel {
   /** Complete WGSL module text. Deterministic: same spec + layout → same text. */

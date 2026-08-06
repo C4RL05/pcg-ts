@@ -51,3 +51,4 @@ export {
   type GpuShaderModuleLike,
 } from "./device.js";
 export { GpuFieldEvaluator, type GpuFieldEvaluatorOptions } from "./evaluator.js";
+export { type GpuPoolStats } from "./pool.js";

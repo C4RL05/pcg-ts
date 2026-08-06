@@ -16,7 +16,7 @@ import {
   readComp,
   requireGeometry,
   requireTuple,
-  resolveOn,
+  resolveOnMaybeGpu,
   rotateVec,
 } from "./util.js";
 
@@ -56,12 +56,19 @@ export const transformPoints = standardNode<TransformPointsParams>({
       description: "Componentwise scale about the world origin, applied before rotation. Field-capable (tuple 1 broadcasts).",
     },
   },
-  execute({ inputs, params, seed }) {
+  // Field params may resolve on the GPU ("fields": the memo key gains
+  // device provenance only when some param is a spec'd Field — plain
+  // values keep their cache across the gpu toggle). All three params
+  // resolve on the cloned input's point domain BEFORE any mutation, so
+  // GPU (fresh) and CPU (possibly zero-copy view) columns read the same
+  // pre-transform bytes.
+  gpu: "fields",
+  async execute({ inputs, params, seed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "transformPoints"));
     const n = geo.pointCount;
-    const tCol = requireTuple(resolveOn(geo, "point", params.translate, seed), [1, 3], "transformPoints", "translate");
-    const rCol = requireTuple(resolveOn(geo, "point", params.rotateEuler, seed), [1, 3], "transformPoints", "rotateEuler");
-    const sCol = requireTuple(resolveOn(geo, "point", params.scale, seed), [1, 3], "transformPoints", "scale");
+    const tCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.translate, seed), [1, 3], "transformPoints", "translate");
+    const rCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.rotateEuler, seed), [1, 3], "transformPoints", "rotateEuler");
+    const sCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.scale, seed), [1, 3], "transformPoints", "scale");
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
@@ -125,10 +132,14 @@ export const jitterPoints = standardNode<JitterPointsParams>({
       description: "Extra seed folded into the node seed; change it to re-roll the jitter.",
     },
   },
-  execute({ inputs, params, seed: nodeSeed }) {
+  // `amount` may resolve on the GPU; it is evaluated on the cloned
+  // input's positions with the jitter-derived seed BEFORE any point
+  // moves — exactly the CPU path's context.
+  gpu: "fields",
+  async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "jitterPoints"));
     const seed = hashCombine(nodeSeed, params.seed);
-    const amount = requireTuple(resolveOn(geo, "point", params.amount, seed), [1, 3], "jitterPoints", "amount");
+    const amount = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.amount, seed), [1, 3], "jitterPoints", "amount");
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
@@ -350,7 +361,12 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
         "Which local axis maps onto the direction. Default '+z' — the forward axis assets face in the examples (a spline-fence style tangent yaw). For ±x/±z the local +Y follows the up hint; for ±y the local +Z follows it.",
     },
   },
-  execute({ inputs, params, seed }) {
+  // `direction` may resolve on the GPU; it is evaluated on the cloned
+  // input's point domain BEFORE the rot attribute is (re)created or
+  // written, so the resolver sees the same attribute layout and bytes
+  // the CPU evaluation would.
+  gpu: "fields",
+  async execute({ inputs, params, seed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "orientAlongVector"));
     const axis = params.axis;
     if (!(ORIENT_AXES as readonly string[]).includes(axis)) {
@@ -359,7 +375,7 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
       );
     }
     const dir = requireTuple(
-      resolveOn(geo, "point", params.direction, seed),
+      await resolveOnMaybeGpu(gpu, geo, "point", params.direction, seed),
       [1, 3],
       "orientAlongVector",
       "direction",

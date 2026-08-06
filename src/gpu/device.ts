@@ -42,10 +42,15 @@ export interface GpuComputePipelineLike {
   getBindGroupLayout(index: number): GpuBindGroupLayoutLike;
 }
 
-/** Structural `GPUBuffer` (the mapping surface used for readback). */
+/**
+ * Structural `GPUBuffer` (the mapping surface used for readback).
+ * `mapAsync`/`getMappedRange` take the optional offset/size the real API
+ * has: pooled buffers can be larger than the live range, so readback
+ * always maps and slices the exact byte length it needs.
+ */
 export interface GpuBufferLike {
-  mapAsync(mode: number): Promise<unknown>;
-  getMappedRange(): ArrayBuffer;
+  mapAsync(mode: number, offset?: number, size?: number): Promise<unknown>;
+  getMappedRange(offset?: number, size?: number): ArrayBuffer;
   unmap(): void;
   destroy(): void;
 }

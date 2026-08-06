@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:88%; }
+  .bar > div { height:100%; background:var(--done); width:92%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 12:20</p>
-  <div class="bar"><div style="width:88%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 13:35</p>
+  <div class="bar"><div style="width:92%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -73,16 +73,16 @@
     <li class="done"><span class="chip">done</span>19 · WGSL field compiler — codegen for the field-expression grammar</li>
     <li class="done"><span class="chip">done</span>20 · GPU device runtime — evaluator, cook integration, parity suite</li>
     <li class="done"><span class="chip">done</span>21 · GPU example, docs, v0.5.0</li>
-    <li class="active"><span class="chip">active</span>22 · Pervasive GPU adoption — all field nodes, chunked dispatch, buffer pooling</li>
-    <li class="pending"><span class="chip">pending</span>23 · Device-resident pipeline core — fused runs, one readback</li>
+    <li class="done"><span class="chip">done</span>22 · Pervasive GPU adoption — all field nodes, chunked dispatch, buffer pooling</li>
+    <li class="active"><span class="chip">active</span>23 · Device-resident pipeline core — fused runs, one readback</li>
     <li class="pending"><span class="chip">pending</span>24 · Demo, docs, v0.6.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>769</b><span>passed</span></div>
+    <div><b>801</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-06 11:42</b><span>last run</span></div>
+    <div><b>2026-08-06 13:34</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -118,6 +118,7 @@
     <li><time>2026-08-06 11:05</time>Phase 20 complete and audited (PASS-with-fixes): GpuFieldEvaluator runs compiled field kernels on a real device behind the core GpuFieldResolver interface — structural device typing (browser and Node bindings both assignable), instance-lifetime pipeline cache, complete fallback vocabulary (no-spec / compile-error / too-many-buffers / dispatch-too-large), CookOptions.gpu threaded through setAttribute, subgraphs, captureAsync, and World. Memo keys gain |gpu:&lt;device salt&gt; exactly when a node would resolve a spec&#39;d field on device, so caches stay provenance-pure across toggles (stats-proven) while the CPU path stays byte-identical. Parity measured on hardware and asserted as budgets: u32/hash/compare families byte-exact across counts and seeds; floats from 1-2 ULP (arith) to the WGSL absolute-error class (asin/acos); four GIGO-class divergences pinned as contract lines. Load-bearing discovery: Dawn destabilizes vitest workers, so all device work runs in plain-Node children (deterministic across 6+ full runs); suites skip visibly without an adapter. Audit re-derived the zero-regression and layering claims, simulated the no-adapter path, and fixed one test-only defect (NaN-blind parity comparator). 769 tests green (41 new).</li>
     <li><time>2026-08-06 11:45</time>v0.5.0 released. Phase 21 complete: example 08-gpu-fields (million-point scatter whose JSON field expressions cook through WGSL compute kernels; CPU/GPU toggle, live CookStats.gpu, per-path FNV hashes, live parity readout) verified interactively in Chrome on the host adapter — 1M GPU cook in ~0.8s with 2 dispatches and zero fallbacks vs ~5s CPU at 100k, GPU hash byte-stable across cold reloads and cold-cache recooks, CPU/GPU hashes distinct as documented, live deviation 5.9 range-ULP within budgets, and toggling paths recooked exactly the field nodes while the scatter source stayed cached (provenance surgery visible in the stats line). One in-browser defect found and fixed: the pre-cook paint wait hung forever in hidden tabs (rAF never fires); now races a timeout. README/llms.txt/authoring document the GPU surface and the measured parity contract; overview site refreshed with the eighth demo; hosted demos rebuilt. Final gate: 769 tests, clean typecheck, library and examples builds. npm publish remains a separate user-driven step.</li>
     <li><time>2026-08-06 12:20</time>v0.6 cycle started (phases 22-24): make the GPU path pervasive (transformPoints/jitterPoints/orientAlongVector/surfaceSample/volumeSample adopt the resolver; chunked dispatch retires dispatch-too-large; pooled buffers), then device-resident pipelines fusing count-preserving field-node chains into single-readback runs under a fixed cache contract (terminal-only caching, boundary splits at external consumers), then demo/docs/v0.6.0. User confirmed the 08-gpu-fields demo renders correctly (visual check that was pending window visibility). npm publish explicitly deferred by user.</li>
+    <li><time>2026-08-06 13:35</time>Phase 22 complete and audited (PASS-with-fixes): transformPoints, jitterPoints, orientAlongVector, surfaceSample, and volumeSample now resolve field params on device through a shared resolveOnMaybeGpu helper with gpu:fields provenance — the samplers hand the resolver the exact internal-cloud contexts the CPU path uses, and audit-built adversarial specs (fields reading the very attributes the nodes write) proved CPU and GPU cooks byte-identical in every case. Chunked dispatch (chunkOffset uniform, non-final chunks exact workgroup multiples) retires dispatch-too-large: a 4.3M-element resolve byte-equals CPU in 10 ms; audit re-derived the partition math and fuzzed adversarial chunk overrides. Pow2-bucketed buffer pooling (256 MiB bound, poolStats, dispose) proven observationally invisible across interleaved shapes. Audit fixed two real evaluator defects: NaN dispatch-limit silently produced all-zero uncomputed columns (now rejected at construction), and an OOM-class readback failure returned a still-mapped buffer to the pool, poisoning its bucket (unmap now in finally). 801 tests green (32 new).</li>
   </ol>
 </body>
 </html>

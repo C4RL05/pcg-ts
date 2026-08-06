@@ -6,14 +6,25 @@
  * type dependency.
  *
  * Resolution pipeline per field: eligibility gate (spec present, layout
- * compiles, baseline device limits hold) → pipeline cache lookup by the
- * kernel's specialization key → SoA column marshalling into tightly
- * packed storage buffers → one 1D dispatch → async readback into a
- * fresh Column of the kernel's output type. Ineligibility returns null
- * synchronously (the caller falls back to the CPU `evaluateField`) with
- * a machine-readable reason counted in the stats sink; a device failure
- * after commitment rejects the returned promise (an error, never a
- * silent fallback).
+ * compiles, baseline storage-buffer limit holds) → pipeline cache lookup
+ * by the kernel's specialization key → SoA column marshalling into
+ * tightly packed storage buffers → a 1D dispatch, chunked across
+ * multiple `dispatchWorkgroups` calls when the element count exceeds
+ * what 65535 workgroups cover (each chunk carries its start index in
+ * the `chunkOffset` uniform member, so counts are unbounded) → async
+ * readback into a fresh Column of the kernel's output type.
+ * Ineligibility returns null synchronously (the caller falls back to
+ * the CPU `evaluateField`) with a machine-readable reason counted in
+ * the stats sink; a device failure after commitment rejects the
+ * returned promise (an error, never a silent fallback).
+ *
+ * Buffers come from a per-evaluator size-bucketed pool ({@link
+ * BufferPool}): storage/uniform/readback buffers are reused across
+ * dispatches instead of created and destroyed per resolve. Reuse is
+ * observationally invisible — kernels never touch lanes past the live
+ * count, uploads cover the full read range, and readback slices the
+ * exact byte length. `poolStats` introspects it; {@link dispose}
+ * releases the pooled device memory.
  *
  * Determinism: the kernel bakes all spec constants, the seed uniform is
  * `ctx.seed >>> 0` (exactly the CPU coercion), buffers are written and
@@ -39,6 +50,7 @@ import {
   type GpuBufferLike,
   type GpuDeviceLike,
 } from "./device.js";
+import { BufferPool, type GpuPoolStats } from "./pool.js";
 import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./types.js";
 
 /**
@@ -58,10 +70,22 @@ const MAX_STORAGE_BUFFERS = 8;
 
 /**
  * Baseline WebGPU limit `maxComputeWorkgroupsPerDimension`: the kernel
- * dispatches on one dimension, so element counts above
- * `65535 * workgroupSize` fall back to the CPU.
+ * dispatches on one dimension, so one `dispatchWorkgroups` call covers
+ * at most `65535 * workgroupSize` elements; larger counts split into
+ * multiple chunked dispatches (see `chunkOffset` in the kernel uniform).
  */
 const MAX_WORKGROUPS = 65535;
+
+/**
+ * Default bound on bytes RETAINED by the buffer pool (idle buffers
+ * only; in-flight buffers are unbounded exactly as without pooling).
+ * 256 MiB comfortably holds the working set of repeated multi-million-
+ * element dispatches while staying far below typical device memory.
+ */
+const DEFAULT_MAX_POOLED_BYTES = 256 * 1024 * 1024;
+
+/** Byte size of the kernel uniform struct {count, seed, chunkOffset}. */
+const UNIFORM_BYTES = 12;
 
 const OUT_CTORS: Record<GpuScalarType, new (buffer: ArrayBuffer) => Column["data"]> = {
   f32: Float32Array,
@@ -88,6 +112,23 @@ export interface GpuFieldEvaluatorOptions {
    * device does not expose one).
    */
   readonly adapterInfo?: GpuAdapterInfoLike;
+  /**
+   * Maximum elements a single `dispatchWorkgroups` call covers; larger
+   * counts split into that many chunks. Rounded down to a multiple of
+   * the kernel workgroup size (minimum one workgroup) and capped at the
+   * baseline `65535 * workgroupSize`. Chunking is byte-invisible — the
+   * produced column is identical for any setting — so this exists for
+   * tests forcing chunk seams at small counts; production code should
+   * leave it unset.
+   */
+  readonly maxElementsPerDispatch?: number;
+  /**
+   * Bound on bytes the buffer pool retains across dispatches (idle
+   * buffers only; a release past the bound destroys the buffer
+   * instead). Default 256 MiB; 0 disables retention entirely (every
+   * buffer is destroyed on release — the pre-pooling behavior).
+   */
+  readonly maxPooledBytes?: number;
 }
 
 function saltFrom(info: GpuAdapterInfoLike | undefined): string {
@@ -131,10 +172,22 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
   private readonly kernels = new Map<string, CompiledFieldKernel | Error>();
   /** Pipelines by kernel specialization key; persists across cooks. */
   private readonly pipelines = new Map<string, PipelineEntry>();
+  /** Size-bucketed reuse of uniform/storage/readback buffers. */
+  private readonly pool: BufferPool;
+  private readonly maxElementsPerDispatch: number | undefined;
 
   constructor(device: GpuDeviceLike, opts: GpuFieldEvaluatorOptions = {}) {
+    if (opts.maxElementsPerDispatch !== undefined && !Number.isFinite(opts.maxElementsPerDispatch)) {
+      // A non-finite override would make the chunk plan NaN and skip
+      // every dispatch, silently returning uncomputed bytes.
+      throw new Error(
+        `GpuFieldEvaluator: maxElementsPerDispatch must be a finite number, got ${opts.maxElementsPerDispatch}; leave it unset to use the device maximum`,
+      );
+    }
     this.device = device;
     this.cacheSalt = saltFrom(opts.adapterInfo ?? device.adapterInfo);
+    this.pool = new BufferPool(device, opts.maxPooledBytes ?? DEFAULT_MAX_POOLED_BYTES);
+    this.maxElementsPerDispatch = opts.maxElementsPerDispatch;
   }
 
   /** Number of cached pipelines (introspection for tools and tests). */
@@ -142,13 +195,40 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     return this.pipelines.size;
   }
 
+  /** Buffer-pool counters (created/reused/destroyed, retained bytes). */
+  get poolStats(): GpuPoolStats {
+    return this.pool.stats;
+  }
+
+  /**
+   * Destroy every pooled device buffer. The evaluator stays usable —
+   * later dispatches recreate buffers on demand — so call this when a
+   * burst of GPU work is over and the retained memory should go back to
+   * the device. Pipeline and kernel caches are unaffected (pipelines
+   * hold no destroyable resources).
+   */
+  dispose(): void {
+    this.pool.dispose();
+  }
+
+  /** Elements one chunk covers for `kernel` (multiple of its workgroup size). */
+  private chunkElements(kernel: CompiledFieldKernel): number {
+    const cap = MAX_WORKGROUPS * kernel.workgroupSize;
+    const requested = Math.min(this.maxElementsPerDispatch ?? cap, cap);
+    return Math.max(
+      kernel.workgroupSize,
+      Math.floor(requested / kernel.workgroupSize) * kernel.workgroupSize,
+    );
+  }
+
   /**
    * Resolve `field` over the context's domain on the device, or return
    * null (synchronously) when it is ineligible — no serializable spec,
    * the spec does not compile against the geometry's attribute layout,
-   * or a baseline device limit would be exceeded. See
-   * `GpuFieldResolver.resolveField` for the full contract and
-   * `GpuCookStats` for the fallback-reason vocabulary.
+   * or the kernel needs more storage buffers than the baseline limit
+   * guarantees. Element count never disqualifies: large counts dispatch
+   * in chunks. See `GpuFieldResolver.resolveField` for the full
+   * contract and `GpuCookStats` for the fallback-reason vocabulary.
    */
   resolveField(field: Field, ctx: EvalContext, stats?: GpuCookStats): Promise<Column> | null {
     const spec = getFieldSpec(field);
@@ -180,9 +260,6 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
       return countFallback(stats, "too-many-buffers");
     }
     const count = set.count;
-    if (Math.ceil(count / kernel.workgroupSize) > MAX_WORKGROUPS) {
-      return countFallback(stats, "dispatch-too-large");
-    }
     if (count === 0) {
       // Nothing to dispatch; mirror the CPU's empty column of the same type.
       return Promise.resolve({ data: new EMPTY_CTORS[kernel.outType](0), tupleSize: kernel.outTupleSize });
@@ -214,24 +291,30 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     count: number,
   ): Promise<Column> {
     const device = this.device;
-    const buffers: GpuBufferLike[] = [];
+    // Buffers acquired from the pool for this dispatch; released (not
+    // destroyed) in `finally`, after all queue work has completed.
+    const acquired: GpuBufferLike[] = [];
+    const acquire = (size: number, usage: number): GpuBufferLike => {
+      const buf = this.pool.acquire(size, usage);
+      acquired.push(buf);
+      return buf;
+    };
     try {
-      // Uniforms: { count, seed } — seed coerced exactly as the CPU
-      // hash chain coerces ctx.seed (>>> 0).
-      const uniformBuf = device.createBuffer({
-        size: 8,
-        usage: BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST,
-      });
-      buffers.push(uniformBuf);
-      device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([count, ctx.seed >>> 0]));
+      // Chunk plan: every chunk except the last covers exactly
+      // `chunk` elements (a multiple of the workgroup size, so its
+      // workgroup count is exact and no lane strays into the next
+      // chunk's range); the last chunk's trailing lanes are trimmed by
+      // the kernel's `i >= count` guard. Each element is therefore
+      // computed by exactly one invocation regardless of chunking.
+      const chunk = this.chunkElements(kernel);
+      const chunkCount = Math.ceil(count / chunk);
 
-      const bindEntries: { binding: number; resource: { buffer: GpuBufferLike } }[] = [
-        { binding: kernel.bindings.uniforms, resource: { buffer: uniformBuf } },
-      ];
+      const bindEntries: { binding: number; resource: { buffer: GpuBufferLike } }[] = [];
 
       // Input columns: tightly packed SoA scalars, exactly the CPU
       // attribute storage prefix. Bool columns bind as u32 0/1 per the
-      // kernel layout contract.
+      // kernel layout contract. Uploads cover the full range any live
+      // lane reads, so stale bytes in pooled buffers are unreachable.
       const set = ctx.geo.attrs[ctx.domain];
       for (const input of kernel.inputs) {
         const attr = set.require(input.name);
@@ -244,45 +327,59 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
         } else {
           data = attr.data.subarray(0, n);
         }
-        const buf = device.createBuffer({
-          size: n * 4,
-          usage: BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST,
-        });
-        buffers.push(buf);
+        const buf = acquire(n * 4, BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST);
         device.queue.writeBuffer(buf, 0, data);
         bindEntries.push({ binding: input.binding, resource: { buffer: buf } });
       }
 
       const outBytes = count * kernel.outTupleSize * 4;
-      const outBuf = device.createBuffer({
-        size: outBytes,
-        usage: BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_SRC,
-      });
-      buffers.push(outBuf);
+      const outBuf = acquire(outBytes, BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_SRC);
       bindEntries.push({ binding: kernel.bindings.output, resource: { buffer: outBuf } });
 
-      const readBuf = device.createBuffer({
-        size: outBytes,
-        usage: BUFFER_USAGE.COPY_DST | BUFFER_USAGE.MAP_READ,
-      });
-      buffers.push(readBuf);
+      const readBuf = acquire(outBytes, BUFFER_USAGE.COPY_DST | BUFFER_USAGE.MAP_READ);
 
-      const bindGroup = device.createBindGroup({
-        layout: entry.pipeline.getBindGroupLayout(0),
-        entries: bindEntries,
-      });
+      // Uniforms per chunk: { count, seed, chunkOffset } — seed coerced
+      // exactly as the CPU hash chain coerces ctx.seed (>>> 0). One
+      // buffer + bind group per chunk; a single submit runs them all.
+      const bindGroups: ReturnType<GpuDeviceLike["createBindGroup"]>[] = [];
+      for (let c = 0; c < chunkCount; c++) {
+        const uniformBuf = acquire(UNIFORM_BYTES, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
+        device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([count, ctx.seed >>> 0, c * chunk]));
+        bindGroups.push(
+          device.createBindGroup({
+            layout: entry.pipeline.getBindGroupLayout(0),
+            entries: [
+              { binding: kernel.bindings.uniforms, resource: { buffer: uniformBuf } },
+              ...bindEntries,
+            ],
+          }),
+        );
+      }
+
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
       pass.setPipeline(entry.pipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.dispatchWorkgroups(Math.ceil(count / kernel.workgroupSize));
+      for (let c = 0; c < chunkCount; c++) {
+        const elements = Math.min(chunk, count - c * chunk);
+        pass.setBindGroup(0, bindGroups[c]);
+        pass.dispatchWorkgroups(Math.ceil(elements / kernel.workgroupSize));
+      }
       pass.end();
       encoder.copyBufferToBuffer(outBuf, 0, readBuf, 0, outBytes);
       device.queue.submit([encoder.finish()]);
 
-      await readBuf.mapAsync(MAP_MODE.READ);
-      const copy = readBuf.getMappedRange().slice(0);
-      readBuf.unmap();
+      // Pooled readback buffers can be larger than the live output:
+      // map and slice exactly the bytes this dispatch produced. unmap
+      // sits in a finally so an OOM-class failure in getMappedRange or
+      // slice can never release a still-mapped buffer into the pool
+      // (which would poison every later reuse of its bucket).
+      await readBuf.mapAsync(MAP_MODE.READ, 0, outBytes);
+      let copy: ArrayBuffer;
+      try {
+        copy = readBuf.getMappedRange(0, outBytes).slice(0);
+      } finally {
+        readBuf.unmap();
+      }
       return { data: new OUT_CTORS[kernel.outType](copy), tupleSize: kernel.outTupleSize };
     } catch (err) {
       throw new Error(
@@ -291,7 +388,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
         { cause: err },
       );
     } finally {
-      for (const buf of buffers) buf.destroy();
+      for (const buf of acquired) this.pool.release(buf);
     }
   }
 }

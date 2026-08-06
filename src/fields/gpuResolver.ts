@@ -22,8 +22,9 @@ import type { Column, EvalContext, Field } from "./types.js";
  * - `"too-many-buffers"` — the kernel would need more storage buffers
  *   than the baseline WebGPU limit guarantees (more than 7 attribute
  *   inputs plus the output).
- * - `"dispatch-too-large"` — the element count exceeds what a single 1D
- *   dispatch can cover (65535 workgroups x workgroup size).
+ *
+ * Element count is never a fallback reason: counts beyond one
+ * dispatch's coverage split into chunked dispatches.
  */
 export interface GpuCookStats {
   /** Compute dispatches submitted (one per resolved field column). */

@@ -12,7 +12,7 @@ import {
   geometryItems,
   requireGeometry,
   requireTuple,
-  resolveOn,
+  resolveOnMaybeGpu,
 } from "./util.js";
 
 /** Params of {@link surfaceSample}. */
@@ -55,7 +55,15 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
         "Acceptance probability in [0, 1] per candidate, evaluated on the candidate points after placement (so it can read P or noise). 1 keeps every candidate; 0 keeps none.",
     },
   },
-  execute({ inputs, params, seed: nodeSeed }) {
+  // `densityField` may resolve on the GPU. It is evaluated over the
+  // internally built candidate cloud (the standard point-cloud
+  // attributes plus `normal`) with the sampling-derived seed — the
+  // resolver receives exactly the EvalContext the CPU `resolveOn` call
+  // would ({ geo: candidates, domain: "point", seed }), after candidate
+  // placement and before any acceptance, so fallback equivalence stays
+  // byte-exact.
+  gpu: "fields",
+  async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = requireGeometry(inputs, "in", "surfaceSample");
     const seed = hashCombine(nodeSeed, params.seed);
     const P = geo.attrs.point.get("P");
@@ -141,7 +149,7 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
 
     // Accept candidates by density (evaluated once over the candidate cloud).
     const density = requireTuple(
-      resolveOn(candidates, "point", params.densityField, seed),
+      await resolveOnMaybeGpu(gpu, candidates, "point", params.densityField, seed),
       [1],
       "surfaceSample",
       "densityField",
@@ -342,7 +350,14 @@ export const volumeSample = standardNode<VolumeSampleParams>({
       description: "Extra seed folded into the node seed; change it to re-roll the jitter.",
     },
   },
-  execute({ inputs, params, seed: nodeSeed }) {
+  // `jitter` may resolve on the GPU. It is evaluated over the freshly
+  // built grid cloud (the standard point-cloud attributes) while P
+  // still holds the un-jittered cell centers, with the jitter-derived
+  // seed — the resolver receives exactly the EvalContext the CPU
+  // `resolveOn` call would, before any point moves, so fallback
+  // equivalence stays byte-exact.
+  gpu: "fields",
+  async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const seed = hashCombine(nodeSeed, params.seed);
     if (!(params.cellSize > 0)) {
       throw new Error(`volumeSample: cellSize must be > 0, got ${params.cellSize}`);
@@ -410,7 +425,7 @@ export const volumeSample = standardNode<VolumeSampleParams>({
     }
     // Jitter each point inside its cell (field evaluated on the centers).
     const jitter = requireTuple(
-      resolveOn(geo, "point", params.jitter, seed),
+      await resolveOnMaybeGpu(gpu, geo, "point", params.jitter, seed),
       [1],
       "volumeSample",
       "jitter",
