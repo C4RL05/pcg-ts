@@ -331,12 +331,12 @@
     <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>769</b><span>tests, all green</span></div>
+      <div class="stat"><b>842</b><span>tests, all green</span></div>
       <div class="stat"><b>25</b><span>registered node types</span></div>
       <div class="stat"><b>40</b><span>field-grammar functions</span></div>
       <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b>v0.5</b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b>v0.6</b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -410,7 +410,7 @@ flowchart TB
       <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
       <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
       <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
-      <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, parity-budgeted</span></li>
+      <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, device-resident runs, parity-budgeted</span></li>
       <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
     </ul>
   </section>
@@ -484,7 +484,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/"><b>06 · graph editor</b><span>build and cook node graphs interactively — palette, inspector, JSON round-trip</span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/"><b>07 · galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/"><b>08 · gpu fields</b><span>a million points cooked through a WebGPU field kernel — CPU/GPU toggle with a live parity readout</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/"><b>08 · gpu fields</b><span>a million points through a five-node chain, cooked three ways — CPU, per-node GPU, and one fused device-resident run</span></a>
     </div>
   </section>
 
@@ -528,10 +528,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.6.0 <small>2026-08-06</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Pervasive GPU + device-resident pipelines: five more nodes resolve their field params on device, chunked dispatch retires the element-count ceiling, and pooled buffers bound the allocation churn. On top of that, maximal linear chains of count-preserving field nodes now fuse into <b>device-resident runs</b> — attribute columns stay in storage buffers across member kernels and only the run terminal reads back, under a strict cache contract (terminal-only entries, splits wherever the graph observes bytes). New counters: <code>residentRuns</code>, <code>fusedNodes</code>, <code>readbacksSaved</code>. The CPU stays the bit-exact reference. 842 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>GPU-resident node pipelines — fusing chains of field-driven nodes into device-resident subgraphs without per-node readback · npm publish.</p>
+          <p>Constant params broadcast through the run uniform instead of a full device column · GPU-resident World streaming (cell cooks that keep instance transforms device-side end to end) · npm publish.</p>
         </div>
       </li>
     </ul>
@@ -541,7 +548,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.5.0</span>
+    <span>pcg-ts v0.6.0</span>
     <span>MIT license</span>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>

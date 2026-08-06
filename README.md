@@ -321,7 +321,8 @@ Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 ## GPU cooking (WebGPU)
 
 `pcg-ts/gpu` compiles the serializable field-expression grammar to WGSL
-compute kernels and runs them on a WebGPU device. The core never
+compute kernels, runs them on a WebGPU device, and fuses chains of
+field-driven nodes into single device-resident runs. The core never
 imports it (guard-tested, like `pcg-ts/three`); the graph layer sees
 only a structural resolver interface, injected per cook:
 
@@ -337,7 +338,8 @@ const gpu = new GpuFieldEvaluator(device, { adapterInfo: adapter.info });
 
 const result = await cook(graph, { gpu });
 console.log(result.stats.gpu);
-// { dispatches, pipelinesCompiled, pipelineCacheHits, fallbacks: {...} }
+// { dispatches, pipelinesCompiled, pipelineCacheHits,
+//   residentRuns, fusedNodes, readbacksSaved, fallbacks: {...} }
 ```
 
 In Node, install the `webgpu` package (Dawn bindings, a dev-time
@@ -354,13 +356,80 @@ grammar compiles — inputs, arithmetic, trig, `clamp`/`lerp`/`remap`/
 `select`/`ramp`, vector ops, and all noise including `fbm` and exact
 worley. Code-authored combinator fields have no spec and stay on the
 CPU. One eligible field evaluates over a whole domain in one compute
-dispatch; `setAttribute` is the adopting node, `captureAsync` is the
-graph-free entry point, and `WorldOptions.gpu` / `UpdateOptions.gpu`
-(update wins) thread a resolver into every cell cook. Ineligible fields
-fall back to the CPU silently but countably —
-`CookStats.gpu.fallbacks` records machine-readable reasons: `no-spec`,
-`compile-error`, `too-many-buffers`, `dispatch-too-large` (that is the
-complete vocabulary).
+dispatch.
+
+Six nodes resolve their field params on the device — `setAttribute`,
+`transformPoints`, `jitterPoints`, `orientAlongVector`,
+`surfaceSample`, `volumeSample` — subgraph nodes forward the resolver
+to their inner cooks, `captureAsync` is the graph-free entry point,
+and `WorldOptions.gpu` / `UpdateOptions.gpu` (update wins) thread a
+resolver into every cell cook. Element count is never a limit: a
+kernel covering more elements than one `dispatchWorkgroups` call
+allows (65535 × 64 ≈ 4.19M) splits into chunked dispatches with
+byte-identical output. Ineligible fields fall back to the CPU silently
+but countably — `CookStats.gpu.fallbacks` records machine-readable
+reasons: `no-spec`, `compile-error`, `too-many-buffers` per field, and
+`run-plan-failed`, `run-too-large` per fused run (that is the complete
+vocabulary).
+
+**Device-resident runs.** When the resolver implements the optional
+`planRun`/`executeRun` pair — `GpuFieldEvaluator` does; a resolver
+with neither degrades cleanly to per-node cooking — the executor finds
+**maximal linear chains** of fusable nodes and cooks each as one
+device round trip. Attribute columns live in storage buffers across
+member kernels; only the run's terminal reads back.
+
+- **What fuses:** `setAttribute` (numeric mode, point domain, no
+  literal `values`/`stringValue`), `transformPoints`, `jitterPoints`,
+  and `orientAlongVector` — all count-preserving, one geometry in, one
+  geometry out — in a straight line where every member has exactly one
+  consumer, that consumer is the next member, and every `Field` param
+  along the chain carries a serializable spec. A chain of one is not a
+  run.
+- **Where runs end:** at a non-fusable node, at a node carrying a
+  declared graph output, and at any fan-out. An interior node with
+  external consumers becomes a run terminal with its own readback —
+  fusion never changes which bytes the rest of the graph observes.
+- **Cache contract:** only the terminal caches, under a composite key
+  `run1|gpu:<cacheSalt>|i<inputSig>|m[type|seed|paramHash|memoKey]…`
+  covering every member in order. Interior members hold no entry while
+  fused. Editing any member's params recooks exactly that run and
+  leaves siblings and upstream cached.
+- **Stats:** `residentRuns` (runs executed), `fusedNodes` (their total
+  members), and `readbacksSaved = fusedNodes − residentRuns` — each
+  run reads back once where the per-node path reads back per member.
+
+Three things to know before reading a benchmark:
+
+- **Constant params still cost a full device column and a dispatch.**
+  Inside a run, a plain `translate: [0, 0, 0]` materializes an
+  `n × 12`-byte temporary exactly as a noise field would. In the
+  `examples/08-gpu-fields` chain the seven param columns are 76 of the
+  212 bytes per point the run holds — 36% of the working set — so a
+  constant-heavy chain can be **slower** than per-node GPU cooking and
+  reaches `run-too-large` sooner than its point count suggests.
+  Broadcasting constants through the uniform instead is the obvious
+  next optimization; it is recorded, not scheduled.
+- **`stats.dispatches` counts member kernels, not `dispatchWorkgroups`
+  calls** — one per field-capable param plus one apply kernel per
+  member. A kernel chunked across several dispatches still counts
+  once: a 4.3M-point four-member run reports 4 while issuing 8.
+- **Toggling `gpu` on and off thrashes the terminal's cache slot by
+  design.** A node holds one memo entry; a fused cook stores under the
+  run key above, a per-node cook under `<type>|s…`. The two formats
+  cannot collide, so neither path ever serves the other's bytes — but
+  the chain does recook on every flip. Time GPU work from cold caches.
+
+A run's working set — resident attribute slots across every epoch,
+field temporaries held for the whole run, and the readback staging
+buffer — is computed at plan time and compared against
+`maxResidentBytes` (default 512 MiB); over-budget runs fall back with
+`run-too-large`. Two more evaluator options matter under load:
+`maxPooledBytes` (default 256 MiB, `0` disables retention) bounds the
+buffer pool's idle bytes, and `evaluator.dispose()` destroys those
+idle buffers while leaving in-flight ones valid and the evaluator
+usable. `evaluator.poolStats` reports `{ buffersCreated,
+buffersReused, buffersDestroyed, pooledBuffers, pooledBytes }`.
 
 **Determinism contract.** The CPU is the bit-exact reference and
 existing goldens never move; the GPU path is a documented approximation
@@ -382,6 +451,19 @@ of it:
 - On a single device, results are run-to-run **byte-identical**.
 - Branchy ops (select, compares, ramp segments, worley cell walks) may
   flip at knife-edge inputs whose operands differ within tolerance.
+- Fused runs carry composed budgets. Across 17 device chains the worst
+  case is `rangeUlp` 4.83 on `P` for a
+  noise→orient→transform→jitter chain (budget 6), with quaternion dot
+  ≥ 0.99999957 against a floor of 0.9999995. Twelve of the 17 are
+  **byte-identical** to the CPU — which holds only because their
+  jitter amounts are powers of two and their transforms use identity
+  euler angles and power-of-two scales, so every f32 step is exact and
+  the single store is the only rounding. Change an amount to 0.1 and
+  the chain moves into the budgeted class.
+- **Every budget here was measured on one adapter** (discrete desktop,
+  D3D12/Dawn) and is the measured value rounded up minimally. Another
+  adapter exceeding one is a finding worth reporting, not expected
+  noise.
 
 Out-of-domain inputs are garbage-in/garbage-out, measured and
 documented rather than patched: NaN through `min`/`max` may return the
@@ -395,12 +477,15 @@ resolver's `cacheSalt` (format version + adapter vendor, architecture,
 device, description) folds into the memo key of any node that would
 resolve a live spec'd Field on device. Toggling `gpu` never serves
 bytes produced by the other path — and nodes without live spec'd field
-params keep their cache hits across the toggle. Pipelines are cached on
-the evaluator instance and persist across cooks.
+params keep their cache hits across the toggle. Fused runs use the same
+salt inside the run key above. Pipelines are cached on the evaluator
+instance and persist across cooks.
 
 See it live: [`examples/08-gpu-fields`](./examples/08-gpu-fields) cooks
-a million-point scatter through the same graph on both paths, with cook
-stats, per-path output hashes, and a live deviation readout.
+a five-node fusable chain over a million points three ways — CPU, GPU
+per-node (fusion switched off), and one fused device-resident run —
+with per-path cold-cache wall times, the full `CookStats.gpu` counters,
+per-path output hashes, and a live deviation readout.
 
 ## Determinism guarantees
 
@@ -441,8 +526,8 @@ The `examples/` directory contains eight vite multi-page demos (scatter
 with density noise, forest instancing, spline sampling, infinite
 streaming world, field composition playground, a registry-driven
 node-graph editor, an infinite deterministic spiral galaxy with
-click-to-visit star systems, and a million-point WebGPU field cook with
-a live CPU/GPU parity readout):
+click-to-visit star systems, and a million-point WebGPU cook comparing
+CPU, per-node GPU, and one fused device-resident run):
 
 ```sh
 npm run examples

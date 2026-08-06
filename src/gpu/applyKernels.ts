@@ -19,11 +19,18 @@
  *   CPU rounds once from f64 — tolerance class.
  * - transformPoints / orientAlongVector float math computes in f32
  *   (quaternion construction, basis branches) where the CPU computes in
- *   f64 and stores f32; branchy paths (quatFromBasis trace branches,
- *   up-parallel fallbacks) can flip at knife-edge inputs within
- *   tolerance. orientAlongVector's zero-direction test can additionally
- *   flip for subnormal direction magnitudes (f32 squares flush to zero
- *   where f64 keeps them) — subnormal GIGO class.
+ *   f64 and stores f32. Two further divergences beyond that width gap:
+ *   `pcg_rotate_vec` re-associates the CPU's `A + B - C` into
+ *   `A + (B - C)` via WGSL `cross`, and `cross`/`dot` may contract into
+ *   FMA where the CPU's explicit expressions cannot — both shift the
+ *   last ulps independently of f32-vs-f64. Branchy paths (quatFromBasis
+ *   trace branches, up-parallel fallbacks) can flip at knife-edge inputs
+ *   within tolerance; the baked parallel epsilon is the nearest f32 to
+ *   1e-12 (9.99999996e-13, strictly below the CPU's f64 1e-12), so the
+ *   fallback branch set differs by slightly more than rounding alone.
+ *   orientAlongVector's zero-direction test can additionally flip for
+ *   subnormal direction magnitudes (f32 squares flush to zero where f64
+ *   keeps them) — subnormal GIGO class.
  *
  * Aliasing: apply kernels access only element `i`'s slots of any buffer
  * (never cross-element), param columns are separate buffers materialized
@@ -153,7 +160,9 @@ export function makeSetAttributeApply(
   tupleSize: number,
 ): ApplyKernel {
   // Bind element types: bool targets are u32 0/1 buffers; the bit-exact
-  // f32→f32 copy binds both sides as u32.
+  // f32→f32 copy binds both sides as u32. The raw u32 copy is in fact
+  // *more* bit-preserving than the CPU store, which canonicalizes
+  // non-canonical NaN payloads on the way through a Float32Array.
   const rawF32Copy = targetType === "f32" && col.type === "f32";
   const colElem: GpuScalarType = rawF32Copy ? "u32" : col.type;
   const outElem: GpuScalarType = targetType === "bool" || rawF32Copy ? "u32" : targetType;

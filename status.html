@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:96%; }
+  .bar > div { height:100%; background:var(--done); width:100%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 21:40</p>
-  <div class="bar"><div style="width:96%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-06 22:45</p>
+  <div class="bar"><div style="width:100%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -75,7 +75,7 @@
     <li class="done"><span class="chip">done</span>21 · GPU example, docs, v0.5.0</li>
     <li class="done"><span class="chip">done</span>22 · Pervasive GPU adoption — all field nodes, chunked dispatch, buffer pooling</li>
     <li class="done"><span class="chip">done</span>23 · Device-resident pipeline core — fused runs, one readback</li>
-    <li class="active"><span class="chip">active</span>24 · Demo, docs, v0.6.0</li>
+    <li class="done"><span class="chip">done</span>24 · Demo, docs, v0.6.0</li>
   </ul>
 
   <h2>Tests</h2>
@@ -120,6 +120,7 @@
     <li><time>2026-08-06 12:20</time>v0.6 cycle started (phases 22-24): make the GPU path pervasive (transformPoints/jitterPoints/orientAlongVector/surfaceSample/volumeSample adopt the resolver; chunked dispatch retires dispatch-too-large; pooled buffers), then device-resident pipelines fusing count-preserving field-node chains into single-readback runs under a fixed cache contract (terminal-only caching, boundary splits at external consumers), then demo/docs/v0.6.0. User confirmed the 08-gpu-fields demo renders correctly (visual check that was pending window visibility). npm publish explicitly deferred by user.</li>
     <li><time>2026-08-06 13:35</time>Phase 22 complete and audited (PASS-with-fixes): transformPoints, jitterPoints, orientAlongVector, surfaceSample, and volumeSample now resolve field params on device through a shared resolveOnMaybeGpu helper with gpu:fields provenance — the samplers hand the resolver the exact internal-cloud contexts the CPU path uses, and audit-built adversarial specs (fields reading the very attributes the nodes write) proved CPU and GPU cooks byte-identical in every case. Chunked dispatch (chunkOffset uniform, non-final chunks exact workgroup multiples) retires dispatch-too-large: a 4.3M-element resolve byte-equals CPU in 10 ms; audit re-derived the partition math and fuzzed adversarial chunk overrides. Pow2-bucketed buffer pooling (256 MiB bound, poolStats, dispose) proven observationally invisible across interleaved shapes. Audit fixed two real evaluator defects: NaN dispatch-limit silently produced all-zero uncomputed columns (now rejected at construction), and an OOM-class readback failure returned a still-mapped buffer to the pool, poisoning its bucket (unmap now in finally). 801 tests green (32 new).</li>
     <li><time>2026-08-06 21:40</time>Phase 23 complete and audited (PASS-with-fixes): device-resident runs fuse linear chains of setAttribute/transformPoints/jitterPoints/orientAlongVector into one round trip — attribute columns live in storage buffers across member kernels (in-place, with field temporaries materialized before each apply kernel so a param column can never alias the buffer it writes) and a single readback materializes only written attributes. Verified on hardware: 228 apply-kernel variants compile with zero WGSL diagnostics; 17 chains of 2-8 members execute correctly, 11 of them BIT-EXACT vs CPU on every attribute (incl. mid-run retype, self-read rewrite, 8-member run); float chains 1.33-4.83 rangeUlp against budget 6; a 4.3M-point run fuses in 421 ms byte-identical to CPU; cancellation leaves zero buffers in flight. The audit led with mutation testing — 11 deliberate kernel/planner defects injected one at a time — and the suite as delivered caught 10, the survivor being SSA-epoch rebinding (invisible because the probe&#39;s replacement field was the identity), now closed by a new bit-exact chain. The audit also falsified the implementer&#39;s zero-bug claim by finding a real contract violation: interior members retained stale per-node cache entries while fused, each pinning an unreachable Geometry — fixed. Implementation note: the first implementation agent was interrupted by credit exhaustion mid-file; the evaluator wiring (shared pipeline cache, getPipeline, planRun/executeRun, maxResidentBytes) was completed by hand. 842 tests green (41 new).</li>
+    <li><time>2026-08-06 22:45</time>v0.6.0 released. Phase 24 complete: 08-gpu-fields now cooks a five-node fusable chain three ways and times them cold — browser-verified at 500k points as CPU 27.0 s / GPU per-node 1.19 s / GPU fused 443 ms (x66.6 vs CPU, 2.7x vs per-node), with counters reading 1 resident run over 5 fused nodes, 4 readbacks saved, 12 member kernels, zero fallbacks; both GPU hashes reproduce byte-for-byte across reloads, and the 8 MiB cap control forces a visible run-too-large that falls back to per-node. Browser verification caught two real demo defects, both fixed: measuring CPU first could cost the page its WebGPU device (a ~57 s main-thread block trips the browser watchdog) and left the next readback pending forever — GPU paths now measure first and a device-lost handler surfaces the reason instead of hanging; and the counters block, keyed to the last-cooked path, went blank when CPU ran last — it now falls back to the newest GPU report with its source labeled. Headless Node reproduction proved the library itself was never at fault (per-node 635 ms, fused 254 ms at 1M). Docs carry the resident-run contract, the corrected stats.gpu shape, and the honest cost note that constant params still cost a device column and dispatch each. Final gate: 842 tests, clean typecheck, library + examples builds, idempotent docs.</li>
   </ol>
 </body>
 </html>

@@ -1,13 +1,31 @@
 /**
- * 08 — gpu fields: one million+ scattered points colored and sized by
- * chunky JSON field expressions, cooked through the normal graph path
- * (`pointScatterInBounds` → two `setAttribute` nodes) with a CPU/GPU
- * toggle. In GPU mode the cook is passed a `GpuFieldEvaluator` over the
- * browser's WebGPU device, so each spec'd field resolves as one WGSL
- * compute dispatch; in CPU mode the identical graph cooks on the CPU —
- * the bit-exact reference. The panel shows wall times, `CookStats.gpu`
- * counters, per-path output hashes (cache provenance made visible), and
- * a live max-deviation readout against the CPU over a sample window.
+ * 08 — gpu fields: a million+ scattered points pushed through a
+ * five-node, count-preserving chain
+ *
+ *   setAttribute("wobble") → jitterPoints → transformPoints
+ *                          → setAttribute("tint") → setAttribute("psize")
+ *
+ * cooked three ways and timed against each other:
+ *
+ * - **CPU** — `cook(graph)` with no resolver. The bit-exact reference:
+ *   every field evaluation and every apply loop runs in JS.
+ * - **GPU per-node** — the real `GpuFieldEvaluator` for field
+ *   resolution, but fusion switched off (a wrapper whose `planRun`
+ *   returns null). Each node still clones the geometry, reads its
+ *   field column back from the device, and applies it on the CPU.
+ * - **GPU fused** — the plain evaluator. All five nodes are one
+ *   device-resident run: attribute columns live in storage buffers
+ *   across member kernels and only the terminal reads back, so
+ *   `readbacksSaved = fusedNodes − residentRuns = 5 − 1 = 4`.
+ *
+ * Every timing is taken from **cold caches** (a fresh graph per
+ * measurement). That is not decoration: the terminal node holds a
+ * single memo slot, and a fused cook stores under a run key
+ * (`run1|gpu:<salt>|…`) while a per-node cook stores under a node key
+ * (`<type>|s…`). Switching paths therefore always recooks the chain —
+ * by design, not a bug — so a "warm" number would silently be a number
+ * from whichever path ran last.
+ *
  * Without WebGPU the page runs CPU-only with a visible notice.
  */
 import {
@@ -17,10 +35,13 @@ import {
   evaluateField,
   fieldFromJson,
   firstGeometry,
+  jitterPoints,
   pointScatterInBounds,
   setAttribute,
+  transformPoints,
   type Field,
   type Geometry,
+  type GpuFieldResolver,
 } from "pcg-ts";
 import {
   GpuFieldEvaluator,
@@ -33,8 +54,16 @@ import { createFpsMeter } from "../shared/fps.js";
 import { makeRecooker } from "../shared/recook.js";
 import { createScene } from "../shared/scene.js";
 import Panel from "./Panel.svelte";
-import { sizeSpec, tintSpec } from "./spec.js";
-import type { CookMode, PanelBridge, PanelView } from "./view.js";
+import { sizeSpec, tintSpec, wobbleSpec } from "./spec.js";
+import {
+  COOK_PATHS,
+  TIGHT_RESIDENT_BYTES,
+  type CookPath,
+  type PanelBridge,
+  type PanelView,
+  type PathReport,
+  type ResidentBudget,
+} from "./view.js";
 
 const AREA = 30; // half extent in X/Z
 const HALF_Y = 9; // half extent in Y
@@ -45,8 +74,24 @@ const DEVIATION_WINDOW = 16384;
 let seed = 1;
 let count = 1_000_000;
 let frequency = 0.055;
-let mode: CookMode = "cpu";
+let path: CookPath = "cpu";
+let residentBudget: ResidentBudget = "default";
 
+/**
+ * The chain is deliberately built from the four fusable node kinds
+ * (`setAttribute` in numeric point mode, `jitterPoints`,
+ * `transformPoints`, `orientAlongVector`) in a straight line with no
+ * taps: one geometry in, one geometry out, one consumer each, and
+ * every Field param carries a serializable spec. `pointScatterInBounds`
+ * changes the point count, so it is never a run member — the run is
+ * exactly the five nodes after it, and its terminal (`psize`) is the
+ * declared output, which is where the single readback lands.
+ *
+ * `transformPoints` runs on plain vec3 constants on purpose: constants
+ * still materialize a full device column and a dispatch each inside a
+ * run (three of them here), which is the honest picture of what fusion
+ * costs today.
+ */
 function buildRig() {
   const graph = new Graph(seed);
   const scatter = graph.add(pointScatterInBounds, {
@@ -54,6 +99,27 @@ function buildRig() {
     boundsMin: [-AREA, -HALF_Y, -AREA],
     boundsMax: [AREA, HALF_Y, AREA],
   });
+  const wobbleNode = graph.add(setAttribute, {
+    name: "wobble",
+    domain: "point",
+    type: "f32",
+    tupleSize: 3,
+    value: fieldFromJson(wobbleSpec(frequency)),
+  });
+  // Reads the attribute the previous member just wrote — resident, so
+  // the bytes never leave the device between the two nodes.
+  const jitterNode = graph.add(jitterPoints, {
+    amount: fieldFromJson({ fn: "attribute", name: "wobble", tupleSize: 3 }),
+    seed: 7,
+  });
+  const transformNode = graph.add(transformPoints, {
+    translate: [0, 0, 0],
+    rotateEuler: [0, 14, 0],
+    scale: [1, 0.92, 1],
+  });
+  // Evaluated on the post-jitter, post-transform positions: the tint
+  // kernel reads P out of the resident slot the two members above
+  // mutated in place.
   const tintField: Field = fieldFromJson(tintSpec(frequency));
   const tintNode = graph.add(setAttribute, {
     name: "tint",
@@ -69,10 +135,13 @@ function buildRig() {
     tupleSize: 1,
     value: fieldFromJson(sizeSpec(frequency)),
   });
-  graph.connect(scatter, "out", tintNode, "in");
+  graph.connect(scatter, "out", wobbleNode, "in");
+  graph.connect(wobbleNode, "out", jitterNode, "in");
+  graph.connect(jitterNode, "out", transformNode, "in");
+  graph.connect(transformNode, "out", tintNode, "in");
   graph.connect(tintNode, "out", sizeNode, "in");
   graph.output(sizeNode, "out", "points");
-  return { graph, scatter, tintNode, sizeNode, tintField };
+  return { graph, tintNode, tintField };
 }
 
 let rig = buildRig();
@@ -90,7 +159,36 @@ interface NavigatorGpuLike {
   requestAdapter(): Promise<AdapterLike | null>;
 }
 
-let gpuEval: GpuFieldEvaluator | undefined;
+/** Fusing evaluator, default 512 MiB resident bound. */
+let fusedEval: GpuFieldEvaluator | undefined;
+/** Same device, tiny resident bound — every run rejects `run-too-large`. */
+let tightEval: GpuFieldEvaluator | undefined;
+/** Fusion disabled; fields still resolve on the device. */
+let perNodeEval: GpuFieldResolver | undefined;
+/** Set once the device is lost: GPU paths stop being offered. */
+let gpuLost = false;
+
+/**
+ * Wraps a real evaluator so the executor never fuses: `planRun` returns
+ * null (with no fallback counted — this is a mode, not a rejection), so
+ * every member cooks through the per-node path. `executeRun` is
+ * forwarded only because the executor requires *both* run methods
+ * before it calls either; with a null plan it is unreachable.
+ *
+ * `cacheSalt` is the base evaluator's, deliberately. Both GPU paths run
+ * on the same device, so claiming different device provenance would be
+ * a lie. The two paths still never serve each other's bytes: a fused
+ * terminal caches under a run key and a per-node cook under a node key,
+ * and the two key formats cannot collide.
+ */
+function perNodeOnly(base: GpuFieldEvaluator): GpuFieldResolver {
+  return {
+    cacheSalt: base.cacheSalt,
+    resolveField: (field, ctx, stats) => base.resolveField(field, ctx, stats),
+    planRun: () => null,
+    executeRun: (plan, input, stats) => base.executeRun(plan, input, stats),
+  };
+}
 
 async function initGpu(): Promise<{ label: string } | { error: string }> {
   const navGpu = (navigator as unknown as { gpu?: NavigatorGpuLike }).gpu;
@@ -104,17 +202,48 @@ async function initGpu(): Promise<{ label: string } | { error: string }> {
     }
     const info = adapter.info;
     const device = await adapter.requestDevice();
-    gpuEval = new GpuFieldEvaluator(device, info !== undefined ? { adapterInfo: info } : {});
+    // A lost device never rejects work already in flight — a pending
+    // readback simply never settles — so surface it instead of letting
+    // the page sit on "cooking…" forever. Chrome can lose the device
+    // when the main thread blocks long enough to trip its watchdog,
+    // which a million-point CPU cook is entirely capable of doing.
+    const lost = (device as { lost?: Promise<{ reason?: string; message?: string }> }).lost;
+    if (lost !== undefined) {
+      void lost.then((detail) => {
+        gpuLost = true;
+        view.cooking = false;
+        view.error =
+          `WebGPU device lost (${detail?.reason ?? "unknown"}: ${detail?.message ?? "no detail"}) — ` +
+          "GPU paths are disabled; reload to get a fresh device.";
+        view.gpuAvailable = false;
+        push();
+      });
+    }
+    const base = info !== undefined ? { adapterInfo: info } : {};
+    fusedEval = new GpuFieldEvaluator(device, base);
+    tightEval = new GpuFieldEvaluator(device, { ...base, maxResidentBytes: TIGHT_RESIDENT_BYTES });
+    perNodeEval = perNodeOnly(fusedEval);
     const label =
       [info?.vendor, info?.architecture, info?.description !== "" ? info?.description : info?.device]
         .filter((p): p is string => typeof p === "string" && p !== "")
         .join(" · ") || "adapter (no info exposed)";
-    console.info(`08-gpu-fields: WebGPU ready — ${label}; cacheSalt=${gpuEval.cacheSalt}`);
+    console.info(`08-gpu-fields: WebGPU ready — ${label}; cacheSalt=${fusedEval.cacheSalt}`);
     return { label };
   } catch (err) {
     console.error("08-gpu-fields: WebGPU init failed, falling back to CPU:", err);
     return { error: `WebGPU init failed: ${err instanceof Error ? err.message : String(err)}` };
   }
+}
+
+/** The resolver a path cooks with; `undefined` means "no gpu option". */
+function resolverFor(p: CookPath): GpuFieldResolver | undefined {
+  if (p === "cpu") return undefined;
+  if (p === "gpu-node") return perNodeEval;
+  return residentBudget === "tight" ? tightEval : fusedEval;
+}
+
+function pathAvailable(p: CookPath): boolean {
+  return p === "cpu" || (fusedEval !== undefined && !gpuLost);
 }
 
 // -- scene + point cloud rendering -----------------------------------------
@@ -203,12 +332,14 @@ function hashColumns(tint: Float32Array, psize: Float32Array): string {
 
 /**
  * Re-evaluate the tint field on the CPU over the first `DEVIATION_WINDOW`
- * points (same positions, same evaluation seed the setAttribute node
- * used) and compare against the GPU-cooked bytes. Reported both as
- * max |cpu − gpu| and in range-ULP units — the phase-measured metric:
- * error / (2^-23 · max|cpu|), i.e. ULPs at the top of the output range.
+ * points of the cooked result (same positions the device kernel saw —
+ * post-jitter, post-transform — and the same evaluation seed the
+ * setAttribute node used) and compare against the cooked bytes.
+ * Reported both as max |cpu − gpu| and in range-ULP units — the
+ * phase-measured metric: error / (2^-23 · max|cpu|), i.e. ULPs at the
+ * top of the output range.
  */
-function measureDeviation(geo: Geometry, tintGpu: Float32Array): PanelView["deviation"] {
+function measureDeviation(geo: Geometry, tintGpu: Float32Array, p: CookPath): PanelView["deviation"] {
   const w = Math.min(DEVIATION_WINDOW, geo.pointCount);
   if (w === 0) return undefined;
   const sub = createPointCloud(w);
@@ -230,25 +361,28 @@ function measureDeviation(geo: Geometry, tintGpu: Float32Array): PanelView["devi
     if (m > maxMag) maxMag = m;
   }
   const rangeUlp = maxAbs === 0 ? 0 : maxMag === 0 ? Infinity : maxAbs / (2 ** -23 * maxMag);
-  return { maxAbs, rangeUlp, window: w };
+  return { maxAbs, rangeUlp, window: w, path: p };
 }
 
 // -- panel wiring ----------------------------------------------------------
+
+function emptyReports(): Record<CookPath, PathReport> {
+  return { cpu: {}, "gpu-node": {}, "gpu-fused": {} };
+}
 
 const view: PanelView = {
   gpuAvailable: false,
   gpuReason: "",
   adapter: "detecting…",
-  mode,
+  path,
   count,
   seed,
   frequency,
+  residentBudget,
   cooking: false,
   fps: "–",
   points: 0,
-  nodes: "–",
-  cpu: {},
-  gpu: {},
+  reports: emptyReports(),
   specJson: JSON.stringify(tintSpec(frequency), null, 2),
 };
 
@@ -257,18 +391,18 @@ const bridge: PanelBridge = {};
 function push(): void {
   bridge.publish?.({
     ...view,
-    cpu: { ...view.cpu },
-    gpu: { ...view.gpu },
-    gpuStats: view.gpuStats && { ...view.gpuStats, fallbacks: { ...view.gpuStats.fallbacks } },
+    reports: {
+      cpu: { ...view.reports.cpu },
+      "gpu-node": { ...view.reports["gpu-node"] },
+      "gpu-fused": { ...view.reports["gpu-fused"] },
+    },
     deviation: view.deviation && { ...view.deviation },
   });
 }
 
 function resetComparisons(): void {
-  view.cpu = {};
-  view.gpu = {};
+  view.reports = emptyReports();
   view.deviation = undefined;
-  view.gpuStats = undefined;
 }
 
 // -- cook loop -------------------------------------------------------------
@@ -288,19 +422,30 @@ function paintFlush(): Promise<void> {
   });
 }
 
-const recook = makeRecooker(async () => {
-  const useGpu = mode === "gpu" && gpuEval !== undefined;
+interface CookJob {
+  readonly path: CookPath;
+  /** Reuse the existing graph (caches populated) instead of rebuilding. */
+  readonly warm: boolean;
+}
+
+async function runCook(job: CookJob): Promise<void> {
+  if (!pathAvailable(job.path)) return;
+  if (!job.warm) rig = buildRig();
+  path = job.path;
+  view.path = job.path;
   view.cooking = true;
   view.error = undefined;
   push();
   await paintFlush();
+
+  const resolver = resolverFor(job.path);
   const t0 = performance.now();
   let result;
   try {
     // budgetMs lets the cook yield between nodes; a single 1M-point CPU
     // field evaluation is still one synchronous block (that contrast is
     // the demo).
-    result = await cook(rig.graph, useGpu ? { gpu: gpuEval, budgetMs: 14 } : { budgetMs: 14 });
+    result = await cook(rig.graph, resolver !== undefined ? { gpu: resolver, budgetMs: 14 } : { budgetMs: 14 });
   } catch (err) {
     console.error("08-gpu-fields: cook failed:", err);
     view.cooking = false;
@@ -322,29 +467,57 @@ const recook = makeRecooker(async () => {
   const psize = (geo.attrs.point.require("psize").data as Float32Array).subarray(0, n);
   uploadPoints(geo, tint, psize);
 
-  const report = useGpu ? view.gpu : view.cpu;
+  const report = view.reports[job.path];
+  report.nodes = `${result.stats.cooked} / ${result.stats.cached}`;
   if (result.stats.cooked > 0) {
-    // A fully cached cook (~0 ms) is not a timing sample.
+    // A fully cached cook is not a cold-timing sample; it is the warm one.
     report.lastMs = wallMs;
     report.bestMs = report.bestMs === undefined ? wallMs : Math.min(report.bestMs, wallMs);
+  } else {
+    report.warmMs = wallMs;
   }
   report.hash = hashColumns(tint, psize);
-  view.points = n;
-  view.nodes = `${result.stats.cooked} / ${result.stats.cached}`;
-  if (result.stats.gpu !== undefined) {
-    view.gpuStats = {
+  // Counters are kept from cold cooks only. A warm cook legitimately
+  // reports all zeros (a run served from its terminal's memo entry does
+  // no device work at all), but zeroing the panel would hide the
+  // numbers worth reading; `nodes 0 / N` and the warm wall time are the
+  // proof instead.
+  if (result.stats.gpu !== undefined && result.stats.cooked > 0) {
+    report.gpu = {
       dispatches: result.stats.gpu.dispatches,
       pipelinesCompiled: result.stats.gpu.pipelinesCompiled,
       pipelineCacheHits: result.stats.gpu.pipelineCacheHits,
+      residentRuns: result.stats.gpu.residentRuns,
+      fusedNodes: result.stats.gpu.fusedNodes,
+      readbacksSaved: result.stats.gpu.readbacksSaved,
       fallbacks: { ...result.stats.gpu.fallbacks },
     };
-    if (useGpu && result.stats.gpu.dispatches > 0) {
-      view.deviation = measureDeviation(geo, tint);
-    }
+  }
+  view.points = n;
+  if (job.path !== "cpu" && result.stats.cooked > 0) {
+    view.deviation = measureDeviation(geo, tint, job.path);
   }
   view.cooking = false;
   push();
+}
+
+/**
+ * Jobs run strictly in order; a newer request replaces whatever has not
+ * started yet (so dragging the frequency slider never queues a dozen
+ * million-point cooks) but never interrupts the cook in flight.
+ */
+let queue: CookJob[] = [];
+const pump = makeRecooker(async () => {
+  while (queue.length > 0) {
+    const job = queue.shift();
+    if (job !== undefined) await runCook(job);
+  }
 });
+
+function schedule(...jobs: CookJob[]): void {
+  queue = jobs;
+  pump();
+}
 
 // -- controls --------------------------------------------------------------
 
@@ -357,42 +530,62 @@ mount(Panel, {
   props: {
     bridge,
     host: {
-      setMode(m: CookMode) {
-        if (m === "gpu" && gpuEval === undefined) return;
-        mode = m;
-        view.mode = m;
-        recook();
+      setPath(p: CookPath) {
+        if (!pathAvailable(p)) return;
+        view.path = p;
+        schedule({ path: p, warm: false });
       },
       setCount(n: number) {
         count = n;
         view.count = n;
-        rig.graph.setParam(rig.scatter, "count", n);
         resetComparisons();
-        recook();
+        schedule({ path, warm: false });
       },
       setSeed(s: number) {
         seed = s;
         view.seed = s;
-        rig.graph.setSeed(s);
         resetComparisons();
-        recook();
+        schedule({ path, warm: false });
       },
       setFrequency(f: number) {
         frequency = f;
         view.frequency = f;
-        rig.tintField = fieldFromJson(tintSpec(f));
-        rig.graph.setParam(rig.tintNode, "value", rig.tintField);
-        rig.graph.setParam(rig.sizeNode, "value", fieldFromJson(sizeSpec(f)));
         view.specJson = JSON.stringify(tintSpec(f), null, 2);
         resetComparisons();
-        recook();
+        schedule({ path, warm: false });
+      },
+      setResidentBudget(b: ResidentBudget) {
+        residentBudget = b;
+        view.residentBudget = b;
+        // A different bound changes whether the run fuses at all, so no
+        // previously measured time stays comparable.
+        resetComparisons();
+        schedule({ path, warm: false });
+      },
+      measureAll() {
+        // GPU paths first, CPU last. A million-point CPU cook blocks the
+        // main thread for the better part of a minute, which is long
+        // enough for the browser to lose the WebGPU device — and a lost
+        // device leaves an in-flight readback pending forever, so a CPU
+        // measurement taken first can hang the GPU measurements behind
+        // it. Measuring CPU last keeps the comparison honest and the
+        // page responsive up to the one unavoidable freeze.
+        const order = COOK_PATHS.filter(pathAvailable).sort((a, b) =>
+          a === "cpu" ? 1 : b === "cpu" ? -1 : 0,
+        );
+        schedule(...order.map((p) => ({ path: p, warm: false })));
       },
       rebuild() {
         // Fresh graph, cold caches, same seed: the recook must reproduce
         // the same per-path hash — determinism made visible. The GPU
-        // evaluator (and its pipeline cache) survives the rebuild.
-        rig = buildRig();
-        recook();
+        // evaluators (and their pipeline caches) survive the rebuild.
+        schedule({ path, warm: false });
+      },
+      cookWarm() {
+        // Same graph again: every node is a memo hit, the fused run is
+        // served from its terminal's single entry, and no device work
+        // happens at all (residentRuns and dispatches both stay 0).
+        schedule({ path, warm: true });
       },
     },
     initial: { ...view },
@@ -405,15 +598,15 @@ void initGpu().then((res) => {
   if ("label" in res) {
     view.gpuAvailable = true;
     view.adapter = res.label;
-    mode = "gpu";
-    view.mode = "gpu";
+    path = "gpu-fused";
+    view.path = "gpu-fused";
   } else {
     view.gpuAvailable = false;
     view.gpuReason = res.error;
     view.adapter = "none";
   }
   push();
-  recook();
+  schedule({ path, warm: false });
 });
 
 const fps = createFpsMeter((v) => {

@@ -293,7 +293,11 @@ The serializable field-expression grammar (previous section) is the GPU
 surface: every fn compiles to WGSL. A field is GPU-eligible iff it
 carries a spec — `getFieldSpec(field)` returns it (only fields built by
 `fieldFromJson` do; code-authored fields return undefined and stay on
-CPU). One eligible field = one compute dispatch over the whole domain.
+CPU). One eligible field = one compute dispatch over the whole domain
+(chunked into several `dispatchWorkgroups` calls past 65535 × 64 ≈
+4.19M elements, byte-invisibly). Chains of fusable nodes go further:
+they cook as one device-resident run with a single readback (see
+"Device-resident runs" below).
 
 Setup (browser):
 
@@ -313,7 +317,10 @@ on it), then `const adapter = await create([]).requestAdapter()` with
 Surface:
 
 - `GpuFieldResolver` (core interface, no WebGPU types): `{ cacheSalt:
-  string; resolveField(field, ctx, stats?): Promise<Column> | null }`.
+  string; resolveField(field, ctx, stats?): Promise<Column> | null;
+  planRun?; executeRun? }` — the two run methods are optional and
+  detailed under "Device-resident runs" below; absence degrades to
+  per-node cooking with identical bytes.
   `null` is returned synchronously for ineligible fields — the caller
   falls back to the CPU `evaluateField` and the reason is counted. A
   non-null return commits to GPU: it resolves to a freshly allocated
@@ -327,27 +334,54 @@ Surface:
   `capture`.
 - `CookStats.gpu` (present exactly when the cook was given a resolver;
   includes nested subgraph-cook work): `{ dispatches,
-  pipelinesCompiled, pipelineCacheHits, fallbacks: Record<reason,
-  count> }`. The complete fallback-reason vocabulary:
+  pipelinesCompiled, pipelineCacheHits, residentRuns, fusedNodes,
+  readbacksSaved, fallbacks: Record<reason, count> }`.
+  `dispatches` = **member kernels**, one per resolved field column plus
+  one apply kernel per fused member — NOT `dispatchWorkgroups` calls; a
+  chunked kernel still counts once (a 4.3M-point 4-member run reports
+  4 while issuing 8). The complete fallback-reason vocabulary:
   - `no-spec` — code-authored field, no serializable spec
   - `compile-error` — spec cannot lower to WGSL against the geometry's
     attribute layout (missing or string attribute, tuple size > 4,
     non-finite f32 constant)
   - `too-many-buffers` — kernel needs > 8 storage buffers (more than 7
     attribute inputs + the output; baseline WebGPU limit)
-  - `dispatch-too-large` — element count > 65535 × 64 ≈ 4.19M (baseline
-    1D dispatch limit; workgroup size is 64)
-- `NodeDef.gpu?: "fields" | "always"` — GPU-adoption marker
-  (`setAttribute` is `"fields"`, subgraph defs `"always"`). When a cook
-  has a resolver and such a node has a live spec'd Field param, the
-  memo key gains `|gpu:<cacheSalt>` — so toggling gpu never serves
-  bytes produced by the other path, while nodes without spec'd field
-  params keep their cache hits across the toggle. The marker is
-  conservative: it applies for spec'd-but-ineligible fields too
-  (over-invalidation; bytes stay CPU-identical). `GpuFieldEvaluator`'s
-  salt is `"gpu1|<vendor>|<architecture>|<device>|<description>"`
-  (format version + adapter identity; missing fields become `?`) —
-  bytes from different devices never serve each other.
+  - `run-plan-failed` — some member of a resident run cannot be
+    compiled into the pipeline (unknown resident kind, field compile
+    error, tuple/layout mismatch, missing standard attribute, buffer
+    limit). Counted once per rejected run; every member then cooks
+    per-node, including surfacing the identical CPU error for genuinely
+    invalid params.
+  - `run-too-large` — a run's resident working set exceeds
+    `maxResidentBytes`. Counted once per rejected run.
+  - Element count is NEVER a fallback reason; `dispatch-too-large` no
+    longer exists (chunking removed it).
+- `NodeDef.gpu?: "fields" | "always"` — GPU-adoption marker. `"fields"`
+  on `setAttribute`, `transformPoints`, `jitterPoints`,
+  `orientAlongVector`, `surfaceSample`, `volumeSample`; `"always"` on
+  subgraph defs (they forward the resolver to inner cooks and their
+  counters land in the outermost sink). When a cook has a resolver and
+  such a node has a live spec'd Field param, the memo key gains
+  `|gpu:<cacheSalt>` — so toggling gpu never serves bytes produced by
+  the other path, while nodes without spec'd field params keep their
+  cache hits across the toggle. The marker is conservative: it applies
+  for spec'd-but-ineligible fields too (over-invalidation; bytes stay
+  CPU-identical). `GpuFieldEvaluator`'s salt is
+  `"gpu1|<vendor>|<architecture>|<device>|<description>"` (format
+  version + adapter identity; missing fields become `?`) — bytes from
+  different devices never serve each other.
+- `GpuFieldEvaluatorOptions`: `adapterInfo?` (salt identity when the
+  device exposes none); `maxResidentBytes?` (default 512 MiB — the
+  resident-run working-set bound); `maxPooledBytes?` (default 256 MiB —
+  idle bytes the buffer pool retains; `0` disables retention);
+  `maxElementsPerDispatch?` (chunk size override, byte-invisible,
+  intended for tests forcing chunk seams — production code leaves it
+  unset; default `65535 × workgroupSize` = 4 194 240 at wg 64).
+- `evaluator.dispose()` destroys pooled (idle) buffers only; in-flight
+  buffers stay valid and re-pool on release and the evaluator remains
+  usable (pipeline/kernel caches untouched). `evaluator.poolStats` →
+  `{ buffersCreated, buffersReused, buffersDestroyed, pooledBuffers,
+  pooledBytes }`.
 - Pipelines cache on the evaluator instance (keyed by kernel
   specialization key = codegen version + spec key + attribute layout)
   and persist across cooks; `pipelineCacheSize` getter for tools.
@@ -357,6 +391,69 @@ Surface:
 - World note: toggling gpu between updates does NOT recook stored
   cells (cell staleness is version-based); provenance protects the
   graph memo layer whenever a cell actually recooks.
+
+Device-resident runs (fusion):
+
+- Opt-in through two OPTIONAL resolver methods, both or neither — the
+  executor fuses only when it finds both, so a v0.5-style resolver
+  gets exactly the per-node behavior and identical bytes:
+  - `planRun?(members: readonly ResidentMemberDesc[], ctx:
+    ResidentRunContext, stats?): object | null` — synchronous and
+    device-free. `null` = cannot fuse; the resolver counts the reason
+    and every member cooks per-node. The returned plan is opaque to the
+    executor.
+  - `executeRun?(plan: object, input: ResidentRunInput, stats?):
+    Promise<ResidentRunResult>` — commits to device execution; a
+    rejection is an error, never a silent fallback (except the standard
+    cancellation error when `input.signal` aborted). Its `geo` must be
+    structurally indistinguishable from cooking the members
+    sequentially: same attribute set, shapes, defaults, insertion
+    order, string tables, topology; untouched attributes pass through
+    byte-identically.
+  - `ResidentMemberDesc` = `{ id, type, kind, params, seed }` (`kind`
+    from the node def's `resident` descriptor, `seed` exactly what the
+    CPU execute would receive). `ResidentRunContext` = `{ attributes:
+    Record<name, { type, tupleSize }>, count }`.
+- Fusable node kinds (exactly four, all count-preserving, one geometry
+  in / one geometry out): `setAttribute` (numeric mode only — not
+  `type: "string"`, `domain: "point"`, empty `values`, empty
+  `stringValue`), `transformPoints`, `jitterPoints`,
+  `orientAlongVector`.
+- Boundary rules — the executor takes MAXIMAL linear chains and stops
+  when: the tail has ≠ 1 outgoing connection (any fan-out, counting
+  connections to nodes outside this cook's selection), the tail carries
+  a declared graph output, the consumer is outside the cooked
+  selection, the consumer is not fusable, or the consumer's incoming
+  set is not exactly the tail. A chain of length 1 is not a run.
+  Detection is conservative: it under-fuses, never over-fuses. An
+  interior node with external consumers becomes a run terminal with its
+  own readback — fusion never changes which bytes the graph observes.
+- Cache contract: ONLY the run terminal caches, under
+  `run1|gpu:<cacheSalt>|i<first member inputSig>|m[type|s<seed>|p<paramHash>|x<memoKey>]…`
+  (one `m[...]` tuple per member, in order). Interior members hold NO
+  entry while fused (any stale per-node entry is cleared). Editing any
+  member recooks exactly that run; siblings and upstream stay cached.
+  Run keys and per-node keys (`<type>|s…`) can never collide, so
+  neither path serves the other's bytes — but a node holds ONE memo
+  slot, so flipping gpu on/off (or fusion on/off) recooks the chain
+  every time BY DESIGN. Benchmark from cold caches.
+- Memory: working set = Σ resident slot bytes over every epoch + Σ
+  field-temporary column bytes (held for the WHOLE run, not just their
+  member) + readback staging bytes, checked against `maxResidentBytes`
+  at plan time. Logical bytes only: pow2 pool bucketing can allocate up
+  to 2×, and the 12-byte per-chunk uniforms are not counted.
+- Cost model caveat: a CONSTANT param still materializes a full device
+  column and a dispatch inside a run — `translate: [0,0,0]` costs
+  `n × 12` bytes exactly as a noise field would. In the
+  `examples/08-gpu-fields` chain the seven param columns are 76 of 212
+  bytes per point (36% of the working set). So a constant-heavy fused
+  chain can be SLOWER than per-node GPU and hits `run-too-large`
+  earlier than its point count suggests. Broadcasting constants through
+  the uniform is a recorded, unscheduled optimization.
+- Third-party `resident` kinds: `NodeDef.resident?: { kind: string;
+  eligible?(params): boolean }`. `eligible` runs outside the executor's
+  error wrapping — it must be cheap, pure, and total; an exception
+  there escapes `cook()` unwrapped.
 
 Determinism contract — the CPU is the bit-exact reference; existing
 goldens never move:
@@ -403,6 +500,39 @@ goldens never move:
   asin/acos absolute error ≈ 6.7e-5 — the WGSL-specified
   absolute-error class for those builtins.
 
+- Per-node budgets for the field-driven point ops (same adapter,
+  10k/8k points, perlin-normalized params):
+
+  | node (noise-driven param) | measured | budget |
+  |---|---|---|
+  | transformPoints (translate) | rangeUlp 0.92 | 2 |
+  | jitterPoints (amount) | rangeUlp 0.93 | 2 |
+  | volumeSample (jitter) | rangeUlp 0.50 | 1 |
+  | orientAlongVector (direction) | min quat dot 0.999999933 | ≥ 0.9999999 |
+  | surfaceSample (density) | accept-set symDiff 0 / 4096 | ≤ 8 |
+
+- Fused-run (composed) budgets, 17 device chains of 2–8 members:
+
+  | chain | quantity | measured | budget |
+  |---|---|---|---|
+  | noise → orient → transform → jitter | P | rangeUlp 4.83 | ≤ 6 |
+  | | perlin-normalized attr | rangeUlp 4.27 | ≤ 6 |
+  | | rot | min quat dot 0.99999957 | ≥ 0.9999995 |
+  | transform → orient → length | P / h | rangeUlp 1.69 / 1.71 | ≤ 3 |
+  | orient → transform | P | rangeUlp 1.33 | ≤ 3 |
+
+  12 of the 17 are BYTE-IDENTICAL to the CPU. That is engineered, not
+  incidental: those chains use power-of-two jitter amounts and
+  identity-euler / power-of-two transform scales, so every f32 step is
+  exact and the single store is the only rounding. A non-pow2 jitter
+  amount (`jitterPoints` rounds twice where the CPU rounds once) or a
+  `quatFromBasis` rotation moves a chain into the budgeted class.
+
+- All budgets above were measured on ONE adapter (discrete desktop,
+  D3D12/Dawn) and are the measured values rounded up minimally. Another
+  adapter exceeding one is a finding worth reporting, not expected
+  noise.
+
 Out-of-domain inputs are GIGO — measured and documented, not patched:
 
 - min/max with a NaN operand: CPU propagates NaN; a GPU may return the
@@ -432,5 +562,6 @@ GraphSerializationError, FieldJsonError, WorldValidationError.
   GPU eligibility rules
 - examples/ — eight vite demos; 06-graph-editor is an interactive node
   editor built on this same registry metadata and JSON format;
-  08-gpu-fields cooks the same graph on CPU and GPU with a live parity
-  readout
+  08-gpu-fields cooks one five-node fusable chain three ways (CPU, GPU
+  per-node, one fused device-resident run) with cold-cache wall times,
+  the full CookStats.gpu counters, and a live parity readout

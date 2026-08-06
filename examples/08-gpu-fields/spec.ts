@@ -71,6 +71,35 @@ export function tintSpec(frequency: number): FieldSpec {
 }
 
 /**
+ * Per-axis jitter amount (tuple 3): three low-frequency perlin bands,
+ * one per axis, remapped into [0, 0.9] so some regions of the cloud
+ * wobble far more than others.
+ *
+ * This one is written to a `wobble` attribute by the first member of
+ * the fused chain and read straight back by `jitterPoints` through
+ * `{ fn: "attribute", name: "wobble" }`. That is the device-resident
+ * case worth showing: a later member reading an attribute an earlier
+ * member wrote, with no readback in between — on the per-node path the
+ * same two nodes cost two full column round trips.
+ */
+export function wobbleSpec(frequency: number): FieldSpec {
+  const axis = (seed: number, offset: [number, number, number]): FieldSpec => ({
+    fn: "remap",
+    args: [
+      { fn: "perlinNoise", opts: { seed, frequency: frequency * 0.8, offset, normalized: true } },
+      0,
+      1,
+      0,
+      0.9,
+    ],
+  });
+  return {
+    fn: "vec",
+    args: [axis(11, [0, 0, 0]), axis(23, [37, 5, -19]), axis(47, [-11, 61, 5])],
+  };
+}
+
+/**
  * Per-point size (scalar): points near worley feature centers grow
  * (clumpy starfield look), plus a hashed per-point jitter.
  */
