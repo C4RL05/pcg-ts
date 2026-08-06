@@ -352,10 +352,11 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-The `examples/` directory contains six vite multi-page demos (scatter
+The `examples/` directory contains seven vite multi-page demos (scatter
 with density noise, forest instancing, spline sampling, infinite
-streaming world, field composition playground, and a registry-driven
-node-graph editor):
+streaming world, field composition playground, a registry-driven
+node-graph editor, and an infinite deterministic spiral galaxy with
+click-to-visit star systems):
 
 ```sh
 npm run examples
