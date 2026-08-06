@@ -404,10 +404,87 @@ front, grounded in an architecture audit of the shipped code:
 - Exit: full suite green, docs idempotent, example browser-verified,
   release tagged. Commit.
 
+## Phases (v0.6) — pervasive GPU + resident pipelines, scheduled 2026-08-06
+
+Two tiers, in order: first make the v0.5 GPU path pervasive (every
+field-resolving node consults the resolver; device limits stop being
+fallbacks), then the recorded stretch — device-resident pipelines that
+fuse chains of field-driven nodes so intermediates never ride back
+through the CPU. Design decisions fixed up front:
+
+- **Fusion is executor-driven and automatic** over maximal runs of
+  eligible nodes: element-count-preserving, all live Field params
+  spec'd, node type flagged resident-capable. No new authoring
+  surface; existing graphs benefit unchanged.
+- **Cache contract for fused runs.** A run caches only its terminal
+  output (one readback); interior nodes cache nothing while fused —
+  any interior change recooks the whole run (composite memo key from
+  member keys + gpu salt), siblings unaffected. An interior node with
+  external consumers (declared output, multi-consumer tap, or a
+  non-fusable downstream) becomes a run terminal with a readback —
+  fusion never changes which bytes the rest of the graph observes.
+- **Determinism composes.** Per-op budgets accumulate across a fused
+  chain exactly as across sequential dispatches; run-to-run
+  byte-stability on one device still holds; CPU-only cooking remains
+  the bit-exact reference and is byte-identical to v0.5.0.
+
+### Phase 22 — Pervasive GPU adoption, chunked dispatch, buffer pooling
+- Adopt the resolver in the remaining field-resolving nodes:
+  transformPoints (translate/rotateEuler/scale), jitterPoints
+  (amount), orientAlongVector (direction), surfaceSample
+  (densityField over the candidate cloud), volumeSample (jitter) —
+  each with `gpu: "fields"` provenance and CPU fallback, aliasing
+  semantics preserved.
+- Chunked 1D dispatch: counts beyond 65535 x workgroupSize split
+  across dispatches with a chunk-offset uniform; `dispatch-too-large`
+  leaves the fallback vocabulary; chunked output byte-identical to
+  unchunked for sizes both can serve (internal max-dispatch override
+  so tests exercise chunk seams without 16MB buffers).
+- Size-bucketed buffer pooling per evaluator (bounded, introspectable
+  via a pool-stats getter); reuse must be observationally invisible —
+  full-overwrite or explicit clear semantics, proven by tests that
+  interleave differently-shaped dispatches.
+- Exit: per-node device parity + provenance-surgery tests; chunk-seam
+  byte-equality incl. counts 1 above/below a seam; pooling
+  reuse-safety tests; CPU-only cooks byte-identical to v0.5.0;
+  existing goldens and the 769-test suite untouched. Commit.
+
+### Phase 23 — Device-resident pipeline core
+- Run detection in the executor per the fixed contract above;
+  compiled-run representation (ordered member kernels + attribute
+  read/write sets) with a stable composite specialization key.
+- Resident columns: intermediate attribute writes live in storage
+  buffers between member kernels (ping-pong or read_write in place,
+  implementer's choice, documented); one readback materializes the
+  terminal node's output items; interior boundary cases (external
+  consumer, output decl, count-changing downstream) split runs.
+- Cook stats gain resident-run counters (runs, fusedNodes,
+  readbacksSaved) alongside the existing gpu counters.
+- Cancellation/budget: runs respect signal/budgetMs at member-kernel
+  granularity without leaking device resources mid-run.
+- Exit: fused output within composed budgets of the per-node GPU
+  path and CPU reference on device; byte-stable run-to-run;
+  cache-surgery tests (interior edit recooks exactly the run;
+  sibling caches survive; boundary nodes cache normally); World and
+  subgraph interplay regression-free; CPU-only byte-identical.
+  Commit.
+
+### Phase 24 — Demo, docs, v0.6.0
+- Extend 08-gpu-fields with a fused chain (e.g. setAttribute →
+  jitter → transform → setAttribute) and a three-way wall-time
+  readout: CPU / per-node GPU / resident run, plus readbacksSaved.
+  Browser-verified on a real adapter.
+- README/llms.txt/authoring: pervasive adoption list, chunking and
+  pooling notes, the fused-run cache contract, updated stats shape;
+  node reference regenerated if metadata changed; overview site
+  refreshed; version 0.6.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, demo browser-verified,
+  release tagged. Commit.
+
 ## Stretch (recorded, not scheduled)
-- GPU-resident node pipelines: fusing chains of field-driven nodes
-  into device-resident subgraphs without per-node readback (the
-  natural successor once field kernels ship).
+- GPU-resident World streaming: cell cooks that keep instance
+  transforms device-side end to end (spawner-to-renderer without a
+  CPU round trip).
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
