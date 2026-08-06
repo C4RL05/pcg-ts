@@ -2,7 +2,8 @@
 
 pcg-ts is a deterministic procedural content generation library for
 TypeScript (browser + Node, ESM, package `pcg-ts`, optional three.js
-adapter `pcg-ts/three`). It combines a domain-based attribute data model
+adapter `pcg-ts/three`, optional WebGPU field evaluation `pcg-ts/gpu`).
+It combines a domain-based attribute data model
 (SoA typed arrays), deferred field expressions, a memoizing node-graph
 executor, and a hierarchical streaming runtime. It is designed to be
 driven programmatically: node capabilities are enumerable at runtime
@@ -286,6 +287,133 @@ retainRadius + LRU, and reports { cooked, evicted, pending }.
 `world.invalidate(level?, coord?)` forces recooks; parent recooks
 cascade staleness to children automatically.
 
+## GPU field evaluation (pcg-ts/gpu)
+
+The serializable field-expression grammar (previous section) is the GPU
+surface: every fn compiles to WGSL. A field is GPU-eligible iff it
+carries a spec — `getFieldSpec(field)` returns it (only fields built by
+`fieldFromJson` do; code-authored fields return undefined and stay on
+CPU). One eligible field = one compute dispatch over the whole domain.
+
+Setup (browser):
+
+```ts
+import { cook } from "pcg-ts";
+import { GpuFieldEvaluator } from "pcg-ts/gpu";
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice();
+const gpu = new GpuFieldEvaluator(device, { adapterInfo: adapter.info });
+const result = await cook(graph, { gpu });   // CookOptions.gpu
+```
+
+Node: `npm i -D webgpu` (Dawn bindings; the library has no dependency
+on it), then `const adapter = await create([]).requestAdapter()` with
+`import { create } from "webgpu"`.
+
+Surface:
+
+- `GpuFieldResolver` (core interface, no WebGPU types): `{ cacheSalt:
+  string; resolveField(field, ctx, stats?): Promise<Column> | null }`.
+  `null` is returned synchronously for ineligible fields — the caller
+  falls back to the CPU `evaluateField` and the reason is counted. A
+  non-null return commits to GPU: it resolves to a freshly allocated
+  column (never a view of attribute storage) with the same element type
+  and tuple size the CPU would produce; a rejection is an error (device
+  failure), never a silent fallback.
+- `CookOptions.gpu?: GpuFieldResolver` / `WorldOptions.gpu?` /
+  `UpdateOptions.gpu?` (update wins, threaded to every cell cook) /
+  `captureAsync(geo, domain, field, seed?, gpu?, stats?)` — the
+  graph-free entry point; without `gpu` it is byte-identical to
+  `capture`.
+- `CookStats.gpu` (present exactly when the cook was given a resolver;
+  includes nested subgraph-cook work): `{ dispatches,
+  pipelinesCompiled, pipelineCacheHits, fallbacks: Record<reason,
+  count> }`. The complete fallback-reason vocabulary:
+  - `no-spec` — code-authored field, no serializable spec
+  - `compile-error` — spec cannot lower to WGSL against the geometry's
+    attribute layout (missing or string attribute, tuple size > 4,
+    non-finite f32 constant)
+  - `too-many-buffers` — kernel needs > 8 storage buffers (more than 7
+    attribute inputs + the output; baseline WebGPU limit)
+  - `dispatch-too-large` — element count > 65535 × 64 ≈ 4.19M (baseline
+    1D dispatch limit; workgroup size is 64)
+- `NodeDef.gpu?: "fields" | "always"` — GPU-adoption marker
+  (`setAttribute` is `"fields"`, subgraph defs `"always"`). When a cook
+  has a resolver and such a node has a live spec'd Field param, the
+  memo key gains `|gpu:<cacheSalt>` — so toggling gpu never serves
+  bytes produced by the other path, while nodes without spec'd field
+  params keep their cache hits across the toggle. The marker is
+  conservative: it applies for spec'd-but-ineligible fields too
+  (over-invalidation; bytes stay CPU-identical). `GpuFieldEvaluator`'s
+  salt is `"gpu1|<vendor>|<architecture>|<device>|<description>"`
+  (format version + adapter identity; missing fields become `?`) —
+  bytes from different devices never serve each other.
+- Pipelines cache on the evaluator instance (keyed by kernel
+  specialization key = codegen version + spec key + attribute layout)
+  and persist across cooks; `pipelineCacheSize` getter for tools.
+- `compileFieldSpec(spec, { attributes })` and `supportedGpuFieldFns()`
+  are exported for direct WGSL inspection; compile errors are
+  actionable (they name the spec node and list what is supported).
+- World note: toggling gpu between updates does NOT recook stored
+  cells (cell staleness is version-based); provenance protects the
+  graph memo layer whenever a cell actually recooks.
+
+Determinism contract — the CPU is the bit-exact reference; existing
+goldens never move:
+
+- Bit-exact (byte equality): u32 hash/random streams (`randomField`
+  with default and string keys, noise lattice hashing), `index`,
+  u32/i32 attribute roots, bool→f32 reads, pure hash+compare+select
+  trees, and f32 add/sub/mul, clamp/min/max, floor, select/compares.
+- On one device, repeated dispatches are run-to-run byte-identical.
+- Branchy ops (select, compares, ramp segments, worley cell walks) may
+  flip at knife-edge inputs whose operands differ within tolerance.
+- Everything else matches within measured budgets. Metric: rangeUlp =
+  |cpu−gpu| / (2⁻²³ · max|cpu|) — ULPs at the top of the family's
+  output range (raw max-ULP inflates at output zero-crossings, where
+  the CPU's f64 interior survives cancellation that f32 cannot).
+  Measured on discrete desktop hardware (D3D12/Dawn), 10 000 dense
+  hash-derived inputs; budgets are the measured values rounded up
+  minimally and may be exceeded on other adapters:
+
+  | family | measured rangeUlp | budget |
+  |---|---|---|
+  | arith add/sub/mul | 0 | bit-exact |
+  | clamp/min/max, floor, select/compare | 0 | bit-exact |
+  | div | 0.76 | 1 |
+  | lerp | 0.50 | 1 |
+  | remap | 0.00 | 1 |
+  | ramp (multi-stop) | 1.09 | 2 |
+  | dot | 0.70 | 1 |
+  | length/normalize (incl. sqrt) | 1.50 | 2 |
+  | sin/cos over [−8, 8] | 6.50 | 8 |
+  | tan over [−1.45, 1.45] | 19.48 | 24 |
+  | asin over [−0.9, 0.9] | 503.99 | 512 |
+  | acos over [−0.9, 0.9] | 359.09 | 384 |
+  | atan | 67.06 | 80 |
+  | atan2 | 64.52 | 80 |
+  | valueNoise raw / normalized | 6.53 / 6.53 | 8 / 8 |
+  | perlinNoise raw / normalized | 7.69 / 4.21 | 10 / 6 |
+  | simplexNoise raw / normalized | 17.46 / 8.55 | 24 / 12 |
+  | worley f1 / f2 | 5.16 / 4.71 | 8 / 8 |
+  | worley f2−f1 normalized / exact f2−f1 | 9.42 / 9.28 | 12 / 12 |
+  | fbm value / perlin / simplex / worley | 4.32 / 4.84 / 19.02 / 4.81 | 6 / 6 / 24 / 6 |
+  | composite (ramp∘perlin × (random+attr)) | 9.77 | 12 |
+
+  asin/acos absolute error ≈ 6.7e-5 — the WGSL-specified
+  absolute-error class for those builtins.
+
+Out-of-domain inputs are GIGO — measured and documented, not patched:
+
+- min/max with a NaN operand: CPU propagates NaN; a GPU may return the
+  non-NaN operand (any adapter must yield NaN or the other operand).
+- |v| beyond f32 range: GPU length → Inf and normalize → 0 where the
+  CPU's f64 interior survives (≈1.4e20); tiny |v| (≈1.4e-25)
+  underflows both to 0 on GPU.
+- Noise lattice coords ≥ 2³¹ diverge (JS ToUint32 wraps, WGSL f32→int
+  saturates); ordinary lanes stay within the noise budget.
+- Subnormal results flush to exactly 0 on GPU; CPU keeps subnormals.
+
 ## Errors
 
 Read error messages: they name the offending node id, pin, or param and
@@ -300,6 +428,9 @@ GraphSerializationError, FieldJsonError, WorldValidationError.
 - README.md — human tour with runnable examples
 - docs/nodes.md — full generated node reference (pins, params, defaults, ranges)
 - docs/nodes.json — the same registry metadata, machine-readable
-- docs/authoring.md — graph JSON spec, complete field grammar, recipes
-- examples/ — six vite demos; 06-graph-editor is an interactive node
-  editor built on this same registry metadata and JSON format
+- docs/authoring.md — graph JSON spec, complete field grammar, recipes,
+  GPU eligibility rules
+- examples/ — eight vite demos; 06-graph-editor is an interactive node
+  editor built on this same registry metadata and JSON format;
+  08-gpu-fields cooks the same graph on CPU and GPU with a live parity
+  readout

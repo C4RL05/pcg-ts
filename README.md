@@ -1,7 +1,8 @@
 # pcg-ts
 
 Deterministic procedural content generation for TypeScript. Runs in the
-browser and Node, with optional three.js interop (`pcg-ts/three`). Built
+browser and Node, with optional three.js interop (`pcg-ts/three`) and
+optional WebGPU field evaluation (`pcg-ts/gpu`). Built
 to be driven by AI agents as well as humans: every node type carries
 machine-readable metadata, graphs serialize to a stable JSON format, and
 errors name the offending node, pin, or param. Agent-facing entry points:
@@ -317,6 +318,90 @@ Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 `World` cell — pass its `cellReady`/`cellEvicted` methods into the
 `World`'s `onCellReady`/`onCellEvicted` callbacks.
 
+## GPU cooking (WebGPU)
+
+`pcg-ts/gpu` compiles the serializable field-expression grammar to WGSL
+compute kernels and runs them on a WebGPU device. The core never
+imports it (guard-tested, like `pcg-ts/three`); the graph layer sees
+only a structural resolver interface, injected per cook:
+
+```ts
+import { cook } from "pcg-ts";
+import { GpuFieldEvaluator } from "pcg-ts/gpu";
+
+// Browser
+const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error("no WebGPU adapter");
+const device = await adapter.requestDevice();
+const gpu = new GpuFieldEvaluator(device, { adapterInfo: adapter.info });
+
+const result = await cook(graph, { gpu });
+console.log(result.stats.gpu);
+// { dispatches, pipelinesCompiled, pipelineCacheHits, fallbacks: {...} }
+```
+
+In Node, install the `webgpu` package (Dawn bindings, a dev-time
+dependency — the library itself depends on nothing):
+
+```ts
+import { create } from "webgpu";
+const adapter = await create([]).requestAdapter();
+```
+
+**What compiles.** Fields built by `fieldFromJson` carry a spec
+(`getFieldSpec(field)` returns it) and are GPU-eligible; the whole
+grammar compiles — inputs, arithmetic, trig, `clamp`/`lerp`/`remap`/
+`select`/`ramp`, vector ops, and all noise including `fbm` and exact
+worley. Code-authored combinator fields have no spec and stay on the
+CPU. One eligible field evaluates over a whole domain in one compute
+dispatch; `setAttribute` is the adopting node, `captureAsync` is the
+graph-free entry point, and `WorldOptions.gpu` / `UpdateOptions.gpu`
+(update wins) thread a resolver into every cell cook. Ineligible fields
+fall back to the CPU silently but countably —
+`CookStats.gpu.fallbacks` records machine-readable reasons: `no-spec`,
+`compile-error`, `too-many-buffers`, `dispatch-too-large` (that is the
+complete vocabulary).
+
+**Determinism contract.** The CPU is the bit-exact reference and
+existing goldens never move; the GPU path is a documented approximation
+of it:
+
+- u32 hash and random streams (`hashCombine`, `hashFloat`,
+  `randomField`, noise lattice hashing) are **bit-exact** between CPU
+  and WGSL — likewise `index`, integer attribute reads, bool→f32 reads,
+  and pure hash+compare+select trees.
+- Float arithmetic matches within measured per-op-family budgets (CPU
+  computes in f64 and stores f32; WGSL computes in f32). Condensed, in
+  range-ULP units (error / 2⁻²³·max|output|, measured on real
+  hardware; the full table lives in [llms.txt](./llms.txt) and
+  [docs/authoring.md](./docs/authoring.md)): add/sub/mul and
+  clamp/min/max/floor/select/compares are bit-exact; div, lerp, remap,
+  and dot ≤ 1; ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
+  atan/atan2 ≤ 80, asin/acos ≤ 512 (an absolute-error class per the
+  WGSL spec); noise families ≤ 6–24 depending on base and mode.
+- On a single device, results are run-to-run **byte-identical**.
+- Branchy ops (select, compares, ramp segments, worley cell walks) may
+  flip at knife-edge inputs whose operands differ within tolerance.
+
+Out-of-domain inputs are garbage-in/garbage-out, measured and
+documented rather than patched: NaN through `min`/`max` may return the
+other operand on GPU (CPU propagates NaN); vector lengths beyond f32
+range overflow to Inf/0 where the CPU's f64 interior survives; noise
+lattice coordinates at or above 2³¹ diverge (JS wraps, WGSL
+saturates); subnormal results flush to exactly 0 on GPU.
+
+**Cache provenance.** GPU output is not byte-identical to CPU, so a
+resolver's `cacheSalt` (format version + adapter vendor, architecture,
+device, description) folds into the memo key of any node that would
+resolve a live spec'd Field on device. Toggling `gpu` never serves
+bytes produced by the other path — and nodes without live spec'd field
+params keep their cache hits across the toggle. Pipelines are cached on
+the evaluator instance and persist across cooks.
+
+See it live: [`examples/08-gpu-fields`](./examples/08-gpu-fields) cooks
+a million-point scatter through the same graph on both paths, with cook
+stats, per-path output hashes, and a live deviation readout.
+
 ## Determinism guarantees
 
 What the library promises:
@@ -352,11 +437,12 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-The `examples/` directory contains seven vite multi-page demos (scatter
+The `examples/` directory contains eight vite multi-page demos (scatter
 with density noise, forest instancing, spline sampling, infinite
 streaming world, field composition playground, a registry-driven
-node-graph editor, and an infinite deterministic spiral galaxy with
-click-to-visit star systems):
+node-graph editor, an infinite deterministic spiral galaxy with
+click-to-visit star systems, and a million-point WebGPU field cook with
+a live CPU/GPU parity readout):
 
 ```sh
 npm run examples
@@ -366,7 +452,7 @@ npm run examples
 
 ```sh
 npm test          # vitest: unit + integration + determinism suites
-npm run build     # tsup: dist/ with subpath exports ".", "./three"
+npm run build     # tsup: dist/ with subpath exports ".", "./three", "./gpu"
 npm run check     # tsc --noEmit
 npm run examples  # vite dev server for examples/
 npm run docs:nodes  # regenerate docs/nodes.{md,json} from the registry

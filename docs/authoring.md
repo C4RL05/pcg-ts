@@ -475,3 +475,147 @@ Nesting rules (the parent is the level above):
 An unbounded level (`cellSize: "unbounded"`, first level only) needs no
 `generationRadius`; omit it — a value is accepted and ignored, so
 configs written before it became optional keep working.
+
+## GPU evaluation of field expressions (pcg-ts/gpu)
+
+Every field expression written in the JSON grammar above is also the
+GPU surface: `pcg-ts/gpu` compiles a FieldSpec to one WGSL compute
+kernel and evaluates it over a whole domain in one dispatch. Nothing
+about authoring changes — the same spec cooks on either path — but the
+rules below decide which path actually runs.
+
+### Wiring a resolver into a cook
+
+```ts
+import { cook } from "pcg-ts";
+import { GpuFieldEvaluator } from "pcg-ts/gpu";
+
+// Browser
+const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error("no WebGPU adapter");
+const device = await adapter.requestDevice();
+const gpu = new GpuFieldEvaluator(device, { adapterInfo: adapter.info });
+
+const result = await cook(graph, { gpu });     // graph path
+// World: WorldOptions.gpu, or world.update(vp, { gpu }) — update wins
+// Graph-free: await captureAsync(geo, "point", field, seed, gpu)
+console.log(result.stats.gpu);
+```
+
+In Node install the `webgpu` package (Dawn bindings) as a dev
+dependency and obtain the adapter with
+`import { create } from "webgpu"; const adapter = await create([]).requestAdapter()`.
+The library itself never imports WebGPU — the evaluator is typed
+structurally, and core code sees only the `GpuFieldResolver` interface
+(`{ cacheSalt, resolveField }`, expressed in core types).
+
+### Eligibility — what runs on the GPU
+
+A field-capable param resolves on the GPU exactly when all of these
+hold; otherwise it falls back to the CPU with a machine-readable
+reason in `CookStats.gpu.fallbacks`:
+
+1. The field carries a serializable spec: it was built by
+   `fieldFromJson` (JSON params always are; `getFieldSpec(field)` is
+   the non-throwing probe). Hand-composed combinator fields have no
+   spec → `no-spec`.
+2. The spec compiles against the geometry's attribute layout: every
+   `attribute` it reads exists on the domain, is numeric (bool reads
+   compile; string attributes do not), and tuple sizes stay ≤ 4 with
+   finite f32 constants → otherwise `compile-error` (the thrown
+   compile diagnostics name the offending spec node; the cook just
+   counts and falls back).
+3. The kernel fits baseline WebGPU limits: at most 8 storage buffers —
+   up to 7 distinct attribute inputs plus the output
+   (`too-many-buffers`) — and at most 65535 × 64 ≈ 4.19M elements per
+   dispatch, the baseline 1D limit at workgroup size 64
+   (`dispatch-too-large`).
+
+Those four reasons (`no-spec`, `compile-error`, `too-many-buffers`,
+`dispatch-too-large`) are the complete vocabulary. Plain (non-Field)
+params never consult the resolver — constants are cheaper on the CPU.
+`setAttribute` is the GPU-adopting node (`NodeDef.gpu: "fields"`);
+subgraph nodes forward the resolver to their inner cooks
+(`NodeDef.gpu: "always"`), whose stats land in the outermost cook's
+sink. A fallback is silent in the bytes — CPU output is what the GPU
+path approximates — but never silent in the stats.
+
+### Cache provenance
+
+GPU floats are not byte-identical to CPU floats, so when a cook has a
+resolver and a node would resolve a live spec'd Field param on device,
+that node's memo key gains `|gpu:<cacheSalt>` — the evaluator's salt is
+`"gpu1|<vendor>|<architecture>|<device>|<description>"`. Toggling gpu
+on or off (or switching devices) therefore never serves bytes produced
+by the other path, while nodes without live spec'd field params keep
+their cache hits across the toggle. The marker is conservative: a
+spec'd-but-ineligible field also gains it (over-invalidation, bytes
+still CPU-identical). Compiled pipelines cache on the evaluator
+instance and persist across cooks. In a `World`, toggling gpu between
+updates does not by itself recook stored cells; provenance applies
+whenever a cell actually recooks.
+
+### Determinism contract and measured budgets
+
+The CPU is the bit-exact reference: goldens are CPU-produced and never
+move. On the GPU, u32 hash/random streams (`randomField`, noise
+lattice hashing), `index`, integer attribute roots, bool→f32 reads,
+hash+compare+select trees, and f32 add/sub/mul, clamp/min/max, floor,
+select/compares are bit-exact ports. One device is run-to-run
+byte-identical. Everything else matches within measured per-op-family
+budgets, in range-ULP units — |cpu−gpu| / (2⁻²³ · max|cpu|), i.e. ULPs
+at the top of the family's output range (raw max-ULP is misleading at
+output zero-crossings, where the CPU's f64 interior survives
+cancellation that f32 cannot). Measured on discrete desktop hardware
+(D3D12/Dawn) over 10 000 dense hash-derived inputs; budgets are the
+measured values rounded up minimally, and a different adapter may
+exceed them:
+
+| family | measured rangeUlp | budget |
+|---|---|---|
+| arith add/sub/mul | 0 | bit-exact |
+| clamp/min/max, floor, select/compare | 0 | bit-exact |
+| div | 0.76 | 1 |
+| lerp | 0.50 | 1 |
+| remap | 0.00 | 1 |
+| ramp (multi-stop) | 1.09 | 2 |
+| dot | 0.70 | 1 |
+| length/normalize (incl. sqrt) | 1.50 | 2 |
+| sin/cos over [−8, 8] | 6.50 | 8 |
+| tan over [−1.45, 1.45] | 19.48 | 24 |
+| asin over [−0.9, 0.9] | 503.99 | 512 |
+| acos over [−0.9, 0.9] | 359.09 | 384 |
+| atan | 67.06 | 80 |
+| atan2 | 64.52 | 80 |
+| valueNoise raw / normalized | 6.53 / 6.53 | 8 / 8 |
+| perlinNoise raw / normalized | 7.69 / 4.21 | 10 / 6 |
+| simplexNoise raw / normalized | 17.46 / 8.55 | 24 / 12 |
+| worley f1 / f2 | 5.16 / 4.71 | 8 / 8 |
+| worley f2−f1 normalized / exact f2−f1 | 9.42 / 9.28 | 12 / 12 |
+| fbm value / perlin / simplex / worley | 4.32 / 4.84 / 19.02 / 4.81 | 6 / 6 / 24 / 6 |
+| composite (ramp∘perlin × (random+attr)) | 9.77 | 12 |
+
+asin/acos absolute error is ≈ 6.7e-5 — the WGSL-specified
+absolute-error class for those builtins. Branchy ops (select,
+compares, ramp segments, worley cell walks) may flip at knife-edge
+inputs whose operands differ within tolerance.
+
+Out-of-domain inputs are garbage-in/garbage-out — measured and
+documented, not patched: NaN through `min`/`max` may return the
+non-NaN operand on GPU (CPU propagates NaN); vector magnitudes near
+the f32 range boundary overflow (length → Inf, normalize → 0) or
+underflow to 0 where the CPU's f64 interior survives; noise lattice
+coordinates ≥ 2³¹ diverge (JS ToUint32 wraps, WGSL f32→int saturates);
+subnormal results flush to exactly 0.
+
+### Introspection
+
+`CookStats.gpu` is present exactly when the cook was given a resolver:
+`{ dispatches, pipelinesCompiled, pipelineCacheHits, fallbacks }`,
+including nested subgraph-cook work. `compileFieldSpec(spec,
+{ attributes })` exposes the generated WGSL and its bind-layout plan
+directly, `supportedGpuFieldFns()` lists the compilable fns, and
+`GpuFieldEvaluator.pipelineCacheSize` reports the live pipeline cache.
+The `examples/08-gpu-fields` demo shows the whole surface at once:
+one graph cooked on both paths with wall times, gpu counters, per-path
+output hashes, and a live deviation readout against the CPU reference.

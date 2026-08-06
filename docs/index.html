@@ -331,12 +331,12 @@
     <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>627</b><span>tests, all green</span></div>
+      <div class="stat"><b>769</b><span>tests, all green</span></div>
       <div class="stat"><b>25</b><span>registered node types</span></div>
       <div class="stat"><b>40</b><span>field-grammar functions</span></div>
       <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b>v0.4</b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b>v0.5</b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -365,8 +365,8 @@
 
   <section>
     <p class="eyebrow">Architecture</p>
-    <h2>Layered core, one optional adapter</h2>
-    <p>The core has zero dependencies and never imports three.js — a guard test enforces that only the adapter may. Each layer depends only on the ones before it.</p>
+    <h2>Layered core, optional adapters</h2>
+    <p>The core has zero dependencies and never imports three.js or WebGPU — guard tests enforce that only the adapters may. Each layer depends only on the ones before it.</p>
 
     <div class="plate">
       <pre class="mermaid">
@@ -393,8 +393,10 @@ flowchart TB
     SPAWN["src/spawn — InstanceBatch protocol"]
   end
   THREE["src/three — optional adapter, the only module importing three"]
+  GPU["src/gpu — optional WGSL compiler + WebGPU device runtime"]
   L1 --> L2 --> L3 --> L4
   L4 -. render-agnostic boundary .-> THREE
+  L2 -. structural resolver boundary .-> GPU
       </pre>
       <p class="caption"><b>Fig. 1</b> — module layers; arrows are the only allowed dependency direction.</p>
     </div>
@@ -408,6 +410,7 @@ flowchart TB
       <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
       <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
       <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
+      <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, parity-budgeted</span></li>
       <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
     </ul>
   </section>
@@ -471,7 +474,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   <section>
     <p class="eyebrow">Examples</p>
-    <h2>Seven demos, live in your browser</h2>
+    <h2>Eight demos, live in your browser</h2>
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
     <div class="examples">
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></a>
@@ -481,6 +484,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/"><b>06 · graph editor</b><span>build and cook node graphs interactively — palette, inspector, JSON round-trip</span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/"><b>07 · galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/"><b>08 · gpu fields</b><span>a million points cooked through a WebGPU field kernel — CPU/GPU toggle with a live parity readout</span></a>
     </div>
   </section>
 
@@ -517,10 +521,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.5.0 <small>2026-08-06</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>WebGPU field kernels: the serializable field grammar compiles to WGSL compute kernels and cooks on a real device through <code>pcg-ts/gpu</code> — bit-exact u32 hash/random streams, measured per-op float budgets, cache provenance across the CPU/GPU toggle, cook stats with machine-readable fallback reasons, and a million-point live demo. The CPU stays the bit-exact reference. 769 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>WebGPU compute subgraphs for GPU-side generation · npm publish.</p>
+          <p>GPU-resident node pipelines — fusing chains of field-driven nodes into device-resident subgraphs without per-node readback · npm publish.</p>
         </div>
       </li>
     </ul>
@@ -530,7 +541,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.4.0</span>
+    <span>pcg-ts v0.5.0</span>
     <span>MIT license</span>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>

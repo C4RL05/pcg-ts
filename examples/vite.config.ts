@@ -27,6 +27,7 @@ export default defineConfig({
         "05-fields-playground": here("05-fields-playground/index.html"),
         "06-graph-editor": here("06-graph-editor/index.html"),
         "07-galaxy": here("07-galaxy/index.html"),
+        "08-gpu-fields": here("08-gpu-fields/index.html"),
       },
     },
   },

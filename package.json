@@ -1,6 +1,6 @@
 {
   "name": "pcg-ts",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Deterministic procedural content generation for TypeScript: domain attributes, node graphs, deferred fields, hierarchical streaming. Optional three.js interop.",
   "license": "MIT",
   "author": "C4RL05 <carlos@helloenjoy.com>",

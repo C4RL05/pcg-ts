@@ -1,0 +1,39 @@
+var e=!1;function t(){if(e)return;e=!0;let t=document.createElement(`style`);t.textContent=`
+.pcg-overlay {
+  position: fixed; top: 12px; left: 12px; z-index: 10;
+  width: 300px; max-height: calc(100vh - 24px); overflow-y: auto;
+  padding: 14px 16px; box-sizing: border-box;
+  background: rgba(13, 17, 23, 0.88);
+  border: 1px solid #2a3548; border-radius: 10px;
+  color: #dbe4f0; font: 13px/1.45 system-ui, sans-serif;
+  backdrop-filter: blur(6px);
+}
+.pcg-overlay h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; color: #f0f4fa; }
+.pcg-overlay .pcg-info { margin: 0 0 10px; color: #8b98ab; font-size: 12px; }
+.pcg-overlay .pcg-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+.pcg-overlay .pcg-row > label { flex: 0 0 96px; color: #aeb9c9; font-size: 12px; }
+.pcg-overlay input[type="range"] { flex: 1; accent-color: #4c8dff; min-width: 0; }
+.pcg-overlay input[type="number"] {
+  width: 90px; padding: 3px 6px; box-sizing: border-box;
+  background: #161d29; color: #dbe4f0; border: 1px solid #33405a; border-radius: 5px;
+  font: 12px ui-monospace, monospace;
+}
+.pcg-overlay select {
+  flex: 1; padding: 3px 6px; background: #161d29; color: #dbe4f0;
+  border: 1px solid #33405a; border-radius: 5px; font: 12px system-ui, sans-serif;
+}
+.pcg-overlay input[type="checkbox"] { accent-color: #4c8dff; }
+.pcg-overlay .pcg-val { flex: 0 0 44px; text-align: right; color: #8fd0ff; font: 12px ui-monospace, monospace; }
+.pcg-overlay .pcg-stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid #223047; }
+.pcg-overlay .pcg-stat { display: flex; justify-content: space-between; margin: 2px 0; }
+.pcg-overlay .pcg-stat span:first-child { color: #8b98ab; font-size: 12px; }
+.pcg-overlay .pcg-stat span:last-child { color: #b8f5c8; font: 12px ui-monospace, monospace; }
+.pcg-overlay details { margin-top: 10px; border-top: 1px solid #223047; padding-top: 8px; }
+.pcg-overlay summary { cursor: pointer; color: #aeb9c9; font-size: 12px; user-select: none; }
+.pcg-overlay pre {
+  margin: 8px 0 0; padding: 8px; max-height: 260px; overflow: auto;
+  background: #0a0e14; border: 1px solid #223047; border-radius: 6px;
+  color: #9ecbff; font: 11px/1.5 ui-monospace, monospace; white-space: pre;
+}
+.pcg-overlay .pcg-note { margin-top: 8px; color: #6f7c8f; font-size: 11px; }
+`,document.head.appendChild(t)}function n(e){t();let n=document.createElement(`div`);n.className=`pcg-overlay`;let r=document.createElement(`h1`);if(r.textContent=e.title,n.appendChild(r),e.info){let t=document.createElement(`p`);t.className=`pcg-info`,t.textContent=e.info,n.appendChild(t)}let i=document.createElement(`div`);n.appendChild(i);let a=document.createElement(`div`);a.className=`pcg-stats`,n.appendChild(a),document.body.appendChild(n);function o(e){let t=document.createElement(`div`);t.className=`pcg-row`;let n=document.createElement(`label`);return n.textContent=e,t.appendChild(n),i.appendChild(t),t}return{el:n,addSeed(e,t){let n=o(`seed`),r=document.createElement(`input`);r.type=`number`,r.step=`1`,r.value=String(e),r.addEventListener(`change`,()=>{let e=Math.floor(Number(r.value));Number.isFinite(e)&&t(e>>>0)}),n.appendChild(r)},addSlider(e,t,n){let r=o(e),i=document.createElement(`input`);i.type=`range`,i.min=String(t.min),i.max=String(t.max),i.step=String(t.step),i.value=String(t.value);let a=document.createElement(`span`);a.className=`pcg-val`;let s=t.format??(e=>String(e));a.textContent=s(t.value),i.addEventListener(`input`,()=>{let e=Number(i.value);a.textContent=s(e),n(e)}),r.appendChild(i),r.appendChild(a)},addSelect(e,t,n,r){let i=o(e),a=document.createElement(`select`);for(let e of t){let t=document.createElement(`option`);t.value=e.value,t.textContent=e.label,a.appendChild(t)}a.value=n,a.addEventListener(`change`,()=>r(a.value)),i.appendChild(a)},addCheckbox(e,t,n){let r=o(e),i=document.createElement(`input`);i.type=`checkbox`,i.checked=t,i.addEventListener(`change`,()=>n(i.checked)),r.appendChild(i)},addStat(e){let t=document.createElement(`div`);t.className=`pcg-stat`;let n=document.createElement(`span`);n.textContent=e;let r=document.createElement(`span`);return r.textContent=`–`,t.appendChild(n),t.appendChild(r),a.appendChild(t),e=>{r.textContent=String(e)}},addCollapsible(e,t=!1){let r=document.createElement(`details`);r.open=t;let i=document.createElement(`summary`);i.textContent=e,r.appendChild(i);let a=document.createElement(`pre`);return r.appendChild(a),n.appendChild(r),a},addNote(e){let t=document.createElement(`p`);t.className=`pcg-note`,t.textContent=e,n.appendChild(t)}}}export{n as t};
