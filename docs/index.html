@@ -273,15 +273,25 @@
   .features li b { color: var(--ink); font-weight: 600; }
 
   /* ---------- examples ---------- */
-  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 16px 0 8px; }
+  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 14px; margin: 16px 0 8px; }
   a.example {
     display: block;
-    border: 1px solid var(--line); border-radius: 10px; padding: 14px;
+    border: 1px solid var(--line); border-radius: 10px;
     background: var(--bg);
-    border-bottom: 1px solid var(--line);
+    overflow: hidden; /* clip the thumbnail to the card's rounded corners */
     transition: border-color 0.15s ease;
   }
   a.example:hover, a.example:focus-visible { border-color: var(--accent); }
+  /* The frame's aspect is reserved up front so lazily-loaded thumbnails
+     cannot reflow the grid as they arrive. */
+  .example img {
+    display: block; width: 100%; aspect-ratio: 640 / 345; object-fit: cover;
+    background: var(--card);
+    border-bottom: 1px solid var(--line);
+    opacity: 0.92; transition: opacity 0.15s ease;
+  }
+  a.example:hover img, a.example:focus-visible img { opacity: 1; }
+  .example .meta { display: block; padding: 12px 14px 14px; }
   .example b { font-family: var(--mono); font-size: 13px; display: block; margin-bottom: 4px; color: var(--accent-ink); }
   .example span { font-size: 13px; color: var(--muted); }
 
@@ -491,14 +501,14 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <h2>Eight demos, live in your browser</h2>
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
     <div class="examples">
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, declarative multi-asset instancing</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/"><b>06 · graph editor</b><span>build and cook node graphs interactively — palette, inspector, JSON round-trip</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/"><b>07 · galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/"><b>08 · gpu fields</b><span>a million points through a five-node chain, cooked three ways — CPU, per-node GPU, and one fused device-resident run</span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><img src="./thumbs/01-scatter-basic.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A dense field of small points scattered across a dark plane, thinned by noise, with a stats panel showing cook time and point count."><span class="meta"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><img src="./thumbs/02-forest.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A hilly grey terrain covered in thousands of small green conifers, thinning out on steep slopes, with a stats panel showing planted counts."><span class="meta"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, declarative multi-asset instancing</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/"><img src="./thumbs/03-spline-fence.jpg" width="640" height="345" loading="lazy" decoding="async" alt="Fence posts placed at even intervals along a curving spline, each rotated to follow the curve's tangent."><span class="meta"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/"><img src="./thumbs/04-infinite-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A landscape of scattered instances streaming around a moving camera, with a panel showing cooked and evicted cell counts."><span class="meta"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><img src="./thumbs/05-fields-playground.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A grid of points coloured by a composed noise field, beside a Svelte panel holding the editable field-expression JSON."><span class="meta"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/"><img src="./thumbs/06-graph-editor.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A node-graph editor: a palette on the left, connected nodes in the centre, a parameter inspector on the right, and the cooked result rendering above."><span class="meta"><b>06 · graph editor</b><span>build and cook node graphs interactively — palette, inspector, JSON round-trip</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/"><img src="./thumbs/07-galaxy.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A spiral galaxy of tens of thousands of coloured star points around a bright core, with a panel showing streamed star cells."><span class="meta"><b>07 · galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/"><img src="./thumbs/08-gpu-fields.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A million-point cloud tinted blue and green, beside a panel comparing CPU, per-node GPU and fused device-resident cook times."><span class="meta"><b>08 · gpu fields</b><span>a million points through a five-node chain, cooked three ways — CPU, per-node GPU, and one fused device-resident run</span></span></a>
     </div>
   </section>
 
