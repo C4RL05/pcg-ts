@@ -129,6 +129,19 @@
     color: var(--ink);
   }
   .hero-bar .install::before { content: "$ "; color: var(--faint); }
+  .hero-bar .manual-link {
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--accent-ink);
+    font-weight: 600;
+    pointer-events: auto;
+  }
+  .hero-bar .manual-link:hover, .hero-bar .manual-link:focus-visible {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: var(--accent);
+  }
   .seed-ctl { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
   .seed-ctl label { color: var(--muted); }
   .seed-ctl input {
@@ -315,6 +328,7 @@
   </div>
   <div class="wrap hero-bar">
     <span class="install">npm install pcg-ts</span>
+    <a href="./manual.html" class="manual-link">Read the manual →</a>
     <span class="seed-ctl">
       <label for="seed">seed</label>
       <input id="seed" type="number" value="42" step="1" />
@@ -467,7 +481,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
       <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
       <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
       <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
-      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>nodes.json</code>, and an authoring guide with recipes.</li>
+      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>nodes.json</code>, an authoring guide with recipes, and the <a href="./manual.html">user manual</a>, whose second half is written for an agent driving the library programmatically.</li>
       <li><b>Adversarially audited</b> — every release phase was probed by an independent audit agent before landing; the defects it found shipped fixed, with regression tests.</li>
     </ul>
   </section>
@@ -557,6 +571,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
     <span>pcg-ts v0.6.1</span>
     <span>MIT license</span>
+    <a href="./manual.html">user manual</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>
   </div>

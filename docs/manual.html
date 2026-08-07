@@ -1,0 +1,1357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<meta name="description" content="The pcg-ts user manual: building worlds by hand, and driving the library programmatically as an agent." />
+<title>pcg-ts manual — deterministic PCG for TypeScript</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📗</text></svg>" />
+</head>
+<body>
+<style>
+  :root {
+    /* Declare native light+dark support so a forced/auto dark-mode
+       extension never inverts the page. Every colour below is a token;
+       nothing is pinned onto a surface whose lightness can flip. */
+    color-scheme: light dark;
+    --bg: #fafbf8;
+    --ink: #1b241e;
+    --muted: #5c6b61;
+    --faint: #8a978d;
+    --accent: #2e7d4f;
+    --accent-ink: #22623d;
+    --amber: #a07d1c;
+    --line: #dfe6df;
+    --card: #f1f5f0;
+    --code-bg: #14201a;
+    --code-ink: #d8e6da;
+    --plate: #f7f9f5;
+    --shadow: rgba(27, 36, 30, 0.09);
+    --mono: "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    /* Code-plate ink. The plate is dark in both themes, so these stay put. */
+    --c-key: #7fd4a8;
+    --c-str: #d8c078;
+    --c-com: #6d8577;
+    --c-num: #a8ccf0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101612;
+      --ink: #e5ede6;
+      --muted: #92a296;
+      --faint: #6c7b70;
+      --accent: #58be8a;
+      --accent-ink: #6fcf9d;
+      --amber: #d9b84a;
+      --line: #232e26;
+      --card: #161f19;
+      --code-bg: #0b110d;
+      --code-ink: #cfe0d2;
+      --plate: #151d18;
+      --shadow: rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #fafbf8; --ink: #1b241e; --muted: #5c6b61; --faint: #8a978d;
+    --accent: #2e7d4f; --accent-ink: #22623d; --amber: #a07d1c;
+    --line: #dfe6df; --card: #f1f5f0; --code-bg: #14201a; --code-ink: #d8e6da;
+    --plate: #f7f9f5; --shadow: rgba(27, 36, 30, 0.09);
+  }
+  :root[data-theme="dark"] {
+    --bg: #101612; --ink: #e5ede6; --muted: #92a296; --faint: #6c7b70;
+    --accent: #58be8a; --accent-ink: #6fcf9d; --amber: #d9b84a;
+    --line: #232e26; --card: #161f19; --code-bg: #0b110d; --code-ink: #cfe0d2;
+    --plate: #151d18; --shadow: rgba(0, 0, 0, 0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 20px; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; }
+  }
+  body {
+    margin: 0;
+    overflow-x: hidden;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3, h4 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 25px; font-weight: 600; margin: 0 0 10px; scroll-margin-top: 24px; }
+  h3 { font-size: 17px; font-weight: 600; margin: 30px 0 8px; scroll-margin-top: 24px; }
+  h4 { font-size: 14.5px; font-weight: 600; margin: 22px 0 6px; color: var(--muted); }
+  p { margin: 0 0 14px; max-width: 74ch; }
+  ul, ol { max-width: 74ch; padding-left: 22px; }
+  li { margin: 0 0 7px; }
+  a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  a:hover, a:focus-visible { border-bottom-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  strong { font-weight: 600; }
+  code { font-family: var(--mono); font-size: 0.9em; }
+  p code, li code, td code, dd code, dt code, figcaption code {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.5px 5px;
+    color: var(--accent-ink);
+    /* Wrap only when a token genuinely cannot fit, so a narrow column
+       never pushes inline code past the text measure. */
+    overflow-wrap: anywhere;
+  }
+  /* Table cells live inside .tablewrap, which scrolls — keep them intact. */
+  td code, th code { white-space: nowrap; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-ink);
+    margin: 0 0 10px;
+  }
+  .lead { font-size: 17.5px; color: var(--muted); }
+  .lead strong { color: var(--ink); }
+
+  /* ---------- masthead ---------- */
+  header.top { border-bottom: 1px solid var(--line); padding: 40px 0 26px; }
+  .kicker {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--faint); margin: 0 0 8px;
+  }
+  .kicker a { color: var(--faint); border-bottom-color: color-mix(in srgb, var(--faint) 45%, transparent); }
+  h1 {
+    font-size: clamp(32px, 5.4vw, 48px); font-weight: 700;
+    letter-spacing: -0.03em; margin: 0; line-height: 1.08;
+  }
+  h1 .dot { color: var(--accent); }
+  .subtitle { font-size: clamp(15px, 2.2vw, 18px); color: var(--muted); margin: 12px 0 0; max-width: 60ch; }
+  .metabar {
+    display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center;
+    margin-top: 20px; font-family: var(--mono); font-size: 13px; color: var(--muted);
+  }
+  .metabar .install {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; color: var(--ink);
+  }
+  .metabar .install::before { content: "$ "; color: var(--faint); }
+
+  /* ---------- layout: sidebar + content ---------- */
+  .layout { display: block; }
+  @media (min-width: 1000px) {
+    .layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 48px; align-items: start; }
+    nav.toc { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
+  }
+  nav.toc {
+    padding: 34px 0 10px;
+    font-size: 13.5px;
+  }
+  nav.toc h2 { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin-bottom: 12px; }
+  nav.toc ol { list-style: none; margin: 0 0 18px; padding: 0; }
+  nav.toc li { margin: 0; }
+  nav.toc a {
+    display: block; padding: 4px 0 4px 10px;
+    border-bottom: none; border-left: 2px solid var(--line);
+    color: var(--muted); line-height: 1.4;
+  }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent-ink); border-left-color: var(--accent); }
+  nav.toc .part {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent-ink); margin: 20px 0 8px; padding-left: 10px;
+  }
+  nav.toc .part:first-child { margin-top: 0; }
+
+  main { padding-bottom: 20px; }
+  section { padding: 38px 0 14px; }
+  section + section { border-top: 1px solid var(--line); }
+
+  /* ---------- part banners ---------- */
+  .part-banner {
+    margin: 46px 0 0; padding: 26px 0 22px;
+    border-top: 2px solid var(--accent);
+    border-bottom: 1px solid var(--line);
+  }
+  .part-banner .num {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent-ink);
+  }
+  .part-banner h2 { font-size: 30px; margin: 6px 0 8px; }
+  .part-banner p { color: var(--muted); margin: 0; }
+  section.first-of-part { border-top: none; }
+
+  /* ---------- code ---------- */
+  .codeblock {
+    background: var(--code-bg); color: var(--code-ink);
+    border-radius: 10px; padding: 16px 18px;
+    overflow-x: auto; margin: 16px 0 8px;
+  }
+  .codeblock pre { margin: 0; }
+  .codeblock code {
+    font-family: var(--mono); font-size: 13px; line-height: 1.62;
+    color: var(--code-ink); background: none; border: none; padding: 0; white-space: pre;
+  }
+  .codeblock .k { color: var(--c-key); }
+  .codeblock .s { color: var(--c-str); }
+  .codeblock .c { color: var(--c-com); font-style: italic; }
+  .codeblock .n { color: var(--c-num); }
+  .code-label {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--faint); margin: 18px 0 -8px;
+  }
+  .caption { font-size: 13.5px; color: var(--faint); margin: 4px 0 16px; max-width: 74ch; }
+  .caption b { color: var(--muted); font-weight: 600; }
+
+  /* ---------- figures ---------- */
+  figure {
+    margin: 22px 0 18px; padding: 0;
+    border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; background: var(--plate);
+  }
+  figure img { display: block; width: 100%; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 13.5px; color: var(--muted);
+    padding: 12px 16px; border-top: 1px solid var(--line);
+  }
+  figcaption b { color: var(--ink); font-weight: 600; font-family: var(--mono); font-size: 13px; }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--card);
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px; margin: 18px 0;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note.warn { border-left-color: var(--amber); }
+  .note .tag {
+    display: block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent-ink); margin-bottom: 5px;
+  }
+  .note.warn .tag { color: var(--amber); }
+
+  /* ---------- tables ---------- */
+  .tablewrap { overflow-x: auto; margin: 16px 0 10px; }
+  table { border-collapse: collapse; font-size: 14px; min-width: 100%; }
+  th, td { text-align: left; padding: 8px 16px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  td code { white-space: nowrap; }
+
+  /* ---------- definition-ish lists ---------- */
+  dl.defs { margin: 16px 0; max-width: 74ch; }
+  dl.defs dt { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--accent-ink); margin-top: 14px; }
+  dl.defs dd { margin: 3px 0 0; color: var(--muted); font-size: 15px; }
+
+  /* ---------- example cards ---------- */
+  .demo-links { display: flex; flex-wrap: wrap; gap: 8px 14px; font-family: var(--mono); font-size: 12.5px; margin: 0 0 6px; }
+  .demo-links .chip {
+    display: inline-block; padding: 3px 10px; border-radius: 99px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent-ink); border: none;
+  }
+  .demo-links a.chip:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+  footer {
+    border-top: 1px solid var(--line); margin-top: 40px; padding: 24px 0 48px;
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 8px 28px;
+  }
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.6.1</p>
+    <h1>The pcg<span class="dot">-</span>ts manual</h1>
+    <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
+    <div class="metabar">
+      <span class="install">npm install pcg-ts</span>
+      <span>MIT · ESM · TypeScript strict</span>
+      <span>zero required dependencies</span>
+      <a href="https://github.com/C4RL05/pcg-ts">source on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap layout">
+
+<nav class="toc" aria-label="Table of contents">
+  <h2>Contents</h2>
+  <p class="part">Part I · By hand</p>
+  <ol>
+    <li><a href="#install">1 · Install and first cook</a></li>
+    <li><a href="#model">2 · The mental model</a></li>
+    <li><a href="#three">3 · three.js interop</a></li>
+    <li><a href="#examples">4 · The examples tour</a></li>
+    <li><a href="#editor">5 · Authoring in the editor</a></li>
+    <li><a href="#gpu">6 · GPU cooking</a></li>
+    <li><a href="#debugging">7 · Debugging</a></li>
+  </ol>
+  <p class="part">Part II · By machine</p>
+  <ol>
+    <li><a href="#discovery">8 · Capability discovery</a></li>
+    <li><a href="#json">9 · Graphs as JSON</a></li>
+    <li><a href="#grammar">10 · The field grammar</a></li>
+    <li><a href="#errors">11 · Errors as an API</a></li>
+    <li><a href="#introspection">12 · Introspection &amp; mutation</a></li>
+    <li><a href="#contract">13 · Determinism as a contract</a></li>
+    <li><a href="#loop">14 · A worked agent loop</a></li>
+  </ol>
+  <p class="part">Reference</p>
+  <ol>
+    <li><a href="#reference">Where to look next</a></li>
+  </ol>
+</nav>
+
+<main>
+
+  <section id="intro">
+    <p class="eyebrow">Orientation</p>
+    <h2>What this manual is</h2>
+    <p class="lead">pcg-ts turns <strong>seeded node graphs</strong> into content: scattered points, filtered sets, instanced geometry, streamed worlds. It runs in the browser and in Node, has no required dependencies, and is deterministic by construction — the same graph and the same seed produce byte-identical output across runs, platforms, cook orders, and streaming paths.</p>
+    <p>The manual has two genuine halves, and they are meant to be read separately. <strong>Part I</strong> is for a person building a world: install, the mental model, the renderer adapter, a tour of the eight live demos, the GPU path, and how to debug a graph that is not doing what you meant. <strong>Part II</strong> is for an LLM or agent driving the library programmatically: discovering what exists at runtime, emitting graphs as JSON, treating error strings as an API, and closing the loop with introspection and mutation.</p>
+    <p>Every API name, signature, parameter and code sample below was executed against the published build before it was written down. Numbers quoted from a run (survivor counts, cook stats, hashes, error strings) are real output, not illustrations — with the exception of wall-clock timings, which vary by machine.</p>
+    <div class="note">
+      <span class="tag">Companion documents</span>
+      <p><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a> is the generated node reference and <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> the same metadata machine-readable; <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a> is the format spec with recipes; <a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a> is the compact agent capability map. All four are generated from or checked against the registry. This manual explains <em>why</em> and <em>when</em>; those explain <em>exactly what</em>.</p>
+    </div>
+  </section>
+
+  <div class="part-banner" id="part-1">
+    <p class="num">Part I</p>
+    <h2>Building a world by hand</h2>
+    <p>For the person holding the mouse: from an empty file to a streaming world on screen.</p>
+  </div>
+
+  <section id="install" class="first-of-part">
+    <p class="eyebrow">Chapter 1</p>
+    <h2>Install and the first cook</h2>
+    <p>The core package has zero dependencies. The renderer adapter needs three.js as an optional peer dependency; the WebGPU path needs nothing extra in a browser, and Dawn bindings in Node.</p>
+
+    <div class="codeblock"><pre><code><span class="c"># the library</span>
+npm install pcg-ts
+
+<span class="c"># optional: only if you use the pcg-ts/three adapter</span>
+npm install three
+
+<span class="c"># optional: only for WebGPU cooking under Node (browsers need nothing)</span>
+npm install -D webgpu</code></pre></div>
+    <p class="caption">Node 18 or newer, or any modern browser bundler. ESM only — there is no CommonJS build.</p>
+
+    <h3>A graph that cooks</h3>
+    <p>A graph is built in code by adding node instances, connecting typed pins, declaring which pins are terminal outputs, and then cooking. Cooking is pull-based: it walks back from the declared outputs and evaluates only what they need.</p>
+
+    <div class="codeblock"><pre><code><span class="k">import</span> {
+  Graph, cook, firstGeometry,
+  pointScatterInBounds, jitterPoints,
+  fbm, perlinNoise, remap,
+} <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> graph = <span class="k">new</span> <span class="n">Graph</span>(<span class="n">42</span>);          <span class="c">// graph seed; every node seed derives from it</span>
+
+<span class="k">const</span> scatter = graph.<span class="n">add</span>(pointScatterInBounds, {
+  count: <span class="n">500</span>,
+  boundsMin: [<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>],
+  boundsMax: [<span class="n">50</span>, <span class="n">0</span>, <span class="n">50</span>],
+});
+
+<span class="c">// `amount` is field-capable: this scalar noise is evaluated per point</span>
+<span class="c">// and broadcasts across all three axes.</span>
+<span class="k">const</span> jitter = graph.<span class="n">add</span>(jitterPoints, {
+  amount: <span class="n">remap</span>(<span class="n">fbm</span>(perlinNoise, { seed: <span class="n">7</span>, frequency: <span class="n">0.05</span> }), -<span class="n">1</span>, <span class="n">1</span>, <span class="n">0</span>, <span class="n">1</span>),
+});
+
+graph.<span class="n">connect</span>(scatter, <span class="s">"out"</span>, jitter, <span class="s">"in"</span>);
+graph.<span class="n">output</span>(jitter, <span class="s">"out"</span>, <span class="s">"points"</span>);
+
+<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
+<span class="k">const</span> geo = <span class="n">firstGeometry</span>(result.outputs.points);
+<span class="k">if</span> (!geo) <span class="k">throw</span> <span class="k">new</span> Error(<span class="s">"no geometry"</span>);
+
+<span class="k">const</span> P = geo.attrs.point.<span class="n">require</span>(<span class="s">"P"</span>);   <span class="c">// f32 column, 3 components per point</span>
+console.<span class="n">log</span>(geo.pointCount, [...P.data.<span class="n">subarray</span>(<span class="n">0</span>, <span class="n">3</span>)]);
+console.<span class="n">log</span>(result.stats);</code></pre></div>
+
+    <p class="code-label">Actual output</p>
+    <div class="codeblock"><pre><code>500 [ 33.082, -0.3688, 6.8829 ]
+{ cooked: 2, cached: 0, elapsedMs: 6.69 }</code></pre></div>
+
+    <p>Cook the same graph again and both nodes are served from the memo cache — <code>{ cooked: 0, cached: 2 }</code>. Change one parameter with <code>graph.setParam(scatter, "count", 1000)</code> and only that node and everything downstream of it recooks. Nothing else moves; nothing is deep-hashed.</p>
+
+    <p>Two details worth internalising immediately. First, the second argument to <code>graph.add</code> is a partial parameter object — anything you omit takes its schema default, and the defaults are published in the registry, not hidden in the source. Second, <code>result.outputs.points</code> is a <em>collection</em> of data items, not a single geometry: <code>firstGeometry</code> is the convenience accessor for the common case where you know there is exactly one.</p>
+  </section>
+
+  <section id="model">
+    <p class="eyebrow">Chapter 2</p>
+    <h2>The mental model</h2>
+    <p class="lead">Five ideas carry the whole library. If you hold these, the rest of the API reads as consequences rather than vocabulary.</p>
+
+    <h3>2.1 · Domains and attributes</h3>
+    <p>Content lives in a <code>Geometry</code>, and a geometry is four <em>domains</em> of named typed-array columns: <strong>point</strong>, <strong>vertex</strong>, <strong>primitive</strong>, and <strong>detail</strong> (always exactly one element — the place for per-geometry facts). Columns are struct-of-arrays: one <code>Float32Array</code> per attribute, not one object per point. That is not an optimisation detail you can ignore, it is the shape of the data you will read.</p>
+    <p>An attribute has a name, an element type (<code>f32</code>, <code>i32</code>, <code>u32</code>, <code>bool</code>, <code>string</code>) and a tuple size (1 = scalar, 3 = vector, 4 = colour or quaternion). A freshly scattered point cloud carries the standard set:</p>
+
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Attribute</th><th>Type</th><th>Tuple</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>P</code></td><td>f32</td><td>3</td><td>Position in world space.</td></tr>
+        <tr><td><code>rot</code></td><td>f32</td><td>4</td><td>Orientation quaternion, xyzw order.</td></tr>
+        <tr><td><code>scale</code></td><td>f32</td><td>3</td><td>Per-axis scale.</td></tr>
+        <tr><td><code>density</code></td><td>f32</td><td>1</td><td>The channel the density filters read.</td></tr>
+        <tr><td><code>boundsMin</code> / <code>boundsMax</code></td><td>f32</td><td>3</td><td>Per-point extents, for bounds filters.</td></tr>
+        <tr><td><code>color</code></td><td>f32</td><td>4</td><td>RGBA.</td></tr>
+        <tr><td><code>seed</code></td><td>u32</td><td>1</td><td>The point's own seed — its slice of the hash chain.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <p>Attributes move between domains rather than being recomputed. <code>promoteAttribute</code> walks the topology (first / average / sum / min / max) to lift or lower a value; <code>transferAttribute</code> copies from a second geometry by nearest source point, by barycentric lookup in the source triangulation's UV space, or by raycast against the source mesh. Everything else — filters, spawners, the renderer adapter — reads these same columns, which is why "write an attribute, then act on it" is the dominant idiom in every graph you will build.</p>
+
+    <h3>2.2 · Fields: values that resolve late</h3>
+    <p>A <code>Field&lt;T&gt;</code> is a deferred computation. It is not a number; it is a description of how to produce one column of numbers once it knows a geometry, a domain and a seed. Field-capable node parameters accept <code>T | Field&lt;T&gt;</code>, so the same slot takes <code>0.5</code> or a four-octave noise expression, and the node does not care which.</p>
+    <p>Fields compose before any geometry exists. Inputs (<code>position()</code>, <code>attribute(name)</code>, <code>index()</code>, <code>randomField(key)</code>), arithmetic and comparison combinators, the full trig set, <code>clamp</code>/<code>lerp</code>/<code>remap</code>/<code>select</code>/<code>ramp</code>, vector operations, and five noise families all return fields.</p>
+
+    <div class="codeblock"><pre><code><span class="k">import</span> { createPointCloud, capture, attribute, clamp, add, mul, worleyNoise } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="c">// density = clamp(0.2 + worley * 0.9, 0, 1) — still just a description.</span>
+<span class="k">const</span> density = <span class="n">clamp</span>(<span class="n">add</span>(<span class="n">0.2</span>, <span class="n">mul</span>(<span class="n">worleyNoise</span>({ frequency: <span class="n">0.15</span> }), <span class="n">0.9</span>)), <span class="n">0</span>, <span class="n">1</span>);
+
+<span class="k">const</span> geo = <span class="n">createPointCloud</span>(<span class="n">1000</span>);
+<span class="k">const</span> name = <span class="n">capture</span>(geo, <span class="s">"point"</span>, density);   <span class="c">// evaluates, stores as "__anon_0"</span>
+<span class="k">const</span> col = <span class="n">attribute</span>(name).<span class="n">evaluate</span>({ geo, domain: <span class="s">"point"</span>, seed: <span class="n">0</span> });
+<span class="c">// col.data.length === 1000, col.tupleSize === 1</span></code></pre></div>
+
+    <p><code>capture</code> is how an intermediate result becomes an anonymous attribute you can read back later — useful when a value is expensive and consumed twice. Raw numbers and tuples coerce to constants wherever a field is accepted, and scalars broadcast against tuples, so you never write <code>constant(0.5)</code> by hand.</p>
+    <div class="note warn">
+      <span class="tag">Two lifetimes to respect</span>
+      <p>An evaluated <code>Column</code> may alias live attribute storage. Treat it as read-only, and re-evaluate with a fresh <code>EvalContext</code> after mutating or resizing the geometry. Likewise, a <code>CookResult</code> aliases live cache internals — call <code>cloneGeometry</code> before you change anything in it, or you will corrupt the cache silently.</p>
+    </div>
+
+    <h4>Noise, and knowing its range</h4>
+    <p>Every noise field takes <code>normalized: true</code>, which affinely remaps its documented raw range to exactly [0, 1] — the cleanest way to feed a density channel. The raw ranges are machine-readable rather than folklore: <code>NOISE_RAW_RANGES</code> per noise type, and <code>noiseOutputRange(field)</code> per field instance, which is fBm-aware. A four-octave Perlin fBm reports <code>[-1.875, 1.875]</code>, because the octave sum is not renormalised. Worley additionally takes <code>exact: true</code> to widen its cell search until provably correct, for when the fast approximation's rare artifacts matter.</p>
+
+    <h3>2.3 · Graphs, cooking, and the cache</h3>
+    <p>Validation is eager: bad pin names, kind mismatches and cycles throw at <code>connect</code> time, naming the node and pin. Pin kinds are <code>geometry</code>, <code>value</code>, <code>instances</code> and <code>any</code>; an input marked <code>multi</code> concatenates everything connected to it, in connection order.</p>
+    <p>Each node memoizes on exactly four things: node type, a structural hash of its parameters, its derived seed, and the revision ids of its input items. Data items carry monotonically assigned <code>rev</code> numbers, so geometry is never deep-hashed — an unchanged upstream output keeps its rev, and cleanliness propagates downstream for free.</p>
+
+    <dl class="defs">
+      <dt>cook(graph)</dt>
+      <dd>Cooks every declared output. Returns <code>{ outputs, stats }</code> where <code>stats</code> is <code>{ cooked, cached, elapsedMs }</code>.</dd>
+      <dt>cook(graph, { budgetMs })</dt>
+      <dd>Yields to the event loop between nodes once the budget elapses. Cooking always completes; it just shares the thread instead of blocking a frame.</dd>
+      <dt>cook(graph, { signal })</dt>
+      <dd>Rejects with <code>CookCancelledError</code>. Nodes that finished keep their caches, so the next cook resumes where the cancelled one stopped.</dd>
+      <dt>cook(graph, { outputs: ["a"] })</dt>
+      <dd>Cooks only the named outputs' upstream subgraph. Everything else is untouched and keeps its caches — this is what makes staged pipelines fit in one graph: cook an early output, bind data derived from it, cook the rest.</dd>
+      <dt>subgraphNode(inner, inputs, outputs)</dt>
+      <dd>Wraps an entire graph as one node with its own persistent inner caches. The inner seed derives from the outer node's seed, so two instances of the same subgraph produce different but reproducible content.</dd>
+    </dl>
+
+    <p>Per-output cooking is worth a concrete trace. Given scatter → jitter → spawn with both <code>points</code> (on jitter) and <code>instances</code> (on spawn) declared:</p>
+    <div class="codeblock"><pre><code><span class="k">await</span> <span class="n">cook</span>(graph, { outputs: [<span class="s">"points"</span>] });  <span class="c">// { cooked: 2, cached: 0 }</span>
+<span class="k">await</span> <span class="n">cook</span>(graph);                          <span class="c">// { cooked: 1, cached: 2 }</span></code></pre></div>
+    <p>The spawner is the only thing left to do. The partial cook also returns a partial <code>outputs</code> object — its keys are exactly the outputs you asked for.</p>
+
+    <h3>2.4 · The streaming World</h3>
+    <p>A <code>World</code> streams grid cells around a moving viewpoint. Levels are ordered coarse to fine, one graph per level, and each cell is cooked independently with a seed hashed from the world seed, the level index and every cell coordinate.</p>
+
+    <div class="codeblock"><pre><code><span class="k">import</span> { Graph, World, pointScatterInBounds, spawnInstances } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> level = <span class="k">new</span> <span class="n">Graph</span>();
+<span class="k">const</span> scatter = level.<span class="n">add</span>(pointScatterInBounds, { count: <span class="n">200</span> });
+<span class="k">const</span> spawn = level.<span class="n">add</span>(spawnInstances, { assetId: <span class="s">"tree"</span> });
+level.<span class="n">connect</span>(scatter, <span class="s">"out"</span>, spawn, <span class="s">"in"</span>);
+level.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <span class="s">"instances"</span>);
+
+<span class="k">const</span> world = <span class="k">new</span> <span class="n">World</span>({
+  seed: <span class="n">1234</span>,
+  levels: [{
+    name: <span class="s">"props"</span>,
+    cellSize: <span class="n">32</span>,             <span class="c">// world units per cell, XZ plane</span>
+    generationRadius: <span class="n">96</span>,    <span class="c">// a cell cooks when its centre enters this radius</span>
+    graph: level,
+    <span class="n">bind</span>(graph, ctx) {
+      <span class="c">// The ONLY channel through which cell data enters the graph.</span>
+      <span class="c">// Contract: derive params only from ctx, and wire ctx.seed into</span>
+      <span class="c">// every stochastic node.</span>
+      graph.<span class="n">setParam</span>(scatter, <span class="s">"boundsMin"</span>, [ctx.min[<span class="n">0</span>], <span class="n">0</span>, ctx.min[<span class="n">1</span>]]);
+      graph.<span class="n">setParam</span>(scatter, <span class="s">"boundsMax"</span>, [ctx.max[<span class="n">0</span>], <span class="n">0</span>, ctx.max[<span class="n">1</span>]]);
+      graph.<span class="n">setParam</span>(scatter, <span class="s">"seed"</span>, ctx.seed);
+    },
+  }],
+  onCellReady: (level, coord, outputs) => {<span class="c">/* hand outputs to the renderer */</span>},
+  onCellEvicted: (level, coord) => {<span class="c">/* tear down renderer state */</span>},
+});
+
+<span class="c">// Per frame, or on movement. Overlapping calls are serialized.</span>
+<span class="k">await</span> world.<span class="n">update</span>([camera.x, camera.y, camera.z], { budgetMs: <span class="n">8</span> });</code></pre></div>
+
+    <p><code>update</code> resolves to <code>{ cooked, evicted, pending, elapsedMs }</code>, where <code>cooked</code> and <code>evicted</code> are arrays of <code>{ level, coord }</code> — enough to drive a renderer without a separate bookkeeping layer. Cells cook nearest-first; eviction uses a <code>retainRadius</code> (default 1.25× the generation radius) plus LRU, so a viewpoint hovering on a boundary does not thrash.</p>
+    <p>The determinism claim here is stronger than "the same seed gives the same world". Cell content is a pure function of (world seed, level, coordinate, graph, parent cell content) — never of cook order, viewpoint path, or eviction history. Fly away and back and the identical cells return, because they were never a function of how you got there. The contract you owe in exchange is narrow: derive parameters only from <code>ctx</code>, and route <code>ctx.seed</code> into anything stochastic. Setting per-node seed parameters and calling <code>graph.setSeed(...)</code> inside <code>bind</code> are both sanctioned; bind-time writes are not counted as user edits, so neither causes phantom recooks.</p>
+    <p>Levels use square XZ cells by default. <code>cellMode: "xyz"</code> switches a level to cube cells addressed <code>[cx, cy, cz]</code>, with radii measured in full XYZ distance. A leading <code>cellSize: "unbounded"</code> level covers the world with a single global cell and needs no radius — the natural home for landmarks and anything global. Lower levels see their parent cell's outputs through <code>ctx.parent</code>, typically injected via a <code>dataInput</code> node, and a parent recook marks its children stale automatically.</p>
+
+    <h3>2.5 · Spawners: the render-agnostic terminal</h3>
+    <p>The core never imports a renderer. The boundary is <code>spawnInstances</code>, a terminal node that converts points into <strong>instance batches</strong>: an asset id, a count, and a flat <code>Float32Array</code> of 4×4 column-major transforms composing <code>T(P) · R(rot) · S(scale)</code>. A thousand points become one batch of sixteen thousand floats, and it is up to the adapter what to do with them.</p>
+    <div class="codeblock"><pre><code><span class="c">// From a real cook of a 1008-point cloud:</span>
+batch.assetId          <span class="c">// "rock"</span>
+batch.count            <span class="c">// 1008</span>
+batch.transforms       <span class="c">// Float32Array(16128)</span>
+batch.transforms.<span class="n">subarray</span>(<span class="n">0</span>, <span class="n">16</span>)
+<span class="c">// [ 1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  98.143, 0, 94.491, 1 ]</span></code></pre></div>
+    <p>Multi-asset spawning stays declarative rather than becoming a loop in your application. Write a per-point <em>string</em> attribute with <code>setAttribute</code> (<code>type: "string"</code>, a <code>values</code> list, and a field-capable numeric selector that indexes into it) and name that attribute in the spawner's <code>assetAttr</code>. The output then splits into one batch per asset id, in first-occurrence order. The selector is total: it floors, clamps into range, and maps NaN to zero, so weighting by repetition (<code>["pine", "pine", "birch", "bush"]</code> is 50% pine) works and no single point can throw.</p>
+  </section>
+
+  <section id="three">
+    <p class="eyebrow">Chapter 3</p>
+    <h2>three.js interop</h2>
+    <p><code>pcg-ts/three</code> is the only module that imports three.js, which is an optional peer dependency — a guard test enforces that the core never reaches for it. The adapter is small on purpose: four functions and one binding class, covering the two directions data actually flows.</p>
+
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Export</th><th>Direction</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>fromBufferGeometry</code></td><td>three → pcg</td><td>A <code>BufferGeometry</code> becomes a sampleable <code>Geometry</code> with real triangle topology.</td></tr>
+        <tr><td><code>fromCurve</code></td><td>three → pcg</td><td>A <code>Curve&lt;Vector3&gt;</code> becomes a polyline for <code>splineSample</code>.</td></tr>
+        <tr><td><code>toInstancedMeshes</code></td><td>pcg → three</td><td>Instance batches become <code>InstancedMesh</code> objects, one per asset id.</td></tr>
+        <tr><td><code>toPointsObject</code></td><td>pcg → three</td><td>A point cloud becomes a <code>Points</code> object — debug rendering.</td></tr>
+        <tr><td><code>WorldThreeBinding</code></td><td>both</td><td>Manages one scene-graph group per live <code>World</code> cell.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="codeblock"><pre><code><span class="k">import</span> { BoxGeometry, MeshStandardMaterial, SphereGeometry } <span class="k">from</span> <span class="s">"three"</span>;
+<span class="k">import</span> { fromBufferGeometry, toInstancedMeshes } <span class="k">from</span> <span class="s">"pcg-ts/three"</span>;
+<span class="k">import</span> { Graph, cook, dataInput, makeGeometryItem, surfaceSample, spawnInstances } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="c">// three -> pcg: a triangle mesh becomes sampleable geometry.</span>
+<span class="k">const</span> surface = <span class="n">fromBufferGeometry</span>(<span class="k">new</span> <span class="n">BoxGeometry</span>(<span class="n">10</span>, <span class="n">1</span>, <span class="n">10</span>));
+
+<span class="k">const</span> graph = <span class="k">new</span> <span class="n">Graph</span>(<span class="n">7</span>);
+<span class="k">const</span> input = graph.<span class="n">add</span>(dataInput, { items: [<span class="n">makeGeometryItem</span>(surface)] });
+<span class="k">const</span> sample = graph.<span class="n">add</span>(surfaceSample, { count: <span class="n">2000</span> });
+<span class="k">const</span> spawn = graph.<span class="n">add</span>(spawnInstances, { assetId: <span class="s">"rock"</span> });
+graph.<span class="n">connect</span>(input, <span class="s">"out"</span>, sample, <span class="s">"in"</span>);
+graph.<span class="n">connect</span>(sample, <span class="s">"out"</span>, spawn, <span class="s">"in"</span>);
+graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <span class="s">"instances"</span>);
+
+<span class="c">// pcg -> three: instance batches become InstancedMesh objects.</span>
+<span class="k">const</span> { outputs } = <span class="k">await</span> <span class="n">cook</span>(graph);
+<span class="k">for</span> (<span class="k">const</span> item <span class="k">of</span> outputs.instances) {
+  <span class="k">if</span> (item.kind !== <span class="s">"instances"</span>) <span class="k">continue</span>;
+  <span class="k">const</span> meshes = <span class="n">toInstancedMeshes</span>(item.batches, {
+    rock: { geometry: <span class="k">new</span> <span class="n">SphereGeometry</span>(<span class="n">0.1</span>), material: <span class="k">new</span> <span class="n">MeshStandardMaterial</span>() },
+  });
+  <span class="c">// meshes[i] is a THREE.InstancedMesh — add it to your scene.</span>
+}</code></pre></div>
+
+    <p><code>dataInput</code> is the sanctioned bridge for anything produced outside the graph: it emits exactly the items in its <code>items</code> parameter, unchanged. Bind a <em>fresh</em> array to change what it emits — arrays bound into parameters are captured by reference, and mutating one in place changes stored cell outputs with no staleness signal.</p>
+    <p>For a streaming world, <code>WorldThreeBinding</code> removes the bookkeeping entirely: hand its <code>cellReady</code> and <code>cellEvicted</code> methods to the <code>World</code>'s <code>onCellReady</code> / <code>onCellEvicted</code> callbacks and it maintains one group per live cell, adding and disposing meshes as cells come and go.</p>
+  </section>
+
+  <section id="examples">
+    <p class="eyebrow">Chapter 4</p>
+    <h2>The examples tour</h2>
+    <p class="lead">Eight demos ship in <code>examples/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
+
+    <h3 id="ex-01">01 · Scatter basic — the minimal cook loop</h3>
+    <figure>
+      <img src="manual-assets/01-scatter-basic.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The scatter-basic demo: a control panel on the left shows seed, density frequency and a debug-points toggle above live stats reading 60 fps, 2903 of 6000 instances, 15.9 ms cook, 4 nodes cooked and 0 cached, with the density field's JSON spec printed below. The 3D viewport shows a dark ground plane densely covered with pale blue instanced boxes, clumped and thinned by the noise field." />
+      <figcaption><b>01 · scatter basic</b> — 2903 of 6000 candidates survived the probabilistic density filter, and the exact JSON that produced the density field is printed in the panel.</figcaption>
+    </figure>
+    <p>The smallest complete pipeline: scatter uniformly in a box, write a <code>density</code> attribute from an fBm field built with <code>fieldFromJson</code>, drop points probabilistically against that density, spawn the survivors. It is the demo to read first because nothing is hidden — the field spec on screen is the literal parameter the graph cooks with, and re-entering the same seed reproduces the same scatter exactly.</p>
+    <p class="demo-links">
+      <span class="chip">Graph · cook · fieldFromJson</span>
+      <span class="chip">pointScatterInBounds · setAttribute · filterByDensity · spawnInstances</span>
+      <span class="chip">three: toInstancedMeshes · toPointsObject</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/">run it →</a>
+    </p>
+
+    <h3 id="ex-02">02 · Forest — sampling a surface, filtering by what you measured</h3>
+    <figure>
+      <img src="manual-assets/02-forest.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The forest demo: a control panel reports 60 fps, 5912 planted trees split 4246 pine and 1666 bush, a 22.6 ms cook, and 9 nodes cooked. The viewport shows a wide grey-green heightfield terrain seen from above and to the side, with dense bands of dark green conifers covering the lower slopes and thinning out entirely on the steep faces and the high ridge." />
+      <figcaption><b>02 · forest</b> — 5912 trees placed from 9000 candidates: 4246 pine and 1666 bush, split by a per-point string attribute rather than by two graphs.</figcaption>
+    </figure>
+    <p>An fBm heightfield becomes a three.js <code>BufferGeometry</code>, crosses into the library through <code>fromBufferGeometry</code>, and is area-weighted sampled by <code>surfaceSample</code> — which emits a <code>normal</code> attribute as it goes. Height and slope are then written as attributes and used by <code>filterByAttribute</code> to keep trees off cliffs and above the treeline. The visible result is the point of the design: the filters read measurements the sampler already produced, so "no trees on steep ground" is a comparison, not a special case.</p>
+    <p>Species selection is where multi-asset spawning earns its keep. One string <code>setAttribute</code> picks pine or bush per point from a numeric selector, and <code>spawnInstances</code> splits the output into two batches by that attribute — one graph, one cook, two <code>InstancedMesh</code>es.</p>
+    <p class="demo-links">
+      <span class="chip">surfaceSample · setAttribute · filterByAttribute · spawnInstances</span>
+      <span class="chip">fields: position · component · sub · mul · ge · vec · randomField · fbm</span>
+      <span class="chip">three: fromBufferGeometry · toInstancedMeshes</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/">run it →</a>
+    </p>
+
+    <h3 id="ex-03">03 · Spline fence — orientation from a tangent</h3>
+    <figure>
+      <img src="manual-assets/03-spline-fence.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The spline-fence demo: the panel reports 60 fps, 57 posts, a fence length of 90.6 units and a 1.7 ms cook. The viewport shows a closed, irregular loop of wooden fence posts joined by two horizontal rails, standing on a faint dark blue grid plane. Every post's flat face is turned to follow the curve." />
+      <figcaption><b>03 · spline fence</b> — 57 posts along 90.6 units of curve, each rotated so its local axis follows the tangent the sampler emitted.</figcaption>
+    </figure>
+    <p>A Catmull-Rom curve enters through <code>fromCurve</code>; <code>splineSample</code> walks it by arc length at a chosen spacing and emits <code>tangent</code> and <code>curveU</code> per sample. <code>orientAlongVector</code> then turns that tangent attribute into the standard <code>rot</code> quaternion, with an up hint to fix roll. The whole "posts face along the fence" behaviour is one node reading one attribute — no per-instance matrix maths in application code, and zero directions simply keep their existing rotation instead of producing NaNs.</p>
+    <p class="demo-links">
+      <span class="chip">splineSample · orientAlongVector · spawnInstances · dataInput</span>
+      <span class="chip">three: fromCurve · toInstancedMeshes</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/">run it →</a>
+    </p>
+
+    <h3 id="ex-04">04 · Infinite world — hierarchical streaming</h3>
+    <figure>
+      <img src="manual-assets/04-infinite-world.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The infinite-world demo mid-flight: the panel reports 60 fps, 186 live rock cells, 267 cells cooked against 80 evicted, 0 pending, 20614 instances and a camera position of 0, 164. The viewport looks forward across a dark plain scattered with thousands of small pale rocks receding to the horizon, with several huge dark faceted boulders standing as landmarks near and far." />
+      <figcaption><b>04 · infinite world</b> — 186 live cells and 20,614 instances around a flying camera; 267 cooked and 80 already evicted, with nothing pending.</figcaption>
+    </figure>
+    <p>Two levels: an unbounded level holding the landmark boulders (one global cell, no radius), and a bounded 20-unit level of small rocks that streams around the camera. The counters tell the streaming story directly — cells cooked, cells evicted, and a pending queue that stays at zero because <code>update</code> is called with a millisecond budget every frame.</p>
+    <p>Fly out to the edge of the generation radius and back, or drag the radius slider while moving, and the same rocks return in the same places. That is the order- and path-independence guarantee being exercised rather than asserted: the cell content never depended on the route.</p>
+    <p class="demo-links">
+      <span class="chip">World · LevelDef.bind · unbounded level · budgeted update</span>
+      <span class="chip">pointScatterInBounds · setAttribute · filterByDensity · spawnInstances</span>
+      <span class="chip">three: WorldThreeBinding</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/">run it →</a>
+    </p>
+
+    <h3 id="ex-05">05 · Fields playground — the grammar, live</h3>
+    <figure>
+      <img src="manual-assets/05-fields-playground.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The fields-playground demo: on the left a stats panel reads 60 fps, 36864 elements and 56.1 ms to build and evaluate. In the centre a teal and sand coloured heightfield surface, displaced by four-octave Perlin fBm, floats against a dark background. On the right a control panel offers a noise-type dropdown set to fBm Perlin, frequency and octave sliders, an output range and a seed, above a code box showing the exact FieldSpec JSON: a remap wrapping an fbm over perlinNoise, with the fBm range -1.875 to 1.875 mapped into 0 to 1." />
+      <figcaption><b>05 · fields playground</b> — the panel is a spec editor: whatever JSON it prints is what <code>fieldFromJson</code> is being handed, evaluated over a 192×192 grid.</figcaption>
+    </figure>
+    <p>This demo has no node graph at all. It builds one field from JSON, evaluates it over a grid point cloud, and displaces the surface with the result — which makes it the fastest way to develop an intuition for what each noise family and each parameter actually does. Note the remap bounds in the screenshot: <code>-1.875, 1.875</code> is not a magic number, it is what <code>noiseOutputRange()</code> reports for four-octave Perlin fBm, read from the library rather than guessed.</p>
+    <p class="demo-links">
+      <span class="chip">fieldFromJson · evaluateField · createPointCloud</span>
+      <span class="chip">all five noise families · normalized output</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/">run it →</a>
+    </p>
+
+    <h3 id="ex-06">06 · Graph editor — the registry as a user interface</h3>
+    <figure>
+      <img src="manual-assets/06-graph-editor.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The graph-editor demo: a stats panel top-left reads 60 fps, 2 outputs, 5.4 ms cook, 4 nodes cooked and 4 cached, 350 points and 350 instances, and an output hash of 012ff4b2. Behind it a 3D preview shows conifers scattered on a dark ground plane. The lower half is the editor: a left palette lists node types under category headings SOURCE, SAMPLER and POINT OP; a canvas shows four connected nodes — pointScatterInBounds, jitterPoints, orientAlongVector and spawnInstances — wired left to right; and a right-hand inspector shows the selected jitterPoints node with its registry description and its amount parameter, marked vec3 and field, toggled to field mode with its JSON spec below." />
+      <figcaption><b>06 · graph editor</b> — the palette's categories, the inspector's prose, and the <code>vec3 · field</code> type badge are all read from the registry at runtime. Nothing about the node types is hard-coded in the app.</figcaption>
+    </figure>
+    <p>The editor is the strongest existence proof the library has: it is built entirely on the same public API this manual documents. The palette groups by <code>category</code> from <code>listNodeTypes()</code>; the inspector renders each parameter from its schema, including whether it accepts a field; the description text under the node name is the registry's own prose. Import and export are <code>deserializeGraph</code> and <code>serializeGraph</code> verbatim.</p>
+    <p class="demo-links">
+      <span class="chip">listNodeTypes · getNodeType · describeSubgraphPins · isField</span>
+      <span class="chip">serializeGraph · deserializeGraph · fieldFromJson · fieldToJson</span>
+      <span class="chip">mutation API: add · connect · disconnect · removeNode</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/">run it →</a>
+    </p>
+
+    <h3 id="ex-07">07 · Galaxy — determinism at scale</h3>
+    <figure>
+      <img src="manual-assets/07-galaxy.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The galaxy demo: the panel reports seed 42, a 420-unit generation radius, 60 fps, a galaxy named Artor with 5 arms and radius 952, 31,753 stars across 65 star cells, 67 cooked against 1 evicted, 0 pending, a 2.7 ms last update, and a camera position of -492, 339, 327. The viewport shows tens of thousands of coloured star points spread across a black sky, densest in a glowing pale core just left of centre and thinning outward into scattered arms." />
+      <figcaption><b>07 · galaxy</b> — 31,753 stars live across 65 streamed cells; the last streaming update cost 2.7 ms. Seed 42 always produces this galaxy, named Artor, with five arms.</figcaption>
+    </figure>
+    <p>An unbounded halo and dust level above 100-unit star cells that stream around a free-flying camera. Everything is derived from the seed: the morphology (arm count, twist, bulge, palette), every star position and colour, and — one level further down — every planet of every star you click. The demo is really an argument about scope. A seed is a complete, shareable address for a universe, because nothing in it was ever a function of anything but the seed and the coordinate.</p>
+    <p>It also shows off the field grammar under load, composing <code>atan2</code>, <code>ramp</code>, <code>length</code>, trigonometry and simplex noise into the spiral density that decides where stars exist at all.</p>
+    <p class="demo-links">
+      <span class="chip">World · unbounded + bounded levels · per-cell seeding</span>
+      <span class="chip">fields: atan2 · ramp · length · cos · clamp · gt · component · simplexNoise</span>
+      <span class="chip">Pcg32 · hashCombine · transformPoints</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/">run it →</a>
+    </p>
+
+    <h3 id="ex-08">08 · GPU fields — one chain, cooked three ways</h3>
+    <figure>
+      <img src="manual-assets/08-gpu-fields.jpg" width="1366" height="900" loading="lazy" decoding="async"
+           alt="The gpu-fields demo after cooking all three paths cold at one million points. The right-hand panel shows results: CPU 11940.3 ms with hash 110c44d6; GPU per-node 791.7 ms, ×15.1 versus CPU, hash b0e8a20f; GPU fused 412.6 ms, ×33.0 versus CPU, best 361.8 ms, hash f2baff70 — each cooking 6 nodes with 0 cached. Below, counters read adapter nvidia blackwell, 1,000,000 points, 60 fps, 1 resident run over 5 fused nodes, 4 readbacks saved, 9 member-kernel dispatches, 0 pipelines compiled against 9 cache hits, no gpu fallbacks, and a maximum CPU-to-GPU deviation of 8.05e-7, or 8.4 range-ULP. The left of the screen renders the million-point cloud as a dense blue-green nebula." />
+      <figcaption><b>08 · gpu fields</b> — the same five-node chain over a million points: CPU 11,940 ms, GPU per-node 792 ms, one fused device-resident run 413 ms. Three different hashes, one documented deviation budget.</figcaption>
+    </figure>
+    <p>Five field-driven nodes in a straight line — <code>setAttribute</code> → <code>jitterPoints</code> → <code>transformPoints</code> → <code>setAttribute</code> → <code>setAttribute</code> — over a million points. All five are fusable kinds, so with the full evaluator the chain becomes a single device-resident run: attribute columns stay in storage buffers between member kernels and only the terminal reads back. The counters make that concrete: <code>1</code> resident run over <code>5</code> fused nodes saves <code>4</code> readbacks, and the <code>9</code> reported dispatches are member kernels, not <code>dispatchWorkgroups</code> calls.</p>
+    <p>The three output hashes differ, and the demo says so rather than hiding it. That is the determinism contract working as designed — see <a href="#gpu">chapter 6</a>. The measured deviation on this run, <code>8.05e-7</code> or 8.4 range-ULP, is the honest number the panel prints alongside the timings.</p>
+    <div class="note warn">
+      <span class="tag">If you run this locally</span>
+      <p>The CPU path at one million points blocks the main thread for roughly ten to twelve seconds. Drop the point count to 100k first if you want a responsive page, and read every wall time as a cold-cache cook: a node holds one memo slot, and flipping the cook path always recooks the chain by design.</p>
+    </div>
+    <p class="demo-links">
+      <span class="chip">gpu: GpuFieldEvaluator · CookOptions.gpu · CookStats.gpu</span>
+      <span class="chip">setAttribute · jitterPoints · transformPoints · fieldFromJson</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/">run it →</a>
+    </p>
+  </section>
+
+  <section id="editor">
+    <p class="eyebrow">Chapter 5</p>
+    <h2>Using the graph editor as an authoring tool</h2>
+    <p>Demo 06 is not only a demonstration; it is a usable way to build a graph without writing code, and its output is the same JSON your application loads. The workflow is short.</p>
+    <ol>
+      <li><strong>Pick nodes from the palette.</strong> It is grouped by the registry's own categories — source, sampler, point op, filter, attribute, value, spawn, io, composite — so you can find a node by what it does rather than by remembering its name. The search box filters across all of them.</li>
+      <li><strong>Wire pins left to right.</strong> Inputs are on the left of a node, outputs on the right. The editor refuses invalid connections because it asks the live graph, and the live graph validates eagerly.</li>
+      <li><strong>Edit parameters in the inspector.</strong> Each parameter renders from its schema: enums become dropdowns with exactly the legal values, numeric parameters carry their documented range, and a field-capable parameter shows a <code>constant / field</code> toggle. In field mode you edit the JSON spec directly, which is the same spec the rest of the library speaks.</li>
+      <li><strong>Watch the stats line.</strong> Cook time, nodes cooked versus cached, point and instance counts, and an output hash. The hash is the fastest determinism check you have — same seed, same graph, same hash.</li>
+      <li><strong>Export.</strong> The button produces <code>serializeGraph</code> output. Paste it into <code>deserializeGraph</code> in your application and it cooks identically.</li>
+    </ol>
+    <p>An unconnected output pin is a declared graph output — that is how you say "this is what I want out". Deleting a node cascades: every connection touching it and every output declared on it go with it, in a single version bump. Watch the cooked-versus-cached counters when you do it. Untouched branches keep serving from cache, because the editor edits the live graph through the mutation API rather than rebuilding it from JSON. A rebuild is fully validated but starts cold; mutation is what keeps a large graph pleasant to edit.</p>
+  </section>
+
+  <section id="gpu">
+    <p class="eyebrow">Chapter 6</p>
+    <h2>GPU cooking</h2>
+    <p class="lead">The GPU path is opt-in, additive, and honest about being an approximation. Nothing changes unless you pass a resolver into <code>cook</code>.</p>
+
+    <h3>Turning it on</h3>
+    <div class="codeblock"><pre><code><span class="k">import</span> { cook } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+<span class="k">import</span> { GpuFieldEvaluator } <span class="k">from</span> <span class="s">"pcg-ts/gpu"</span>;
+
+<span class="k">const</span> adapter = <span class="k">await</span> navigator.gpu.<span class="n">requestAdapter</span>();
+<span class="k">if</span> (!adapter) <span class="k">throw</span> <span class="k">new</span> Error(<span class="s">"no WebGPU adapter"</span>);
+<span class="k">const</span> device = <span class="k">await</span> adapter.<span class="n">requestDevice</span>();
+<span class="k">const</span> gpu = <span class="k">new</span> <span class="n">GpuFieldEvaluator</span>(device, { adapterInfo: adapter.info });
+
+<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph, { gpu });
+console.<span class="n">log</span>(result.stats.gpu);
+<span class="c">// { dispatches, pipelinesCompiled, pipelineCacheHits,</span>
+<span class="c">//   residentRuns, fusedNodes, readbacksSaved, fallbacks: {...} }</span></code></pre></div>
+    <p>The core never imports the GPU module — the graph layer sees only a structural resolver interface, injected per cook. The same option exists on <code>WorldOptions.gpu</code> and <code>UpdateOptions.gpu</code> (update wins), threading a resolver into every cell cook.</p>
+
+    <h3>What actually compiles</h3>
+    <p>The GPU surface is exactly the serializable field-expression grammar, and all of it compiles: inputs, arithmetic, trigonometry, <code>clamp</code>/<code>lerp</code>/<code>remap</code>/<code>select</code>/<code>ramp</code>, vector operations, and every noise family including fBm and exact worley. The dividing line is not <em>which functions</em> but <em>how the field was built</em>. A field built by <code>fieldFromJson</code> carries a spec and is eligible; a field composed from the code combinators has no spec and stays on the CPU. <code>getFieldSpec(field)</code> tells you which you have — it returns the spec, or <code>undefined</code>.</p>
+    <p>Six nodes resolve their field parameters on device: <code>setAttribute</code>, <code>transformPoints</code>, <code>jitterPoints</code>, <code>orientAlongVector</code>, <code>surfaceSample</code> and <code>volumeSample</code>. Subgraph nodes forward the resolver to their inner cooks. Element count is never a limit — a kernel covering more elements than one dispatch call allows splits into chunks with byte-identical output.</p>
+    <p>When a field cannot run on device it falls back to the CPU silently but <em>countably</em>. <code>stats.gpu.fallbacks</code> records machine-readable reasons, and the vocabulary is closed: <code>no-spec</code>, <code>compile-error</code>, <code>too-many-buffers</code> per field, and <code>run-plan-failed</code>, <code>run-too-large</code> per fused run. If you expected device execution and did not get it, that record names why.</p>
+
+    <h3>Device-resident runs</h3>
+    <p>Beyond per-node evaluation, the executor finds <em>maximal linear chains</em> of fusable nodes and cooks each as a single device round trip. Four node kinds fuse — <code>setAttribute</code> in numeric point-domain mode, <code>transformPoints</code>, <code>jitterPoints</code> and <code>orientAlongVector</code> — all count-preserving, one geometry in and one out. A run ends at a non-fusable node, at any fan-out, and at a node carrying a declared graph output. A chain of one is not a run.</p>
+    <p>Fusion never changes which bytes the rest of the graph observes: an interior node with external consumers simply becomes a run terminal with its own readback. Only the terminal caches, under a composite key covering every member in order, so editing any member recooks exactly that run and leaves siblings and upstream cached.</p>
+
+    <h3>The determinism contract, in plain language</h3>
+    <p>The CPU is the bit-exact reference and existing goldens never move. The GPU is a documented approximation of it, and the shape of the difference is this:</p>
+    <ul>
+      <li><strong>Integer work is bit-exact.</strong> Hash and random streams, noise lattice hashing, <code>index</code>, integer attribute reads, boolean-to-float reads, and pure hash-compare-select trees all produce byte-identical results on both paths.</li>
+      <li><strong>Float work matches within measured budgets.</strong> The CPU computes in f64 and stores f32; WGSL computes in f32 throughout. Addition, subtraction, multiplication, <code>clamp</code>, <code>min</code>/<code>max</code>, <code>floor</code>, and comparisons are bit-exact anyway. Division, <code>lerp</code>, <code>remap</code> and <code>dot</code> stay within one range-ULP; <code>ramp</code> and vector length within two; sine and cosine within eight; the inverse trigonometric functions are the loosest, as the WGSL specification permits. Noise families sit between six and twenty-four depending on base and mode. The full table lives in <a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a> and <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a>.</li>
+      <li><strong>On one device, repeated runs are byte-identical.</strong> The variability is between the CPU and the GPU, and between different adapters — not between two runs on the same machine.</li>
+      <li><strong>Branchy operations can flip.</strong> Comparisons, <code>select</code>, <code>ramp</code> segment boundaries and worley cell walks may take the other branch at knife-edge inputs whose operands differ within tolerance. A point right on a filter threshold may survive on one path and not the other.</li>
+      <li><strong>Every budget was measured on one adapter.</strong> Another adapter exceeding one is a finding worth reporting, not expected noise.</li>
+    </ul>
+    <p>Because GPU output is not byte-identical to CPU output, cache provenance folds the resolver's <code>cacheSalt</code> — a format version plus the adapter's identity — into the memo key of any node that would resolve a live spec'd field on device. Toggling the GPU on and off therefore never serves bytes produced by the other path. It also means the chain recooks on every flip, because a node holds one memo slot. That is by design, and it is why every benchmark in demo 08 is a cold-cache cook.</p>
+
+    <h3>When it helps, and when it does not</h3>
+    <p>The GPU path pays off when the same field expression is evaluated over a very large domain — hundreds of thousands of elements and up — and pays off most when several such nodes sit in a fusable line, because then the readbacks disappear too. Demo 08's chain at a million points ran roughly fifteen times faster per-node and roughly thirty-three times faster fused, on one desktop adapter.</p>
+    <p>It does not help, and can cost, when the domain is small enough that dispatch and readback dominate; when the fields were composed in code and carry no spec, so every one of them falls back; when the graph's cost is in topology rather than fields, since only field evaluation moves to the device; or when you are toggling the path back and forth, which recooks the chain each time. Bit-exactness with existing goldens is a reason to stay on the CPU, and staying on the CPU is always a supported choice — it is the reference.</p>
+    <div class="note">
+      <span class="tag">Scope</span>
+      <p>What is on device today is field evaluation, plus fused runs of the four count-preserving node kinds above. Instance transforms are read back before they reach a renderer, and multi-asset spawning is not a device-side operation. Anything beyond that is unshipped.</p>
+    </div>
+  </section>
+
+  <section id="debugging">
+    <p class="eyebrow">Chapter 7</p>
+    <h2>Debugging a graph</h2>
+
+    <h3>Cook stats are the first thing to read</h3>
+    <p>Every cook returns <code>stats: { cooked, cached, elapsedMs }</code>, and the ratio answers most "why is this slow" questions immediately. A graph that recooks everything on every frame has a cache-invalidation problem, not a performance problem. Common causes, in rough order of frequency: a parameter is being set to a freshly constructed array or field every frame, so its structural hash changes; a <code>dataInput</code> node is being rebound with a new items array when the data has not changed; or a field is being rebuilt from JSON per frame instead of once.</p>
+    <p>The inverse reading is just as useful. After an edit, <code>cooked</code> should be exactly the edited node plus its dependents. If it is more, something upstream is changing that you did not intend to change.</p>
+
+    <h3>Cache hits after an edit — a real trace</h3>
+    <div class="code-label">Four-node graph: scatter → density → keep → spawn</div>
+    <div class="codeblock"><pre><code><span class="k">await</span> <span class="n">cook</span>(graph);                          <span class="c">// { cooked: 4, cached: 0 }  — 1008 survivors</span>
+graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <span class="n">fieldFromJson</span>(newSpec));
+<span class="k">await</span> <span class="n">cook</span>(graph);                          <span class="c">// { cooked: 3, cached: 1 }  —  967 survivors</span></code></pre></div>
+    <p>One node cached: the scatter, which is upstream of the edit. Three cooked: the edited node and the two that depend on it. That is exactly the contract, and seeing it hold is how you confirm a graph is wired the way you think it is.</p>
+
+    <h3>Determinism is a debugging tool, not only a feature</h3>
+    <p>Because the same seed produces the same bytes, a hash of an output column is a stable fingerprint. Demo 06 prints one in its status line for precisely this reason. Hash your output, change nothing, cook again, and compare: if the hash moved, something in your pipeline is reading state you did not declare — wall-clock time, an unhashed external array, <code>Math.random</code> somewhere in your own code. If the hash is stable but the picture is wrong, the bug is in the graph, and you can bisect it by declaring an output on an intermediate node and cooking only that one.</p>
+    <p>The same property makes bug reports reproducible in a way that is otherwise rare in procedural work: a seed and a serialized graph fully determine the output.</p>
+
+    <h3>What the error messages already tell you</h3>
+    <p>Error strings in this library are treated as part of the API surface: they name the offending node, pin or parameter, and they list the valid alternatives instead of leaving you to search for them. Reading the message is usually faster than reading the code. Chapter 11 shows the real strings and how a program should react to them; for a human the practical advice is shorter — the message names the thing, and the second half of the message is the fix.</p>
+    <p>The typed classes let you distinguish causes when you need to: <code>GraphValidationError</code> (bad structure or unknown pins), <code>GraphCycleError</code>, <code>NodeExecutionError</code> (carries <code>.nodeId</code>), <code>CookCancelledError</code>, <code>GraphSerializationError</code>, <code>FieldJsonError</code>, and <code>WorldValidationError</code>.</p>
+
+    <h3>Four contracts whose violations are invisible</h3>
+    <p>Most confusing behaviour in practice comes from one of four mutation contracts, each of which fails quietly rather than loudly:</p>
+    <ul>
+      <li><strong>Cook results are immutable.</strong> They alias live cache internals. Mutating one corrupts the cache with no error — clone first with <code>cloneGeometry</code>.</li>
+      <li><strong>Bound arrays are frozen by convention.</strong> An array bound into a parameter is captured by reference. Mutate it in place and stored cell outputs change with no staleness signal. Bind a fresh array.</li>
+      <li><strong>Columns are transient.</strong> An evaluated column may alias attribute storage and is only valid until the geometry is mutated or resized.</li>
+      <li><strong>Do not edit a graph mid-cook.</strong> Edits during an in-flight <code>cook</code> or <code>World.update</code> are detected and heal on the next pass — but that pass may return a torn mix of old and new state.</li>
+    </ul>
+  </section>
+
+  <div class="part-banner" id="part-2">
+    <p class="num">Part II</p>
+    <h2>Driving the library as an agent</h2>
+    <p>For an LLM or a program: everything needed to author, cook, inspect and edit a graph without reading the source.</p>
+  </div>
+
+  <section id="discovery" class="first-of-part">
+    <p class="eyebrow">Chapter 8</p>
+    <h2>Runtime capability discovery</h2>
+    <p class="lead">The registry is the truth. Node types are not a list in the documentation that the code happens to match — the documentation is generated from the registry, so anything you can read in <code>docs/nodes.md</code> you can also ask for at runtime.</p>
+
+    <h3>listNodeTypes()</h3>
+    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 25 types in the standard library, all categorized.</p>
+
+    <div class="codeblock"><pre><code><span class="k">import</span> { listNodeTypes } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> types = <span class="n">listNodeTypes</span>();
+types.length;                                <span class="c">// 25</span>
+<span class="k">const</span> jitter = types.<span class="n">find</span>(t => t.type === <span class="s">"jitterPoints"</span>);</code></pre></div>
+
+    <p class="code-label">The entry, verbatim</p>
+    <div class="codeblock"><pre><code>{
+  <span class="s">"type"</span>: <span class="s">"jitterPoints"</span>,
+  <span class="s">"description"</span>: <span class="s">"Offsets each point by a deterministic random vector: each axis</span>
+<span class="s">    moves by a uniform random in [-amount, +amount], hashed from (seed, point</span>
+<span class="s">    index, axis) — order-independent and reproducible. amount is field-capable</span>
+<span class="s">    (evaluated on the input positions; tuple 1 broadcasts to all axes)."</span>,
+  <span class="s">"category"</span>: <span class="s">"point op"</span>,
+  <span class="s">"inputs"</span>:  [ { <span class="s">"name"</span>: <span class="s">"in"</span>,  <span class="s">"kind"</span>: <span class="s">"geometry"</span>, <span class="s">"multi"</span>: <span class="k">false</span> } ],
+  <span class="s">"outputs"</span>: [ { <span class="s">"name"</span>: <span class="s">"out"</span>, <span class="s">"kind"</span>: <span class="s">"geometry"</span>, <span class="s">"multi"</span>: <span class="k">false</span> } ],
+  <span class="s">"params"</span>: {
+    <span class="s">"amount"</span>: {
+      <span class="s">"type"</span>: <span class="s">"vec3"</span>,
+      <span class="s">"default"</span>: [<span class="n">0.1</span>, <span class="n">0.1</span>, <span class="n">0.1</span>],
+      <span class="s">"description"</span>: <span class="s">"Maximum offset per axis, in world units. Field-capable (tuple 1 broadcasts)."</span>,
+      <span class="s">"acceptsField"</span>: <span class="k">true</span>
+    },
+    <span class="s">"seed"</span>: {
+      <span class="s">"type"</span>: <span class="s">"u32"</span>,
+      <span class="s">"default"</span>: <span class="n">0</span>,
+      <span class="s">"description"</span>: <span class="s">"Extra seed folded into the node seed; change it to re-roll the jitter."</span>
+    }
+  }
+}</code></pre></div>
+
+    <p>That is everything needed to emit a valid node: the type name, which pins exist and what kind they are, which parameters are legal, their defaults, and — critically — <code>acceptsField</code>, which tells you whether a field spec object is allowed in that slot. Parameter schemas additionally carry <code>min</code> / <code>max</code> for numeric ranges and <code>enum</code> for enumerated values, which is how the editor knows to render a dropdown containing exactly the legal strings.</p>
+
+    <h3>Categories</h3>
+    <p>Every standard type declares a <code>category</code>, so a palette or a generated document groups without heuristics. The complete grouping:</p>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Category</th><th>Types</th></tr></thead>
+      <tbody>
+        <tr><td><code>source</code></td><td><code>pointGrid</code>, <code>pointLine</code>, <code>pointScatterInBounds</code></td></tr>
+        <tr><td><code>sampler</code></td><td><code>surfaceSample</code>, <code>splineSample</code>, <code>volumeSample</code></td></tr>
+        <tr><td><code>point op</code></td><td><code>transformPoints</code>, <code>jitterPoints</code>, <code>copyToPoints</code>, <code>mergePoints</code>, <code>orientAlongVector</code>, <code>setBounds</code></td></tr>
+        <tr><td><code>filter</code></td><td><code>filterByDensity</code>, <code>filterByBounds</code>, <code>filterByAttribute</code>, <code>selfPrune</code>, <code>projectToPlane</code></td></tr>
+        <tr><td><code>attribute</code></td><td><code>setAttribute</code>, <code>promoteAttribute</code>, <code>transferAttribute</code>, <code>partitionByAttribute</code></td></tr>
+        <tr><td><code>value</code></td><td><code>valueConstant</code></td></tr>
+        <tr><td><code>spawn</code></td><td><code>spawnInstances</code></td></tr>
+        <tr><td><code>io</code></td><td><code>dataInput</code></td></tr>
+        <tr><td><code>composite</code></td><td><code>subgraph</code></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <h3>Building a graph in code from a type name</h3>
+    <p>Two companions make the registry usable as a factory, not only as a catalog. <code>hasNodeType(name)</code> is a boolean existence check. <code>getNodeType(name)</code> returns <code>{ def, info }</code> — <code>info</code> is the same metadata entry <code>listNodeTypes()</code> yields, and <code>def</code> is the node definition you can hand straight to <code>graph.add</code>. It <em>throws</em> on an unknown name (listing every registered type) rather than returning <code>undefined</code>, so check first if the name came from somewhere untrusted.</p>
+    <div class="codeblock"><pre><code><span class="k">import</span> { Graph, cook, getNodeType, hasNodeType, firstGeometry } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">if</span> (!<span class="n">hasNodeType</span>(<span class="s">"pointGrid"</span>)) <span class="k">throw</span> <span class="k">new</span> Error(<span class="s">"not registered"</span>);
+<span class="k">const</span> { def, info } = <span class="n">getNodeType</span>(<span class="s">"pointGrid"</span>);
+info.type;                                <span class="c">// "pointGrid"</span>
+
+<span class="k">const</span> g = <span class="k">new</span> <span class="n">Graph</span>(<span class="n">5</span>);
+<span class="k">const</span> n = g.<span class="n">add</span>(def, { countX: <span class="n">3</span>, countZ: <span class="n">3</span> });   <span class="c">// n.id === "pointGrid_0"</span>
+g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s">"p"</span>);
+<span class="n">firstGeometry</span>((<span class="k">await</span> <span class="n">cook</span>(g)).outputs.p).pointCount;   <span class="c">// 9</span></code></pre></div>
+    <p>Note the generated id: a code-built node is named <code>&lt;type&gt;_&lt;n&gt;</code>, whereas a node loaded from JSON keeps the id you gave it. Both appear verbatim in error messages and in <code>describe()</code>, so meaningful ids in your documents pay for themselves the first time something fails.</p>
+
+    <h3>listFieldFns()</h3>
+    <p>Returns the complete field-expression vocabulary as a sorted array of 40 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
+    <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>,
+ <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"ge"</span>, <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>,
+ <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>, <span class="s">"mul"</span>, <span class="s">"normalize"</span>, <span class="s">"perlinNoise"</span>, <span class="s">"position"</span>,
+ <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>,
+ <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
+
+    <h3>docs/nodes.json as an offline catalog</h3>
+    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 25 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
+    <div class="note">
+      <span class="tag">Discovery checklist</span>
+      <p>Before emitting a graph: confirm the type exists (<code>hasNodeType</code>), confirm each parameter name is in <code>params</code>, confirm enum values against <code>enum</code> and numbers against <code>min</code>/<code>max</code>, confirm a field spec is only used where <code>acceptsField</code> is true, and confirm pin names against <code>inputs</code>/<code>outputs</code>. Every one of those checks the deserializer will also make — but making them first turns a thrown error into a corrected emission.</p>
+    </div>
+  </section>
+
+  <section id="json">
+    <p class="eyebrow">Chapter 9</p>
+    <h2>Authoring graphs as JSON, end to end</h2>
+
+    <h3>The format</h3>
+    <p><code>SerializedGraph</code>, format version 1. Field names exactly as written:</p>
+    <dl class="defs">
+      <dt>formatVersion</dt><dd>Always <code>1</code>.</dd>
+      <dt>seed</dt><dd>Number. The graph seed; every node seed derives from it.</dd>
+      <dt>nodes</dt><dd>Array of <code>{ id, type, params }</code>. <code>id</code> is yours to choose and is what every error message and every introspection read will call the node. Omitted parameters take their schema defaults. A <code>subgraph</code> node additionally carries <code>subgraph: { graph, inputs, outputs }</code> — the inner graph recursively in this same format, plus the exposed pin mappings.</dd>
+      <dt>connections</dt><dd>Array of <code>{ from: [nodeId, outputPin], to: [nodeId, inputPin] }</code>. Order matters on <code>multi</code> inputs: it is part of determinism.</dd>
+      <dt>outputs</dt><dd>Array of <code>{ id, pin, name }</code>. <code>name</code> becomes the key in <code>result.outputs</code>.</dd>
+    </dl>
+
+    <h3>A complete working example</h3>
+    <p>This document deserializes, cooks, and round-trips as written. It scatters two thousand points over a hundred-unit square, writes a normalized four-octave fBm into the <code>density</code> attribute, keeps points probabilistically against that density, and spawns the survivors.</p>
+
+    <div class="codeblock"><pre><code>{
+  <span class="s">"formatVersion"</span>: <span class="n">1</span>,
+  <span class="s">"seed"</span>: <span class="n">7</span>,
+  <span class="s">"nodes"</span>: [
+    { <span class="s">"id"</span>: <span class="s">"scatter"</span>, <span class="s">"type"</span>: <span class="s">"pointScatterInBounds"</span>,
+      <span class="s">"params"</span>: { <span class="s">"count"</span>: <span class="n">2000</span>, <span class="s">"boundsMin"</span>: [<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>], <span class="s">"boundsMax"</span>: [<span class="n">100</span>, <span class="n">0</span>, <span class="n">100</span>] } },
+
+    { <span class="s">"id"</span>: <span class="s">"density"</span>, <span class="s">"type"</span>: <span class="s">"setAttribute"</span>,
+      <span class="s">"params"</span>: {
+        <span class="s">"name"</span>: <span class="s">"density"</span>, <span class="s">"domain"</span>: <span class="s">"point"</span>, <span class="s">"type"</span>: <span class="s">"f32"</span>, <span class="s">"tupleSize"</span>: <span class="n">1</span>,
+        <span class="s">"value"</span>: { <span class="s">"fn"</span>: <span class="s">"fbm"</span>, <span class="s">"base"</span>: <span class="s">"perlinNoise"</span>,
+                   <span class="s">"opts"</span>: { <span class="s">"frequency"</span>: <span class="n">0.03</span>, <span class="s">"octaves"</span>: <span class="n">4</span>, <span class="s">"normalized"</span>: <span class="k">true</span> } }
+      } },
+
+    { <span class="s">"id"</span>: <span class="s">"keep"</span>, <span class="s">"type"</span>: <span class="s">"filterByDensity"</span>, <span class="s">"params"</span>: { <span class="s">"mode"</span>: <span class="s">"probabilistic"</span> } },
+
+    { <span class="s">"id"</span>: <span class="s">"spawn"</span>, <span class="s">"type"</span>: <span class="s">"spawnInstances"</span>, <span class="s">"params"</span>: { <span class="s">"assetId"</span>: <span class="s">"rock"</span> } }
+  ],
+  <span class="s">"connections"</span>: [
+    { <span class="s">"from"</span>: [<span class="s">"scatter"</span>, <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"density"</span>, <span class="s">"in"</span>] },
+    { <span class="s">"from"</span>: [<span class="s">"density"</span>, <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"keep"</span>,    <span class="s">"in"</span>] },
+    { <span class="s">"from"</span>: [<span class="s">"keep"</span>,    <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"spawn"</span>,   <span class="s">"in"</span>] }
+  ],
+  <span class="s">"outputs"</span>: [
+    { <span class="s">"id"</span>: <span class="s">"keep"</span>,  <span class="s">"pin"</span>: <span class="s">"out"</span>,       <span class="s">"name"</span>: <span class="s">"points"</span> },
+    { <span class="s">"id"</span>: <span class="s">"spawn"</span>, <span class="s">"pin"</span>: <span class="s">"instances"</span>, <span class="s">"name"</span>: <span class="s">"instances"</span> }
+  ]
+}</code></pre></div>
+
+    <div class="code-label">Loading and cooking it</div>
+    <div class="codeblock"><pre><code><span class="k">import</span> { deserializeGraph, serializeGraph, cook, firstGeometry } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> graph = <span class="n">deserializeGraph</span>(doc);   <span class="c">// validates everything, names any fault</span>
+<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
+
+<span class="n">firstGeometry</span>(result.outputs.points).pointCount;   <span class="c">// 1008</span>
+result.stats;                                      <span class="c">// { cooked: 4, cached: 0, elapsedMs: 13.6 }</span>
+
+<span class="k">const</span> batch = result.outputs.instances
+  .<span class="n">find</span>(i => i.kind === <span class="s">"instances"</span>).batches[<span class="n">0</span>];
+batch.assetId;               <span class="c">// "rock"</span>
+batch.count;                 <span class="c">// 1008</span>
+batch.transforms.length;     <span class="c">// 16128  (16 floats per instance, column-major)</span></code></pre></div>
+
+    <h3>What round-tripping actually guarantees</h3>
+    <p>This is the one place where an imprecise mental model causes real trouble, so be precise. <code>serializeGraph(deserializeGraph(doc))</code> is <strong>not</strong> byte-identical to <code>doc</code>. Deserialization applies schema defaults, and serialization emits the full parameter set — so a node you wrote as <code>{ "count": 500 }</code> comes back as <code>{ "count": 500, "boundsMin": [0,0,0], "boundsMax": [1,1,1], "seed": 0 }</code>.</p>
+    <p>What <em>is</em> guaranteed is the pair of properties you actually need:</p>
+    <ul>
+      <li><strong>Semantic fidelity.</strong> The round-tripped graph cooks byte-identically to the original.</li>
+      <li><strong>Idempotence after normalisation.</strong> Serialize once and you have the canonical form; serializing again produces exactly the same JSON. <code>JSON.stringify(s1) === JSON.stringify(s2)</code> where <code>s2 = serializeGraph(deserializeGraph(s1))</code> — verified.</li>
+    </ul>
+    <p>So the correct diffing strategy for an agent is: normalise both sides through one serialize before comparing. Comparing your hand-written emission against a serialize output will report differences that are not differences.</p>
+
+    <h3>Two nodes that serialize specially</h3>
+    <p><code>subgraph</code> nodes carry their inner graph as a nested payload in the same format, recursively, so composition survives a round trip with no external registry. <code>dataInput</code> nodes serialize with an empty <code>items</code> list — live data items are runtime-injected by definition, so after deserializing you must re-bind them:</p>
+    <div class="codeblock"><pre><code><span class="c">// A graph containing a dataInput serializes as:</span>
+{<span class="s">"formatVersion"</span>:<span class="n">1</span>,<span class="s">"seed"</span>:<span class="n">1</span>,<span class="s">"nodes"</span>:[{<span class="s">"id"</span>:<span class="s">"dataInput_0"</span>,<span class="s">"type"</span>:<span class="s">"dataInput"</span>,<span class="s">"params"</span>:{<span class="s">"items"</span>:[]}}],
+ <span class="s">"connections"</span>:[],<span class="s">"outputs"</span>:[{<span class="s">"id"</span>:<span class="s">"dataInput_0"</span>,<span class="s">"pin"</span>:<span class="s">"out"</span>,<span class="s">"name"</span>:<span class="s">"geo"</span>}]}
+
+<span class="c">// After deserializing, bind a FRESH array — never mutate one in place:</span>
+graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span>, [<span class="n">makeGeometryItem</span>(surface)]);</code></pre></div>
+  </section>
+
+  <section id="grammar">
+    <p class="eyebrow">Chapter 10</p>
+    <h2>The field grammar as a generation target</h2>
+    <p class="lead">A field spec is <code>{ "fn": &lt;name&gt;, ...args }</code>. Entries inside <code>args</code> may be nested specs, finite numbers, or number arrays — plain values wrap into <code>constant</code> automatically, so you never emit a <code>constant</code> node by hand unless you want to.</p>
+
+    <h3>The complete vocabulary</h3>
+    <h4>Inputs</h4>
+    <div class="codeblock"><pre><code>{ <span class="s">"fn"</span>: <span class="s">"constant"</span>,    <span class="s">"value"</span>: <span class="n">1</span> }              <span class="c">// or [1, 2, 3]</span>
+{ <span class="s">"fn"</span>: <span class="s">"attribute"</span>,   <span class="s">"name"</span>: <span class="s">"density"</span>, <span class="s">"tupleSize"</span>: <span class="n">1</span> }   <span class="c">// numeric attributes only</span>
+{ <span class="s">"fn"</span>: <span class="s">"position"</span> }                              <span class="c">// reads P, tuple 3</span>
+{ <span class="s">"fn"</span>: <span class="s">"index"</span> }                                 <span class="c">// 0, 1, 2, ...</span>
+{ <span class="s">"fn"</span>: <span class="s">"randomField"</span>, <span class="s">"key"</span>: <span class="s">"species"</span> }            <span class="c">// per-element hash random in [0,1)</span></code></pre></div>
+
+    <h4>Elementwise combinators — exact arity, scalars broadcast</h4>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Args</th><th>Functions</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>2</td><td><code>add sub mul div min max lt le gt ge eq dot atan2</code></td><td>Comparisons emit 1 or 0. <code>dot</code> reduces tuples to a scalar. <code>atan2</code> takes <code>[y, x]</code>, radians.</td></tr>
+        <tr><td>1</td><td><code>abs floor length normalize sin cos tan asin acos atan</code></td><td>Trigonometry in radians, elementwise.</td></tr>
+        <tr><td>3</td><td><code>clamp</code> (x, lo, hi) · <code>lerp</code> (a, b, t) · <code>select</code> (cond, a, b)</td><td></td></tr>
+        <tr><td>5</td><td><code>remap</code> (x, inMin, inMax, outMin, outMax)</td><td>Unclamped — wrap in <code>clamp</code> if you need the bound.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h4>Structure</h4>
+    <div class="codeblock"><pre><code>{ <span class="s">"fn"</span>: <span class="s">"vec"</span>,       <span class="s">"args"</span>: [x, y, z] }               <span class="c">// 1+ args, concatenates components</span>
+{ <span class="s">"fn"</span>: <span class="s">"component"</span>, <span class="s">"args"</span>: [tupleField], <span class="s">"index"</span>: <span class="n">0</span> }  <span class="c">// extract one component</span>
+{ <span class="s">"fn"</span>: <span class="s">"ramp"</span>,      <span class="s">"args"</span>: [scalarField],
+                     <span class="s">"stops"</span>: [[<span class="n">0</span>, <span class="n">0</span>], [<span class="n">0.5</span>, <span class="n">1</span>], [<span class="n">1</span>, <span class="n">0</span>]] }   <span class="c">// strictly ascending, clamped at the ends</span></code></pre></div>
+
+    <h4>Noise</h4>
+    <p>All noise functions are scalar fields of the sample position, and are pure functions of seed plus position — the evaluation context's seed does not affect them.</p>
+    <div class="codeblock"><pre><code>{ <span class="s">"fn"</span>: <span class="s">"valueNoise"</span> | <span class="s">"perlinNoise"</span> | <span class="s">"simplexNoise"</span>,
+  <span class="s">"opts"</span>: { <span class="s">"seed"</span>: <span class="n">0</span>, <span class="s">"frequency"</span>: <span class="n">1</span>, <span class="s">"offset"</span>: [<span class="n">0</span>,<span class="n">0</span>,<span class="n">0</span>], <span class="s">"position"</span>: spec, <span class="s">"normalized"</span>: <span class="k">false</span> } }
+
+{ <span class="s">"fn"</span>: <span class="s">"worleyNoise"</span>,
+  <span class="s">"opts"</span>: { ...same, <span class="s">"output"</span>: <span class="s">"f1"</span> | <span class="s">"f2"</span> | <span class="s">"f2-f1"</span>, <span class="s">"exact"</span>: <span class="k">false</span> } }
+
+{ <span class="s">"fn"</span>: <span class="s">"fbm"</span>, <span class="s">"base"</span>: <span class="s">"perlinNoise"</span> | <span class="s">"valueNoise"</span> | <span class="s">"simplexNoise"</span> | <span class="s">"worleyNoise"</span>,
+  <span class="s">"opts"</span>: { ...same, <span class="s">"octaves"</span>: <span class="n">4</span>, <span class="s">"lacunarity"</span>: <span class="n">2</span>, <span class="s">"gain"</span>: <span class="n">0.5</span> } }</code></pre></div>
+    <p>Raw output ranges: <code>valueNoise</code> is [0, 1); Perlin and simplex are approximately [-1, 1]; worley <code>f1</code> is [0, ~1.73). The fBm sum is <em>not</em> renormalised, so its range grows with octaves. Rather than hardcoding constants, ask: <code>NOISE_RAW_RANGES</code> gives per-type ranges and <code>noiseOutputRange(field)</code> gives the range of a specific field instance, fBm-aware. Or sidestep the arithmetic entirely with <code>"normalized": true</code>, which affinely remaps the documented raw range to exactly [0, 1] and works on fBm too.</p>
+
+    <h4>A nested example</h4>
+    <div class="codeblock"><pre><code>{ <span class="s">"fn"</span>: <span class="s">"clamp"</span>, <span class="s">"args"</span>: [
+    { <span class="s">"fn"</span>: <span class="s">"remap"</span>, <span class="s">"args"</span>: [
+        { <span class="s">"fn"</span>: <span class="s">"fbm"</span>, <span class="s">"base"</span>: <span class="s">"perlinNoise"</span>, <span class="s">"opts"</span>: { <span class="s">"frequency"</span>: <span class="n">0.03</span>, <span class="s">"octaves"</span>: <span class="n">4</span> } },
+        -<span class="n">1</span>, <span class="n">1</span>, <span class="n">0</span>, <span class="n">1</span> ] },
+    <span class="n">0</span>, <span class="n">1</span> ] }</code></pre></div>
+
+    <h3>What an agent can emit — and what it cannot</h3>
+    <p>This is the boundary that matters most, because it is asymmetric and easy to get wrong in the safe-looking direction.</p>
+    <p><strong>You can emit any field the grammar describes.</strong> Those 40 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
+    <p><strong>You cannot emit a code-authored field, and you cannot serialize one.</strong> A field composed with the code combinators — <code>clamp(add(0.2, mul(worleyNoise(...), 0.9)), 0, 1)</code> — cooks perfectly well but has no spec. <code>getFieldSpec</code> returns <code>undefined</code> for it, and <code>serializeGraph</code> on a graph containing one cannot represent that parameter. There is no specification for arbitrary code-authored fields, and there will not be one, because there is nothing finite to specify.</p>
+    <p>Two consequences follow directly, and both are practical rather than theoretical:</p>
+    <ul>
+      <li><strong>Serializability is a property of construction, not of content.</strong> The identical expression is serializable when built from JSON and not when built in code. If you are generating graphs that must round-trip, build every field through <code>fieldFromJson</code> — including ones you could write more tersely in code.</li>
+      <li><strong>GPU eligibility follows the same line.</strong> A field is GPU-eligible if and only if it carries a spec. Code-authored fields fall back to the CPU and are counted under the <code>no-spec</code> reason. So the same discipline that keeps graphs serializable also keeps them device-eligible.</li>
+    </ul>
+
+    <div class="note warn">
+      <span class="tag">Setting a field parameter on a live graph</span>
+      <p><code>setParam</code> does not convert JSON for you. Passing a raw spec object stores the object, and the cook fails at that node with <code>value is not iterable</code>. Wrap it: <code>graph.setParam(handle, "value", fieldFromJson(spec))</code>. The value in the <em>serialized</em> document is a spec object; the value on a <em>live</em> graph is a <code>Field</code>.</p>
+    </div>
+  </section>
+
+  <section id="errors">
+    <p class="eyebrow">Chapter 11</p>
+    <h2>Errors as an API</h2>
+    <p class="lead">Validation messages name the offending node, pin or parameter and list the valid alternatives. That is a deliberate design commitment, not a courtesy — it means a failed emission carries the information needed to fix itself, and a correction loop does not need to consult external documentation.</p>
+
+    <p>Every string below is real output, produced by feeding the named mistake to the published build.</p>
+
+    <div class="code-label">Unknown node type — the message enumerates the entire registry</div>
+    <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown node type <span class="s">"pointScatterInBox"</span>;
+registered types: copyToPoints, dataInput, filterByAttribute, filterByBounds,
+filterByDensity, jitterPoints, mergePoints, orientAlongVector,
+partitionByAttribute, pointGrid, pointLine, pointScatterInBounds,
+projectToPlane, promoteAttribute, selfPrune, setAttribute, setBounds,
+spawnInstances, splineSample, subgraph, surfaceSample, transferAttribute,
+transformPoints, valueConstant, volumeSample</code></pre></div>
+
+    <div class="code-label">Unknown parameter — the message enumerates that type's parameters</div>
+    <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown param <span class="s">"counts"</span> for type
+<span class="s">"pointScatterInBounds"</span>; valid params: count, boundsMin, boundsMax, seed</code></pre></div>
+
+    <div class="code-label">Range and enum violations — the bound and the legal set are both stated</div>
+    <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span> param <span class="s">"count"</span>: -5 is below the minimum 0
+
+GraphSerializationError: node <span class="s">"a"</span> param <span class="s">"mode"</span>: expected one of
+<span class="s">"threshold"</span>, <span class="s">"probabilistic"</span>, got <span class="s">"probablistic"</span></code></pre></div>
+
+    <div class="code-label">Wiring — the connection index, the node, and the valid pins</div>
+    <div class="codeblock"><pre><code>GraphSerializationError: connections[0]: node <span class="s">"a"</span> has no output pin
+<span class="s">"output"</span>; valid output pins: out
+
+GraphCycleError: connecting jitterPoints_1.out to jitterPoints_0.in
+would create a cycle
+
+GraphValidationError: node <span class="s">"jitterPoints_0"</span> has no input pin <span class="s">"input"</span>;
+input pins: <span class="s">"in"</span>
+
+GraphValidationError: unknown output <span class="s">"pts"</span>; declared outputs: <span class="s">"points"</span></code></pre></div>
+
+    <div class="code-label">Field grammar — the fn list and the exact arity</div>
+    <div class="codeblock"><pre><code>FieldJsonError: $: unknown field fn <span class="s">"perlin"</span>; valid fns: abs, acos, add, asin,
+atan, atan2, attribute, clamp, component, constant, cos, div, dot, eq, fbm,
+floor, ge, gt, index, le, length, lerp, lt, max, min, mul, normalize,
+perlinNoise, position, ramp, randomField, remap, select, simplexNoise, sin,
+sub, tan, valueNoise, vec, worleyNoise
+
+FieldJsonError: $: fn <span class="s">"clamp"</span> expects exactly 3 args, got 2</code></pre></div>
+    <p>The <code>$</code> prefix is a path into the spec: nested failures report the position of the offending sub-expression rather than only the root.</p>
+
+    <div class="code-label">Execution — the node id is both in the message and on the error object</div>
+    <div class="codeblock"><pre><code>NodeExecutionError: node <span class="s">"spawnInstances_0"</span> failed: spawnInstances:
+input pin <span class="s">"in"</span> has no geometry connected
+  err.nodeId === <span class="s">"spawnInstances_0"</span></code></pre></div>
+
+    <div class="code-label">World construction — validated before a single cell cooks</div>
+    <div class="codeblock"><pre><code>WorldValidationError: level 0 (<span class="s">"a"</span>): a bounded level requires generationRadius
+(a positive finite number); only an unbounded level may omit it
+
+WorldValidationError: level 0 (<span class="s">"a"</span>): cookOutputs names unknown output
+<span class="s">"nope"</span>; the level graph declares: <span class="s">"x"</span></code></pre></div>
+
+    <h3>How a program should react</h3>
+    <p>These messages are structured enough to act on without natural-language parsing, and the right reaction differs by class:</p>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Error class</th><th>Means</th><th>Correct reaction</th></tr></thead>
+      <tbody>
+        <tr><td><code>GraphSerializationError</code></td><td>The document is invalid. Nothing was built.</td><td>Repair the document. The message's second clause is the candidate set — pick from it, do not guess.</td></tr>
+        <tr><td><code>GraphValidationError</code></td><td>An operation on a live graph referenced something that is not there.</td><td>Re-read <code>describe()</code>; your model of the graph has drifted from the graph.</td></tr>
+        <tr><td><code>GraphCycleError</code></td><td>The connection would close a loop.</td><td>Do not retry. Change the topology.</td></tr>
+        <tr><td><code>FieldJsonError</code></td><td>The field spec is malformed at the reported path.</td><td>Fix that sub-expression. Arity and fn-name errors are both fully determined by the message.</td></tr>
+        <tr><td><code>NodeExecutionError</code></td><td>The graph was structurally valid but a node failed at runtime.</td><td>Read <code>.nodeId</code>, inspect that node's parameters and inputs. Usually a missing connection or a parameter combination the schema permits but the node rejects.</td></tr>
+        <tr><td><code>CookCancelledError</code></td><td>Your abort signal fired.</td><td>Not a failure. Completed nodes kept their caches; cook again to resume.</td></tr>
+        <tr><td><code>WorldValidationError</code></td><td>A level definition is inconsistent.</td><td>Fix the level, at construction time — this one is raised before any cell cooks.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>The general rule for a correction loop: <strong>never retry an identical emission.</strong> Every error above is deterministic and total — the same input always produces the same message, so a retry without a change is guaranteed to fail again. The message tells you what to change; change that.</p>
+  </section>
+
+  <section id="introspection">
+    <p class="eyebrow">Chapter 12</p>
+    <h2>Introspection and mutation for closed-loop editing</h2>
+    <p class="lead">JSON is the interchange format, not the only way to change a graph. A tool that keeps one live graph edits it in place and reads it back — preserving the caches a rebuild would discard.</p>
+
+    <h3>Reading: describe() and getParams()</h3>
+    <p><code>graph.describe()</code> returns a frozen structural snapshot in insertion, creation and declaration order. It is cheap enough to call every UI frame, and it offers no path that could mutate the graph behind its version counter.</p>
+
+    <div class="codeblock"><pre><code>graph.<span class="n">describe</span>()
+
+{
+  <span class="s">"nodes"</span>: [
+    { <span class="s">"id"</span>: <span class="s">"scatter"</span>, <span class="s">"seed"</span>: <span class="n">3953054466</span>, <span class="s">"defType"</span>: <span class="s">"pointScatterInBounds"</span> },
+    { <span class="s">"id"</span>: <span class="s">"density"</span>, <span class="s">"seed"</span>: <span class="n">2454708624</span>, <span class="s">"defType"</span>: <span class="s">"setAttribute"</span> },
+    { <span class="s">"id"</span>: <span class="s">"keep"</span>,    <span class="s">"seed"</span>: <span class="n">1901719706</span>, <span class="s">"defType"</span>: <span class="s">"filterByDensity"</span> },
+    { <span class="s">"id"</span>: <span class="s">"spawn"</span>,   <span class="s">"seed"</span>: <span class="n">2435855515</span>, <span class="s">"defType"</span>: <span class="s">"spawnInstances"</span> }
+  ],
+  <span class="s">"connections"</span>: [
+    { <span class="s">"from"</span>: [<span class="s">"scatter"</span>, <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"density"</span>, <span class="s">"in"</span>] },
+    { <span class="s">"from"</span>: [<span class="s">"density"</span>, <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"keep"</span>, <span class="s">"in"</span>] },
+    { <span class="s">"from"</span>: [<span class="s">"keep"</span>, <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"spawn"</span>, <span class="s">"in"</span>] }
+  ],
+  <span class="s">"outputs"</span>: [
+    { <span class="s">"id"</span>: <span class="s">"keep"</span>, <span class="s">"pin"</span>: <span class="s">"out"</span>, <span class="s">"name"</span>: <span class="s">"points"</span> },
+    { <span class="s">"id"</span>: <span class="s">"spawn"</span>, <span class="s">"pin"</span>: <span class="s">"instances"</span>, <span class="s">"name"</span>: <span class="s">"instances"</span> }
+  ]
+}</code></pre></div>
+
+    <p>The <code>seed</code> field is the <em>derived</em> per-node seed the executor actually uses, not the graph seed — useful when reproducing a single node's randomness outside the graph. <code>defType</code> is <code>undefined</code> when a definition carries no usable type string. Note that <code>describe()</code> reports structure verbatim, which for a subgraph-wrapped graph includes injected plumbing that serialization deliberately excludes; the two views differ on purpose.</p>
+
+    <p><code>graph.getParams(handle)</code> returns a frozen shallow copy of a node's parameters at call time. It gives you <em>runtime</em> values — a field parameter comes back as a live <code>Field</code> object with its stable key, not as a JSON spec. When you want the spec, serialize.</p>
+
+    <div class="note">
+      <span class="tag">Handles from ids</span>
+      <p>A <code>NodeHandle</code> is <code>{ readonly id: string }</code>. <code>describe()</code> reports ids, and the mutation and parameter APIs take handles — so an agent that only has a snapshot can reconstruct what it needs: <code>const byId = Object.fromEntries(graph.describe().nodes.map(n =&gt; [n.id, { id: n.id }]))</code>, then <code>graph.getParams(byId.density)</code>. Verified working. Passing an id string directly does not work, and fails with <code>unknown node "undefined"</code>.</p>
+    </div>
+
+    <p>For composites, <code>describeSubgraphPins(def)</code> resolves a subgraph definition's per-instance pins — the exposed name plus the concrete kind of the inner pin, resolved live through nested subgraphs. It returns <code>{"inputs":[],"outputs":[{"name":"out","kind":"geometry"}]}</code> for a single-output wrapper, <code>undefined</code> for a non-subgraph definition, and throws (naming the pin and inner node) when later edits have broken the wrapper.</p>
+
+    <h3>Writing: the mutation API and its exact cache semantics</h3>
+    <p>Every mutation bumps the graph version. The cache consequences are specified, not incidental:</p>
+
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Operation</th><th>Cascade</th><th>Cache effect</th><th>Failure mode</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>removeNode(handle)</code></td>
+          <td>The node, every connection touching it, and every output declared on it — one version bump.</td>
+          <td>The removed node's cached outputs are dropped immediately. Former downstream nodes recook next cook; untouched branches keep serving.</td>
+          <td>Unknown handle (another graph's, or already removed) throws.</td>
+        </tr>
+        <tr>
+          <td><code>disconnect(from, pin, to, pin)</code></td>
+          <td>One matching connection. Remaining connections on a <code>multi</code> input keep insertion order — order is part of determinism.</td>
+          <td>Same as <code>removeNode</code>: target and downstream recook, untouched branches stay cached.</td>
+          <td>Unknown nodes or pins <em>throw</em>. A missing connection between two valid endpoints returns <code>false</code> and bumps nothing.</td>
+        </tr>
+        <tr>
+          <td><code>removeOutput(name)</code></td>
+          <td>Undeclares one terminal output; the name is free to redeclare.</td>
+          <td><strong>Node caches untouched.</strong> An output changes what a cook pulls, not any memo key — so the next cook serves every unchanged node from cache.</td>
+          <td>Unknown name throws, listing the declared outputs.</td>
+        </tr>
+        <tr>
+          <td><code>setParam(handle, name, value)</code></td>
+          <td>None.</td>
+          <td>That node and its dependents recook; upstream stays cached.</td>
+          <td>Unknown handle or param throws. Field params need a real <code>Field</code>, not a spec object.</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+    <p>The <code>removeOutput</code> row is the one most likely to surprise, so here it is measured. On a three-node graph with two declared outputs:</p>
+    <div class="codeblock"><pre><code><span class="k">await</span> <span class="n">cook</span>(g);                       <span class="c">// { cooked: 3, cached: 0 }</span>
+<span class="k">await</span> <span class="n">cook</span>(g);                       <span class="c">// { cooked: 0, cached: 3 }</span>
+g.<span class="n">removeOutput</span>(<span class="s">"points"</span>);
+<span class="k">await</span> <span class="n">cook</span>(g);                       <span class="c">// { cooked: 0, cached: 3 }   ← nothing recooked</span>
+
+g.<span class="n">disconnect</span>(jitter, <span class="s">"out"</span>, spawn, <span class="s">"in"</span>);   <span class="c">// true</span>
+g.<span class="n">disconnect</span>(jitter, <span class="s">"out"</span>, spawn, <span class="s">"in"</span>);   <span class="c">// false — already gone, no version bump</span>
+<span class="k">await</span> <span class="n">cook</span>(g);
+<span class="c">// NodeExecutionError: node "spawnInstances_0" failed:</span>
+<span class="c">//   spawnInstances: input pin "in" has no geometry connected</span></code></pre></div>
+
+    <p>And the cascade, measured on the four-node JSON graph from chapter 9:</p>
+    <div class="codeblock"><pre><code>g.<span class="n">removeNode</span>(byId.spawn);
+g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep", pin: "out", name: "points" } ]</span>
+                       <span class="c">//   the "instances" output went with the node</span>
+<span class="k">await</span> <span class="n">cook</span>(g);         <span class="c">// { cooked: 0, cached: 3 }  ← every survivor served from cache</span></code></pre></div>
+
+    <h3>Mutate or rebuild?</h3>
+    <p>Mutate while a live graph is being edited and warm caches matter — tweaking one branch of an expensive graph must not recook its siblings. Rebuild through <code>deserializeGraph</code> when loading a document or handing a graph across a boundary: a rebuilt graph is fully validated but starts with cold caches. The two views stay consistent, so this is a performance decision rather than a correctness one — after any mutation, <code>serializeGraph(graph)</code> reflects the current structure and round-trips.</p>
+  </section>
+
+  <section id="contract">
+    <p class="eyebrow">Chapter 13</p>
+    <h2>Determinism as a contract</h2>
+    <p class="lead">Same seed, identical bytes. This is the property everything else is built to preserve, and for an agent it is the difference between generation that can be verified and generation that can only be looked at.</p>
+
+    <h3>What is promised</h3>
+    <ul>
+      <li><strong>Same graph plus same seed produces byte-identical output</strong> across runs and platforms. All randomness flows from seeds through PCG32 and murmur-style hash combining. There is no <code>Math.random</code> anywhere in the library.</li>
+      <li><strong>The seed chain is specified.</strong> Graph seed → node seed = <code>hashCombine(graphSeed, hashString(nodeId))</code> → per-point <code>hashCombine(seed, index, axis)</code>. Cell seeds are <code>hashCombine(worldSeed, levelIndex, ...coord)</code>, with every coordinate hashed.</li>
+      <li><strong>Order and path independence.</strong> Cook order, streaming order, cancellation, eviction and recooks never change the bytes produced. Per-point randomness is hashed from index, not drawn from a stream, which is why it does not matter what was generated before it.</li>
+      <li><strong>Execution is introspectable.</strong> Cook stats, cache hit and miss counts, and per-node progress callbacks expose what actually ran.</li>
+    </ul>
+
+    <div class="code-label">Verifying it, the way an agent should</div>
+    <div class="codeblock"><pre><code><span class="k">const</span> fingerprint = <span class="k">async</span> (doc) => {
+  <span class="k">const</span> r = <span class="k">await</span> <span class="n">cook</span>(<span class="n">deserializeGraph</span>(doc));
+  <span class="k">const</span> P = <span class="n">firstGeometry</span>(r.outputs.points).attrs.point.<span class="n">require</span>(<span class="s">"P"</span>);
+  <span class="k">const</span> bytes = <span class="k">new</span> Uint8Array(P.data.buffer, P.data.byteOffset, P.data.byteLength);
+  <span class="k">let</span> h = <span class="n">0x811c9dc5</span> >>> <span class="n">0</span>;                    <span class="c">// FNV-1a over the raw column</span>
+  <span class="k">for</span> (<span class="k">const</span> b <span class="k">of</span> bytes) { h ^= b; h = Math.<span class="n">imul</span>(h, <span class="n">0x01000193</span>) >>> <span class="n">0</span>; }
+  <span class="k">return</span> h.<span class="n">toString</span>(<span class="n">16</span>).<span class="n">padStart</span>(<span class="n">8</span>, <span class="s">"0"</span>);
+};
+
+<span class="k">await</span> <span class="n">fingerprint</span>(doc);   <span class="c">// "62fdb8a9"</span>
+<span class="k">await</span> <span class="n">fingerprint</span>(doc);   <span class="c">// "62fdb8a9"  — identical, from a cold graph each time</span></code></pre></div>
+
+    <h3>Why this matters for generation you can trust</h3>
+    <p>A fingerprint over an output column turns three otherwise awkward problems into equality checks.</p>
+    <p><strong>Reproducibility.</strong> A serialized graph plus its seed is a complete, portable description of its output. Nothing else needs to travel — no assets, no cached results, no record of the order operations happened in. Two parties running the same document get the same bytes, which makes a generated world citable in the way a hash is citable.</p>
+    <p><strong>Verification.</strong> An agent that emits a graph, cooks it, and records the fingerprint can prove later that a given output came from a given graph — and can detect any drift in its own pipeline. If the fingerprint changes and the document did not, the change came from somewhere undeclared, and that is a bug worth finding.</p>
+    <p><strong>Regression testing without goldens for everything.</strong> An eight-character hash stands in for a megabyte of positions. Change a node, expect exactly the branches you touched to move, and confirm it by hashing outputs rather than by looking at pictures.</p>
+
+    <h3>The four caveats, stated plainly</h3>
+    <ul>
+      <li><strong>The GPU path is a documented approximation.</strong> Chapter 6 covers the budgets. Fingerprints from the CPU and GPU paths differ, legitimately and by measured amounts. Cache provenance guarantees the two never serve each other's bytes, but it does not make them equal — so fingerprint comparisons must be within one path.</li>
+      <li><strong>The caller's mutation contracts are load-bearing.</strong> Determinism assumes you did not mutate a cook result, mutate a bound array in place, or hold an evaluated column across a geometry resize. All three fail quietly.</li>
+      <li><strong>Live data is outside the seed.</strong> A <code>dataInput</code> node's items come from your program. Determinism covers what the graph does with them, not where they came from.</li>
+      <li><strong>A serialized document is not a lockfile for the library.</strong> The guarantee is that a given version cooks a given document identically. Existing goldens are not moved by design, but "same seed" is a statement about the graph, not a version pin.</li>
+    </ul>
+  </section>
+
+  <section id="loop">
+    <p class="eyebrow">Chapter 14</p>
+    <h2>A worked end-to-end agent loop</h2>
+    <p class="lead">Discover what exists, emit a graph, cook it, read the result, change one thing, recook. Every value shown below is real output from running exactly this sequence.</p>
+
+    <h3>1 · Discover</h3>
+    <div class="codeblock"><pre><code><span class="k">import</span> {
+  listNodeTypes, listFieldFns, hasNodeType,
+  deserializeGraph, serializeGraph, cook, firstGeometry, fieldFromJson,
+} <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> types = <span class="n">listNodeTypes</span>();               <span class="c">// 25 entries, each fully self-describing</span>
+<span class="k">const</span> fns = <span class="n">listFieldFns</span>();                 <span class="c">// 40 field fns — the closed vocabulary</span>
+
+<span class="c">// Plan against the schemas rather than against memory.</span>
+<span class="k">const</span> scatterSchema = types.<span class="n">find</span>(t => t.type === <span class="s">"pointScatterInBounds"</span>).params;
+Object.<span class="n">keys</span>(scatterSchema);                <span class="c">// [ "count", "boundsMin", "boundsMax", "seed" ]</span>
+
+<span class="k">const</span> setAttr = types.<span class="n">find</span>(t => t.type === <span class="s">"setAttribute"</span>).params;
+setAttr.value.acceptsField;                <span class="c">// true  -> a field spec is legal here</span>
+setAttr.type.enum;                         <span class="c">// [ "f32", "i32", "u32", "bool", "string" ]</span>
+setAttr.tupleSize.min;                     <span class="c">// 1</span>
+setAttr.tupleSize.max;                     <span class="c">// 4</span></code></pre></div>
+
+    <h3>2 · Emit</h3>
+    <p>Build the document from what discovery reported. Use the chapter 9 example verbatim — four nodes, three connections, two outputs.</p>
+    <div class="codeblock"><pre><code><span class="k">const</span> doc = { <span class="c">/* the JSON from chapter 9 */</span> };
+
+<span class="c">// Cheap pre-flight before handing it over.</span>
+<span class="k">for</span> (<span class="k">const</span> n <span class="k">of</span> doc.nodes) {
+  <span class="k">if</span> (!<span class="n">hasNodeType</span>(n.type)) <span class="k">throw</span> <span class="k">new</span> Error(<span class="s">`no such type: </span>${n.type}<span class="s">`</span>);
+}
+
+<span class="k">const</span> graph = <span class="n">deserializeGraph</span>(doc);   <span class="c">// throws with the fix if anything is wrong</span></code></pre></div>
+
+    <h3>3 · Cook and inspect</h3>
+    <div class="codeblock"><pre><code><span class="k">const</span> r1 = <span class="k">await</span> <span class="n">cook</span>(graph);
+
+r1.stats;                                       <span class="c">// { cooked: 4, cached: 0, elapsedMs: 13.6 }</span>
+<span class="n">firstGeometry</span>(r1.outputs.points).pointCount;    <span class="c">// 1008  (of 2000 scattered)</span>
+
+<span class="k">const</span> geo = <span class="n">firstGeometry</span>(r1.outputs.points);
+[...geo.attrs.point.<span class="n">names</span>()];
+<span class="c">// [ "P", "rot", "scale", "density", "boundsMin", "boundsMax", "color", "seed" ]</span>
+
+<span class="k">const</span> d = geo.attrs.point.<span class="n">require</span>(<span class="s">"density"</span>);
+d.type, d.tupleSize;                            <span class="c">// "f32", 1</span>
+[...d.data.<span class="n">subarray</span>(<span class="n">0</span>, <span class="n">4</span>)];                    <span class="c">// [ 0.4724, 0.4536, 0.6287, 0.5888 ]</span>
+
+<span class="k">const</span> batch = r1.outputs.instances.<span class="n">find</span>(i => i.kind === <span class="s">"instances"</span>).batches[<span class="n">0</span>];
+batch.assetId, batch.count;                     <span class="c">// "rock", 1008</span></code></pre></div>
+    <p>The observations that matter for a decision are all here: how many nodes actually ran, how many points survived, what the density channel looks like, and whether the spawner produced the expected batch. An agent aiming for "roughly six hundred rocks" now knows it overshot by two-thirds and knows which node controls it.</p>
+
+    <h3>4 · Mutate</h3>
+    <p>Reconstruct handles from the snapshot, then change exactly one parameter — the density field's frequency, from 0.03 to 0.09.</p>
+    <div class="codeblock"><pre><code><span class="k">const</span> byId = Object.<span class="n">fromEntries</span>(
+  graph.<span class="n">describe</span>().nodes.<span class="n">map</span>(n => [n.id, { id: n.id }])
+);
+
+graph.<span class="n">getParams</span>(byId.density).name;      <span class="c">// "density"  — confirm the target first</span>
+
+graph.<span class="n">setParam</span>(byId.density, <span class="s">"value"</span>, <span class="n">fieldFromJson</span>({
+  fn: <span class="s">"fbm"</span>, base: <span class="s">"perlinNoise"</span>,
+  opts: { frequency: <span class="n">0.09</span>, octaves: <span class="n">4</span>, normalized: <span class="k">true</span> },
+}));                                     <span class="c">// fieldFromJson, NOT the raw spec object</span></code></pre></div>
+
+    <h3>5 · Recook and compare</h3>
+    <div class="codeblock"><pre><code><span class="k">const</span> r2 = <span class="k">await</span> <span class="n">cook</span>(graph);
+
+r2.stats;                                       <span class="c">// { cooked: 3, cached: 1 }</span>
+<span class="n">firstGeometry</span>(r2.outputs.points).pointCount;    <span class="c">// 967   (was 1008)</span>
+
+<span class="c">// The live graph and its serialized form stay in step:</span>
+<span class="n">serializeGraph</span>(graph).nodes[<span class="n">1</span>].params.value;
+<span class="c">// { fn: "fbm", base: "perlinNoise",</span>
+<span class="c">//   opts: { frequency: 0.09, octaves: 4, normalized: true } }</span></code></pre></div>
+
+    <p>Read the stats as a check on your own model. <code>cached: 1</code> is the scatter node — upstream of the edit, so untouched. <code>cooked: 3</code> is the edited node plus its two dependents. Had the numbers come back <code>{ cooked: 4, cached: 0 }</code>, something changed that you did not intend to change, and that is worth investigating before trusting the output.</p>
+
+    <h3>6 · Close the loop</h3>
+    <div class="codeblock"><pre><code>graph.<span class="n">removeNode</span>(byId.spawn);       <span class="c">// documented cascade: the node, its connections,</span>
+                                   <span class="c">// and the "instances" output declared on it</span>
+graph.<span class="n">describe</span>().outputs;          <span class="c">// [ { id: "keep", pin: "out", name: "points" } ]</span>
+
+<span class="k">await</span> <span class="n">cook</span>(graph);                 <span class="c">// { cooked: 0, cached: 3 } — survivors all served warm</span>
+
+<span class="k">const</span> finalDoc = <span class="n">serializeGraph</span>(graph);   <span class="c">// canonical, and idempotent from here on</span></code></pre></div>
+
+    <p>The loop in one sentence: <em>discovery gives you the legal moves, deserialization rejects the illegal ones with the fix attached, cook stats tell you what actually happened, introspection lets you locate the next edit, mutation applies it without discarding warm caches, and serialization hands back a canonical document.</em> No step requires reading the library's source, and no step requires guessing.</p>
+  </section>
+
+  <section id="reference">
+    <p class="eyebrow">Reference</p>
+    <h2>Where to look next</h2>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Document</th><th>What it is</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td>Generated node reference: every pin, parameter, default and range for all 25 types.</td><td>Looking up one node exactly.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>The same registry metadata as a plain JSON array.</td><td>Machine consumption, offline planning, validation.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a></td><td>Graph JSON spec, the full field grammar, recipes, transfer mappings, GPU eligibility rules.</td><td>The precise format, and worked recipes.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a></td><td>Compact agent capability map with the full measured GPU budget tables.</td><td>Context for an LLM; the deviation numbers.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/README.md">README.md</a></td><td>The human API tour.</td><td>A second angle on anything in Part I.</td></tr>
+        <tr><td><a href="./index.html">Project overview</a></td><td>Architecture and pipeline diagrams, roadmap.</td><td>How the modules layer, and what shipped when.</td></tr>
+        <tr><td><a href="https://c4rl05.github.io/pcg-ts/examples/">Live demos</a></td><td>All eight examples, running.</td><td>Seeing it before reading about it.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>Development commands, for working in the repository itself: <code>npm test</code> runs the unit, integration and determinism suites; <code>npm run build</code> produces <code>dist/</code> with the <code>.</code>, <code>./three</code> and <code>./gpu</code> subpath exports; <code>npm run check</code> type-checks; <code>npm run examples</code> starts the demo server; <code>npm run docs:nodes</code> regenerates the node reference from the registry.</p>
+  </section>
+
+</main>
+</div>
+
+<footer>
+  <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
+    <span>pcg-ts v0.6.1 manual</span>
+    <span>MIT license</span>
+    <a href="./index.html">project overview</a>
+    <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
+    <span>ESM · TypeScript strict · three.js optional</span>
+  </div>
+</footer>
+</body>
+</html>

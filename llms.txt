@@ -70,8 +70,18 @@ import { deserializeGraph, serializeGraph, cook, firstGeometry } from "pcg-ts";
 const graph = deserializeGraph(json);      // validates everything, names faults
 const result = await cook(graph);          // { outputs, stats }
 const geo = firstGeometry(result.outputs.points);
-serializeGraph(graph);                     // lossless round-trip back to JSON
+serializeGraph(graph);                     // back to JSON (see round-trip note)
 ```
+
+Round-trip semantics, stated precisely because agents diff JSON: the
+output is semantically identical and cooks byte-identically, but it is
+NOT textually equal to hand-authored input that omitted params —
+serialization writes every param explicitly, filling omitted ones with
+their schema defaults. It is idempotent from then on
+(`serialize(deserialize(x)) === serialize(deserialize(serialize(deserialize(x))))`).
+So compare round-tripped JSON against a round-tripped baseline, never
+against your minimal source, and treat newly-appearing default params
+as normalization rather than corruption.
 
 ## Authoring a graph in code
 
