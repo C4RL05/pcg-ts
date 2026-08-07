@@ -47,9 +47,12 @@ valid:
 
 `serializeGraph` enforces the same schemas on the way out, and requires
 every node to be a registered type (`standardNode`). Field-valued params
-serialize only when the field was built by `fieldFromJson` (fields
-composed in code have no JSON spec attached); `fieldToJson` throws an
-actionable error otherwise.
+serialize whether the field was built by `fieldFromJson` or composed
+from the combinator API — a combinator field derives its spec from its
+arguments. The exceptions are a field built by `makeField` (an
+arbitrary closure that nothing can describe), any field composed over
+one, and a tree nested deeper than the spec depth limit; `fieldToJson`
+throws an actionable error naming which of those it hit.
 
 Numbers must be finite. A field-capable vec3/vec4 param set to a plain
 scalar is canonicalized to the full tuple on serialization (broadcast

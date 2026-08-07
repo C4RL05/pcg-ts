@@ -10,9 +10,17 @@
  * `captureAsync` and eligible spec'd Field params resolve on the
  * device, falling back to the CPU otherwise.
  *
- * Use `getFieldSpec(field)` (exported from the package root) to check
- * whether a live Field carries a compilable spec: JSON-authored fields
- * do, code-authored fields return undefined and stay on the CPU.
+ * `getFieldSpec(field)` (exported from the package root) answers "can
+ * this field be DESCRIBED", not "will it run on the device": both
+ * JSON-authored and code-authored fields carry a compilable spec, and a
+ * derived one compiles to WGSL just as an authored one does.
+ *
+ * Device eligibility is the narrower rule: a Field param resolves on the
+ * device only when its spec was AUTHORED — built by `fieldFromJson` — and
+ * a field built from the combinator API stays on the CPU even though it
+ * describes itself. The CPU is the bit-exact reference, so moving an
+ * existing graph's fields onto the device is an opt-in change, not a
+ * side effect of a field learning to describe itself.
  *
  * Determinism contract (CPU is the bit-exact reference):
  * - u32 hash/random streams (`randomField`, noise lattice hashing) are

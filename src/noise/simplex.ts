@@ -97,5 +97,5 @@ export function simplexNoise(opts: NoiseOpts = {}): Field<1> {
           corner(i + 1, j + 1, k + 1, x3, y3, z3))
       );
     };
-  });
+  }, { fn: "simplexNoise" });
 }

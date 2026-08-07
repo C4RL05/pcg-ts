@@ -64,6 +64,12 @@ import {
   vec,
 } from "../fields/index.js";
 import {
+  type FieldSpec,
+  MAX_SPEC_DEPTH,
+  attachAuthoredSpec,
+  peekFieldSpec,
+} from "../fields/spec.js";
+import {
   type FbmOpts,
   type NoiseFactory,
   type NoiseOpts,
@@ -83,18 +89,11 @@ export class FieldJsonError extends Error {
   }
 }
 
-/** A JSON field expression: a constructor name plus its arguments. */
-export interface FieldSpec {
-  /** Field constructor name; see {@link listFieldFns}. */
-  readonly fn: string;
-  readonly [key: string]: unknown;
-}
-
-/** An argument position: a nested spec, or a number/tuple (wraps into constant). */
-export type FieldSpecArg = FieldSpec | number | readonly number[];
-
-/** @internal Symbol under which fieldFromJson attaches the original spec. */
-const FIELD_SPEC: unique symbol = Symbol("pcg-ts.fieldSpec");
+// The spec type and its accessors live in `src/fields/spec.ts` so the
+// field constructors can derive specs without `src/fields` depending on
+// `src/nodes`. Re-exported here unchanged: this module is still where
+// the public spec API is documented and imported from.
+export { type FieldSpec, type FieldSpecArg, getFieldSpec } from "../fields/spec.js";
 
 interface FnDef {
   /** Spec keys allowed besides `fn`. */
@@ -160,19 +159,27 @@ function requireArgs(spec: Record<string, unknown>, path: string, arity: number 
   return args;
 }
 
-/** Nesting cap for field specs; deeper trees are almost certainly a bug. */
-const MAX_SPEC_DEPTH = 256;
-
 /** Spec objects currently being built, for cycle detection (see buildSpec). */
 const inProgress = new Set<object>();
+
+/**
+ * Deepest nesting level reached by the current `fieldFromJson` call — the
+ * authored spec's own depth, handed to `attachAuthoredSpec` so that
+ * constructors building on top of the field keep counting from where the
+ * author's tree ended. Measured here because `buildSpec` already walks
+ * exactly the levels {@link MAX_SPEC_DEPTH} counts.
+ */
+let deepestLevel = 0;
 
 function buildSpec(spec: Record<string, unknown>, path: string): Field {
   if (inProgress.has(spec)) {
     fail(path, "cyclic field spec: this spec object contains itself (directly or through its args)");
   }
-  if (inProgress.size >= MAX_SPEC_DEPTH) {
+  const level = inProgress.size + 1;
+  if (level > MAX_SPEC_DEPTH) {
     fail(path, `field spec nesting deeper than ${MAX_SPEC_DEPTH} levels; flatten the expression`);
   }
+  if (level > deepestLevel) deepestLevel = level;
   inProgress.add(spec);
   try {
     const fn = spec.fn;
@@ -461,40 +468,36 @@ export function fieldFromJson(spec: FieldSpec): Field {
   if (!isPlainObject(spec)) {
     throw new FieldJsonError(`fieldFromJson: expected a spec object, got ${describeValue(spec)}`);
   }
+  deepestLevel = 0;
   const field = buildSpec(spec, "$");
-  (field as unknown as Record<symbol, unknown>)[FIELD_SPEC] = structuredClone(spec);
+  // Stamped LAST, over whatever spec the constructors derived while
+  // building the tree, so `fieldToJson` returns the author's exact JSON
+  // rather than a canonicalized derivation of it.
+  attachAuthoredSpec(field, structuredClone(spec) as FieldSpec, deepestLevel);
   return field;
 }
 
 /**
- * The JSON spec a field was built from, or undefined: the non-throwing
- * counterpart of {@link fieldToJson}, so compilability (e.g. for the
- * `pcg-ts/gpu` WGSL compiler) is queryable without try/catch. Returns a
- * defensive copy for fields constructed by {@link fieldFromJson} —
- * mutating it does not affect the field or later calls — and undefined
- * for code-authored fields (which carry no spec) or non-Field values.
- */
-export function getFieldSpec(field: Field): FieldSpec | undefined {
-  if (!isField(field)) return undefined;
-  const spec = (field as unknown as Record<symbol, unknown>)[FIELD_SPEC];
-  if (spec === undefined) return undefined;
-  return structuredClone(spec) as FieldSpec;
-}
-
-/**
- * Serialize a field back to the JSON spec it was built from. Only fields
- * constructed by {@link fieldFromJson} carry a spec; code-authored fields
- * throw an actionable error. See {@link getFieldSpec} for the
- * non-throwing variant.
+ * Serialize a field back to its JSON spec. Fields built by
+ * {@link fieldFromJson} return the author's original spec; fields built
+ * with the combinator API return the spec derived from their inputs.
+ * Fields that carry none — anything built with `makeField`, built over
+ * such a field, or nested deeper than the grammar's cap — throw an
+ * actionable error. See `getFieldSpec` for the non-throwing variant.
  */
 export function fieldToJson(field: Field): FieldSpec {
   if (!isField(field)) {
     throw new FieldJsonError("fieldToJson: value is not a Field");
   }
-  const spec = (field as unknown as Record<symbol, unknown>)[FIELD_SPEC];
+  const spec = peekFieldSpec(field);
   if (spec === undefined) {
     throw new FieldJsonError(
-      "fieldToJson: this field was authored in code and carries no JSON spec; construct it via fieldFromJson to make it serializable",
+      "fieldToJson: this field carries no JSON spec, so it cannot be serialized. " +
+        "Code-authored fields do carry one, but only when every part of the expression can be " +
+        "named in the grammar (see listFieldFns) and the tree is at most " +
+        `${MAX_SPEC_DEPTH} levels deep: a makeField closure can never be named, and everything ` +
+        "built over one inherits that. Replace the opaque part with grammar constructors " +
+        "(combinators, inputs, noise, or fieldFromJson), or flatten a deeper tree",
     );
   }
   return structuredClone(spec) as FieldSpec;

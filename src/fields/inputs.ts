@@ -1,4 +1,5 @@
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
+import { attachSpec, isSpecNumber } from "./spec.js";
 import {
   type Field,
   type FieldLike,
@@ -19,7 +20,7 @@ export function constant(value: number | readonly number[]): Field {
   const values = typeof value === "number" ? [value] : [...value];
   const ts = values.length;
   if (ts < 1) throw new Error("constant: tuple must have at least one component");
-  return makeField(`const(${values.map(keyNum).join(",")})`, ts, (ctx) => {
+  const field = makeField(`const(${values.map(keyNum).join(",")})`, ts, (ctx) => {
     const n = elementCount(ctx);
     const data = new Float32Array(n * ts);
     for (let i = 0; i < n; i++) {
@@ -27,6 +28,13 @@ export function constant(value: number | readonly number[]): Field {
     }
     return { data, tupleSize: ts };
   });
+  // The grammar's `constant` takes a finite number or a non-empty array
+  // of finite numbers; this constructor accepts NaN/±Infinity too, and a
+  // spec carrying one would be rejected by `fieldFromJson`.
+  if (values.every(isSpecNumber)) {
+    attachSpec(field, { fn: "constant", value: typeof value === "number" ? value : values }, 1);
+  }
+  return field;
 }
 
 /** Coerce a `T | Field` parameter to a Field (numbers/arrays wrap into constant). */
@@ -45,7 +53,7 @@ export function attribute(name: string, tupleSize?: number): Field {
   // injection-proof for arbitrary attribute names.
   const quoted = JSON.stringify(name);
   const key = tupleSize === undefined ? `attr(${quoted})` : `attr(${quoted},${tupleSize})`;
-  return makeField(key, tupleSize, (ctx) => {
+  const field = makeField(key, tupleSize, (ctx) => {
     const attr = ctx.geo.attrs[ctx.domain].require(name);
     if (attr.type === "string") {
       throw new Error(`attribute "${name}": string attributes cannot be read as fields`);
@@ -64,10 +72,21 @@ export function attribute(name: string, tupleSize?: number): Field {
     }
     return { data: attr.data.subarray(0, n), tupleSize: ts };
   });
+  // The grammar requires a non-empty name and, when given, a positive
+  // integer tupleSize; this constructor checks neither.
+  if (name !== "" && (tupleSize === undefined || (Number.isInteger(tupleSize) && tupleSize >= 1))) {
+    attachSpec(
+      field,
+      tupleSize === undefined ? { fn: "attribute", name } : { fn: "attribute", name, tupleSize },
+      1,
+    );
+  }
+  return field;
 }
 
 const P_ATTR = attribute("P", 3);
 const POSITION: Field<3> = makeField("position", 3, (ctx) => P_ATTR.evaluate(ctx));
+attachSpec(POSITION, { fn: "position" }, 1);
 
 /** The standard position input: reads the `P` attribute (f32, tuple 3). */
 export function position(): Field<3> {
@@ -80,6 +99,7 @@ const INDEX: Field<1> = makeField("index", 1, (ctx) => {
   for (let i = 0; i < n; i++) data[i] = i;
   return { data, tupleSize: 1 };
 });
+attachSpec(INDEX, { fn: "index" }, 1);
 
 /** Element index input: 0, 1, 2, ... over the domain. */
 export function index(): Field<1> {
@@ -93,11 +113,26 @@ export function index(): Field<1> {
  */
 export function randomField(key: number | string = 0): Field<1> {
   const keyHash = typeof key === "string" ? hashString(key) : key >>> 0;
-  return makeField(`random(${keyHash})`, 1, (ctx) => {
+  const field = makeField(`random(${keyHash})`, 1, (ctx) => {
     const n = elementCount(ctx);
     const seed = ctx.seed;
     const data = new Float32Array(n);
     for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, i));
     return { data, tupleSize: 1 };
   });
+  // The spec carries the ORIGINAL key, not the hash. Emitting `keyHash`
+  // would rebuild the same stream — `hashString` returns a uint32 and
+  // `>>> 0` is idempotent, so re-hashing it is a no-op — but it would
+  // describe the field as something nobody wrote: a saved graph would
+  // show `randomField("species")` as an opaque uint32, and the author's
+  // name would be unrecoverable from it. Fidelity of the description,
+  // not correctness of the stream, is the reason.
+  //
+  // A non-finite numeric key survives `fieldFromJson` but not JSON
+  // (NaN/Infinity serialize as null, which the parser then rejects), so
+  // it derives no spec.
+  if (typeof key === "string" || isSpecNumber(key)) {
+    attachSpec(field, { fn: "randomField", key }, 1);
+  }
+  return field;
 }

@@ -45,7 +45,7 @@ import type {
   ResidentRunInput,
   ResidentRunResult,
 } from "../fields/index.js";
-import { getFieldSpec } from "../nodes/fieldJson.js";
+import { peekAuthoredSpec } from "../fields/spec.js";
 import { compileFieldSpec } from "./compile.js";
 import {
   BUFFER_USAGE,
@@ -284,7 +284,11 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
    * contract and `GpuCookStats` for the fallback-reason vocabulary.
    */
   resolveField(field: Field, ctx: EvalContext, stats?: GpuCookStats): Promise<Column> | null {
-    const spec = getFieldSpec(field);
+    // Authored specs only: a combinator field carries a faithful derived
+    // spec, but adopting those moves evaluation from the CPU (the
+    // bit-exact reference) to the GPU (an approximation) for graphs that
+    // never asked, so the widening is a separate opt-in decision.
+    const spec = peekAuthoredSpec(field);
     if (spec === undefined) return countFallback(stats, "no-spec");
 
     const set = ctx.geo.attrs[ctx.domain];

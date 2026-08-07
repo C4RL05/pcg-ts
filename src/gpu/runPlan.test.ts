@@ -8,8 +8,9 @@
  * to the same bytes lives in resident.device.test.ts.
  */
 import { describe, expect, it } from "vitest";
-import type { ResidentMemberDesc, ResidentRunContext } from "../fields/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { mul, position, type ResidentMemberDesc, type ResidentRunContext } from "../fields/index.js";
+import { fieldFromJson, getFieldSpec, type FieldSpec } from "../nodes/fieldJson.js";
+import { compileFieldSpec } from "./compile.js";
 import { planResidentRun } from "./run.js";
 
 const field = (s: object) => fieldFromJson(s as FieldSpec);
@@ -306,6 +307,59 @@ describe("resident run planning: the demo chain's working set", () => {
     // A bound that rejected before phase 25 (one byte under the old
     // working set) now fits with room to spare.
     expect(plan(members, count, POINT_LAYOUT, DEMO_BYTES_BEFORE_PHASE25 - 1).totalBytes).toBe(120_000_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// phase 32: the planner's own eligibility gate
+
+describe("resident run planning: only AUTHORED specs are fusable", () => {
+  /**
+   * Since phase 32 a combinator field describes itself, so "has a spec"
+   * and "may run on the device" are different questions and the planner
+   * must ask the second one. Today `paramsFieldsAllSpecd` already filters
+   * derived-spec members out upstream, so this seam is defence in depth —
+   * which is exactly why it needs its own alarm: with the gate widened
+   * only here, or only there, the two disagree and nothing else notices.
+   */
+  it("declines a derived-spec field and fuses the byte-identical authored one", () => {
+    const derived = mul(position(), 0.1);
+    const authored = field({
+      fn: "mul",
+      args: [{ fn: "position" }, { fn: "constant", value: 0.1 }],
+    });
+    // Same field and same spec — provenance is the ONLY difference, so
+    // nothing below can be explained by the expression itself.
+    expect(authored.key).toBe(derived.key);
+    expect(getFieldSpec(derived)).toEqual(getFieldSpec(authored));
+    // ...and that spec compiles: the planner is not declining something
+    // the WGSL backend could not have handled.
+    expect(() =>
+      compileFieldSpec(getFieldSpec(derived) as FieldSpec, { attributes: POINT_LAYOUT }),
+    ).not.toThrow();
+
+    expect(rejection([member("jitterPoints", { amount: derived, seed: 7 })], 16)).toBe(
+      "run-plan-failed",
+    );
+    const p = plan([member("jitterPoints", { amount: authored, seed: 7 })], 16);
+    expect(p.cols).toEqual([16 * 3 * 4]); // one field column, one kernel
+    expect(p.members[0].steps).toHaveLength(2);
+  });
+
+  it("rejects the whole run, not just the member, when one member's field is derived", () => {
+    // A run is planned or it is not: a derived-spec param anywhere in the
+    // chain must not leave a partially fused plan behind.
+    const members = [
+      member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
+      member("jitterPoints", { amount: mul(position(), 0.25), seed: 3 }, "jit"),
+    ];
+    expect(rejection(members, 32)).toBe("run-plan-failed");
+    // Authored, the same two members plan together.
+    const ok = [
+      members[0],
+      member("jitterPoints", { amount: field({ fn: "mul", args: [{ fn: "position" }, 0.25] }), seed: 3 }, "jit"),
+    ];
+    expect(plan(ok, 32).members).toHaveLength(2);
   });
 });
 

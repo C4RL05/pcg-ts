@@ -38,7 +38,8 @@ import {
   setBounds,
   transformPoints,
 } from "../nodes/index.js";
-import { fieldFromJson, getFieldSpec } from "../nodes/fieldJson.js";
+import { peekAuthoredSpec } from "../fields/spec.js";
+import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
 import type { Geometry } from "../data/index.js";
@@ -55,7 +56,7 @@ function cpuResolveField(
   ctx: Parameters<GpuFieldResolver["resolveField"]>[1],
   stats: GpuCookStats | undefined,
 ): ReturnType<GpuFieldResolver["resolveField"]> {
-  if (getFieldSpec(field) === undefined) return countFallback(stats, "no-spec");
+  if (peekAuthoredSpec(field) === undefined) return countFallback(stats, "no-spec");
   if (stats !== undefined) stats.dispatches++;
   const column = evaluateField(field, ctx);
   return Promise.resolve({

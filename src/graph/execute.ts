@@ -8,7 +8,7 @@ import {
   type ResidentMemberDesc,
   type ResidentRunResult,
 } from "../fields/index.js";
-import { getFieldSpec } from "../nodes/fieldJson.js";
+import { peekAuthoredSpec } from "../fields/spec.js";
 import {
   makeDeviceInstancesItem,
   makeGeometryItem,
@@ -203,15 +203,22 @@ function stableValueHash(v: unknown, path: string): string {
 }
 
 /**
- * Does the param tree hold at least one genuine Field carrying a
- * serializable spec (`getFieldSpec`)? Only such fields can ever be
+ * Does the param tree hold at least one genuine Field carrying an
+ * AUTHORED spec (`peekAuthoredSpec`)? Only such fields can ever be
  * GPU-resolved, so only they make a node's output depend on the
  * resolver. Walks the same containers `stableValueHash` accepts; other
  * values cannot contain Fields (or fail hashing first).
+ *
+ * Authored, not merely spec'd: a combinator field derives a faithful
+ * spec, but the evaluator declines derived specs, so counting one here
+ * would salt a memo key for a node that then resolves on the CPU. This
+ * predicate, `paramsFieldsAllSpecd`, and the evaluator's own gate are
+ * one decision in three places and must agree exactly — disagreement is
+ * the one way this becomes a stale-cache bug.
  */
 function paramsHaveSpecField(v: unknown): boolean {
   if (typeof v !== "object" || v === null) return false;
-  if (isField(v)) return getFieldSpec(v) !== undefined;
+  if (isField(v)) return peekAuthoredSpec(v) !== undefined;
   if (Array.isArray(v)) return v.some(paramsHaveSpecField);
   if (v instanceof Set) return [...v].some(paramsHaveSpecField);
   if (v instanceof Map) return [...v.values()].some(paramsHaveSpecField);
@@ -256,14 +263,15 @@ function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResol
 const RUN_KEY_VERSION = "run1";
 
 /**
- * Are all Fields in the param tree spec'd (`getFieldSpec`)? A spec-less
- * (code-authored) Field would force a CPU fallback inside a fused run,
- * so nodes carrying one never join a run. Trees without any Field are
- * trivially true — plain values compile as constants.
+ * Are all Fields in the param tree AUTHORED-spec'd (`peekAuthoredSpec`)?
+ * A Field the run planner would decline forces a CPU fallback inside a
+ * fused run, so nodes carrying one never join a run. Trees without any
+ * Field are trivially true — plain values compile as constants. Reads
+ * the same predicate as {@link paramsHaveSpecField}; see the note there.
  */
 function paramsFieldsAllSpecd(v: unknown): boolean {
   if (typeof v !== "object" || v === null) return true;
-  if (isField(v)) return getFieldSpec(v) !== undefined;
+  if (isField(v)) return peekAuthoredSpec(v) !== undefined;
   if (Array.isArray(v)) return v.every(paramsFieldsAllSpecd);
   if (ArrayBuffer.isView(v)) return true;
   if (v instanceof Set) return [...v].every(paramsFieldsAllSpecd);

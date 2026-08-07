@@ -6,6 +6,7 @@ import {
   component,
   cos,
   evaluateField,
+  makeField,
   mul,
   position,
   remap,
@@ -265,10 +266,41 @@ describe("fieldFromJson", () => {
 });
 
 describe("fieldToJson", () => {
-  it("throws an actionable error for code-authored fields", () => {
+  it("serializes code-authored fields through their derived spec", () => {
+    // Was a pinned negative: this used to throw. A combinator field now
+    // derives its spec from its inputs', so it serializes — and the JSON
+    // rebuilds the identical field.
     const codeAuthored = mul(position(), 2);
-    expect(() => fieldToJson(codeAuthored)).toThrow(FieldJsonError);
-    expect(() => fieldToJson(codeAuthored)).toThrow(/construct it via fieldFromJson/);
+    const json = fieldToJson(codeAuthored);
+    expect(json).toEqual({
+      fn: "mul",
+      args: [{ fn: "position" }, { fn: "constant", value: 2 }],
+    });
+    expect(fieldFromJson(json).key).toBe(codeAuthored.key);
+  });
+
+  it("throws an actionable error for fields with no derivable spec", () => {
+    // `makeField`'s evaluator is an arbitrary closure: no spec can
+    // describe it, and none is invented. This is the permanent
+    // spec-less case, and the error must name THAT cause — "authored in
+    // code" stopped being the reason when code-authored fields started
+    // carrying specs, and a regex matching only "fieldFromJson" could
+    // not see the drift.
+    const opaque = makeField("opaque", 1, (ctx) => ({
+      data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
+      tupleSize: 1,
+    }));
+    expect(() => fieldToJson(opaque)).toThrow(FieldJsonError);
+    for (const field of [opaque, mul(opaque, 2)]) {
+      expect(() => fieldToJson(field)).toThrow(/carries no JSON spec/);
+      // The two real causes, and the fix for each.
+      expect(() => fieldToJson(field)).toThrow(/makeField closure can never be named/);
+      expect(() => fieldToJson(field)).toThrow(/at most 256 levels deep/);
+      expect(() => fieldToJson(field)).toThrow(/Replace the opaque part|flatten a deeper tree/);
+      // The old message blamed "authored in code", which is now false:
+      // `mul(position(), 2)` is authored in code and serializes fine.
+      expect(() => fieldToJson(field)).not.toThrow(/authored in code/);
+    }
   });
 
   it("rejects non-field values", () => {

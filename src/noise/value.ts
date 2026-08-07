@@ -36,5 +36,5 @@ export function valueNoise(opts: NoiseOpts = {}): Field<1> {
       mix(mix(v001, v101, u), mix(v011, v111, u), v),
       w,
     );
-  });
+  }, { fn: "valueNoise" });
 }

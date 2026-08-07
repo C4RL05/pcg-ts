@@ -49,5 +49,5 @@ export function perlinNoise(opts: NoiseOpts = {}): Field<1> {
         )
       );
     };
-  });
+  }, { fn: "perlinNoise" });
 }

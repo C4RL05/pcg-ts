@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mul, position } from "../fields/index.js";
+import { type Field, add, makeField, mul, position } from "../fields/index.js";
 import { Graph, cook, defineNode } from "../graph/index.js";
 import {
   GraphSerializationError,
@@ -13,6 +13,20 @@ import {
   transformPoints,
 } from "./index.js";
 import { firstGeo, snapshotGeometry } from "./testSupport.js";
+
+/**
+ * The grammar's nesting cap, restated here rather than imported: this is
+ * the boundary the serialized format promises, so a change to it must
+ * break a test and be re-approved, not follow the code silently.
+ */
+const MAX_DEPTH = 256;
+
+/** A field whose derived spec is exactly `levels` deep (position + adds). */
+function addChain(levels: number): Field {
+  let f: Field = position();
+  for (let i = 1; i < levels; i++) f = add(f, 1);
+  return f;
+}
 
 /** A nontrivial pipeline: scatter -> density from fbm -> filter -> jitter -> transform. */
 function buildGraph(seed: number): Graph {
@@ -105,11 +119,44 @@ describe("serializeGraph", () => {
     expect(() => serializeGraph(g)).toThrow(/type "rogueNode" is not registered/);
   });
 
-  it("rejects code-authored fields with a pointer to fieldFromJson", () => {
+  it("rejects fields with no derivable spec, naming the node, the param and the cause", () => {
+    // `makeField` takes an arbitrary closure, so no spec can describe it
+    // — and a combinator over one inherits that (undefined propagates).
+    const opaque = makeField("opaque", 1, (ctx) => ({
+      data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
+      tupleSize: 1,
+    }));
     const g = new Graph();
-    const jit = g.add(jitterPoints, { amount: mul(position(), 0.1) }, "jit");
+    const jit = g.add(jitterPoints, { amount: mul(opaque, 0.1) }, "jit");
     g.output(jit, "out");
-    expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*fieldFromJson/);
+    // Matching only "fieldFromJson" could not tell the real message from
+    // one that misstates the cause, so the cause is pinned too.
+    expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
+    expect(() => serializeGraph(g)).toThrow(/makeField closure can never be named/);
+  });
+
+  it("refuses a field nested past the grammar's cap instead of writing an unloadable graph", () => {
+    // The contract is that a derived spec always survives `fieldFromJson`.
+    // A chain one level past the cap therefore carries NO spec, and the
+    // graph refuses up front — rather than serializing to JSON that
+    // `deserializeGraph` would then throw on, which is a saved file that
+    // cannot be opened.
+    const g = new Graph();
+    const jit = g.add(jitterPoints, { amount: addChain(MAX_DEPTH + 1) }, "jit");
+    g.output(jit, "out");
+    expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
+    expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
+    expect(() => serializeGraph(g)).toThrow(/at most 256 levels deep/);
+
+    // One level shallower serializes AND loads back — the refusal is the
+    // cap, not a blanket refusal of deep expressions.
+    const ok = new Graph(4);
+    const src = ok.add(pointScatterInBounds, { count: 8 }, "src");
+    const deep = ok.add(jitterPoints, { amount: addChain(MAX_DEPTH) }, "jit");
+    ok.connect(src, "out", deep, "in");
+    ok.output(deep, "out", "result");
+    const json = serializeGraph(ok);
+    expect(() => deserializeGraph(JSON.parse(JSON.stringify(json)))).not.toThrow();
   });
 });
 
@@ -129,6 +176,29 @@ describe("deserializeGraph round trip", () => {
     const geoB = firstGeo(b.outputs.result);
     expect(geoA.pointCount).toBeGreaterThan(0);
     expect(snapshotGeometry(geoB)).toEqual(snapshotGeometry(geoA));
+  });
+
+  it("round-trips a graph whose field param was built from combinators", async () => {
+    // Before derived specs this threw: a combinator field carried no
+    // spec, so the whole graph was unserializable and the author had to
+    // rewrite the field as JSON. That authoring cliff is what phase 32
+    // removes, so the positive case is pinned here rather than left to
+    // the negative test above to imply.
+    const g = new Graph(9);
+    const src = g.add(pointScatterInBounds, { count: 64 }, "src");
+    const jit = g.add(jitterPoints, { amount: mul(position(), 0.1) }, "jit");
+    g.connect(src, "out", jit, "in");
+    g.output(jit, "out", "result");
+
+    const json = serializeGraph(g);
+    const rebuilt = deserializeGraph(JSON.parse(JSON.stringify(json)));
+    // Idempotent thereafter, and cooks to the same bytes as the graph
+    // that was never serialized at all.
+    expect(serializeGraph(rebuilt)).toEqual(json);
+    const a = firstGeo((await cook(g)).outputs.result);
+    const b = firstGeo((await cook(rebuilt)).outputs.result);
+    expect(a.pointCount).toBeGreaterThan(0);
+    expect(snapshotGeometry(b)).toEqual(snapshotGeometry(a));
   });
 
   it("canonicalizes scalar values on vec field-capable params and cooks identically", async () => {

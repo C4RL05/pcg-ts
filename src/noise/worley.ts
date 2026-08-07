@@ -1,6 +1,9 @@
 import type { Field } from "../fields/index.js";
 import { hashFloat } from "../random/hash.js";
-import { NOISE_RAW_RANGES, type NoiseOpts, hash5, makeNoiseField } from "./util.js";
+import { NOISE_RAW_RANGES, type NoiseOpts, type NoiseSpecInfo, hash5, makeNoiseField } from "./util.js";
+
+/** The `output` values the JSON grammar accepts (TS-only union at the call site). */
+const WORLEY_OUTPUTS: readonly string[] = ["f1", "f2", "f2-f1"];
 
 /** Kind salt decorrelating worley noise from other noise types ("worl"). */
 export const WORLEY_SALT = 0x776f726c;
@@ -47,6 +50,12 @@ export function worleyNoise(opts: WorleyNoiseOpts = {}): Field<1> {
   const exact = opts.exact === true;
   const range = NOISE_RAW_RANGES.worleyNoise[output];
   const kind = `worley:${output}${exact ? ":exact" : ""}`;
+  // `output` is a TS-only union here — nothing checks it at runtime, and
+  // the grammar does. An out-of-union value derives no spec (it has no
+  // documented range either, so the field is already degenerate).
+  const spec: NoiseSpecInfo | undefined = WORLEY_OUTPUTS.includes(output)
+    ? { fn: "worleyNoise", extraOpts: { output, exact } }
+    : undefined;
   return makeNoiseField(kind, WORLEY_SALT, opts, range, (seed) => (x, y, z) => {
     const cx = Math.floor(x);
     const cy = Math.floor(y);
@@ -125,5 +134,5 @@ export function worleyNoise(opts: WorleyNoiseOpts = {}): Field<1> {
       }
     }
     return output === "f1" ? f1 : output === "f2" ? f2 : f2 - f1;
-  });
+  }, spec);
 }

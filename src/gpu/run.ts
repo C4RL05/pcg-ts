@@ -98,7 +98,7 @@ import {
 } from "../fields/index.js";
 import { cloneGeometry } from "../graph/clone.js";
 import { CookCancelledError } from "../graph/errors.js";
-import { getFieldSpec, type FieldSpecArg } from "../nodes/fieldJson.js";
+import { peekAuthoredSpec, type FieldSpecArg } from "../fields/spec.js";
 import { hashCombine } from "../random/index.js";
 import { groupPointsByAsset } from "../spawn/grouping.js";
 import {
@@ -426,7 +426,9 @@ export function planResidentRun(
   ): { param: ApplyParamRef; ref: BufRef | null } => {
     let spec: FieldSpecArg;
     if (isField(value)) {
-      const s = getFieldSpec(value);
+      // Authored specs only — the same gate as `resolveField`, so a run
+      // never fuses what the per-field path would decline.
+      const s = peekAuthoredSpec(value);
       if (s === undefined) throw new PlanFail("no spec");
       spec = s;
     } else if (typeof value === "number" || (Array.isArray(value) && value.every((x) => typeof x === "number"))) {

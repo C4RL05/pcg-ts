@@ -9,6 +9,14 @@ import {
   position,
   resolveField,
 } from "../fields/index.js";
+import {
+  type FieldSpec,
+  MAX_SPEC_DEPTH,
+  attachSpec,
+  isSpecNumber,
+  peekFieldSpec,
+  specDepth,
+} from "../fields/spec.js";
 import { hashFinalize, hashMix, hashSeed } from "../random/hash.js";
 
 /** Options shared by all noise fields. */
@@ -121,6 +129,51 @@ export function normalize01(inner: Field<1>, range: NoiseRange): Field<1> {
 /** A noise constructor usable as an fbm base (e.g. `perlinNoise`). */
 export type NoiseFactory = (opts?: NoiseOpts) => Field<1>;
 
+/**
+ * @internal How a noise factory names itself in the JSON grammar:
+ * `fn` is its `listFieldFns()` entry (which is NOT the internal `kind`
+ * string — `kind` also encodes worley's output/exact selection), and
+ * `extraOpts` are the grammar-legal options beyond the shared five. A
+ * factory passes `undefined` to opt out of deriving a spec at all.
+ */
+export interface NoiseSpecInfo {
+  readonly fn: string;
+  readonly extraOpts?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * @internal The `opts` object of a derived noise spec, or undefined when
+ * any option falls outside what the grammar's parser accepts. The
+ * factories are looser than the parser (`seed` is coerced with `>>> 0`,
+ * `frequency`/`offset` are never checked for finiteness), so a spec
+ * derived from raw arguments could be one `fieldFromJson` would reject —
+ * and a spec that cannot be parsed back must never be produced.
+ *
+ * Values are the NORMALIZED ones that already feed the structural key,
+ * so the rebuilt field is key-identical.
+ */
+export function noiseOptsSpec(
+  opts: NoiseOpts,
+  seed: number,
+  frequency: number,
+  offset: readonly number[],
+  positionSpec: FieldSpec | undefined,
+  extra: Readonly<Record<string, unknown>> | undefined,
+): Record<string, unknown> | undefined {
+  if (opts.seed !== undefined && !Number.isInteger(opts.seed)) return undefined;
+  if (!isSpecNumber(frequency)) return undefined;
+  if (offset.length !== 3 || !offset.every(isSpecNumber)) return undefined;
+  if (opts.position !== undefined && positionSpec === undefined) return undefined;
+  const out: Record<string, unknown> = {
+    seed,
+    frequency,
+    offset: [offset[0], offset[1], offset[2]],
+  };
+  if (opts.position !== undefined) out.position = positionSpec;
+  if (extra !== undefined) Object.assign(out, extra);
+  return out;
+}
+
 /** Fixed-arity hashCombine(a, b): identical output, no rest-array alloc. */
 export function hash2(a: number, b: number): number {
   return hashFinalize(hashMix(hashMix(hashSeed(2), a), b));
@@ -164,6 +217,9 @@ export const GRAD3: Float32Array = new Float32Array([
  * `rawRange` is the sampler's documented output range; when
  * `opts.normalized` is set the raw field is wrapped with
  * {@link normalize01} (the raw path stays bit-identical).
+ *
+ * `spec` names the factory in the JSON grammar so the field can carry a
+ * derived {@link FieldSpec}; pass `undefined` to derive none.
  */
 export function makeNoiseField(
   kind: string,
@@ -171,10 +227,12 @@ export function makeNoiseField(
   opts: NoiseOpts,
   rawRange: NoiseRange,
   makeSampler: (seed: number) => (x: number, y: number, z: number) => number,
+  spec: NoiseSpecInfo | undefined,
 ): Field<1> {
   const seed = (opts.seed ?? 0) >>> 0;
   const frequency = opts.frequency ?? 1;
-  const [ox, oy, oz] = opts.offset ?? [0, 0, 0];
+  const offset = opts.offset ?? [0, 0, 0];
+  const [ox, oy, oz] = offset;
   const pos = resolveField(opts.position ?? position());
   const key = `${kind}(${seed},${keyNum(frequency)},${keyNum(ox)},${keyNum(oy)},${keyNum(oz)};${keyRef(pos.key)})`;
   const sample = makeSampler(hash2(kindSalt, seed));
@@ -196,5 +254,26 @@ export function makeNoiseField(
     return { data: out, tupleSize: 1 };
   });
   setNoiseOutputRange(raw, rawRange);
-  return opts.normalized === true ? normalize01(raw, rawRange) : raw;
+  // Only an EXPLICIT position lands in the spec (the default is implied by
+  // its absence), so only that one contributes a nesting level.
+  const positionSpec = opts.position === undefined ? undefined : peekFieldSpec(pos);
+  const optsSpec =
+    spec === undefined
+      ? undefined
+      : noiseOptsSpec(opts, seed, frequency, offset, positionSpec, spec.extraOpts);
+  // One level for the noise spec itself, plus the position it nests.
+  const depth = 1 + specDepth(positionSpec);
+  const fitsDepth = depth <= MAX_SPEC_DEPTH;
+  if (spec !== undefined && optsSpec !== undefined && fitsDepth) {
+    attachSpec(raw, { fn: spec.fn, opts: optsSpec }, depth);
+  }
+  if (opts.normalized !== true) return raw;
+  // `normalize01` builds a fresh field through `makeField`, so the
+  // wrapper needs its own spec — the same one with `normalized: true`,
+  // which is exactly how the grammar reaches this shape.
+  const wrapped = normalize01(raw, rawRange);
+  if (spec !== undefined && optsSpec !== undefined && fitsDepth) {
+    attachSpec(wrapped, { fn: spec.fn, opts: { ...optsSpec, normalized: true } }, depth);
+  }
+  return wrapped;
 }

@@ -18,7 +18,8 @@ import {
   transformPoints,
   volumeSample,
 } from "../nodes/index.js";
-import { fieldFromJson, getFieldSpec } from "../nodes/fieldJson.js";
+import { peekAuthoredSpec } from "../fields/spec.js";
+import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
 
@@ -29,7 +30,7 @@ function stubResolver(salt: string): GpuFieldResolver & { calls: number } {
     cacheSalt: salt,
     resolveField(field, ctx, stats) {
       stub.calls++;
-      if (getFieldSpec(field) === undefined) {
+      if (peekAuthoredSpec(field) === undefined) {
         if (stats !== undefined) stats.fallbacks["no-spec"] = (stats.fallbacks["no-spec"] ?? 0) + 1;
         return null;
       }

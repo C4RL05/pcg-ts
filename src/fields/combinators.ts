@@ -1,4 +1,5 @@
 import { resolveField } from "./inputs.js";
+import { argSpecs, attachSpec, isSpecNumber } from "./spec.js";
 import {
   type Column,
   type Field,
@@ -45,7 +46,7 @@ function elementwise(
   const fields = inputs.map(resolveField);
   const staticTs = broadcastTupleSize(kind, fields.map((f) => f.tupleSize));
   const key = `${kind}(${fields.map((f) => keyRef(f.key)).join(",")})`;
-  return makeField(key, staticTs, (ctx) => {
+  const field = makeField(key, staticTs, (ctx) => {
     const cols = fields.map((f) => evaluateField(f, ctx));
     const ts = broadcastTupleSize(kind, cols.map((c) => c.tupleSize)) ?? 1;
     const n = elementCount(ctx);
@@ -60,6 +61,12 @@ function elementwise(
     }
     return { data: out, tupleSize: ts };
   });
+  // `kind` IS the grammar fn name for every elementwise combinator — one
+  // derivation covers all 24. `elementwiseKindsAreRegisteredFns` in
+  // spec.test.ts pins that correspondence so it cannot drift.
+  const args = argSpecs(fields);
+  if (args !== undefined) attachSpec(field, { fn: kind, args: args.specs }, args.depth);
+  return field;
 }
 
 /** Elementwise a + b. */
@@ -242,7 +249,7 @@ export function dot(a: FieldLike, b: FieldLike): Field<1> {
   const fa = resolveField(a);
   const fb = resolveField(b);
   broadcastTupleSize("dot", [fa.tupleSize, fb.tupleSize]); // static check
-  return makeField(`dot(${keyRef(fa.key)},${keyRef(fb.key)})`, 1, (ctx) => {
+  const field = makeField<1>(`dot(${keyRef(fa.key)},${keyRef(fb.key)})`, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const cb = evaluateField(fb, ctx);
     const ts = broadcastTupleSize("dot", [ca.tupleSize, cb.tupleSize]) ?? 1;
@@ -255,12 +262,15 @@ export function dot(a: FieldLike, b: FieldLike): Field<1> {
     }
     return { data: out, tupleSize: 1 };
   });
+  const args = argSpecs([fa, fb]);
+  if (args !== undefined) attachSpec(field, { fn: "dot", args: args.specs }, args.depth);
+  return field;
 }
 
 /** Euclidean length of each element tuple. */
 export function length(a: FieldLike): Field<1> {
   const fa = resolveField(a);
-  return makeField(`length(${keyRef(fa.key)})`, 1, (ctx) => {
+  const field = makeField<1>(`length(${keyRef(fa.key)})`, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const ts = ca.tupleSize;
     const n = elementCount(ctx);
@@ -275,12 +285,15 @@ export function length(a: FieldLike): Field<1> {
     }
     return { data: out, tupleSize: 1 };
   });
+  const args = argSpecs([fa]);
+  if (args !== undefined) attachSpec(field, { fn: "length", args: args.specs }, args.depth);
+  return field;
 }
 
 /** Normalize each element tuple to unit length (zero tuples stay zero). */
 export function normalize(a: FieldLike): Field {
   const fa = resolveField(a);
-  return makeField(`normalize(${keyRef(fa.key)})`, fa.tupleSize, (ctx) => {
+  const field = makeField(`normalize(${keyRef(fa.key)})`, fa.tupleSize, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const ts = ca.tupleSize;
     const n = elementCount(ctx);
@@ -296,6 +309,9 @@ export function normalize(a: FieldLike): Field {
     }
     return { data: out, tupleSize: ts };
   });
+  const args = argSpecs([fa]);
+  if (args !== undefined) attachSpec(field, { fn: "normalize", args: args.specs }, args.depth);
+  return field;
 }
 
 /**
@@ -310,7 +326,7 @@ export function vec(...components: FieldLike[]): Field {
     ? sizes.reduce<number>((acc, s) => acc + (s as number), 0)
     : undefined;
   const key = `vec(${fields.map((f) => keyRef(f.key)).join(",")})`;
-  return makeField(key, staticTs, (ctx) => {
+  const field = makeField(key, staticTs, (ctx) => {
     const cols = fields.map((f) => evaluateField(f, ctx));
     const ts = cols.reduce((acc, c) => acc + c.tupleSize, 0);
     const n = elementCount(ctx);
@@ -323,6 +339,9 @@ export function vec(...components: FieldLike[]): Field {
     }
     return { data: out, tupleSize: ts };
   });
+  const args = argSpecs(fields);
+  if (args !== undefined) attachSpec(field, { fn: "vec", args: args.specs }, args.depth);
+  return field;
 }
 
 /** Extract one component of each element tuple as a scalar field. */
@@ -331,7 +350,7 @@ export function component(a: FieldLike, componentIndex: number): Field<1> {
     throw new Error(`component: index must be a non-negative integer, got ${componentIndex}`);
   }
   const fa = resolveField(a);
-  return makeField(`component(${keyRef(fa.key)},${componentIndex})`, 1, (ctx) => {
+  const field = makeField<1>(`component(${keyRef(fa.key)},${componentIndex})`, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     const ts = ca.tupleSize;
     if (componentIndex >= ts) {
@@ -342,6 +361,12 @@ export function component(a: FieldLike, componentIndex: number): Field<1> {
     for (let i = 0; i < n; i++) out[i] = ca.data[i * ts + componentIndex];
     return { data: out, tupleSize: 1 };
   });
+  // `componentIndex` was already validated exactly as the grammar does.
+  const args = argSpecs([fa]);
+  if (args !== undefined) {
+    attachSpec(field, { fn: "component", args: args.specs, index: componentIndex }, args.depth);
+  }
+  return field;
 }
 
 /**
@@ -364,7 +389,7 @@ export function ramp(
   const fa = resolveField(input);
   const stopsKey = stops.map((s) => `${keyNum(s[0])}:${keyNum(s[1])}`).join(",");
   const key = `ramp(${keyRef(fa.key)};${stopsKey})`;
-  return makeField(key, 1, (ctx) => {
+  const field = makeField<1>(key, 1, (ctx) => {
     const ca = evaluateField(fa, ctx);
     if (ca.tupleSize !== 1) {
       throw new Error(`ramp: input must be scalar, got tupleSize ${ca.tupleSize}`);
@@ -389,4 +414,15 @@ export function ramp(
     }
     return { data: out, tupleSize: 1 };
   });
+  // Ascending order is already enforced above (more strictly than the
+  // grammar checks), but finiteness is not — and the grammar requires it.
+  const args = argSpecs([fa]);
+  if (args !== undefined && ts.every(isSpecNumber) && vs.every(isSpecNumber)) {
+    attachSpec(
+      field,
+      { fn: "ramp", args: args.specs, stops: stops.map((s) => [s[0], s[1]]) },
+      args.depth,
+    );
+  }
+  return field;
 }

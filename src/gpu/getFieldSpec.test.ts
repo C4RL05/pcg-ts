@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { add, constant, mul, position } from "../fields/index.js";
+import { add, constant, makeField, mul, position } from "../fields/index.js";
 import { perlinNoise } from "../noise/index.js";
 import { type FieldSpec, fieldFromJson, getFieldSpec } from "../nodes/fieldJson.js";
 import { compileFieldSpec } from "./index.js";
@@ -14,10 +14,35 @@ describe("getFieldSpec", () => {
     expect(getFieldSpec(field)).toEqual(spec);
   });
 
-  it("returns undefined for code-authored fields", () => {
-    expect(getFieldSpec(constant(1))).toBeUndefined();
-    expect(getFieldSpec(add(position(), 1))).toBeUndefined();
-    expect(getFieldSpec(mul(perlinNoise({ seed: 3 }), 2))).toBeUndefined();
+  it("returns a derived spec for code-authored fields, and compiles it", () => {
+    // Was a pinned negative: code-authored fields used to carry nothing.
+    // They now derive a spec from their inputs', and because the derived
+    // spec is a grammar spec it compiles to WGSL like any other.
+    expect(getFieldSpec(constant(1))).toEqual({ fn: "constant", value: 1 });
+    expect(getFieldSpec(add(position(), 1))).toEqual({
+      fn: "add",
+      args: [{ fn: "position" }, { fn: "constant", value: 1 }],
+    });
+    const noiseSpec = getFieldSpec(mul(perlinNoise({ seed: 3 }), 2));
+    expect(noiseSpec).toEqual({
+      fn: "mul",
+      args: [
+        { fn: "perlinNoise", opts: { seed: 3, frequency: 1, offset: [0, 0, 0] } },
+        { fn: "constant", value: 2 },
+      ],
+    });
+    expect(() => compileFieldSpec(noiseSpec!, { attributes: { P: { type: "f32", tupleSize: 3 } } })).not.toThrow();
+  });
+
+  it("returns undefined for fields whose evaluator is an opaque closure", () => {
+    const opaque = makeField("opaque", 1, (ctx) => ({
+      data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
+      tupleSize: 1,
+    }));
+    expect(getFieldSpec(opaque)).toBeUndefined();
+    // ...and undefined propagates through every combinator above it.
+    expect(getFieldSpec(add(opaque, 1))).toBeUndefined();
+    expect(getFieldSpec(mul(perlinNoise({ position: opaque }), 2))).toBeUndefined();
   });
 
   it("returns a defensive copy", () => {

@@ -834,11 +834,24 @@ Design decisions fixed up front:
 - Exit: a property test over all 40 constructors × an argument matrix
   proving `fieldFromJson(getFieldSpec(f))` evaluates byte-identically
   to `f`; `getFieldSpec` undefined for `makeField` and any tree
-  containing one, for `fbm` with a non-built-in base, and for noise
-  over a spec-less `position`; a test pinning `elementwise`'s `kind`
-  set equal to the registered fn set; existing round-trip tests
-  unchanged and green; **full suite green with no resolver, CPU bytes
-  and memo keys byte-identical to v0.8.0**. Commit.
+  containing one, and for noise over a spec-less `position`; a test
+  pinning `elementwise`'s `kind` set equal to the registered fn set;
+  existing round-trip tests unchanged and green; **full suite green
+  with no resolver, CPU bytes and memo keys byte-identical to
+  v0.8.0**. Commit.
+- Amended during the phase, deliberately: this originally required
+  `getFieldSpec` to be `undefined` for `fbm` with a non-built-in
+  `base`. It is not. A custom base built from spec'd octaves composes
+  a faithful `add`/`mul` octave tree, and erasing a spec that already
+  round-trips would serve the plan rather than the user. Deep cases
+  still yield `undefined`, but through the depth rule below rather
+  than through the base.
+- Also learned the hard way, and now a rule rather than a footnote:
+  **derivation must refuse at the same nesting depth the parser
+  enforces**, sharing the limit rather than restating it. Producing a
+  spec deeper than `MAX_SPEC_DEPTH` let `serializeGraph` emit JSON
+  that `deserializeGraph` then rejected — a graph that saves and
+  cannot be reopened, which is worse than one that refuses to save.
 
 ### Phase 33 — Device adoption, gated
 - `GpuFieldEvaluatorOptions.acceptDerivedSpecs` (default `false`),
@@ -851,6 +864,12 @@ Design decisions fixed up front:
 - Parity corpus extended with the derived forms plus the three
   `02-forest` fields, on real hardware against existing per-family
   budgets.
+- **Hazard carried over from phase 32's audit:** `fieldFromJson({fn:
+  "position"})` permanently stamps an authored spec onto the global
+  `position` singleton. Verified identical in v0.8.0, so it is not a
+  regression — but once acceptance is gated, one call anywhere could
+  make every `position()` in the process look authored rather than
+  derived, and eligibility would depend on load order. Settle it here.
 - Exit: gate off — every byte and memo key identical to v0.8.0 across
   the full suite including device suites; gate on — a test proving the
   salt mark and the resolver's acceptance agree for every node type,

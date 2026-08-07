@@ -1,12 +1,38 @@
-import { type Field, add, mul } from "../fields/index.js";
+import { type Field, add, mul, resolveField } from "../fields/index.js";
+import { MAX_SPEC_DEPTH, attachSpec, isSpecNumber, peekFieldSpec, specDepth } from "../fields/spec.js";
 import { hashCombine } from "../random/index.js";
+import { perlinNoise } from "./perlin.js";
+import { simplexNoise } from "./simplex.js";
 import {
   type NoiseFactory,
   type NoiseOpts,
+  noiseOptsSpec,
   noiseOutputRange,
   normalize01,
   setNoiseOutputRange,
 } from "./util.js";
+import { valueNoise } from "./value.js";
+import { worleyNoise } from "./worley.js";
+
+/**
+ * The four factories the JSON grammar's `base` names. A base outside
+ * this table cannot be named in a spec, so an fbm over one derives no
+ * `fbm` spec of its own — it keeps whatever spec its `add`/`mul` octave
+ * tree composed, which is `undefined` unless every octave is spec'd.
+ */
+const BUILT_IN_BASES: ReadonlyArray<readonly [NoiseFactory, string]> = [
+  [valueNoise, "valueNoise"],
+  [perlinNoise, "perlinNoise"],
+  [simplexNoise, "simplexNoise"],
+  [worleyNoise, "worleyNoise"],
+];
+
+function baseName(base: NoiseFactory): string | undefined {
+  for (const [factory, name] of BUILT_IN_BASES) {
+    if (factory === base) return name;
+  }
+  return undefined;
+}
 
 /** Options for {@link fbm}. */
 export interface FbmOpts extends NoiseOpts {
@@ -67,6 +93,8 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
   // All terms are scalar fields, so the sum is too.
   const raw = sum as Field<1>;
   if (rangeKnown) setNoiseOutputRange(raw, [lo, hi]);
+  const derived = deriveFbmSpec(base, opts, { octaves, lacunarity, gain, seed, frequency });
+  if (derived !== undefined) attachSpec(raw, derived.spec, derived.depth);
   if (opts.normalized !== true) return raw;
   if (!rangeKnown) {
     throw new Error(
@@ -82,5 +110,58 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
         "for this octaves/gain configuration",
     );
   }
-  return normalize01(raw, [lo, hi]);
+  const wrapped = normalize01(raw, [lo, hi]);
+  if (derived !== undefined) {
+    attachSpec(
+      wrapped,
+      { ...derived.spec, opts: { ...derived.spec.opts, normalized: true } },
+      derived.depth,
+    );
+  }
+  return wrapped;
+}
+
+/**
+ * The derived spec for an fbm result and its nesting depth, or undefined
+ * when it cannot be named in the grammar: a base outside {@link
+ * BUILT_IN_BASES}, or an option outside what the grammar's parser accepts
+ * (`fbm` never checks `lacunarity`/`gain` for finiteness, so those must
+ * be filtered here).
+ *
+ * `octaves` is already validated identically by the constructor, and
+ * `seed` by {@link noiseOptsSpec} — it rejects a non-integer `opts.seed`,
+ * which is the same condition as a non-integer `resolved.seed` because
+ * `resolved.seed` is `opts.seed ?? 0`. (`-0` needs no guard of its own:
+ * `hashCombine` cannot tell it from `0`, so both build the identical
+ * field and JSON's `-0` → `0` cannot change what the spec means.)
+ */
+function deriveFbmSpec(
+  base: NoiseFactory,
+  opts: FbmOpts,
+  resolved: {
+    octaves: number;
+    lacunarity: number;
+    gain: number;
+    seed: number;
+    frequency: number;
+  },
+): { spec: { fn: "fbm"; base: string; opts: Record<string, unknown> }; depth: number } | undefined {
+  const name = baseName(base);
+  if (name === undefined) return undefined;
+  if (!isSpecNumber(resolved.lacunarity) || !isSpecNumber(resolved.gain)) return undefined;
+  const positionSpec =
+    opts.position === undefined ? undefined : peekFieldSpec(resolveField(opts.position));
+  const optsSpec = noiseOptsSpec(
+    opts,
+    resolved.seed,
+    resolved.frequency,
+    opts.offset ?? [0, 0, 0],
+    positionSpec,
+    { octaves: resolved.octaves, lacunarity: resolved.lacunarity, gain: resolved.gain },
+  );
+  if (optsSpec === undefined) return undefined;
+  // One level for the `fbm` spec, plus the position nested in its opts.
+  const depth = 1 + specDepth(positionSpec);
+  if (depth > MAX_SPEC_DEPTH) return undefined;
+  return { spec: { fn: "fbm", base: name, opts: optsSpec }, depth };
 }

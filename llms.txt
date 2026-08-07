@@ -195,9 +195,12 @@ Nested example — density in [0,1] from remapped 4-octave noise:
     0, 1 ] }
 ```
 
-In code, only fields built by `fieldFromJson(spec)` serialize back via
-`fieldToJson`; hand-composed combinator fields cook fine but cannot be
-serialized.
+In code, both `fieldFromJson(spec)` fields and combinator-composed
+fields serialize back via `fieldToJson` — a combinator derives its spec
+from its arguments. Only three cases refuse: a `makeField` closure, any
+field composed over one, and a tree deeper than the spec depth limit.
+Note this is about DESCRIBING a field, not about where it runs: device
+eligibility still requires an AUTHORED spec (see the GPU section).
 
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 
