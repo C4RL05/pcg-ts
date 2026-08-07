@@ -750,6 +750,135 @@ Design decisions fixed up front:
 - Exit: full suite green, docs idempotent, example browser-verified,
   release tagged. Commit.
 
+## Phases (v0.9) — derived field specs, scheduled 2026-08-07
+
+There are two ways to build a `Field` and only one of them is a
+first-class citizen. Author it with `fieldFromJson` and it carries a
+`FieldSpec`: it serializes, and it can reach the device. Author it with
+the ergonomic combinator API — `component(position(), 1)`,
+`ge(randomField("species"), 0.72)` — and it carries nothing.
+
+The consequence people actually hit is **not** the GPU one. A graph
+holding a combinator field **cannot be serialized at all**:
+`serializeGraph` throws and points at `fieldFromJson`. For a library
+whose stated pillar is that graphs round-trip through a stable JSON
+format, that is an authoring cliff between the pleasant API and the
+supported one. The GPU eligibility is a smaller, secondary gain, and
+this cycle should be judged on the serialization fix.
+
+Feasibility settled before scheduling. 40 of 42 exported constructors
+can derive a spec from their arguments, and 24 of them through a single
+edit in `elementwise()`, whose `kind` string already *is* the grammar
+`fn` name. There are no callbacks anywhere in the combinator API, so
+the only genuinely spec-less cases are `makeField` (by design), `fbm`
+with a non-built-in `base`, and noise over a spec-less `position` — all
+covered by one `undefined`-propagation rule. `supportedGpuFieldFns()`
+already equals `listFieldFns()`, so no grammar entries and no new WGSL
+are needed.
+
+Measured honestly, the fusion gain is small: `02-forest` goes from
+1 run / 1 member to 2 runs / 3 members, and `08-gpu-fields` and
+`09-gpu-world` gain nothing because they are already spec'd. Say so in
+the docs rather than implying more.
+
+Design decisions fixed up front:
+
+- **Device adoption is opt-in, default off**, behind
+  `GpuFieldEvaluatorOptions.acceptDerivedSpecs`, mirroring
+  `deviceInstances`. This is not caution for its own sake: the GPU path
+  is a documented approximation of the CPU one, so making more nodes
+  eligible would change output bytes for graphs that never asked for
+  it — and README:366 currently *promises* the opposite ("Code-authored
+  combinator fields have no spec and stay on the CPU"). The memo salt
+  covers cache correctness but not output stability, so it does not
+  save us here. With the gate off, every byte and every memo key is
+  identical to v0.8.0.
+- **Specs are derived, not remembered.** Each constructor composes
+  `{fn, args}` from its inputs' specs and propagates `undefined` when
+  any input lacks one. `makeField` never attaches, so the escape hatch
+  behaves exactly as today.
+- **Two descriptions of one field is the new risk**, and it gets tested
+  rather than argued: every constructor must satisfy
+  `fieldFromJson(getFieldSpec(f))` ≡ `f` byte-for-byte on the CPU.
+- **One predicate, not three.** The memo-salt mark, the fusion gate and
+  the evaluator's acceptance must consult the same flag through the
+  same path, or a node can resolve on device without its key gaining
+  the salt — a stale-cache bug.
+- **The spec module moves down; the constructors do not move up.**
+  `FieldSpec` and its accessors relocate to `src/fields/spec.ts`, and
+  `src/nodes/fieldJson.ts` re-exports them, so the public surface is
+  unchanged.
+
+### Phase 32 — Derived specs in the field layer
+- New `src/fields/spec.ts` holding `FieldSpec`, `FIELD_SPEC`,
+  `getFieldSpec` (cloning, public), `peekFieldSpec` (non-cloning,
+  internal), `attachSpec`, and a `WeakSet` derived marker. The marker
+  must NOT be a key inside the spec object — `checkKeys` rejects
+  unknown keys and would break the round-trip.
+- `elementwise()` composes `{fn: kind, args}`, covering 24
+  constructors at once; `vec`, `component`, `ramp`, `dot`, `length`,
+  `normalize` attach individually; `constant`, `attribute`,
+  `position`, `index`, `randomField` attach leaf specs.
+  `makeNoiseField` attaches `{fn, opts}` including the nested
+  `position` spec; `fbm` reverse-looks-up `base` against the built-in
+  factories and attaches nothing otherwise.
+- Derive from the **normalized** values that already feed the
+  structural key, and attach nothing when a value falls outside the
+  grammar's accepted domain (non-finite `constant`, empty attribute
+  name, non-integer noise seed, …) — code-side validation is looser
+  than the parser's, and a spec that would not survive parsing must
+  not be produced.
+- Swap the hot readers to `peekFieldSpec`; share child spec structure
+  rather than cloning per level. Rewrite the two pinned negatives to
+  assert the new rule rather than deleting them.
+- Exit: a property test over all 40 constructors × an argument matrix
+  proving `fieldFromJson(getFieldSpec(f))` evaluates byte-identically
+  to `f`; `getFieldSpec` undefined for `makeField` and any tree
+  containing one, for `fbm` with a non-built-in base, and for noise
+  over a spec-less `position`; a test pinning `elementwise`'s `kind`
+  set equal to the registered fn set; existing round-trip tests
+  unchanged and green; **full suite green with no resolver, CPU bytes
+  and memo keys byte-identical to v0.8.0**. Commit.
+
+### Phase 33 — Device adoption, gated
+- `GpuFieldEvaluatorOptions.acceptDerivedSpecs` (default `false`),
+  advertised on the resolver and forwarded through the stats view
+  exactly as `residentTerminals` is.
+- Both `execute.ts` predicates and the run planner consult that one
+  flag. With the gate off, a derived-spec field resolves on the CPU
+  and counts a new reason `"derived-spec"`, distinct from `"no-spec"`,
+  which keeps its meaning for genuinely spec-less fields.
+- Parity corpus extended with the derived forms plus the three
+  `02-forest` fields, on real hardware against existing per-family
+  budgets.
+- Exit: gate off — every byte and memo key identical to v0.8.0 across
+  the full suite including device suites; gate on — a test proving the
+  salt mark and the resolver's acceptance agree for every node type,
+  so no node resolves on device without `|gpu:` in its key; parity
+  green within existing budgets, any overrun reported as a finding
+  rather than absorbed. Commit.
+
+### Phase 34 — Serialization, examples, docs, v0.9.0
+- **The headline.** `serializeGraph` now succeeds for combinator-field
+  params. Rewrite the pinned refusal into a round-trip assertion
+  (serialize → deserialize → cook, byte-identical), and keep a
+  negative proving a `makeField` param still refuses with the same
+  actionable message.
+- `examples/02-forest`: enable `acceptDerivedSpecs`, update the
+  readouts to the real numbers, and rewrite the "why one fused member"
+  panel — including dropping any implication that a spec alone would
+  fuse `scale`. Record that the surviving breaks are the two
+  `filterByAttribute` nodes and the string `setAttribute`.
+- Docs: the eligibility rule, the fallback vocabulary (no longer
+  complete without `derived-spec`), the cache-provenance sentence, and
+  the serialization section.
+- Decide the default: flip `acceptDerivedSpecs` to `true` only if
+  phase 33's hardware evidence is clean; otherwise ship opt-in and
+  schedule the flip for v0.10 with the evidence recorded.
+- Version 0.9.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, `02-forest` browser-verified
+  on both toggles, release tagged. Commit.
+
 ## Stretch — surveyed and NOT scheduled
 
 - **Device-produced asset keys** (make `setAttribute` resident in
@@ -782,13 +911,22 @@ Design decisions fixed up front:
   If it is ever revisited, the design to build is the cheap one: read
   back the key column and reuse the shipped `groupPointsByAsset`.
 
-- **The better opener, and the root cause behind all three findings:**
-  give code-authored field combinators their own `FieldSpec`s (or
-  author the example fields with `fieldFromJson`). Today a field built
-  from combinators cannot reach the device at all, which is why
-  `02-forest` reports `no-spec` fallbacks and fuses one member. That
-  limits every demo and every user graph that does not hand-write JSON,
-  and fixing it needs no new GPU machinery.
+- ~~**The better opener:** give code-authored field combinators their
+  own `FieldSpec`s.~~ Surveyed and **scheduled as v0.9, phases 32-34**
+  above. The survey confirmed it is cheap but reframed the reason: the
+  GPU gain is small (`02-forest` 1 member → 3), while the real cost of
+  today's behaviour is that a graph holding a combinator field cannot
+  be serialized at all.
+
+- **A `resident` descriptor for `filterByAttribute`** (a count-changing
+  resident member). This, not field specs, is what would actually put
+  the forest's chain on the device — its two `filterByAttribute` nodes
+  survive v0.9 as chain breaks. Larger and independent; survey
+  separately before believing any estimate of it.
+
+- **Give `04-infinite-world` a GPU evaluator.** It has `09-gpu-world`'s
+  shape authored with combinators, so it becomes the natural showcase
+  once v0.9 lands — but it is example work, not library work.
 
 Full survey: `notes/research/v09-device-keys-survey.md` in the private
 repo.
