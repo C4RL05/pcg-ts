@@ -364,6 +364,13 @@ Surface:
     invalid params.
   - `run-too-large` — a run's resident working set exceeds
     `maxResidentBytes`. Counted once per rejected run.
+  - `spawn-asset-attr` — a NODE-level opt-out (`ResidentDesc.eligible`
+    returned this string): `spawnInstances` with a non-empty
+    `assetAttr` cannot terminate a device-resident run (grouping by a
+    per-point string asset id is a device-side sort this pipeline does
+    not implement). Counted once per cook per such node, whether or not
+    a run formed around it; the node spawns on the CPU with
+    byte-identical transforms and the chain in front of it still fuses.
   - Element count is NEVER a fallback reason; `dispatch-too-large` no
     longer exists (chunking removed it).
 - `NodeDef.gpu?: "fields" | "always"` — GPU-adoption marker. `"fields"`
@@ -386,12 +393,16 @@ Surface:
   idle bytes the buffer pool retains; `0` disables retention);
   `maxElementsPerDispatch?` (chunk size override, byte-invisible,
   intended for tests forcing chunk seams — production code leaves it
-  unset; default `65535 × workgroupSize` = 4 194 240 at wg 64).
+  unset; default `65535 × workgroupSize` = 4 194 240 at wg 64);
+  `deviceInstances?` (default false — opt in to device-resident
+  instance transforms; see "Device-resident instancing" below).
 - `evaluator.dispose()` destroys pooled (idle) buffers only; in-flight
   buffers stay valid and re-pool on release and the evaluator remains
-  usable (pipeline/kernel caches untouched). `evaluator.poolStats` →
-  `{ buffersCreated, buffersReused, buffersDestroyed, pooledBuffers,
-  pooledBytes }`.
+  usable (pipeline/kernel caches untouched). DETACHED buffers (device
+  transform handles) are untouched too — the pool does not own them.
+  `evaluator.poolStats` → `{ buffersCreated, buffersReused,
+  buffersDestroyed, pooledBuffers, pooledBytes, buffersDetached,
+  detachedBuffers, detachedBytes }`.
 - Pipelines cache on the evaluator instance (keyed by kernel
   specialization key = codegen version + spec key + attribute layout)
   and persist across cooks; `pipelineCacheSize` getter for tools.
@@ -424,17 +435,22 @@ Device-resident runs (fusion):
     from the node def's `resident` descriptor, `seed` exactly what the
     CPU execute would receive). `ResidentRunContext` = `{ attributes:
     Record<name, { type, tupleSize }>, count }`.
-- Fusable node kinds (exactly four, all count-preserving, one geometry
+- Fusable CHAIN kinds (exactly four, all count-preserving, one geometry
   in / one geometry out): `setAttribute` (numeric mode only — not
   `type: "string"`, `domain: "point"`, empty `values`, empty
   `stringValue`), `transformPoints`, `jitterPoints`,
-  `orientAlongVector`.
+  `orientAlongVector`. Plus one TERMINAL kind, `spawnInstances`
+  (`ResidentDesc.terminal: true`): it may be a run's LAST member, a
+  chain never continues through it, and it joins a run only when the
+  resolver lists its kind in `residentTerminals` — see
+  "Device-resident instancing" below.
 - Boundary rules — the executor takes MAXIMAL linear chains and stops
   when: the tail has ≠ 1 outgoing connection (any fan-out, counting
   connections to nodes outside this cook's selection), the tail carries
   a declared graph output, the consumer is outside the cooked
   selection, the consumer is not fusable, or the consumer's incoming
-  set is not exactly the tail. A chain of length 1 is not a run.
+  set is not exactly the tail. A chain of length 1 is not a run —
+  EXCEPT a lone TERMINAL, which is (see "Device-resident instancing").
   Detection is conservative: it under-fuses, never over-fuses. An
   interior node with external consumers becomes a run terminal with its
   own readback — fusion never changes which bytes the graph observes.
@@ -462,9 +478,127 @@ Device-resident runs (fusion):
   editing a constant hits the pipeline cache instead of recompiling.
   A kernel carries at most `MAX_APPLY_CONST_SLOTS` (4) constant slots.
 - Third-party `resident` kinds: `NodeDef.resident?: { kind: string;
-  eligible?(params): boolean }`. `eligible` runs outside the executor's
-  error wrapping — it must be cheap, pure, and total; an exception
-  there escapes `cook()` unwrapped.
+  eligible?(params): boolean | string; terminal?: boolean }`.
+  `eligible` runs outside the executor's error wrapping — it must be
+  cheap, pure, and total; an exception there escapes `cook()`
+  unwrapped. Returning a non-empty STRING means the same as `false`
+  (does not fuse) but names the reason, which the executor counts once
+  per cook in `fallbacks` under exactly that key — use it for
+  author-actionable cases, plain `false` otherwise. `terminal: true`
+  permits output pins beyond the single geometry one (the resolver must
+  then model every extra pin) and requires the resolver to advertise
+  the kind in `residentTerminals`.
+
+Device-resident instancing (pcg-ts/gpu + pcg-ts/three) — v0.7.0:
+
+- Opt in: `new GpuFieldEvaluator(device, { deviceInstances: true })`.
+  That sets `evaluator.residentTerminals = ["spawnInstances"]`; default
+  `[]`, and with `[]` the spawner cooks byte-for-byte as it always has.
+- Terminal contract. A `spawnInstances` whose `assetAttr` is `""` may
+  end a run. The run appends a compose-TRS kernel writing one
+  column-major 4x4 f32 per point (`count * 64` bytes, exactly the
+  `InstanceBatch` layout) into a buffer it then `BufferPool.detach`es.
+  A LONE spawner IS a run under the opt-in (the single-node exception:
+  fusion is the only way to produce device output at all). When
+  `ResidentRunContext.needsGeometry` is false — the terminal's geometry
+  pin is neither connected nor a declared output — the run does NO
+  readback: no `mapAsync`, no staging buffer, no CPU copy of
+  P/rot/scale. `stats.readbacksSaved` then contributes `members`, the
+  one case where `readbacksSaved === fusedNodes - residentRuns` fails.
+- What the caller receives: the terminal's instances pin carries an
+  `InstancesItem` with `deviceBatches?: readonly DeviceInstanceBatch[]`
+  (`{ residency: "device", assetId, count, transforms }`), NOT
+  `batches`. Reading `.batches` on it THROWS (naming both fixes) —
+  probe with `isDeviceResidentInstances(item)` or
+  `item.deviceBatches !== undefined` FIRST. `transforms` is a
+  `DeviceTransformsHandle`: `{ backend: string; byteLength: number;
+  disposed: boolean; resource: unknown; dispose(): void }` — opaque,
+  never a `Float32Array`. `deviceTransformsBuffer(handle)`
+  (`pcg-ts/gpu`) narrows `resource` to the backend buffer; bind exactly
+  `byteLength` bytes from offset 0 (pool buckets to pow2 — the tail is
+  uninitialized). Wrong backend or a disposed handle throws.
+- SHARED DEVICE IS MANDATORY. One `GPUDevice` must back both the
+  `GpuFieldEvaluator` and the `THREE.WebGPURenderer`: a `GPUBuffer`
+  belongs to the device that created it, two devices cannot share one,
+  and a WebGL context cannot read a WebGPU buffer at all. Construct as
+  `device = await gpuAdapter.requestDevice()` →
+  `renderer = new WebGPURenderer({ device })` → `await renderer.init()`
+  → `new GpuFieldEvaluator(device, { deviceInstances: true })` →
+  `await createWebGpuInstanceAdapter({ renderer, assets })`. A batch
+  whose handle's backend is not `"webgpu"` is refused by `build()`.
+- Renderer wiring (`pcg-ts/three`): `createWebGpuInstanceAdapter({
+  renderer, assets }): Promise<WebGpuInstanceAdapter>` (async — it
+  imports `three/webgpu` lazily, so a WebGL app pays nothing), then
+  `new WorldThreeBinding({ group, assets, deviceInstances: { adapter,
+  bounds? } })`. `bounds(levelName, coord) => { center, radius } |
+  undefined` supplies the cell sphere out of band, because
+  `InstancedMesh.computeBoundingSphere()` would read the (empty) CPU
+  matrix array and cull the cell away; `undefined` (or an infinite
+  centre, i.e. an unbounded level) disables frustum culling for that
+  cell instead of guessing, and a non-finite/negative radius throws.
+  Without a `deviceInstances` binding, a device-resident item is an
+  ERROR naming both fixes — never a silently empty cell.
+  `adapter.stats` → `{ built, released, adopted, liveInstances }`.
+- Ownership chain, exactly: pool-owned → `detach` (the run's LAST line,
+  after the final cancellation check, so every earlier failure path
+  reclaims it) → holder-owned handle → `dispose()`. Nothing else ever
+  frees it: not the pool, not the memo cache, not
+  `GpuFieldEvaluator.dispose()`, not `BufferPool.dispose()`.
+  - The GRAPH delivers but never owns: a terminal producing device
+    batches writes a `volatile` cache entry (delivered once, then
+    refused by the hit path), so device-resident output is NEVER
+    memoized and every cook mints a fresh handle. Memoizing would pin
+    device memory for the graph's lifetime and hand one handle to two
+    owners. A handle no delivered collection carries — or one from a
+    failed/cancelled cook — is disposed by the cook, not stranded.
+  - `WorldThreeBinding` is the owner of last resort: it refcounts
+    handles BY IDENTITY and disposes at the last release only. Identity
+    is load-bearing — a child cell forwarding its parent's outputs
+    holds the SAME handle object, so parent/child eviction is safe in
+    either order. Four release paths: evict, recook (new handles
+    retained before old released, so a shared handle survives the
+    swap), partial build failure (handles retained for the WHOLE cell
+    up front, released in the catch), and `binding.dispose()`.
+  - The ADAPTER never disposes a handle; it owns only the
+    `InstancedMesh` and its attribute. `adapter.release(object)` frees
+    those without destroying the adopted buffer.
+  - `dispose()` twice is a no-op, never a double free. Reading
+    `resource` after dispose throws.
+  - Leaks are VISIBLE: an un-disposed handle stays counted in
+    `evaluator.poolStats.detachedBuffers` / `.detachedBytes`; the
+    binding reports the same population as `binding.deviceHandleCount`
+    / `.deviceHandleBytes`. Steady state over a fly-through, not climb.
+    Cross-check the COUNTS only: pool bytes are pow2 bucket sizes,
+    binding bytes are the logical `count * 64` payload, so the two byte
+    totals differ permanently and by design.
+- Single-asset limitation: only a constant `assetId` fuses. `assetAttr`
+  non-empty → `spawn-asset-attr` (above), CPU compose, byte-identical
+  transforms. Device-side asset grouping needs a sort/partition over a
+  string-table attribute; recorded as the successor, NOT shipped.
+- three version dependency: three publishes no supported way to render
+  from a buffer you already own, so the adapter seeds three's WebGPU
+  backend attribute record (`renderer.backend.get(attribute).buffer`)
+  to make three's own buffer creation and upload a no-op. Peer range
+  `three@^0.185.1`, verified against `0.185.1`.
+  `checkAdoptionSeam(renderer, makeAttribute)` (exported from
+  `pcg-ts/three`) is the guard: it seeds a sentinel on a throwaway
+  attribute, runs three's creation path over it, and verifies the
+  sentinel survived. `createWebGpuInstanceAdapter` runs it at
+  CONSTRUCTION — a moved internal fails at startup with an actionable
+  message (pin three / update ADOPTION_SEAM / drop `deviceInstances`),
+  never a silent fallback to wrong rendering.
+- Determinism: the device compose is f32 throughout where CPU
+  `composeTRS` keeps an f64 interior — a DOCUMENTED TOLERANCE CLASS,
+  not a bit-exact port, because these bytes drive a renderer, not a
+  seed chain. Measured over 4096 instances: translation column
+  byte-identical always (straight copy of P); pad rows exact (3/7/11 =
+  0, 15 = 1); absent rot/scale is BIT-EXACT end to end (compiled-in
+  identity/one); basis deviation <= 1e-6 abs and <= 5e-8 of the basis
+  range (measured 1.70e-8), >70% of the sample bit-equal; rot without
+  scale measured max |cpu-gpu| = 1.19e-7. Run-to-run byte-identical on
+  one device. Nothing else moves: determinism suites pin the CPU path,
+  CPU goldens are unchanged, and no device-composed float feeds a seed,
+  an index, or a later cook.
 
 Determinism contract — the CPU is the bit-exact reference; existing
 goldens never move:
@@ -571,8 +705,11 @@ GraphSerializationError, FieldJsonError, WorldValidationError.
 - docs/nodes.json — the same registry metadata, machine-readable
 - docs/authoring.md — graph JSON spec, complete field grammar, recipes,
   GPU eligibility rules
-- examples/ — eight vite demos; 06-graph-editor is an interactive node
+- examples/ — nine vite demos; 06-graph-editor is an interactive node
   editor built on this same registry metadata and JSON format;
   08-gpu-fields cooks one five-node fusable chain three ways (CPU, GPU
   per-node, one fused device-resident run) with cold-cache wall times,
-  the full CookStats.gpu counters, and a live parity readout
+  the full CookStats.gpu counters, and a live parity readout;
+  09-gpu-world streams a World rendering from device-resident instance
+  transforms, with the binding's live handle count and the evaluator
+  pool's detached-buffer accounting shown side by side

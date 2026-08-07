@@ -57,7 +57,17 @@ export { type DetachedBuffer, type GpuPoolStats } from "./pool.js";
  * `deviceInstances`). A renderer adapter receives a core
  * `DeviceTransformsHandle` on each `DeviceInstanceBatch` and turns it
  * into a bindable buffer with `deviceTransformsBuffer(handle)`, binding
- * exactly `handle.byteLength` bytes from offset 0. The adapter owns the
- * handle and must call `handle.dispose()` when it stops drawing from it.
+ * exactly `handle.byteLength` bytes from offset 0.
+ *
+ * Ownership is split, and the adapter is not the owner: the adapter owns
+ * only the renderer-side objects it creates from the buffer, while the
+ * holder that retained the handle owns the handle itself and disposes it
+ * once no live consumer references it. An adapter must never call
+ * `handle.dispose()` — one handle can back several cells at once (parent
+ * outputs alias into children), so holders refcount by handle identity
+ * and an adapter-side dispose would free a buffer still being drawn.
+ * `WorldThreeBinding` is that holder for the streaming path; see
+ * `DeviceInstanceAdapter` in `pcg-ts/three` for the same split stated
+ * from the renderer side.
  */
 export { deviceTransformsBuffer, WEBGPU_BACKEND } from "./deviceTransforms.js";

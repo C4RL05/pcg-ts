@@ -318,6 +318,13 @@ Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 `World` cell — pass its `cellReady`/`cellEvicted` methods into the
 `World`'s `onCellReady`/`onCellEvicted` callbacks.
 
+With a `THREE.WebGPURenderer`, `createWebGpuInstanceAdapter` lets the
+same binding draw instance matrices straight out of the GPU buffer the
+cook composed them in, skipping the `Float32Array` entirely — see
+[Device-resident instancing](#device-resident-instancing-v070) below.
+`three/webgpu` is imported lazily by that factory, so a WebGL app pays
+nothing for its existence.
+
 ## GPU cooking (WebGPU)
 
 `pcg-ts/gpu` compiles the serializable field-expression grammar to WGSL
@@ -368,8 +375,9 @@ kernel covering more elements than one `dispatchWorkgroups` call
 allows (65535 × 64 ≈ 4.19M) splits into chunked dispatches with
 byte-identical output. Ineligible fields fall back to the CPU silently
 but countably — `CookStats.gpu.fallbacks` records machine-readable
-reasons: `no-spec`, `compile-error`, `too-many-buffers` per field, and
-`run-plan-failed`, `run-too-large` per fused run (that is the complete
+reasons: `no-spec`, `compile-error`, `too-many-buffers` per field,
+`run-plan-failed`, `run-too-large` per fused run, and
+`spawn-asset-attr` per opted-out node (that is the complete
 vocabulary).
 
 **Device-resident runs.** When the resolver implements the optional
@@ -385,7 +393,9 @@ member kernels; only the run's terminal reads back.
   geometry out — in a straight line where every member has exactly one
   consumer, that consumer is the next member, and every `Field` param
   along the chain carries a serializable spec. A chain of one is not a
-  run.
+  run — with one exception: a lone *terminal* is, because fusion is the
+  only way to produce device output at all (see
+  [Device-resident instancing](#device-resident-instancing-v070)).
 - **Where runs end:** at a non-fusable node, at a node carrying a
   declared graph output, and at any fan-out. An interior node with
   external consumers becomes a run terminal with its own readback —
@@ -396,8 +406,12 @@ member kernels; only the run's terminal reads back.
   fused. Editing any member's params recooks exactly that run and
   leaves siblings and upstream cached.
 - **Stats:** `residentRuns` (runs executed), `fusedNodes` (their total
-  members), and `readbacksSaved = fusedNodes − residentRuns` — each
-  run reads back once where the per-node path reads back per member.
+  members), and `readbacksSaved` — each run reads back once where the
+  per-node path reads back per member, so `readbacksSaved =
+  fusedNodes − residentRuns` for every run that materializes. A run
+  that reads back nothing at all — a device-resident spawner whose
+  `points` pin is neither connected nor declared — contributes its
+  full member count instead.
 
 Three things to know before reading a benchmark:
 
@@ -488,6 +502,197 @@ per-node (fusion switched off), and one fused device-resident run —
 with per-path cold-cache wall times, the full `CookStats.gpu` counters,
 per-path output hashes, and a live deviation readout.
 
+## Device-resident instancing (v0.7.0)
+
+A fused run normally ends by reading its result back to the CPU. With a
+WebGPU renderer on the other side there is no reason to: the instance
+matrices are already on the device the renderer draws from. Opt in with
+`deviceInstances: true` and a `spawnInstances` terminal composes every
+4×4 on the GPU and hands back a **buffer handle** instead of a
+`Float32Array` — no readback, no CPU compose loop, and no
+`instanceMatrix` upload on the way back out.
+
+```ts
+import { World } from "pcg-ts";
+import { GpuFieldEvaluator } from "pcg-ts/gpu";
+import { WorldThreeBinding, createWebGpuInstanceAdapter } from "pcg-ts/three";
+import { WebGPURenderer } from "three/webgpu";
+
+// ONE device, two consumers. This is the whole feature.
+const gpuAdapter = await navigator.gpu.requestAdapter();
+if (!gpuAdapter) throw new Error("no WebGPU adapter");
+const device = await gpuAdapter.requestDevice();
+
+const renderer = new WebGPURenderer({ device });
+await renderer.init();                       // must be initialized first
+
+const gpu = new GpuFieldEvaluator(device, {
+  adapterInfo: gpuAdapter.info,
+  deviceInstances: true,                     // advertises spawnInstances
+});
+const adapter = await createWebGpuInstanceAdapter({ renderer, assets });
+
+const binding = new WorldThreeBinding({
+  group, assets,
+  deviceInstances: { adapter, bounds: (level, coord) => cellSphere(level, coord) },
+});
+const world = new World({
+  ..., gpu,
+  onCellReady: (l, c, outputs) => binding.cellReady(l, c, outputs),
+  onCellEvicted: (l, c) => binding.cellEvicted(l, c),
+});
+```
+
+**The same `GPUDevice` must back both halves.** Not a convenience — a
+hard requirement of the platform. A `GPUBuffer` belongs to the device
+that created it; two devices cannot share one, and a WebGL context
+cannot read a WebGPU buffer at all. So the CPU-free path exists only
+when one device backs the evaluator *and* the renderer. Create the
+device yourself and pass it to `new WebGPURenderer({ device })` — and
+after `init()`, checking that `renderer.backend.device` really is that
+same object is cheap insurance against a future three release quietly
+dropping the parameter. A batch that arrives from anywhere else is
+refused by name:
+
+```
+createWebGpuInstanceAdapter: batch "tree" carries a "cpu" transforms handle,
+not "webgpu"; only a GpuFieldEvaluator running on the renderer's own GPUDevice
+produces bindable buffers
+```
+
+**What the spawner terminal produces.** `spawnInstances` declares
+itself a run *terminal*: it may be a run's last member and a chain
+never continues through it. When the evaluator advertises it
+(`evaluator.residentTerminals` is `["spawnInstances"]` under the
+opt-in) the run appends a compose-TRS kernel writing one column-major
+4×4 per point, then transfers that buffer out of the evaluator's pool.
+If nothing in the cook reads the terminal's `points` pin, the run
+performs *no readback at all* — no `mapAsync`, no staging buffer, no
+CPU copy of `P`/`rot`/`scale`. Even a lone spawner counts as a run
+here, because fusion is the only way to produce device output.
+
+The `instances` item that comes back carries `deviceBatches`, not
+`batches`. Each `DeviceInstanceBatch` is `{ residency: "device",
+assetId, count, transforms }`, where `transforms` is an opaque
+`DeviceTransformsHandle` (`backend`, `byteLength`, `disposed`,
+`resource`, `dispose()`) — never a typed array. Reading `batches` on
+such an item throws on purpose, because a WebGL adapter silently
+drawing nothing is the worse failure:
+
+```
+instances item is device-resident (1 batch(es), 140 instances): its transforms
+live in GPU buffers and were never composed on the CPU, so `batches` does not
+exist. Read `item.deviceBatches` and bind each batch's `transforms` handle with
+a WebGPU renderer, or construct the GpuFieldEvaluator without
+`deviceInstances: true` to get CPU `batches` back.
+```
+
+Writing your own renderer adapter? `deviceTransformsBuffer(handle)`
+from `pcg-ts/gpu` is the one supported way to get the `GPUBuffer` back
+out. Bind exactly `handle.byteLength` bytes from offset 0 — the pool
+buckets allocations to powers of two, so the tail is uninitialized.
+
+**One asset per spawner, and the fallback is countable.** Only the
+constant-`assetId` case fuses. Set `assetAttr` and the node opts out
+with the machine-readable reason **`spawn-asset-attr`**, counted in
+`CookStats.gpu.fallbacks` once per cook per such node — whether or not
+a run formed around it. The node then spawns on the CPU with
+byte-identical transforms, and the chain in *front* of it still fuses
+normally; only the compose moves back to the host. Grouping points by
+a per-point string asset id is a sort/partition over a string-table
+attribute on the device, which this pipeline does not implement; it is
+recorded as the successor to this work, not shipped in 0.7.0. Multi-
+asset spawns stay fully supported on the CPU path.
+
+**Who frees what.** The buffer starts pool-owned; `BufferPool.detach`
+moves it out on the run's very last line, after the final cancellation
+check, so every earlier failure path still reclaims it. From that
+instant the *holder* owns it and nothing else will ever free it — not
+the pool, not the memo cache, not `evaluator.dispose()`.
+
+- The graph delivers handles but never owns them. A terminal that
+  produced device batches writes a **volatile** cache entry: it feeds
+  this cook's consumers and is then refused by the cache-hit path, so
+  every cook produces a fresh handle. Memoizing one would pin GPU
+  memory for the lifetime of the graph and hand the same handle to a
+  second owner.
+- `WorldThreeBinding` is the owner of last resort. It reference-counts
+  handles **by identity** and disposes only at the last release, across
+  four paths: evict, recook, a partial build failure, and `dispose()`.
+  Identity counting is load-bearing, not decoration — a child cell that
+  forwards its parent's outputs holds the *same handle object*, so
+  eviction in either order is safe.
+- The adapter never disposes a handle. It owns the `InstancedMesh` and
+  its attribute only; `release()` deliberately avoids anything that
+  would `destroy()` a buffer another live cell may still draw from.
+- `dispose()` twice is a no-op, never a double free. Reading `resource`
+  after dispose throws instead of handing out a destroyed buffer.
+- **Leaks are visible, not silent.** An un-disposed handle stays
+  counted in `evaluator.poolStats` (`detachedBuffers`, `detachedBytes`,
+  plus cumulative `buffersDetached`); the binding reports the same
+  population from its own side as `binding.deviceHandleCount` and
+  `binding.deviceHandleBytes`. Over a sustained fly-through both must
+  reach a steady state, not climb. Compare the *counts*: the byte
+  totals are different quantities and never converge — the pool
+  reports the power-of-two bucket it allocated, the binding the
+  logical `count * 64` payload it holds.
+
+Cells with no CPU matrices have no bounding sphere to compute, so
+supply one out of band via `deviceInstances.bounds` (derive it from the
+cell AABB). Return `undefined` and frustum culling is switched off for
+that cell rather than guessed — drawing too much is recoverable,
+culling visible geometry is not.
+
+**This leans on three's renderer internals, and says so loudly.** three
+publishes no supported way to render from a `GPUBuffer` you already
+own; left alone it allocates its own and uploads the attribute's
+(empty) array over the top. The adapter seeds three's WebGPU backend
+attribute record so creation and upload become a no-op. The peer range
+is pinned to `three@^0.185.1`, and `checkAdoptionSeam(renderer,
+makeAttribute)` — exported from `pcg-ts/three` — is the guard that pins
+the seam: it seeds a sentinel on a throwaway attribute, lets three's
+own creation path run over it, and verifies the sentinel survived.
+`createWebGpuInstanceAdapter` runs that check at construction, so a
+moved internal fails at startup rather than drawing wrong matrices at
+frame time. The failure names the version and every way out:
+
+```
+pcg-ts/three WebGPU instance adapter: <detail>. This adapter binds device-resident
+instance transforms by seeding three's WebGPU backend attribute record
+(`renderer.backend.get(attribute).buffer`), an internal verified against three
+0.185.1; observed: <observed>. three has moved or renamed it, so rendering from a
+device buffer would silently draw the wrong matrices. Pin three to 0.185.1, or
+update src/three/webgpuInstances.ts (ADOPTION_SEAM) to the new shape, or drop
+`deviceInstances: true` from the GpuFieldEvaluator to render through the CPU path
+```
+
+**The CPU stays the reference.** The compose kernel works in f32
+throughout where the CPU's `composeTRS` keeps an f64 interior, so
+device matrices are a *documented tolerance class*, not a bit-exact
+port — these bytes drive a renderer, not a seed chain. Measured against
+`composeTRS` over a dense 4096-instance sample: the translation column
+is byte-identical always (it is a straight copy of `P`), the constant
+rows are exact (3/7/11 = 0, 15 = 1), a spawner with no `rot`/`scale`
+attribute is **bit-exact** end to end (the compiled-in identity makes
+every product exact in f32), and basis deviation stays ≤ 1e-6 absolute
+and ≤ 5e-8 of the basis range (measured 1.70e-8) with over 70% of the
+sample still bit-equal. On one device, the same graph composes
+byte-identical transforms twice.
+
+What that does **not** weaken: anything outside these matrices. Seeds,
+hash streams, and every CPU golden are untouched, and the CPU spawner's
+goldens still pin `composeTRS`. A spawner writes no attribute, so
+nothing the compose kernel produces ever re-enters the graph: the
+handle leaves the cook and goes to the renderer, never into a seed, an
+index, or a subsequent cook. What it *does* mean: if you need matrices
+that match the CPU bit for bit, do not turn `deviceInstances` on.
+
+See it live: [`examples/09-gpu-world`](./examples/09-gpu-world) streams
+a `World` whose cells render from instance matrices that never touch
+the CPU, showing the binding's live handle count and the evaluator
+pool's own detached-buffer accounting side by side — an independent
+second opinion on the lifetime story above.
+
 ## Determinism guarantees
 
 What the library promises:
@@ -523,12 +728,13 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-The `examples/` directory contains eight vite multi-page demos (scatter
+The `examples/` directory contains nine vite multi-page demos (scatter
 with density noise, forest instancing, spline sampling, infinite
 streaming world, field composition playground, a registry-driven
 node-graph editor, an infinite deterministic spiral galaxy with
-click-to-visit star systems, and a million-point WebGPU cook comparing
-CPU, per-node GPU, and one fused device-resident run):
+click-to-visit star systems, a million-point WebGPU cook comparing
+CPU, per-node GPU, and one fused device-resident run, and a streamed
+world drawing from device-resident instance transforms):
 
 ```sh
 npm run examples

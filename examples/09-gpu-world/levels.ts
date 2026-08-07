@@ -1,8 +1,9 @@
 /**
- * Level definitions for the GPU-world harness.
+ * Level definitions for the GPU world.
  *
- * The whole point is that the fine level's chain is device-resident end
- * to end, so every node after the scatter is a fusable run member:
+ * The point of the shape below is that the fine level's chain can be
+ * device-resident end to end, so every node after the scatter is a
+ * fusable run member:
  *
  *   pointScatterInBounds → setAttribute("scale") → orientAlongVector
  *                        → spawnInstances            (terminal)
@@ -15,7 +16,9 @@
  *   would drop the node — and everything after it — off the run.
  * - `spawnInstances` closes the run as a device-resident terminal, so P,
  *   rot and scale are never read back: the 4x4 matrices are composed in a
- *   WGSL kernel and handed to the renderer as a GPU buffer.
+ *   WGSL kernel and handed to the renderer as a GPU buffer. Build the
+ *   evaluator without `deviceInstances` and the very same graph ends on
+ *   the CPU instead — that is the comparison the page's toggle makes.
  *
  * Determinism contract (see LevelDef.bind): every stochastic node's seed
  * derives from ctx.seed, and the graph seed is re-derived per cell.
@@ -35,8 +38,32 @@ import {
 /** Fine level cell edge length in world units. */
 export const FINE_CELL = 24;
 
-/** Tallest instance half-extent, folded into each cell's bounding sphere. */
-export const MAX_INSTANCE_RADIUS = 3.2;
+// -- scale limits ----------------------------------------------------------
+//
+// The remap targets below are the only thing that sets how large an
+// instance can get, so they are named rather than inlined: the cell
+// bounding spheres in main.ts are derived from them, and a sphere that
+// is too small culls geometry that is on screen.
+
+/** `remap` target of each noise band: `perlinNoise(normalized)` → this. */
+const BAND_MIN = 0.35;
+const BAND_MAX = 1.45;
+/** `remap` target of the per-point hash: `randomField` → this. */
+const JITTER_MIN = 0.6;
+const JITTER_MAX = 1.3;
+/** How much taller than wide a spire may get. */
+const TALL_GAIN = 1.9;
+
+/**
+ * Largest per-axis scale `scaleSpec` can produce. Both sources are
+ * normalized to [0, 1] before the remap, so the product of the two
+ * upper targets is the bound (`wide = band * jitter`,
+ * `tall = band * jitter * TALL_GAIN`). Consumers should round the
+ * derived extent up — a normalized noise band can overshoot 1 by a
+ * hair, and over-covering a bounding sphere is the harmless direction.
+ */
+export const MAX_SCALE_WIDE = BAND_MAX * JITTER_MAX; // 1.885
+export const MAX_SCALE_TALL = MAX_SCALE_WIDE * TALL_GAIN; // 3.5815
 
 /** Per-axis scale (tuple 3) from two noise bands plus a per-point hash. */
 function scaleSpec(seed: number): FieldSpec {
@@ -46,18 +73,18 @@ function scaleSpec(seed: number): FieldSpec {
       { fn: "perlinNoise", opts: { seed: s, frequency, normalized: true } },
       0,
       1,
-      0.35,
-      1.45,
+      BAND_MIN,
+      BAND_MAX,
     ],
   });
   const jitter: FieldSpec = {
     fn: "remap",
-    args: [{ fn: "randomField", key: "size" }, 0, 1, 0.6, 1.3],
+    args: [{ fn: "randomField", key: "size" }, 0, 1, JITTER_MIN, JITTER_MAX],
   };
   const wide: FieldSpec = { fn: "mul", args: [band(seed, 0.017), jitter] };
   const tall: FieldSpec = {
     fn: "mul",
-    args: [{ fn: "mul", args: [band(hashCombine(seed, 5), 0.031), jitter] }, 1.9],
+    args: [{ fn: "mul", args: [band(hashCombine(seed, 5), 0.031), jitter] }, TALL_GAIN],
   };
   return { fn: "vec", args: [wide, tall, wide] };
 }

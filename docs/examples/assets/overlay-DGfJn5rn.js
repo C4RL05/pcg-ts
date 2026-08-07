@@ -25,9 +25,13 @@ var e=!1;function t(){if(e)return;e=!0;let t=document.createElement(`style`);t.t
 .pcg-overlay input[type="checkbox"] { accent-color: #4c8dff; }
 .pcg-overlay .pcg-val { flex: 0 0 44px; text-align: right; color: #8fd0ff; font: 12px ui-monospace, monospace; }
 .pcg-overlay .pcg-stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid #223047; }
-.pcg-overlay .pcg-stat { display: flex; justify-content: space-between; margin: 2px 0; }
-.pcg-overlay .pcg-stat span:first-child { color: #8b98ab; font-size: 12px; }
-.pcg-overlay .pcg-stat span:last-child { color: #b8f5c8; font: 12px ui-monospace, monospace; }
+/* Flex items default to min-width:auto, so a long value used to overrun the
+   label. Wrap the row instead: when the pair does not fit, the value drops to
+   its own right-aligned line rather than breaking "105.0 KiB" mid-number or
+   clipping the label. */
+.pcg-overlay .pcg-stat { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 10px; margin: 2px 0; }
+.pcg-overlay .pcg-stat span:first-child { color: #8b98ab; font-size: 12px; flex: 0 1 auto; min-width: 0; }
+.pcg-overlay .pcg-stat span:last-child { color: #b8f5c8; font: 12px ui-monospace, monospace; flex: 0 0 auto; margin-left: auto; min-width: 0; text-align: right; overflow-wrap: anywhere; }
 .pcg-overlay details { margin-top: 10px; border-top: 1px solid #223047; padding-top: 8px; }
 .pcg-overlay summary { cursor: pointer; color: #aeb9c9; font-size: 12px; user-select: none; }
 .pcg-overlay pre {

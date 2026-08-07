@@ -613,7 +613,12 @@ Design decisions fixed up front:
 ### Phase 28 — Example, docs, v0.7.0
 - New or extended example: a streamed world rendering wholly from
   device-resident transforms, with a CPU/resident toggle and readouts
-  for retained device bytes, readbacks avoided, and cell churn.
+  for retained device bytes, matrix uploads avoided, and cell churn.
+  (Shipped as "matrix uploads avoided", not "readbacks avoided" as
+  first written: the metered bytes are `count * 64`, which is the
+  matrix upload that did not happen. The avoided *readback* is the
+  P/rot/scale columns at 28 bytes per instance — a different number,
+  and the label has to name the one it prints.)
 - README/llms.txt/authoring: the resident spawner contract, the
   shared-device requirement, the single-asset limitation and its
   fallback reason, the lifetime/ownership rules, and the three

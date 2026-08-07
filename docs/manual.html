@@ -266,7 +266,7 @@
 
 <header class="top">
   <div class="wrap">
-    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.6.1</p>
+    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.7.0</p>
     <h1>The pcg<span class="dot">-</span>ts manual</h1>
     <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
     <div class="metabar">
@@ -556,7 +556,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
   <section id="examples">
     <p class="eyebrow">Chapter 4</p>
     <h2>The examples tour</h2>
-    <p class="lead">Eight demos ship in <code>examples/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
+    <p class="lead">Nine demos ship in <code>examples/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
 
     <h3 id="ex-01">01 · Scatter basic — the minimal cook loop</h3>
     <figure>
@@ -673,6 +673,25 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">gpu: GpuFieldEvaluator · CookOptions.gpu · CookStats.gpu</span>
       <span class="chip">setAttribute · jitterPoints · transformPoints · fieldFromJson</span>
       <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/">run it →</a>
+    </p>
+
+    <h3 id="ex-09">09 · GPU world — matrices that never reach the CPU</h3>
+    <figure>
+      <img src="manual-assets/09-gpu-world.jpg" width="1079" height="791" loading="lazy" decoding="async"
+           alt="The gpu-world demo running the device-resident path. The left panel offers a two-way toggle, device-resident selected over CPU readback, above sliders for seed 1, speed 26 u/s, gen radius 150 u and per cell 420, with autopilot checked. The counters below read renderer nvidia blackwell webgpu, 40 live cells, 40 cells cooked and 0 evicted, a churn of 11.7 cooked per second, 16,800 instances drawn, 40 buffers holding 1.0 MiB of matrices on device, a cumulative 181 buffers and 2.2 MiB of readbacks avoided, and 0 buffers and 0 B of matrices uploaded. The status line reads device-resident, no matrix readback. The right of the screen renders a dense field of tall teal spires receding to the horizon." />
+      <figcaption><b>09 · gpu world</b> — a streamed world drawing 16,800 instances from 1.0 MiB of matrices that were composed on the GPU and never read back. The <code>matrices uploaded</code> row stays at <code>0 B</code> for as long as the device path is selected.</figcaption>
+    </figure>
+    <p>Where <a href="#ex-08">08</a> keeps <em>attribute columns</em> device-side between fused kernels, this one keeps the <em>result</em> device-side as well. <code>spawnInstances</code> acts as the terminal of a resident run: the transform, scale and rotation columns stay in storage buffers, a WGSL kernel composes them into column-major 4×4 matrices, and the batch hands back an opaque buffer handle instead of a <code>Float32Array</code>. A renderer sharing the same <code>GPUDevice</code> adopts that buffer as a storage instance attribute, so the matrices go from compute kernel to draw call without ever existing in JS.</p>
+    <p>The toggle is the point of the demo. Both paths cook the same graph with the same fields on the same device — only the ending differs. Switch to <b>CPU readback</b> and <code>matrices held on device</code> falls to zero while <code>matrices uploaded</code> starts climbing; switch back and the upload counter freezes where it stopped. Both meters are cumulative, so they record what each path has cost since the page loaded rather than what it is holding right now — the two <code>buf</code> counts diverging from <code>live cells</code> is the honest picture of a streaming world.</p>
+    <p>That divergence is also the leak check. Retained device bytes track <em>live</em> cells exactly — 40 cells of 420 instances is 40 × 420 × 64 = 1.0 MiB — while the cumulative counter climbs past 181 buffers. Handles are refcounted by identity, so a parent output aliased into several child cells is freed once, by the last cell to let go of it, in whichever order they evict.</p>
+    <div class="note warn">
+      <span class="tag">What this needs</span>
+      <p>One <code>GPUDevice</code> must back both the field evaluator and the renderer: a <code>GPUBuffer</code> belongs to the device that made it, two devices cannot share one, and a WebGL context cannot read a WebGPU buffer at all. Without that the demo says so in the status line and runs the CPU path instead of rendering something wrong. Device-side asset grouping is not implemented, so a spawn driven by <code>assetAttr</code> falls back to the CPU path with a named reason rather than silently producing different geometry.</p>
+    </div>
+    <p class="demo-links">
+      <span class="chip">three: createWebGpuInstanceAdapter · WorldThreeBinding · DeviceInstanceAdapter</span>
+      <span class="chip">gpu: GpuFieldEvaluator · deviceInstances · deviceTransformsBuffer</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/09-gpu-world/">run it →</a>
     </p>
   </section>
 
@@ -1334,7 +1353,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a></td><td>Compact agent capability map with the full measured GPU budget tables.</td><td>Context for an LLM; the deviation numbers.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/README.md">README.md</a></td><td>The human API tour.</td><td>A second angle on anything in Part I.</td></tr>
         <tr><td><a href="./index.html">Project overview</a></td><td>Architecture and pipeline diagrams, roadmap.</td><td>How the modules layer, and what shipped when.</td></tr>
-        <tr><td><a href="https://c4rl05.github.io/pcg-ts/examples/">Live demos</a></td><td>All eight examples, running.</td><td>Seeing it before reading about it.</td></tr>
+        <tr><td><a href="https://c4rl05.github.io/pcg-ts/examples/">Live demos</a></td><td>All nine examples, running.</td><td>Seeing it before reading about it.</td></tr>
       </tbody>
     </table>
     </div>
@@ -1346,7 +1365,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.6.1 manual</span>
+    <span>pcg-ts v0.7.0 manual</span>
     <span>MIT license</span>
     <a href="./index.html">project overview</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>

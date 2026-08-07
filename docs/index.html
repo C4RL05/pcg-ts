@@ -498,7 +498,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   <section>
     <p class="eyebrow">Examples</p>
-    <h2>Eight demos, live in your browser</h2>
+    <h2>Nine demos, live in your browser</h2>
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
     <div class="examples">
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><img src="./thumbs/01-scatter-basic.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A dense field of small points scattered across a dark plane, thinned by noise, with a stats panel showing cook time and point count."><span class="meta"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></span></a>
@@ -509,6 +509,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/"><img src="./thumbs/06-graph-editor.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A node-graph editor: a palette on the left, connected nodes in the centre, a parameter inspector on the right, and the cooked result rendering above."><span class="meta"><b>06 · graph editor</b><span>build and cook node graphs interactively — palette, inspector, JSON round-trip</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/"><img src="./thumbs/07-galaxy.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A spiral galaxy of tens of thousands of coloured star points around a bright core, with a panel showing streamed star cells."><span class="meta"><b>07 · galaxy</b><span>an infinite deterministic spiral galaxy — streamed star cells, click any star to visit its planets</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/"><img src="./thumbs/08-gpu-fields.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A million-point cloud tinted blue and green, beside a panel comparing CPU, per-node GPU and fused device-resident cook times."><span class="meta"><b>08 · gpu fields</b><span>a million points through a five-node chain, cooked three ways — CPU, per-node GPU, and one fused device-resident run</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/09-gpu-world/"><img src="./thumbs/09-gpu-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A streamed world of tall teal spires drawn from GPU-composed matrices, beside a panel reading 40 live cells, 16,800 instances drawn, 1.0 MiB of matrices held on device and 0 B uploaded."><span class="meta"><b>09 · gpu world</b><span>a streamed world whose instance matrices are composed in WGSL and drawn straight from that buffer — toggle to the CPU path and watch the readbacks appear</span></span></a>
     </div>
   </section>
 
@@ -566,10 +567,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.7.0 <small>2026-08-07</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Instance transforms that never reach the CPU. <code>spawnInstances</code> can now terminate a device-resident run: a WGSL kernel composes the 4×4 matrices and the batch hands back an opaque buffer handle instead of a <code>Float32Array</code>. A renderer sharing the same <code>GPUDevice</code> adopts that buffer as a storage instance attribute, so a streamed world goes from compute kernel to draw call with no readback and no per-cell upload. Ownership is explicit — pool-owned, detached, then disposed by the holder — and handles are refcounted by identity, so a parent output aliased into several cells is freed once, in whichever order they evict. Single-asset only for now; <code>assetAttr</code> falls back to the CPU path with a named reason. The CPU path stays the reference. 955 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>GPU-resident World streaming (cell cooks that keep instance transforms device-side end to end) · npm publish.</p>
+          <p>Device-side multi-asset grouping — sort and partition points by asset id on device so <code>assetAttr</code> spawns fuse instead of falling back to the CPU.</p>
         </div>
       </li>
     </ul>
@@ -579,7 +587,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.6.1</span>
+    <span>pcg-ts v0.7.0</span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>

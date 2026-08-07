@@ -294,6 +294,12 @@ empty-string entry never names an asset — those points fall back to the
 spawner's `assetId`. With `values` empty, the constant `stringValue`
 param is written instead.
 
+Setting `assetAttr` also opts the spawner out of device-resident
+composition (grouping by a per-point string id is a device-side sort
+that pipeline does not implement): transforms are always composed on
+the CPU here, and a GPU cook counts `spawn-asset-attr` — see
+[Device-resident instancing](#device-resident-instancing-drawing-without-a-readback).
+
 ## Editing live graphs
 
 JSON is the interchange format, not the only way to change a graph. A
@@ -576,8 +582,8 @@ the node def's `resident` descriptor; `seed` is exactly what the CPU
 `execute` would have received). `ResidentRunContext` is
 `{ attributes: Record<name, { type, tupleSize }>, count }`.
 
-**What fuses.** Exactly four node kinds, all count-preserving with one
-geometry input and one geometry output:
+**What fuses.** Four *chain* kinds, all count-preserving with one
+geometry input and one geometry output, plus one *terminal* kind:
 
 | node | fuses when |
 |---|---|
@@ -585,9 +591,15 @@ geometry input and one geometry output:
 | `transformPoints` | always |
 | `jitterPoints` | always |
 | `orientAlongVector` | always |
+| `spawnInstances` | `assetAttr` is empty **and** the resolver advertises the kind — terminal only; see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
 
 plus, for every member: every `Field` in its param tree carries a
 serializable spec (`getFieldSpec`).
+
+A terminal may be a run's *last* member and a chain never continues
+through it. It is also the one place a run of length 1 still counts as
+a run, because there the fused and per-node paths are not equivalent —
+fusion is the only way to produce device-resident output at all.
 
 **Where a run ends.** The executor takes *maximal linear chains* and
 stops when the tail has anything other than exactly one outgoing
@@ -595,7 +607,8 @@ connection (counting connections to nodes outside this cook's
 selection), when the tail carries a declared graph output, when the
 consumer is outside the cooked selection, when the consumer is not
 fusable, or when the consumer's incoming set is not exactly the tail. A
-chain of length 1 is not a run. Detection is deliberately conservative:
+chain of length 1 is not a run, except for the lone-terminal case noted
+above. Detection is deliberately conservative:
 it under-fuses, never over-fuses. An interior node with external
 consumers — a declared output, a multi-consumer tap, a non-fusable
 downstream — becomes a run terminal with its own readback, so fusion
@@ -617,7 +630,8 @@ the other's bytes — but a node holds a *single* memo slot, so flipping
 That is by design, not a bug; benchmark from cold caches.
 
 **Two more fallback reasons**, each counted once per rejected run
-(after which every member cooks per-node):
+(after which every member cooks per-node) — plus one node-level reason,
+`spawn-asset-attr`, described in the next section:
 
 - `run-plan-failed` — a member cannot be compiled into the resident
   pipeline: unknown resident kind, field compile error, tuple-size or
@@ -649,10 +663,245 @@ and hits the pipeline cache, where baking values into the shader text
 would recompile on every change.
 
 **Third-party resident kinds.** `NodeDef.resident?: { kind: string;
-eligible?(params): boolean }` marks a node fusable. `eligible` runs
-outside the executor's error wrapping: keep it cheap, pure, and total —
-an exception thrown there escapes `cook()` unwrapped rather than as a
-`NodeExecutionError`.
+eligible?(params): boolean | string; terminal?: boolean }` marks a node
+fusable. `eligible` runs outside the executor's error wrapping: keep it
+cheap, pure, and total — an exception thrown there escapes `cook()`
+unwrapped rather than as a `NodeExecutionError`. Returning a non-empty
+*string* means the same as `false` (the node does not fuse) but names
+the reason, which the executor counts once per cook in
+`CookStats.gpu.fallbacks` under exactly that key — use it for cases an
+author can act on, and plain `false` for combinations that are simply
+not the kind's business. `terminal: true` additionally permits output
+pins beyond the single geometry one, and gates the node behind the
+resolver's `residentTerminals` advertisement.
+
+### Device-resident instancing (drawing without a readback)
+
+A fused run ends with a readback so the CPU can see the result. If a
+WebGPU renderer is what consumes that result, the readback is pure
+waste: the instance matrices are already on the device it draws from.
+Opting in makes a `spawnInstances` terminal compose every 4×4 on the
+GPU and hand back a *buffer handle* instead of a `Float32Array`.
+
+**1. Share one device between the evaluator and the renderer.** This
+is the load-bearing requirement, and it is a platform constraint rather
+than a convenience: a `GPUBuffer` belongs to the device that created
+it, two devices cannot share one, and a WebGL context cannot read a
+WebGPU buffer at all. Create the device yourself and hand it to both.
+
+```ts
+import { GpuFieldEvaluator } from "pcg-ts/gpu";
+import { createWebGpuInstanceAdapter, WorldThreeBinding } from "pcg-ts/three";
+import { WebGPURenderer } from "three/webgpu";
+
+const gpuAdapter = await navigator.gpu.requestAdapter();
+if (!gpuAdapter) throw new Error("no WebGPU adapter");
+const device = await gpuAdapter.requestDevice();
+
+const renderer = new WebGPURenderer({ device });
+await renderer.init();                    // must be initialized first
+
+const gpu = new GpuFieldEvaluator(device, {
+  adapterInfo: gpuAdapter.info,
+  deviceInstances: true,                  // opt in
+});
+gpu.residentTerminals;                    // ["spawnInstances"]
+
+const adapter = await createWebGpuInstanceAdapter({ renderer, assets });
+```
+
+`createWebGpuInstanceAdapter` is async because it imports `three/webgpu`
+lazily — a WebGL app that merely imports `pcg-ts/three` pays nothing.
+Batches whose handle carries any other backend are refused by name:
+`... carries a "cpu" transforms handle, not "webgpu"; only a
+GpuFieldEvaluator running on the renderer's own GPUDevice produces
+bindable buffers`.
+
+**2. Wire the binding.** `WorldThreeBinding` grows one option:
+
+```ts
+const binding = new WorldThreeBinding({
+  group,
+  assets,
+  deviceInstances: {
+    adapter,
+    bounds: (levelName, coord) => cellSphere(levelName, coord),
+  },
+});
+```
+
+`bounds` supplies the cell's bounding sphere out of band because a
+device-resident batch has no CPU matrices to compute one from —
+`InstancedMesh.computeBoundingSphere()` would read the empty array and
+cull the cell away. Derive it from the cell AABB: its centre, and half
+its diagonal plus the tallest asset's radius so instances straddling
+the border are not culled while still on screen. Return `undefined` and
+frustum culling is switched *off* for that cell instead of guessed
+(drawing too much is recoverable; culling visible geometry is not); an
+unbounded level's infinite centre does the same. A non-finite or
+negative radius throws rather than being clamped.
+
+Omit `deviceInstances` while the cook still produces device batches and
+the binding throws instead of rendering an empty cell, naming both
+fixes: pass `deviceInstances: { adapter, bounds }`, or construct the
+evaluator without `deviceInstances: true` to get CPU batches back.
+
+**3. Read the output as device batches, never as `batches`.** The
+terminal's `instances` pin carries an item whose `deviceBatches` holds
+the payload; reading `.batches` on it **throws** on purpose, because
+the alternative is a CPU consumer silently drawing nothing:
+
+```ts
+for (const item of outputs.instances) {
+  if (item.kind !== "instances") continue;
+  if (item.deviceBatches !== undefined) {         // or isDeviceResidentInstances(item)
+    for (const batch of item.deviceBatches) {
+      batch.residency;            // "device"
+      batch.count;                // instances
+      batch.transforms.byteLength; // count * 64
+    }
+  } else {
+    // CPU path: item.batches, Float32Array transforms
+  }
+}
+```
+
+Check residency *first* — the residency probe is safe, the `batches`
+read is not. Each `transforms` is an opaque `DeviceTransformsHandle`
+(`backend`, `byteLength`, `disposed`, `resource`, `dispose()`), never a
+typed array. Writing your own adapter?
+`deviceTransformsBuffer(handle)` from `pcg-ts/gpu` is the one supported
+way to get the buffer back; bind exactly `handle.byteLength` bytes from
+offset 0, since the pool buckets allocations to powers of two and the
+tail is uninitialized.
+
+**4. Know what the run skips.** The run appends a compose-TRS kernel
+writing one column-major 4×4 per point in exactly the `InstanceBatch`
+layout, then transfers that buffer out of the evaluator's pool. If
+nothing in the cook reads the terminal's `points` pin — it is neither
+connected nor a declared graph output — the run performs *no readback
+at all*: no `mapAsync`, no staging buffer, no CPU copy of
+`P`/`rot`/`scale`. That is the one case where the
+`readbacksSaved === fusedNodes − residentRuns` identity does not hold;
+such a run contributes its full member count. Declare or connect the
+`points` output and the readback comes back, with both outputs
+agreeing.
+
+**One asset per spawner.** Only the constant-`assetId` case fuses. Set
+`assetAttr` and the node opts out with the reason **`spawn-asset-attr`**
+in `CookStats.gpu.fallbacks`, counted once per cook per such node —
+whether or not a run formed around it. Transforms are then composed on
+the CPU, byte-identically, and the chain in *front* of the spawner
+still fuses; only the compose moves back to the host. Grouping points
+by a per-point string asset id is a sort/partition over a string-table
+attribute on the device, which this pipeline does not implement; it is
+recorded as the successor to this work and is not part of 0.7.0. The
+multi-asset recipe above stays fully supported on the CPU path.
+
+**Lifetime: who frees what, and when.** The buffer starts pool-owned.
+`BufferPool.detach` moves it out on the run's very last line, after the
+final cancellation check, so every earlier failure path still reclaims
+it. From that instant the *holder* owns it, and nothing else in the
+library will ever free it — not the pool, not the memo cache, not
+`GpuFieldEvaluator.dispose()`.
+
+| stage | owner | frees it |
+|---|---|---|
+| during the run | evaluator's `BufferPool` | the run's `finally` |
+| after `detach` | whoever holds the handle | `handle.dispose()` |
+| delivered to a cook result | the cook's caller | — |
+| retained by `WorldThreeBinding` | the binding | at the last release |
+
+- **The graph delivers but never owns.** A terminal that produced
+  device batches writes a *volatile* cache entry: it feeds this cook's
+  consumers and is then refused by the cache-hit path, so a
+  device-resident spawner recooks every cook and yields a fresh handle.
+  Memoizing one would pin GPU memory for the graph's lifetime and hand
+  the same handle to a second owner. A handle that no delivered
+  collection carries — or one from a cook that threw or was cancelled —
+  is disposed by the cook rather than stranded.
+- **`WorldThreeBinding` is the owner of last resort.** It
+  reference-counts handles **by identity** and disposes only at the
+  last release, across four paths: eviction, recook (new handles are
+  retained before old ones are released, so a handle common to both
+  survives the swap), a partial build failure (the whole cell's handles
+  are retained up front and released in the catch), and
+  `binding.dispose()`. Identity counting is load-bearing: a child cell
+  that forwards its parent's outputs holds the *same handle object*, so
+  the parent evicting first must not destroy a buffer the live child
+  still draws from. Either eviction order is safe.
+- **The adapter never disposes a handle.** It owns the `InstancedMesh`
+  and its attribute only; `adapter.release(object)` frees those without
+  destroying the adopted buffer.
+- **Double dispose is a no-op**, never a double free. Reading
+  `resource` after dispose throws rather than handing out a destroyed
+  buffer.
+- **Leaks stay visible.** An un-disposed handle keeps counting in
+  `evaluator.poolStats` (`detachedBuffers`, `detachedBytes`, cumulative
+  `buffersDetached`); the binding reports the same population from its
+  own side as `binding.deviceHandleCount` and
+  `binding.deviceHandleBytes`, and the adapter's `stats` gives
+  `{ built, released, adopted, liveInstances }`. Over a sustained
+  fly-through those numbers must reach a steady state rather than
+  climbing. It is the *counts* that track each other: pool bytes are
+  power-of-two bucket sizes while binding bytes are the logical
+  `count * 64` payload, so the two byte totals differ by design.
+
+**The three version this depends on.** three publishes no supported way
+to render from a `GPUBuffer` you already own; left alone it allocates
+its own and uploads the attribute's (empty) array over the top. The
+adapter therefore seeds three's WebGPU backend attribute record
+(`renderer.backend.get(attribute).buffer`) so that three's own creation
+and upload become a no-op. That is an internal, so the peer range is
+pinned to `three@^0.185.1` and verified against `0.185.1`.
+
+`checkAdoptionSeam(renderer, makeAttribute)`, exported from
+`pcg-ts/three`, is the guard that pins the seam: it seeds a sentinel on
+a throwaway attribute, lets three's own creation path run over it, and
+verifies the sentinel survived untouched.
+`createWebGpuInstanceAdapter` runs it at *construction*, so a moved
+internal fails at startup instead of drawing wrong matrices at frame
+time — and it fails with the fix spelled out rather than degrading
+silently:
+
+```
+pcg-ts/three WebGPU instance adapter: <detail>. This adapter binds device-resident
+instance transforms by seeding three's WebGPU backend attribute record
+(`renderer.backend.get(attribute).buffer`), an internal verified against three
+0.185.1; observed: <observed>. three has moved or renamed it, so rendering from a
+device buffer would silently draw the wrong matrices. Pin three to 0.185.1, or
+update src/three/webgpuInstances.ts (ADOPTION_SEAM) to the new shape, or drop
+`deviceInstances: true` from the GpuFieldEvaluator to render through the CPU path
+```
+
+**The CPU stays the reference.** The compose kernel works in f32
+throughout, where the CPU's `composeTRS` keeps an f64 interior. Device
+matrices are therefore a *documented tolerance class*, not a bit-exact
+port — a deliberate exception, justified by these bytes driving a
+renderer rather than a seed chain. Measured against `composeTRS` over
+4096 instances:
+
+| quantity | result |
+|---|---|
+| translation column (elements 12–14) | byte-identical always (a straight copy of `P`) |
+| pad rows (3, 7, 11 = 0; 15 = 1) | exact |
+| no `rot`/`scale` attribute present | **bit-exact** end to end (compiled-in identity/one) |
+| basis, full TRS | ≤ 1e-6 absolute, ≤ 5e-8 of the basis range (measured 1.70e-8) |
+| `rot` present, `scale` absent | max \|cpu − gpu\| = 1.19e-7 |
+| repeated cooks, one device | byte-identical |
+
+What this does **not** weaken: everything else. The determinism suites
+pin the CPU path, the CPU spawner's `composeTRS` goldens are unchanged,
+and seed and hash streams are untouched. A spawner writes no attribute,
+so nothing the compose kernel produces re-enters the graph — the handle
+leaves the cook and goes to the renderer, never into a seed, an index,
+or a later cook. What it *does* mean: if you need instance matrices
+that match the CPU bit for bit, leave `deviceInstances` off.
+
+`examples/09-gpu-world` is the worked end-to-end version of all of the
+above: a streamed `World` whose cells draw from matrices that never
+touch the CPU, with the binding's handle accounting and the evaluator
+pool's detached-buffer counters shown side by side.
 
 ### Cache provenance
 
@@ -772,7 +1021,7 @@ and includes nested subgraph-cook work:
   pipelineCacheHits,
   residentRuns,        // resident runs executed (a cached run counts nothing)
   fusedNodes,          // their total member count
-  readbacksSaved,      // fusedNodes - residentRuns
+  readbacksSaved,      // fusedNodes - runs that read back at all
   fallbacks,           // Record<reason, count>
 }
 ```
@@ -807,4 +1056,7 @@ five-node fusable chain over a million points cooked three ways — CPU,
 GPU per-node (a resolver whose `planRun` returns null), and one fused
 device-resident run — with per-path cold-cache wall times, the full
 counter set, per-path output hashes, and a live deviation readout
-against the CPU reference.
+against the CPU reference. `examples/09-gpu-world` covers the
+device-resident instancing surface: a streamed `World` drawing from
+matrices that never reach the CPU, with `poolStats.detachedBuffers`
+and the binding's own handle count shown together as a live leak meter.
