@@ -15,10 +15,89 @@
  * });
  * ```
  */
-import { Group, type InstancedMesh, type BufferGeometry, type Points, type PointsMaterial } from "three";
+import {
+  Group,
+  type BufferGeometry,
+  type InstancedMesh,
+  type Object3D,
+  type Points,
+  type PointsMaterial,
+} from "three";
+import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/index.js";
+import { isDeviceResidentInstances } from "../graph/data.js";
 import type { CellCoord, CellOutputs } from "../runtime/types.js";
 import { toPointsObject } from "./debug.js";
 import { toInstancedMeshes, type AssetMap } from "./instanced.js";
+
+/**
+ * Bounding sphere for a cell, supplied out of band because a
+ * device-resident batch has no CPU instance matrices to compute one
+ * from (`InstancedMesh.computeBoundingSphere()` reads
+ * `instanceMatrix.array`, which no longer holds the transforms).
+ *
+ * Centre and radius are in the coordinate space of the object's parent
+ * — the same space `World` cell bounds are expressed in — because
+ * three applies `matrixWorld` to the sphere before testing the frustum.
+ * Derive it from `CellContext.min`/`max`: the cell AABB's centre, and
+ * half its diagonal plus the tallest asset's radius so instances
+ * straddling the cell border are not culled while still on screen.
+ */
+export interface DeviceCellBounds {
+  /** Sphere centre `[x, y, z]`. */
+  readonly center: readonly [number, number, number];
+  /** Sphere radius; must cover every instance the cell draws. */
+  readonly radius: number;
+}
+
+/** What the binding knows about the cell a device batch belongs to. */
+export interface DeviceInstanceContext {
+  readonly levelName: string;
+  readonly coord: CellCoord;
+  /**
+   * Cell bounds from {@link DeviceInstanceBinding.bounds}, or undefined
+   * when none was supplied — in which case the adapter must disable
+   * frustum culling rather than guess, since a wrong sphere culls
+   * visible instances silently.
+   */
+  readonly bounds: DeviceCellBounds | undefined;
+}
+
+/**
+ * Renderer-side half of the device-resident spawner protocol: turns one
+ * {@link DeviceInstanceBatch} into a scene object that draws its
+ * instances straight from the batch's GPU buffer.
+ *
+ * Ownership split, exactly: the ADAPTER owns the three-side objects it
+ * creates (geometry, material, attribute) and frees them in
+ * {@link release}; the BINDING owns the batch's
+ * `DeviceTransformsHandle` and disposes it when no live cell references
+ * it any more. An adapter must never call `handle.dispose()`.
+ *
+ * See `createWebGpuInstanceAdapter` for the WebGPU implementation.
+ */
+export interface DeviceInstanceAdapter {
+  /**
+   * Build the scene object for `batch`. Throwing is allowed and safe:
+   * the binding releases every handle it retained for the partial cell
+   * and rethrows, leaving the cell's previous content in place.
+   */
+  build(batch: DeviceInstanceBatch, ctx: DeviceInstanceContext): Object3D;
+  /** Free the three-side resources of an object {@link build} returned. */
+  release(object: Object3D): void;
+}
+
+/** Device-resident instancing configuration for {@link WorldThreeBinding}. */
+export interface DeviceInstanceBinding {
+  /** Turns device batches into scene objects. */
+  readonly adapter: DeviceInstanceAdapter;
+  /**
+   * Bounding sphere for a cell, used instead of
+   * `computeBoundingSphere()`. Returning undefined disables frustum
+   * culling for that cell's device objects — correct but slower, and
+   * always preferable to a sphere that is too small.
+   */
+  readonly bounds?: (levelName: string, coord: CellCoord) => DeviceCellBounds | undefined;
+}
 
 /** Options for {@link WorldThreeBinding}. */
 export interface WorldThreeBindingOptions {
@@ -30,12 +109,27 @@ export interface WorldThreeBindingOptions {
   readonly debugPoints?: boolean;
   /** Debug point size in world units (default 0.1). */
   readonly debugPointSize?: number;
+  /**
+   * Opt-in support for device-resident instances items (produced by a
+   * `GpuFieldEvaluator` constructed with `deviceInstances: true`).
+   * Absent, such an item is an error naming both fixes rather than a
+   * cell that silently draws nothing. The CPU path is unaffected either
+   * way.
+   */
+  readonly deviceInstances?: DeviceInstanceBinding;
 }
 
 interface CellEntry {
   readonly group: Group;
   readonly instanced: InstancedMesh[];
   readonly debug: Points<BufferGeometry, PointsMaterial>[];
+  /** Adapter-built objects for device-resident batches. */
+  readonly device: Object3D[];
+  /**
+   * One entry per retain this cell took out — repeated if the same
+   * handle appears twice in the cell's outputs, so releases balance.
+   */
+  readonly handles: DeviceTransformsHandle[];
 }
 
 /**
@@ -50,10 +144,41 @@ interface CellEntry {
  * per-instance buffers released via `InstancedMesh.dispose()`, but the
  * asset geometry and material they reference are shared across cells and
  * are NOT disposed — they belong to the caller's asset map.
+ *
+ * Device-resident batches add a second disposal contract. `World` never
+ * frees a `DeviceTransformsHandle` and the graph refuses to own one, so
+ * this binding is the owner of last resort: it **reference-counts
+ * handles by identity** across live cells and disposes a handle only
+ * when the last cell holding it goes away. Identity counting is not
+ * decoration — a child cell that forwards its parent's outputs
+ * (`CellContext.parent.outputs` is passed by reference) holds the *same
+ * handle object* as the parent cell, and disposing it when the parent
+ * evicts would destroy a buffer the live child still draws from.
+ *
+ * The four ways a cell's handles are released:
+ * - **evict** (`cellEvicted`, from radius exit or LRU trim),
+ * - **recook** (`cellReady` for a cell that already has content — the
+ *   new handles are retained before the old ones are released, so a
+ *   handle common to both survives the swap),
+ * - **partial build failure** (every handle the failed build retained is
+ *   released before the error is rethrown — including the case where no
+ *   `deviceInstances` adapter is configured at all), and
+ * - **teardown** (`dispose`).
+ *
+ * What it deliberately does NOT do: free anything on a cook that never
+ * reached `cellReady` (the graph's cook owns those), or free the outputs
+ * `World.getCell`/`World.cells` hand out by reference — those are views
+ * of a live cell, not transfers of ownership.
  */
 export class WorldThreeBinding {
   private readonly opts: WorldThreeBindingOptions;
   private readonly cells = new Map<string, CellEntry>();
+  /**
+   * Live references per device handle, keyed by handle identity. A
+   * handle reaches 0 exactly once and is disposed there; see the class
+   * docs for why identity (not per-cell ownership) is the right key.
+   */
+  private readonly handleRefs = new Map<DeviceTransformsHandle, number>();
 
   constructor(opts: WorldThreeBindingOptions) {
     this.opts = opts;
@@ -62,6 +187,22 @@ export class WorldThreeBinding {
   /** Number of live cell groups (diagnostics/tests). */
   get cellCount(): number {
     return this.cells.size;
+  }
+
+  /**
+   * Distinct device transform handles this binding currently holds — a
+   * live leak meter for a streaming world. Over a sustained fly-through
+   * this must reach a steady state, not climb.
+   */
+  get deviceHandleCount(): number {
+    return this.handleRefs.size;
+  }
+
+  /** Total logical bytes of the retained device transform buffers. */
+  get deviceHandleBytes(): number {
+    let bytes = 0;
+    for (const handle of this.handleRefs.keys()) bytes += handle.byteLength;
+    return bytes;
   }
 
   /**
@@ -78,14 +219,21 @@ export class WorldThreeBinding {
     const key = cellKey(levelName, coord);
     const group = new Group();
     group.name = key;
-    const entry: CellEntry = { group, instanced: [], debug: [] };
+    const entry: CellEntry = { group, instanced: [], debug: [], device: [], handles: [] };
+    this.retainCellHandles(entry, outputs);
     try {
       for (const name of Object.keys(outputs)) {
         for (const item of outputs[name]) {
           if (item.kind === "instances") {
-            for (const mesh of toInstancedMeshes(item.batches, this.opts.assets)) {
-              entry.instanced.push(mesh);
-              group.add(mesh);
+            // Device residency first: reading `batches` on a device item
+            // throws by design, so this branch must precede it.
+            if (isDeviceResidentInstances(item)) {
+              this.buildDeviceBatches(entry, levelName, coord, item.deviceBatches ?? []);
+            } else {
+              for (const mesh of toInstancedMeshes(item.batches, this.opts.assets)) {
+                entry.instanced.push(mesh);
+                group.add(mesh);
+              }
             }
           } else if (item.kind === "geometry" && this.opts.debugPoints === true) {
             const points = toPointsObject(item.geo, {
@@ -119,6 +267,81 @@ export class WorldThreeBinding {
     for (const key of [...this.cells.keys()]) this.removeCell(key);
   }
 
+  /**
+   * Retain every device handle in the WHOLE cell before any build runs.
+   *
+   * Scope is the point: retaining per item, as each device item is
+   * reached, strands a later item's handles whenever an earlier one
+   * throws — `toInstancedMeshes` throws on an unknown assetId or a
+   * transform-length mismatch, and the debug-points branch can throw
+   * too. Nothing else in the library would ever free them: `World`
+   * stores outputs and disposes nothing, and the graph transferred
+   * ownership at delivery. Retaining up front means the catch in
+   * `cellReady` releases every handle the cell carried, whatever failed
+   * and wherever. That includes the misconfigured case (no
+   * `deviceInstances` adapter) — an unrenderable buffer is still a
+   * buffer, and leaking one per cook is worse than freeing one that was
+   * never going to be drawn.
+   */
+  private retainCellHandles(entry: CellEntry, outputs: CellOutputs): void {
+    for (const name of Object.keys(outputs)) {
+      for (const item of outputs[name]) {
+        // Residency first: reading `batches` on a device item throws by
+        // design, so this test must precede any other item access.
+        if (item.kind !== "instances" || !isDeviceResidentInstances(item)) continue;
+        for (const batch of item.deviceBatches ?? []) {
+          entry.handles.push(batch.transforms);
+          this.retainHandle(batch.transforms);
+        }
+      }
+    }
+  }
+
+  /** Build the adapter objects for one device item's batches. */
+  private buildDeviceBatches(
+    entry: CellEntry,
+    levelName: string,
+    coord: CellCoord,
+    batches: readonly DeviceInstanceBatch[],
+  ): void {
+    const dev = this.opts.deviceInstances;
+    if (dev === undefined) {
+      const count = batches.reduce((n, b) => n + b.count, 0);
+      throw new Error(
+        `WorldThreeBinding: cell "${cellKey(levelName, coord)}" produced a device-resident ` +
+          `instances item (${batches.length} batch(es), ${count} instances) but no ` +
+          "`deviceInstances` adapter is configured. Pass `deviceInstances: { adapter, bounds }` " +
+          "(see createWebGpuInstanceAdapter) to draw from the device buffers, or construct the " +
+          "GpuFieldEvaluator without `deviceInstances: true` to get CPU batches back",
+      );
+    }
+    const bounds = dev.bounds?.(levelName, coord);
+    const ctx: DeviceInstanceContext = { levelName, coord, bounds };
+    for (const batch of batches) {
+      const object = dev.adapter.build(batch, ctx);
+      entry.device.push(object);
+      entry.group.add(object);
+    }
+  }
+
+  private retainHandle(handle: DeviceTransformsHandle): void {
+    this.handleRefs.set(handle, (this.handleRefs.get(handle) ?? 0) + 1);
+  }
+
+  /** Drop one reference; dispose at zero. Never disposes a shared handle. */
+  private releaseHandle(handle: DeviceTransformsHandle): void {
+    const refs = this.handleRefs.get(handle);
+    if (refs === undefined) return;
+    if (refs > 1) {
+      this.handleRefs.set(handle, refs - 1);
+      return;
+    }
+    this.handleRefs.delete(handle);
+    // Idempotent by contract, but skipping an already-disposed handle
+    // keeps a caller-side dispose from looking like a double free.
+    if (!handle.disposed) handle.dispose();
+  }
+
   private removeCell(key: string): void {
     const entry = this.cells.get(key);
     if (!entry) return;
@@ -135,6 +358,20 @@ export class WorldThreeBinding {
     for (const points of entry.debug) {
       points.geometry.dispose();
       points.material.dispose();
+    }
+    entry.instanced.length = 0;
+    entry.debug.length = 0;
+    // Device batches: the renderer-side objects go first (destroying a
+    // buffer a live bind group still points at would fault on the next
+    // draw), and the handle releases run in a `finally` so a throwing
+    // adapter can never strand a device buffer.
+    const dev = this.opts.deviceInstances;
+    const objects = entry.device.splice(0, entry.device.length);
+    const handles = entry.handles.splice(0, entry.handles.length);
+    try {
+      if (dev !== undefined) for (const object of objects) dev.adapter.release(object);
+    } finally {
+      for (const handle of handles) this.releaseHandle(handle);
     }
   }
 }
