@@ -627,9 +627,120 @@ Design decisions fixed up front:
 - Exit: full suite green, docs idempotent, example browser-verified,
   release tagged. Commit.
 
+## Phases (v0.8) — multi-asset resident spawns, scheduled 2026-08-07
+
+v0.7's one documented limitation: only a constant `assetId` fuses, and
+a spawn driven by `assetAttr` falls back to the CPU path with the
+machine-readable reason `"spawn-asset-attr"`. That is not a corner
+case — `examples/02-forest` spawns with `assetAttr: "species"`, so the
+most representative demo in the repo cannot use the device-resident
+path at all.
+
+Feasibility settled before scheduling, and it **inverted the recorded
+stretch**. That entry assumed a device-side sort/partition. There is no
+need for one: a resident run always starts from a host `Geometry`, and
+no resident node can produce a string attribute (`setAttribute`'s
+resident predicate requires `type !== "string"`; `run.ts` planning
+throws `PlanFail` on a string slot). The asset key is therefore
+host-resident at plan time *by construction*. The host plans the
+grouping, uploads a permutation, and the device composes once per
+asset — no atomics, no prefix sum, no readback. String columns are
+already `Uint32Array` indices into a per-attribute table, so there is
+nothing to marshal.
+
+Design decisions fixed up front:
+
+- **Host plans the grouping; the device only composes.** The grouping
+  shares code with `buildInstanceBatches` rather than re-deriving it,
+  so ordering is identical by construction rather than by comparison.
+  The device-side counting sort stays recorded and unbuilt, gated on a
+  change nothing currently requires.
+- **N buffers, not one buffer with per-asset offsets.** three's
+  bind-group seam emits `{ binding, resource: { buffer } }` with no
+  offset or size, so a sub-range cannot be expressed without an
+  upstream change. One detach per asset needs no renderer change and
+  keeps the existing identity-keyed refcount correct.
+- **Additive and opt-in, again.** The CPU spawner path, the WebGL
+  route, and the constant-`assetId` resident path stay byte-for-byte
+  as they are.
+- **CPU stays the reference.** Grouping order is exact; matrix values
+  keep v0.7's f32-vs-f64 compose tolerance.
+- **The chain still breaks at the string `setAttribute`.** The
+  forest's run fuses exactly one member — the spawn. That is the
+  honest number, and the docs and demo readouts must say so rather
+  than implying deeper fusion.
+
+### Phase 29 — Host-planned asset grouping in the resident run
+- Extract the grouping out of `buildInstanceBatches`
+  (`spawn/instances.ts`) into a shared, testable function returning
+  `{ order, counts, offsets, perm }`, with the CPU spawner rewritten to
+  consume it so exactly one implementation of the ordering spec exists.
+  Order is: batches by ascending first-occurrence point index;
+  within a batch, ascending point index. `""` merges with
+  `defaultAssetId`, and table-index order is *not* batch order, so a
+  host-side dense-key remap is required.
+- `run.ts`: allow `string` attributes as `u32` slots; make
+  `InstancesDesc`/`BufRef.out` plural; add a per-step element count and
+  a u32 `base` to the uniform header (it fits the existing 16-byte
+  padding); one output buffer and one compose dispatch per asset; N
+  detaches after the final cancellation check, with exactly-once
+  disposal on partial failure. Bump `PLAN_FORMAT`, and `APPLY_VERSION`
+  / `SALT_VERSION` if WGSL text moves.
+- `makeComposeInstancesApply` gains a `perm` binding and a
+  `src = perm[base + i]` indirection; the destination index stays `i`.
+- Planner validation rejects the two CPU throws (missing attribute,
+  non-string attribute) via `PlanFail`, so the per-node path raises the
+  identical message.
+- Retire the `"spawn-asset-attr"` opt-out and its reason from the
+  taxonomy and every mirror.
+- Exit: device batch ids, order and counts identical to
+  `buildInstanceBatches` across a fixture matrix covering every edge
+  case and determinism item in the survey; matrices within the v0.7
+  tolerance; constant-`assetId` and CPU-only paths byte-identical to
+  v0.7.0; pool stats show N buffers out and N back across cook →
+  evict → recook. Commit.
+
+### Phase 30 — Multi-batch delivery, renderer, and lifetime
+- `WorldThreeBinding` and the WebGPU adapter carry N batches per cell.
+  The expectation is **no production change on the three side** — the
+  phase's first job is to prove that, and the guard test pinning the
+  bind-group seam must remain untouched and green.
+- Leak and ordering tests extended to multi-batch: partial-build
+  cleanup, eviction with several handles per cell, sustained churn
+  returning to zero retained bytes.
+- Decide and document `stats.dispatches` for per-asset dispatch, and
+  note that per-asset pool bucketing makes reported logical bytes
+  understate device occupancy.
+- Per-asset bounds: either thread `assetId` into the `bounds` callback
+  or record the cell-sphere approximation as deliberate.
+- Exit: `worldBindingDevice` churn tests green with multi-asset cells;
+  no growth in retained device bytes over a sustained fly-through;
+  three guard test unchanged and green; browser-verified multi-asset
+  resident rendering. Commit.
+
+### Phase 31 — Forest resident, docs, v0.8.0
+- `examples/02-forest` runs on the device-resident path with its
+  `assetAttr: "species"` intact, with the CPU/resident toggle and
+  readouts v0.7's example established — and a fusion readout that does
+  not overstate depth (one fused member, not four).
+- README / llms.txt / authoring: the resident spawner contract loses
+  the single-asset limitation and the `"spawn-asset-attr"` reason; the
+  grouping order becomes part of the documented device contract; the
+  string-`setAttribute` chain break is documented as the remaining
+  boundary.
+- Version 0.8.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, example browser-verified,
+  release tagged. Commit.
+
 ## Stretch (recorded, not scheduled)
-- Device-side multi-asset grouping: sort/partition points by asset id
-  on device so `assetAttr` spawns fuse instead of falling back.
+- **Device-produced asset keys.** Make `setAttribute` resident in
+  string `values` mode (host interns the static values list; the
+  kernel writes `lut[clamp(floor(selector), 0, last)]`), extending the
+  forest's run to its full chain. Because the key would then be
+  device-produced, this is also what would finally require the stable
+  counting sort: `atomic<u32>` bindings, a per-step domain size for the
+  K-bucket scan, an `atomicMin` first-occurrence pass, and a
+  constant-size `2K` u32 readback needing a mid-run pass split.
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
