@@ -307,10 +307,12 @@ for (const item of outputs.instances) {
 Multi-asset spawns stay declarative: write a per-point string attribute
 with `setAttribute` (`type: "string"`, a `values` list, and a
 field-capable selector that picks per point) and name it in
-`spawnInstances`' `assetAttr` — batches then split by asset id, and
-`orientAlongVector` turns a direction attribute (a surface normal, a
-spline tangent) into the standard `rot` quaternion without leaving the
-graph. See `examples/02-forest` and `examples/03-spline-fence`.
+`spawnInstances`' `assetAttr` — batches then split by asset id (in
+ascending first-occurrence point order), and `orientAlongVector` turns
+a direction attribute (a surface normal, a spline tangent) into the
+standard `rot` quaternion without leaving the graph. Since v0.8.0 such
+a spawn is device-resident too, not just a CPU one. See
+`examples/02-forest` and `examples/03-spline-fence`.
 
 Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 `splineSample`), `toPointsObject` (debug point rendering), and
@@ -321,7 +323,7 @@ Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 With a `THREE.WebGPURenderer`, `createWebGpuInstanceAdapter` lets the
 same binding draw instance matrices straight out of the GPU buffer the
 cook composed them in, skipping the `Float32Array` entirely — see
-[Device-resident instancing](#device-resident-instancing-v070) below.
+[Device-resident instancing](#device-resident-instancing) below.
 `three/webgpu` is imported lazily by that factory, so a WebGL app pays
 nothing for its existence.
 
@@ -375,10 +377,13 @@ kernel covering more elements than one `dispatchWorkgroups` call
 allows (65535 × 64 ≈ 4.19M) splits into chunked dispatches with
 byte-identical output. Ineligible fields fall back to the CPU silently
 but countably — `CookStats.gpu.fallbacks` records machine-readable
-reasons: `no-spec`, `compile-error`, `too-many-buffers` per field,
-`run-plan-failed`, `run-too-large` per fused run, and
-`spawn-asset-attr` per opted-out node (that is the complete
-vocabulary).
+reasons: `no-spec`, `compile-error`, `too-many-buffers` per field, and
+`run-plan-failed`, `run-too-large` per fused run. That is the complete
+vocabulary. Node-level opt-outs are part of it in principle (a node
+whose `ResidentDesc.eligible` returns a reason string), but the
+standard node library declares none — v0.7's `spawn-asset-attr` was
+the only one, and v0.8 retired it when `assetAttr` spawns became
+device-resident.
 
 **Device-resident runs.** When the resolver implements the optional
 `planRun`/`executeRun` pair — `GpuFieldEvaluator` does; a resolver
@@ -395,7 +400,7 @@ member kernels; only the run's terminal reads back.
   along the chain carries a serializable spec. A chain of one is not a
   run — with one exception: a lone *terminal* is, because fusion is the
   only way to produce device output at all (see
-  [Device-resident instancing](#device-resident-instancing-v070)).
+  [Device-resident instancing](#device-resident-instancing)).
 - **Where runs end:** at a non-fusable node, at a node carrying a
   declared graph output, and at any fan-out. An interior node with
   external consumers becomes a run terminal with its own readback —
@@ -425,10 +430,16 @@ Three things to know before reading a benchmark:
   instead of recompiling. (Before v0.6.1 constants cost a full column
   each, which is why older notes describe constant-heavy chains as a
   fusion hazard.)
-- **`stats.dispatches` counts member kernels, not `dispatchWorkgroups`
-  calls** — one per field-capable param plus one apply kernel per
+- **`stats.dispatches` counts kernels, not `dispatchWorkgroups`
+  calls** — one per resolved field column plus one apply kernel per
   member. A kernel chunked across several dispatches still counts
-  once: a 4.3M-point four-member run reports 4 while issuing 8.
+  once: a 4.3M-point four-member run reports 4 while issuing 8. One
+  kernel counts more than once, and only one: a **multi-asset spawner
+  terminal** dispatches once per asset present in the input — the unit
+  is (step, asset), not step — because those are distinct dispatches
+  over disjoint ranges into distinct output buffers, not chunks of one
+  range. A constant-`assetId` spawn has exactly one asset and still
+  counts 1, so v0.7 numbers stay comparable.
 - **Toggling `gpu` on and off thrashes the terminal's cache slot by
   design.** A node holds one memo entry; a fused cook stores under the
   run key above, a per-node cook under `<type>|s…`. The two formats
@@ -444,7 +455,10 @@ buffer — is computed at plan time and compared against
 buffer pool's idle bytes, and `evaluator.dispose()` destroys those
 idle buffers while leaving in-flight ones valid and the evaluator
 usable. `evaluator.poolStats` reports `{ buffersCreated,
-buffersReused, buffersDestroyed, pooledBuffers, pooledBytes }`.
+buffersReused, buffersDestroyed, pooledBuffers, pooledBytes,
+buffersDetached, detachedBuffers, detachedBytes }`. Its byte totals
+are **bucket** bytes, not logical ones: the pool rounds every
+allocation up to a power of two with a 256-byte floor.
 
 **Determinism contract.** The CPU is the bit-exact reference and
 existing goldens never move; the GPU path is a documented approximation
@@ -502,15 +516,17 @@ per-node (fusion switched off), and one fused device-resident run —
 with per-path cold-cache wall times, the full `CookStats.gpu` counters,
 per-path output hashes, and a live deviation readout.
 
-## Device-resident instancing (v0.7.0)
+## Device-resident instancing
 
 A fused run normally ends by reading its result back to the CPU. With a
 WebGPU renderer on the other side there is no reason to: the instance
 matrices are already on the device the renderer draws from. Opt in with
 `deviceInstances: true` and a `spawnInstances` terminal composes every
-4×4 on the GPU and hands back a **buffer handle** instead of a
-`Float32Array` — no readback, no CPU compose loop, and no
-`instanceMatrix` upload on the way back out.
+4×4 on the GPU and hands back **buffer handles** instead of
+`Float32Array`s — no readback, no CPU compose loop, and no
+`instanceMatrix` upload on the way back out. (Shipped in v0.7.0 for a
+constant `assetId`; since v0.8.0 an `assetAttr`-driven multi-asset
+spawn is resident too.)
 
 ```ts
 import { World } from "pcg-ts";
@@ -565,14 +581,18 @@ itself a run *terminal*: it may be a run's last member and a chain
 never continues through it. When the evaluator advertises it
 (`evaluator.residentTerminals` is `["spawnInstances"]` under the
 opt-in) the run appends a compose-TRS kernel writing one column-major
-4×4 per point, then transfers that buffer out of the evaluator's pool.
-If nothing in the cook reads the terminal's `points` pin, the run
-performs *no readback at all* — no `mapAsync`, no staging buffer, no
-CPU copy of `P`/`rot`/`scale`. Even a lone spawner counts as a run
-here, because fusion is the only way to produce device output.
+4×4 per point, then transfers the composed buffers out of the
+evaluator's pool — **one buffer per asset**, so a constant-`assetId`
+spawn yields one and an `assetAttr` spawn yields as many as there are
+distinct asset ids on its points. If nothing in the cook reads the
+terminal's `points` pin, the run performs *no readback at all* — no
+`mapAsync`, no staging buffer, no CPU copy of `P`/`rot`/`scale`. Even a
+lone spawner counts as a run here, because fusion is the only way to
+produce device output.
 
 The `instances` item that comes back carries `deviceBatches`, not
-`batches`. Each `DeviceInstanceBatch` is `{ residency: "device",
+`batches` — one entry per asset, in the batch order documented below.
+Each `DeviceInstanceBatch` is `{ residency: "device",
 assetId, count, transforms }`, where `transforms` is an opaque
 `DeviceTransformsHandle` (`backend`, `byteLength`, `disposed`,
 `resource`, `dispose()`) — never a typed array. Reading `batches` on
@@ -592,23 +612,64 @@ from `pcg-ts/gpu` is the one supported way to get the `GPUBuffer` back
 out. Bind exactly `handle.byteLength` bytes from offset 0 — the pool
 buckets allocations to powers of two, so the tail is uninitialized.
 
-**One asset per spawner, and the fallback is countable.** Only the
-constant-`assetId` case fuses. Set `assetAttr` and the node opts out
-with the machine-readable reason **`spawn-asset-attr`**, counted in
-`CookStats.gpu.fallbacks` once per cook per such node — whether or not
-a run formed around it. The node then spawns on the CPU with
-byte-identical transforms, and the chain in *front* of it still fuses
-normally; only the compose moves back to the host. Grouping points by
-a per-point string asset id is a sort/partition over a string-table
-attribute on the device, which this pipeline does not implement; it is
-recorded as the successor to this work, not shipped in 0.7.0. Multi-
-asset spawns stay fully supported on the CPU path.
+**Multi-asset spawns are resident too (v0.8.0), and the batch order is
+part of the contract.** `assetAttr` no longer forces the compose back
+to the host. There is no device-side sort, and none is needed: no
+resident node can produce a string attribute, so the asset key is a
+host column *by construction*. The host plans the grouping with the
+same function the CPU spawner calls, uploads a permutation, and the
+device composes once per asset — no atomics, no prefix sum, no
+readback. Both paths therefore agree by construction rather than by
+comparison, which is what makes the order safe to depend on:
 
-**Who frees what.** The buffer starts pool-owned; `BufferPool.detach`
-moves it out on the run's very last line, after the final cancellation
-check, so every earlier failure path still reclaims it. From that
-instant the *holder* owns it and nothing else will ever free it — not
-the pool, not the memo cache, not `evaluator.dispose()`.
+- **Batches are ordered by ascending first-occurrence point index** of
+  each distinct resolved asset id. Not string-table order, not intern
+  order, not lexicographic — so a recook whose string table interned
+  in a different order still produces the same batch order. Points
+  `["b", "a", "b"]` give batches `["b", "a"]`.
+- **Within a batch, instances are in ascending original point index.**
+  The grouping is a stable partition.
+- **An empty per-point value (`""`) resolves to `assetId`** and merges
+  into that batch rather than opening its own — including when some
+  other point carries the literal string equal to `assetId`. The
+  merged batch sits at the first occurrence of *either*. An
+  out-of-range string-table index resolves the same way.
+- **Zero points yields zero batches**, in constant mode as well as
+  attribute mode. An asset that appears in the string table but on no
+  point produces no batch: groups come from points, never from the
+  table.
+
+`assetAttr` naming a missing attribute, or an attribute that is not a
+string attribute, is still an error and still raises the CPU spawner's
+message, naming the attribute (the missing-attribute form also lists
+the string point attributes that *are* present). The run planner
+mirrors those two conditions and *rejects* rather than throwing —
+counting `run-plan-failed` — so the per-node path serves and there is
+exactly one copy of each message.
+
+**The remaining boundary: a string `setAttribute` breaks the chain.**
+`setAttribute` is fusable in numeric point-domain mode only; its
+resident predicate excludes `type: "string"`. So the idiomatic way to
+*compute* an asset key — `setAttribute` with `type: "string"` and a
+field-capable selector over a `values` list — is not resident, and the
+chain breaks there. Where it feeds the spawner directly, as in the
+recipe above and in `examples/02-forest`, the run holds only the
+spawner: one fused member, not four. Resident nodes sitting *between*
+the string write and the spawn still fuse with it, so the depth is
+whatever survives downstream of the break, and the chain in front of
+the break fuses as its own run. Making `setAttribute` resident in
+string `values` mode is the recorded successor — and because the key
+would then be device-produced, that is also the change that would
+finally require the device-side counting sort this design avoids.
+
+**Who frees what.** Each batch's buffer starts pool-owned;
+`BufferPool.detach` moves them out on the run's very last line, after
+the final cancellation check — one detach and one
+`DeviceTransformsHandle` per asset — so every earlier failure path
+still reclaims every buffer, and a transfer that fails partway disposes
+each buffer exactly once. From that instant the *holder* owns them and
+nothing else will ever free them — not the pool, not the memo cache,
+not `evaluator.dispose()`.
 
 - The graph delivers handles but never owns them. A terminal that
   produced device batches writes a **volatile** cache entry: it feeds
@@ -631,17 +692,41 @@ the pool, not the memo cache, not `evaluator.dispose()`.
   counted in `evaluator.poolStats` (`detachedBuffers`, `detachedBytes`,
   plus cumulative `buffersDetached`); the binding reports the same
   population from its own side as `binding.deviceHandleCount` and
-  `binding.deviceHandleBytes`. Over a sustained fly-through both must
-  reach a steady state, not climb. Compare the *counts*: the byte
-  totals are different quantities and never converge — the pool
-  reports the power-of-two bucket it allocated, the binding the
-  logical `count * 64` payload it holds.
+  `binding.deviceHandleBytes` — now one handle per *batch*, i.e. per
+  asset in a cell, rather than one per cell; a handle shared across
+  cells is still counted once, since the count is of distinct handles.
+  Over a sustained fly-through both must reach a steady
+  state, not climb. Compare the *counts*: the byte totals are different
+  quantities and never converge — the pool reports the power-of-two
+  bucket it allocated, the binding the logical `count * 64` payload it
+  holds.
+- **Read `deviceHandleBytes` as a leak meter, not as VRAM.** It is a
+  lower bound on device occupancy, and since v0.8 a loose one: the pool
+  buckets to the next power of two with a 256-byte floor, and a
+  multi-asset spawn takes one buffer per asset, so a cell with four
+  small batches pays four roundings where it used to pay one — a
+  3-instance batch is 192 logical bytes in a 256-byte bucket, a
+  20-instance batch 1280 in 2048. With many small per-asset batches the
+  gap is structural, not incidental. What stays exact is the property
+  the meter exists for: retained bytes returning to zero and staying
+  bounded.
 
 Cells with no CPU matrices have no bounding sphere to compute, so
 supply one out of band via `deviceInstances.bounds` (derive it from the
 cell AABB). Return `undefined` and frustum culling is switched off for
-that cell rather than guessed — drawing too much is recoverable,
-culling visible geometry is not.
+that batch's object rather than guessed — drawing too much is
+recoverable, culling visible geometry is not.
+
+`bounds` is called **once per batch**, not once per cell, and takes
+`(levelName, coord, assetId)`. The third argument is the lever a
+multi-asset cell needs: the sphere must cover the instances' own extent
+as well as the cell's, and with one sphere per cell every asset
+inherits the padding of the tallest one — a cell holding both a
+200-unit landmark and ground cover would draw the ground cover with a
+200-unit skirt and effectively stop culling it. Ignoring the third
+argument is fine and keeps the per-cell behaviour; existing
+two-parameter callbacks still type-check and are simply asked once per
+asset.
 
 **This leans on three's renderer internals, and says so loudly.** three
 publishes no supported way to render from a `GPUBuffer` you already
@@ -691,7 +776,11 @@ See it live: [`examples/09-gpu-world`](./examples/09-gpu-world) streams
 a `World` whose cells render from instance matrices that never touch
 the CPU, showing the binding's live handle count and the evaluator
 pool's own detached-buffer accounting side by side — an independent
-second opinion on the lifetime story above.
+second opinion on the lifetime story above. For the multi-asset shape,
+[`examples/02-forest`](./examples/02-forest) spawns with
+`assetAttr: "species"` and toggles between the CPU and device-resident
+paths, reporting the batch count and the fusion depth it actually
+achieves (one member — the spawn — for the reason above).
 
 ## Determinism guarantees
 

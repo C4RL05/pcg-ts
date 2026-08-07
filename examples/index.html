@@ -52,7 +52,9 @@
       <span class="body">
         <span class="name">Forest</span>
         <div class="desc">fbm heightfield terrain, surface sampling, slope/treeline filters, and
-          pine/bush instancing split by a per-point species attribute.</div>
+          pine/bush instancing split by a per-point species attribute — with a device-resident
+          spawn that composes one matrix buffer per species on the GPU. Falls back to the CPU
+          path without WebGPU.</div>
       </span>
     </a>
 

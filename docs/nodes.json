@@ -729,7 +729,7 @@
       "assetAttr": {
         "type": "string",
         "default": "",
-        "description": "Optional name of a string point attribute holding per-point asset ids; empty string disables the override. Points whose attribute value is empty use assetId instead. Errors when the named attribute is missing or not a string attribute."
+        "description": "Optional name of a string point attribute holding per-point asset ids; empty string disables the override. Points whose attribute value is empty use assetId instead. Errors when the named attribute is missing or not a string attribute. Device-resident spawning supports it: the grouping is planned on the CPU (the asset column is always host-resident) and the device composes one transform buffer per asset, in the same batch order the CPU path produces."
       }
     }
   },

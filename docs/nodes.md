@@ -367,7 +367,7 @@ Spawner terminal: converts the input point cloud into render-agnostic instance b
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `assetId` | string | `"asset"` |  |  |  | Asset id stamped on every instance not overridden per point via assetAttr. The renderer resolves it to an actual renderable (e.g. the three adapter's asset map). |
-| `assetAttr` | string | `""` |  |  |  | Optional name of a string point attribute holding per-point asset ids; empty string disables the override. Points whose attribute value is empty use assetId instead. Errors when the named attribute is missing or not a string attribute. |
+| `assetAttr` | string | `""` |  |  |  | Optional name of a string point attribute holding per-point asset ids; empty string disables the override. Points whose attribute value is empty use assetId instead. Errors when the named attribute is missing or not a string attribute. Device-resident spawning supports it: the grouping is planned on the CPU (the asset column is always host-resident) and the device composes one transform buffer per asset, in the same batch order the CPU path produces. |
 
 ## splineSample
 

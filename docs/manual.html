@@ -266,7 +266,7 @@
 
 <header class="top">
   <div class="wrap">
-    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.7.0</p>
+    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.8.0</p>
     <h1>The pcg<span class="dot">-</span>ts manual</h1>
     <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
     <div class="metabar">
@@ -574,16 +574,18 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
 
     <h3 id="ex-02">02 · Forest — sampling a surface, filtering by what you measured</h3>
     <figure>
-      <img src="manual-assets/02-forest.jpg" width="1454" height="783" loading="lazy" decoding="async"
-           alt="The forest demo: a control panel reports 60 fps, 5912 planted trees split 4246 pine and 1666 bush, a 22.6 ms cook, and 9 nodes cooked. The viewport shows a wide grey-green heightfield terrain seen from above and to the side, with dense bands of dark green conifers covering the lower slopes and thinning out entirely on the steep faces and the high ridge." />
-      <figcaption><b>02 · forest</b> — 5912 trees placed from 9000 candidates: 4246 pine and 1666 bush, split by a per-point string attribute rather than by two graphs.</figcaption>
+      <img src="manual-assets/02-forest.jpg" width="1400" height="845" loading="lazy" decoding="async"
+           alt="The forest demo on the device-resident path. The panel offers a device-resident / CPU readback toggle and reports 2 live batches split 4,246 pine and 1,666 bush, 5,912 instances drawn, 2 buffers holding 369.5 KiB of matrices on device, the same 369.5 KiB of matrix uploads avoided, 0 B uploaded, 1 resident run of 1 fused member, 2 device dispatches, and a 127.3 ms cook over 9 nodes. The viewport shows a wide grey-green heightfield terrain seen from above and to the side, with dense bands of dark green conifers covering the lower slopes and thinning out entirely on the steep faces and the high ridge." />
+      <figcaption><b>02 · forest</b> — 5912 trees placed from 9000 candidates: 4246 pine and 1666 bush, split by a per-point string attribute rather than by two graphs. Since v0.8 both species are composed on the GPU, one matrix buffer each, and drawn without a readback.</figcaption>
     </figure>
     <p>An fBm heightfield becomes a three.js <code>BufferGeometry</code>, crosses into the library through <code>fromBufferGeometry</code>, and is area-weighted sampled by <code>surfaceSample</code> — which emits a <code>normal</code> attribute as it goes. Height and slope are then written as attributes and used by <code>filterByAttribute</code> to keep trees off cliffs and above the treeline. The visible result is the point of the design: the filters read measurements the sampler already produced, so "no trees on steep ground" is a comparison, not a special case.</p>
     <p>Species selection is where multi-asset spawning earns its keep. One string <code>setAttribute</code> picks pine or bush per point from a numeric selector, and <code>spawnInstances</code> splits the output into two batches by that attribute — one graph, one cook, two <code>InstancedMesh</code>es.</p>
+    <p>Since v0.8 that split also happens without a CPU round trip. Flip the toggle to <b>device-resident</b> and each species gets its own matrix buffer, composed in a WGSL kernel and drawn straight from the GPU — <code>matrices uploaded</code> sits at <code>0 B</code>. Flip back to <b>CPU readback</b> and the same bytes are composed in JS and uploaded instead. The batch counts do not move between the two: <code>4,246 / 1,666</code> either way, because the device path plans its grouping with the very same function the CPU spawner calls.</p>
+    <p>The <code>fused members</code> readout says <code>1</code>, and that is the honest number rather than a disappointing one. A string <code>setAttribute</code> is not resident-eligible, so it breaks the fusable chain one node before the spawn — the run is the spawn alone. Making string <code>setAttribute</code> resident is the recorded successor, and it is also the only thing that would require a device-side sort; see <a href="#gpu">chapter 6</a>.</p>
     <p class="demo-links">
       <span class="chip">surfaceSample · setAttribute · filterByAttribute · spawnInstances</span>
       <span class="chip">fields: position · component · sub · mul · ge · vec · randomField · fbm</span>
-      <span class="chip">three: fromBufferGeometry · toInstancedMeshes</span>
+      <span class="chip">three: fromBufferGeometry · toInstancedMeshes · createWebGpuInstanceAdapter</span>
       <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/">run it →</a>
     </p>
 
@@ -1365,7 +1367,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.7.0 manual</span>
+    <span>pcg-ts v0.8.0 manual</span>
     <span>MIT license</span>
     <a href="./index.html">project overview</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>

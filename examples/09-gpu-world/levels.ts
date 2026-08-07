@@ -109,8 +109,16 @@ function leanSpec(seed: number): FieldSpec {
 
 /**
  * Fine bounded level: one device-resident run per cell, `count`
- * instances of a single asset (single-asset is the v0.7 resident
- * spawner's supported shape; `assetAttr` falls back to the CPU path).
+ * instances of a single asset.
+ *
+ * Single-asset is this level's choice, not the spawner's limit. Since
+ * v0.8 a spawn driven by `assetAttr` is device-resident too — the host
+ * plans the grouping from the (necessarily host-resident) string column,
+ * uploads a permutation, and the device composes one buffer and one
+ * dispatch per asset, so a cell then arrives as N device batches instead
+ * of one. `examples/02-forest` is that shape. A constant `assetId` keeps
+ * this level's per-cell accounting and its single bounding sphere as
+ * simple as the rest of the page.
  */
 export function makeSpireLevel(
   worldSeed: number,

@@ -39,8 +39,12 @@ export const TIGHT_RESIDENT_BYTES = 8 * 1024 * 1024;
 export interface GpuStatsView {
   /**
    * Compute kernels executed — one per resolved field column plus one
-   * apply kernel per fused member. NOT a `dispatchWorkgroups` count: a
-   * kernel split across chunks still counts once.
+   * apply kernel per fused member, except a multi-asset spawner
+   * terminal, which dispatches once per (member, asset): it composes one
+   * buffer per asset over that asset's own element range, and each of
+   * those counts. NOT a `dispatchWorkgroups` count: a kernel split
+   * across chunks still counts once. (This chain has no spawner, so here
+   * the count is exactly one per field column plus one per member.)
    */
   dispatches: number;
   pipelinesCompiled: number;

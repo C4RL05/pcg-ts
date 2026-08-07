@@ -228,7 +228,9 @@
     holds one memo slot, and a fused cook stores under a run key while a per-node cook stores under
     a node key — so flipping the path always recooks the chain, by design. <code>dispatches</code>
     counts member kernels, not <code>dispatchWorkgroups</code> calls (a chunked kernel still counts
-    once). The three hashes differ (float ops carry documented per-op budgets; hash/random streams
+    once). One per fused member holds for this chain because it has no spawner terminal; a
+    multi-asset <code>spawnInstances</code> composes one buffer per asset and so dispatches once per
+    (member, asset) — see <b>02 · forest</b>. The three hashes differ (float ops carry documented per-op budgets; hash/random streams
     are bit-exact) but each path is deterministic: recook cold and the same hash comes back. A warm
     recook reports <code>nodes 0 / 6</code> in ~0 ms and does no device work at all — the fused run
     comes back from its terminal's single memo entry — so the counters above stay the cold ones. The
