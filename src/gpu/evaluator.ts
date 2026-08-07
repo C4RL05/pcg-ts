@@ -153,14 +153,18 @@ export interface GpuFieldEvaluatorOptions {
    * loop. Only useful when the caller can actually draw from a device
    * buffer, i.e. a WebGPU renderer sharing this evaluator's device.
    *
+   * A spawner grouping by `assetAttr` is resident too: the host plans the
+   * grouping and the device composes ONE BUFFER PER ASSET, so such a cook
+   * yields several batches and therefore several handles — all of them
+   * the caller's to dispose.
+   *
    * The caller then OWNS every handle it receives and must dispose it
    * (see `DeviceTransformsHandle`); handles are never memo-cached, so a
-   * device-resident spawner recooks every cook and yields a fresh one.
+   * device-resident spawner recooks every cook and yields fresh ones.
    *
    * Default false: `spawnInstances` spawns on the CPU exactly as it
    * always has, byte for byte, and a chain feeding it still fuses up to
-   * the node before it. A spawner with `assetAttr` set stays on the CPU
-   * either way (counted as `spawn-asset-attr`).
+   * the node before it.
    */
   readonly deviceInstances?: boolean;
 }

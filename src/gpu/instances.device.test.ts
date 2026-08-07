@@ -46,6 +46,19 @@ interface StatsShape {
   cached: number;
 }
 
+interface BatchObs {
+  shapes: Array<[string, number]>;
+  shapesMatchCpu: boolean;
+  perBatch: Array<{
+    assetId: string;
+    count: number;
+    byteLength: number;
+    lengthsAgree: boolean;
+    parity: Parity;
+  }>;
+  parity: Parity;
+}
+
 interface Variant {
   name: string;
   count: number;
@@ -100,15 +113,26 @@ interface ScenarioOutput {
     duringRecovery: PoolSnap;
     after: PoolSnap;
   };
-  fallback: {
+  grouping: {
     stats: StatsShape;
-    chainedStats: StatsShape;
     deviceBatchesPresent: boolean;
-    batchShapes: Array<[string, number]>;
-    bytesIdenticalToCpuOnly: boolean;
-    chainedShapes: Array<[string, number]>;
-    chainedShapesMatchCpu: boolean;
-    chainedParity: Parity;
+    grouped: BatchObs;
+    cpuShapes: Array<[string, number]>;
+    tableEntries: string[];
+    holding: { detachedBuffers: number; detachedBytes: number };
+    holdingBytesMatchCounts: boolean;
+    afterDispose: { detachedBuffers: number; detachedBytes: number; inFlight: number };
+    cycles: Array<{ batches: number; detachedBuffers: number; detachedBytes: number }>;
+    afterCycles: { detachedBuffers: number; detachedBytes: number; inFlight: number };
+    identicalAcrossCooks: boolean;
+    permutedTableShapes: Array<[string, number]>;
+    wide: BatchObs;
+    solo: BatchObs;
+  };
+  groupingChain: {
+    stats: StatsShape;
+    observed: BatchObs;
+    batchCount: number;
   };
   optOut: {
     residentTerminals: string[];
@@ -419,31 +443,97 @@ describe.skipIf(testDevice === null)(
     });
 
     // -----------------------------------------------------------------
-    // 5. fallbacks
+    // 5. multi-asset grouping (phase 29)
 
-    it("assetAttr falls back to the CPU with byte-identical transforms and a counted reason", () => {
-      const f = scenario.fallback;
-      expect(f.stats.fallbacks).toEqual({ "spawn-asset-attr": 1 });
-      expect(f.stats.residentRuns).toBe(0);
-      expect(f.deviceBatchesPresent).toBe(false);
-      expect(f.batchShapes).toEqual([
-        ["pine", 86],
-        ["rock", 85],
-        ["tree", 85], // empty per-point ids fall back to assetId
+    it("assetAttr composes on the device, one batch per asset, in the CPU order", () => {
+      const g = scenario.grouping;
+      // The reason v0.7 counted here is retired: nothing falls back.
+      expect(g.stats.fallbacks).toEqual({});
+      expect(g.stats.residentRuns).toBe(1);
+      expect(g.deviceBatchesPresent).toBe(true);
+
+      // Batch order is FIRST OCCURRENCE — pinned literally, not merely
+      // compared against the CPU, so a shared bug in both would show.
+      // Not lexicographic (fern < pine < rock < tree), not table order
+      // (see tableEntries below), and "ghost" — interned but worn by no
+      // point — produces no batch at all.
+      expect(g.grouped.shapes).toEqual([
+        ["pine", 102], // point 5 lost to the out-of-range index below
+        ["rock", 103],
+        ["tree", 205], // "" (102) + literal "tree" (102) + the out-of-range point
+        ["fern", 102],
       ]);
-      // Not "within tolerance": the same bytes a CPU-only cook produces.
-      expect(f.bytesIdenticalToCpuOnly).toBe(true);
+      expect(g.tableEntries).toEqual(["", "ghost", "rock", "pine", "tree", "fern"]);
+      expect(g.grouped.shapes.reduce((n, s) => n + s[1], 0)).toBe(512);
+      expect(g.grouped.shapesMatchCpu).toBe(true);
+      expect(g.cpuShapes).toEqual(g.grouped.shapes);
     });
 
-    it("an assetAttr spawner does not cost the chain in front of it its fusion", () => {
-      const f = scenario.fallback;
-      expect(f.chainedStats.residentRuns).toBe(1);
-      expect(f.chainedStats.fusedNodes).toBe(2); // transform + orient still fuse
-      expect(f.chainedStats.readbacksSaved).toBe(1); // members - 1: the run materializes
-      expect(f.chainedStats.fallbacks).toEqual({ "spawn-asset-attr": 1 });
-      expect(f.chainedShapesMatchCpu).toBe(true);
-      expect(f.chainedParity.n).toBeGreaterThan(0);
-      expect(f.chainedParity.rangeRel).toBeLessThanOrEqual(CHAIN_RANGE_REL);
+    it("every batch's matrices come from the right points, within the compose tolerance", () => {
+      const g = scenario.grouping;
+      expect(g.grouped.perBatch).toHaveLength(4);
+      for (const b of g.grouped.perBatch) {
+        expect(b.lengthsAgree, `batch ${b.assetId}`).toBe(true);
+        expect(b.byteLength, `batch ${b.assetId}`).toBe(b.count * 64);
+        expect(b.parity.n, `batch ${b.assetId}`).toBe(b.count * 16);
+        // A wrongly-permuted source point is a WHOLE different matrix,
+        // orders of magnitude outside this budget — this is the assertion
+        // that catches a bad `base` or a bad permutation upload.
+        expect(b.parity.rangeRel, `batch ${b.assetId}`).toBeLessThanOrEqual(BASIS_RANGE_REL);
+      }
+      expect(g.grouped.parity.n).toBe(512 * 16);
+      expect(g.grouped.parity.rangeRel).toBeLessThanOrEqual(BASIS_RANGE_REL);
+    });
+
+    it("batch order does not follow the string table, and is stable across recooks", () => {
+      const g = scenario.grouping;
+      // Same per-point ids, a table interned in a different order.
+      expect(g.permutedTableShapes).toEqual(g.grouped.shapes);
+      // And three recooks produce the same bytes, not merely the same
+      // shapes: the permutation is buffer content, never a pipeline key.
+      expect(g.identicalAcrossCooks).toBe(true);
+    });
+
+    it("reads component 0 of a wide key column, and handles a single-asset column", () => {
+      const g = scenario.grouping;
+      // Component 1 holds decoys; grouping must be identical to the
+      // tupleSize-1 fixture.
+      expect(g.wide.shapes).toEqual(g.grouped.shapes);
+      expect(g.wide.shapesMatchCpu).toBe(true);
+      expect(g.wide.parity.rangeRel).toBeLessThanOrEqual(BASIS_RANGE_REL);
+      // N = 1: still one batch, still every point.
+      expect(g.solo.shapes).toEqual([["only", 64]]);
+      expect(g.solo.perBatch[0].byteLength).toBe(64 * 64);
+      expect(g.solo.parity.rangeRel).toBeLessThanOrEqual(BASIS_RANGE_REL);
+    });
+
+    it("N buffers out and N back, across cook → evict → recook", () => {
+      const g = scenario.grouping;
+      expect(g.holding.detachedBuffers).toBe(4); // one per asset
+      expect(g.holdingBytesMatchCounts).toBe(true);
+      expect(g.afterDispose).toMatchObject({ detachedBuffers: 0, detachedBytes: 0, inFlight: 0 });
+      for (const [i, c] of g.cycles.entries()) {
+        expect(c.batches, `cycle ${i}`).toBe(4);
+        expect(c.detachedBuffers, `cycle ${i}`).toBe(4);
+        expect(c.detachedBytes, `cycle ${i}`).toBeGreaterThan(0);
+      }
+      expect(g.afterCycles).toMatchObject({ detachedBuffers: 0, detachedBytes: 0, inFlight: 0 });
+    });
+
+    it("a chain in front now fuses WITH the multi-asset spawner, not up to it", () => {
+      const c = scenario.groupingChain;
+      expect(c.stats.fallbacks).toEqual({});
+      expect(c.stats.residentRuns).toBe(1);
+      expect(c.stats.fusedNodes).toBe(3); // transform + orient + spawn
+      // Nothing materializes, so every member's readback is saved.
+      expect(c.stats.readbacksSaved).toBe(3);
+      // transformPoints apply + orient field kernel + orient apply, then
+      // one compose dispatch PER ASSET.
+      expect(c.batchCount).toBe(4);
+      expect(c.stats.dispatches).toBe(3 + c.batchCount);
+      expect(c.observed.shapesMatchCpu).toBe(true);
+      expect(c.observed.parity.n).toBe(256 * 16);
+      expect(c.observed.parity.rangeRel).toBeLessThanOrEqual(CHAIN_RANGE_REL);
     });
 
     it("without the opt-in the spawner is exactly what it was in v0.6.1", () => {

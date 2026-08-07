@@ -5,6 +5,7 @@
  */
 import type { Geometry } from "../data/index.js";
 import type { InstanceBatch } from "../graph/data.js";
+import { groupPointsByAsset } from "./grouping.js";
 
 /** Options for {@link buildInstanceBatches}. */
 export interface BuildInstanceBatchesOptions {
@@ -76,13 +77,17 @@ export function composeTRS(
  * asset id — one batch per asset, in deterministic first-occurrence
  * order, instances in point order within each batch. Pure: the geometry
  * is only read.
+ *
+ * The grouping itself lives in {@link groupPointsByAsset}, which the
+ * device-resident spawner terminal consumes too, so both paths order
+ * their batches identically by construction. This function only adds the
+ * matrix compose on top of it.
  */
 export function buildInstanceBatches(
   geo: Geometry,
   opts: BuildInstanceBatchesOptions,
 ): InstanceBatch[] {
   const points = geo.attrs.point;
-  const n = points.count;
   const P = points.get("P");
   if (!P || P.type !== "f32" || P.tupleSize !== 3) {
     throw new Error(
@@ -99,50 +104,20 @@ export function buildInstanceBatches(
       ? scaleAttr.data
       : undefined;
 
-  let assetOf: (i: number) => string;
-  const attrName = opts.assetAttr;
-  if (attrName !== undefined && attrName !== "") {
-    const attr = points.get(attrName);
-    if (!attr) {
-      const stringAttrs = points
-        .names()
-        .filter((name) => points.require(name).type === "string");
-      throw new Error(
-        `buildInstanceBatches: assetAttr "${attrName}" not found on the point domain; ` +
-          `string point attributes present: ${stringAttrs.length > 0 ? stringAttrs.join(", ") : "(none)"}`,
-      );
-    }
-    if (attr.type !== "string") {
-      throw new Error(
-        `buildInstanceBatches: assetAttr "${attrName}" must be a string attribute, got ${attr.type}`,
-      );
-    }
-    const fallback = opts.defaultAssetId;
-    assetOf = (i) => {
-      const id = attr.getString(i);
-      return id === "" ? fallback : id;
-    };
-  } else {
-    const fixed = opts.defaultAssetId;
-    assetOf = () => fixed;
-  }
-
-  // Group point indices per asset id; Map preserves first-occurrence order.
-  const groups = new Map<string, number[]>();
-  for (let i = 0; i < n; i++) {
-    const id = assetOf(i);
-    let group = groups.get(id);
-    if (!group) groups.set(id, (group = []));
-    group.push(i);
-  }
+  // The ordering spec, shared verbatim with the device path (P is
+  // validated first, so a missing P still reports before a bad
+  // assetAttr — the order this function has always thrown in).
+  const grouping = groupPointsByAsset(geo, opts);
 
   const pd = P.data;
   const batches: InstanceBatch[] = [];
-  for (const [assetId, indices] of groups) {
-    const count = indices.length;
+  for (let j = 0; j < grouping.order.length; j++) {
+    const assetId = grouping.order[j];
+    const count = grouping.counts[j];
+    const start = grouping.offsets[j];
     const transforms = new Float32Array(count * 16);
     for (let k = 0; k < count; k++) {
-      const i = indices[k];
+      const i = grouping.perm[start + k];
       composeTRS(
         transforms,
         k * 16,

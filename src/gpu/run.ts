@@ -61,15 +61,29 @@
  * (`ctx.needsGeometry === false`) the run also skips the readback
  * entirely: no `mapAsync`, no staging buffer, no CPU copy of P/rot/scale.
  *
+ * Multi-asset spawner terminals (phase 29): a spawner driven by
+ * `assetAttr` composes on the device too, with NO device-side sort. A
+ * resident run always starts from a host `Geometry` and no resident node
+ * can produce a string attribute, so the per-point asset key is host
+ * resident by construction. The host therefore plans the grouping with
+ * `groupPointsByAsset` — the exact function the CPU spawner
+ * (`buildInstanceBatches`) calls, so the ordering spec has one
+ * implementation and cannot drift — uploads its permutation as a u32
+ * column, and dispatches the compose kernel once per asset with a `base`
+ * uniform selecting that batch's slice (`src = perm[base + i]`, the
+ * destination staying `i`). One output buffer and one dispatch per asset;
+ * `count * 64` transform bytes in total either way.
+ *
  * Pool discipline: every buffer is released in a `finally` (never
  * mapped — the readback unmaps in its own `finally`), on success,
  * failure, and cancellation alike. The one exception is the retained
- * transform buffer, and it is an exception by construction rather than
- * by omission: ownership transfers on the very last line before the
+ * transform buffers, and it is an exception by construction rather than
+ * by omission: ownership transfers in the very last loop before the
  * result is built, after the final cancellation check, so every earlier
- * failure path still reclaims it — and a failure after the transfer
- * disposes the handle in the `catch`. The `finally` skips exactly the
- * buffers it no longer owns; releasing a detached buffer would throw.
+ * failure path still reclaims them — and a failure after (or partway
+ * through) the transfer disposes the handles built so far in the
+ * `catch`, exactly once each. The `finally` skips exactly the buffers it
+ * no longer owns; releasing a detached buffer would throw.
  */
 import type { AttrType, Geometry } from "../data/index.js";
 import {
@@ -86,6 +100,7 @@ import { cloneGeometry } from "../graph/clone.js";
 import { CookCancelledError } from "../graph/errors.js";
 import { getFieldSpec, type FieldSpecArg } from "../nodes/fieldJson.js";
 import { hashCombine } from "../random/index.js";
+import { groupPointsByAsset } from "../spawn/grouping.js";
 import {
   APPLY_CONST_COMPONENTS,
   APPLY_CONST_OFFSET,
@@ -159,8 +174,20 @@ export function chunkCapacity(workgroupSize: number, maxElementsPerDispatch: num
 type BufRef =
   | { readonly kind: "slot"; readonly index: number }
   | { readonly kind: "col"; readonly index: number }
-  /** The run's single retained instance-transform buffer (spawner terminal). */
-  | { readonly kind: "out" };
+  /**
+   * The retained instance-transform buffer of the batch currently being
+   * dispatched (spawner terminal). Plural since phase 29: the plan
+   * cannot name an index, because how many batches there are — and how
+   * large each is — depends on the run's DATA, not its layout, and the
+   * planner never sees the data. The executor resolves this ref per
+   * batch against the grouping it computes at execute time.
+   */
+  | { readonly kind: "out" }
+  /**
+   * The uploaded grouping permutation (attribute-mode spawner only): one
+   * u32 source point index per instance slot, batches concatenated.
+   */
+  | { readonly kind: "perm" };
 
 interface KernelStep {
   /** Pipeline-cache key. */
@@ -179,6 +206,15 @@ interface KernelStep {
    * scalar header. Empty for field kernels and constant-free applies.
    */
   readonly consts: readonly number[];
+  /**
+   * Dispatch this step ONCE PER INSTANCE BATCH — over that batch's
+   * element range, with the uniform's `count` set to the batch's size and
+   * `base` to its offset into the permutation — instead of once over the
+   * whole element range. Only the indexed compose kernel of a
+   * multi-asset spawner terminal sets it; every other step, and every
+   * plan a v0.7 build could produce, is `false`.
+   */
+  readonly perBatch: boolean;
   readonly bindings: readonly { readonly binding: number; readonly ref: BufRef }[];
 }
 
@@ -211,19 +247,38 @@ type LayoutOp =
 export const INSTANCE_MATRIX_BYTES = 64;
 
 /**
- * The retained device-resident instance batch a spawner terminal
- * produces: one batch covering every point, in point order (the
- * single-asset case — a per-point `assetAttr` needs a device-side sort
- * and stays on the CPU path).
+ * The device-resident instance output a spawner terminal produces.
+ *
+ * This describes the GROUPING, not the batches: how many batches there
+ * are, which assets they carry, and how big each is depends on the
+ * per-point asset column's contents, and the planner sees only the
+ * attribute LAYOUT. The executor resolves it into concrete batches with
+ * {@link groupPointsByAsset} — the CPU spawner's own ordering code — and
+ * allocates one retained buffer per batch.
+ *
+ * The byte totals are data-independent, which is why the run's memory
+ * bound can still be decided at plan time: the batches partition the
+ * points, so their transform bytes always sum to
+ * `count * INSTANCE_MATRIX_BYTES` however the grouping falls.
  */
 interface InstancesDesc {
+  /** `spawnInstances`' `assetId`: the id every unset/empty point resolves to. */
   readonly assetId: string;
+  /**
+   * String point attribute holding per-point asset ids, or `""` for
+   * constant mode (exactly one batch, no permutation, and a compose
+   * kernel byte-identical to v0.7's).
+   */
+  readonly assetAttr: string;
+  /** Points the terminal composes (always `plan.count`). */
   readonly count: number;
-  /** `count * INSTANCE_MATRIX_BYTES`. */
+  /** Retained transform bytes across every batch: `count * INSTANCE_MATRIX_BYTES`. */
   readonly bytes: number;
+  /** Permutation upload: `count * 4` in attribute mode, 0 in constant mode. */
+  readonly permBytes: number;
 }
 
-const PLAN_FORMAT = "pcg-resident-run/3";
+const PLAN_FORMAT = "pcg-resident-run/4";
 
 /** Opaque (to the executor) compiled run plan. */
 export interface ResidentRunPlan {
@@ -407,6 +462,7 @@ export function planResidentRun(
       uniformsBinding: kernel.bindings.uniforms,
       uniformBytes: UNIFORM_BYTES,
       consts: NO_CONSTS,
+      perBatch: false,
       bindings: [
         ...kernel.inputs.map((inp) => ({ binding: inp.binding, ref: { kind: "slot", index: slotFor(inp.name) } as BufRef })),
         { binding: kernel.bindings.output, ref: { kind: "col", index: colIndex } },
@@ -430,6 +486,7 @@ export function planResidentRun(
     seed: number,
     refs: Record<string, BufRef>,
     consts: readonly number[],
+    perBatch = false,
   ): KernelStep => {
     if (kernel.constSlots * APPLY_CONST_COMPONENTS !== consts.length) {
       throw new Error(
@@ -446,6 +503,7 @@ export function planResidentRun(
       uniformsBinding: 0,
       uniformBytes: kernel.uniformBytes,
       consts,
+      perBatch,
       bindings: kernel.bindings.map((b) => {
         const ref = refs[b.role];
         if (ref === undefined) throw new PlanFail(`unmapped role ${b.role}`);
@@ -565,12 +623,21 @@ export function planResidentRun(
           if (!isLast) throw new PlanFail("spawnInstances must be the run's last member");
           const assetId = p.assetId;
           if (typeof assetId !== "string" || assetId === "") throw new PlanFail("assetId");
-          // Per-point asset ids need a device-side group/sort this
-          // pipeline does not implement; the node's `eligible` gate
-          // already keeps those off the device, so reaching here means a
-          // caller built the member list by hand.
-          if (p.assetAttr !== "" && p.assetAttr !== undefined) throw new PlanFail("assetAttr");
           expectAttr("P", "f32", 3);
+          const rawAttr = p.assetAttr;
+          if (rawAttr !== undefined && typeof rawAttr !== "string") throw new PlanFail("assetAttr");
+          const assetAttr = rawAttr === undefined ? "" : rawAttr;
+          if (assetAttr !== "") {
+            // The two conditions `buildInstanceBatches` throws on. The
+            // resident descriptor's `eligible` predicate sees params only
+            // and cannot inspect the geometry, so the check lives here —
+            // and REJECTS rather than throws, so the per-node path serves
+            // and raises the CPU spawner's identical, actionable message
+            // (which attribute, and which string attributes exist).
+            const key = layout.get(assetAttr);
+            if (key === undefined) throw new PlanFail(`assetAttr "${assetAttr}" not on the point domain`);
+            if (key.type !== "string") throw new PlanFail(`assetAttr "${assetAttr}" is ${key.type}, not string`);
+          }
           const rotAttr = layout.get("rot");
           const hasRot = rotAttr !== undefined && rotAttr.type === "f32" && rotAttr.tupleSize === 4;
           const sclAttr = layout.get("scale");
@@ -582,10 +649,24 @@ export function planResidentRun(
           };
           if (hasRot) refs.rot = { kind: "slot", index: slotFor("rot") };
           if (hasScale) refs.scaleAttr = { kind: "slot", index: slotFor("scale") };
+          // Multi-asset spawns compose through a host-planned permutation
+          // — one dispatch and one output buffer per asset. The asset key
+          // is a host-resident string column by construction (no resident
+          // node can produce one), so there is nothing to sort on device.
+          const indexed = assetAttr !== "";
+          if (indexed) refs.perm = { kind: "perm" };
           // Reads only: a spawner never writes an attribute, so nothing
           // joins `written` and the geometry is untouched.
-          steps.push(applyStep(makeComposeInstancesApply(hasRot, hasScale), 0, refs, consts));
-          instances = { assetId, count, bytes: count * INSTANCE_MATRIX_BYTES };
+          steps.push(
+            applyStep(makeComposeInstancesApply(hasRot, hasScale, indexed), 0, refs, consts, indexed),
+          );
+          instances = {
+            assetId,
+            assetAttr,
+            count,
+            bytes: count * INSTANCE_MATRIX_BYTES,
+            permBytes: indexed ? count * 4 : 0,
+          };
           break;
         }
         default:
@@ -607,10 +688,12 @@ export function planResidentRun(
   const readbackBytes = materialize
     ? writtenList.reduce((acc, w) => acc + slots[w.slot].bytes, 0)
     : 0;
-  // The retained buffer counts against the run's bound like any other
-  // allocation, even though it outlives the run: it is device memory the
-  // run must be able to allocate.
-  const totalBytes = slotBytes + colBytes + readbackBytes + (instances?.bytes ?? 0);
+  // The retained buffers count against the run's bound like any other
+  // allocation, even though they outlive the run: they are device memory
+  // the run must be able to allocate. Their total is grouping-independent
+  // (the batches partition the points), so this stays a plan-time number.
+  const totalBytes =
+    slotBytes + colBytes + readbackBytes + (instances?.bytes ?? 0) + (instances?.permBytes ?? 0);
   if (totalBytes > maxResidentBytes) return { reason: "run-too-large" };
 
   return {
@@ -692,14 +775,21 @@ export async function executeResidentRun(
     return buf;
   };
   /**
-   * Buffers whose ownership has left the pool this run (at most one
-   * today: the retained instance-transform buffer). The `finally` below
+   * Buffers whose ownership has left the pool this run: the retained
+   * instance-transform buffers, one per asset batch. The `finally` below
    * must not release them — the pool no longer owns them and would
    * throw — and a failure after the transfer must destroy them through
    * their handle, so a broken run never leaks device memory.
    */
   const retained = new Set<GpuBufferLike>();
-  let retainedHandle: DeviceTransformsHandle | undefined;
+  /**
+   * Handles minted this run, in batch order. Every buffer whose
+   * ownership left the pool is either destroyed on the spot (the one
+   * failure window below) or reachable through exactly one entry here,
+   * so the `catch` frees each exactly once — `dispose()` is idempotent,
+   * and no two entries wrap the same `DetachedBuffer`.
+   */
+  const retainedHandles: DeviceTransformsHandle[] = [];
 
   try {
     // Resident attribute buffers. Uploads cover the full live range any
@@ -729,29 +819,65 @@ export async function executeResidentRun(
     const colBufs = plan.cols.map((bytes) =>
       acquire(bytes, BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST | BUFFER_USAGE.COPY_SRC),
     );
-    // Retained instance transforms. VERTEX so a renderer can bind it as
-    // instance data without a copy, COPY_SRC so it can be read back for
-    // verification, STORAGE because the compose kernel writes it.
-    const outBuf =
+
+    // Grouping. Computed HERE, on the host, by the very function the CPU
+    // spawner calls — so device batch order, membership, and within-batch
+    // order are the CPU spec by construction, not by resemblance. The
+    // asset key is always a host string column (no resident node can
+    // produce one), so this needs no readback and no device-side sort.
+    const grouping =
       plan.instances === null
         ? undefined
-        : acquire(
-            plan.instances.bytes,
-            BUFFER_USAGE.STORAGE |
-              BUFFER_USAGE.COPY_DST |
-              BUFFER_USAGE.COPY_SRC |
-              BUFFER_USAGE.VERTEX,
+        : groupPointsByAsset(geo, {
+            defaultAssetId: plan.instances.assetId,
+            ...(plan.instances.assetAttr !== "" ? { assetAttr: plan.instances.assetAttr } : {}),
+          });
+    const permBuf =
+      plan.instances !== null && plan.instances.permBytes > 0
+        ? acquire(plan.instances.permBytes, BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST)
+        : undefined;
+    if (permBuf !== undefined && grouping !== undefined) {
+      device.queue.writeBuffer(permBuf, 0, grouping.perm);
+    }
+    // Retained instance transforms, ONE BUFFER PER ASSET. VERTEX so a
+    // renderer can bind them as instance data without a copy, COPY_SRC so
+    // they can be read back for verification, STORAGE because the compose
+    // kernel writes them. N whole buffers rather than sub-ranges of one:
+    // the renderer seam binds a buffer with no offset or size, and
+    // identity-keyed handle refcounting stays correct only when each
+    // batch carries its own buffer.
+    const outBufs: GpuBufferLike[] =
+      grouping === undefined
+        ? []
+        : Array.from(grouping.counts, (n) =>
+            acquire(
+              n * INSTANCE_MATRIX_BYTES,
+              BUFFER_USAGE.STORAGE |
+                BUFFER_USAGE.COPY_DST |
+                BUFFER_USAGE.COPY_SRC |
+                BUFFER_USAGE.VERTEX,
+            ),
           );
-    const bufFor = (ref: BufRef): GpuBufferLike => {
+    const bufFor = (ref: BufRef, batch: number): GpuBufferLike => {
       if (ref.kind === "slot") return slotBufs[ref.index];
       if (ref.kind === "col") return colBufs[ref.index];
-      if (outBuf === undefined) {
+      if (ref.kind === "perm") {
+        if (permBuf === undefined) {
+          throw new Error(
+            "resident run: a kernel binds the grouping permutation but the plan declares no " +
+              "per-point asset attribute (plan and kernels disagree)",
+          );
+        }
+        return permBuf;
+      }
+      const out = outBufs[batch];
+      if (out === undefined) {
         throw new Error(
-          "resident run: a kernel binds the retained instance-transform buffer but the plan " +
+          "resident run: a kernel binds a retained instance-transform buffer but the plan " +
             "declares no instances output (plan and kernels disagree)",
         );
       }
-      return outBuf;
+      return out;
     };
 
     // One compute pass; consecutive dispatches have implicit write
@@ -764,39 +890,67 @@ export async function executeResidentRun(
       checkCancelled();
       for (const step of member.steps) {
         const pipeline = env.getPipeline(step.key, step.wgsl, step.entryPoint, stats);
-        if (stats !== undefined) stats.dispatches++;
         pass.setPipeline(pipeline);
         // Chunk plan (shared with the per-node path): non-final chunks
         // are exact workgroup multiples — chunks partition the range.
         const chunk = chunkCapacity(step.workgroupSize, env.maxElementsPerDispatch);
-        const chunkCount = Math.ceil(count / chunk);
-        // Uniform bytes for this step: the scalar header, plus the
-        // step's constant slots when it has any. Constants are
-        // chunk-invariant, so only chunkOffset changes between writes;
-        // the f32 view rounds each value exactly once, matching the
-        // constant column these slots replace.
-        const uniformData = new ArrayBuffer(step.uniformBytes);
-        const uniformBytes = new Uint8Array(uniformData);
-        const header = new Uint32Array(uniformData, 0, 3);
-        header[0] = count;
-        header[1] = step.seed >>> 0;
-        if (step.consts.length > 0) {
-          new Float32Array(uniformData, APPLY_CONST_OFFSET, step.consts.length).set(step.consts);
-        }
-        for (let c = 0; c < chunkCount; c++) {
-          const uniformBuf = acquire(step.uniformBytes, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
-          header[2] = c * chunk;
-          device.queue.writeBuffer(uniformBuf, 0, uniformBytes);
-          const bindGroup = device.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0),
-            entries: [
-              { binding: step.uniformsBinding, resource: { buffer: uniformBuf } },
-              ...step.bindings.map((b) => ({ binding: b.binding, resource: { buffer: bufFor(b.ref) } })),
-            ],
-          });
-          const elements = Math.min(chunk, count - c * chunk);
-          pass.setBindGroup(0, bindGroup);
-          pass.dispatchWorkgroups(Math.ceil(elements / step.workgroupSize));
+        // Element ranges this step dispatches over. Ordinary steps cover
+        // the whole domain once; the multi-asset compose kernel covers
+        // one batch per range, `base` selecting that batch's slice of the
+        // permutation. Batches partition the points, so the union of the
+        // ranges is still exactly [0, count) and every output slot of
+        // every buffer is written by exactly one invocation.
+        const ranges =
+          step.perBatch && grouping !== undefined
+            ? Array.from(grouping.counts, (n, j) => ({
+                batch: j,
+                elements: n,
+                base: grouping.offsets[j],
+              }))
+            : // Batch 0 is the only batch a non-per-batch step can mean:
+              // constant mode has exactly one, and in attribute mode the
+              // compose kernel — the only step that binds `out` at all —
+              // is always per-batch.
+              [{ batch: 0, elements: count, base: 0 }];
+        for (const range of ranges) {
+          // One dispatch counted per range: chunking never multiplies the
+          // counter, but per-asset dispatches are genuinely distinct
+          // kernels over distinct ranges and each counts once.
+          if (stats !== undefined) stats.dispatches++;
+          // Uniform bytes for this step: the scalar header (plus `base`
+          // when the kernel indexes through a permutation), plus the
+          // step's constant slots when it has any. Constants are
+          // chunk-invariant, so only chunkOffset changes between writes;
+          // the f32 view rounds each value exactly once, matching the
+          // constant column these slots replace.
+          const uniformData = new ArrayBuffer(step.uniformBytes);
+          const uniformBytes = new Uint8Array(uniformData);
+          const header = new Uint32Array(uniformData, 0, step.uniformBytes >= 16 ? 4 : 3);
+          header[0] = range.elements;
+          header[1] = step.seed >>> 0;
+          if (step.perBatch) header[3] = range.base;
+          if (step.consts.length > 0) {
+            new Float32Array(uniformData, APPLY_CONST_OFFSET, step.consts.length).set(step.consts);
+          }
+          const chunkCount = Math.ceil(range.elements / chunk);
+          for (let c = 0; c < chunkCount; c++) {
+            const uniformBuf = acquire(step.uniformBytes, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
+            header[2] = c * chunk;
+            device.queue.writeBuffer(uniformBuf, 0, uniformBytes);
+            const bindGroup = device.createBindGroup({
+              layout: pipeline.getBindGroupLayout(0),
+              entries: [
+                { binding: step.uniformsBinding, resource: { buffer: uniformBuf } },
+                ...step.bindings.map((b) => ({
+                  binding: b.binding,
+                  resource: { buffer: bufFor(b.ref, range.batch) },
+                })),
+              ],
+            });
+            const elements = Math.min(chunk, range.elements - c * chunk);
+            pass.setBindGroup(0, bindGroup);
+            pass.dispatchWorkgroups(Math.ceil(elements / step.workgroupSize));
+          }
         }
       }
       if (budgetMs !== undefined && performance.now() - sliceStart > budgetMs) {
@@ -885,33 +1039,46 @@ export async function executeResidentRun(
       checkCancelled();
     }
 
-    // Ownership transfer, LAST and after the final cancellation check:
-    // up to here the retained buffer is still the pool's and the
-    // `finally` reclaims it on any failure. From this line on it belongs
-    // to the handle — and therefore to whoever receives the result.
+    // Ownership transfer, LAST and after the final cancellation check —
+    // the WHOLE loop, not just its first iteration: up to here every
+    // retained buffer is still the pool's and the `finally` reclaims it
+    // on any failure, cancellation included. From each detach on, that
+    // buffer belongs to its handle, and therefore to whoever receives the
+    // result.
     let deviceBatches: readonly DeviceInstanceBatch[] | undefined;
     if (plan.instances !== null) {
-      if (outBuf === undefined) {
+      if (grouping === undefined || outBufs.length !== grouping.order.length) {
         throw new Error(
-          "resident run: the plan declares an instances output but no transform buffer was " +
-            "acquired (library bug: plan.instances and the acquired buffer must agree)",
+          "resident run: the plan declares an instances output but the acquired transform " +
+            "buffers do not match the grouping (library bug: plan.instances, the grouping, and " +
+            "the acquired buffers must agree)",
         );
       }
-      const detached = pool.detach(outBuf);
-      retained.add(outBuf);
-      retainedHandle = makeDeviceTransformsHandle(
-        detached,
-        plan.instances.bytes,
-        `${plan.instances.count} instances of "${plan.instances.assetId}"`,
-      );
-      deviceBatches = [
-        {
-          residency: "device",
-          assetId: plan.instances.assetId,
-          count: plan.instances.count,
-          transforms: retainedHandle,
-        },
-      ];
+      const batches: DeviceInstanceBatch[] = [];
+      for (let j = 0; j < grouping.order.length; j++) {
+        const assetId = grouping.order[j];
+        const batchCount = grouping.counts[j];
+        const detached = pool.detach(outBufs[j]);
+        // From this instant the pool no longer owns the buffer, so the
+        // `finally` must skip it (releasing a detached buffer throws).
+        retained.add(outBufs[j]);
+        let handle: DeviceTransformsHandle;
+        try {
+          handle = makeDeviceTransformsHandle(
+            detached,
+            batchCount * INSTANCE_MATRIX_BYTES,
+            `${batchCount} instances of "${assetId}"`,
+          );
+        } catch (err) {
+          // Nothing else can reach this buffer now: neither the pool nor
+          // a handle holds it. Free it here or it is stranded for good.
+          detached.destroy();
+          throw err;
+        }
+        retainedHandles.push(handle);
+        batches.push({ residency: "device", assetId, count: batchCount, transforms: handle });
+      }
+      deviceBatches = batches;
     }
 
     if (stats !== undefined) {
@@ -926,9 +1093,12 @@ export async function executeResidentRun(
     if (deviceBatches !== undefined) result.deviceBatches = deviceBatches;
     return result;
   } catch (err) {
-    // A failure after the transfer would otherwise strand the buffer:
-    // nobody holds the handle yet, so free it here.
-    retainedHandle?.dispose();
+    // A failure after a transfer would otherwise strand that buffer:
+    // nobody holds its handle yet, so free it here. Exactly once per
+    // buffer — one handle per detach, and `dispose()` is idempotent — so
+    // a partial build that detached 3 of 5 frees those 3 and leaves the
+    // other 2 to the `finally` reclaim.
+    for (const handle of retainedHandles) handle.dispose();
     if (err instanceof CookCancelledError) throw err;
     throw new Error(
       `GpuFieldEvaluator: resident run failed (${plan.members.length} fused nodes ` +

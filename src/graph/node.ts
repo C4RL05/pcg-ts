@@ -91,9 +91,10 @@ export interface ResidentDesc<P = Record<string, unknown>> {
    * Returning a non-empty STRING means the same thing as `false` — the
    * node does not fuse — but additionally names the reason, which the
    * executor counts once per cook in `CookStats.gpu.fallbacks` under
-   * exactly that key. Use it for the cases an author can act on
-   * (`"spawn-asset-attr"`), and plain `false` for combinations that are
-   * simply not this kind's business.
+   * exactly that key. Use it for the cases an author can act on — a
+   * param setting they could change to get the device path — and plain
+   * `false` for combinations that are simply not this kind's business.
+   * No standard node declares one today.
    */
   eligible?(params: P): boolean | string;
   /**

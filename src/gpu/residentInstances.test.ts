@@ -2,7 +2,7 @@
  * Device-resident spawner terminals, CPU-only (runs everywhere): the
  * relaxed fusion rule and its boundaries in BOTH directions, the
  * terminal opt-in at the resolver seam, `needsGeometry`, the
- * `spawn-asset-attr` opt-out and its byte-identity with a CPU cook, the
+ * multi-asset `assetAttr` terminal and its plan-time rejections, the
  * device-instances item (including its deliberately throwing `batches`),
  * and the memo-cache policy — device handles are delivered but never
  * memoized, so retained device bytes stay bounded across many cooks.
@@ -113,7 +113,16 @@ function deviceInstanceResolver(terminals: readonly string[]): FakeResolver {
       fake.needsGeometry.push(ctx.needsGeometry);
       // Unknown kinds reject, exactly like the real planner.
       const known = new Set(["setAttribute", "transformPoints", "jitterPoints", "orientAlongVector", "spawnInstances"]);
-      if (members.some((m) => !known.has(m.kind))) {
+      // ...and so do the two conditions buildInstanceBatches throws on,
+      // which the real planner also decides from the LAYOUT alone, so
+      // the per-node path serves and raises the identical message.
+      const badAssetAttr = members.some((m) => {
+        if (m.kind !== "spawnInstances") return false;
+        const name = m.params.assetAttr;
+        if (typeof name !== "string" || name === "") return false;
+        return ctx.attributes[name]?.type !== "string";
+      });
+      if (badAssetAttr || members.some((m) => !known.has(m.kind))) {
         if (stats !== undefined) {
           stats.fallbacks["run-plan-failed"] = (stats.fallbacks["run-plan-failed"] ?? 0) + 1;
         }
@@ -132,8 +141,10 @@ function deviceInstanceResolver(terminals: readonly string[]): FakeResolver {
       for (const m of members) {
         if (m.kind === "spawnInstances") {
           if (item.kind !== "geometry") throw new Error("fake executeRun: expected geometry");
+          const assetAttr = m.params.assetAttr;
           const batches = buildInstanceBatches(item.geo, {
             defaultAssetId: m.params.assetId as string,
+            ...(typeof assetAttr === "string" && assetAttr !== "" ? { assetAttr } : {}),
           });
           deviceBatches = batches.map((b) => ({
             residency: "device" as const,
@@ -360,46 +371,62 @@ describe("spawnInstances as a device-resident run terminal", () => {
     expect(gpu3.needsGeometry).toEqual([true]);
   });
 
-  it("assetAttr opts out with a counted reason and byte-identical CPU transforms", async () => {
+  it("assetAttr FUSES: one device batch per asset, in the CPU spawner's order", async () => {
+    // v0.7 opted this node out with the reason "spawn-asset-attr"; v0.8
+    // retired both the opt-out and the reason. No fallback may be
+    // counted, and the batch list must be the CPU list.
     const geo = makeCorpusGeometry(16);
     geo.attrs.point.add("kind", "string", 1);
     const kind = geo.attrs.point.require("kind");
-    for (let i = 0; i < 16; i++) kind.setString(i, i % 2 === 0 ? "pine" : "rock");
+    // "rock" first-occurs at 1, "pine" at 0, and index 2 is empty so it
+    // merges into the default "tree" — a three-batch, order-sensitive mix.
+    for (let i = 0; i < 16; i++) kind.setString(i, i % 3 === 0 ? "pine" : i % 3 === 1 ? "rock" : "");
 
     const cpu = await cook(spawnGraph(geo, { chain: true, assetAttr: "kind" }).g);
-    const { g, ids } = spawnGraph(geo, { chain: true, assetAttr: "kind" });
+    const { g } = spawnGraph(geo, { chain: true, assetAttr: "kind" });
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     const r = await cook(g, { gpu });
 
-    expect(r.stats.gpu!.fallbacks["spawn-asset-attr"]).toBe(1);
-    expect(r.stats.gpu!.residentRuns).toBe(0);
-    // The spawner never joined a run — and the upstream chain is a lone
-    // node, so nothing fused at all. Bytes are the CPU bytes.
-    expect(gpu.planned).toEqual([]);
-    expect(ids.tr).toBeDefined();
+    expect(r.stats.gpu!.fallbacks).toEqual({});
+    expect(r.stats.gpu!.residentRuns).toBe(1);
+    // The chain in front now fuses WITH the spawner rather than stopping
+    // at it: one run, both members. In v0.7 this was two separate paths.
+    expect(gpu.planned).toEqual([["transformPoints_0", "spawnInstances_0"]]);
+    expect(r.stats.gpu!.fusedNodes).toBe(2);
+
     const item = instancesOf(r);
-    expect(item.deviceBatches).toBeUndefined();
     const ref = instancesOf(cpu);
-    expect(item.batches.map((b) => [b.assetId, b.count])).toEqual(
+    expect(item.deviceBatches).toBeDefined();
+    expect(item.deviceBatches!.map((b) => [b.assetId, b.count])).toEqual(
       ref.batches.map((b) => [b.assetId, b.count]),
     );
-    for (let i = 0; i < ref.batches.length; i++) {
-      expect(item.batches[i].transforms).toEqual(ref.batches[i].transforms);
-    }
+    // Three assets → three batches → three handles, all the caller's.
+    expect(ref.batches).toHaveLength(3);
+    expect(gpu.book.created).toBe(3);
+    expect(gpu.book.live).toBe(3);
+    for (const b of item.deviceBatches!) b.transforms.dispose();
+    expect(gpu.book.liveBytes).toBe(0);
   });
 
-  it("assetAttr counts the reason once per cook even with no run to reject", async () => {
+  it("a missing or non-string assetAttr rejects at PLAN time, so the CPU raises it", async () => {
     const { g } = spawnGraph(makeCorpusGeometry(4), { assetAttr: "" });
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     const clean = await cook(g, { gpu });
-    expect(clean.stats.gpu!.fallbacks["spawn-asset-attr"]).toBeUndefined();
+    expect(clean.stats.gpu!.fallbacks).toEqual({});
 
+    // The node is now fusable, so detection DOES plan a run; the planner
+    // is what rejects, and the per-node path then surfaces the CPU
+    // spawner's identical message.
     const withAttr = spawnGraph(makeCorpusGeometry(4), { assetAttr: "missing" });
     const gpu2 = deviceInstanceResolver(["spawnInstances"]);
-    // The CPU execute errors on the missing attribute; the point is that
-    // detection opted the node out before ever planning a run.
     await expect(cook(withAttr.g, { gpu: gpu2 })).rejects.toThrow(/assetAttr "missing" not found/);
-    expect(gpu2.planned).toEqual([]);
+    expect(gpu2.planned).toHaveLength(1);
+
+    // Same for an attribute that exists but is not a string one.
+    const numeric = makeCorpusGeometry(4);
+    const badGraph = spawnGraph(numeric, { assetAttr: "density" });
+    const gpu3 = deviceInstanceResolver(["spawnInstances"]);
+    await expect(cook(badGraph.g, { gpu: gpu3 })).rejects.toThrow(/must be a string attribute/);
   });
 });
 

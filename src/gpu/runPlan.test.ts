@@ -20,9 +20,18 @@ const POINT_LAYOUT: ResidentRunContext["attributes"] = { P: { type: "f32", tuple
 interface StepShape {
   readonly uniformBytes: number;
   readonly consts: readonly number[];
+  readonly perBatch: boolean;
   readonly bindings: readonly { readonly binding: number; readonly ref: unknown }[];
   readonly wgsl: string;
   readonly key: string;
+}
+
+interface InstancesShape {
+  readonly assetId: string;
+  readonly assetAttr: string;
+  readonly count: number;
+  readonly bytes: number;
+  readonly permBytes: number;
 }
 
 interface PlanShape {
@@ -31,7 +40,7 @@ interface PlanShape {
   readonly members: readonly { readonly steps: readonly StepShape[] }[];
   readonly materialize: boolean;
   readonly written: readonly { readonly name: string }[];
-  readonly instances: { readonly assetId: string; readonly count: number; readonly bytes: number } | null;
+  readonly instances: InstancesShape | null;
 }
 
 function plan(
@@ -329,11 +338,51 @@ describe("resident run planning: spawnInstances terminal", () => {
       { binding: 4, ref: { kind: "out" } },
     ]);
     expect(p.written).toEqual([]); // a spawner mutates nothing
-    expect(p.instances).toEqual({ assetId: "tree", count: 1000, bytes: 64_000 });
+    expect(p.instances).toEqual({
+      assetId: "tree",
+      assetAttr: "",
+      count: 1000,
+      bytes: 64_000,
+      permBytes: 0, // constant mode uploads no permutation
+    });
+    expect(applyOf(p, 0).perBatch).toBe(false); // one dispatch over everything
     expect(p.materialize).toBe(false);
     // Slots P(12) + rot(16) + scale(12) = 40 B/pt, plus 64 B/pt retained,
     // and NO readback staging at all.
     expect(p.totalBytes).toBe(1000 * (40 + 64));
+  });
+
+  it("the constant-assetId kernel keeps v0.7's key, header and body verbatim", () => {
+    // Phase 29 must not move a byte of the single-asset path, which is
+    // why neither APPLY_VERSION nor SALT_VERSION was bumped. The
+    // specialization key (which selects the cached pipeline), the whole
+    // uniform struct, the binding block and the body's index expressions
+    // are pinned literally, so an accidental `base` field, `perm`
+    // binding, or `src` indirection leaking into this variant fails here.
+    const p = plan([spawn()], 8, TRS_LAYOUT, Number.MAX_SAFE_INTEGER, false);
+    const apply = applyOf(p, 0);
+    expect(apply.key).toBe("apply2|spawnInstances|rot=1|scl=1");
+    expect(apply.uniformBytes).toBe(12);
+    expect(apply.perBatch).toBe(false);
+    expect(apply.wgsl).not.toContain("base");
+    expect(apply.wgsl).not.toContain("perm");
+    expect(apply.wgsl).not.toContain("src");
+    expect(apply.wgsl).toContain(
+      "struct PcgParams {\n  count: u32,\n  seed: u32,\n  chunkOffset: u32,\n}\n",
+    );
+    expect(apply.wgsl).toContain(
+      "@group(0) @binding(0) var<uniform> params: PcgParams;\n" +
+        "@group(0) @binding(1) var<storage, read> b1: array<f32>; // attribute P: f32 tupleSize 3\n" +
+        "@group(0) @binding(2) var<storage, read> b2: array<f32>; // attribute rot: f32 tupleSize 4\n" +
+        "@group(0) @binding(3) var<storage, read> b3: array<f32>; // attribute scale: f32 tupleSize 3\n" +
+        "@group(0) @binding(4) var<storage, read_write> b4: array<f32>; // out: 16 f32 per instance\n",
+    );
+    // Every source read is the raw invocation index, not a permuted one.
+    expect(apply.wgsl).toContain(
+      "  let q = vec4<f32>(b2[i * 4u], b2[i * 4u + 1u], b2[i * 4u + 2u], b2[i * 4u + 3u]);\n" +
+        "  let s = vec3<f32>(b3[i * 3u], b3[i * 3u + 1u], b3[i * 3u + 2u]);\n",
+    );
+    expect(apply.wgsl).toContain("b4[o + 12u] = b1[i * 3u];");
   });
 
   it("compiles rot/scale defaults out when the attributes are absent or mis-shaped", () => {
@@ -392,7 +441,7 @@ describe("resident run planning: spawnInstances terminal", () => {
     expect(p.instances).toBeNull();
   });
 
-  it("rejects a spawner that is not the last member, or that carries assetAttr", () => {
+  it("rejects a spawner that is not the last member, or that has no assetId", () => {
     expect(
       rejection(
         [spawn(), member("jitterPoints", { amount: [1, 1, 1], seed: 0 }, "j")],
@@ -400,6 +449,9 @@ describe("resident run planning: spawnInstances terminal", () => {
         TRS_LAYOUT,
       ),
     ).toBe("run-plan-failed");
+    // An assetAttr naming an attribute this layout does not have still
+    // rejects — but for the missing attribute, not for being an
+    // assetAttr; see the multi-asset suite below.
     expect(rejection([spawn({ assetAttr: "kind" })], 16, TRS_LAYOUT)).toBe("run-plan-failed");
     expect(rejection([spawn({ assetId: "" })], 16, TRS_LAYOUT)).toBe("run-plan-failed");
   });
@@ -408,5 +460,133 @@ describe("resident run planning: spawnInstances terminal", () => {
     const exact = 8 * (40 + 64);
     expect(plan([spawn()], 8, TRS_LAYOUT, exact, false).totalBytes).toBe(exact);
     expect(rejection([spawn()], 8, TRS_LAYOUT, exact - 1, false)).toBe("run-too-large");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// phase 29: host-planned multi-asset grouping
+
+/** TRS layout plus the string asset column the forest's spawner groups by. */
+const SPECIES_LAYOUT: ResidentRunContext["attributes"] = {
+  ...TRS_LAYOUT,
+  species: { type: "string", tupleSize: 1 },
+  height: { type: "f32", tupleSize: 1 },
+};
+
+describe("resident run planning: multi-asset spawner terminal", () => {
+  it("plans the indexed compose kernel: perm binding, base uniform, per-batch dispatch", () => {
+    const p = plan(
+      [spawn({ assetAttr: "species" })],
+      1000,
+      SPECIES_LAYOUT,
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    const apply = applyOf(p, 0);
+    expect(apply.key).toBe("apply2|spawnInstances|rot=1|scl=1|perm");
+    // The `base` u32 rides the padding the vec4 alignment already
+    // reserved, so the header grows by exactly one word.
+    expect(apply.uniformBytes).toBe(16);
+    expect(apply.perBatch).toBe(true);
+    // P/rot/scale/transforms keep their v0.7 binding indices; perm is
+    // appended, and is the ONLY new binding.
+    expect(apply.bindings).toEqual([
+      { binding: 1, ref: { kind: "slot", index: 0 } },
+      { binding: 2, ref: { kind: "slot", index: 1 } },
+      { binding: 3, ref: { kind: "slot", index: 2 } },
+      { binding: 4, ref: { kind: "out" } },
+      { binding: 5, ref: { kind: "perm" } },
+    ]);
+    expect(p.instances).toEqual({
+      assetId: "tree",
+      assetAttr: "species",
+      count: 1000,
+      bytes: 64_000,
+      permBytes: 4000,
+    });
+    // The string column is NEVER uploaded: the host resolves the key.
+    expect(p.members[0].steps).toHaveLength(1);
+    expect(p.written).toEqual([]);
+  });
+
+  it("indirects the SOURCE and leaves the DESTINATION as the invocation index", () => {
+    const apply = applyOf(
+      plan([spawn({ assetAttr: "species" })], 8, SPECIES_LAYOUT, Number.MAX_SAFE_INTEGER, false),
+      0,
+    );
+    expect(apply.wgsl).toContain("  base: u32,");
+    expect(apply.wgsl).toContain("let src = b5[params.base + i];");
+    // Reads permuted...
+    expect(apply.wgsl).toContain("b1[src * 3u]");
+    expect(apply.wgsl).toContain("b2[src * 4u]");
+    expect(apply.wgsl).toContain("b3[src * 3u]");
+    // ...writes are dense and unpermuted, or two lanes could collide.
+    expect(apply.wgsl).toContain("let o = i * 16u;");
+    expect(apply.wgsl).not.toContain("src * 16u");
+  });
+
+  it("counts the permutation upload against the run's memory bound", () => {
+    // 40 B/pt of slots + 64 B/pt retained + 4 B/pt of permutation.
+    const exact = 8 * (40 + 64 + 4);
+    expect(
+      plan([spawn({ assetAttr: "species" })], 8, SPECIES_LAYOUT, exact, false).totalBytes,
+    ).toBe(exact);
+    expect(rejection([spawn({ assetAttr: "species" })], 8, SPECIES_LAYOUT, exact - 1, false)).toBe(
+      "run-too-large",
+    );
+  });
+
+  it("rejects the two conditions the CPU spawner throws on, so the CPU raises them", () => {
+    // Missing attribute, and an attribute of the wrong type. Both reject
+    // as run-plan-failed; the per-node path then surfaces
+    // buildInstanceBatches' identical, actionable message.
+    expect(rejection([spawn({ assetAttr: "absent" })], 16, SPECIES_LAYOUT)).toBe("run-plan-failed");
+    expect(rejection([spawn({ assetAttr: "height" })], 16, SPECIES_LAYOUT)).toBe("run-plan-failed");
+    // A non-string param value is not a valid graph either.
+    expect(rejection([spawn({ assetAttr: 7 })], 16, SPECIES_LAYOUT)).toBe("run-plan-failed");
+  });
+
+  it("still rejects a spawner that is not last, or that has no assetId", () => {
+    expect(
+      rejection(
+        [spawn({ assetAttr: "species" }), member("jitterPoints", { amount: [1, 1, 1], seed: 0 }, "j")],
+        16,
+        SPECIES_LAYOUT,
+      ),
+    ).toBe("run-plan-failed");
+    expect(rejection([spawn({ assetAttr: "species", assetId: "" })], 16, SPECIES_LAYOUT)).toBe(
+      "run-plan-failed",
+    );
+  });
+
+  it("fuses a chain ahead of a multi-asset spawner, terminal included", () => {
+    const p = plan(
+      [
+        member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
+        spawn({ assetAttr: "species" }),
+      ],
+      100,
+      SPECIES_LAYOUT,
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    expect(p.members).toHaveLength(2);
+    expect(applyOf(p, 0).perBatch).toBe(false); // the transform is not per-asset
+    expect(applyOf(p, 1).perBatch).toBe(true);
+    expect(p.instances?.permBytes).toBe(400);
+  });
+
+  it("stamps the plan format, so a shape change cannot silently reuse old plans", () => {
+    // The tag is what stops a plan built by one shape of this code from
+    // being executed by another. Phase 29 made `instances` plural and
+    // added `permBytes`, so it moved to /4. Change the plan's shape and
+    // this must move with it — an unbumped tag is a stale-plan bug, not
+    // a cosmetic slip, and nothing else in the suite notices a revert.
+    const p = plan(
+      [member("transformPoints", { translate: [1, 2, 3], rotateEuler: [0, 90, 0], scale: [2, 2, 2] })],
+      8,
+    );
+    expect((p as unknown as { readonly format: string }).format).toBe("pcg-resident-run/4");
   });
 });

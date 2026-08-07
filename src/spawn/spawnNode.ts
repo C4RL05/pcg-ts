@@ -44,10 +44,10 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
       description:
         "Optional name of a string point attribute holding per-point asset ids; empty string " +
         "disables the override. Points whose attribute value is empty use assetId instead. " +
-        "Errors when the named attribute is missing or not a string attribute. Setting it also " +
-        "opts the node out of device-resident spawning (grouping by a per-point string id is a " +
-        "device-side sort the resident pipeline does not implement): transforms are then always " +
-        "composed on the CPU, and a GPU cook counts the reason 'spawn-asset-attr'.",
+        "Errors when the named attribute is missing or not a string attribute. Device-resident " +
+        "spawning supports it: the grouping is planned on the CPU (the asset column is always " +
+        "host-resident) and the device composes one transform buffer per asset, in the same " +
+        "batch order the CPU path produces.",
     },
   },
   /**
@@ -62,11 +62,19 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
    * Inert unless the caller opted in (`GpuFieldEvaluator`'s
    * `deviceInstances`), so the default cook — CPU or GPU — is
    * byte-for-byte what it has always been.
+   *
+   * No `eligible` gate: both `assetId` and `assetAttr` spawns are
+   * device-resident. A multi-asset spawn needs no device-side sort — the
+   * asset column is host-resident by construction, so the host plans the
+   * grouping (shared code with the CPU spawner, hence identical batch
+   * order) and the device composes one buffer per asset. The param
+   * failures the CPU spawner throws on (a missing or non-string
+   * `assetAttr`) are rejected by the run planner instead, which puts the
+   * node back on this execute so it raises the identical message.
    */
   resident: {
     kind: "spawnInstances",
     terminal: true,
-    eligible: (params) => (params.assetAttr === "" ? true : "spawn-asset-attr"),
   },
   execute({ inputs, params }) {
     let item: GeometryItem | undefined;

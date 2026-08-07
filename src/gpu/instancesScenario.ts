@@ -18,7 +18,7 @@ import { create } from "webgpu";
 import { Geometry } from "../data/index.js";
 import { CookCancelledError, Graph, cook, makeGeometryItem } from "../graph/index.js";
 import type { CookResult, InstancesItem } from "../graph/index.js";
-import type { DeviceTransformsHandle } from "../fields/index.js";
+import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { dataInput } from "../runtime/dataInput.js";
 import { orientAlongVector, transformPoints } from "../nodes/index.js";
@@ -597,57 +597,231 @@ async function cancellation(
   };
 }
 
-/** assetAttr: CPU fallback with byte-identical transforms + a counted reason. */
-async function assetAttrFallback(
+/**
+ * The phase-29 fixture: a species column exercising the whole ordering
+ * edge matrix in one geometry.
+ *
+ * - "ghost" is interned into the string table but worn by no point, and
+ *   "rock"/"pine" are interned in the OPPOSITE order to their first
+ *   occurrence — so table order, intern order and lexicographic order
+ *   all differ from the spec's first-occurrence order.
+ * - point 2 is the empty string and point 3 is the literal "tree": two
+ *   distinct table indices that must merge into ONE batch.
+ * - point 5 carries an out-of-range table index, which reads as "" and
+ *   must merge into that same batch rather than opening a new one.
+ *
+ * Expected batch order: pine, rock, tree, fern.
+ */
+function makeSpeciesSample(count: number, tupleSize = 1): Geometry {
+  const geo = makeTransformSample(count);
+  const species = geo.attrs.point.add("species", "string", tupleSize, "");
+  species.internString("ghost");
+  species.internString("rock");
+  species.internString("pine");
+  for (let i = 0; i < count; i++) {
+    const m = i % 5;
+    species.setString(
+      i,
+      m === 0 ? "pine" : m === 1 ? "rock" : m === 2 ? "" : m === 3 ? "tree" : "fern",
+    );
+    // A decoy in component 1 that grouping must never read.
+    if (tupleSize > 1) species.setString(i, m === 0 ? "fern" : "ghost", 1);
+  }
+  // Point 5 would be "pine"; an out-of-range index makes it "" instead.
+  species.data[5 * tupleSize] = species.stringTable.length + 3;
+  return geo;
+}
+
+/** Every batch of a device instances item, read back and measured vs the CPU. */
+async function batchObservations(
+  device: GpuDeviceLike,
+  batches: readonly DeviceInstanceBatch[],
+  cpu: readonly { assetId: string; count: number; transforms: Float32Array }[],
+): Promise<Record<string, unknown>> {
+  const shapes = batches.map((b) => [b.assetId, b.count] as const);
+  const cpuShapes = cpu.map((b) => [b.assetId, b.count] as const);
+  const perBatch: Array<Record<string, unknown>> = [];
+  const flatCpu: number[] = [];
+  const flatGpu: number[] = [];
+  for (let j = 0; j < batches.length; j++) {
+    const gpu = await readHandle(device, batches[j].transforms);
+    const ref = cpu[j]?.transforms ?? new Float32Array(0);
+    perBatch.push({
+      assetId: batches[j].assetId,
+      count: batches[j].count,
+      byteLength: batches[j].transforms.byteLength,
+      // Length equality is part of the oracle: a short GPU buffer would
+      // otherwise be compared against a truncated CPU reference.
+      lengthsAgree: gpu.length === ref.length,
+      parity: measure(ref, gpu),
+    });
+    for (let i = 0; i < ref.length; i++) flatCpu.push(ref[i]);
+    for (let i = 0; i < gpu.length; i++) flatGpu.push(gpu[i]);
+  }
+  return {
+    shapes,
+    shapesMatchCpu: JSON.stringify(shapes) === JSON.stringify(cpuShapes),
+    perBatch,
+    // One aggregate parity over every instance of every batch, so a
+    // single wrongly-sourced matrix anywhere shows up.
+    parity: measure(flatCpu, flatGpu),
+  };
+}
+
+/**
+ * assetAttr on the device: one batch per asset, in the CPU spawner's
+ * order, composed from the host-planned permutation.
+ */
+async function assetAttrGrouping(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  const count = 512;
+  const geo = makeSpeciesSample(count);
+  const opts = { defaultAssetId: "tree", assetAttr: "species" } as const;
+  const cpu = buildInstanceBatches(geo, opts);
+
+  const ev = new GpuFieldEvaluator(device, { adapterInfo, deviceInstances: true });
+  const gpuCook = await cook(spawnRig(geo, { assetAttr: "species" }).g, { gpu: ev });
+  const item = instancesOf(gpuCook);
+  const batches = item.deviceBatches!;
+  const grouped = await batchObservations(device, batches, cpu);
+
+  // Ownership: one detached buffer per asset, out and back.
+  const holding = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+  };
+  const holdingBytesMatchCounts =
+    batches.reduce((n, b) => n + b.count, 0) * 64 ===
+    cpu.reduce((n, b) => n + b.transforms.length * 4, 0);
+  for (const b of batches) b.transforms.dispose();
+  const afterDispose = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+    inFlight: ev.poolStats.buffersCreated - ev.poolStats.buffersDestroyed - ev.poolStats.pooledBuffers,
+  };
+
+  // Recook → evict → recook: the same N buffers out and back each time,
+  // and byte-identical transforms every time (the permutation is data,
+  // never a cached pipeline input).
+  const cycles: Array<Record<string, number>> = [];
+  let identicalAcrossCooks = true;
+  let firstBytes: number[] | undefined;
+  for (let c = 0; c < 3; c++) {
+    const r = await cook(spawnRig(geo, { assetAttr: "species" }).g, { gpu: ev });
+    const bs = instancesOf(r).deviceBatches!;
+    cycles.push({
+      batches: bs.length,
+      detachedBuffers: ev.poolStats.detachedBuffers,
+      detachedBytes: ev.poolStats.detachedBytes,
+    });
+    const bytes: number[] = [];
+    for (const b of bs) bytes.push(...(await readHandle(device, b.transforms)));
+    if (firstBytes === undefined) firstBytes = bytes;
+    else {
+      identicalAcrossCooks &&= firstBytes.length === bytes.length;
+      for (let i = 0; identicalAcrossCooks && i < bytes.length; i++) {
+        identicalAcrossCooks = Object.is(firstBytes[i], bytes[i]);
+      }
+    }
+    for (const b of bs) b.transforms.dispose();
+  }
+  const afterCycles = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+    inFlight: ev.poolStats.buffersCreated - ev.poolStats.buffersDestroyed - ev.poolStats.pooledBuffers,
+  };
+
+  // Batch order must not follow the string table: a geometry whose table
+  // was interned in a DIFFERENT order (same per-point ids) groups the
+  // same way. Nothing about the plan or the pipeline may key on it.
+  const permuted = makeTransformSample(count);
+  const alt = permuted.attrs.point.add("species", "string", 1, "");
+  alt.internString("fern");
+  alt.internString("tree");
+  alt.internString("pine");
+  for (let i = 0; i < count; i++) {
+    alt.setString(i, geo.attrs.point.require("species").getString(i));
+  }
+  const permCook = await cook(spawnRig(permuted, { assetAttr: "species" }).g, { gpu: ev });
+  const permBatches = instancesOf(permCook).deviceBatches!;
+  const permShapes = permBatches.map((b) => [b.assetId, b.count] as const);
+  for (const b of permBatches) b.transforms.dispose();
+
+  // tupleSize 2: component 0 only, decoy in component 1.
+  const wide = makeSpeciesSample(count, 2);
+  const wideCook = await cook(spawnRig(wide, { assetAttr: "species" }).g, { gpu: ev });
+  const wideBatches = instancesOf(wideCook).deviceBatches!;
+  const wideObs = await batchObservations(
+    device,
+    wideBatches,
+    buildInstanceBatches(wide, opts),
+  );
+  for (const b of wideBatches) b.transforms.dispose();
+
+  // A single-asset column: the N = 1 boundary of the indexed path.
+  const solo = makeTransformSample(64);
+  const soloAttr = solo.attrs.point.add("species", "string", 1, "");
+  for (let i = 0; i < 64; i++) soloAttr.setString(i, "only");
+  const soloCook = await cook(spawnRig(solo, { assetAttr: "species" }).g, { gpu: ev });
+  const soloBatches = instancesOf(soloCook).deviceBatches!;
+  const soloObs = await batchObservations(device, soloBatches, buildInstanceBatches(solo, opts));
+  for (const b of soloBatches) b.transforms.dispose();
+
+  const out = {
+    stats: statsOf(gpuCook),
+    deviceBatchesPresent: item.deviceBatches !== undefined,
+    grouped,
+    cpuShapes: cpu.map((b) => [b.assetId, b.count] as const),
+    tableEntries: [...geo.attrs.point.require("species").stringTable],
+    holding,
+    holdingBytesMatchCounts,
+    afterDispose,
+    cycles,
+    afterCycles,
+    identicalAcrossCooks,
+    permutedTableShapes: permShapes,
+    wide: wideObs,
+    solo: soloObs,
+  };
+  ev.dispose();
+  return out;
+}
+
+/** A fusable chain in front of a MULTI-ASSET spawner: one run, all of it. */
+async function assetAttrChain(
   device: GpuDeviceLike,
   adapterInfo: { vendor?: string },
 ): Promise<Record<string, unknown>> {
   const count = 256;
-  const geo = makeTransformSample(count);
-  const kind = geo.attrs.point.add("kind", "string", 1);
-  for (let i = 0; i < count; i++) kind.setString(i, i % 3 === 0 ? "pine" : i % 3 === 1 ? "rock" : "");
-
-  const cpuOnly = await cook(spawnRig(geo, { assetAttr: "kind" }).g);
+  const geo = makeSpeciesSample(count);
   const ev = new GpuFieldEvaluator(device, { adapterInfo, deviceInstances: true });
-  const gpuCook = await cook(spawnRig(geo, { assetAttr: "kind" }).g, { gpu: ev });
 
-  const ref = instancesOf(cpuOnly).batches;
-  const got = instancesOf(gpuCook).batches;
-  let identical = ref.length === got.length;
-  for (let b = 0; identical && b < ref.length; b++) {
-    identical =
-      ref[b].assetId === got[b].assetId &&
-      ref[b].count === got[b].count &&
-      ref[b].transforms.length === got[b].transforms.length;
-    for (let i = 0; identical && i < ref[b].transforms.length; i++) {
-      identical = Object.is(ref[b].transforms[i], got[b].transforms[i]);
-    }
-  }
+  const rig = spawnRig(geo, { chain: true, assetAttr: "species" });
+  const fused = await cook(rig.g, { gpu: ev });
+  const batches = instancesOf(fused).deviceBatches!;
 
-  // And with a fusable chain in front: the chain still fuses on the
-  // device, only the spawner stays on the CPU.
-  const chained = await cook(spawnRig(geo, { chain: true, assetAttr: "kind" }).g, { gpu: ev });
-  const chainedCpu = await cook(spawnRig(geo, { chain: true, assetAttr: "kind" }).g);
-  const chainedRef = instancesOf(chainedCpu).batches;
-  const chainedGot = instancesOf(chained).batches;
-  const chainedShapes = chainedGot.map((b) => [b.assetId, b.count] as const);
+  // Reference: the same chain cooked on the CPU without the spawner,
+  // then grouped and composed by the CPU spawner.
+  const refGraph = new Graph(7);
+  const din = refGraph.add(dataInput, { items: [makeGeometryItem(geo)] }, rig.ids.din);
+  const xf = refGraph.add(
+    transformPoints,
+    { translate: [1, 2, 3], rotateEuler: [0, 30, 0], scale: [2, 2, 2] },
+    rig.ids.xf,
+  );
+  const or = refGraph.add(orientAlongVector, { direction: field({ fn: "position" }) }, rig.ids.or);
+  refGraph.connect(din, "out", xf, "in");
+  refGraph.connect(xf, "out", or, "in");
+  refGraph.output(or, "out", "out");
+  const refItem = (await cook(refGraph)).outputs.out[0];
+  if (refItem.kind !== "geometry") throw new Error("scenario: expected geometry");
+  const cpu = buildInstanceBatches(refItem.geo, { defaultAssetId: "tree", assetAttr: "species" });
 
-  const out = {
-    stats: statsOf(gpuCook),
-    chainedStats: statsOf(chained),
-    deviceBatchesPresent: instancesOf(gpuCook).deviceBatches !== undefined,
-    batchShapes: got.map((b) => [b.assetId, b.count] as const),
-    bytesIdenticalToCpuOnly: identical,
-    chainedShapes,
-    chainedShapesMatchCpu:
-      JSON.stringify(chainedShapes) === JSON.stringify(chainedRef.map((b) => [b.assetId, b.count])),
-    // The device-fused chain and the CPU chain agree on transforms only
-    // within the documented tolerance, so measure rather than compare.
-    chainedParity: measure(
-      chainedRef.flatMap((b) => Array.from(b.transforms)),
-      chainedGot.flatMap((b) => Array.from(b.transforms)),
-    ),
-  };
+  const observed = await batchObservations(device, batches, cpu);
+  for (const b of batches) b.transforms.dispose();
+  const out = { stats: statsOf(fused), observed, batchCount: batches.length };
   ev.dispose();
   return out;
 }
@@ -696,7 +870,8 @@ async function main(): Promise<void> {
   out.chain = await fusedChain(structural, adapter.info);
   out.ownership = await ownership(structural, adapter.info);
   out.cancellation = await cancellation(structural, adapter.info);
-  out.fallback = await assetAttrFallback(structural, adapter.info);
+  out.grouping = await assetAttrGrouping(structural, adapter.info);
+  out.groupingChain = await assetAttrChain(structural, adapter.info);
   out.optOut = await optInWithheld(structural, adapter.info);
 
   process.stdout.write(JSON.stringify(out));

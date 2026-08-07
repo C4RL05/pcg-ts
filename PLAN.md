@@ -679,7 +679,7 @@ Design decisions fixed up front:
   within a batch, ascending point index. `""` merges with
   `defaultAssetId`, and table-index order is *not* batch order, so a
   host-side dense-key remap is required.
-- `run.ts`: allow `string` attributes as `u32` slots; make
+- `run.ts`: make
   `InstancesDesc`/`BufRef.out` plural; add a per-step element count and
   a u32 `base` to the uniform header (it fits the existing 16-byte
   padding); one output buffer and one compose dispatch per asset; N
@@ -692,7 +692,15 @@ Design decisions fixed up front:
   non-string attribute) via `PlanFail`, so the per-node path raises the
   identical message.
 - Retire the `"spawn-asset-attr"` opt-out and its reason from the
-  taxonomy and every mirror.
+  source taxonomy. (The doc mirrors — README, llms.txt, authoring,
+  nodes.md — belong to phase 31 with the rest of the documentation, so
+  the two phases do not both claim them.)
+- Not needed after all: allowing `string` attributes as `u32` slots.
+  Written into this plan on the assumption that the asset key might
+  have to reach the device, it is dead on arrival under host-planned
+  grouping — the key never leaves the host, string attributes are
+  CPU-only in the compiler, and `setAttribute` rejects string mode, so
+  the code would be uncallable. Verified during the phase, not assumed.
 - Exit: device batch ids, order and counts identical to
   `buildInstanceBatches` across a fixture matrix covering every edge
   case and determinism item in the survey; matrices within the v0.7

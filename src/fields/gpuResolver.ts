@@ -42,14 +42,12 @@ import type { Column, EvalContext, Field } from "./types.js";
  * Node-level opt-out reasons (a node that declares `resident` but whose
  * `eligible` predicate returned a reason string — see `ResidentDesc`;
  * counted once per cook per such node, whether or not a run formed
- * around it):
- *
- * - `"spawn-asset-attr"` — `spawnInstances` with a non-empty `assetAttr`
- *   cannot terminate a device-resident run: grouping points by a
- *   per-point string asset id is a device-side sort this pipeline does
- *   not implement. The node spawns on the CPU path with byte-identical
- *   transforms; clear `assetAttr` (and stamp the asset id via `assetId`)
- *   to get device-resident transforms.
+ * around it) are part of this vocabulary, but the standard node library
+ * declares none: every reason a standard node stays off the device today
+ * is one of the per-field or per-run reasons above. (v0.7's
+ * `"spawn-asset-attr"` was the only one, and v0.8 retired it —
+ * `spawnInstances` is device-resident with `assetAttr` set as well,
+ * since the grouping needs no device-side sort.)
  *
  * Element count is never a fallback reason: counts beyond one
  * dispatch's coverage split into chunked dispatches.
@@ -61,6 +59,14 @@ export interface GpuCookStats {
    * member's apply kernel) inside fused runs. Chunking never multiplies
    * this — a kernel split across N chunked `dispatchWorkgroups` calls
    * still counts once.
+   *
+   * A multi-asset spawner terminal is the one kernel that counts more
+   * than once: it dispatches once per asset present in the input, over
+   * that asset's element range and into that asset's output buffer, and
+   * each counts. These are distinct dispatches over disjoint ranges, not
+   * chunks of one range, so counting them once each keeps the number a
+   * measure of device work. A constant-`assetId` spawner has exactly one
+   * asset and so still counts one.
    */
   dispatches: number;
   /** Pipelines compiled because no cached pipeline matched the kernel key. */
