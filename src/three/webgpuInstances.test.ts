@@ -641,3 +641,143 @@ describe("createWebGpuInstanceAdapter", () => {
     expect(adapter.stats.adopted).toBe(2);
   });
 });
+
+// -- v0.8: several batches from one cell -----------------------------------
+
+/**
+ * A resident spawn driven by `assetAttr` hands the binding one batch per
+ * asset, each with its own buffer, and the binding builds them through
+ * one adapter in a row. `build` is per batch and holds no cross-batch
+ * state, so what these pin is that it stays that way: N assets in, N
+ * independent objects out, each bound to its own buffer with its own
+ * geometry and its own sphere, and a failure in the middle of the run
+ * leaving the earlier ones untouched.
+ */
+const MULTI_ASSETS = ["pine", "rock", "fern"] as const;
+
+async function makeMultiAssetAdapter() {
+  const backend = new WebGPUBackend({});
+  const renderer = { backend } as { readonly backend: unknown };
+  const assets: Record<string, { geometry: BoxGeometry; material: MeshBasicMaterial }> = {};
+  // Distinct geometry per asset: a mesh drawing the wrong asset's
+  // geometry is the failure a shared-state bug would produce.
+  for (const id of MULTI_ASSETS) {
+    assets[id] = { geometry: new BoxGeometry(), material: new MeshBasicMaterial() };
+  }
+  const adapter = await createWebGpuInstanceAdapter({ renderer, assets });
+  return {
+    adapter,
+    assets,
+    backend: backend as unknown as { get(o: object): { buffer?: unknown } },
+  };
+}
+
+/**
+ * A per-asset bounding sphere, the shape `DeviceInstanceBinding.bounds`
+ * now returns. The centre moves with the radius so that a mesh wearing
+ * the wrong batch's sphere is wrong in two independent components.
+ */
+function ctxWithRadius(radius: number): DeviceInstanceContext {
+  return {
+    levelName: "spires",
+    coord: [2, 3],
+    bounds: { center: [48 + radius, 4, 72], radius },
+  };
+}
+
+describe("createWebGpuInstanceAdapter with several batches from one cell", () => {
+  it("adopts one distinct buffer per asset into one distinct attribute", async () => {
+    const { adapter, assets, backend } = await makeMultiAssetAdapter();
+    const counts = [102, 103, 205];
+    const handles = counts.map((n) => stubHandle(n));
+    const meshes = MULTI_ASSETS.map(
+      (id, i) => adapter.build(stubBatch(id, counts[i], handles[i]), CTX) as InstancedMesh,
+    );
+
+    MULTI_ASSETS.forEach((id, i) => {
+      expect(meshes[i].name).toBe(id);
+      expect(meshes[i].geometry, `${id} draws its own geometry`).toBe(assets[id].geometry);
+      expect(meshes[i].count).toBe(counts[i]);
+      const attr = meshes[i].instanceMatrix as unknown as { name: string };
+      expect(attr.name).toBe(`pcg:instanceMatrix:${id}`);
+      // The claim, by identity: the buffer three will bind for THIS mesh
+      // is the buffer THIS batch's handle owns.
+      expect(backend.get(attr as unknown as object).buffer).toBe(handles[i].resource);
+    });
+    // No two batches share an attribute or a buffer — three caches bind
+    // groups by attribute identity, so a shared one would draw one
+    // asset's matrices under another asset's geometry.
+    const attrs = meshes.map((m) => m.instanceMatrix as unknown as object);
+    expect(new Set(attrs).size).toBe(3);
+    expect(new Set(attrs.map((a) => backend.get(a).buffer)).size).toBe(3);
+    expect(adapter.stats).toEqual({ built: 3, released: 0, adopted: 3, liveInstances: 410 });
+  });
+
+  it("gives each batch the sphere its own context carried", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    // Per-asset bounds is the point of threading `assetId` into the
+    // binding's `bounds` callback: ground cover must not inherit a
+    // landmark's radius.
+    const pine = adapter.build(stubBatch("pine", 4), ctxWithRadius(12)) as InstancedMesh;
+    const rock = adapter.build(stubBatch("rock", 4), ctxWithRadius(3)) as InstancedMesh;
+    const fern = adapter.build(stubBatch("fern", 4), ctxWithRadius(210)) as InstancedMesh;
+    // Centre AND radius, because `ctxWithRadius` offsets the centre by
+    // the radius: a mesh wearing another batch's sphere fails on both.
+    expect([pine, rock, fern].map((m) => m.boundingSphere?.radius)).toEqual([12, 3, 210]);
+    expect([pine, rock, fern].map((m) => m.boundingSphere?.center.x)).toEqual([60, 51, 258]);
+    // Separate Sphere objects: sharing one would make a later batch's
+    // radius overwrite an earlier batch's.
+    expect(pine.boundingSphere).not.toBe(rock.boundingSphere);
+  });
+
+  it("a rejected radius names the asset as well as the cell", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    // A finite centre with a non-finite radius: the centre check runs
+    // first and would disable culling instead of throwing.
+    const bad: DeviceInstanceContext = {
+      levelName: "spires",
+      coord: [2, 3],
+      bounds: { center: [48, 4, 72], radius: Number.NaN },
+    };
+    expect(() => adapter.build(stubBatch("fern", 4), bad)).toThrow(
+      /cell "spires\|2,3" supplied a bounding radius of NaN for asset "fern"/,
+    );
+  });
+
+  it("releasing every object of a multi-asset cell returns the live-instance meter to zero", async () => {
+    const { adapter } = await makeMultiAssetAdapter();
+    const objects = [
+      adapter.build(stubBatch("pine", 30), CTX),
+      // An empty batch in the middle: a placeholder, not an InstancedMesh.
+      adapter.build(stubBatch("rock", 0), CTX),
+      adapter.build(stubBatch("fern", 7), CTX),
+    ];
+    expect(adapter.stats).toEqual({ built: 3, released: 0, adopted: 2, liveInstances: 37 });
+    for (const object of objects) adapter.release(object);
+    expect(adapter.stats).toEqual({ built: 3, released: 3, adopted: 2, liveInstances: 0 });
+  });
+
+  it("a batch that fails validation adopts nothing and leaves the earlier ones intact", async () => {
+    const { adapter, backend } = await makeMultiAssetAdapter();
+    const good = stubHandle(4);
+    const first = adapter.build(stubBatch("pine", 4, good), CTX) as InstancedMesh;
+    const before = adapter.stats;
+    expect(before).toEqual({ built: 1, released: 0, adopted: 1, liveInstances: 4 });
+
+    // Batch 2 of 3 declares more instances than its handle holds.
+    expect(() => adapter.build({ ...stubBatch("rock", 4), count: 5 }, CTX)).toThrow(
+      /declares 5 instances/,
+    );
+    // Nothing was counted and nothing was adopted for the failed batch —
+    // the binding is about to release the cell, and a phantom `built`
+    // would never be balanced by a `release`.
+    expect(adapter.stats).toEqual(before);
+    // The surviving object still binds its own buffer.
+    expect(backend.get(first.instanceMatrix as unknown as object).buffer).toBe(good.resource);
+
+    // And a later batch still builds normally.
+    const third = adapter.build(stubBatch("fern", 9), CTX) as InstancedMesh;
+    expect(third.count).toBe(9);
+    expect(adapter.stats).toEqual({ built: 2, released: 0, adopted: 2, liveInstances: 13 });
+  });
+});

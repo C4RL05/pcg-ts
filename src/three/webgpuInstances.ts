@@ -34,7 +34,9 @@
  * `mesh.boundingSphere`, which `Frustum.intersectsObject` prefers over
  * the geometry's and which stops three ever calling
  * `computeBoundingSphere()`. With no bounds supplied, frustum culling is
- * switched off instead of guessed.
+ * switched off instead of guessed. The binding asks for those bounds once
+ * per batch, so a cell holding several assets culls each by its own
+ * sphere rather than by the tallest asset's.
  *
  * ## Ownership
  *
@@ -345,7 +347,7 @@ export async function createWebGpuInstanceAdapter(
       mesh.instanceMatrix = attribute;
       mesh.count = batch.count;
       mesh.name = batch.assetId;
-      applyBounds(mesh, ctx);
+      applyBounds(mesh, ctx, batch.assetId);
       liveInstances += batch.count;
       return mesh;
     },
@@ -383,14 +385,19 @@ function adoptInto(backend: BackendLike, attribute: object, buffer: unknown): vo
 }
 
 /**
- * Frustum culling without CPU matrices: assign the cell's bounding
- * sphere so `Frustum.intersectsObject` uses it (it prefers
- * `object.boundingSphere` over the geometry's) and never falls back to
- * `computeBoundingSphere()`, which would read the empty CPU array and
- * cull the cell away. With no bounds supplied, culling is disabled —
- * drawing too much is recoverable, culling visible geometry is not.
+ * Frustum culling without CPU matrices: assign the bounding sphere the
+ * binding supplied for this batch's asset so `Frustum.intersectsObject`
+ * uses it (it prefers `object.boundingSphere` over the geometry's) and
+ * never falls back to `computeBoundingSphere()`, which would read the
+ * empty CPU array and cull the cell away. With no bounds supplied,
+ * culling is disabled — drawing too much is recoverable, culling visible
+ * geometry is not.
+ *
+ * `ctx.bounds` is per asset, so a rejected radius names the asset as
+ * well as the cell: with several assets per cell the cell alone does not
+ * identify which `bounds(...)` return value was wrong.
  */
-function applyBounds(mesh: InstancedMesh, ctx: DeviceInstanceContext): void {
+function applyBounds(mesh: InstancedMesh, ctx: DeviceInstanceContext, assetId: string): void {
   const bounds = ctx.bounds;
   if (bounds === undefined) {
     mesh.frustumCulled = false;
@@ -405,8 +412,8 @@ function applyBounds(mesh: InstancedMesh, ctx: DeviceInstanceContext): void {
   if (!Number.isFinite(bounds.radius) || bounds.radius < 0) {
     throw new Error(
       `createWebGpuInstanceAdapter: cell "${ctx.levelName}|${ctx.coord.join(",")}" supplied a ` +
-        `bounding radius of ${String(bounds.radius)}; it must be a finite non-negative number ` +
-        "(return undefined from `bounds` to disable frustum culling instead)",
+        `bounding radius of ${String(bounds.radius)} for asset "${assetId}"; it must be a finite ` +
+        "non-negative number (return undefined from `bounds` to disable frustum culling instead)",
     );
   }
   mesh.boundingSphere = new Sphere(new Vector3(x, y, z), bounds.radius);

@@ -736,6 +736,16 @@ Design decisions fixed up front:
   grouping order becomes part of the documented device contract; the
   string-`setAttribute` chain break is documented as the remaining
   boundary.
+- Correct the `stats.dispatches` wording, which phase 29 made false.
+  "One apply kernel per fused member" holds only at one asset; a
+  multi-asset spawn dispatches once per (step, asset). Known mirrors:
+  `README.md:429`, `llms.txt:350`, `docs/authoring.md:1030`, and the
+  `08-gpu-fields` panel copy. Also record that per-asset pool bucketing
+  (256 B floor, powers of two) makes reported logical bytes understate
+  device occupancy.
+- `examples/09-gpu-world/levels.ts:110-113` still tells the reader that
+  single-asset is the supported shape and that `assetAttr` falls back
+  to the CPU path. Phase 29 made that false; correct it.
 - Version 0.8.0, tag, GitHub release.
 - Exit: full suite green, docs idempotent, example browser-verified,
   release tagged. Commit.

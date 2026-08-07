@@ -39,8 +39,11 @@ import { toInstancedMeshes, type AssetMap } from "./instanced.js";
  * — the same space `World` cell bounds are expressed in — because
  * three applies `matrixWorld` to the sphere before testing the frustum.
  * Derive it from `CellContext.min`/`max`: the cell AABB's centre, and
- * half its diagonal plus the tallest asset's radius so instances
- * straddling the cell border are not culled while still on screen.
+ * half its diagonal plus the radius of the asset being drawn, so
+ * instances straddling the cell border are not culled while still on
+ * screen. Since v0.8 a cell can hold several assets and the sphere is
+ * asked for per asset, so that padding is the *drawn* asset's radius,
+ * not the largest one in the map — see {@link DeviceInstanceBinding.bounds}.
  */
 export interface DeviceCellBounds {
   /** Sphere centre `[x, y, z]`. */
@@ -54,10 +57,13 @@ export interface DeviceInstanceContext {
   readonly levelName: string;
   readonly coord: CellCoord;
   /**
-   * Cell bounds from {@link DeviceInstanceBinding.bounds}, or undefined
-   * when none was supplied — in which case the adapter must disable
-   * frustum culling rather than guess, since a wrong sphere culls
-   * visible instances silently.
+   * Bounds from {@link DeviceInstanceBinding.bounds} for **this batch's
+   * asset**, or undefined when none was supplied — in which case the
+   * adapter must disable frustum culling rather than guess, since a
+   * wrong sphere culls visible instances silently.
+   *
+   * One context is built per batch, so a cell holding several assets can
+   * give each its own sphere; see {@link DeviceInstanceBinding.bounds}.
    */
   readonly bounds: DeviceCellBounds | undefined;
 }
@@ -91,12 +97,27 @@ export interface DeviceInstanceBinding {
   /** Turns device batches into scene objects. */
   readonly adapter: DeviceInstanceAdapter;
   /**
-   * Bounding sphere for a cell, used instead of
+   * Bounding sphere for one asset's batch in a cell, used instead of
    * `computeBoundingSphere()`. Returning undefined disables frustum
-   * culling for that cell's device objects — correct but slower, and
-   * always preferable to a sphere that is too small.
+   * culling for that batch's object — correct but slower, and always
+   * preferable to a sphere that is too small.
+   *
+   * Called **once per batch**, not once per cell. A resident spawn
+   * driven by `assetAttr` puts several assets in one cell, and the
+   * sphere has to cover the instances' own extent as well as the cell's:
+   * with one sphere per cell every asset inherits the padding of the
+   * tallest one, so a cell containing both a 200-unit landmark and
+   * ground cover would draw the ground cover with a 200-unit skirt and
+   * effectively stop culling it. `assetId` is the lever that fixes that
+   * — pad by the radius of *that* asset. Ignoring the third argument is
+   * fine and keeps the old per-cell behaviour (a two-parameter callback
+   * still type-checks).
    */
-  readonly bounds?: (levelName: string, coord: CellCoord) => DeviceCellBounds | undefined;
+  readonly bounds?: (
+    levelName: string,
+    coord: CellCoord,
+    assetId: string,
+  ) => DeviceCellBounds | undefined;
 }
 
 /** Options for {@link WorldThreeBinding}. */
@@ -198,7 +219,19 @@ export class WorldThreeBinding {
     return this.handleRefs.size;
   }
 
-  /** Total logical bytes of the retained device transform buffers. */
+  /**
+   * Total **logical** bytes of the retained device transform buffers —
+   * the sum of `handle.byteLength`, i.e. `instances * 64` per batch.
+   *
+   * This is a lower bound on device occupancy, and since v0.8 a loose
+   * one. The evaluator's buffer pool buckets allocations to powers of
+   * two with a 256-byte floor, and a multi-asset spawn takes one buffer
+   * per asset, so a cell with four small batches pays four roundings
+   * instead of one: a 3-instance batch is 192 logical bytes in a 256-byte
+   * bucket, and a 20-instance batch is 1280 in 2048. Use this to check
+   * that retained bytes return to zero and stay bounded — that property
+   * is exact — not to read off how much VRAM is in use.
+   */
   get deviceHandleBytes(): number {
     let bytes = 0;
     for (const handle of this.handleRefs.keys()) bytes += handle.byteLength;
@@ -213,15 +246,25 @@ export class WorldThreeBinding {
    * previous one is removed, so a throwing rebuild (e.g. an unknown
    * assetId on recook) leaves the cell's existing content visible and
    * registered — the error is rethrown after disposing whatever partial
-   * resources the failed build created.
+   * resources the failed build created, with any secondary failure from
+   * that cleanup attached as its `cause`.
+   *
+   * The mirror case is guaranteed too: if releasing the *previous*
+   * content throws (a throwing `adapter.release`), the new content is
+   * still registered and visible before the error propagates, so its
+   * buffers stay reachable by `cellEvicted` and `dispose`.
    */
   cellReady(levelName: string, coord: CellCoord, outputs: CellOutputs): void {
     const key = cellKey(levelName, coord);
     const group = new Group();
     group.name = key;
     const entry: CellEntry = { group, instanced: [], debug: [], device: [], handles: [] };
-    this.retainCellHandles(entry, outputs);
     try {
+      // Inside the guard, not before it: a retain pass that threw
+      // half-way (a hostile `outputs` object, a getter with an opinion)
+      // would otherwise strand exactly the handles it had already taken
+      // out, with no entry in `cells` to reach them through.
+      this.retainCellHandles(entry, outputs);
       for (const name of Object.keys(outputs)) {
         for (const item of outputs[name]) {
           if (item.kind === "instances") {
@@ -245,12 +288,31 @@ export class WorldThreeBinding {
         }
       }
     } catch (err) {
-      this.disposeEntry(entry);
+      // The build failure is the diagnosis ("unknown assetId ..."); a
+      // failure while cleaning up after it is a downstream symptom. Let
+      // the actionable one propagate and hang the other off it, rather
+      // than replacing the cause with the consequence.
+      const cleanup = attempt(undefined, () => {
+        this.disposeEntry(entry);
+      });
+      if (cleanup !== undefined && err instanceof Error && err.cause === undefined) {
+        err.cause = cleanup.err;
+      }
       throw err;
     }
-    this.removeCell(key); // Only now replace the previous content, if any.
+    // The swap is where ownership transfers, so it must not be skippable.
+    // Releasing the OUTGOING cell can throw (a throwing `adapter.release`
+    // propagates out of `removeCell`), and an escape here would leave the
+    // INCOMING cell — every handle already retained, every object already
+    // built — registered nowhere: `cellEvicted` and `dispose()` both look
+    // in `cells`, so its buffers could never be freed by anything. Commit
+    // first, rethrow after.
+    const failure = attempt(undefined, () => {
+      this.removeCell(key); // Only now replace the previous content, if any.
+    });
     this.opts.group.add(group);
     this.cells.set(key, entry);
+    if (failure !== undefined) throw failure.err;
   }
 
   /**
@@ -262,9 +324,25 @@ export class WorldThreeBinding {
     this.removeCell(cellKey(levelName, coord));
   }
 
-  /** Remove and dispose every live cell (e.g. on teardown). */
+  /**
+   * Remove and dispose every live cell (e.g. on teardown).
+   *
+   * Per cell, exactly as {@link disposeEntry} is per object, and for a
+   * sharper reason: `removeCell` can throw (a throwing
+   * `adapter.release` propagates out of it), and a cell abandoned at
+   * teardown is an abandoned device buffer that nothing will ever free
+   * — the binding is the owner of last resort and this is the last
+   * resort. Every cell is torn down; the first failure is rethrown
+   * afterwards.
+   */
   dispose(): void {
-    for (const key of [...this.cells.keys()]) this.removeCell(key);
+    let failure: TeardownFailure;
+    for (const key of [...this.cells.keys()]) {
+      failure = attempt(failure, () => {
+        this.removeCell(key);
+      });
+    }
+    if (failure !== undefined) throw failure.err;
   }
 
   /**
@@ -315,9 +393,16 @@ export class WorldThreeBinding {
           "GpuFieldEvaluator without `deviceInstances: true` to get CPU batches back",
       );
     }
-    const bounds = dev.bounds?.(levelName, coord);
-    const ctx: DeviceInstanceContext = { levelName, coord, bounds };
     for (const batch of batches) {
+      // Per batch, not hoisted: `bounds` is asked per asset so a cell
+      // holding several assets can cull each by its own extent. N is the
+      // asset count of one cell (single digits), so the extra calls are
+      // not a hot path.
+      const ctx: DeviceInstanceContext = {
+        levelName,
+        coord,
+        bounds: dev.bounds?.(levelName, coord, batch.assetId),
+      };
       const object = dev.adapter.build(batch, ctx);
       entry.device.push(object);
       entry.group.add(object);
@@ -351,13 +436,28 @@ export class WorldThreeBinding {
   }
 
   private disposeEntry(entry: CellEntry): void {
+    // Every step below is attempted and none is skippable: an entry only
+    // reaches this function once it is already unreachable from `cells`,
+    // so anything an early throw skipped is a resource nothing in the
+    // process could ever free. The first failure is rethrown at the end;
+    // the rest are suppressed, since only one error can propagate and the
+    // first is the one with a live cause.
+    let failure: TeardownFailure;
     // Releases the per-mesh instance buffers; shared asset geometry and
-    // material are intentionally left alone.
-    for (const mesh of entry.instanced) mesh.dispose();
+    // material are intentionally left alone. These are guarded for the
+    // same reason the device section below is: `InstancedMesh.dispose()`,
+    // `BufferGeometry.dispose()` and `Material.dispose()` each dispatch a
+    // `dispose` event before doing anything else, and a listener (three's
+    // own renderer bookkeeping, or a caller's) may throw — which would
+    // otherwise abort teardown *above* the device section and strand
+    // every one of the cell's GPU buffers.
+    for (const mesh of entry.instanced) {
+      failure = attempt(failure, () => mesh.dispose());
+    }
     // Debug points own their geometry and material — created per cell.
     for (const points of entry.debug) {
-      points.geometry.dispose();
-      points.material.dispose();
+      failure = attempt(failure, () => points.geometry.dispose());
+      failure = attempt(failure, () => points.material.dispose());
     }
     entry.instanced.length = 0;
     entry.debug.length = 0;
@@ -365,17 +465,57 @@ export class WorldThreeBinding {
     // buffer a live bind group still points at would fault on the next
     // draw), and the handle releases run in a `finally` so a throwing
     // adapter can never strand a device buffer.
+    //
+    // Each object is released in its own attempt. A cell holds one object
+    // per asset, so with a multi-asset spawn a single throwing release
+    // would otherwise abandon every *later* batch's object — their
+    // buffers still freed by the `finally`, but their meshes never
+    // disposed and the adapter's live-instance meter permanently high.
     const dev = this.opts.deviceInstances;
     const objects = entry.device.splice(0, entry.device.length);
     const handles = entry.handles.splice(0, entry.handles.length);
     try {
-      if (dev !== undefined) for (const object of objects) dev.adapter.release(object);
+      if (dev !== undefined) {
+        for (const object of objects) {
+          failure = attempt(failure, () => dev.adapter.release(object));
+        }
+      }
     } finally {
       for (const handle of handles) this.releaseHandle(handle);
     }
+    if (failure !== undefined) throw failure.err;
   }
 }
 
 function cellKey(levelName: string, coord: CellCoord): string {
   return `${levelName}|${coord.join(",")}`;
+}
+
+/** The first failure a teardown hit, or undefined if every step ran clean. */
+type TeardownFailure = { readonly err: unknown } | undefined;
+
+/**
+ * Run one teardown step to completion, capturing what it throws instead
+ * of letting it escape, and return the failure to carry forward.
+ *
+ * This exists to state one invariant in one place, because the binding
+ * needs it in four: **a throwing teardown must never abort the ownership
+ * bookkeeping around it.** The binding is the owner of last resort for
+ * device buffers, and every teardown site here sits next to a step that
+ * decides what is still reachable — `cells.set` on the swap, the handle
+ * releases in `disposeEntry`, the next cell in `dispose`. An exception
+ * that escapes one of those windows does not merely fail loudly; it
+ * removes the resource from every index that could later free it, and no
+ * `dispose()` can recover what it can no longer find. Every step runs,
+ * state is committed, and only then does the first failure propagate
+ * (the rest are suppressed — only one error can propagate, and the first
+ * is the one with a live cause).
+ */
+function attempt(failure: TeardownFailure, step: () => void): TeardownFailure {
+  try {
+    step();
+  } catch (err) {
+    return failure ?? { err };
+  }
+  return failure;
 }
