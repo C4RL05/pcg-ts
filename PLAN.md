@@ -750,15 +750,48 @@ Design decisions fixed up front:
 - Exit: full suite green, docs idempotent, example browser-verified,
   release tagged. Commit.
 
-## Stretch (recorded, not scheduled)
-- **Device-produced asset keys.** Make `setAttribute` resident in
-  string `values` mode (host interns the static values list; the
-  kernel writes `lut[clamp(floor(selector), 0, last)]`), extending the
-  forest's run to its full chain. Because the key would then be
-  device-produced, this is also what would finally require the stable
-  counting sort: `atomic<u32>` bindings, a per-step domain size for the
-  K-bucket scan, an `atomicMin` first-occurrence pass, and a
-  constant-size `2K` u32 readback needing a mid-run pass split.
+## Stretch — surveyed and NOT scheduled
+
+- **Device-produced asset keys** (make `setAttribute` resident in
+  string `values` mode). Surveyed 2026-08-07; **recommendation: do not
+  schedule.** Recorded here so it is not picked up later on the
+  premises it was written with, all three of which the survey broke:
+  - *"It would extend the forest's run to its full chain."* It would
+    not. Every field in `examples/02-forest` is code-authored and
+    carries no `FieldSpec`, and fusability requires all field params to
+    be spec'd — so widening the resident predicate moves the forest
+    from 1 fused member to 1. The benefit is zero, not small.
+  - *"It would finally require the stable counting sort."* It would
+    not. WebGPU has no device-side allocation, and the host must know
+    each batch's `assetId` (a string), its `count`, and how many
+    batches there are before it can allocate. A readback is therefore
+    unavoidable in every candidate design, and all of them pay the same
+    mid-run pass split. The only question is how many bytes ride an
+    already-paid round trip — reading back the key column is `n * 4`
+    against a constant `2K`, i.e. microseconds of bandwidth against a
+    sub-millisecond latency. Buying that with the repo's first atomics,
+    first workgroup-shared memory and first cross-workgroup scan — and
+    a determinism proof argued rather than inherited from
+    `groupPointsByAsset` — is a bad trade.
+  - *"The kernel writes `lut[clamp(floor(selector), 0, last)]`."* Not
+    portable: the CPU semantics are `floor`, then `!(idx > 0) -> 0`,
+    which is deliberately NaN-safe (NaN selects index 0). WGSL `clamp`
+    carries no such guarantee, so that body would violate the
+    determinism invariant.
+
+  If it is ever revisited, the design to build is the cheap one: read
+  back the key column and reuse the shipped `groupPointsByAsset`.
+
+- **The better opener, and the root cause behind all three findings:**
+  give code-authored field combinators their own `FieldSpec`s (or
+  author the example fields with `fieldFromJson`). Today a field built
+  from combinators cannot reach the device at all, which is why
+  `02-forest` reports `no-spec` fallbacks and fuses one member. That
+  limits every demo and every user graph that does not hand-write JSON,
+  and fixing it needs no new GPU machinery.
+
+Full survey: `notes/research/v09-device-keys-survey.md` in the private
+repo.
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
