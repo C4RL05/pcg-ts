@@ -526,10 +526,105 @@ and it is why a constant-heavy fused chain can trail per-node GPU.
   boundary moves accordingly; full suite green with pinned counts
   updated to the new (lower) numbers. Commit, release v0.6.1.
 
+## Phases (v0.7) — GPU-resident World streaming, scheduled 2026-08-07
+
+The recorded stretch: a streamed cell's instance transforms are
+composed on device and handed to the renderer without ever crossing to
+the CPU. Today every cell pays a full round trip — the resident run
+reads P/rot/scale back (`run.ts` readback), `composeTRS` builds 16
+floats per point in a JS loop (`spawn/instances.ts`), and the three
+adapter copies that array a second time into `instanceMatrix`.
+
+Feasibility settled before scheduling: three 0.185.1 already ships
+`three/webgpu`, and its backend takes `parameters.device` ("create the
+device if it is not passed with parameters"), so one `GPUDevice` can
+back both the evaluator and a `WebGPURenderer`. Without shared-device
+support this feature is impossible — a WebGL context cannot read a
+WebGPU buffer, and two devices cannot share one either.
+
+Design decisions fixed up front:
+
+- **Additive and opt-in.** The CPU spawner path and the WebGL
+  `toInstancedMeshes` route stay byte-for-byte as they are. The
+  resident path activates only when the caller supplies a shared
+  device and a WebGPU renderer; everything else keeps working
+  untouched.
+- **Single-asset first; multi-asset stays on CPU.** Device-side asset
+  grouping needs a sort/partition over a string-table attribute — the
+  one genuinely GPU-hostile step in the pipeline. v0.7 fuses only the
+  constant-`assetId` case; `assetAttr` falls back to the CPU path with
+  a machine-readable reason. Recorded as the obvious successor, not
+  smuggled in.
+- **Lifetime is the hard problem, not the math.** Cells evict
+  continuously, so every retained device buffer is a leak in waiting.
+  Ownership transfers explicitly out of the pool (a `detach` that
+  survives the run's `finally`), the buffer's owner is named at every
+  moment, eviction is ordered against in-flight GPU work, and the
+  node memo cache must not silently pin device memory across cells.
+- **CPU stays the reference.** Composing on device in f32 will not
+  bit-match `composeTRS`'s f64 interior; that is a documented
+  tolerance class (these bytes drive a renderer, not a seed chain),
+  and the CPU path remains what determinism tests pin.
+- **The three seam is an internal.** three publishes no supported way
+  to render from a buffer you already own, so this leans on backend
+  internals. It gets version-pinned and guarded by a test that fails
+  loudly and legibly when three moves it — never a silent fallback to
+  wrong rendering.
+
+### Phase 26 — Device-resident instance transforms
+- Compose-TRS WGSL kernel writing column-major 4x4 matrices, ported
+  from `composeTRS` (`spawn/instances.ts`) and validated against it
+  within the documented tolerance.
+- Buffer ownership: `BufferPool.detach` (ownership leaves the pool so
+  the run's `finally` cannot reclaim it), an explicit disposable
+  handle, and a documented rule for who destroys what and when.
+- Core gains a device-resident instance-batch variant carrying an
+  opaque handle instead of a `Float32Array` — expressed in core types
+  only, so `src/fields`/`src/graph` still know nothing about WebGPU.
+- `spawnInstances` becomes eligible as a resident-run terminal (its
+  second output is what bars it from `isFusable` today); the run
+  keeps P/rot/scale device-side and skips their readback.
+- Memo-cache interaction: a cached node output must never pin a
+  device buffer indefinitely — pin the policy with a test that cooks
+  many cells and asserts retained device bytes stay bounded.
+- Exit: kernel parity vs `composeTRS`; no-leak tests across cook →
+  evict → recook cycles with pool stats proving it; `assetAttr`
+  falls back with bytes identical to the CPU path; CPU-only and
+  WebGL paths byte-identical to v0.6.1. Commit.
+
+### Phase 27 — three/webgpu adapter and shared-device binding
+- `WebGPURenderer` interop: shared-device construction, an instanced
+  material/attribute path fed by the retained buffer, and bounds
+  supplied out-of-band from the cell AABB (`computeBoundingSphere`
+  reads CPU matrices that no longer exist).
+- `WorldThreeBinding` gains a resident branch: device batches build
+  and dispose alongside CPU ones, eviction releases device buffers in
+  the right order, and a partial build still cleans up.
+- Guard test pinning the three internals the adapter depends on, with
+  an actionable failure naming the three version and the moved API.
+- Verification is browser-based by necessity: `WebGPURenderer` needs a
+  real canvas/swap chain, so Node+Dawn cannot cover it. Unit-test
+  everything that does not need three; verify the rest live.
+- Exit: browser-verified streaming with instances rendering from
+  device-composed matrices, cells entering and leaving cleanly over a
+  sustained fly-through with no growth in device memory; guard test
+  green; WebGL path unaffected. Commit.
+
+### Phase 28 — Example, docs, v0.7.0
+- New or extended example: a streamed world rendering wholly from
+  device-resident transforms, with a CPU/resident toggle and readouts
+  for retained device bytes, readbacks avoided, and cell churn.
+- README/llms.txt/authoring: the resident spawner contract, the
+  shared-device requirement, the single-asset limitation and its
+  fallback reason, the lifetime/ownership rules, and the three
+  version dependency. Overview site and hosted demos refreshed.
+- Version 0.7.0, tag, GitHub release.
+- Exit: full suite green, docs idempotent, example browser-verified,
+  release tagged. Commit.
+
 ## Stretch (recorded, not scheduled)
-- GPU-resident World streaming: cell cooks that keep instance
-  transforms device-side end to end (spawner-to-renderer without a
-  CPU round trip).
+- Device-side multi-asset grouping: sort/partition points by asset id
+  on device so `assetAttr` spawns fuse instead of falling back.
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
