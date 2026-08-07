@@ -173,6 +173,22 @@ export function outputsDiff(a: CellOutputs, b: CellOutputs): string | null {
         const diff = geometryDiff(x.geo, y.geo);
         if (diff !== null) return `${name}[${i}]: ${diff}`;
       } else if (x.kind === "instances" && y.kind === "instances") {
+        // CPU-only by design: device-resident batches hold GPU buffers
+        // with no host bytes to diff, and reading `batches` would throw.
+        // Report it as a difference the caller can act on instead.
+        if (x.deviceBatches !== undefined || y.deviceBatches !== undefined) {
+          if (x.deviceBatches === undefined || y.deviceBatches === undefined) {
+            return `${name}[${i}]: one item is device-resident and the other is not`;
+          }
+          const shape = (b: readonly { assetId: string; count: number }[]): string =>
+            b.map((v) => `${v.assetId}x${v.count}`).join(",");
+          if (shape(x.deviceBatches) !== shape(y.deviceBatches)) {
+            return `${name}[${i}]: device batches ${shape(x.deviceBatches)} vs ${shape(y.deviceBatches)}`;
+          }
+          // Shapes match; transform bytes live on the device and are not
+          // comparable here (the device suites compare them directly).
+          continue;
+        }
         if (x.batches.length !== y.batches.length) {
           return `${name}[${i}]: ${x.batches.length} batches vs ${y.batches.length}`;
         }

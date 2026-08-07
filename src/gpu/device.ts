@@ -133,6 +133,8 @@ export const BUFFER_USAGE = {
   MAP_READ: 0x0001,
   COPY_SRC: 0x0004,
   COPY_DST: 0x0008,
+  /** Bindable as vertex/instance data — retained instance-transform buffers. */
+  VERTEX: 0x0020,
   UNIFORM: 0x0040,
   STORAGE: 0x0080,
 } as const;

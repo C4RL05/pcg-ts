@@ -39,6 +39,18 @@ import type { Column, EvalContext, Field } from "./types.js";
  *   resident attribute strides + field temporaries + readback) exceeds
  *   the evaluator's resident memory bound.
  *
+ * Node-level opt-out reasons (a node that declares `resident` but whose
+ * `eligible` predicate returned a reason string — see `ResidentDesc`;
+ * counted once per cook per such node, whether or not a run formed
+ * around it):
+ *
+ * - `"spawn-asset-attr"` — `spawnInstances` with a non-empty `assetAttr`
+ *   cannot terminate a device-resident run: grouping points by a
+ *   per-point string asset id is a device-side sort this pipeline does
+ *   not implement. The node spawns on the CPU path with byte-identical
+ *   transforms; clear `assetAttr` (and stamp the asset id via `assetId`)
+ *   to get device-resident transforms.
+ *
  * Element count is never a fallback reason: counts beyond one
  * dispatch's coverage split into chunked dispatches.
  */
@@ -64,9 +76,13 @@ export interface GpuCookStats {
   /** Total member nodes across executed resident runs. */
   fusedNodes: number;
   /**
-   * Readbacks avoided by fusion: `fusedNodes - residentRuns` (each run
-   * reads back once at its terminal where the per-node path would read
-   * back once per member).
+   * Readbacks avoided by fusion: the per-node path reads back once per
+   * member, a run reads back once at its terminal — so an ordinary run
+   * contributes `members - 1` and the identity
+   * `readbacksSaved === fusedNodes - residentRuns` holds. A run ending
+   * in a DEVICE-RESIDENT terminal whose geometry nobody reads performs
+   * no readback at all and contributes `members`, which is the one case
+   * that identity does not cover.
    */
   readbacksSaved: number;
   /** CPU fallbacks by machine-readable reason (see the vocabulary above). */
@@ -122,6 +138,17 @@ export interface ResidentRunContext {
   readonly attributes: Readonly<Record<string, ResidentAttrDesc>>;
   /** Point count of the input geometry (always > 0; the executor skips fusion for empty inputs). */
   readonly count: number;
+  /**
+   * Does this cook need the terminal's geometry output? False only when
+   * the terminal member's geometry pin is neither connected nor declared
+   * as a graph output — the run may then skip materializing the chain's
+   * geometry entirely (no readback at all), which is what makes a
+   * device-resident spawner terminal a true zero-round-trip path. True
+   * for every terminal whose geometry someone reads, including every
+   * single-geometry-output terminal, so the pre-existing behavior is
+   * unchanged.
+   */
+  readonly needsGeometry: boolean;
 }
 
 /** Input to {@link GpuFieldResolver.executeRun}. */
@@ -138,6 +165,80 @@ export interface ResidentRunInput {
   readonly budgetMs?: number;
 }
 
+/**
+ * Opaque, disposable handle to a device-resident buffer produced by a
+ * resident run. Core code (graph, fields, nodes, runtime) only ever sees
+ * this interface — never a WebGPU type — so nothing outside `src/gpu`
+ * gains a device dependency; `pcg-ts/gpu`'s `deviceTransformsBuffer()`
+ * narrows {@link resource} back to a device buffer for a renderer
+ * adapter.
+ *
+ * Ownership. The handle is created the moment the producing buffer's
+ * ownership leaves the evaluator's buffer pool, and from then on
+ * **whoever receives the handle owns the memory**: nothing in the
+ * library — not the pool, not the node memo cache, not
+ * `GpuFieldEvaluator.dispose()` — will free it. Exactly one party must
+ * call {@link dispose}, and the device memory is not reclaimed until it
+ * does. Handles are never memo-cached and never handed to two owners:
+ * every cook that produces device-resident output produces a *fresh*
+ * handle (see `CookOptions.gpu`), so an owner may dispose its handle as
+ * soon as it stops rendering from it.
+ *
+ * Failure modes are all defined and none of them are silent:
+ * - `dispose()` twice (or after the owning evaluator was disposed) is a
+ *   no-op, never a double free.
+ * - reading {@link resource} after `dispose()` throws instead of handing
+ *   out a destroyed buffer.
+ * - a handle that is never disposed is a leak, and a bounded, visible
+ *   one: its bytes stay counted in `GpuFieldEvaluator.poolStats`
+ *   (`detachedBuffers` / `detachedBytes`) until it is disposed.
+ */
+export interface DeviceTransformsHandle {
+  /** Backend that owns the resource, e.g. `"webgpu"`. */
+  readonly backend: string;
+  /**
+   * Logical byte length of the payload. The underlying allocation can be
+   * LARGER (the pool buckets to powers of two) — bind, copy, and read
+   * exactly this many bytes; the rest is uninitialized.
+   */
+  readonly byteLength: number;
+  /** True once {@link dispose} has run. */
+  readonly disposed: boolean;
+  /**
+   * The backend resource (a `GPUBuffer` when `backend === "webgpu"`),
+   * opaque here. Throws after {@link dispose} rather than returning a
+   * destroyed resource.
+   */
+  readonly resource: unknown;
+  /** Release the device memory. Idempotent: a second call does nothing. */
+  dispose(): void;
+}
+
+/**
+ * A device-resident instance batch: the same render-agnostic spawner
+ * payload as `InstanceBatch` (see src/graph/data.ts), except that the packed 4x4 transforms
+ * live in a device buffer ({@link transforms}) that was composed on the
+ * GPU and never crossed to the CPU.
+ *
+ * The buffer holds `count * 16` f32 in exactly the `InstanceBatch`
+ * layout — column-major, translation at floats 12-14, float 15 = 1 —
+ * so a renderer can bind it as instance data directly. Composed in f32
+ * throughout, where the CPU `composeTRS` keeps an f64 interior: these
+ * bytes drive a renderer, not a seed chain, so they are a documented
+ * tolerance class rather than a bit-exact port. The CPU path remains the
+ * reference.
+ */
+export interface DeviceInstanceBatch {
+  /** Marks this batch device-resident; CPU batches carry `"cpu"` or nothing. */
+  readonly residency: "device";
+  /** Which asset every instance in this batch renders; resolved by the renderer. */
+  readonly assetId: string;
+  /** Number of instances in the batch. */
+  readonly count: number;
+  /** Device buffer of `count * 16` f32; see {@link DeviceTransformsHandle} for who frees it. */
+  readonly transforms: DeviceTransformsHandle;
+}
+
 /** Result of {@link GpuFieldResolver.executeRun}. */
 export interface ResidentRunResult {
   /**
@@ -146,8 +247,20 @@ export interface ResidentRunResult {
    * per-node path — same attribute set, shapes, defaults, insertion
    * order, string tables, and topology; attributes no member wrote pass
    * through from the input byte-identically.
+   *
+   * Undefined exactly when the run was planned with
+   * `ResidentRunContext.needsGeometry === false` and the terminal's
+   * device-resident outputs made materializing it unnecessary — the run
+   * then performed no readback at all.
    */
-  readonly geo: Geometry;
+  readonly geo?: Geometry;
+  /**
+   * Device-resident instance batches the terminal member produced (a
+   * spawner terminal). The caller wraps them into the terminal's
+   * instances output pin and hands them to whoever owns them next; see
+   * {@link DeviceTransformsHandle} for the ownership rules.
+   */
+  readonly deviceBatches?: readonly DeviceInstanceBatch[];
 }
 
 /**
@@ -185,6 +298,17 @@ export interface GpuFieldResolver {
   /** Stable device/backend identity folded into memo keys. */
   readonly cacheSalt: string;
   /**
+   * Resident `kind`s this resolver can run as a run TERMINAL producing
+   * device-resident (non-geometry) outputs — see `ResidentDesc.terminal`.
+   * Terminal-only nodes join a run only when their kind is listed here,
+   * so the feature is opt-in at the device seam: a resolver that omits
+   * this (or lists nothing) yields exactly the pre-existing fusion
+   * behavior and byte-identical output, and every such node cooks on its
+   * normal CPU path. Ordinary single-geometry-output members ignore this
+   * list entirely.
+   */
+  readonly residentTerminals?: readonly string[];
+  /**
    * Resolve `field` over the context's domain on the GPU, or return
    * `null` (synchronously) when the field is ineligible. `stats`, when
    * given, receives dispatch/pipeline/fallback counters.
@@ -205,9 +329,15 @@ export interface GpuFieldResolver {
   /**
    * Execute a plan produced by this resolver's `planRun` over the run's
    * input geometry, materializing the terminal member's output with a
-   * single readback. `stats`, when given, receives dispatch/pipeline
-   * counters plus the resident-run counters (`residentRuns`,
-   * `fusedNodes`, `readbacksSaved`).
+   * single readback — or with no readback at all when the plan needs no
+   * geometry and produces only device-resident outputs. `stats`, when
+   * given, receives dispatch/pipeline counters plus the resident-run
+   * counters (`residentRuns`, `fusedNodes`, `readbacksSaved`).
+   *
+   * Any device-resident handle in the result is handed to the caller
+   * already owned by it (see {@link DeviceTransformsHandle}); a
+   * rejection or cancellation frees everything the run allocated,
+   * including handles it had already built, so a failed run never leaks.
    */
   executeRun?(
     plan: object,

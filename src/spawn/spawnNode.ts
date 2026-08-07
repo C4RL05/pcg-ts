@@ -44,8 +44,29 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
       description:
         "Optional name of a string point attribute holding per-point asset ids; empty string " +
         "disables the override. Points whose attribute value is empty use assetId instead. " +
-        "Errors when the named attribute is missing or not a string attribute.",
+        "Errors when the named attribute is missing or not a string attribute. Setting it also " +
+        "opts the node out of device-resident spawning (grouping by a per-point string id is a " +
+        "device-side sort the resident pipeline does not implement): transforms are then always " +
+        "composed on the CPU, and a GPU cook counts the reason 'spawn-asset-attr'.",
     },
+  },
+  /**
+   * Device-resident terminal: a resolver advertising the
+   * "spawnInstances" kind composes every instance matrix on the device
+   * inside the fused run and emits an instances item holding a retained
+   * device buffer instead of `Float32Array`s — no P/rot/scale readback,
+   * no CPU compose loop. Terminal-only, so a chain never continues
+   * through it; its second output ("points") is a geometry pass-through
+   * that the run materializes only when something actually reads it.
+   *
+   * Inert unless the caller opted in (`GpuFieldEvaluator`'s
+   * `deviceInstances`), so the default cook — CPU or GPU — is
+   * byte-for-byte what it has always been.
+   */
+  resident: {
+    kind: "spawnInstances",
+    terminal: true,
+    eligible: (params) => (params.assetAttr === "" ? true : "spawn-asset-attr"),
   },
   execute({ inputs, params }) {
     let item: GeometryItem | undefined;

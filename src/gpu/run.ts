@@ -52,13 +52,30 @@
  * allocate up to 2x, and the per-chunk uniforms (12 bytes, or 16 + 16
  * per constant slot) are not counted.
  *
+ * Device-resident spawner terminal (phase 26): when the chain's last
+ * member is a `spawnInstances` the run appends a compose-TRS kernel that
+ * writes one column-major 4x4 matrix per point into a buffer it then
+ * transfers OUT of the pool (`BufferPool.detach`) and hands back as a
+ * `DeviceTransformsHandle` — the transforms never touch host memory. If
+ * nothing in the cook reads the terminal's geometry
+ * (`ctx.needsGeometry === false`) the run also skips the readback
+ * entirely: no `mapAsync`, no staging buffer, no CPU copy of P/rot/scale.
+ *
  * Pool discipline: every buffer is released in a `finally` (never
  * mapped — the readback unmaps in its own `finally`), on success,
- * failure, and cancellation alike.
+ * failure, and cancellation alike. The one exception is the retained
+ * transform buffer, and it is an exception by construction rather than
+ * by omission: ownership transfers on the very last line before the
+ * result is built, after the final cancellation check, so every earlier
+ * failure path still reclaims it — and a failure after the transfer
+ * disposes the handle in the `catch`. The `finally` skips exactly the
+ * buffers it no longer owns; releasing a detached buffer would throw.
  */
 import type { AttrType, Geometry } from "../data/index.js";
 import {
   isField,
+  type DeviceInstanceBatch,
+  type DeviceTransformsHandle,
   type GpuCookStats,
   type ResidentMemberDesc,
   type ResidentRunContext,
@@ -73,6 +90,7 @@ import {
   APPLY_CONST_COMPONENTS,
   APPLY_CONST_OFFSET,
   MAX_APPLY_CONST_SLOTS,
+  makeComposeInstancesApply,
   makeJitterPointsApply,
   makeOrientApply,
   makeSetAttributeApply,
@@ -89,6 +107,7 @@ import {
   type GpuComputePipelineLike,
   type GpuDeviceLike,
 } from "./device.js";
+import { makeDeviceTransformsHandle } from "./deviceTransforms.js";
 import type { BufferPool } from "./pool.js";
 import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./types.js";
 
@@ -137,7 +156,11 @@ export function chunkCapacity(workgroupSize: number, maxElementsPerDispatch: num
 // ---------------------------------------------------------------------------
 // plan representation
 
-type BufRef = { readonly kind: "slot"; readonly index: number } | { readonly kind: "col"; readonly index: number };
+type BufRef =
+  | { readonly kind: "slot"; readonly index: number }
+  | { readonly kind: "col"; readonly index: number }
+  /** The run's single retained instance-transform buffer (spawner terminal). */
+  | { readonly kind: "out" };
 
 interface KernelStep {
   /** Pipeline-cache key. */
@@ -184,7 +207,23 @@ type LayoutOp =
   | { readonly op: "replace"; readonly name: string; readonly type: AttrType; readonly tupleSize: number }
   | { readonly op: "ensure-rot" };
 
-const PLAN_FORMAT = "pcg-resident-run/2";
+/** Bytes one instance's column-major 4x4 f32 matrix occupies. */
+export const INSTANCE_MATRIX_BYTES = 64;
+
+/**
+ * The retained device-resident instance batch a spawner terminal
+ * produces: one batch covering every point, in point order (the
+ * single-asset case — a per-point `assetAttr` needs a device-side sort
+ * and stays on the CPU path).
+ */
+interface InstancesDesc {
+  readonly assetId: string;
+  readonly count: number;
+  /** `count * INSTANCE_MATRIX_BYTES`. */
+  readonly bytes: number;
+}
+
+const PLAN_FORMAT = "pcg-resident-run/3";
 
 /** Opaque (to the executor) compiled run plan. */
 export interface ResidentRunPlan {
@@ -197,7 +236,18 @@ export interface ResidentRunPlan {
   /** Attributes some member wrote: final slot per name, first-write order. */
   readonly written: readonly { readonly name: string; readonly slot: number }[];
   readonly layoutOps: readonly LayoutOp[];
-  /** Logical working-set bytes (slots + cols + readback staging). */
+  /**
+   * Read `written` back and build the terminal's output geometry. False
+   * only when the cook asked for no geometry AND the run has another
+   * output to produce ({@link instances}) — the run then performs no
+   * readback at all, which is the whole point of a device-resident
+   * terminal. A run with nothing else to produce always materializes, so
+   * every pre-existing plan shape is unchanged.
+   */
+  readonly materialize: boolean;
+  /** Device-resident instance batch to retain, or null for an ordinary run. */
+  readonly instances: InstancesDesc | null;
+  /** Logical working-set bytes (slots + cols + readback staging + retained). */
   readonly totalBytes: number;
 }
 
@@ -257,6 +307,7 @@ export function planResidentRun(
   const written = new Map<string, number>();
   const layoutOps: LayoutOp[] = [];
   const planned: PlannedMember[] = [];
+  let instances: InstancesDesc | null = null;
 
   const layoutObj = (): Record<string, FieldKernelAttr> => Object.fromEntries(layout);
 
@@ -405,6 +456,7 @@ export function planResidentRun(
 
   try {
     for (const m of members) {
+      const isLast = m === members[members.length - 1];
       const steps: KernelStep[] = [];
       // Uniform constant slots for THIS member's apply kernel, filled in
       // param order by compileParam.
@@ -506,6 +558,36 @@ export function planResidentRun(
           );
           break;
         }
+        case "spawnInstances": {
+          // Terminal-only by construction (`ResidentDesc.terminal`), but
+          // a plan is a public artifact: reject a spawner anywhere but
+          // last rather than composing from a mid-chain epoch.
+          if (!isLast) throw new PlanFail("spawnInstances must be the run's last member");
+          const assetId = p.assetId;
+          if (typeof assetId !== "string" || assetId === "") throw new PlanFail("assetId");
+          // Per-point asset ids need a device-side group/sort this
+          // pipeline does not implement; the node's `eligible` gate
+          // already keeps those off the device, so reaching here means a
+          // caller built the member list by hand.
+          if (p.assetAttr !== "" && p.assetAttr !== undefined) throw new PlanFail("assetAttr");
+          expectAttr("P", "f32", 3);
+          const rotAttr = layout.get("rot");
+          const hasRot = rotAttr !== undefined && rotAttr.type === "f32" && rotAttr.tupleSize === 4;
+          const sclAttr = layout.get("scale");
+          const hasScale =
+            sclAttr !== undefined && sclAttr.type === "f32" && sclAttr.tupleSize === 3;
+          const refs: Record<string, BufRef> = {
+            P: { kind: "slot", index: slotFor("P") },
+            transforms: { kind: "out" },
+          };
+          if (hasRot) refs.rot = { kind: "slot", index: slotFor("rot") };
+          if (hasScale) refs.scaleAttr = { kind: "slot", index: slotFor("scale") };
+          // Reads only: a spawner never writes an attribute, so nothing
+          // joins `written` and the geometry is untouched.
+          steps.push(applyStep(makeComposeInstancesApply(hasRot, hasScale), 0, refs, consts));
+          instances = { assetId, count, bytes: count * INSTANCE_MATRIX_BYTES };
+          break;
+        }
         default:
           throw new PlanFail(`unknown kind ${m.kind}`);
       }
@@ -517,10 +599,18 @@ export function planResidentRun(
   }
 
   const writtenList = [...written].map(([name, slot]) => ({ name, slot }));
+  // A run with no other output must materialize whatever it wrote, so
+  // ordinary (pre-existing) plans always read back exactly as before.
+  const materialize = ctx.needsGeometry || instances === null;
   const slotBytes = slots.reduce((acc, s) => acc + s.bytes, 0);
   const colBytes = cols.reduce((acc, b) => acc + b, 0);
-  const readbackBytes = writtenList.reduce((acc, w) => acc + slots[w.slot].bytes, 0);
-  const totalBytes = slotBytes + colBytes + readbackBytes;
+  const readbackBytes = materialize
+    ? writtenList.reduce((acc, w) => acc + slots[w.slot].bytes, 0)
+    : 0;
+  // The retained buffer counts against the run's bound like any other
+  // allocation, even though it outlives the run: it is device memory the
+  // run must be able to allocate.
+  const totalBytes = slotBytes + colBytes + readbackBytes + (instances?.bytes ?? 0);
   if (totalBytes > maxResidentBytes) return { reason: "run-too-large" };
 
   return {
@@ -532,6 +622,8 @@ export function planResidentRun(
       cols,
       written: writtenList,
       layoutOps,
+      materialize,
+      instances,
       totalBytes,
     },
   };
@@ -599,6 +691,15 @@ export async function executeResidentRun(
     acquired.push(buf);
     return buf;
   };
+  /**
+   * Buffers whose ownership has left the pool this run (at most one
+   * today: the retained instance-transform buffer). The `finally` below
+   * must not release them — the pool no longer owns them and would
+   * throw — and a failure after the transfer must destroy them through
+   * their handle, so a broken run never leaks device memory.
+   */
+  const retained = new Set<GpuBufferLike>();
+  let retainedHandle: DeviceTransformsHandle | undefined;
 
   try {
     // Resident attribute buffers. Uploads cover the full live range any
@@ -628,7 +729,30 @@ export async function executeResidentRun(
     const colBufs = plan.cols.map((bytes) =>
       acquire(bytes, BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST | BUFFER_USAGE.COPY_SRC),
     );
-    const bufFor = (ref: BufRef): GpuBufferLike => (ref.kind === "slot" ? slotBufs[ref.index] : colBufs[ref.index]);
+    // Retained instance transforms. VERTEX so a renderer can bind it as
+    // instance data without a copy, COPY_SRC so it can be read back for
+    // verification, STORAGE because the compose kernel writes it.
+    const outBuf =
+      plan.instances === null
+        ? undefined
+        : acquire(
+            plan.instances.bytes,
+            BUFFER_USAGE.STORAGE |
+              BUFFER_USAGE.COPY_DST |
+              BUFFER_USAGE.COPY_SRC |
+              BUFFER_USAGE.VERTEX,
+          );
+    const bufFor = (ref: BufRef): GpuBufferLike => {
+      if (ref.kind === "slot") return slotBufs[ref.index];
+      if (ref.kind === "col") return colBufs[ref.index];
+      if (outBuf === undefined) {
+        throw new Error(
+          "resident run: a kernel binds the retained instance-transform buffer but the plan " +
+            "declares no instances output (plan and kernels disagree)",
+        );
+      }
+      return outBuf;
+    };
 
     // One compute pass; consecutive dispatches have implicit write
     // visibility (per-dispatch usage scopes), which is the run's
@@ -685,71 +809,126 @@ export async function executeResidentRun(
 
     // Single readback: every written attribute's final buffer copied
     // into one staging buffer at consecutive offsets, one mapAsync.
-    const readbackBytes = plan.written.reduce((acc, w) => acc + plan.slots[w.slot].bytes, 0);
-    const readBuf = acquire(readbackBytes, BUFFER_USAGE.COPY_DST | BUFFER_USAGE.MAP_READ);
+    // Skipped entirely when the plan materializes no geometry — the
+    // device-resident terminal case, where nothing crosses to the CPU.
     const offsets: number[] = [];
-    let offset = 0;
-    for (const w of plan.written) {
-      const bytes = plan.slots[w.slot].bytes;
-      encoder.copyBufferToBuffer(slotBufs[w.slot], 0, readBuf, offset, bytes);
-      offsets.push(offset);
-      offset += bytes;
+    let readBuf: GpuBufferLike | undefined;
+    // A materializing run whose members wrote NOTHING (a spawner
+    // terminal whose geometry someone reads) has nothing to read back:
+    // no staging buffer, no zero-length map, just the cloned input.
+    const readbackBytes = plan.materialize
+      ? plan.written.reduce((acc, w) => acc + plan.slots[w.slot].bytes, 0)
+      : 0;
+    if (readbackBytes > 0) {
+      readBuf = acquire(readbackBytes, BUFFER_USAGE.COPY_DST | BUFFER_USAGE.MAP_READ);
+      let offset = 0;
+      for (const w of plan.written) {
+        const bytes = plan.slots[w.slot].bytes;
+        encoder.copyBufferToBuffer(slotBufs[w.slot], 0, readBuf, offset, bytes);
+        offsets.push(offset);
+        offset += bytes;
+      }
     }
     device.queue.submit([encoder.finish()]);
 
-    await readBuf.mapAsync(MAP_MODE.READ, 0, readbackBytes);
-    let copy: ArrayBuffer;
-    try {
-      copy = readBuf.getMappedRange(0, readbackBytes).slice(0);
-    } finally {
-      // Never release a mapped buffer into the pool (phase-22 contract).
-      readBuf.unmap();
-    }
-    checkCancelled();
+    let out: Geometry | undefined;
+    if (plan.materialize) {
+      let copy: ArrayBuffer | undefined;
+      if (readBuf !== undefined) {
+        await readBuf.mapAsync(MAP_MODE.READ, 0, readbackBytes);
+        try {
+          copy = readBuf.getMappedRange(0, readbackBytes).slice(0);
+        } finally {
+          // Never release a mapped buffer into the pool (phase-22 contract).
+          readBuf.unmap();
+        }
+      }
+      checkCancelled();
 
-    // Materialize the terminal output: clone the input (untouched
-    // attributes and topology pass through exactly as every CPU member
-    // would carry them), replay the layout ops in member order (same
-    // replace/remove/add calls, so shapes, defaults, and attribute
-    // insertion order match the per-node path), then write the read
-    // back columns.
-    const out = cloneGeometry(geo);
-    const outSet = out.attrs.point;
-    for (const op of plan.layoutOps) {
-      if (op.op === "replace") {
-        outSet.replace(op.name, op.type, op.tupleSize);
-      } else {
-        // orientAlongVector's rot (re)creation, verbatim from the node.
-        const rotAttr = outSet.get("rot");
-        if (!rotAttr || rotAttr.type !== "f32" || rotAttr.tupleSize !== 4) {
-          if (rotAttr) outSet.remove("rot");
-          outSet.add("rot", "f32", 4, [0, 0, 0, 1]);
+      // Materialize the terminal output: clone the input (untouched
+      // attributes and topology pass through exactly as every CPU member
+      // would carry them), replay the layout ops in member order (same
+      // replace/remove/add calls, so shapes, defaults, and attribute
+      // insertion order match the per-node path), then write the read
+      // back columns.
+      out = cloneGeometry(geo);
+      const outSet = out.attrs.point;
+      for (const op of plan.layoutOps) {
+        if (op.op === "replace") {
+          outSet.replace(op.name, op.type, op.tupleSize);
+        } else {
+          // orientAlongVector's rot (re)creation, verbatim from the node.
+          const rotAttr = outSet.get("rot");
+          if (!rotAttr || rotAttr.type !== "f32" || rotAttr.tupleSize !== 4) {
+            if (rotAttr) outSet.remove("rot");
+            outSet.add("rot", "f32", 4, [0, 0, 0, 1]);
+          }
         }
       }
+      plan.written.forEach((w, wi) => {
+        const attr = outSet!.require(w.name);
+        const n = count * attr.tupleSize;
+        if (copy === undefined) throw new Error("resident run: readback missing for a written attribute");
+        if (attr.data instanceof Uint8Array) {
+          // bool attributes ride as u32 0/1; narrow back.
+          const wide = new Uint32Array(copy, offsets[wi], n);
+          for (let i = 0; i < n; i++) attr.data[i] = wide[i];
+        } else {
+          const Ctor = ATTR_CTORS[attr.type];
+          if (Ctor === undefined) {
+            throw new Error(`resident run: cannot materialize attribute "${w.name}" of type ${attr.type}`);
+          }
+          attr.data.set(new Ctor(copy, offsets[wi], n));
+        }
+      });
+    } else {
+      checkCancelled();
     }
-    plan.written.forEach((w, wi) => {
-      const attr = outSet.require(w.name);
-      const n = count * attr.tupleSize;
-      if (attr.data instanceof Uint8Array) {
-        // bool attributes ride as u32 0/1; narrow back.
-        const wide = new Uint32Array(copy, offsets[wi], n);
-        for (let i = 0; i < n; i++) attr.data[i] = wide[i];
-      } else {
-        const Ctor = ATTR_CTORS[attr.type];
-        if (Ctor === undefined) {
-          throw new Error(`resident run: cannot materialize attribute "${w.name}" of type ${attr.type}`);
-        }
-        attr.data.set(new Ctor(copy, offsets[wi], n));
+
+    // Ownership transfer, LAST and after the final cancellation check:
+    // up to here the retained buffer is still the pool's and the
+    // `finally` reclaims it on any failure. From this line on it belongs
+    // to the handle — and therefore to whoever receives the result.
+    let deviceBatches: readonly DeviceInstanceBatch[] | undefined;
+    if (plan.instances !== null) {
+      if (outBuf === undefined) {
+        throw new Error(
+          "resident run: the plan declares an instances output but no transform buffer was " +
+            "acquired (library bug: plan.instances and the acquired buffer must agree)",
+        );
       }
-    });
+      const detached = pool.detach(outBuf);
+      retained.add(outBuf);
+      retainedHandle = makeDeviceTransformsHandle(
+        detached,
+        plan.instances.bytes,
+        `${plan.instances.count} instances of "${plan.instances.assetId}"`,
+      );
+      deviceBatches = [
+        {
+          residency: "device",
+          assetId: plan.instances.assetId,
+          count: plan.instances.count,
+          transforms: retainedHandle,
+        },
+      ];
+    }
 
     if (stats !== undefined) {
       stats.residentRuns++;
       stats.fusedNodes += plan.members.length;
-      stats.readbacksSaved += plan.members.length - 1;
+      // One readback per member on the per-node path; this run did one
+      // (materializing) or none (device-resident terminal).
+      stats.readbacksSaved += plan.members.length - (plan.materialize ? 1 : 0);
     }
-    return { geo: out };
+    const result: { geo?: Geometry; deviceBatches?: readonly DeviceInstanceBatch[] } = {};
+    if (out !== undefined) result.geo = out;
+    if (deviceBatches !== undefined) result.deviceBatches = deviceBatches;
+    return result;
   } catch (err) {
+    // A failure after the transfer would otherwise strand the buffer:
+    // nobody holds the handle yet, so free it here.
+    retainedHandle?.dispose();
     if (err instanceof CookCancelledError) throw err;
     throw new Error(
       `GpuFieldEvaluator: resident run failed (${plan.members.length} fused nodes ` +
@@ -758,6 +937,8 @@ export async function executeResidentRun(
       { cause: err },
     );
   } finally {
-    for (const buf of acquired) pool.release(buf);
+    for (const buf of acquired) {
+      if (!retained.has(buf)) pool.release(buf);
+    }
   }
 }

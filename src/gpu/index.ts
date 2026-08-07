@@ -51,4 +51,13 @@ export {
   type GpuShaderModuleLike,
 } from "./device.js";
 export { GpuFieldEvaluator, type GpuFieldEvaluatorOptions } from "./evaluator.js";
-export { type GpuPoolStats } from "./pool.js";
+export { type DetachedBuffer, type GpuPoolStats } from "./pool.js";
+/**
+ * Device-resident instance transforms (see `GpuFieldEvaluatorOptions`'
+ * `deviceInstances`). A renderer adapter receives a core
+ * `DeviceTransformsHandle` on each `DeviceInstanceBatch` and turns it
+ * into a bindable buffer with `deviceTransformsBuffer(handle)`, binding
+ * exactly `handle.byteLength` bytes from offset 0. The adapter owns the
+ * handle and must call `handle.dispose()` when it stops drawing from it.
+ */
+export { deviceTransformsBuffer, WEBGPU_BACKEND } from "./deviceTransforms.js";

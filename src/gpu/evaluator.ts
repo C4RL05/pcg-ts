@@ -92,6 +92,13 @@ const SALT_VERSION = "gpu2";
  */
 const DEFAULT_MAX_POOLED_BYTES = 256 * 1024 * 1024;
 
+/**
+ * Resident kinds advertised as run terminals when `deviceInstances` is
+ * on — the kinds whose apply kernels this runtime can end a run with,
+ * producing device-resident output instead of geometry.
+ */
+const DEVICE_INSTANCE_TERMINALS: readonly string[] = ["spawnInstances"];
+
 const OUT_CTORS: Record<GpuScalarType, new (buffer: ArrayBuffer) => Column["data"]> = {
   f32: Float32Array,
   i32: Int32Array,
@@ -137,6 +144,25 @@ export interface GpuFieldEvaluatorOptions {
    * Default 512 MiB.
    */
   readonly maxResidentBytes?: number;
+  /**
+   * Opt in to DEVICE-RESIDENT instance transforms. When true this
+   * evaluator advertises `spawnInstances` as a resident run terminal, so
+   * a fused run composes every 4x4 instance matrix on the device and
+   * emits an instances item holding a retained GPU buffer instead of
+   * `Float32Array`s — no readback of P/rot/scale and no CPU compose
+   * loop. Only useful when the caller can actually draw from a device
+   * buffer, i.e. a WebGPU renderer sharing this evaluator's device.
+   *
+   * The caller then OWNS every handle it receives and must dispose it
+   * (see `DeviceTransformsHandle`); handles are never memo-cached, so a
+   * device-resident spawner recooks every cook and yields a fresh one.
+   *
+   * Default false: `spawnInstances` spawns on the CPU exactly as it
+   * always has, byte for byte, and a chain feeding it still fuses up to
+   * the node before it. A spawner with `assetAttr` set stays on the CPU
+   * either way (counted as `spawn-asset-attr`).
+   */
+  readonly deviceInstances?: boolean;
 }
 
 function saltFrom(info: GpuAdapterInfoLike | undefined): string {
@@ -175,6 +201,14 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
    */
   readonly cacheSalt: string;
 
+  /**
+   * Resident kinds this evaluator will terminate a run with, producing
+   * device-resident outputs. Empty unless `deviceInstances` was set, so
+   * the default evaluator behaves exactly as it did before device
+   * transforms existed.
+   */
+  readonly residentTerminals: readonly string[];
+
   private readonly device: GpuDeviceLike;
   /** Compiled kernels (or compile failures) by field key + full layout. */
   private readonly kernels = new Map<string, CompiledFieldKernel | Error>();
@@ -202,6 +236,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     this.pool = new BufferPool(device, opts.maxPooledBytes ?? DEFAULT_MAX_POOLED_BYTES);
     this.maxElementsPerDispatch = opts.maxElementsPerDispatch;
     this.maxResidentBytes = opts.maxResidentBytes ?? DEFAULT_MAX_RESIDENT_BYTES;
+    this.residentTerminals = opts.deviceInstances === true ? DEVICE_INSTANCE_TERMINALS : [];
   }
 
   /** Number of cached pipelines (introspection for tools and tests). */

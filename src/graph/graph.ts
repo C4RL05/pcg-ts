@@ -32,6 +32,15 @@ export interface OutputDecl {
 export interface NodeCache {
   readonly key: string;
   readonly outputs: Record<string, DataCollection>;
+  /**
+   * Never serve this entry: it exists only to deliver this cook's
+   * outputs to downstream nodes and to the cook result, and the next
+   * cook must recompute the node. Set for outputs that hold
+   * device-resident handles, which the graph delivers but never owns —
+   * memoizing one would pin GPU memory for the lifetime of the graph
+   * and hand the same handle to a second owner. See `CookOptions.gpu`.
+   */
+  readonly volatile?: boolean;
 }
 
 /** @internal Per-node state stored by the graph. */

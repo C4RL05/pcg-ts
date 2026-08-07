@@ -29,6 +29,9 @@ interface PlanShape {
   readonly totalBytes: number;
   readonly cols: readonly number[];
   readonly members: readonly { readonly steps: readonly StepShape[] }[];
+  readonly materialize: boolean;
+  readonly written: readonly { readonly name: string }[];
+  readonly instances: { readonly assetId: string; readonly count: number; readonly bytes: number } | null;
 }
 
 function plan(
@@ -36,8 +39,9 @@ function plan(
   count: number,
   attributes = POINT_LAYOUT,
   maxBytes = Number.MAX_SAFE_INTEGER,
+  needsGeometry = true,
 ): PlanShape {
-  const outcome = planResidentRun(members, { attributes, count }, maxBytes);
+  const outcome = planResidentRun(members, { attributes, count, needsGeometry }, maxBytes);
   if (!("plan" in outcome)) throw new Error(`expected a plan, got ${outcome.reason}`);
   return outcome.plan as unknown as PlanShape;
 }
@@ -47,8 +51,9 @@ function rejection(
   count: number,
   attributes = POINT_LAYOUT,
   maxBytes = Number.MAX_SAFE_INTEGER,
+  needsGeometry = true,
 ): string {
-  const outcome = planResidentRun(members, { attributes, count }, maxBytes);
+  const outcome = planResidentRun(members, { attributes, count, needsGeometry }, maxBytes);
   if ("plan" in outcome) throw new Error("expected a rejection, got a plan");
   return outcome.reason;
 }
@@ -292,5 +297,116 @@ describe("resident run planning: the demo chain's working set", () => {
     // A bound that rejected before phase 25 (one byte under the old
     // working set) now fits with room to spare.
     expect(plan(members, count, POINT_LAYOUT, DEMO_BYTES_BEFORE_PHASE25 - 1).totalBytes).toBe(120_000_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// phase 26: the device-resident spawner terminal
+
+/** Layout of a cloud carrying the full standard transform triple. */
+const TRS_LAYOUT: ResidentRunContext["attributes"] = {
+  P: { type: "f32", tupleSize: 3 },
+  rot: { type: "f32", tupleSize: 4 },
+  scale: { type: "f32", tupleSize: 3 },
+};
+
+const spawn = (params: Record<string, unknown> = {}): ResidentMemberDesc =>
+  member("spawnInstances", { assetId: "tree", assetAttr: "", ...params }, "spawn");
+
+describe("resident run planning: spawnInstances terminal", () => {
+  it("adds one compose kernel, a retained buffer, and writes no attribute", () => {
+    const p = plan([spawn()], 1000, TRS_LAYOUT, Number.MAX_SAFE_INTEGER, false);
+    expect(p.members).toHaveLength(1);
+    expect(p.members[0].steps).toHaveLength(1); // no field params, one apply
+    expect(applyOf(p, 0).key).toBe("apply2|spawnInstances|rot=1|scl=1");
+    expect(applyOf(p, 0).consts).toEqual([]);
+    expect(applyOf(p, 0).uniformBytes).toBe(12); // the plain scalar header
+    // P/rot/scale read, transforms written.
+    expect(applyOf(p, 0).bindings).toEqual([
+      { binding: 1, ref: { kind: "slot", index: 0 } },
+      { binding: 2, ref: { kind: "slot", index: 1 } },
+      { binding: 3, ref: { kind: "slot", index: 2 } },
+      { binding: 4, ref: { kind: "out" } },
+    ]);
+    expect(p.written).toEqual([]); // a spawner mutates nothing
+    expect(p.instances).toEqual({ assetId: "tree", count: 1000, bytes: 64_000 });
+    expect(p.materialize).toBe(false);
+    // Slots P(12) + rot(16) + scale(12) = 40 B/pt, plus 64 B/pt retained,
+    // and NO readback staging at all.
+    expect(p.totalBytes).toBe(1000 * (40 + 64));
+  });
+
+  it("compiles rot/scale defaults out when the attributes are absent or mis-shaped", () => {
+    const noneP = plan([spawn()], 8, { P: { type: "f32", tupleSize: 3 } }, Number.MAX_SAFE_INTEGER, false);
+    expect(applyOf(noneP, 0).key).toBe("apply2|spawnInstances|rot=0|scl=0");
+    expect(applyOf(noneP, 0).wgsl).toContain("vec4<f32>(0f, 0f, 0f, 1f)");
+    expect(applyOf(noneP, 0).wgsl).toContain("vec3<f32>(1f, 1f, 1f)");
+    expect(applyOf(noneP, 0).bindings).toHaveLength(2); // P + out
+
+    // Mis-shaped rot/scale are IGNORED exactly as buildInstanceBatches
+    // ignores them — never misread at the wrong stride.
+    const bad = plan(
+      [spawn()],
+      8,
+      {
+        P: { type: "f32", tupleSize: 3 },
+        rot: { type: "f32", tupleSize: 3 },
+        scale: { type: "i32", tupleSize: 3 },
+      },
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    expect(applyOf(bad, 0).key).toBe("apply2|spawnInstances|rot=0|scl=0");
+  });
+
+  it("still materializes (and reads back) when the cook needs the geometry", () => {
+    const members = [
+      member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
+      spawn(),
+    ];
+    const withGeo = plan(members, 100, TRS_LAYOUT, Number.MAX_SAFE_INTEGER, true);
+    expect(withGeo.materialize).toBe(true);
+    expect(withGeo.written.map((w) => w.name)).toEqual(["P", "rot", "scale"]);
+    // slots 40 + readback 40 + retained 64 bytes per point.
+    expect(withGeo.totalBytes).toBe(100 * (40 + 40 + 64));
+
+    const withoutGeo = plan(members, 100, TRS_LAYOUT, Number.MAX_SAFE_INTEGER, false);
+    expect(withoutGeo.materialize).toBe(false);
+    expect(withoutGeo.totalBytes).toBe(100 * (40 + 64));
+  });
+
+  it("a run with nothing else to produce always materializes", () => {
+    // needsGeometry false but no instances output: the plan must still
+    // read back, so ordinary plans are untouched by the new flag.
+    const p = plan(
+      [
+        member("jitterPoints", { amount: [1, 1, 1], seed: 0 }, "j"),
+        member("jitterPoints", { amount: [2, 2, 2], seed: 1 }, "j2"),
+      ],
+      64,
+      POINT_LAYOUT,
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    expect(p.materialize).toBe(true);
+    expect(p.instances).toBeNull();
+  });
+
+  it("rejects a spawner that is not the last member, or that carries assetAttr", () => {
+    expect(
+      rejection(
+        [spawn(), member("jitterPoints", { amount: [1, 1, 1], seed: 0 }, "j")],
+        16,
+        TRS_LAYOUT,
+      ),
+    ).toBe("run-plan-failed");
+    expect(rejection([spawn({ assetAttr: "kind" })], 16, TRS_LAYOUT)).toBe("run-plan-failed");
+    expect(rejection([spawn({ assetId: "" })], 16, TRS_LAYOUT)).toBe("run-plan-failed");
+  });
+
+  it("counts the retained buffer against the run's memory bound", () => {
+    const exact = 8 * (40 + 64);
+    expect(plan([spawn()], 8, TRS_LAYOUT, exact, false).totalBytes).toBe(exact);
+    expect(rejection([spawn()], 8, TRS_LAYOUT, exact - 1, false)).toBe("run-too-large");
   });
 });

@@ -1,13 +1,21 @@
 import {
   createGpuCookStats,
   isField,
+  type DeviceTransformsHandle,
   type GpuCookStats,
   type GpuFieldResolver,
   type ResidentAttrDesc,
   type ResidentMemberDesc,
+  type ResidentRunResult,
 } from "../fields/index.js";
 import { getFieldSpec } from "../nodes/fieldJson.js";
-import { makeGeometryItem, type DataCollection, type DataItem } from "./data.js";
+import {
+  makeDeviceInstancesItem,
+  makeGeometryItem,
+  type DataCollection,
+  type DataItem,
+  type GeometryItem,
+} from "./data.js";
 import { CookCancelledError, GraphCycleError, GraphValidationError, NodeExecutionError } from "./errors.js";
 import { deriveNodeSeed, type Graph, type NodeState, type OutputDecl } from "./graph.js";
 
@@ -71,6 +79,14 @@ export interface CookOptions {
    * degrade cleanly to the per-node behavior. Omitted: cook behavior
    * and every produced byte are identical to a build without GPU
    * support.
+   *
+   * A resolver may additionally advertise `residentTerminals`, letting
+   * spawner-style terminals end a run with DEVICE-RESIDENT outputs (an
+   * instances item whose transforms live in a GPU buffer). Those items
+   * are delivered but never memoized — the cook's caller owns every
+   * handle it receives and must dispose it, and the graph refuses to
+   * pin device memory on its behalf, so a node that produced one always
+   * recooks. Everything else about the cook is unchanged.
    */
   gpu?: GpuFieldResolver;
 }
@@ -217,13 +233,16 @@ function paramsHaveSpecField(v: unknown): boolean {
  * their counters land in the outermost sink.
  */
 function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResolver {
-  const view: GpuFieldResolver = {
+  const view: { -readonly [K in keyof GpuFieldResolver]: GpuFieldResolver[K] } = {
     cacheSalt: base.cacheSalt,
     resolveField: (field, ctx) => base.resolveField(field, ctx, sink),
   };
   if (base.planRun !== undefined && base.executeRun !== undefined) {
     view.planRun = (members, ctx) => base.planRun!(members, ctx, sink);
     view.executeRun = (plan, input) => base.executeRun!(plan, input, sink);
+    // Terminal advertisement is part of what the resolver can fuse, so
+    // it must survive the view (a nested cook sees the same set).
+    if (base.residentTerminals !== undefined) view.residentTerminals = base.residentTerminals;
   }
   return view;
 }
@@ -257,26 +276,79 @@ function paramsFieldsAllSpecd(v: unknown): boolean {
 }
 
 /**
- * May this node join a device-resident run? Declarative gate only —
- * whether the resolver can actually compile the member is decided by
- * `planRun` at cook time. Requirements: a `resident` descriptor whose
- * `eligible` predicate (when present) accepts the live params, exactly
- * one non-multi geometry input pin and one geometry output pin (the
- * linear-chain shape), and every Field param spec'd.
+ * Is this node's pin shape a resident-run CHAIN shape — exactly one
+ * non-multi geometry input and exactly one output, which is geometry?
+ * Such a node can be an interior member (its output feeds the next
+ * member's input) or a terminal.
  */
-function isFusable(node: NodeState): boolean {
-  const def = node.def;
-  if (def.resident === undefined) return false;
-  if (
-    def.inputs.length !== 1 ||
-    def.inputs[0].kind !== "geometry" ||
-    def.inputs[0].multi === true ||
-    def.outputs.length !== 1 ||
-    def.outputs[0].kind !== "geometry"
-  ) {
+function isChainShape(def: NodeState["def"]): boolean {
+  return (
+    def.inputs.length === 1 &&
+    def.inputs[0].kind === "geometry" &&
+    def.inputs[0].multi !== true &&
+    def.outputs.length === 1 &&
+    def.outputs[0].kind === "geometry"
+  );
+}
+
+/**
+ * Is this node's pin shape a resident-run TERMINAL-ONLY shape — one
+ * non-multi geometry input, exactly one geometry output, and any number
+ * of NON-geometry outputs (e.g. spawnInstances' `instances` + `points`)?
+ *
+ * Why admitting these is safe, stated as the rule the detector relies
+ * on: (1) a chain edge is always a geometry pin, and a terminal-only
+ * node has exactly one, so "which output continues the chain" stays
+ * unambiguous; (2) `detectResidentRuns` never continues a chain THROUGH
+ * such a node, so no member's input can come from a pin the run does not
+ * model; (3) the run executor produces the terminal's whole output map,
+ * and the resolver only accepts `resident.kind`s whose extra pins it
+ * models — an unknown kind fails planning and every member cooks
+ * per-node. A node with two GEOMETRY outputs is still rejected (a run
+ * materializes one geometry), and so is any multi-output node that has
+ * not opted in via `resident.terminal`, which is exactly the set that
+ * was unfusable before.
+ */
+function isTerminalShape(def: NodeState["def"]): boolean {
+  if (def.resident?.terminal !== true) return false;
+  if (def.inputs.length !== 1 || def.inputs[0].kind !== "geometry" || def.inputs[0].multi === true) {
     return false;
   }
-  if (def.resident.eligible !== undefined && !def.resident.eligible(node.params)) return false;
+  return def.outputs.filter((pin) => pin.kind === "geometry").length === 1;
+}
+
+/**
+ * May this node join a device-resident run, and if not for an
+ * author-actionable reason, which? Declarative gate only — whether the
+ * resolver can actually compile the member is decided by `planRun` at
+ * cook time.
+ *
+ * Requirements: a `resident` descriptor; then EITHER the plain chain pin
+ * shape (see {@link isChainShape}) for an ordinary member, OR — for a
+ * node declaring `resident.terminal` — the terminal pin shape (see
+ * {@link isTerminalShape}) together with the resolver advertising this
+ * `kind` in `residentTerminals`. Plus the `eligible` predicate (when
+ * present) accepting the live params, and every Field param spec'd.
+ *
+ * Returns `true`, `false`, or the machine-readable reason string
+ * `eligible` returned — which the caller counts in `stats.gpu.fallbacks`.
+ */
+function fusability(node: NodeState, residentTerminals: ReadonlySet<string>): boolean | string {
+  const def = node.def;
+  if (def.resident === undefined) return false;
+  if (def.resident.terminal === true) {
+    if (!isTerminalShape(def)) return false;
+    // Terminal fusion is opt-in per resolver, without exception: a
+    // resolver that does not advertise the kind gets the pre-existing
+    // behavior exactly, and the node cooks on its normal path.
+    if (!residentTerminals.has(def.resident.kind)) return false;
+  } else if (!isChainShape(def)) {
+    return false;
+  }
+  if (def.resident.eligible !== undefined) {
+    const verdict = def.resident.eligible(node.params);
+    if (verdict !== true) return typeof verdict === "string" && verdict !== "" ? verdict : false;
+  }
   return paramsFieldsAllSpecd(node.params);
 }
 
@@ -286,6 +358,13 @@ interface ResidentRun {
   readonly terminal: string;
 }
 
+/** What {@link detectResidentRuns} found: runs plus per-node opt-out reasons. */
+interface ResidentDetection {
+  readonly runs: Map<string, ResidentRun>;
+  /** Node id → the reason its `eligible` gave for staying off the device. */
+  readonly optOuts: Map<string, string>;
+}
+
 /**
  * Detect maximal device-resident runs over the induced cooked subgraph
  * (`order`). A run is a linear chain of fusable nodes where each
@@ -293,44 +372,68 @@ interface ResidentRun {
  * every interior member has exactly one consumer and no declared
  * output; any violation (external tap, declared output, non-fusable or
  * out-of-selection consumer) ends the run at that boundary — the
- * boundary node becomes the run's terminal with a readback. Runs of a
- * single node are not runs: they cook on the (identical-cost) per-node
- * path, keeping their phase-independent memo keys.
+ * boundary node becomes the run's terminal with a readback.
+ *
+ * A chain never continues through a TERMINAL-ONLY node (see
+ * {@link isTerminalShape}): reaching one closes the run.
+ *
+ * Runs of a single node are not runs — they cook on the
+ * (identical-cost) per-node path, keeping their phase-independent memo
+ * keys — with one exception: a lone terminal-only node IS a run,
+ * because there the two paths are not equivalent. Its fused form is the
+ * only way to produce device-resident outputs at all, so skipping
+ * fusion would not be a cheaper route to the same bytes, it would be a
+ * different result.
  *
  * Maximality: `order` is topological, so a chain's earliest fusable
  * node is visited before its downstream members; the first un-membered
  * fusable node therefore starts its chain's maximal run.
  */
-function detectResidentRuns(graph: Graph, order: readonly string[]): Map<string, ResidentRun> {
+function detectResidentRuns(
+  graph: Graph,
+  order: readonly string[],
+  residentTerminals: ReadonlySet<string>,
+): ResidentDetection {
   const byFirst = new Map<string, ResidentRun>();
+  const optOuts = new Map<string, string>();
   const inOrder = new Set(order);
   const membered = new Set<string>();
   const hasOutputDecl = (id: string): boolean => graph._outputs.some((o) => o.node === id);
+  /** Fusability, recording an author-actionable opt-out reason once per node. */
+  const fusable = (node: NodeState): boolean => {
+    const verdict = fusability(node, residentTerminals);
+    if (typeof verdict === "string") {
+      optOuts.set(node.id, verdict);
+      return false;
+    }
+    return verdict;
+  };
   for (const id of order) {
     if (membered.has(id)) continue;
-    if (!isFusable(graph.require(id))) continue;
+    const node = graph.require(id);
+    if (!fusable(node)) continue;
     const chain: string[] = [id];
     let tail = id;
-    for (;;) {
+    while (!isTerminalShape(graph.require(tail).def)) {
       const outgoing = graph._outFrom.get(tail) ?? [];
       if (outgoing.length !== 1) break; // multi-consumer tap (or dead end)
       if (hasOutputDecl(tail)) break; // interior members must not be declared outputs
       const next = outgoing[0].to;
       if (!inOrder.has(next)) break; // consumer outside this cook's selection
       const nextNode = graph.require(next);
-      if (!isFusable(nextNode)) break;
+      if (!fusable(nextNode)) break;
       const incoming = graph._inTo.get(next) ?? [];
       if (incoming.length !== 1 || incoming[0].from !== tail) break; // sole input must be the chain
       chain.push(next);
       tail = next;
     }
-    if (chain.length >= 2) {
+    if (chain.length >= 2 || isTerminalShape(graph.require(tail).def)) {
       const run: ResidentRun = { members: chain, terminal: tail };
       byFirst.set(id, run);
       for (const m of chain) membered.add(m);
     }
   }
-  return byFirst;
+  return { runs: byFirst, optOuts };
 }
 
 /**
@@ -465,11 +568,56 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   // optional run methods; otherwise (including CPU-only cooks and
   // v0.5-style resolvers) every code path below is exactly the per-node
   // one and produced bytes and memo keys are unchanged.
-  const runsByFirst =
+  const detection =
     gpu !== undefined && gpu.planRun !== undefined && gpu.executeRun !== undefined
-      ? detectResidentRuns(graph, order)
+      ? detectResidentRuns(graph, order, new Set(gpu.residentTerminals ?? []))
       : undefined;
+  const runsByFirst = detection?.runs;
+  // Author-actionable opt-outs (a resident node whose `eligible`
+  // returned a reason) count once per cook, whether or not a run formed
+  // around the node — the reason is about the node, not the run.
+  if (detection !== undefined && gpuStats !== undefined) {
+    for (const reason of detection.optOuts.values()) {
+      gpuStats.fallbacks[reason] = (gpuStats.fallbacks[reason] ?? 0) + 1;
+    }
+  }
   const handled = runsByFirst !== undefined && runsByFirst.size > 0 ? new Set<string>() : undefined;
+
+  /**
+   * Device-resident handles this cook minted, in production order. The
+   * cook OWNS every one of them until it hands it to its caller inside
+   * the returned collections; ownership transfers only on delivery.
+   * Anything still owned when the cook settles is disposed here, because
+   * nothing else can ever reach it:
+   *
+   * - the cook threw (cancelled, a later node failed, the terminal
+   *   declared no instances pin) — the caller receives nothing, so every
+   *   handle produced so far is unreachable;
+   * - the cook succeeded but a handle is in no delivered collection (the
+   *   terminal's instances pin is neither a selected output nor read by
+   *   any node in this cook) — nobody was ever given it.
+   *
+   * Handles that DID reach the result are left alone: from that instant
+   * the caller owns them, exactly as `DeviceTransformsHandle` documents.
+   * Disposal is idempotent, so a handle a consumer already disposed
+   * costs nothing here.
+   */
+  const produced: DeviceTransformsHandle[] = [];
+  const disposeUndelivered = (delivered: Record<string, DataCollection> | undefined): void => {
+    if (produced.length === 0) return;
+    const kept = new Set<DeviceTransformsHandle>();
+    if (delivered !== undefined) {
+      for (const collection of Object.values(delivered)) {
+        for (const item of collection) {
+          if (item.kind !== "instances" || item.deviceBatches === undefined) continue;
+          for (const batch of item.deviceBatches) kept.add(batch.transforms);
+        }
+      }
+    }
+    for (const handle of produced) {
+      if (!kept.has(handle)) handle.dispose();
+    }
+  };
 
   /** Inputs (multi pins concatenate in connection order) + rev signature. */
   const assembleInputs = (
@@ -514,7 +662,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
       ";",
     )}|x${extra}${gpuMark}`;
 
-    if (node.cache !== undefined && node.cache.key === key) {
+    if (node.cache !== undefined && node.cache.key === key && node.cache.volatile !== true) {
       node.dirty = false;
       stats.cached++;
       onNodeDone?.({ id, type: def.type, cached: true, elapsedMs: performance.now() - nodeStart });
@@ -567,12 +715,27 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
    * equals the number of visited nodes. `onNodeDone` fires once per
    * member in chain order at run completion; interior members report
    * elapsedMs 0 and the terminal carries the run's total time.
+   *
+   * Device-resident outputs are never memoized: a run whose result
+   * carries device batches writes a `volatile` cache entry, which
+   * delivers this cook's items and is then refused by the hit path
+   * above, so the next cook re-executes and produces fresh handles. See
+   * `NodeCache.volatile` for why owning one would be wrong.
    */
   const cookResidentRun = async (run: ResidentRun): Promise<boolean> => {
     const first = graph.require(run.members[0]);
     const terminal = graph.require(run.terminal);
     const runStart = performance.now();
     const { inputs, inputSig } = assembleInputs(run.members[0], first.def);
+    const geoPin = terminal.def.outputs.find((pin) => pin.kind === "geometry")!;
+    // Does anything read the terminal's geometry? A pin that is neither
+    // connected nor declared as a graph output need not be materialized
+    // at all — the run can then skip its readback entirely. Deliberately
+    // conservative: a connection leaving this cook's selection still
+    // counts as needed.
+    const needsGeometry =
+      (graph._outFrom.get(run.terminal) ?? []).some((c) => c.fromPin === geoPin.name) ||
+      graph._outputs.some((o) => o.node === run.terminal && o.pin === geoPin.name);
 
     // Composite run memo key: run-format version + device salt + the
     // first member's input signature + ordered member tuples
@@ -598,7 +761,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     }
     const key = `${RUN_KEY_VERSION}|gpu:${gpu!.cacheSalt}|i${inputSig.join(";")}|m${memberKeys.join("")}`;
 
-    if (terminal.cache !== undefined && terminal.cache.key === key) {
+    if (terminal.cache !== undefined && terminal.cache.key === key && terminal.cache.volatile !== true) {
       const elapsed = performance.now() - runStart;
       for (const id of run.members) {
         const node = graph.require(id);
@@ -624,34 +787,65 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     // synchronous and device-free. No geometry connected or an empty
     // cloud skips fusion: the per-node path is trivially cheap there
     // and surfaces the identical CPU error for missing inputs.
-    let geo;
+    let inputItem: GeometryItem | undefined;
     for (const item of inputs[first.def.inputs[0].name]) {
       if (item.kind === "geometry") {
-        geo = item.geo;
+        inputItem = item;
         break;
       }
     }
-    if (geo === undefined || geo.attrs.point.count === 0) return false;
+    if (inputItem === undefined || inputItem.geo.attrs.point.count === 0) return false;
+    const geo = inputItem.geo;
     const attributes: Record<string, ResidentAttrDesc> = {};
     for (const attr of geo.attrs.point) {
       attributes[attr.name] = { type: attr.type, tupleSize: attr.tupleSize };
     }
-    const plan = gpu!.planRun!(memberDescs, { attributes, count: geo.attrs.point.count });
+    const plan = gpu!.planRun!(memberDescs, {
+      attributes,
+      count: geo.attrs.point.count,
+      needsGeometry,
+    });
     if (plan === null) return false;
 
-    let resultGeo;
+    let result: ResidentRunResult;
     try {
-      resultGeo = (await gpu!.executeRun!(plan, { geo, signal, budgetMs })).geo;
+      result = await gpu!.executeRun!(plan, { geo, signal, budgetMs });
     } catch (err) {
       // Post-plan failures are errors, never silent fallbacks — except
       // genuine cancellation, which propagates as such.
       if (err instanceof CookCancelledError && signal?.aborted) throw err;
       throw new NodeExecutionError(run.terminal, err);
     }
-    terminal.cache = {
-      key,
-      outputs: { [terminal.def.outputs[0].name]: [makeGeometryItem(resultGeo)] },
-    };
+    // Take ownership of every handle the run minted BEFORE anything else
+    // can throw, so no failure between here and delivery strands one.
+    if (result.deviceBatches !== undefined) {
+      for (const batch of result.deviceBatches) produced.push(batch.transforms);
+    }
+    // Tags the CPU chain would have produced: every resident CHAIN node
+    // emits an untagged item, so a multi-member run's outputs carry no
+    // tags (unchanged behavior); a lone terminal-only member is the one
+    // case where the node's own execute would have passed the input
+    // item's tags through, so it does.
+    const outTags = run.members.length === 1 ? inputItem.tags : undefined;
+    const outputs: Record<string, DataCollection> = {};
+    if (result.geo !== undefined) outputs[geoPin.name] = [makeGeometryItem(result.geo, outTags)];
+    if (result.deviceBatches !== undefined) {
+      const instancesPin = terminal.def.outputs.find((pin) => pin.kind === "instances");
+      if (instancesPin === undefined) {
+        throw new NodeExecutionError(
+          run.terminal,
+          undefined,
+          `node "${run.terminal}" (${terminal.def.type}) terminated a device-resident run that ` +
+            "produced device instance batches, but the node declares no output pin of kind " +
+            `"instances" to carry them; declared outputs: ${terminal.def.outputs
+              .map((pin) => `"${pin.name}" (${pin.kind})`)
+              .join(", ")}`,
+        );
+      }
+      outputs[instancesPin.name] = [makeDeviceInstancesItem(result.deviceBatches, outTags)];
+    }
+    terminal.cache =
+      result.deviceBatches !== undefined ? { key, outputs, volatile: true } : { key, outputs };
     const elapsed = performance.now() - runStart;
     for (const id of run.members) {
       const node = graph.require(id);
@@ -669,32 +863,40 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     return true;
   };
 
-  for (const id of order) {
-    checkCancelled();
-    if (handled !== undefined && handled.has(id)) continue;
-    const run = runsByFirst?.get(id);
-    let fused = false;
-    if (run !== undefined) {
-      fused = await cookResidentRun(run);
-      if (fused) {
-        for (const m of run.members) handled!.add(m);
-      }
-      // Not fused: fall through — this member (and, at their own loop
-      // positions, the rest of the chain) cooks on the per-node path.
-    }
-    if (!fused) await cookNode(id);
-
-    if (budgetMs !== undefined && performance.now() - sliceStart > budgetMs) {
-      await yieldToEventLoop();
-      checkCancelled();
-      sliceStart = performance.now();
-    }
-  }
-
   const outputs: Record<string, DataCollection> = {};
-  for (const decl of decls) {
-    outputs[decl.name] = graph.require(decl.node).cache?.outputs[decl.pin] ?? [];
+  try {
+    for (const id of order) {
+      checkCancelled();
+      if (handled !== undefined && handled.has(id)) continue;
+      const run = runsByFirst?.get(id);
+      let fused = false;
+      if (run !== undefined) {
+        fused = await cookResidentRun(run);
+        if (fused) {
+          for (const m of run.members) handled!.add(m);
+        }
+        // Not fused: fall through — this member (and, at their own loop
+        // positions, the rest of the chain) cooks on the per-node path.
+      }
+      if (!fused) await cookNode(id);
+
+      if (budgetMs !== undefined && performance.now() - sliceStart > budgetMs) {
+        await yieldToEventLoop();
+        checkCancelled();
+        sliceStart = performance.now();
+      }
+    }
+
+    for (const decl of decls) {
+      outputs[decl.name] = graph.require(decl.node).cache?.outputs[decl.pin] ?? [];
+    }
+  } catch (err) {
+    // Nothing is delivered on a failed cook, so every device handle this
+    // pass minted is unreachable — free it rather than strand it.
+    disposeUndelivered(undefined);
+    throw err;
   }
+  disposeUndelivered(outputs);
   stats.elapsedMs = performance.now() - start;
   return { outputs, stats };
 }

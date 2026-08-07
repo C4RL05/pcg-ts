@@ -7,7 +7,8 @@
  * Semantics are ported from the CPU node sources (`src/nodes/attributes.ts`
  * `setAttribute` numeric mode; `src/nodes/pointOps.ts` transformPoints /
  * jitterPoints / orientAlongVector loops and `src/nodes/util.ts`
- * quaternion math), which remain the bit-exact reference:
+ * quaternion math; `src/spawn/instances.ts` `composeTRS` for the
+ * spawner terminal), which remain the bit-exact reference:
  *
  * - setAttribute stores are bit-exact for same-type f32/i32/u32 columns
  *   (raw copies) and for in-range integer conversions; out-of-range or
@@ -31,6 +32,14 @@
  *   orientAlongVector's zero-direction test can additionally flip for
  *   subnormal direction magnitudes (f32 squares flush to zero where f64
  *   keeps them) — subnormal GIGO class.
+ * - spawnInstances' compose-TRS is the same expression tree as
+ *   `composeTRS` evaluated in f32 instead of f64. The translation column
+ *   is a straight copy of P and the constant rows are literals, so those
+ *   are exact; the basis columns carry the width gap (measured 4.8e-7
+ *   absolute, 1.7e-8 of the basis range, on the reference adapter), and
+ *   an absent rot/scale compiles to the literal identity/one, which
+ *   makes the whole matrix exact. Tolerance class, not a bit-exact port:
+ *   these bytes drive a renderer, never a seed chain.
  *
  * Aliasing: apply kernels access only element `i`'s slots of any buffer
  * (never cross-element), param columns are separate buffers materialized
@@ -577,6 +586,88 @@ export function makeOrientApply(
     constSlotsOf([direction, up]),
     bindings.items,
     [QUAT_HELPERS.basis],
+    body,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// spawnInstances: compose one column-major 4x4 instance matrix per point
+// from the resident P / rot / scale buffers, into a device buffer the run
+// retains instead of reading back. Roles: "P" (read), "rot" and
+// "scaleAttr" (read, only when the attribute exists with the right
+// shape), "transforms" (read_write, the output).
+
+/**
+ * Compose-TRS kernel: `out[i] = T(P) * R(rot) * S(scale)` written as 16
+ * consecutive f32 in `THREE.Matrix4.elements` order (first column at 0-3,
+ * translation at 12-14, 15 = 1).
+ *
+ * A direct port of `composeTRS` (`src/spawn/instances.ts`): the same
+ * eleven products, the same `(1 - (yy + zz)) * s` factorization, the same
+ * write order — so the two differ only in float width and in whatever the
+ * WGSL back end contracts into FMA. That is a documented TOLERANCE class,
+ * not a bit-exact port: the CPU keeps an f64 interior and rounds once per
+ * store, the device computes the whole expression in f32. These bytes
+ * drive a renderer, never a seed chain, and the CPU path stays the
+ * reference (the device suite measures the deviation over a dense
+ * sample).
+ *
+ * Missing `rot` / `scale` attributes are compiled out to the literal
+ * identity quaternion and unit scale, matching `buildInstanceBatches`'
+ * defaults exactly — including its shape check, which the planner
+ * mirrors, so an `f32x3` "rot" is *ignored* on both paths rather than
+ * misread.
+ */
+export function makeComposeInstancesApply(hasRot: boolean, hasScale: boolean): ApplyKernel {
+  const bindings = new BindingList();
+  const pVar = bindings.add("P", "read", "f32", "attribute P: f32 tupleSize 3");
+  const rotVar = hasRot ? bindings.add("rot", "read", "f32", "attribute rot: f32 tupleSize 4") : "";
+  const sclVar = hasScale
+    ? bindings.add("scaleAttr", "read", "f32", "attribute scale: f32 tupleSize 3")
+    : "";
+  const outVar = bindings.add("transforms", "read_write", "f32", "out: 16 f32 per instance");
+  const q = hasRot
+    ? `vec4<f32>(${rotVar}[i * 4u], ${rotVar}[i * 4u + 1u], ${rotVar}[i * 4u + 2u], ${rotVar}[i * 4u + 3u])`
+    : "vec4<f32>(0f, 0f, 0f, 1f)";
+  const s = hasScale
+    ? `vec3<f32>(${sclVar}[i * 3u], ${sclVar}[i * 3u + 1u], ${sclVar}[i * 3u + 2u])`
+    : "vec3<f32>(1f, 1f, 1f)";
+  const body = `  let q = ${q};
+  let s = ${s};
+  let x2 = q.x + q.x;
+  let y2 = q.y + q.y;
+  let z2 = q.z + q.z;
+  let xx = q.x * x2;
+  let xy = q.x * y2;
+  let xz = q.x * z2;
+  let yy = q.y * y2;
+  let yz = q.y * z2;
+  let zz = q.z * z2;
+  let wx = q.w * x2;
+  let wy = q.w * y2;
+  let wz = q.w * z2;
+  let o = i * 16u;
+  ${outVar}[o] = (1f - (yy + zz)) * s.x;
+  ${outVar}[o + 1u] = (xy + wz) * s.x;
+  ${outVar}[o + 2u] = (xz - wy) * s.x;
+  ${outVar}[o + 3u] = 0f;
+  ${outVar}[o + 4u] = (xy - wz) * s.y;
+  ${outVar}[o + 5u] = (1f - (xx + zz)) * s.y;
+  ${outVar}[o + 6u] = (yz + wx) * s.y;
+  ${outVar}[o + 7u] = 0f;
+  ${outVar}[o + 8u] = (xz + wy) * s.z;
+  ${outVar}[o + 9u] = (yz - wx) * s.z;
+  ${outVar}[o + 10u] = (1f - (xx + yy)) * s.z;
+  ${outVar}[o + 11u] = 0f;
+  ${outVar}[o + 12u] = ${pVar}[i * 3u];
+  ${outVar}[o + 13u] = ${pVar}[i * 3u + 1u];
+  ${outVar}[o + 14u] = ${pVar}[i * 3u + 2u];
+  ${outVar}[o + 15u] = 1f;`;
+  return assemble(
+    `spawnInstances|rot=${hasRot ? 1 : 0}|scl=${hasScale ? 1 : 0}`,
+    0,
+    bindings.items,
+    [],
     body,
   );
 }

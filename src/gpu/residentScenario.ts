@@ -1631,7 +1631,7 @@ async function cancellation(ev: GpuFieldEvaluator): Promise<Record<string, unkno
   const geo = makeTransformGeometry(count);
   const built = chainGraph(makeTransformGeometry(count), steps);
   const members = membersOf(built.g, built.ids);
-  const ctx = { attributes: attrDescs(geo), count };
+  const ctx = { attributes: attrDescs(geo), count, needsGeometry: true };
 
   const inFlight = (): number => {
     const s = ev.poolStats;
@@ -1685,7 +1685,7 @@ async function cancellation(ev: GpuFieldEvaluator): Promise<Record<string, unkno
     inFlightBefore: before,
     inFlightAfterAbort: afterAbort,
     inFlightAfterRecovery: afterRecovery,
-    recoveredEqualsFusedCook: allAttrsEqual(snapshotGeo(recovered.geo), fusedCook),
+    recoveredEqualsFusedCook: allAttrsEqual(snapshotGeo(recovered.geo!), fusedCook),
     cookCancelledName: cookErr instanceof Error ? cookErr.name : String(cookErr),
     isCookLevelCancelled: cookErr instanceof CookCancelledError,
     postCancelCookEqualsFused: allAttrsEqual(postCook, fusedCook),
@@ -1704,6 +1704,7 @@ async function memoryBound(
   const outcome = planResidentRun(membersOf(built.g, built.ids), {
     attributes: attrDescs(geo),
     count,
+    needsGeometry: true,
   }, Number.MAX_SAFE_INTEGER);
   if (!("plan" in outcome)) throw new Error(`memoryBound: reference plan rejected (${outcome.reason})`);
   const totalBytes = outcome.plan.totalBytes;

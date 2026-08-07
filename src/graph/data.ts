@@ -1,4 +1,5 @@
 import type { Geometry } from "../data/index.js";
+import type { DeviceInstanceBatch } from "../fields/gpuResolver.js";
 
 /** Plain values a value item can carry. */
 export type DataValue = number | readonly number[] | string | boolean;
@@ -31,8 +32,21 @@ export interface ValueItem {
  * One batch of instanced-asset transforms — the render-agnostic spawner
  * protocol's payload. A renderer maps `assetId` to an actual renderable
  * (e.g. the three adapter's asset map → `THREE.InstancedMesh`).
+ *
+ * This is the CPU (host-memory) batch and the reference form: its
+ * transforms are composed by `composeTRS` in an f64 interior. A
+ * `DeviceInstanceBatch` is the same protocol with the transforms left in
+ * a device buffer; the two are discriminated by `residency`, which is
+ * absent (or `"cpu"`) here and `"device"` there.
  */
 export interface InstanceBatch {
+  /**
+   * Discriminant against `DeviceInstanceBatch`. Optional and defaulting
+   * to CPU so every existing literal `{ assetId, count, transforms }`
+   * stays a valid batch; test it as `batch.residency === "device"` to
+   * narrow, never as `=== "cpu"`.
+   */
+  readonly residency?: "cpu";
   /** Which asset every instance in this batch renders; resolved by the renderer. */
   readonly assetId: string;
   /** Number of instances in the batch. */
@@ -48,10 +62,36 @@ export interface InstanceBatch {
   readonly transforms: Float32Array;
 }
 
-/** An instance-batch payload flowing through the graph (spawner terminal). */
+/** Either residency of a spawner batch; narrow on `residency`. */
+export type AnyInstanceBatch = InstanceBatch | DeviceInstanceBatch;
+
+/** Is this batch device-resident (transforms in a device buffer)? */
+export function isDeviceInstanceBatch(batch: AnyInstanceBatch): batch is DeviceInstanceBatch {
+  return batch.residency === "device";
+}
+
+/**
+ * An instance-batch payload flowing through the graph (spawner terminal).
+ *
+ * Residency. `batches` is the CPU form and is what every renderer
+ * adapter reads. When a spawner terminal was fused into a device-resident
+ * run its transforms never reached host memory, and the item instead
+ * carries {@link deviceBatches}; `batches` then has no meaning and
+ * READING IT THROWS — deliberately, because the alternative is a CPU
+ * consumer silently drawing nothing. Check {@link deviceBatches} (or
+ * `isDeviceResidentInstances`) before touching `batches` in code that can
+ * see either.
+ */
 export interface InstancesItem {
   readonly kind: "instances";
   readonly batches: readonly InstanceBatch[];
+  /**
+   * Device-resident batches, present exactly when the producing spawner
+   * ran inside a device-resident run. The receiver owns every handle in
+   * them and must dispose it — see `DeviceTransformsHandle`. Absent on
+   * every CPU-spawned item, so existing consumers are unaffected.
+   */
+  readonly deviceBatches?: readonly DeviceInstanceBatch[];
   /** Free-form routing/filtering tags. */
   readonly tags: ReadonlySet<string>;
   /** Unique revision id; see {@link GeometryItem.rev}. */
@@ -98,6 +138,50 @@ export function makeInstancesItem(
   tags?: Iterable<string>,
 ): InstancesItem {
   return { kind: "instances", batches, tags: makeTags(tags), rev: nextRev() };
+}
+
+/**
+ * Wrap device-resident instance batches in a data item with a fresh rev.
+ *
+ * The item's `batches` is an accessor that THROWS: there are no CPU
+ * transforms to hand out, and a silently empty list would make a WebGL
+ * adapter draw nothing with no explanation. The message names the
+ * situation and both fixes (consume `deviceBatches` with a WebGPU
+ * adapter, or drop the resolver's device-instance opt-in to get CPU
+ * batches back).
+ *
+ * The caller of the cook that produced these batches owns their handles
+ * and must dispose them; the graph never caches or frees one (see
+ * `DeviceTransformsHandle`).
+ */
+export function makeDeviceInstancesItem(
+  deviceBatches: readonly DeviceInstanceBatch[],
+  tags?: Iterable<string>,
+): InstancesItem {
+  return {
+    kind: "instances",
+    get batches(): readonly InstanceBatch[] {
+      throw new Error(
+        `instances item is device-resident (${deviceBatches.length} batch(es), ` +
+          `${deviceBatches.reduce((n, b) => n + b.count, 0)} instances): its transforms live in ` +
+          "GPU buffers and were never composed on the CPU, so `batches` does not exist. Read " +
+          "`item.deviceBatches` and bind each batch's `transforms` handle with a WebGPU " +
+          "renderer, or construct the GpuFieldEvaluator without `deviceInstances: true` to get " +
+          "CPU `batches` back.",
+      );
+    },
+    deviceBatches,
+    tags: makeTags(tags),
+    rev: nextRev(),
+  };
+}
+
+/**
+ * Is this instances item device-resident? True exactly when reading its
+ * `batches` would throw and `deviceBatches` carries the payload.
+ */
+export function isDeviceResidentInstances(item: InstancesItem): boolean {
+  return item.deviceBatches !== undefined;
 }
 
 /** Items carrying the given tag, in collection order. */

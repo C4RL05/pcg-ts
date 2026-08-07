@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:90%; }
+  .bar > div { height:100%; background:var(--done); width:93%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-07 12:10</p>
-  <div class="bar"><div style="width:90%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-07 14:05</p>
+  <div class="bar"><div style="width:93%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -77,16 +77,16 @@
     <li class="done"><span class="chip">done</span>23 · Device-resident pipeline core — fused runs, one readback</li>
     <li class="done"><span class="chip">done</span>24 · Demo, docs, v0.6.0</li>
     <li class="done"><span class="chip">done</span>25 · Uniform constant params — drop the constant column cost (v0.6.1)</li>
-    <li class="active"><span class="chip">active</span>26 · Device-resident instance transforms — compose on GPU, own the buffers</li>
-    <li class="pending"><span class="chip">pending</span>27 · three/webgpu adapter and shared-device binding</li>
+    <li class="done"><span class="chip">done</span>26 · Device-resident instance transforms — compose on GPU, own the buffers</li>
+    <li class="active"><span class="chip">active</span>27 · three/webgpu adapter and shared-device binding</li>
     <li class="pending"><span class="chip">pending</span>28 · GPU-resident streaming example, docs, v0.7.0</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>853</b><span>passed</span></div>
+    <div><b>904</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-07 00:28</b><span>last run</span></div>
+    <div><b>2026-08-07 14:03</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -127,6 +127,7 @@
     <li><time>2026-08-06 22:45</time>v0.6.0 released. Phase 24 complete: 08-gpu-fields now cooks a five-node fusable chain three ways and times them cold — browser-verified at 500k points as CPU 27.0 s / GPU per-node 1.19 s / GPU fused 443 ms (x66.6 vs CPU, 2.7x vs per-node), with counters reading 1 resident run over 5 fused nodes, 4 readbacks saved, 12 member kernels, zero fallbacks; both GPU hashes reproduce byte-for-byte across reloads, and the 8 MiB cap control forces a visible run-too-large that falls back to per-node. Browser verification caught two real demo defects, both fixed: measuring CPU first could cost the page its WebGPU device (a ~57 s main-thread block trips the browser watchdog) and left the next readback pending forever — GPU paths now measure first and a device-lost handler surfaces the reason instead of hanging; and the counters block, keyed to the last-cooked path, went blank when CPU ran last — it now falls back to the newest GPU report with its source labeled. Headless Node reproduction proved the library itself was never at fault (per-node 635 ms, fused 254 ms at 1M). Docs carry the resident-run contract, the corrected stats.gpu shape, and the honest cost note that constant params still cost a device column and dispatch each. Final gate: 842 tests, clean typecheck, library + examples builds, idempotent docs.</li>
     <li><time>2026-08-07 00:30</time>v0.6.1 released. Phase 25 complete and audited (PASS-with-fixes): constant node params inside a resident run now ride the apply kernel&#39;s PcgParams uniform (12-byte scalar header padded to a 16-byte boundary, then array&lt;vec4&lt;f32&gt;,4&gt;) instead of materializing a full device column and a dispatch. The demo&#39;s five-node chain drops from 156 MB to 120 MB of working set per cook at 1M points (-23.1%) and from 12 member kernels to 9; across the device suites dispatches fall 132 to 99, and the run-too-large boundary moves exactly with the new byte math. Constant VALUES stay out of the generated WGSL — the apply key encodes only which params are constant, their tuple sizes, and their slots — so editing a constant rebinds a uniform and hits the pipeline cache instead of recompiling, which baking literals would have thrashed. Byte-exactness held: the audit built an independent harness reproducing the old column path and found uniform output byte-identical across 16 cases spanning all four apply kinds, plus 16 binding arrangements proving the constants-declare-no-binding remap never mis-wires. One measured exception, confirmed and widened by the audit: D3D12 flushes -0 and the entire subnormal range to +-0 when baked as a WGSL literal but not when loaded from a uniform, so those constants now match the CPU reference where the old column path did not. Bytes therefore can change, so SALT_VERSION bumped gpu1 to gpu2 per its own documented rule (and PLAN&#39;s &#39;bytes never move&#39; wording was corrected rather than left contradicting the code). 853 tests green.</li>
     <li><time>2026-08-07 12:10</time>v0.7 cycle started (phases 26-28): GPU-resident World streaming — compose instance transforms on device and hand them to the renderer without a CPU round trip. Feasibility settled first: three 0.185.1 ships three/webgpu and its backend accepts parameters.device, so one GPUDevice can back both the evaluator and a WebGPURenderer (without that the feature is impossible — WebGL cannot read a WebGPU buffer, nor can two devices share one). An architecture survey mapped 19 seams that assume a CPU Float32Array of transforms; two findings shaped scope: spawnInstances is structurally barred from resident runs today (fusion demands exactly one geometry output; it has two), and device-side multi-asset grouping needs a sort/partition over a string-table attribute — the one genuinely GPU-hostile step, so v0.7 fuses the constant-assetId case and falls back for assetAttr. Design fixed: additive and opt-in (WebGL path untouched), buffer lifetime treated as the hard problem rather than the matrix math (explicit pool detach, named owner, eviction ordered against in-flight work, memo cache must not pin device memory), CPU stays the bit-exact reference, and the three backend internal gets version-pinned behind a loud guard test. Also: pcg-ts@0.6.1 published to npm 2026-08-07.</li>
+    <li><time>2026-08-07 14:05</time>Phase 26 complete and audited (PASS-with-fixes): a fused run ending at spawnInstances composes every 4x4 in WGSL and hands back a retained device buffer with ZERO readback — transforms never touch the CPU. Ownership is three states with a named owner throughout (pool-owned, detached, holder-owned handle), double-dispose is a no-op rather than a double free, and un-disposed handles stay counted in poolStats so a leak is visible instead of silent. Compose parity vs composeTRS: max 4.768e-7 (0.143 f32-ULP), 75.9% bit-identical, translation column and constant slots exactly equal, and a layout witness proves column-major with translation at 12-14 — not transposed. isFusable now admits a resident terminal with one geometry output plus non-geometry pins, refusing everything else across 12 adversarial shapes. Device outputs are never memo-served (volatile entry), proven bounded across 20 distinct-graph cycles. The audit&#39;s value was above the run executor, which it confirmed airtight under 24 injected faults: it found FOUR leak paths in cookRun, the worst being a terminal whose instances pin is neither connected nor selected, which composed, detached, and stranded a buffer on every successful cook — silent and monotonic. All four fixed by one mechanism (the cook owns handles until delivery, frees on throw and frees anything undelivered, identity-based so forwarded handles survive) plus five regression tests. It also caught two vacuous test oracles: a measure() that scored NaN as a perfect match, defeating five tolerance assertions, and loops that asserted nothing when empty. Phase 27 inherits a verified 16-site disposal checklist, including that parentFor aliases a parent&#39;s outputs into child cells — so disposing on parent evict would be a use-after-free. 904 tests green.</li>
   </ol>
 </body>
 </html>

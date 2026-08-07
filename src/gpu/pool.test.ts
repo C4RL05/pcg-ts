@@ -77,6 +77,9 @@ describe("BufferPool", () => {
       buffersDestroyed: 0,
       pooledBuffers: 1, // a is idle; c is in flight
       pooledBytes: 65_536,
+      buffersDetached: 0,
+      detachedBuffers: 0,
+      detachedBytes: 0,
     });
   });
 
@@ -105,6 +108,9 @@ describe("BufferPool", () => {
       buffersDestroyed: 1,
       pooledBuffers: 0,
       pooledBytes: 0,
+      buffersDetached: 0,
+      detachedBuffers: 0,
+      detachedBytes: 0,
     });
   });
 
@@ -113,6 +119,7 @@ describe("BufferPool", () => {
     const pool = new BufferPool(device, 1 << 20);
     const foreign = device.createBuffer({ size: 256, usage: 0x80 });
     expect(() => pool.release(foreign)).toThrow(/not acquired from this pool/);
+    expect(() => pool.detach(foreign)).toThrow(/not acquired from this pool/);
   });
 
   it("dispose destroys idle buffers only and the pool stays usable", () => {
@@ -132,5 +139,99 @@ describe("BufferPool", () => {
     expect(pool.stats.pooledBuffers).toBe(1);
     const again = pool.acquire(1000, 0x80);
     expect(again).toBe(inFlight);
+  });
+});
+
+describe("BufferPool.detach (ownership transfer)", () => {
+  it("hands ownership to the caller: not pooled, not reacquirable, caller destroys", () => {
+    const { device } = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const buf = pool.acquire(1000, 0x80) as FakeBuffer;
+    const owned = pool.detach(buf);
+
+    expect(owned.buffer).toBe(buf);
+    expect(owned.bytes).toBe(1024); // bucketed, not the 1000 asked for
+    expect(owned.destroyed).toBe(false);
+    expect(pool.stats).toMatchObject({
+      buffersDetached: 1,
+      detachedBuffers: 1,
+      detachedBytes: 1024,
+      pooledBuffers: 0,
+      buffersDestroyed: 0,
+    });
+    // Still outstanding by the in-flight identity: created - destroyed - pooled.
+    expect(pool.stats.buffersCreated - pool.stats.buffersDestroyed - pool.stats.pooledBuffers).toBe(1);
+
+    // The pool cannot hand it out again.
+    const other = pool.acquire(1000, 0x80);
+    expect(other).not.toBe(buf);
+
+    owned.destroy();
+    expect(buf.destroyed).toBe(true);
+    expect(owned.destroyed).toBe(true);
+    expect(pool.stats).toMatchObject({
+      buffersDetached: 1,
+      detachedBuffers: 0,
+      detachedBytes: 0,
+      buffersDestroyed: 1,
+    });
+  });
+
+  it("destroy is idempotent: a second call is a no-op, never a double free", () => {
+    const { device } = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    let destroys = 0;
+    const buf = pool.acquire(256, 0x80);
+    const real = buf.destroy.bind(buf);
+    (buf as { destroy: () => void }).destroy = () => {
+      destroys++;
+      real();
+    };
+    const owned = pool.detach(buf);
+    owned.destroy();
+    owned.destroy();
+    owned.destroy();
+    expect(destroys).toBe(1);
+    expect(pool.stats.buffersDestroyed).toBe(1);
+    expect(pool.stats.detachedBuffers).toBe(0);
+    expect(pool.stats.detachedBytes).toBe(0);
+  });
+
+  it("releasing a detached buffer throws, and says it was detached", () => {
+    const { device } = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const buf = pool.acquire(256, 0x80);
+    pool.detach(buf);
+    expect(() => pool.release(buf)).toThrow(/was detached from this pool/);
+    // Distinct from the "never mine" message, so the two bugs never blur.
+    expect(() => pool.release(buf)).not.toThrow(/not acquired from this pool/);
+  });
+
+  it("detaching twice throws", () => {
+    const { device } = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const buf = pool.acquire(256, 0x80);
+    pool.detach(buf);
+    expect(() => pool.detach(buf)).toThrow(/already detached/);
+    expect(pool.stats.detachedBuffers).toBe(1);
+  });
+
+  it("dispose() leaves detached buffers alone (the pool does not own them)", () => {
+    const { device } = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const idle = pool.acquire(256, 0x80) as FakeBuffer;
+    pool.release(idle);
+    // A different usage, so this cannot be served the idle buffer above.
+    const owned = pool.detach(pool.acquire(256, 0x84));
+    pool.dispose();
+
+    expect(idle.destroyed).toBe(true);
+    expect((owned.buffer as FakeBuffer).destroyed).toBe(false);
+    expect(owned.destroyed).toBe(false);
+    // Still counted, so an un-disposed handle is a visible leak.
+    expect(pool.stats.detachedBuffers).toBe(1);
+    owned.destroy();
+    expect((owned.buffer as FakeBuffer).destroyed).toBe(true);
+    expect(pool.stats.detachedBuffers).toBe(0);
   });
 });

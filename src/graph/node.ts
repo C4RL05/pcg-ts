@@ -87,8 +87,29 @@ export interface ResidentDesc<P = Record<string, unknown>> {
    * whose execute takes a path the resident kind does not model (e.g.
    * setAttribute's string modes). Ineligible nodes cook on the normal
    * per-node path and never join a run. Must be cheap and pure.
+   *
+   * Returning a non-empty STRING means the same thing as `false` — the
+   * node does not fuse — but additionally names the reason, which the
+   * executor counts once per cook in `CookStats.gpu.fallbacks` under
+   * exactly that key. Use it for the cases an author can act on
+   * (`"spawn-asset-attr"`), and plain `false` for combinations that are
+   * simply not this kind's business.
    */
-  eligible?(params: P): boolean;
+  eligible?(params: P): boolean | string;
+  /**
+   * Declares the node a run TERMINAL: it may be the LAST member of a
+   * device-resident run and a chain never continues through it. Only
+   * terminal nodes may declare output pins beyond the single geometry
+   * one (the run executor produces the terminal's whole output map, so
+   * a resolver must model every extra pin of the kinds it accepts);
+   * every other node still needs exactly one geometry output to fuse.
+   *
+   * Terminal fusion is opt-in at the device seam as well: a terminal
+   * node joins a run only when the cook's resolver lists its `kind` in
+   * `GpuFieldResolver.residentTerminals`. Without that it is inert and
+   * the node cooks exactly as it always has.
+   */
+  readonly terminal?: boolean;
 }
 
 /**
@@ -129,8 +150,9 @@ export interface NodeDef<P = Record<string, unknown>> {
    * implements the optional run methods; otherwise (and on CPU-only
    * cooks) it is inert and behavior is byte-identical to a build
    * without it. Structural requirements checked by the executor:
-   * exactly one non-multi geometry input pin and exactly one geometry
-   * output pin.
+   * exactly one non-multi geometry input pin, and exactly one geometry
+   * output pin — plus, for a `terminal` node only, any number of
+   * non-geometry output pins.
    */
   readonly resident?: ResidentDesc<P>;
   /**
