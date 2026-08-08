@@ -945,10 +945,47 @@ Design decisions fixed up front:
   be serialized at all.
 
 - **A `resident` descriptor for `filterByAttribute`** (a count-changing
-  resident member). This, not field specs, is what would actually put
-  the forest's chain on the device — its two `filterByAttribute` nodes
-  survive v0.9 as chain breaks. Larger and independent; survey
-  separately before believing any estimate of it.
+  resident member). Surveyed 2026-08-08; **recommendation: do not
+  schedule.** Feasible, and cheaper than this entry assumed — the
+  data-dependent count is *not* the blocker v0.9's survey found for
+  device-produced keys, because the input count bounds every
+  allocation, no field's value depends on the element count, and the
+  surviving count rides the run's existing readback as four extra
+  bytes. Two findings settle it anyway:
+  - **It does not compose with the zero-round-trip path.** At a spawner
+    terminal the surviving count sizes a retained buffer and there is
+    no readback for it to ride (`needsGeometry === false`). So a run
+    may never contain both a count-changing member and an instances
+    terminal — the feature is architecturally exclusive with what
+    phases 26-30 built, which is the line this project has invested
+    most in.
+  - **The forest's entire saving is free today.** Moving
+    `setAttribute("scale")` ahead of the two filters in
+    `examples/02-forest` buys the same one readback for zero library
+    work (different random scales, equally valid). Any estimate of this
+    feature must be net of that, and net of it the benefit is close to
+    nothing.
+
+  It would also retire the safety argument at `run.ts:11-18` — "every
+  kernel touches only element `i`" is why attribute buffers are bound
+  in place as `read_write`, and a prefix scan breaks that. If it is
+  ever revisited, build the cheap shape: host-normalized
+  `(comparison, f32 threshold)`, a global ping-pong scan with **no
+  atomics** (an atomic bump would make survivor order nondeterministic),
+  a device-side count word, and materialization reusing the shipped
+  `gatherPoints` so the ordering spec keeps one implementation — the
+  shape v0.8 and v0.9 both converged on. And gate it on a measurement:
+  the scan must beat the round trip it eliminates at the counts the
+  examples actually use.
+
+  Full survey: `notes/research/v10-resident-filter-survey.md` in the
+  private repo, including a phase breakdown if it is scheduled anyway.
+
+- **Free and unscheduled:** reorder `examples/02-forest` so
+  `setAttribute("scale")` precedes the two filters. Fuses it into the
+  height/slope run (3 fused members, not 2) and drops one readback,
+  with no library change. Costs a re-shoot of the manual and landing
+  imagery, since the tree scales change.
 
 - **Give `04-infinite-world` a GPU evaluator.** It has `09-gpu-world`'s
   shape authored with combinators, so it becomes the natural showcase
