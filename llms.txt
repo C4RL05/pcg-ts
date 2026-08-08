@@ -197,10 +197,18 @@ Nested example — density in [0,1] from remapped 4-octave noise:
 
 In code, both `fieldFromJson(spec)` fields and combinator-composed
 fields serialize back via `fieldToJson` — a combinator derives its spec
-from its arguments. Only three cases refuse: a `makeField` closure, any
-field composed over one, and a tree deeper than the spec depth limit.
+from its arguments, so since v0.9 a graph holding
+`mul(position(), 0.1)` serializes (before v0.9 `serializeGraph` threw
+and pointed at `fieldFromJson`). Only three cases refuse: a `makeField`
+closure, any field composed over one (the absent spec propagates), and
+a tree deeper than 256 levels — derivation refuses at exactly the depth
+`fieldFromJson` parses, so a spec that could not be re-parsed is never
+produced and no graph is written that cannot be read back. The refusal
+is one `fieldToJson` message naming all three causes and the fix, and
+`serializeGraph` prefixes it with `node "<id>" param "<key>": `.
 Note this is about DESCRIBING a field, not about where it runs: device
-eligibility still requires an AUTHORED spec (see the GPU section).
+eligibility is narrower and additionally requires either an AUTHORED
+spec or `acceptDerivedSpecs` (see the GPU section).
 
 ## Node types (full schemas: docs/nodes.md, machine-readable: docs/nodes.json)
 
@@ -303,10 +311,28 @@ cascade staleness to children automatically.
 ## GPU field evaluation (pcg-ts/gpu)
 
 The serializable field-expression grammar (previous section) is the GPU
-surface: every fn compiles to WGSL. A field is GPU-eligible iff it
-carries a spec — `getFieldSpec(field)` returns it (only fields built by
-`fieldFromJson` do; code-authored fields return undefined and stay on
-CPU). One eligible field = one compute dispatch over the whole domain
+surface: every fn compiles to WGSL.
+
+DESCRIBING vs RUNNING — two questions since v0.9, do not conflate them:
+- `getFieldSpec(field)` answers "can this field be described": a spec
+  for both `fieldFromJson` fields (AUTHORED) and combinator fields
+  (DERIVED), `undefined` only for a `makeField` closure, anything
+  composed over one, or a tree past 256 levels.
+- Device eligibility is NARROWER: an authored spec always, a derived
+  spec only when the resolver advertises `acceptDerivedSpecs: true`
+  (default false). With it off a derived-spec field evaluates on the
+  CPU and counts a `"derived-spec"` fallback — NOT `"no-spec"`, which
+  now means genuinely undescribable.
+- Opt-in on purpose: derived and authored forms of one expression
+  compile to the same kernel key and the same WGSL and produce the same
+  bytes (measured, one adapter), but the GPU path is still a documented
+  approximation of the CPU reference. Turning the gate on by default
+  would move output bytes for graphs that already pass a resolver and
+  never asked, including discrete flips at knife-edge compares. The
+  memo salt protects cache correctness, not output stability, so
+  adoption is the caller's explicit choice per evaluator.
+
+One eligible field = one compute dispatch over the whole domain
 (chunked into several `dispatchWorkgroups` calls past 65535 × 64 ≈
 4.19M elements, byte-invisibly). Chains of fusable nodes go further:
 they cook as one device-resident run with a single readback (see
@@ -330,8 +356,13 @@ on it), then `const adapter = await create([]).requestAdapter()` with
 Surface:
 
 - `GpuFieldResolver` (core interface, no WebGPU types): `{ cacheSalt:
-  string; resolveField(field, ctx, stats?): Promise<Column> | null;
-  planRun?; executeRun? }` — the two run methods are optional and
+  string; residentTerminals?: readonly string[]; acceptDerivedSpecs?:
+  boolean; resolveField(field, ctx, stats?): Promise<Column> | null;
+  planRun?; executeRun? }` — `acceptDerivedSpecs` is the SINGLE source
+  of truth for derived-spec eligibility: the executor reads it to
+  decide both the memo-key salt and fusion, and the resolver must act
+  on exactly the same value, or it produces GPU bytes under a CPU memo
+  key. The two run methods are optional and
   detailed under "Device-resident runs" below; absence degrades to
   per-node cooking with identical bytes.
   `null` is returned synchronously for ineligible fields — the caller
@@ -360,7 +391,14 @@ Surface:
   constant-`assetId` spawn has exactly one asset and still counts 1, so
   v0.7 numbers stay comparable. The complete fallback-reason
   vocabulary:
-  - `no-spec` — code-authored field, no serializable spec
+  - `no-spec` — the field cannot be described at all: a `makeField`
+    closure, anything composed over one, or a tree past 256 levels
+  - `derived-spec` — the field describes itself, but its spec was
+    DERIVED by the combinator API and this resolver does not advertise
+    `acceptDerivedSpecs`. Scoped to the PER-FIELD seam only: a node the
+    same setting keeps out of a fused run is not counted again at the
+    fusion gate, since its fields still fall back per-field and one
+    cause reported twice would read as two
   - `compile-error` — spec cannot lower to WGSL against the geometry's
     attribute layout (missing or string attribute, tuple size > 4,
     non-finite f32 constant)
@@ -387,15 +425,20 @@ Surface:
   `orientAlongVector`, `surfaceSample`, `volumeSample`; `"always"` on
   subgraph defs (they forward the resolver to inner cooks and their
   counters land in the outermost sink). When a cook has a resolver and
-  such a node has a live spec'd Field param, the memo key gains
+  such a node has a live Field param this resolver WOULD accept
+  (authored, or derived with the gate on), the memo key gains
   `|gpu:<cacheSalt>` — so toggling gpu never serves bytes produced by
-  the other path, while nodes without spec'd field params keep their
+  the other path, while nodes with no acceptable field param keep their
   cache hits across the toggle. The marker is conservative: it applies
-  for spec'd-but-ineligible fields too (over-invalidation; bytes stay
-  CPU-identical). `GpuFieldEvaluator`'s salt is
+  for eligible-but-uncompilable fields too (over-invalidation; bytes
+  stay CPU-identical). `GpuFieldEvaluator`'s salt is
   `"gpu2|<vendor>|<architecture>|<device>|<description>"` (format
   version + adapter identity; missing fields become `?`) — bytes from
-  different devices never serve each other.
+  different devices never serve each other. The executor appends
+  `+derived` to that salt when `acceptDerivedSpecs` is on and appends
+  NOTHING when it is off, so two evaluators on one adapter that
+  disagree about the gate cannot collide in the memo cache, and every
+  pre-v0.9 key is byte-identical.
 - `GpuFieldEvaluatorOptions`: `adapterInfo?` (salt identity when the
   device exposes none); `maxResidentBytes?` (default 512 MiB — the
   resident-run working-set bound); `maxPooledBytes?` (default 256 MiB —
@@ -404,7 +447,12 @@ Surface:
   intended for tests forcing chunk seams — production code leaves it
   unset; default `65535 × workgroupSize` = 4 194 240 at wg 64);
   `deviceInstances?` (default false — opt in to device-resident
-  instance transforms; see "Device-resident instancing" below).
+  instance transforms; see "Device-resident instancing" below);
+  `acceptDerivedSpecs?` (default false — opt in to resolving fields
+  whose spec was DERIVED by the combinator API; see "DESCRIBING vs
+  RUNNING" above). Both are advertised on the resolver
+  (`evaluator.residentTerminals`, `evaluator.acceptDerivedSpecs`) so
+  the executor and the resolver decide from one value.
 - `evaluator.dispose()` destroys pooled (idle) buffers only; in-flight
   buffers stay valid and re-pool on release and the evaluator remains
   usable (pipeline/kernel caches untouched). DETACHED buffers (device
@@ -452,7 +500,10 @@ Device-resident runs (fusion):
   (`ResidentDesc.terminal: true`): it may be a run's LAST member, a
   chain never continues through it, and it joins a run only when the
   resolver lists its kind in `residentTerminals` — see
-  "Device-resident instancing" below.
+  "Device-resident instancing" below. Additionally, for EVERY member:
+  every `Field` in its param tree must carry a spec this resolver
+  accepts (authored always; derived only under `acceptDerivedSpecs`),
+  so the gate widens which chains fuse as well as which fields resolve.
 - Boundary rules — the executor takes MAXIMAL linear chains and stops
   when: the tail has ≠ 1 outgoing connection (any fan-out, counting
   connections to nodes outside this cook's selection), the tail carries

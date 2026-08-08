@@ -266,7 +266,7 @@
 
 <header class="top">
   <div class="wrap">
-    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.8.0</p>
+    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.9.0</p>
     <h1>The pcg<span class="dot">-</span>ts manual</h1>
     <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
     <div class="metabar">
@@ -575,13 +575,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <h3 id="ex-02">02 · Forest — sampling a surface, filtering by what you measured</h3>
     <figure>
       <img src="manual-assets/02-forest.jpg" width="1400" height="845" loading="lazy" decoding="async"
-           alt="The forest demo on the device-resident path. The panel offers a device-resident / CPU readback toggle and reports 2 live batches split 4,246 pine and 1,666 bush, 5,912 instances drawn, 2 buffers holding 369.5 KiB of matrices on device, the same 369.5 KiB of matrix uploads avoided, 0 B uploaded, 1 resident run of 1 fused member, 2 device dispatches, and a 127.3 ms cook over 9 nodes. The viewport shows a wide grey-green heightfield terrain seen from above and to the side, with dense bands of dark green conifers covering the lower slopes and thinning out entirely on the steep faces and the high ridge." />
+           alt="The forest demo on the device-resident path. The panel offers a device-resident / CPU readback toggle and reports 2 live batches split 4,246 pine and 1,666 bush, 5,912 instances drawn, 2 buffers holding 369.5 KiB of matrices on device, the same 369.5 KiB of matrix uploads avoided, 0 B uploaded, 2 resident runs of 3 fused members, 7 device dispatches, no GPU fallbacks, and a 111 ms cook over 9 nodes. Below them a collapsed section is titled why the chain still breaks in three places. The viewport shows a wide grey-green heightfield terrain seen from above and to the side, with dense bands of dark green conifers covering the lower slopes and thinning out entirely on the steep faces and the high ridge." />
       <figcaption><b>02 · forest</b> — 5912 trees placed from 9000 candidates: 4246 pine and 1666 bush, split by a per-point string attribute rather than by two graphs. Since v0.8 both species are composed on the GPU, one matrix buffer each, and drawn without a readback.</figcaption>
     </figure>
     <p>An fBm heightfield becomes a three.js <code>BufferGeometry</code>, crosses into the library through <code>fromBufferGeometry</code>, and is area-weighted sampled by <code>surfaceSample</code> — which emits a <code>normal</code> attribute as it goes. Height and slope are then written as attributes and used by <code>filterByAttribute</code> to keep trees off cliffs and above the treeline. The visible result is the point of the design: the filters read measurements the sampler already produced, so "no trees on steep ground" is a comparison, not a special case.</p>
     <p>Species selection is where multi-asset spawning earns its keep. One string <code>setAttribute</code> picks pine or bush per point from a numeric selector, and <code>spawnInstances</code> splits the output into two batches by that attribute — one graph, one cook, two <code>InstancedMesh</code>es.</p>
     <p>Since v0.8 that split also happens without a CPU round trip. Flip the toggle to <b>device-resident</b> and each species gets its own matrix buffer, composed in a WGSL kernel and drawn straight from the GPU — <code>matrices uploaded</code> sits at <code>0 B</code>. Flip back to <b>CPU readback</b> and the same bytes are composed in JS and uploaded instead. The batch counts do not move between the two: <code>4,246 / 1,666</code> either way, because the device path plans its grouping with the very same function the CPU spawner calls.</p>
-    <p>The <code>fused members</code> readout says <code>1</code>, and that is the honest number rather than a disappointing one. Two independent things keep this chain off the device, and the demo's <b>why one fused member</b> panel separates them. A string <code>setAttribute</code> is not resident-eligible at all, so <code>species</code> could never join a run. But the height and slope <code>setAttribute</code>s are resident-capable by kind and still do not fuse, because fusability also requires every field param to carry a <code>FieldSpec</code> — and this demo's fields are code-authored rather than built with <code>fieldFromJson</code>. That is the <code>no-spec</code> row in <code>gpu fallbacks</code>. Making string <code>setAttribute</code> resident is the recorded successor, but on its own it would not move this number; see <a href="#gpu">chapter 6</a>.</p>
+    <p>Since v0.9 this demo also opts into <code>acceptDerivedSpecs</code>, and the effect is visible in the readouts: it used to report <code>1</code> resident run of <code>1</code> member with three <code>derived-spec</code> fallbacks, and now reports <code>2</code> runs of <code>3</code> members with no field falling back at all. Its fields are written with the combinator API rather than as JSON, and until v0.9 that alone kept them off the device.</p>
+    <p>What remains is more interesting than what was fixed. Three chain breaks survive and none is about specs, which is why the panel is titled <b>why the chain still breaks in three places</b>. The two <code>filterByAttribute</code> nodes change the point count, and a run's members must share one element count — so they can never be members, whatever their fields look like. <code>setAttribute("species")</code> writes a <em>string</em> column, which no resident node can produce. And <code>scale</code>, now perfectly eligible, still forms no run at all: it would be a lone non-terminal member, and a run of one that nothing reads is not worth planning. No spec could have fixed any of the three. The successor that would is a <code>resident</code> descriptor for <code>filterByAttribute</code>; see <a href="#gpu">chapter 6</a>.</p>
     <p class="demo-links">
       <span class="chip">surfaceSample · setAttribute · filterByAttribute · spawnInstances</span>
       <span class="chip">fields: position · component · sub · mul · ge · vec · randomField · fbm</span>
@@ -1367,7 +1368,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.8.0 manual</span>
+    <span>pcg-ts v0.9.0 manual</span>
     <span>MIT license</span>
     <a href="./index.html">project overview</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>

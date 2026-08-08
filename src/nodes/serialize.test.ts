@@ -21,6 +21,17 @@ import { firstGeo, snapshotGeometry } from "./testSupport.js";
  */
 const MAX_DEPTH = 256;
 
+/**
+ * A field nothing can describe: `makeField` wraps an arbitrary closure,
+ * so no grammar name exists for it and no spec is ever attached.
+ */
+function opaqueField(): Field {
+  return makeField("opaque", 1, (ctx) => ({
+    data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
+    tupleSize: 1,
+  }));
+}
+
 /** A field whose derived spec is exactly `levels` deep (position + adds). */
 function addChain(levels: number): Field {
   let f: Field = position();
@@ -119,20 +130,44 @@ describe("serializeGraph", () => {
     expect(() => serializeGraph(g)).toThrow(/type "rogueNode" is not registered/);
   });
 
-  it("rejects fields with no derivable spec, naming the node, the param and the cause", () => {
-    // `makeField` takes an arbitrary closure, so no spec can describe it
-    // — and a combinator over one inherits that (undefined propagates).
-    const opaque = makeField("opaque", 1, (ctx) => ({
-      data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
-      tupleSize: 1,
-    }));
-    const g = new Graph();
-    const jit = g.add(jitterPoints, { amount: mul(opaque, 0.1) }, "jit");
-    g.output(jit, "out");
-    // Matching only "fieldFromJson" could not tell the real message from
-    // one that misstates the cause, so the cause is pinned too.
+  it("rejects a bare makeField closure param, naming the node and the param", () => {
+    // Refusal 1 of 3. The one case that predates derived specs unchanged:
+    // an arbitrary closure has no grammar name, so nothing is attached.
+    const g = new Graph(3);
+    const src = g.add(pointScatterInBounds, { count: 16 }, "src");
+    const jit = g.add(jitterPoints, { amount: opaqueField() }, "jit");
+    g.connect(src, "out", jit, "in");
+    g.output(jit, "out", "result");
+    expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
     expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
+    // Actionable means it states the fix, not just the refusal.
+    expect(() => serializeGraph(g)).toThrow(/Replace the opaque part with grammar constructors/);
+
+    // Negative control: swap in a describable field on the same param of
+    // the same graph and it serializes — the refusal is this field, not
+    // anything else about the graph or the node.
+    g.setParam(jit, "amount", mul(position(), 0.1));
+    expect(() => serializeGraph(g)).not.toThrow();
+  });
+
+  it("rejects a field composed over a makeField closure, since undefined propagates", () => {
+    // Refusal 2 of 3, and the one worth its own test: every combinator
+    // derives its spec from its arguments, so one opaque leaf anywhere in
+    // the tree withholds the whole spec. `mul` here is otherwise the same
+    // constructor the positive round-trip below serializes happily.
+    const g = new Graph();
+    const jit = g.add(jitterPoints, { amount: mul(opaqueField(), 0.1) }, "jit");
+    g.output(jit, "out");
+    expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
+    expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
+    // Note the three refusals share ONE message template, which names all
+    // three causes: by the time `fieldToJson` sees the field, the absent
+    // spec records no reason for its absence. So this substring does not
+    // discriminate the composed case from the other two — the node and
+    // param prefix above is what localizes the fault. Pinned anyway, so
+    // that dropping the enumeration from the message reddens a test.
     expect(() => serializeGraph(g)).toThrow(/makeField closure can never be named/);
+    expect(() => serializeGraph(g)).toThrow(/built over one inherits that/);
   });
 
   it("refuses a field nested past the grammar's cap instead of writing an unloadable graph", () => {

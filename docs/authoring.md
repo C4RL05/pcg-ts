@@ -49,10 +49,30 @@ valid:
 every node to be a registered type (`standardNode`). Field-valued params
 serialize whether the field was built by `fieldFromJson` or composed
 from the combinator API — a combinator field derives its spec from its
-arguments. The exceptions are a field built by `makeField` (an
-arbitrary closure that nothing can describe), any field composed over
-one, and a tree nested deeper than the spec depth limit; `fieldToJson`
-throws an actionable error naming which of those it hit.
+arguments. Since v0.9 there is therefore no authoring cliff between the
+pleasant API and the serializable one: a graph holding
+`mul(position(), 0.1)` round-trips, where before it could not be saved
+at all. Exactly three cases still refuse:
+
+1. a field built by `makeField` — an arbitrary closure that nothing can
+   describe, and the deliberate escape hatch;
+2. any field composed over one, because a combinator derives its spec
+   from its arguments and one missing argument spec propagates;
+3. a tree nested deeper than the spec depth limit (256 levels).
+   Derivation refuses at exactly the depth `fieldFromJson` will parse,
+   so a spec that could not be re-parsed is never produced — a graph
+   that saves and cannot be reopened would be worse than one that
+   refuses to save.
+
+`fieldToJson` throws one actionable message that names all three causes
+and the fix; `serializeGraph` prefixes it with the offending
+`node "<id>" param "<key>"`. (The absent spec records no reason for its
+absence, so the message enumerates rather than discriminates — the
+node/param prefix is what localizes the fault.)
+
+Serializing is about *describing* a field. Whether it then runs on the
+GPU is a narrower question with an extra condition — see
+[Eligibility](#eligibility--what-runs-on-the-gpu).
 
 Numbers must be finite. A field-capable vec3/vec4 param set to a plain
 scalar is canonicalized to the full tuple on serialization (broadcast
@@ -523,14 +543,25 @@ structurally, and core code sees only the `GpuFieldResolver` interface
 
 ### Eligibility — what runs on the GPU
 
+**Describing and running are two questions.** `getFieldSpec(field)` —
+the non-throwing probe — answers the first: since v0.9 it returns a
+spec both for fields built by `fieldFromJson` (*authored*) and for
+fields built from the combinator API (*derived*), and `undefined` only
+for the three cases listed under
+[Validation behavior](#validation-behavior). Eligibility is the
+narrower question, and it asks about provenance as well as
+describability.
+
 A field-capable param resolves on the GPU exactly when all of these
 hold; otherwise it falls back to the CPU with a machine-readable
 reason in `CookStats.gpu.fallbacks`:
 
-1. The field carries a serializable spec: it was built by
-   `fieldFromJson` (JSON params always are; `getFieldSpec(field)` is
-   the non-throwing probe). Hand-composed combinator fields have no
-   spec → `no-spec`.
+1. The field carries a spec **this resolver accepts**. An authored spec
+   always qualifies (JSON params always are authored). A derived spec
+   qualifies only when the resolver advertises
+   `acceptDerivedSpecs: true` — with the default `false`, a derived
+   field falls back with `derived-spec`, and a field with no spec at
+   all falls back with `no-spec`.
 2. The spec compiles against the geometry's attribute layout: every
    `attribute` it reads exists on the domain, is numeric (bool reads
    compile; string attributes do not), and tuple sizes stay ≤ 4 with
@@ -547,8 +578,12 @@ size 64) splits into chunked dispatches whose output is byte-identical
 to the unchunked one, so the old `dispatch-too-large` reason no longer
 exists.
 
-Those three reasons (`no-spec`, `compile-error`, `too-many-buffers`)
-are the complete per-field vocabulary; fused runs add two more, below.
+Those four reasons (`no-spec`, `derived-spec`, `compile-error`,
+`too-many-buffers`) are the complete per-field vocabulary; fused runs
+add two more, below. `derived-spec` is scoped to the **per-field seam**
+only: a node the same setting keeps out of a fused run is not counted
+again at the fusion gate, because its fields still fall back per-field
+and the one cause reported twice would read as two.
 Node-level opt-out reasons (a `ResidentDesc.eligible` returning a
 string) belong to the same vocabulary in principle, but the standard
 node library declares none — v0.7's `spawn-asset-attr` was the only
@@ -562,6 +597,48 @@ Subgraph nodes forward the resolver to their inner cooks
 (`NodeDef.gpu: "always"`), whose stats land in the outermost cook's
 sink. A fallback is silent in the bytes — CPU output is what the GPU
 path approximates — but never silent in the stats.
+
+#### `acceptDerivedSpecs` — why the wider set is opt-in
+
+```ts
+const gpu = new GpuFieldEvaluator(device, {
+  adapterInfo: adapter.info,
+  acceptDerivedSpecs: true,    // default false
+});
+```
+
+The default is `false` in v0.9.0, and the reasoning is worth having
+rather than the flag alone.
+
+Derived specs were measured before they were gated. On one adapter, the
+derived form of an expression compiles to the same kernel key and the
+same WGSL text as its authored twin and produces the same bytes, family
+by family, within the existing per-family budgets — nothing widened.
+But that evidence establishes *derived ≡ authored on the device*. It
+says nothing new about *device ≡ CPU*, and that is the comparison a
+default would change: the CPU is the bit-exact reference and the GPU
+path is a documented approximation of it (see
+[Determinism contract](#determinism-contract-and-measured-budgets)).
+
+So accepting derived specs automatically would move output bytes on
+upgrade, for graphs that already pass a resolver and never asked for
+the change. Most of that movement is inside the documented tolerances,
+but not all of it is tolerance-shaped: a `ge`/`select` threshold landing
+on a knife edge flips a whole point to the other branch — a visible,
+discrete change, not a sub-ULP one. The memo salt below keeps *caches*
+correct across the setting; it has no way to keep *output* stable. That
+is why adoption is your explicit choice, per evaluator, rather than a
+consequence of upgrading.
+
+Two things follow for anyone turning it on:
+
+- Every `cacheSalt` gains a `+derived` component, so the first cook
+  after the flip recooks the affected nodes. That is by design; see
+  [Cache provenance](#cache-provenance).
+- `captureAsync` has no memo key at all, so it has no salt to gain and
+  no cache to poison — but it changes its output the moment it is
+  handed an evaluator with the flag on. It is the one entry point where
+  the effect is immediate and unmediated by any cache.
 
 ### Device-resident runs (fusion)
 
@@ -603,8 +680,12 @@ geometry input and one geometry output, plus one *terminal* kind:
 | `orientAlongVector` | always |
 | `spawnInstances` | the resolver advertises the kind — with or without `assetAttr`, since v0.8.0; terminal only, and it declares no `eligible` gate; see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
 
-plus, for every member: every `Field` in its param tree carries a
-serializable spec (`getFieldSpec`).
+plus, for every member: every `Field` in its param tree carries a spec
+*this resolver accepts* — authored always, derived only under
+`acceptDerivedSpecs`. The gate therefore widens which chains fuse as
+well as which single fields resolve, and both read the same
+advertisement, so a node can never resolve on the device under a memo
+key that did not gain the salt.
 
 A terminal may be a run's *last* member and a chain never continues
 through it. It is also the one place a run of length 1 still counts as
@@ -996,14 +1077,24 @@ batch count, and a fusion readout that does not overstate depth.
 ### Cache provenance
 
 GPU floats are not byte-identical to CPU floats, so when a cook has a
-resolver and a node would resolve a live spec'd Field param on device,
-that node's memo key gains `|gpu:<cacheSalt>` — the evaluator's salt is
-`"gpu2|<vendor>|<architecture>|<device>|<description>"`. Toggling gpu
-on or off (or switching devices) therefore never serves bytes produced
-by the other path, while nodes without live spec'd field params keep
-their cache hits across the toggle. The marker is conservative: a
-spec'd-but-ineligible field also gains it (over-invalidation, bytes
-still CPU-identical). Fused runs fold the same salt into the run key
+resolver and a node would resolve a live Field param on device *under
+that resolver's settings*, the node's memo key gains
+`|gpu:<cacheSalt>` — the evaluator's salt is
+`"gpu2|<vendor>|<architecture>|<device>|<description>"`, and the
+executor appends `+derived` to it when `acceptDerivedSpecs` is on and
+appends nothing when it is off. The empty case is deliberate: every
+memo key a pre-v0.9 graph produced is byte-identical. The non-empty
+case is what keeps two evaluators on *one* adapter — one accepting
+derived specs, one not — from serving each other's bytes, which
+`cacheSalt` alone could not do since they share an adapter identity.
+
+Toggling gpu on or off (or switching devices, or flipping
+`acceptDerivedSpecs`) therefore never serves bytes produced by the
+other path, while a node whose live field params are all ineligible
+under the current settings — no spec at all, or a derived spec with the
+gate off — keeps its cache hits across the toggle. The marker is
+conservative: an eligible-but-uncompilable field also gains it
+(over-invalidation, bytes still CPU-identical). Fused runs fold the same salt into the run key
 shown above. Compiled pipelines cache on the evaluator instance and
 persist across cooks. In a `World`, toggling gpu between updates does
 not by itself recook stored cells; provenance applies whenever a cell
@@ -1141,6 +1232,8 @@ destination; a chunk does not, and its count would move with
 | `maxResidentBytes` | 512 MiB | resident-run working-set bound (`run-too-large` above it) |
 | `maxPooledBytes` | 256 MiB | idle bytes the buffer pool retains; `0` disables retention |
 | `maxElementsPerDispatch` | `65535 × wg` (4 194 240 at wg 64) | chunk-size override; byte-invisible, for tests forcing chunk seams — leave unset in production |
+| `deviceInstances` | `false` | opt in to device-resident instance transforms ([above](#device-resident-instancing-drawing-without-a-readback)) |
+| `acceptDerivedSpecs` | `false` | opt in to resolving combinator-derived specs on device ([above](#acceptderivedspecs--why-the-wider-set-is-opt-in)) |
 
 `evaluator.dispose()` destroys pooled (idle) buffers only: buffers
 still in flight stay valid and re-pool on release, and the evaluator

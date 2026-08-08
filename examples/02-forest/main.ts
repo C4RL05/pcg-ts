@@ -18,22 +18,27 @@
  *   through `createWebGpuInstanceAdapter`. No readback, no `Float32Array`
  *   of matrices, no `instanceMatrix` upload.
  * - **CPU readback** — the same graph, the same device, the same fields,
- *   but an evaluator without `deviceInstances`. `spawnInstances` is then
- *   not a resident terminal, so JS composes the matrices and
- *   `toInstancedMeshes` uploads them.
+ *   the same `acceptDerivedSpecs`, but an evaluator without
+ *   `deviceInstances`. `spawnInstances` is then not a resident terminal,
+ *   so JS composes the matrices and `toInstancedMeshes` uploads them.
+ *   Exactly one option differs between the two evaluators, which is what
+ *   makes the readouts comparable.
  *
- * **The run is one member deep, and the page says so.** A resident run is
- * a maximal linear chain of resident-capable nodes, and this graph's
- * chain breaks immediately before the spawn: `setAttribute("species")` is
- * a *string* attribute, which no resident node can produce, so it is not
- * resident-capable at all. `surfaceSample` and both filters change the
- * point count and are never run members either, and the height/slope/size
- * fields are code-authored, so they carry no `FieldSpec` to lower into
- * WGSL. The run is therefore the spawn alone — `resident runs / fused
- * members` reads `1 / 1`, which is the honest number, and the panel's
- * "why one fused member" section spells out the reason. What the device
- * path buys is exactly one thing, and it is the expensive one: the
- * compose and the upload.
+ * **The run is not the whole chain, and the page says where it breaks.**
+ * A resident run is a maximal linear chain of resident-capable nodes.
+ * Since v0.9 the code-authored fields here each carry a *derived*
+ * `FieldSpec`, and both evaluators are built with
+ * `acceptDerivedSpecs: true`, so the two numeric `setAttribute`s fuse
+ * into one run and no field falls back to the CPU at all. Three chain
+ * breaks survive, and none of them is about specs: the two
+ * `filterByAttribute` nodes change the point count (a run's members
+ * share one element count), and `setAttribute("species")` writes a
+ * *string* column, which no resident node can produce. A full cook of
+ * the device path therefore reads `resident runs / fused members` =
+ * `2 / 3` and `device dispatches` = `7`, and the panel's "why the chain
+ * still breaks in three places" section spells out every row. What the
+ * device path buys is still the expensive thing: the compose and the
+ * upload.
  *
  * Both the cook and the terrain rebuild are budgeted. That matters more
  * than it looks: a long synchronous cook can trip the browser's watchdog
@@ -280,12 +285,16 @@ const sizeAttr = graph.add(setAttribute, {
 // Declarative species pick: a string setAttribute selects into `values`
 // per point (floor + clamp), so ~72% index 0 ("pine"), else "bush".
 //
-// This node is also where the device-resident run stops. A string column
-// is CPU-only by construction — no resident node can produce one — so
-// this `setAttribute` is not resident-capable and the chain breaks here,
-// one node short of the spawn. The spawn itself is still resident, and
-// still splits by `species`: the host plans the grouping and the device
-// composes one buffer per asset.
+// This node is the LAST of the graph's three chain breaks (the two
+// filters above are the others). A string column is CPU-only by
+// construction — no resident node can produce one — so this
+// `setAttribute` is not resident-capable whatever its `value` field
+// carries, and the chain breaks here, one node short of the spawn. It is
+// also what leaves `setAttribute("scale")` stranded: with a filter on one
+// side and this node on the other, `scale` is a chain of one, and a lone
+// non-terminal member forms no run. The spawn itself is still resident,
+// and still splits by `species`: the host plans the grouping and the
+// device composes one buffer per asset.
 const speciesAttr = graph.add(setAttribute, {
   name: "species",
   type: "string",
@@ -417,9 +426,29 @@ let renderer: WebGPURenderer | undefined;
 let controls: OrbitControls | undefined;
 let backendLabel = "…";
 let adapterLabel = "…";
-/** `deviceInstances: true` — `spawnInstances` is a resident terminal. */
+/**
+ * Shared by BOTH evaluators, so the only thing the toggle changes is
+ * `deviceInstances`.
+ *
+ * `acceptDerivedSpecs` is v0.9's opt-in. Every field in this graph is
+ * written with the combinator API — `component(position(), 1)`,
+ * `sub(1, component(attribute("normal", 3), 1))`,
+ * `vec(remap(randomField("size"), …))` — and since v0.9 each of those
+ * carries a *derived* `FieldSpec` describing itself. The library still
+ * refuses derived specs on the device by default, because the GPU path
+ * is a documented approximation of the CPU one and adopting them would
+ * move output bytes for graphs that never asked. This page asks: it is a
+ * demo of the device path, so it opts in explicitly and the readouts
+ * show what that is worth.
+ */
+const EVAL_OPTS = { acceptDerivedSpecs: true } as const;
+/**
+ * `deviceInstances: true` — `spawnInstances` is a resident terminal —
+ * plus {@link EVAL_OPTS}, so this graph's combinator fields may reach the
+ * device.
+ */
 let residentEval: GpuFieldEvaluator | undefined;
-/** Same device, no resident terminals — the spawn materialises to the CPU. */
+/** Same device, same options minus `deviceInstances` — the spawn materialises to the CPU. */
 let cpuEval: GpuFieldEvaluator | undefined;
 /** Present only when the renderer shares our device and the seam holds. */
 let deviceAdapter: WebGpuInstanceAdapter | undefined;
@@ -643,42 +672,67 @@ const statCache = overlay.addStat("nodes cooked/cached");
 const statStatus = overlay.addStat("status");
 statStatus("initialising…");
 
-const why = overlay.addCollapsible("why one fused member");
+const why = overlay.addCollapsible("why the chain still breaks in three places");
 why.textContent = [
   "A device-resident run is a maximal linear chain of resident-capable",
-  "nodes. This graph's chain is one node long:",
+  "nodes, and a chain of ONE only counts when it ends in a resident",
+  "terminal. Four of this graph's nine nodes are resident-capable on the",
+  "device path; three of them fuse, in two runs:",
   "",
   "  surfaceSample        cpu     changes the point count — never a member",
-  "  setAttribute height  cpu     code-authored field: no FieldSpec to lower",
-  "  setAttribute slope   cpu     code-authored field: no FieldSpec to lower",
-  "  filterByAttribute    cpu     changes the point count — never a member",
-  "  filterByAttribute    cpu     changes the point count — never a member",
-  "  setAttribute scale   cpu     code-authored field: no FieldSpec to lower",
-  '  setAttribute species cpu     string column: NOT resident-capable at all',
-  "  spawnInstances       DEVICE  the run — 1 member, 1 dispatch per species",
+  "  setAttribute height  DEVICE  run 1, member 1",
+  "  setAttribute slope   DEVICE  run 1, member 2",
+  "  filterByAttribute    cpu     changes the point count — BREAK",
+  "  filterByAttribute    cpu     changes the point count — BREAK",
+  "  setAttribute scale   device  field resolved per node; a lone member",
+  "                               is not a run — see below",
+  "  setAttribute species cpu     string column: NOT resident-capable — BREAK",
+  "  spawnInstances       DEVICE  run 2, the terminal — 1 dispatch per species",
   "",
-  "The chain break that matters is the last one. No resident node can",
-  "produce a string attribute, so `setAttribute(\"species\")` cannot join a",
-  "run, and the run therefore starts and ends at the spawn.",
+  "Since v0.9 every field here describes itself. `component(position(),",
+  "1)`, `sub(1, component(attribute(\"normal\", 3), 1))` and",
+  "`vec(remap(randomField(\"size\"), …))` are all written with the",
+  "combinator API, and each now carries a DERIVED FieldSpec. Derived",
+  "specs stay on the CPU unless a resolver opts in, and this page opts in",
+  "(`acceptDerivedSpecs: true` on both evaluators), which is why `gpu",
+  "fallbacks` reads `none` where v0.8 read `derived-spec ×3`. That is",
+  "what bought run 1.",
   "",
-  "The two rows above it are worth reading against `gpu fallbacks`, and",
-  "they fail for a different reason than `species` does. The height and",
-  "slope setAttributes ARE resident-capable by kind — but fusability also",
-  "requires every field param to carry a FieldSpec, and these fields are",
-  "code-authored, so the nodes are excluded before any run is planned.",
-  "They never form a chain to reject, which is why you see `no-spec` and",
-  "no `run-plan-failed` at all.",
+  "It did not buy `scale` a run, and no spec ever could have. `scale`",
+  "sits between a filter and a string setAttribute with nothing fusable",
+  "on either side, so its chain is one node long and it is not a",
+  "terminal — and a run of one is only formed for a resident terminal.",
+  "Its field does resolve on the device; it just resolves per node, with",
+  "its own readback, exactly as it would have before fusion existed.",
   "",
-  "So `species` is not the only thing keeping this chain off the device —",
-  "it is the one that would still block it if every field here were",
-  "authored with `fieldFromJson` instead.",
+  "So three real breaks are left — two filters and one string column —",
+  "and not one of them is a spec problem:",
   "",
-  "That does not cost the spawn its residency, and it does not cost",
-  "`species` its meaning: the host plans the grouping from the string",
-  "column it already holds, uploads a permutation, and the device",
-  "composes one buffer per asset. `resident runs / fused members` reads",
-  "1 / 1 because that is the truth — and `device dispatches` counts one",
-  "compose per species, not one per member.",
+  "  · the two `filterByAttribute` nodes change the point count. Every",
+  "    member of a run shares one element count, so a filter can never",
+  "    be a member, whatever its params carry.",
+  "  · `setAttribute(\"species\")` writes a STRING column. No resident",
+  "    node can produce one, so it cannot join a run at all.",
+  "",
+  "None of that costs `species` its meaning: the host plans the",
+  "grouping from the string column it already holds, uploads a",
+  "permutation, and the device composes one buffer per asset — which is",
+  "why `device dispatches` counts one compose per species, not one per",
+  "member.",
+  "",
+  "Numbers to expect. A full cook of the device path reads `resident",
+  "runs / fused members` = 2 / 3 and `device dispatches` = 7. Recook",
+  "without changing anything and the memo cache serves the eight",
+  "upstream nodes, so only the spawn re-runs and the same readouts read",
+  "1 / 1 and 2 — device-resident output is never memo-cached, so the",
+  "terminal always re-executes. On the CPU-readback toggle the spawn is",
+  "not a resident terminal, so a full cook reads 1 / 2: run 1 survives,",
+  "the terminal does not.",
+  "",
+  "Anything appearing in `gpu fallbacks` other than `none` is this",
+  "adapter declining a kernel (`compile-error`) or a plan",
+  "(`run-plan-failed`), not a change in the graph — the CPU serves that",
+  "field or those members instead, and the page still draws.",
 ].join("\n");
 
 overlay.addNote(
@@ -689,7 +743,9 @@ overlay.addNote(
     "composed in JS and uploaded, and `matrices uploaded` climbs by exactly the same arithmetic " +
     "instead. Both totals survive a switch, so you can recook a few times on each and compare. " +
     "`resident runs / fused members` is `CookStats.gpu.residentRuns / fusedNodes` verbatim — the " +
-    "same counters 08 · gpu fields shows as “fused nodes”.",
+    "same counters 08 · gpu fields shows as “fused nodes”. They describe the LAST cook, not a " +
+    "running total, so they fall when the memo cache serves the upstream nodes and only the " +
+    "spawn re-runs; move the seed or the density slider for a full cook.",
 );
 
 const hud = document.createElement("div");
@@ -766,8 +822,8 @@ function paintMode(): void {
     mode === "device"
       ? "<b>device-resident</b> — the spawn composes one matrix buffer per species in a WGSL " +
         "kernel and the renderer draws from them. Nothing is read back and nothing is uploaded. " +
-        "The run is <b>one member deep</b>: the string <code>species</code> attribute breaks the " +
-        "chain right before the spawn." +
+        "The chain cooks as <b>two runs</b>, and the panel below says where the remaining three " +
+        "breaks are — none of them about field specs." +
         ' <span class="pcg02-keys">G to compare · drag to orbit</span>'
       : "<b>CPU readback</b> — the same graph, the same fields on the same device, but the " +
         "spawner materialises: matrices are composed in JS and uploaded per batch." +
@@ -1066,7 +1122,7 @@ async function boot(): Promise<void> {
       : "webgl2";
 
   if (device !== undefined) {
-    const base = info !== undefined ? { adapterInfo: info } : {};
+    const base = { ...EVAL_OPTS, ...(info !== undefined ? { adapterInfo: info } : {}) };
     residentEval = new GpuFieldEvaluator(device, { ...base, deviceInstances: true });
     cpuEval = new GpuFieldEvaluator(device, base);
   }

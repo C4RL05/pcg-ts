@@ -502,7 +502,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
     <div class="examples">
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><img src="./thumbs/01-scatter-basic.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A dense field of small points scattered across a dark plane, thinned by noise, with a stats panel showing cook time and point count."><span class="meta"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></span></a>
-      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><img src="./thumbs/02-forest.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A hilly grey terrain covered in thousands of small green conifers, thinning out on steep slopes, beside a panel showing 4,246 pine and 1,666 bush composed on the GPU with 0 B of matrices uploaded."><span class="meta"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, and multi-asset instancing — both species composed on the GPU, one buffer each, no readback</span></span></a>
+      <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><img src="./thumbs/02-forest.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A hilly grey terrain covered in thousands of small green conifers, thinning out on steep slopes, beside a panel showing 4,246 pine and 1,666 bush composed on the GPU across 2 resident runs, with 0 B of matrices uploaded."><span class="meta"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, and multi-asset instancing — both species composed on the GPU, one buffer each, no readback</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/"><img src="./thumbs/03-spline-fence.jpg" width="640" height="345" loading="lazy" decoding="async" alt="Fence posts placed at even intervals along a curving spline, each rotated to follow the curve's tangent."><span class="meta"><b>03 · spline fence</b><span>spline sampling, posts oriented along the tangent in one graph</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/"><img src="./thumbs/04-infinite-world.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A landscape of scattered instances streaming around a moving camera, with a panel showing cooked and evicted cell counts."><span class="meta"><b>04 · infinite world</b><span>hierarchical streaming around a moving camera</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/"><img src="./thumbs/05-fields-playground.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A grid of points coloured by a composed noise field, beside a Svelte panel holding the editable field-expression JSON."><span class="meta"><b>05 · fields playground</b><span>compose field-spec JSON live (Svelte panel)</span></span></a>
@@ -581,10 +581,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.9.0 <small>2026-08-08</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Fields built with the ergonomic API stop being second-class. There were two ways to build a <code>Field</code> and only one of them was supported: <code>fieldFromJson</code> attached a spec, while <code>component(position(), 1)</code> attached nothing — so a graph holding a combinator field <b>could not be serialized at all</b>. Now every constructor derives its spec from its arguments, and those graphs round-trip. Only three cases still refuse, and they say which: a <code>makeField</code> closure, anything composed over one, and a tree past the spec depth limit — derivation refuses at exactly the depth the parser enforces, so a spec that could not be read back is never written. Device eligibility is the separate, narrower question: derived-spec fields reach the GPU only under <code>acceptDerivedSpecs</code>, <b>off by default</b>, because the device path is a documented approximation of the CPU one and no existing graph should change bytes just by upgrading. 1560 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>Device-produced asset keys — make <code>setAttribute</code> resident in string <code>values</code> mode so a graph can compute its own asset key on device and fuse the whole chain. That is also the only thing that would require a stable counting sort.</p>
+          <p>A <code>resident</code> descriptor for <code>filterByAttribute</code> — a count-changing run member. This, rather than field specs, is what would actually put the forest's chain on the device: its two filter nodes remain the real chain breaks.</p>
         </div>
       </li>
     </ul>
@@ -594,7 +601,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.8.0</span>
+    <span>pcg-ts v0.9.0</span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
