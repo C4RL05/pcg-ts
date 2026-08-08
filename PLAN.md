@@ -981,15 +981,31 @@ Design decisions fixed up front:
   Full survey: `notes/research/v10-resident-filter-survey.md` in the
   private repo, including a phase breakdown if it is scheduled anyway.
 
-- **Free and unscheduled:** reorder `examples/02-forest` so
-  `setAttribute("scale")` precedes the two filters. Fuses it into the
-  height/slope run (3 fused members, not 2) and drops one readback,
-  with no library change. Costs a re-shoot of the manual and landing
-  imagery, since the tree scales change.
+- ~~**Free and unscheduled:** reorder `examples/02-forest` so
+  `setAttribute("scale")` precedes the two filters.~~ **Done**
+  2026-08-08 (`0ed9290`): 2 runs / 4 members, one readback fewer, no
+  library change. It captured the entire benefit the resident-filter
+  descriptor above was going to be built for.
+
+- **Per-cause serialization refusal messages.** `fieldToJson` refuses
+  with one message that *enumerates* all three causes — a `makeField`
+  closure, anything composed over one, and a tree past
+  `MAX_SPEC_DEPTH` — rather than naming the one that actually applies.
+  `serializeGraph` prefixes it with `node "<id>" param "<key>"`, so the
+  location is always exact; only the cause is ambiguous. CLAUDE.md
+  treats error messages as part of the agent API, and "it is one of
+  these three" is weaker than this library's standard elsewhere.
+  Not fixable in the message alone: nothing records *why* a spec is
+  absent, because `undefined` propagates up the derivation without a
+  reason. Needs a reason carried alongside the withheld spec (the depth
+  `WeakMap` in `src/fields/spec.ts` is the obvious place), then the
+  three call sites in `fieldToJson` discriminate on it. Small, and
+  worth doing the next time `src/fields/spec.ts` is open for another
+  purpose.
 
 - **Give `04-infinite-world` a GPU evaluator.** It has `09-gpu-world`'s
-  shape authored with combinators, so it becomes the natural showcase
-  once v0.9 lands — but it is example work, not library work.
+  shape authored with combinators, so it became the natural showcase
+  once v0.9 landed — but it is example work, not library work.
 
 Full survey: `notes/research/v09-device-keys-survey.md` in the private
 repo.
