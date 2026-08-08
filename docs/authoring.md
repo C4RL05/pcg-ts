@@ -624,8 +624,8 @@ const gpu = new GpuFieldEvaluator(device, {
 });
 ```
 
-The default is `false` in v0.9.0, and the reasoning is worth having
-rather than the flag alone.
+The default is `false`, and the reasoning is worth having rather than
+the flag alone.
 
 Derived specs were measured before they were gated. On one adapter, the
 derived form of an expression compiles to the same kernel key and the
