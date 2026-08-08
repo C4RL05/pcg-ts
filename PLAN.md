@@ -905,6 +905,158 @@ Design decisions fixed up front:
 - Exit: full suite green, docs idempotent, `02-forest` browser-verified
   on both toggles, release tagged. Commit.
 
+## Phases (v0.10) — the agent authoring layer, scheduled 2026-08-08
+
+Design fixed up front; the full research plan and the node-library
+survey live in the private repo (`notes/research/node-roadmap.md` and
+the agent-authoring plan beside it).
+
+- **The pillar this serves.** The library is built to be driven by
+  agents: the registry is self-describing, graphs round-trip stable
+  JSON, errors name the offender. What is missing is everything
+  *around* that surface: authoring feedback needs a bespoke script per
+  question (no validate → cook → inspect loop), subgraphs cannot
+  expose params, there is no library of reusable subgraphs, and the
+  examples are code, not data an agent can read, imitate, or load.
+- **No server, no RPC — a CLI.** An agent authors the graph JSON
+  directly; wrapping add-node/connect calls in a remote API would be
+  more round trips and less reviewable than a diff. The part of a tool
+  API actually worth having is its feedback functions, and those ship
+  as `pcg` subcommands that serve humans and CI equally. Deferred,
+  recorded, not scheduled: a watch-mode process keeping cook caches
+  warm across iterations; any live co-editing bridge.
+- **Three data layers on top: primitives, examples, skills.**
+  Primitives are named, parameterized subgraphs — the vocabulary an
+  agent composes instead of reasoning out every wire. Examples are
+  complete graphs in JSON — read, imitated, loaded, and cooked in CI
+  so they cannot rot. Skills are short doctrine documents in the
+  standard Agent Skills format. Every catalog is generated from the
+  assets themselves and drift-tested; none are hand-maintained.
+- **Errors keep the house rule.** Unknown primitive name, unknown
+  param: hard error naming the offender and listing what is valid —
+  never a warning that lets a near-miss cook.
+- **Sequencing.** Interleaved with the node-library expansion:
+  the scaffolding phases need no new nodes and multiply agent leverage
+  over the existing 25 immediately; node waves land with the
+  vocabulary tiers that need them (paths in v0.11, topology in v0.12).
+
+### Phase 35 — Graph CLI and the feedback loop
+- `pcg` bin (pure Node, no new runtime deps): `nodes [type]` /
+  `fields` print the registry catalogs (wrapping `listNodeTypes()` /
+  `listFieldFns()`); `validate <graph.json>` deserializes and reports;
+  `cook <graph.json> [--seed] [--budget] [--stats] [--out]` cooks
+  headless and prints per-node stats; `inspect <graph.json> --node
+  [--pin]` prints element counts per domain, attribute
+  names/types/min/max/mean, bounds, and first-K sample rows; `render
+  <graph.json> --out out.svg` draws a deterministic top-down SVG
+  (points by attribute, polylines as paths) — the agent's eyes on the
+  output, diffable in git.
+- Optional `meta` block (`{ title, description, tags }`) in graph
+  JSON — optional field, `formatVersion` stays 1.
+- A headless Node example (load JSON → cook → stats) — the first
+  example that is data, not a page.
+- Exit: CLI smoke tests green; same seed → byte-identical SVG across
+  two runs; exit codes wired (0 ok, nonzero with the library's message
+  verbatim); an agent can author → validate → cook → inspect with no
+  bespoke script. Commit.
+
+### Phase 36 — Subgraph params and the named-primitive registry
+- Exposed params on subgraph nodes: schema'd (`ParamSchema` including
+  `acceptsField`), forwarded to inner nodes, hashed into memo keys
+  exactly as native params are. The forwarding semantics are designed
+  before implementation — one exposed param may feed several inner
+  params, and `Field` values must survive end-to-end.
+- Named subgraph registry: `registerSubgraph(name, spec)`; serialized
+  graphs may reference a subgraph by name + content hash instead of
+  embedding; the loader resolves from the registry, unknown names
+  error listing what is registered; transitive version-key
+  invalidation extends to named refs.
+- Catalog generator (`docs/primitives.json` + `.md`) reading the
+  assets' own meta; CI drift test.
+- `pcg run <name> [--param k=v] [--in data.json]` — direct
+  fire-and-forget execution of a named primitive.
+- Exit: a JSON graph referencing a named primitive with bound params
+  round-trips and cooks byte-identically to its embedded form;
+  exposed-param round-trip and cache-invalidation tests; catalog
+  generation idempotent; the drift test proven to redden. Commit.
+
+### Phase 37 — Vocabulary v1, spatial index, predicate filters
+- `src/spatial`: extract the uniform grid hash living privately inside
+  `selfPrune` into a reusable, deterministic, cacheable module.
+  `selfPrune` goldens must not move.
+- New nodes, first wave: `pointNeighborhood`, `sampleNearestPoint`,
+  `attributeReduce`; second wave: `filterByExpression` (a boolean
+  `Field` predicate — the params-accept-fields pillar finally reaching
+  the filter family), `filterGroup`, `attributeRemap`.
+- The first ~30 primitives across shape / fill / transform / compose /
+  filter / place / write, built on the node set above; all catalogued.
+- Exit: node count 25 → 31 with the reference regenerated; every
+  primitive validates and cooks in CI; double-cook determinism over
+  the primitive set. Commit.
+
+### Phase 38 — Example corpus, skills, docs, v0.10.0
+- ~20 single-concept examples (`examples/graphs/basics-*.json`), each
+  meta-described and named by what it teaches; generated index
+  (`docs/examples.json` + `.md`).
+- Skills: `graph-authoring` (prefer primitives; read the catalog and
+  an example before building; parameterize, don't hardcode; the
+  validate → cook → inspect loop) and `determinism` (seeds,
+  hash-combining, how to verify). Skills cite the generated references
+  and never embed listings that can drift stale.
+- Corpus CI: validate + cook under budget + golden count-level stats
+  (element counts, attribute presence, bounds within tolerance — not
+  float dumps, or the suite fights every legitimate change).
+- llms.txt gains the generated index sections; README/authoring
+  document the CLI and the primitive library. Version 0.10.0, tag,
+  GitHub release.
+- Exit: corpus green including double-cook determinism; docs
+  idempotent; release tagged. Commit.
+
+## Phases (v0.11) — paths and the pipeline corpus, planned 2026-08-08
+
+Planned from the same research pass; re-survey at cycle start per the
+usual protocol before treating the phase split as fixed.
+
+### Phase 39 — Path authoring, vocabulary v2
+- Node-level path authoring over the existing polyline structure:
+  `pointsToPath` (the unblocking node — nothing else in the curve
+  family can exist until a path can be *made* in-graph),
+  `writeTangents`, `pathResample` (reusing `splineSample`'s arc-length
+  table), `pathSmooth`, `pathFuseCollinear`.
+- Trace/subdivide-verb primitives; path basics examples.
+- Exit: nodes tested and the reference regenerated; path primitives
+  catalogued; path corpus green. Commit.
+
+### Phase 40 — Staged pipeline, skills v2, docs, v0.11.0
+- One staged pipeline in the corpus (settlement-scale: boundary →
+  districts → lots → detail), each step a graph extending the
+  previous; base + edits variants.
+- `performance-and-budgets` skill (SoA rules, partitioned cooking,
+  reading cook stats). Docs; version 0.11.0, tag, GitHub release.
+- Exit: every pipeline step cooks in CI; docs idempotent; release
+  tagged. Commit.
+
+## Phases (v0.12) — topology, planned 2026-08-08
+
+The one genuine data-model expansion in this arc (edges/adjacency),
+carrying its highest determinism risk. The encoding decision (an edge
+domain vs. paired datasets vs. side-car CSR) and the halo/tiebreak
+policy are recorded as open questions in the survey and must be
+settled before implementation. Re-survey at cycle start.
+
+### Phase 41 — Topology, vocabulary v3, docs, v0.12.0
+- Edge/adjacency topology with materialized CSR adjacency, built
+  deterministically and cached per input.
+- New nodes: `connectPoints`, `refineCluster`, `findPath`, and
+  `pruneByPriority` with an explicit halo/tiebreak policy (hash
+  tiebreak — never arrival order, never partition completion order).
+- Connect-verb primitives; network examples (paths between scattered
+  points).
+- Docs; version 0.12.0, tag, GitHub release.
+- Exit: the survey's 15-node batch is complete; cook-order-independence
+  tests for the cross-partition ops green; catalog and corpus green;
+  docs idempotent; release tagged. Commit.
+
 ## Stretch — surveyed and NOT scheduled
 
 - **Device-produced asset keys** (make `setAttribute` resident in
