@@ -389,7 +389,7 @@ Samples points along polyline primitives by arc length, treating all polylines o
 
 ## subgraph
 
-Composite node wrapping an inner graph as a single node. Pins are per-instance, derived from the exposed inner pins, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs). Serialized subgraph nodes carry no params; their inner graph is a nested payload under "subgraph" ({ graph, inputs, outputs }), recursively in the same versioned format.
+Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in "params" and its inner graph plus the exposed pin and param DECLARATIONS in a nested payload under "subgraph" ({ graph, inputs, outputs, params }), recursively in the same versioned format.
 
 **Category:** composite
 

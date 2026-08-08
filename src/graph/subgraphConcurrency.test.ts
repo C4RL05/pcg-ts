@@ -143,6 +143,61 @@ describe("concurrent cooks over one shared inner graph", () => {
     expect(together).toEqual(inputs.map((v) => v * 10));
   });
 
+  it("keeps exposed-param values with the wrapper that set them", async () => {
+    // The third piece of shared state, added in phase 36: exposed params
+    // are written into the inner graph by the wrapper, exactly like the
+    // seed and the portal items. Two instances of one def carrying
+    // DIFFERENT values must each cook against their own — the inner graph
+    // they share must not hand one wrapper the other's tuning.
+    const inner = new Graph(5);
+    const scaler = defineNode<{ factor: number }>({
+      type: "concurrency_scaler",
+      inputs: [],
+      outputs: [{ name: "out", kind: "value" as const }],
+      defaultParams: { factor: 1 },
+      async execute({ params, seed }) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return { out: [makeValueItem(params.factor * 1000 + (seed % 7))] };
+      },
+    });
+    const relay = defineNode<Record<string, never>>({
+      type: "concurrency_relay",
+      inputs: [{ name: "in", kind: "value" as const }],
+      outputs: [{ name: "out", kind: "value" as const }],
+      defaultParams: {},
+      async execute({ inputs }) {
+        // A second inner node, so the write and the cook straddle a yield.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return { out: [makeValueItem(readValue(inputs.in))] };
+      },
+    });
+    const factor = inner.add(scaler, undefined, "factor");
+    const tail = inner.add(relay, undefined, "tail");
+    inner.connect(factor, "out", tail, "in");
+    const def = subgraphNode(inner, [], [{ name: "out", node: tail, pin: "out" }], [
+      {
+        name: "factor",
+        targets: [{ node: factor, param: "factor" }],
+        schema: { type: "i32", default: 1, description: "Scale of the emitted value." },
+      },
+    ]);
+
+    const build = (value: number): Graph => {
+      const graph = new Graph(1);
+      const wrapper = graph.add(def, { factor: value }, "w");
+      graph.output(wrapper, "out", "v");
+      return graph;
+    };
+
+    const values = [2, 3, 4, 5];
+    const alone: number[] = [];
+    for (const value of values) alone.push(valueOf(await cook(build(value))));
+    expect(new Set(alone).size).toBe(values.length);
+
+    const together = (await Promise.all(values.map((v) => cook(build(v))))).map(valueOf);
+    expect(together).toEqual(alone);
+  });
+
   it("still serializes plain overlapping cooks of one graph", async () => {
     // The pre-existing guarantee the section is layered on top of: two
     // cooks of the SAME graph do not interleave.

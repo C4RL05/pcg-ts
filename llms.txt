@@ -40,9 +40,13 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
 - `nodes`: [{ `id`: string, `type`: registered type name, `params`: object }]
   Omitted params take their schema defaults. Field-capable params accept
   a field spec object (below) instead of a constant. A `subgraph` node
-  additionally carries `subgraph: { graph, inputs, outputs }` — the inner
-  graph recursively in this same format plus the exposed pin mappings
-  (`{ name, node, pin }` each) — so nested subgraphs round-trip. A
+  additionally carries `subgraph: { graph, inputs, outputs, params }` —
+  the inner graph recursively in this same format, the exposed pin
+  mappings (`{ name, node, pin }` each), and the exposed-param
+  declarations (`{ name, targets, description, default, min?, max? }`;
+  `type`/`enum`/`acceptsField` are re-derived from the targets on load,
+  never read from JSON) — so nested subgraphs round-trip. Its own
+  `params` hold the exposed params' values. A
   `dataInput` node serializes with `items: []` (live DataItems are
   runtime-injected; re-bind after deserializing).
 - `connections`: [{ `from`: [nodeId, outputPin], `to`: [nodeId, inputPin] }]
@@ -136,6 +140,27 @@ frozen snapshots with no mutation path that bypasses version bumps.
   subgraphs. Returns `undefined` for non-subgraph defs; throws
   (GraphValidationError, naming pin and inner node) when later edits
   broke the wrapper.
+- `describeSubgraphParams(def)` — per-instance params of a `subgraphNode`
+  def: frozen list of `{ name, schema, targets }` in exposure order,
+  where `schema` is the ParamSchema merged from the inner targets and
+  `targets` are the `{ node, param }` slots the value is written into.
+  Returns `undefined` for non-subgraph defs; throws when later edits
+  removed a bound inner node or param.
+- `resolveExposedParam(inner, decl)` — build one exposed param for
+  `subgraphNode`'s fourth argument. `decl` is
+  `{ name, targets, description, default?, min?, max? }`; the schema is
+  DERIVED from the targets' registered schemas (identical `type`/`enum`
+  required across targets, `acceptsField` ANDed, bounds intersected) and
+  the default is the first target's live value unless overridden. Values
+  live on the wrapping instance (so instances tune independently and
+  cache independently) and are written into the inner graph at cook time
+  and restored afterwards, so cooking never modifies the inner graph and
+  a graph's serialized bytes never depend on what was cooked — not even a
+  cook of another graph sharing the definition, or one that threw. A
+  Field on a param that is not field-capable throws at cook time, naming
+  the exposed param and the offending inner target. Two exposed params
+  binding the same inner slot, or one listing a slot twice, is a hard
+  error naming the params and the slot.
 
 Mutations keep serialization consistent: `serializeGraph` of a mutated
 graph round-trips and cooks identically. Rebuilding via
@@ -243,7 +268,7 @@ spawn, io, composite.
 - setBounds — stamp boundsMin/boundsMax on every point
 - spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`); one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order
 - splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
-- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs)` (pins are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins`, serializes recursively
+- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
 - transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail); `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)

@@ -327,7 +327,10 @@ describe("subgraph deserialization validation", () => {
     );
   });
 
-  it("rejects params on subgraph nodes, naming them", () => {
+  it("rejects params a subgraph node does not expose, listing what it does", () => {
+    // Subgraph nodes DO carry params now — their exposed ones. A value
+    // for a param the payload never declared is still a hard error, and
+    // the message lists the declarations instead of denying params exist.
     expect(() =>
       deserializeGraph(
         outer({
@@ -337,7 +340,7 @@ describe("subgraph deserialization validation", () => {
           subgraph: { graph: innerGraphJson, inputs: [], outputs: [] },
         }),
       ),
-    ).toThrow(/node "s": subgraph nodes carry no params.*found: bogus/);
+    ).toThrow(/node "s": unknown param "bogus"; this subgraph node exposes: \(none\)/);
   });
 
   it("rejects exposed pins referencing unknown inner nodes, listing them", () => {

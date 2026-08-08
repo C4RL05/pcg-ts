@@ -26,7 +26,8 @@
  *
  * Output is deterministic — see {@link renderNodeReference}.
  */
-import type { NodeTypeInfo, ParamSchema, ParamType, ParamValue } from "../nodes/registry.js";
+import type { ParamSchema, ParamType, ParamValue } from "../graph/index.js";
+import type { NodeTypeInfo } from "../nodes/registry.js";
 import type { PinKind } from "../graph/index.js";
 
 /** One rendered catalog: the bytes of each generated file. */

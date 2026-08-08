@@ -99,12 +99,21 @@ semantics keep the cooked output identical).
 
 Serialization is complete — two node types have special shapes:
 
-- A `subgraph` node (built with `subgraphNode`) serializes with empty
-  `params` plus a `subgraph: { graph, inputs, outputs }` payload: the
-  inner graph recursively in this same format, and the exposed pin
-  mappings as `{ name, node, pin }` (pin name on the wrapper, inner node
-  id, inner pin). Deserialization rebuilds the inner graph and re-wraps
-  it through `subgraphNode`, so nested subgraphs round-trip and cook
+- A `subgraph` node (built with `subgraphNode`) serializes with a
+  `subgraph: { graph, inputs, outputs, params }` payload: the inner graph
+  recursively in this same format, the exposed pin mappings as
+  `{ name, node, pin }` (pin name on the wrapper, inner node id, inner
+  pin), and the exposed-param declarations as
+  `{ name, targets, description, default, min?, max? }`. Its own `params`
+  hold the exposed params' VALUES — declarations in the payload, values
+  on the node, exactly as a standard node keeps its schemas in the
+  registry and its values on the node. A declaration carries only the
+  authored part: `type`, `enum` and `acceptsField` are re-derived from
+  the targets' registered schemas on load, so a payload cannot claim a
+  capability the inner params do not have. `params` is `{}` and the
+  payload's `params` key is absent when the node exposes none.
+  Deserialization rebuilds the inner graph and re-wraps it through
+  `subgraphNode`, so nested subgraphs round-trip and cook
   byte-identically.
 - A `dataInput` node serializes with `items: []`: live `DataItems` are
   runtime-injected (via `graph.setParam` or a `World` bind), never
@@ -291,8 +300,55 @@ seed derives from the outer node's seed, so two instances of a subgraph
 produce different (but reproducible) content. Graphs containing
 subgraph nodes serialize like any other: the inner graph rides along as
 a nested `subgraph` payload (see above), recursively, and
-`getSubgraphSpec(def)` exposes a node definition's inner graph and pin
-mappings for inspection.
+`getSubgraphSpec(def)` exposes a node definition's inner graph, pin
+mappings and param declarations for inspection.
+
+A fourth argument gives the wrapper its own params, each bound to one or
+more inner `(node, param)` slots. Build them with `resolveExposedParam`,
+which DERIVES the schema from the targets' registered schemas — the
+author supplies only a name, an agent-facing description, and optionally
+a default or narrowed bounds:
+
+```ts
+import { resolveExposedParam } from "pcg-ts";
+
+const clusterDef = subgraphNode(
+  inner,
+  [],
+  [{ name: "out", node: jitter, pin: "out" }],
+  [
+    resolveExposedParam(inner, {
+      name: "count",
+      targets: [{ node: scatter, param: "count" }],
+      description: "How many points in the cluster.",
+    }),
+  ],
+);
+const cluster = outer.add(clusterDef, { count: 120 });
+```
+
+The default is the target's LIVE value at wrap time (50 above), so
+wrapping a tuned graph keeps its tuning. Values live on the wrapping
+instance, so two instances of one def can be tuned differently and each
+caches on its own values; they are written into the inner graph at cook
+time. Fanning one param out to several targets requires them to agree on
+`type` and `enum`; `acceptsField` is ANDed and bounds intersect, so the
+exposed schema never admits a value one target would reject. A `Field`
+set on a param that is not field-capable fails at cook time naming the
+exposed param and the offending inner target.
+
+Two exposed params may not bind the same inner slot, and one may not list
+a slot twice: both are hard errors naming the params and the slot. A
+silent last-write-wins would leave a knob that appears to do something,
+forces a recook when it changes, and provably cannot change the output.
+
+**Cooking does not modify the inner graph.** The values are written in
+and restored again around each cook, so a graph's serialized bytes never
+depend on what has been cooked — including a cook of a DIFFERENT graph
+sharing the same definition, and including a cook that throws partway.
+This is the same guarantee the inner seed already carries, and it is what
+lets one definition back many independently tuned instances: `getSubgraphSpec(def).graph`
+holds what you wrapped, not what somebody last cooked through it.
 
 ### 4. Multi-asset spawn: per-point species (pure JSON)
 
@@ -372,7 +428,11 @@ introspection API — preserving node caches that a rebuild through
 - `describeSubgraphPins(def)` resolves a subgraph def's per-instance
   pins — exposed name plus the concrete kind of the inner pin, through
   nested subgraphs — live from the recorded spec; `undefined` for
-  non-subgraph defs.
+  non-subgraph defs. `describeSubgraphParams(def)` is its sibling for
+  params: exposed name, resolved schema, and the inner targets the value
+  is written into. Together they are a subgraph node's real interface —
+  `listNodeTypes()` reports the `subgraph` type as pinless and paramless
+  because both are per-instance.
 
 When to mutate vs rebuild: mutate while a live graph is being edited and
 warm caches matter (tweaking one branch of an expensive graph must not

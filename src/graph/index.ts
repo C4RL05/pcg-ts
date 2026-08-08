@@ -2,6 +2,13 @@ export * from "./errors.js";
 export * from "./data.js";
 export * from "./node.js";
 export {
+  paramSchemaError,
+  paramValueError,
+  type ParamSchema,
+  type ParamType,
+  type ParamValue,
+} from "./params.js";
+export {
   GRAPH_META_KEYS,
   Graph,
   validateGraphMeta,
@@ -21,11 +28,15 @@ export {
 } from "./execute.js";
 export { cloneGeometry } from "./clone.js";
 export {
+  describeSubgraphParams,
   describeSubgraphPins,
   getSubgraphPlumbing,
   getSubgraphSpec,
   subgraphNode,
+  type DescribedSubgraphParam,
   type DescribedSubgraphPin,
+  type ExposedParam,
+  type ExposedParamTarget,
   type ExposedPin,
   type SubgraphPins,
   type SubgraphPlumbing,

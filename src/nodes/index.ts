@@ -6,6 +6,7 @@
  */
 export * from "./registry.js";
 export * from "./fieldJson.js";
+export * from "./subgraphParams.js";
 export * from "./serialize.js";
 export * from "./sources.js";
 export * from "./samplers.js";

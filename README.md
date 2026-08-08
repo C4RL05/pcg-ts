@@ -145,8 +145,11 @@ and pin named.
   the named outputs' upstream subgraph; everything else is untouched and
   keeps its caches. Staged pipelines fit in one graph — cook the early
   output, bind data derived from it, then cook the rest.
-- **Subgraphs.** `subgraphNode(inner, exposedInputs, exposedOutputs)`
-  wraps a whole graph as one node with its own persistent inner caches.
+- **Subgraphs.** `subgraphNode(inner, exposedInputs, exposedOutputs,
+  exposedParams)` wraps a whole graph as one node with its own persistent
+  inner caches. Exposed params give the wrapper its own knobs, each bound
+  to one or more inner params, with schemas derived from those params
+  rather than hand-written.
 - **Live editing.** `removeNode` cascades: every connection touching the
   node and every output declared on it go with it, in a single version
   bump — downstream nodes recook on the next cook, untouched branches
@@ -215,8 +218,9 @@ to choose from: the node and param at fault, plus — for an opaque leaf
 combinator tree is named rather than the constructor above it.
 
 Serialization is complete: subgraph nodes carry their inner graph as a
-nested payload (`subgraph: { graph, inputs, outputs }`, recursively in
-the same format), and `dataInput` nodes serialize with an empty `items`
+nested payload (`subgraph: { graph, inputs, outputs, params }`,
+recursively in the same format, with exposed-param values on the node
+itself), and `dataInput` nodes serialize with an empty `items`
 list — live data items are runtime-injected, so re-bind them after
 deserializing. Deserialization validates node types, param schemas,
 bounds, enum membership, pins, and connections — every error names the
