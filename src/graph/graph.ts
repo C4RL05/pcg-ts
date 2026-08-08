@@ -117,6 +117,38 @@ export interface GraphDescription {
  * terminal outputs, then cook with `cook(graph)`. Connections are
  * validated eagerly (pins, kinds, single-pin occupancy, cycles).
  */
+/**
+ * Descriptive metadata about a graph: what it is and what it is for.
+ * Carried through the serialized JSON as an optional `meta` block and
+ * read back by {@link Graph.meta}. Purely descriptive — cooking never
+ * reads it, so it is not part of any memo key and setting it does not
+ * bump {@link Graph.version}.
+ */
+export interface GraphMeta {
+  /** Short human name, e.g. "scatter on a slope". */
+  readonly title?: string;
+  /** One or more sentences on what the graph builds. */
+  readonly description?: string;
+  /** Free-form labels for catalogs and search, e.g. ["scatter", "basics"]. */
+  readonly tags?: readonly string[];
+}
+
+/** Keys a {@link GraphMeta} object may carry, in canonical order. */
+export const GRAPH_META_KEYS: readonly string[] = ["title", "description", "tags"];
+
+/**
+ * Copy a {@link GraphMeta} into a frozen, canonical form: known keys only,
+ * absent keys omitted, `tags` copied so later caller-side mutation cannot
+ * reach into the graph. Assumes the value is already validated.
+ */
+export function freezeGraphMeta(meta: GraphMeta): GraphMeta {
+  const out: { title?: string; description?: string; tags?: readonly string[] } = {};
+  if (meta.title !== undefined) out.title = meta.title;
+  if (meta.description !== undefined) out.description = meta.description;
+  if (meta.tags !== undefined) out.tags = Object.freeze([...meta.tags]);
+  return Object.freeze(out);
+}
+
 export class Graph {
   /** @internal Node instances in insertion order. */
   readonly _nodes = new Map<string, NodeState>();
@@ -131,6 +163,7 @@ export class Graph {
 
   private _seed: number;
   private _version = 0;
+  private _meta: GraphMeta | undefined;
   private readonly typeCounts = new Map<string, number>();
 
   constructor(seed = 0) {
@@ -140,6 +173,26 @@ export class Graph {
   /** The graph seed all node seeds derive from. */
   get seed(): number {
     return this._seed;
+  }
+
+  /**
+   * Descriptive metadata, or `undefined` when the graph declares none.
+   * The returned object is frozen; replace it with {@link Graph.setMeta}.
+   */
+  get meta(): GraphMeta | undefined {
+    return this._meta;
+  }
+
+  /**
+   * Attach descriptive metadata (or clear it with `undefined`). The value
+   * is copied and frozen. Metadata is not cook input — no node sees it,
+   * no memo key includes it — so this deliberately does NOT bump
+   * {@link Graph.version}: retitling a graph must not invalidate a single
+   * cache. `serializeGraph` writes it as the optional `meta` block and
+   * `deserializeGraph` reads it back.
+   */
+  setMeta(meta: GraphMeta | undefined): void {
+    this._meta = meta === undefined ? undefined : freezeGraphMeta(meta);
   }
 
   /**

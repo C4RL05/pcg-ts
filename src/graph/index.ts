@@ -2,11 +2,14 @@ export * from "./errors.js";
 export * from "./data.js";
 export * from "./node.js";
 export {
+  GRAPH_META_KEYS,
   Graph,
+  freezeGraphMeta,
   type DescribedConnection,
   type DescribedNode,
   type DescribedOutput,
   type GraphDescription,
+  type GraphMeta,
   type NodeHandle,
 } from "./graph.js";
 export {

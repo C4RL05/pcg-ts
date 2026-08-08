@@ -484,6 +484,28 @@ export function listFieldFns(): string[] {
   return [...FNS.keys()].sort();
 }
 
+/** JSON-safe metadata of one field-expression constructor. */
+export interface FieldFnInfo {
+  /** The `fn` value in a spec. */
+  readonly fn: string;
+  /** Spec keys allowed besides `fn`, in declaration order. */
+  readonly keys: readonly string[];
+  /** Usage sketch — the same text the validation errors quote. */
+  readonly usage: string;
+}
+
+/**
+ * Metadata for every field constructor available in JSON specs, sorted by
+ * name: the grammar's counterpart of {@link listNodeTypes}, and the
+ * catalog an agent reads before writing a field-valued param.
+ */
+export function listFieldFnInfos(): FieldFnInfo[] {
+  return listFieldFns().map((fn) => {
+    const def = FNS.get(fn) as FnDef;
+    return { fn, keys: [...def.keys], usage: def.usage };
+  });
+}
+
 /**
  * Build a Field from a declarative JSON spec. Validates the constructor
  * name and every argument (errors name the failing path and list valid

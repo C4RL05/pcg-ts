@@ -7,11 +7,14 @@
  */
 import { isField } from "../fields/index.js";
 import {
+  GRAPH_META_KEYS,
   Graph,
+  freezeGraphMeta,
   getSubgraphPlumbing,
   getSubgraphSpec,
   subgraphNode,
   type ExposedPin,
+  type GraphMeta,
   type NodeHandle,
   type SubgraphSpec,
 } from "../graph/index.js";
@@ -83,6 +86,13 @@ export interface SerializedOutput {
 export interface SerializedGraph {
   readonly formatVersion: 1;
   readonly seed: number;
+  /**
+   * Optional descriptive block ({@link GraphMeta}): title, description,
+   * tags. Written only when the graph declares one, ignored by cooking,
+   * and — being purely additive — read by every formatVersion-1 reader
+   * that predates it, so the version stays 1.
+   */
+  readonly meta?: GraphMeta;
   readonly nodes: readonly SerializedNode[];
   readonly connections: readonly SerializedConnection[];
   readonly outputs: readonly SerializedOutput[];
@@ -118,6 +128,42 @@ standardNode<Record<string, never>>({
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Validate and copy the optional `meta` block. Absent is fine; present
+ * and malformed is a hard error naming the offending key and listing the
+ * valid ones — a near-miss like "titel" must not cook silently.
+ */
+function readGraphMeta(v: unknown, where: string): GraphMeta | undefined {
+  if (v === undefined) return undefined;
+  if (!isPlainObject(v)) {
+    fail(
+      `${where}: expected an object { title?, description?, tags? }, got ${JSON.stringify(v)}`,
+    );
+  }
+  for (const key of Object.keys(v)) {
+    if (!GRAPH_META_KEYS.includes(key)) {
+      fail(`${where}: unknown key "${key}"; valid keys: ${GRAPH_META_KEYS.join(", ")}`);
+    }
+  }
+  for (const key of ["title", "description"] as const) {
+    const value = v[key];
+    if (value !== undefined && typeof value !== "string") {
+      fail(`${where}.${key}: expected a string, got ${JSON.stringify(value)}`);
+    }
+  }
+  if (v.tags !== undefined) {
+    if (!Array.isArray(v.tags)) {
+      fail(`${where}.tags: expected an array of strings, got ${JSON.stringify(v.tags)}`);
+    }
+    v.tags.forEach((tag: unknown, i: number) => {
+      if (typeof tag !== "string") {
+        fail(`${where}.tags[${i}]: expected a string, got ${JSON.stringify(tag)}`);
+      }
+    });
+  }
+  return freezeGraphMeta(v as GraphMeta);
 }
 
 /**
@@ -349,6 +395,9 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
     return {
       formatVersion: FORMAT_VERSION,
       seed: graph.seed,
+      // Optional: omitted entirely when the graph declares no metadata, so
+      // a graph that never used it serializes byte-identically to before.
+      ...(graph.meta !== undefined ? { meta: freezeGraphMeta(graph.meta) } : {}),
       nodes,
       connections: graph._connections
         .filter((c) => !isPortal(c.from) && !isPortal(c.to))
@@ -477,6 +526,10 @@ function addSubgraphNode(
  * errors name the offending node id, param, or pin and list what would
  * be valid.
  *
+ * The optional `meta` block ({ title?, description?, tags? }) is read
+ * onto {@link Graph.setMeta}; an unknown key inside it is an error, not a
+ * warning. Absent meta leaves the graph without any.
+ *
  * `subgraph` nodes are rebuilt recursively from their nested payload and
  * re-wrapped through `subgraphNode`, so they behave exactly like
  * code-first subgraph nodes (including inner-edit invalidation).
@@ -507,6 +560,7 @@ function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
   if (!Array.isArray(outputsJson)) fail(`"outputs" must be an array`);
 
   const graph = new Graph(json.seed);
+  graph.setMeta(readGraphMeta(json.meta, `"meta"`));
   const handles = new Map<string, NodeHandle>();
   const knownIds = (): string => [...handles.keys()].join(", ");
 

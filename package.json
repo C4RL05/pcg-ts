@@ -26,7 +26,11 @@
   "engines": {
     "node": ">=18"
   },
+  "bin": {
+    "pcg": "bin/pcg.mjs"
+  },
   "files": [
+    "bin",
     "dist",
     "llms.txt",
     "docs/nodes.md",
@@ -45,6 +49,10 @@
     "./gpu": {
       "types": "./dist/gpu/index.d.ts",
       "import": "./dist/gpu/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
     },
     "./package.json": "./package.json"
   },

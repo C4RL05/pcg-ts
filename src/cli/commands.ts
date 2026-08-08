@@ -1,0 +1,589 @@
+/**
+ * The `pcg` subcommands. Each one produces both a text rendering and a
+ * machine-readable object; `--json` chooses between them, so the human
+ * and the agent read the same run, never two different code paths.
+ */
+import {
+  type CookOptions,
+  DOMAINS,
+  type Domain,
+  type NodeDoneInfo,
+  type NodeTypeInfo,
+  type ParamSchema,
+  cook,
+  getNodeType,
+  listFieldFnInfos,
+  listNodeTypes,
+} from "../index.js";
+import {
+  type CommandSpec,
+  CliUsageError,
+  type ParsedArgs,
+  boolFlag,
+  intFlag,
+  numberFlag,
+  stringFlag,
+} from "./args.js";
+import { CliError } from "./errors.js";
+import { fmtMs, fmtStat, plural, table } from "./format.js";
+import { type TargetOptions, cookTarget, loadGraph } from "./graphSource.js";
+import type { CliIo } from "./io.js";
+import { renderSvg } from "./render.js";
+import { type ItemSummary, attrListText, itemLine, sampleRows, summarizeItem } from "./summary.js";
+
+/** What a command produced: one text rendering, one JSON rendering. */
+export interface CommandOutcome {
+  readonly text: string;
+  readonly json: unknown;
+}
+
+/** A subcommand: its declared surface plus its implementation. */
+export interface Command {
+  readonly spec: CommandSpec;
+  run(args: ParsedArgs, io: CliIo): Promise<CommandOutcome>;
+}
+
+const GRAPH_ARG = {
+  name: "graph.json",
+  required: true,
+  description: "path to a serialized graph (formatVersion 1)",
+} as const;
+
+const SEED_FLAG = {
+  kind: "number",
+  value: "n",
+  description: "override the graph seed before cooking",
+} as const;
+
+const BUDGET_FLAG = {
+  kind: "number",
+  value: "ms",
+  description: "soft per-pass time budget in milliseconds (CookOptions.budgetMs)",
+} as const;
+
+const TARGET_FLAGS = {
+  node: { kind: "string", value: "id", description: "read a node's output pin instead of a declared output" },
+  pin: { kind: "string", value: "name", description: "output pin on --node (default: its first output pin)" },
+  output: { kind: "string", value: "name", description: "read one declared output (default: all of them)" },
+} as const;
+
+/**
+ * Which data the shared `--node`/`--pin`/`--output` flags select.
+ * Combinations that would silently ignore one of them are refused
+ * instead: a flag that does nothing is a misunderstanding worth hearing
+ * about immediately.
+ */
+function targetOptions(args: ParsedArgs, command: string): TargetOptions {
+  const node = stringFlag(args, "node");
+  const pin = stringFlag(args, "pin");
+  const output = stringFlag(args, "output");
+  if (node !== undefined && output !== undefined) {
+    throw new CliUsageError(
+      `${command}: --node and --output select different sources; pass one of them, not both`,
+    );
+  }
+  if (pin !== undefined && node === undefined) {
+    throw new CliUsageError(
+      `${command}: --pin names an output pin on --node, so it needs --node <id>; to read a declared output use --output <name>`,
+    );
+  }
+  return {
+    ...(node !== undefined ? { node } : {}),
+    ...(pin !== undefined ? { pin } : {}),
+    ...(output !== undefined ? { output } : {}),
+  };
+}
+
+/** Cook options from the shared `--budget` flag. */
+function cookOptions(args: ParsedArgs, command: string): CookOptions {
+  const budgetMs = numberFlag(args, "budget");
+  if (budgetMs !== undefined && !(budgetMs > 0)) {
+    throw new CliError(`${command}: --budget must be greater than 0, got ${budgetMs}`);
+  }
+  return budgetMs === undefined ? {} : { budgetMs };
+}
+
+/** Apply `--seed` to a freshly loaded graph. */
+function applySeed(args: ParsedArgs, command: string, graph: { setSeed(n: number): void }): number | undefined {
+  const seed = intFlag(args, "seed", command, { min: 0 });
+  if (seed !== undefined) graph.setSeed(seed);
+  return seed;
+}
+
+// ---------------------------------------------------------------------------
+// nodes
+// ---------------------------------------------------------------------------
+
+function paramRow(name: string, schema: ParamSchema): string[] {
+  const range =
+    schema.min !== undefined && schema.max !== undefined
+      ? `${schema.min}..${schema.max}`
+      : schema.min !== undefined
+        ? `>= ${schema.min}`
+        : schema.max !== undefined
+          ? `<= ${schema.max}`
+          : "";
+  return [
+    name,
+    schema.type,
+    JSON.stringify(schema.default),
+    range,
+    schema.enum !== undefined ? schema.enum.join("|") : "",
+    schema.acceptsField === true ? "field" : "",
+    schema.description,
+  ];
+}
+
+function nodeDetailText(info: NodeTypeInfo): string {
+  const pins = (list: readonly { name: string; kind: string; multi: boolean }[]): string =>
+    list.length === 0
+      ? "(none)"
+      : list.map((p) => `${p.name} (${p.kind}${p.multi ? ", multi" : ""})`).join(", ");
+  const lines = [
+    `${info.type}${info.category !== undefined ? `  [${info.category}]` : ""}`,
+    "",
+    info.description,
+    "",
+    `inputs:  ${pins(info.inputs)}`,
+    `outputs: ${pins(info.outputs)}`,
+    "",
+  ];
+  const names = Object.keys(info.params);
+  if (names.length === 0) {
+    lines.push("params:  (none)");
+  } else {
+    lines.push("params:");
+    lines.push(
+      ...table([
+        ["name", "type", "default", "range", "enum", "field", "description"],
+        ...names.map((name) => paramRow(name, info.params[name])),
+      ]),
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+function firstSentence(description: string): string {
+  return description.split(". ")[0].replace(/\.$/, "");
+}
+
+const nodesCommand: Command = {
+  spec: {
+    name: "nodes",
+    summary:
+      "Print the node-type catalog from the registry (listNodeTypes()). With a type, print that type's pins and full param schema.",
+    positionals: [
+      { name: "type", required: false, description: "a registered node type, e.g. pointScatterInBounds" },
+    ],
+    flags: {},
+  },
+  run(args) {
+    const wanted = args.positional[0];
+    if (wanted !== undefined) {
+      // Unknown types raise the registry's own error, which lists every
+      // registered type — the CLI must not paraphrase it.
+      const info = getNodeType(wanted).info;
+      return Promise.resolve({ text: nodeDetailText(info), json: info });
+    }
+    const types = [...listNodeTypes()].sort((a, b) => (a.type < b.type ? -1 : a.type > b.type ? 1 : 0));
+    const byCategory = new Map<string, NodeTypeInfo[]>();
+    for (const info of types) {
+      const key = info.category ?? "(uncategorized)";
+      const bucket = byCategory.get(key);
+      if (bucket === undefined) byCategory.set(key, [info]);
+      else bucket.push(info);
+    }
+    const categories = [...byCategory.keys()].sort((a, b) =>
+      a === "(uncategorized)" ? 1 : b === "(uncategorized)" ? -1 : a < b ? -1 : 1,
+    );
+    const lines = [`${plural(types.length, "node type")}, by category`, ""];
+    for (const category of categories) {
+      lines.push(`${category}:`);
+      lines.push(
+        ...table((byCategory.get(category) as NodeTypeInfo[]).map((i) => [i.type, firstSentence(i.description)])),
+      );
+      lines.push("");
+    }
+    lines.push("pcg nodes <type> prints one type's pins and params.");
+    return Promise.resolve({ text: lines.join("\n") + "\n", json: types });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// fields
+// ---------------------------------------------------------------------------
+
+const fieldsCommand: Command = {
+  spec: {
+    name: "fields",
+    summary:
+      "Print the field-expression catalog: every `fn` a field-valued param accepts in JSON, with its allowed keys and usage.",
+    positionals: [{ name: "fn", required: false, description: "a field constructor, e.g. perlinNoise" }],
+    flags: {},
+  },
+  run(args) {
+    const infos = listFieldFnInfos();
+    const wanted = args.positional[0];
+    if (wanted !== undefined) {
+      const info = infos.find((i) => i.fn === wanted);
+      if (info === undefined) {
+        throw new CliError(
+          `unknown field fn "${wanted}"; valid fns: ${infos.map((i) => i.fn).join(", ")}`,
+        );
+      }
+      const text = [
+        info.fn,
+        "",
+        `keys:  ${info.keys.length === 0 ? "(none besides fn)" : info.keys.join(", ")}`,
+        `usage: ${info.usage}`,
+        "",
+      ].join("\n");
+      return Promise.resolve({ text, json: info });
+    }
+    const lines = [`${plural(infos.length, "field fn")}`, ""];
+    lines.push(...table(infos.map((i) => [i.fn, i.usage])));
+    lines.push("");
+    lines.push("pcg fields <fn> prints one constructor's keys and usage.");
+    return Promise.resolve({ text: lines.join("\n") + "\n", json: infos });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// validate
+// ---------------------------------------------------------------------------
+
+const validateCommand: Command = {
+  spec: {
+    name: "validate",
+    summary:
+      "Deserialize a graph file and report its structure. Exits nonzero with the library's own message when the graph is invalid.",
+    positionals: [GRAPH_ARG],
+    flags: {},
+  },
+  run(args, io) {
+    const { graph, path } = loadGraph(io, args.positional[0]);
+    const description = graph.describe();
+    const meta = graph.meta;
+    const nodes = description.nodes.map((n) => ({ id: n.id, type: n.defType ?? "(unregistered)" }));
+    const lines = [
+      `ok  ${path}`,
+      `seed ${graph.seed}  ${plural(nodes.length, "node")}  ${plural(
+        description.connections.length,
+        "connection",
+      )}  ${plural(description.outputs.length, "output")}`,
+    ];
+    if (meta !== undefined) {
+      lines.push("");
+      if (meta.title !== undefined) lines.push(`title:       ${meta.title}`);
+      if (meta.description !== undefined) lines.push(`description: ${meta.description}`);
+      if (meta.tags !== undefined) lines.push(`tags:        ${meta.tags.join(", ")}`);
+    }
+    lines.push("", "nodes:");
+    lines.push(...table(nodes.map((n) => [n.id, n.type])));
+    lines.push("", "outputs:");
+    lines.push(
+      ...(description.outputs.length === 0
+        ? ["  (none declared — nothing to cook without --node)"]
+        : table(description.outputs.map((o) => [o.name, `<- ${o.id}.${o.pin}`]))),
+    );
+    return Promise.resolve({
+      text: lines.join("\n") + "\n",
+      json: {
+        ok: true,
+        path,
+        seed: graph.seed,
+        ...(meta !== undefined ? { meta } : {}),
+        nodes,
+        connections: description.connections.map((c) => ({ from: c.from, to: c.to })),
+        outputs: description.outputs.map((o) => ({ name: o.name, node: o.id, pin: o.pin })),
+      },
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// cook
+// ---------------------------------------------------------------------------
+
+const cookCommand: Command = {
+  spec: {
+    name: "cook",
+    summary:
+      "Cook every declared output headless and report what came out. --stats adds the per-node breakdown (cooked vs served from cache).",
+    positionals: [GRAPH_ARG],
+    flags: {
+      seed: SEED_FLAG,
+      budget: BUDGET_FLAG,
+      stats: { kind: "boolean", description: "print per-node cook stats" },
+      out: { kind: "string", value: "file", description: "write the JSON report to a file" },
+    },
+  },
+  async run(args, io) {
+    const { graph, path } = loadGraph(io, args.positional[0]);
+    const seed = applySeed(args, "cook", graph);
+    const declared = graph.describe().outputs;
+    if (declared.length === 0) {
+      throw new CliError(
+        `"${path}" declares no outputs, so cooking it produces nothing; declare one in the JSON ("outputs": [...]) or inspect a node directly with: pcg inspect ${path} --node <id>`,
+      );
+    }
+    const perNode: NodeDoneInfo[] = [];
+    const result = await cook(graph, {
+      ...cookOptions(args, "cook"),
+      onNodeDone: (info) => perNode.push(info),
+    });
+
+    const outputs: Record<string, ItemSummary[]> = {};
+    for (const name of Object.keys(result.outputs)) {
+      outputs[name] = [...result.outputs[name]].map(summarizeItem);
+    }
+    const json = {
+      path,
+      seed: graph.seed,
+      stats: {
+        cooked: result.stats.cooked,
+        cached: result.stats.cached,
+        elapsedMs: result.stats.elapsedMs,
+      },
+      nodes: perNode.map((n) => ({
+        id: n.id,
+        type: n.type,
+        cached: n.cached,
+        elapsedMs: n.elapsedMs,
+      })),
+      outputs,
+    };
+
+    const lines = [
+      `cooked ${path}${seed !== undefined ? ` (seed override ${seed})` : ` (seed ${graph.seed})`}`,
+      `${result.stats.cooked} cooked, ${result.stats.cached} cached, ${fmtMs(result.stats.elapsedMs)}`,
+      "",
+      "outputs:",
+    ];
+    for (const name of Object.keys(outputs)) {
+      lines.push(`  ${name} (${plural(outputs[name].length, "item")})`);
+      outputs[name].forEach((item, i) => lines.push(`    [${i}] ${itemLine(item)}`));
+    }
+    if (boolFlag(args, "stats")) {
+      lines.push("", "per-node:");
+      lines.push(
+        ...table([
+          ["id", "type", "state", "elapsed"],
+          ...perNode.map((n) => [n.id, n.type, n.cached ? "cached" : "cooked", fmtMs(n.elapsedMs)]),
+        ]),
+      );
+    }
+    const outPath = stringFlag(args, "out");
+    if (outPath !== undefined) {
+      io.writeFile(outPath, JSON.stringify(json, null, 2) + "\n");
+      lines.push("", `wrote ${outPath}`);
+    }
+    return { text: lines.join("\n") + "\n", json };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// inspect
+// ---------------------------------------------------------------------------
+
+const inspectCommand: Command = {
+  spec: {
+    name: "inspect",
+    summary:
+      "Cook one node's output pin (or a declared output) and report element counts per domain, attribute statistics, bounds, and the first sample rows.",
+    positionals: [GRAPH_ARG],
+    flags: {
+      ...TARGET_FLAGS,
+      seed: SEED_FLAG,
+      budget: BUDGET_FLAG,
+      rows: { kind: "number", value: "k", description: "sample rows to print (default 5)" },
+      domain: {
+        kind: "string",
+        value: "name",
+        description: "domain to sample rows from: point, vertex, primitive, detail (default point)",
+      },
+    },
+  },
+  async run(args, io) {
+    const { graph, path } = loadGraph(io, args.positional[0]);
+    applySeed(args, "inspect", graph);
+    const rows = intFlag(args, "rows", "inspect", { min: 0 }) ?? 5;
+    const domainName = stringFlag(args, "domain") ?? "point";
+    if (!(DOMAINS as readonly string[]).includes(domainName)) {
+      throw new CliError(
+        `inspect: unknown domain "${domainName}"; valid domains: ${DOMAINS.join(", ")}`,
+      );
+    }
+    const domain = domainName as Domain;
+    const target = await cookTarget(
+      graph,
+      targetOptions(args, "inspect"),
+      cookOptions(args, "inspect"),
+    );
+
+    const items = [...target.collection];
+    const summaries = items.map(summarizeItem);
+    const lines = [
+      `${path} — ${target.label}`,
+      `${plural(items.length, "item")}, cooked ${target.result.stats.cooked}, cached ${target.result.stats.cached}`,
+    ];
+    const sampled: unknown[] = [];
+    summaries.forEach((summary, i) => {
+      lines.push("", `item ${i}: ${itemLine(summary)}`);
+      if (summary.kind !== "geometry") {
+        sampled.push(null);
+        return;
+      }
+      for (const domainSummary of summary.geometry.domains) {
+        // A domain with no attributes says nothing the item line has not
+        // already said (its element count), so it is left out.
+        if (domainSummary.attrs.length === 0) continue;
+        lines.push(
+          `  ${domainSummary.domain} — ${plural(domainSummary.count, "element")}: ${attrListText(domainSummary.attrs)}`,
+        );
+        lines.push(
+          ...table(
+            [
+              ["attr", "type", "tuple", "min", "max", "mean"],
+              ...domainSummary.attrs.map((a) => [
+                a.name,
+                a.type,
+                String(a.tupleSize),
+                a.min !== undefined ? a.min.map(fmtStat).join(",") : a.distinct !== undefined ? `${a.distinct} distinct` : "",
+                a.max !== undefined ? a.max.map(fmtStat).join(",") : (a.values ?? []).map((v) => JSON.stringify(v)).join(" "),
+                a.mean !== undefined ? a.mean.map(fmtStat).join(",") : "",
+              ]),
+            ],
+            "    ",
+          ),
+        );
+      }
+      const item = items[i];
+      if (item.kind !== "geometry") return;
+      const sample = sampleRows(item.geo, domain, rows);
+      sampled.push(sample);
+      if (sample.rows.length > 0) {
+        lines.push(`  first ${sample.rows.length} of ${sample.total} ${domain} rows:`);
+        lines.push(...table([sample.columns as string[], ...sample.rows.map((r) => [...r])], "    "));
+      } else {
+        lines.push(`  no ${domain} rows to sample (${sample.total} elements)`);
+      }
+    });
+
+    return {
+      text: lines.join("\n") + "\n",
+      json: {
+        path,
+        target: target.label,
+        stats: {
+          cooked: target.result.stats.cooked,
+          cached: target.result.stats.cached,
+          elapsedMs: target.result.stats.elapsedMs,
+        },
+        domain,
+        items: summaries.map((summary, i) => ({ ...summary, sample: sampled[i] })),
+      },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// render
+// ---------------------------------------------------------------------------
+
+const renderCommand: Command = {
+  spec: {
+    name: "render",
+    summary:
+      "Draw a cooked collection as a deterministic top-down SVG (points as circles, polylines as paths). Without --out the SVG goes to stdout.",
+    positionals: [GRAPH_ARG],
+    flags: {
+      ...TARGET_FLAGS,
+      seed: SEED_FLAG,
+      budget: BUDGET_FLAG,
+      out: { kind: "string", value: "file.svg", description: "write the SVG to a file" },
+      width: { kind: "number", value: "px", description: "image width in pixels (default 800)" },
+      attr: {
+        kind: "string",
+        value: "name",
+        description: "point attribute to color by: scalar ramp, vec3+ as RGB, strings categorical",
+      },
+      radius: { kind: "number", value: "px", description: "point radius in pixels (default 1.5)" },
+      "max-points": { kind: "number", value: "n", description: "drawn-point cap per geometry (default 50000)" },
+      "max-primitives": { kind: "number", value: "n", description: "drawn-primitive cap per geometry (default 20000)" },
+    },
+  },
+  async run(args, io) {
+    const outPath = stringFlag(args, "out");
+    if (outPath === undefined && boolFlag(args, "json")) {
+      throw new CliUsageError(
+        "render: --json needs --out <file.svg>, because without it the SVG itself is the output",
+      );
+    }
+    const { graph, path } = loadGraph(io, args.positional[0]);
+    applySeed(args, "render", graph);
+    const target = await cookTarget(
+      graph,
+      targetOptions(args, "render"),
+      cookOptions(args, "render"),
+    );
+    const width = intFlag(args, "width", "render", { min: 1 });
+    const attr = stringFlag(args, "attr");
+    const radius = numberFlag(args, "radius");
+    if (radius !== undefined && !(radius > 0)) {
+      throw new CliError(`render: --radius must be greater than 0, got ${radius}`);
+    }
+    const maxPoints = intFlag(args, "max-points", "render", { min: 1 });
+    const maxPrimitives = intFlag(args, "max-primitives", "render", { min: 1 });
+    const result = renderSvg(target.collection, {
+      ...(width !== undefined ? { width } : {}),
+      ...(attr !== undefined ? { attr } : {}),
+      ...(radius !== undefined ? { radius } : {}),
+      ...(maxPoints !== undefined ? { maxPoints } : {}),
+      ...(maxPrimitives !== undefined ? { maxPrimitives } : {}),
+    });
+    const json = {
+      path,
+      target: target.label,
+      out: outPath ?? null,
+      width: result.width,
+      height: result.height,
+      points: result.points,
+      pointsTotal: result.pointsTotal,
+      primitives: result.primitives,
+      primitivesTotal: result.primitivesTotal,
+      instances: result.instances,
+      skipped: result.skipped,
+      ...(result.colorAttr !== undefined ? { colorAttr: result.colorAttr } : {}),
+      ...(result.bounds !== undefined ? { bounds: result.bounds } : {}),
+    };
+    if (outPath === undefined) return { text: result.svg, json };
+    io.writeFile(outPath, result.svg);
+    const truncated =
+      result.points < result.pointsTotal || result.primitives < result.primitivesTotal;
+    const text = [
+      `wrote ${outPath}  ${result.width}x${result.height}`,
+      `${path} — ${target.label}`,
+      `${result.points} of ${result.pointsTotal} points, ${result.primitives} of ${result.primitivesTotal} primitives, ${result.instances} instances${
+        result.skipped > 0 ? `, ${result.skipped} skipped (non-finite)` : ""
+      }${truncated ? " — capped, raise --max-points/--max-primitives to draw the rest" : ""}`,
+      ...(result.colorAttr !== undefined ? [`colored by "${result.colorAttr}"`] : []),
+      ...(result.bounds !== undefined
+        ? [
+            `bounds x ${fmtStat(result.bounds.min[0])}..${fmtStat(result.bounds.max[0])}  z ${fmtStat(result.bounds.min[1])}..${fmtStat(result.bounds.max[1])}`,
+          ]
+        : ["nothing drawable in this collection"]),
+    ].join("\n");
+    return { text: text + "\n", json };
+  },
+};
+
+/** Every subcommand, in help order. */
+export const COMMANDS: readonly Command[] = [
+  nodesCommand,
+  fieldsCommand,
+  validateCommand,
+  cookCommand,
+  inspectCommand,
+  renderCommand,
+];
