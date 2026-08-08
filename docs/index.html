@@ -281,7 +281,12 @@
 
   /* ---------- module list ---------- */
   .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 4px 28px; margin: 16px 0 8px; padding: 0; list-style: none; }
-  .modules li { display: flex; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+  /* Two columns, not a flex row: the module names differ in width
+     (src/gpu 55px, src/runtime 86px), so a flex row started every
+     description at a different x and wrapped lines under it. The fixed
+     first column lands them all on one edge. 88px clears the longest
+     name — widen it if a longer one is ever added. */
+  .modules li { display: grid; grid-template-columns: 88px 1fr; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
   .modules code { font-family: var(--mono); font-size: 13px; color: var(--accent-ink); white-space: nowrap; }
   .modules span { color: var(--muted); }
 
