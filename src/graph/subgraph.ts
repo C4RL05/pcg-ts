@@ -1,7 +1,7 @@
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";
-import { cook } from "./execute.js";
+import { cook, withExclusiveGraph } from "./execute.js";
 import type { Graph, NodeHandle } from "./graph.js";
 import { defineNode, type NodeDef, type PinDef, type PinKind } from "./node.js";
 
@@ -303,23 +303,34 @@ export function subgraphNode(
     gpu: "always",
     memoKey: () => transitiveVersionKey(inner, new Set()),
     async execute({ inputs, seed, signal, budgetMs, gpu }) {
-      // Same outer seed and inputs reproduce the same inner keys, so the
-      // persisted inner caches serve unchanged nodes across outer cooks.
-      // Quiet setters: plumbing must not bump the inner version, or the
-      // memo key above would invalidate this node on every cook.
-      inner._setSeedQuiet(hashCombine(seed, hashString("subgraph")));
-      for (const portal of portals) {
-        inner._setParamQuiet(portal.handle, "items", inputs[portal.name] ?? []);
-      }
-      // gpu forwards like signal/budgetMs: the inner cook applies the
-      // same policy (its per-cook stats view reports into the outer
-      // cook's sink; see gpuStatsView in execute.ts).
-      const result = await cook(inner, { signal, budgetMs, gpu });
-      const out: Record<string, DataCollection> = {};
-      for (const exp of exposedOutputs) {
-        out[exp.name] = result.outputs[`__out_${exp.name}`] ?? [];
-      }
-      return out;
+      // The writes and the cook are ONE indivisible step. One inner graph
+      // can back several wrapper instances — the same def used twice, or,
+      // once primitives are named, the same primitive referenced from two
+      // graphs — and those wrappers can be cooked concurrently. Preparing
+      // outside the guard let a second wrapper overwrite the seed and
+      // portal items after the first had written them and before its cook
+      // had read them, so the first cook finished against the second's
+      // seed: same graph, same seed, an output that depended on
+      // scheduling.
+      return withExclusiveGraph(inner, async () => {
+        // Same outer seed and inputs reproduce the same inner keys, so the
+        // persisted inner caches serve unchanged nodes across outer cooks.
+        // Quiet setters: plumbing must not bump the inner version, or the
+        // memo key above would invalidate this node on every cook.
+        inner._setSeedQuiet(hashCombine(seed, hashString("subgraph")));
+        for (const portal of portals) {
+          inner._setParamQuiet(portal.handle, "items", inputs[portal.name] ?? []);
+        }
+        // gpu forwards like signal/budgetMs: the inner cook applies the
+        // same policy (its per-cook stats view reports into the outer
+        // cook's sink; see gpuStatsView in execute.ts).
+        const result = await cook(inner, { signal, budgetMs, gpu });
+        const out: Record<string, DataCollection> = {};
+        for (const exp of exposedOutputs) {
+          out[exp.name] = result.outputs[`__out_${exp.name}`] ?? [];
+        }
+        return out;
+      });
     },
   });
   const detach = (e: ExposedPin): ExposedPin => ({ name: e.name, node: { id: e.node.id }, pin: e.pin });

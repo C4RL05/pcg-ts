@@ -593,6 +593,54 @@ function yieldToEventLoop(): Promise<void> {
 const inFlight = new WeakMap<Graph, Promise<unknown>>();
 
 /**
+ * Graphs whose exclusive section is held right now; see
+ * {@link withExclusiveGraph}. Read by {@link cook} so the section holder's
+ * own cook does not queue behind itself.
+ */
+const exclusive = new WeakSet<Graph>();
+
+/**
+ * @internal Run `fn` with exclusive access to `graph`, queued on the same
+ * per-graph chain as {@link cook}, so nothing else cooks or prepares it
+ * until `fn` settles.
+ *
+ * This exists because preparing a graph and cooking it must be ONE
+ * indivisible step. A subgraph wrapper writes the inner graph's seed and
+ * portal inputs and then awaits a cook of it; serializing only the cook
+ * leaves the writes outside the guard, so a second wrapper sharing that
+ * inner graph can overwrite them mid-flight and the first cook finishes
+ * against the second's seed — same graph, same seed, different output
+ * depending on scheduling, which is precisely what this library promises
+ * cannot happen.
+ *
+ * Deadlock-free by the same rule that makes subgraph nesting sound: a
+ * section for graph G is only ever entered from a cook of some OTHER
+ * graph, and nesting is acyclic. A graph that (transitively) wraps
+ * ITSELF is the exception — it already hung before this existed, and is
+ * rejected at construction time rather than here, where a nested call
+ * and a concurrent one are indistinguishable.
+ */
+export function withExclusiveGraph<T>(graph: Graph, fn: () => Promise<T>): Promise<T> {
+  const prev = inFlight.get(graph);
+  const run = (prev ?? Promise.resolve()).then(async () => {
+    exclusive.add(graph);
+    try {
+      return await fn();
+    } finally {
+      exclusive.delete(graph);
+    }
+  });
+  inFlight.set(
+    graph,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
+/**
  * Cook the graph: pull-based from its declared outputs (or the subset
  * selected via `opts.outputs`), topological order, sequential. Each node
  * is memoized on (type, param hash, node seed, input item revs, optional
@@ -615,6 +663,10 @@ const inFlight = new WeakMap<Graph, Promise<unknown>>();
  * keys and heals.
  */
 export function cook(graph: Graph, opts: CookOptions = {}): Promise<CookResult> {
+  // Re-entrant for the holder of an exclusive section: it is already the
+  // only task allowed to touch this graph, so queuing behind the chain
+  // its own section owns would deadlock against itself.
+  if (exclusive.has(graph)) return cookRun(graph, opts);
   const prev = inFlight.get(graph);
   const run = prev === undefined ? cookRun(graph, opts) : prev.then(() => cookRun(graph, opts));
   inFlight.set(
