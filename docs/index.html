@@ -106,7 +106,11 @@
   }
   section { padding: 44px 0 20px; }
   section + section { border-top: 1px solid var(--line); }
-  .lead { font-size: 17.5px; color: var(--muted); }
+  /* `ch` scales with the element's own font-size, so the 70ch measure
+     on `p` renders 66px wider here at 17.5px than in body copy at 16px
+     — the lead's right edge visibly overhung the paragraphs under it.
+     70 x 16/17.5 = 64 lands both on the same measure. */
+  .lead { font-size: 17.5px; color: var(--muted); max-width: 64ch; }
   .lead strong { color: var(--ink); font-weight: 600; }
 
   /* ---------- hero ---------- */
