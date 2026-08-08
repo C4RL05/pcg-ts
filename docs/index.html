@@ -4,11 +4,29 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="light dark" />
-<title>pcg-ts — deterministic PCG for TypeScript</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌱</text></svg>" />
+<title>pcg-ts — real-time PCG for TypeScript</title>
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
 <body>
 <style>
+  /* Self-hosted rather than linked from a font CDN: no third-party
+     request, nothing to block, and the page keeps its typography
+     offline. Both files are the latin subset of a VARIABLE font, so one
+     file per family covers every weight used here. OFL licensed. */
+  @font-face {
+    font-family: "Inter";
+    src: url("./fonts/inter-latin.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/jetbrains-mono-latin.woff2") format("woff2");
+    font-weight: 100 800;
+    font-style: normal;
+    font-display: swap;
+  }
   :root {
     /* Declare native light+dark support so Chrome's forced/auto dark mode
        (desktop flag and Android "Dark theme") never inverts the page. */
@@ -25,8 +43,8 @@
     --code-bg: #14201a;
     --code-ink: #d8e6da;
     --plate: #f7f9f5;
-    --mono: "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
-    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -110,6 +128,14 @@
     line-height: 1.05;
   }
   .hero-title .dot { color: var(--accent); }
+  /* Phosphor "graph" (MIT) — nodes and edges, which is what the library
+     is. Sized in em so it tracks the clamped title size. */
+  .hero-title .logo {
+    width: 0.86em; height: 0.86em;
+    fill: var(--accent);
+    vertical-align: -0.07em;
+    margin-right: 0.26em;
+  }
   .hero-sub {
     font-size: clamp(15px, 2.2vw, 18px);
     color: var(--muted);
@@ -331,8 +357,8 @@
     <canvas id="field" aria-hidden="true"></canvas>
     <div class="hero-overlay">
       <div class="wrap">
-        <h1 class="hero-title">pcg<span class="dot">-</span>ts</h1>
-        <p class="hero-sub">Deterministic procedural content generation for TypeScript — in the browser and Node, with optional three.js interop.</p>
+        <h1 class="hero-title"><svg class="logo" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><path d="M200,152a31.84,31.84,0,0,0-19.53,6.68l-23.11-18A31.65,31.65,0,0,0,160,128c0-.74,0-1.48-.08-2.21l13.23-4.41A32,32,0,1,0,168,104c0,.74,0,1.48.08,2.21l-13.23,4.41A32,32,0,0,0,128,96a32.59,32.59,0,0,0-5.27.44L115.89,81A32,32,0,1,0,96,88a32.59,32.59,0,0,0,5.27-.44l6.84,15.4a31.92,31.92,0,0,0-8.57,39.64L73.83,165.44a32.06,32.06,0,1,0,10.63,12l25.71-22.84a31.91,31.91,0,0,0,37.36-1.24l23.11,18A31.65,31.65,0,0,0,168,184a32,32,0,1,0,32-32Zm0-64a16,16,0,1,1-16,16A16,16,0,0,1,200,88ZM80,56A16,16,0,1,1,96,72,16,16,0,0,1,80,56ZM56,208a16,16,0,1,1,16-16A16,16,0,0,1,56,208Zm56-80a16,16,0,1,1,16,16A16,16,0,0,1,112,128Zm88,72a16,16,0,1,1,16-16A16,16,0,0,1,200,200Z"/></svg>pcg<span class="dot">-</span>ts</h1>
+        <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
       </div>
     </div>
   </div>
@@ -355,12 +381,12 @@
     <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>842</b><span>tests, all green</span></div>
+      <div class="stat"><b>1,561</b><span>tests, all green</span></div>
       <div class="stat"><b>25</b><span>registered node types</span></div>
       <div class="stat"><b>40</b><span>field-grammar functions</span></div>
       <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b>v0.6</b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b>v0.9</b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 

@@ -1,8 +1,9 @@
 # pcg-ts
 
-Deterministic procedural content generation for TypeScript. Runs in the
-browser and Node, with optional three.js interop (`pcg-ts/three`) and
-optional WebGPU field evaluation (`pcg-ts/gpu`). Built
+Real-time procedural content generation for TypeScript — deterministic
+by construction, WebGPU accelerated. Runs in the browser and Node, with
+optional three.js interop (`pcg-ts/three`) and optional WebGPU field
+evaluation (`pcg-ts/gpu`). Built
 to be driven by AI agents as well as humans: every node type carries
 machine-readable metadata, graphs serialize to a stable JSON format, and
 errors name the offending node, pin, or param. Agent-facing entry points:

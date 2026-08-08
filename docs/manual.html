@@ -5,11 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="light dark" />
 <meta name="description" content="The pcg-ts user manual: building worlds by hand, and driving the library programmatically as an agent." />
-<title>pcg-ts manual — deterministic PCG for TypeScript</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📗</text></svg>" />
+<title>pcg-ts manual — real-time PCG for TypeScript</title>
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
 </head>
 <body>
 <style>
+  /* Self-hosted rather than linked from a font CDN: no third-party
+     request, nothing to block, and the page keeps its typography
+     offline. Both files are the latin subset of a VARIABLE font, so one
+     file per family covers every weight used here. OFL licensed. */
+  @font-face {
+    font-family: "Inter";
+    src: url("./fonts/inter-latin.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/jetbrains-mono-latin.woff2") format("woff2");
+    font-weight: 100 800;
+    font-style: normal;
+    font-display: swap;
+  }
   :root {
     /* Declare native light+dark support so a forced/auto dark-mode
        extension never inverts the page. Every colour below is a token;
@@ -28,8 +46,8 @@
     --code-ink: #d8e6da;
     --plate: #f7f9f5;
     --shadow: rgba(27, 36, 30, 0.09);
-    --mono: "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
-    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
     /* Code-plate ink. The plate is dark in both themes, so these stay put. */
     --c-key: #7fd4a8;
     --c-str: #d8c078;
