@@ -612,9 +612,12 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     </figure>
     <p>Two levels: an unbounded level holding the landmark boulders (one global cell, no radius), and a bounded 20-unit level of small rocks that streams around the camera. The counters tell the streaming story directly — cells cooked, cells evicted, and a pending queue that stays at zero because <code>update</code> is called with a millisecond budget every frame.</p>
     <p>Fly out to the edge of the generation radius and back, or drag the radius slider while moving, and the same rocks return in the same places. That is the order- and path-independence guarantee being exercised rather than asserted: the cell content never depended on the route.</p>
+    <p>Since v0.9 the panel also carries a <b>GPU per-node / CPU</b> toggle and a <code>derived specs</code> checkbox, and that checkbox is the tidiest demonstration of what v0.9 changed. Every field in this example is written with the combinator API — <code>remap(randomField("mega"), 0, 1, 5, 13)</code> and friends — which until v0.9 could not reach the device at all. Untick the box and <code>gpu fallbacks</code> reads <code>derived-spec ×5</code> with zero dispatches; tick it and the fallbacks vanish and the dispatches appear. The instance count does not move either way, which is the point: the flag changes where the work happens, never what comes out.</p>
+    <p>What it does <em>not</em> show is fusion. <code>resident runs / fused members</code> reads <code>0 / 0</code> on both paths, and the demo has a <b>why nothing fuses here</b> section saying so: <code>filterByDensity</code> changes the point count and can never be a run member, which leaves both graphs as singleton chains, and a chain of one is only a run when it ends in a resident terminal. Reaching the device per node and fusing into one run are different wins, and this example is honest about which one it got.</p>
     <p class="demo-links">
       <span class="chip">World · LevelDef.bind · unbounded level · budgeted update</span>
       <span class="chip">pointScatterInBounds · setAttribute · filterByDensity · spawnInstances</span>
+      <span class="chip">gpu: GpuFieldEvaluator · acceptDerivedSpecs · CookStats.gpu</span>
       <span class="chip">three: WorldThreeBinding</span>
       <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/">run it →</a>
     </p>
