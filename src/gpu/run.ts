@@ -98,7 +98,7 @@ import {
 } from "../fields/index.js";
 import { cloneGeometry } from "../graph/clone.js";
 import { CookCancelledError } from "../graph/errors.js";
-import { peekAuthoredSpec, type FieldSpecArg } from "../fields/spec.js";
+import { deviceSpec, type FieldSpecArg } from "../fields/spec.js";
 import { hashCombine } from "../random/index.js";
 import { groupPointsByAsset } from "../spawn/grouping.js";
 import {
@@ -348,11 +348,18 @@ const NO_CONSTS: readonly number[] = [];
  * identical error), out-of-range tuple sizes — rejects with
  * `run-plan-failed`; an over-budget working set rejects with
  * `run-too-large`.
+ *
+ * `acceptDerivedSpecs` is the calling evaluator's advertised flag and is
+ * required rather than defaulted: this seam is defence in depth (the
+ * executor's fusion gate already filters members by the same predicate),
+ * and a default would let a caller silently plan against a narrower rule
+ * than the one whose memo keys were salted.
  */
 export function planResidentRun(
   members: readonly ResidentMemberDesc[],
   ctx: ResidentRunContext,
   maxResidentBytes: number,
+  acceptDerivedSpecs: boolean,
 ): PlanOutcome {
   const count = ctx.count;
   const layout = new Map<string, FieldKernelAttr>(Object.entries(ctx.attributes));
@@ -426,9 +433,10 @@ export function planResidentRun(
   ): { param: ApplyParamRef; ref: BufRef | null } => {
     let spec: FieldSpecArg;
     if (isField(value)) {
-      // Authored specs only — the same gate as `resolveField`, so a run
-      // never fuses what the per-field path would decline.
-      const s = peekAuthoredSpec(value);
+      // THE eligibility predicate again, with the flag the caller was
+      // constructed with — so a run never fuses what the per-field path
+      // would decline, and never declines what it would accept.
+      const s = deviceSpec(value, acceptDerivedSpecs);
       if (s === undefined) throw new PlanFail("no spec");
       spec = s;
     } else if (typeof value === "number" || (Array.isArray(value) && value.every((x) => typeof x === "number"))) {

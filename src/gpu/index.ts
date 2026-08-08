@@ -15,12 +15,15 @@
  * JSON-authored and code-authored fields carry a compilable spec, and a
  * derived one compiles to WGSL just as an authored one does.
  *
- * Device eligibility is the narrower rule: a Field param resolves on the
- * device only when its spec was AUTHORED — built by `fieldFromJson` — and
- * a field built from the combinator API stays on the CPU even though it
- * describes itself. The CPU is the bit-exact reference, so moving an
- * existing graph's fields onto the device is an opt-in change, not a
- * side effect of a field learning to describe itself.
+ * Device eligibility is the narrower rule, and it is a flag: by default a
+ * Field param resolves on the device only when its spec was AUTHORED —
+ * built by `fieldFromJson` — and a field built from the combinator API
+ * stays on the CPU even though it describes itself, counting a
+ * `"derived-spec"` fallback. Construct the evaluator with
+ * `{ acceptDerivedSpecs: true }` and code-authored fields resolve on the
+ * device too. The CPU is the bit-exact reference, so moving an existing
+ * graph's fields onto the device is an opt-in change, not a side effect
+ * of a field learning to describe itself.
  *
  * Determinism contract (CPU is the bit-exact reference):
  * - u32 hash/random streams (`randomField`, noise lattice hashing) are

@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateField,
+  makeField,
   randomField,
   type GpuCookStats,
   type GpuFieldResolver,
@@ -38,7 +39,7 @@ import {
   setBounds,
   transformPoints,
 } from "../nodes/index.js";
-import { peekAuthoredSpec } from "../fields/spec.js";
+import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
@@ -50,13 +51,20 @@ function countFallback(stats: GpuCookStats | undefined, reason: string): null {
   return null;
 }
 
-/** CPU-backed per-field resolution shared by both fakes. */
+/**
+ * CPU-backed per-field resolution shared by both fakes. `accept` is the
+ * flag the fake advertises, read through the production gate, so a fake
+ * can never resolve a field the executor did not salt.
+ */
 function cpuResolveField(
   field: Parameters<GpuFieldResolver["resolveField"]>[0],
   ctx: Parameters<GpuFieldResolver["resolveField"]>[1],
   stats: GpuCookStats | undefined,
+  accept: boolean,
 ): ReturnType<GpuFieldResolver["resolveField"]> {
-  if (peekAuthoredSpec(field) === undefined) return countFallback(stats, "no-spec");
+  if (deviceSpec(field, accept) === undefined) {
+    return countFallback(stats, specFallbackReason(field));
+  }
   if (stats !== undefined) stats.dispatches++;
   const column = evaluateField(field, ctx);
   return Promise.resolve({
@@ -72,12 +80,14 @@ interface FakeResolver extends GpuFieldResolver {
 }
 
 /** planRun always rejects (run-plan-failed): pins detection + fallback. */
-function recordingResolver(salt: string): FakeResolver {
+function recordingResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } = {}): FakeResolver {
+  const accept = acceptsDerivedSpecs(opts);
   const fake: FakeResolver = {
     planned: [],
     executeRuns: 0,
     cacheSalt: salt,
-    resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats),
+    acceptDerivedSpecs: accept,
+    resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats, accept),
     planRun(members, _ctx, stats) {
       fake.planned.push(members.map((m) => m.id));
       return countFallback(stats, "run-plan-failed");
@@ -95,12 +105,14 @@ function recordingResolver(salt: string): FakeResolver {
  * output bytes are the per-node CPU bytes by construction and cache
  * semantics are observable without a device.
  */
-function cpuRunResolver(salt: string): FakeResolver {
+function cpuRunResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } = {}): FakeResolver {
+  const accept = acceptsDerivedSpecs(opts);
   const fake: FakeResolver = {
     planned: [],
     executeRuns: 0,
     cacheSalt: salt,
-    resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats),
+    acceptDerivedSpecs: accept,
+    resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats, accept),
     planRun(members, _ctx, _stats) {
       fake.planned.push(members.map((m) => m.id));
       return { members: [...members] };
@@ -247,14 +259,50 @@ describe("resident run detection (recording resolver)", () => {
     ]);
   });
 
-  it("a spec-less Field param excludes the member (and short runs stay per-node)", async () => {
+  it("a code-authored Field param excludes the member (and short runs stay per-node)", async () => {
     const { g, ids } = buildChain(makeCorpusGeometry(20));
-    g.setParam(ids.jit, "amount", randomField("authored")); // code-authored: no spec
+    g.setParam(ids.jit, "amount", randomField("authored")); // code-authored: derived spec
     const rec = recordingResolver("fake|A");
     const r = await cook(g, { gpu: rec });
     // sa alone is not a run; jit is excluded; [tr, or] remains.
     expect(rec.planned).toEqual([[ids.tr.id, ids.or.id]]);
-    expect(r.stats.gpu!.fallbacks["no-spec"]).toBe(1); // jit's per-node resolve fell back
+    expect(r.stats.gpu!.fallbacks["derived-spec"]).toBe(1); // jit's per-node resolve fell back
+    expect(r.stats.gpu!.fallbacks["no-spec"]).toBeUndefined(); // ...as "derived", not "no-spec"
+  });
+
+  it("a spec-less Field param excludes the member and still counts no-spec", async () => {
+    // The compensating negative for the relabel above: `derived-spec` is a
+    // NEW population, not a rename of `no-spec`. A `makeField` closure can
+    // never be compiled on any setting of the flag, so it must keep
+    // breaking the run and keep counting the original reason — otherwise
+    // a regression collapsing the two words would go unnoticed here.
+    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    g.setParam(ids.jit, "amount", makeField("opaque", 3, () => ({ data: new Float32Array(60), tupleSize: 3 })));
+    const rec = recordingResolver("fake|A");
+    const r = await cook(g, { gpu: rec });
+    expect(rec.planned).toEqual([[ids.tr.id, ids.or.id]]);
+    expect(r.stats.gpu!.fallbacks["no-spec"]).toBe(1);
+    expect(r.stats.gpu!.fallbacks["derived-spec"]).toBeUndefined();
+
+    // ...and not even the wide gate admits it: `acceptDerivedSpecs`
+    // widens the population that HAS a spec, it does not invent one.
+    const { g: g2, ids: ids2 } = buildChain(makeCorpusGeometry(20));
+    g2.setParam(ids2.jit, "amount", makeField("opaque", 3, () => ({ data: new Float32Array(60), tupleSize: 3 })));
+    const wide = recordingResolver("fake|A", { acceptDerivedSpecs: true });
+    const r2 = await cook(g2, { gpu: wide });
+    expect(wide.planned).toEqual([[ids2.tr.id, ids2.or.id]]);
+    expect(r2.stats.gpu!.fallbacks["no-spec"]).toBe(1);
+  });
+
+  it("acceptDerivedSpecs admits that same member to the run", async () => {
+    // The fusion gate reads the same flag as the per-field seam: widen
+    // one and the member joins the chain instead of breaking it.
+    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    g.setParam(ids.jit, "amount", randomField("authored"));
+    const rec = recordingResolver("fake|A", { acceptDerivedSpecs: true });
+    const r = await cook(g, { gpu: rec });
+    expect(rec.planned).toEqual([[ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id]]);
+    expect(r.stats.gpu!.fallbacks["derived-spec"]).toBeUndefined();
   });
 
   it("string-mode and non-point-domain setAttribute never fuse", async () => {
@@ -386,7 +434,7 @@ describe("resident run detection (recording resolver)", () => {
     const cpu = await cook(buildChain(makeCorpusGeometry(30)).g);
     const runless: GpuFieldResolver = {
       cacheSalt: "fake|A",
-      resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats),
+      resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats, false),
     };
     const r = await cook(g, { gpu: runless });
     expect(r.stats.cooked).toBe(5);

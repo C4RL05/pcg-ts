@@ -51,10 +51,11 @@ import {
 import { attribute, constant, index, position, randomField } from "./inputs.js";
 import {
   type FieldSpec,
+  deviceSpec,
   getFieldSpec,
   isDerivedSpec,
-  peekAuthoredSpec,
   peekFieldSpec,
+  specFallbackReason,
 } from "./spec.js";
 import {
   type Column,
@@ -64,6 +65,13 @@ import {
   evaluateField,
   makeField,
 } from "./types.js";
+
+/**
+ * The spec a device seam would see with `acceptDerivedSpecs` OFF — the
+ * default gate, and the only reading of "authored" the library still
+ * has now that provenance is asked through one flagged predicate.
+ */
+const authoredSpec = (field: Field): FieldSpec | undefined => deviceSpec(field, false);
 
 const COUNT = 24;
 
@@ -473,7 +481,7 @@ describe("no spec is derived when none can be", () => {
       const field = c.make();
       expect(getFieldSpec(field), c.name).toBeUndefined();
       expect(peekFieldSpec(field), `${c.name}: internal peek`).toBeUndefined();
-      expect(peekAuthoredSpec(field), `${c.name}: authored peek`).toBeUndefined();
+      expect(authoredSpec(field), `${c.name}: authored peek`).toBeUndefined();
       // Still a working field — declining to describe it changes nothing
       // about what it computes.
       if (c.evaluable !== false) {
@@ -557,14 +565,14 @@ describe("spec provenance", () => {
     const derivedSpec = peekFieldSpec(derived);
     expect(derivedSpec).toBeDefined();
     expect(isDerivedSpec(derivedSpec as FieldSpec)).toBe(true);
-    expect(peekAuthoredSpec(derived)).toBeUndefined();
+    expect(authoredSpec(derived)).toBeUndefined();
     expect(getFieldSpec(derived)).toBeDefined();
 
     const authored = fieldFromJson({ fn: "add", args: [{ fn: "position" }, 1] });
-    const authoredSpec = peekFieldSpec(authored);
-    expect(authoredSpec).toBeDefined();
-    expect(isDerivedSpec(authoredSpec as FieldSpec)).toBe(false);
-    expect(peekAuthoredSpec(authored)).toBeDefined();
+    const stamped = peekFieldSpec(authored);
+    expect(stamped).toBeDefined();
+    expect(isDerivedSpec(stamped as FieldSpec)).toBe(false);
+    expect(authoredSpec(authored)).toBeDefined();
   });
 
   it("the authored stamp overwrites the spec derived while building", () => {
@@ -572,7 +580,7 @@ describe("spec provenance", () => {
     // outermost field carries a derived spec until the author's original
     // lands on it last.
     const authored = fieldFromJson({ fn: "mul", args: [{ fn: "position" }, [2, 2, 2]] });
-    expect(peekAuthoredSpec(authored)).toEqual({
+    expect(authoredSpec(authored)).toEqual({
       fn: "mul",
       args: [{ fn: "position" }, [2, 2, 2]],
     });
@@ -613,6 +621,61 @@ describe("spec provenance", () => {
     expect(peekFieldSpec(position())).toBe(peekFieldSpec(position()));
     expect(getFieldSpec(position())).toEqual({ fn: "position" });
     expect(getFieldSpec(index())).toEqual({ fn: "index" });
+  });
+
+  it("never returns a field whose provenance another caller can see", () => {
+    // `fieldFromJson` stamps an AUTHORED spec on whatever it built, and
+    // provenance is what device eligibility turns on. So no parse may
+    // hand back an object another caller also holds — otherwise one
+    // `fieldFromJson({fn:"position"})` anywhere in a process would flip
+    // every later `position()` to authored, and device eligibility would
+    // depend on module load order.
+    //
+    // Checked over the WHOLE matrix (which pins itself equal to
+    // `listFieldFns()`), not just the two known singletons, so a
+    // constructor that starts caching its result fails here.
+    for (const c of CASES) {
+      const spec = getFieldSpec(c.make());
+      if (spec === undefined) continue;
+      const a = fieldFromJson(spec);
+      const b = fieldFromJson(spec);
+      expect(a, `${c.name}: two parses share a field object`).not.toBe(b);
+    }
+
+    // And specifically for the two singletons: the parse is authored, the
+    // singleton stays derived, and they still compute the same thing.
+    const before = authoredSpec(position());
+    const parsed = fieldFromJson({ fn: "position" });
+    expect(before).toBeUndefined();
+    expect(authoredSpec(position())).toBeUndefined();
+    expect(authoredSpec(parsed)).toEqual({ fn: "position" });
+    expect(parsed).not.toBe(position());
+    expect(parsed.key).toBe(position().key);
+    expect(parsed.tupleSize).toBe(position().tupleSize);
+    expectSameColumn(
+      evaluateField(parsed, fixture(1)),
+      evaluateField(position(), fixture(1)),
+      "position copy",
+    );
+
+    const parsedIndex = fieldFromJson({ fn: "index" });
+    expect(authoredSpec(index())).toBeUndefined();
+    expect(authoredSpec(parsedIndex)).toEqual({ fn: "index" });
+    expect(parsedIndex).not.toBe(index());
+    expectSameColumn(
+      evaluateField(parsedIndex, fixture(1)),
+      evaluateField(index(), fixture(1)),
+      "index copy",
+    );
+  });
+
+  it("a parsed position copy composes exactly like the singleton", () => {
+    // The copy carries the same DERIVED spec, so nesting it inside a
+    // larger expression must derive the same description — otherwise
+    // `fieldFromJson` would quietly produce less serializable trees.
+    const parsed = fieldFromJson({ fn: "position" });
+    expect(getFieldSpec(mul(parsed, 2))).toEqual(getFieldSpec(mul(position(), 2)));
+    expect(mul(parsed, 2).key).toBe(mul(position(), 2).key);
   });
 
   it("never lets a spec reach the field's structural identity", () => {
@@ -658,7 +721,7 @@ describe("derivation stops at the parser's nesting cap", () => {
     const field = addChain(MAX_DEPTH + 1);
     expect(getFieldSpec(field)).toBeUndefined();
     expect(peekFieldSpec(field)).toBeUndefined();
-    expect(peekAuthoredSpec(field)).toBeUndefined();
+    expect(authoredSpec(field)).toBeUndefined();
     // Withholding a description never changes what the field computes.
     expect(() => evaluateField(field, fixture(0))).not.toThrow();
   });
@@ -699,7 +762,7 @@ describe("derivation stops at the parser's nesting cap", () => {
     // cap-deep authored spec is past it — and must withhold, or the
     // author could reach an unparseable spec through the front door.
     const atCap = fieldFromJson(getFieldSpec(addChain(MAX_DEPTH)) as FieldSpec);
-    expect(peekAuthoredSpec(atCap)).toBeDefined();
+    expect(authoredSpec(atCap)).toBeDefined();
     expect(getFieldSpec(add(atCap, 1))).toBeUndefined();
 
     // A shallow authored spec keeps composing normally.

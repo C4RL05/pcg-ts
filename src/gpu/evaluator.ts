@@ -45,7 +45,7 @@ import type {
   ResidentRunInput,
   ResidentRunResult,
 } from "../fields/index.js";
-import { peekAuthoredSpec } from "../fields/spec.js";
+import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
 import { compileFieldSpec } from "./compile.js";
 import {
   BUFFER_USAGE,
@@ -167,6 +167,29 @@ export interface GpuFieldEvaluatorOptions {
    * the node before it.
    */
   readonly deviceInstances?: boolean;
+  /**
+   * Opt in to resolving fields whose spec was DERIVED by the combinator
+   * API — `mul(position(), 0.1)`, `ge(randomField("species"), 0.72)` —
+   * rather than AUTHORED through `fieldFromJson`. Since v0.9 a combinator
+   * field describes itself faithfully, so "can this field be described"
+   * and "may it run on the device" became different questions, and this
+   * flag answers the second one.
+   *
+   * Default false: a code-authored field evaluates on the CPU exactly as
+   * it always has, byte for byte, and counts a `"derived-spec"` fallback
+   * so the readout says why rather than blaming a missing spec. Turning
+   * it on widens the eligible set, moving those params from the CPU (the
+   * bit-exact reference) to the GPU (a documented approximation within
+   * the measured per-family budgets) — a change of produced bytes for
+   * graphs that were already passing a resolver, which is why it is
+   * opt-in rather than automatic.
+   *
+   * Memo keys move with it: the flag is advertised on the resolver, and
+   * the executor salts exactly the nodes this evaluator will accept, so
+   * cached CPU bytes are never served to a cook that enabled it, nor the
+   * reverse.
+   */
+  readonly acceptDerivedSpecs?: boolean;
 }
 
 function saltFrom(info: GpuAdapterInfoLike | undefined): string {
@@ -213,6 +236,15 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
    */
   readonly residentTerminals: readonly string[];
 
+  /**
+   * Whether this evaluator accepts DERIVED (combinator-authored) field
+   * specs — see `GpuFieldEvaluatorOptions.acceptDerivedSpecs`. Advertised
+   * because the graph executor must salt memo keys for exactly the set
+   * this evaluator will resolve; it is read there, and here, through the
+   * same accessor.
+   */
+  readonly acceptDerivedSpecs: boolean;
+
   private readonly device: GpuDeviceLike;
   /** Compiled kernels (or compile failures) by field key + full layout. */
   private readonly kernels = new Map<string, CompiledFieldKernel | Error>();
@@ -241,6 +273,11 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     this.maxElementsPerDispatch = opts.maxElementsPerDispatch;
     this.maxResidentBytes = opts.maxResidentBytes ?? DEFAULT_MAX_RESIDENT_BYTES;
     this.residentTerminals = opts.deviceInstances === true ? DEVICE_INSTANCE_TERMINALS : [];
+    // Through the shared accessor, not `opts.acceptDerivedSpecs === true`
+    // written out again: the executor interprets the same absent-means-
+    // false rule through this function, so there is one reading of the
+    // flag in the process rather than one per seam.
+    this.acceptDerivedSpecs = acceptsDerivedSpecs(opts);
   }
 
   /** Number of cached pipelines (introspection for tools and tests). */
@@ -284,12 +321,13 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
    * contract and `GpuCookStats` for the fallback-reason vocabulary.
    */
   resolveField(field: Field, ctx: EvalContext, stats?: GpuCookStats): Promise<Column> | null {
-    // Authored specs only: a combinator field carries a faithful derived
-    // spec, but adopting those moves evaluation from the CPU (the
-    // bit-exact reference) to the GPU (an approximation) for graphs that
-    // never asked, so the widening is a separate opt-in decision.
-    const spec = peekAuthoredSpec(field);
-    if (spec === undefined) return countFallback(stats, "no-spec");
+    // THE eligibility predicate — the same call, with the same flag, that
+    // salts this node's memo key and admits it to a fused run. A field
+    // that describes itself but was authored in code is declined unless
+    // `acceptDerivedSpecs` was set, and says so ("derived-spec") rather
+    // than claiming it has no spec.
+    const spec = deviceSpec(field, this.acceptDerivedSpecs);
+    if (spec === undefined) return countFallback(stats, specFallbackReason(field));
 
     const set = ctx.geo.attrs[ctx.domain];
     const attrs: Record<string, FieldKernelAttr> = {};
@@ -363,7 +401,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     ctx: ResidentRunContext,
     stats?: GpuCookStats,
   ): object | null {
-    const outcome = planResidentRun(members, ctx, this.maxResidentBytes);
+    const outcome = planResidentRun(members, ctx, this.maxResidentBytes, this.acceptDerivedSpecs);
     if ("plan" in outcome) return outcome.plan;
     if (stats !== undefined) {
       stats.fallbacks[outcome.reason] = (stats.fallbacks[outcome.reason] ?? 0) + 1;

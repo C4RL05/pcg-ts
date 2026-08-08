@@ -9,12 +9,13 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateField,
+  makeField,
   randomField,
   type GpuFieldResolver,
 } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem, subgraphNode } from "../graph/index.js";
 import { setAttribute } from "../nodes/index.js";
-import { peekAuthoredSpec } from "../fields/spec.js";
+import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
@@ -23,18 +24,26 @@ import { makeCorpusGeometry } from "./testGeometry.js";
 const SPEC = { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "randomField", key: "jitter" }] };
 
 /**
- * Stub resolver: spec'd fields "resolve on the GPU" by evaluating on
+ * Stub resolver: eligible fields "resolve on the GPU" by evaluating on
  * the CPU into a fresh column (honoring the freshness contract);
- * spec-less fields fall back with no-spec. Counts every resolution.
+ * ineligible ones fall back with the production reason. The gate is the
+ * production predicate driven by the flag the stub advertises, so the
+ * double resolves exactly the population the executor salts.
  */
-function stubResolver(salt: string): GpuFieldResolver & { calls: number } {
+function stubResolver(
+  salt: string,
+  opts: { acceptDerivedSpecs?: boolean } = {},
+): GpuFieldResolver & { calls: number } {
+  const accept = acceptsDerivedSpecs(opts);
   const stub: GpuFieldResolver & { calls: number } = {
     calls: 0,
     cacheSalt: salt,
+    acceptDerivedSpecs: accept,
     resolveField(field, ctx, stats) {
       stub.calls++;
-      if (peekAuthoredSpec(field) === undefined) {
-        if (stats !== undefined) stats.fallbacks["no-spec"] = (stats.fallbacks["no-spec"] ?? 0) + 1;
+      if (deviceSpec(field, accept) === undefined) {
+        const reason = specFallbackReason(field);
+        if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
         return null;
       }
       if (stats !== undefined) stats.dispatches++;
@@ -127,18 +136,31 @@ describe("gpu memo-key provenance (stub resolver)", () => {
     expect(stub.calls).toBe(0); // plain values never reach the resolver
   });
 
-  it("code-authored (spec-less) field params take no provenance marker", async () => {
+  it("code-authored field params take no provenance marker", async () => {
     const g = makeSetAttributeGraph(randomField("authored"));
     await cook(g);
     const stub = stubResolver("stub|deviceA");
     const toggled = await cook(g, { gpu: stub });
-    // No spec → no marker → cache hit; the resolver is never consulted
-    // for a cached node.
+    // Derived spec, gate off → no marker → cache hit; the resolver is
+    // never consulted for a cached node.
     expect(toggled.stats.cooked).toBe(0);
     expect(stub.calls).toBe(0);
   });
 
-  it("a fresh cook of a spec-less field under gpu counts the fallback and matches CPU bytes", async () => {
+  it("acceptDerivedSpecs puts the marker on the same code-authored param", async () => {
+    // The mirror image of the test above, and the whole point of "one
+    // predicate": widening the resolver's acceptance MUST widen the memo
+    // key, or a CPU entry would be served to a device cook.
+    const g = makeSetAttributeGraph(randomField("authored"));
+    await cook(g);
+    const stub = stubResolver("stub|deviceA", { acceptDerivedSpecs: true });
+    const toggled = await cook(g, { gpu: stub });
+    expect(toggled.stats.cooked).toBe(1);
+    expect(stub.calls).toBe(1);
+    expect(toggled.stats.gpu!.dispatches).toBe(1);
+  });
+
+  it("a fresh cook of a code-authored field under gpu counts derived-spec and matches CPU bytes", async () => {
     const gGpu = makeSetAttributeGraph(randomField("authored"));
     const stub = stubResolver("stub|deviceA");
     const gpuRun = await cook(gGpu, { gpu: stub });
@@ -149,11 +171,25 @@ describe("gpu memo-key provenance (stub resolver)", () => {
       residentRuns: 0,
       fusedNodes: 0,
       readbacksSaved: 0,
-      fallbacks: { "no-spec": 1 },
+      fallbacks: { "derived-spec": 1 },
     });
     const gCpu = makeSetAttributeGraph(randomField("authored"));
     const cpuRun = await cook(gCpu);
     expect(outAttrBytes(gpuRun)).toEqual(outAttrBytes(cpuRun));
+  });
+
+  it("a genuinely indescribable field still counts no-spec, flag or no flag", async () => {
+    // `no-spec` keeps its original meaning: a makeField closure can never
+    // be named, so no flag admits it.
+    for (const accept of [false, true]) {
+      const opaque = makeField("opaque", 1, (ctx) =>
+        evaluateField(randomField("authored"), ctx),
+      );
+      const stub = stubResolver("stub|deviceA", { acceptDerivedSpecs: accept });
+      const run = await cook(makeSetAttributeGraph(opaque), { gpu: stub });
+      expect(run.stats.gpu!.fallbacks, `accept=${accept}`).toEqual({ "no-spec": 1 });
+      expect(run.stats.gpu!.dispatches, `accept=${accept}`).toBe(0);
+    }
   });
 
   it("subgraph nodes carry the marker whenever a resolver is present", async () => {

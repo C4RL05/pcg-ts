@@ -8,7 +8,17 @@
  */
 import { describe, expect, it } from "vitest";
 import { Geometry } from "../data/index.js";
-import { createGpuCookStats, randomField } from "../fields/index.js";
+import {
+  createGpuCookStats,
+  evaluateField,
+  makeField,
+  mul,
+  position,
+  randomField,
+  type FieldLike,
+  type ResidentMemberDesc,
+  type ResidentRunContext,
+} from "../fields/index.js";
 import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
 import type { GpuBufferLike, GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
@@ -31,8 +41,9 @@ function untouchableDevice(adapterInfo?: GpuDeviceLike["adapterInfo"]): GpuDevic
 }
 
 describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
-  it("code-authored fields fall back with reason no-spec", () => {
+  it("code-authored fields fall back with reason derived-spec", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
+    expect(ev.acceptDerivedSpecs).toBe(false); // the shipped default
     const stats = createGpuCookStats();
     const geo = makeCorpusGeometry(4);
     const res = ev.resolveField(randomField("authored"), { geo, domain: "point", seed: 0 }, stats);
@@ -44,8 +55,38 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
       residentRuns: 0,
       fusedNodes: 0,
       readbacksSaved: 0,
-      fallbacks: { "no-spec": 1 },
+      fallbacks: { "derived-spec": 1 },
     });
+  });
+
+  it("indescribable fields keep the reason no-spec, with the flag either way", () => {
+    // `no-spec` did not become a synonym for "code-authored": it still
+    // names the population no flag can rescue.
+    const geo = makeCorpusGeometry(4);
+    for (const acceptDerivedSpecs of [false, true]) {
+      const ev = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs });
+      const stats = createGpuCookStats();
+      const opaque = makeField("opaque", 1, (ctx) => evaluateField(randomField("x"), ctx));
+      expect(ev.resolveField(opaque, { geo, domain: "point", seed: 0 }, stats)).toBeNull();
+      expect(stats.fallbacks, `accept=${acceptDerivedSpecs}`).toEqual({ "no-spec": 1 });
+      // ...and so does a combinator tree built over one.
+      const stats2 = createGpuCookStats();
+      expect(ev.resolveField(mul(opaque, 2), { geo, domain: "point", seed: 0 }, stats2)).toBeNull();
+      expect(stats2.fallbacks, `accept=${acceptDerivedSpecs} (tree)`).toEqual({ "no-spec": 1 });
+    }
+  });
+
+  it("acceptDerivedSpecs is advertised, and admits the same field", () => {
+    // The device is untouchable, so reaching a dispatch attempt is proof
+    // the gate opened: eligibility is decided before any device contact.
+    const ev = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs: true });
+    expect(ev.acceptDerivedSpecs).toBe(true);
+    const stats = createGpuCookStats();
+    const geo = makeCorpusGeometry(4);
+    expect(() =>
+      ev.resolveField(randomField("authored"), { geo, domain: "point", seed: 0 }, stats),
+    ).toThrow(/fake device was touched/);
+    expect(stats.fallbacks).toEqual({});
   });
 
   it("string-attribute reads fall back with reason compile-error, and the failure is cached", () => {
@@ -58,6 +99,40 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     expect(ev.resolveField(field, ctx, stats)).toBeNull();
     expect(ev.resolveField(field, ctx, stats)).toBeNull();
     expect(stats.fallbacks).toEqual({ "compile-error": 2 });
+  });
+
+  it("planRun applies the evaluator's own flag, not a default", () => {
+    // The run planner is the fourth seam, and the only one the evaluator
+    // reaches by passing the flag ONWARD rather than reading it. If that
+    // hand-off is dropped, a chain declines members the per-field path
+    // accepts (or the reverse) and the two disagree silently — planning
+    // is device-free, so this is observable without an adapter.
+    const member = (amount: FieldLike): ResidentMemberDesc => ({
+      id: "jit",
+      type: "jitterPoints",
+      kind: "jitterPoints",
+      params: { amount, seed: 7 },
+      seed: 12345,
+    });
+    const ctx: ResidentRunContext = {
+      attributes: { P: { type: "f32", tupleSize: 3 } },
+      count: 16,
+      needsGeometry: true,
+    };
+    const derived = mul(position(), 0.1);
+    const authored = fieldFromJson({ fn: "mul", args: [{ fn: "position" }, 0.1] });
+    expect(derived.key).toBe(authored.key); // same field, different provenance
+
+    const narrow = new GpuFieldEvaluator(untouchableDevice());
+    const narrowStats = createGpuCookStats();
+    expect(narrow.planRun([member(derived)], ctx, narrowStats)).toBeNull();
+    expect(narrowStats.fallbacks).toEqual({ "run-plan-failed": 1 });
+    expect(narrow.planRun([member(authored)], ctx, createGpuCookStats())).not.toBeNull();
+
+    const wide = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs: true });
+    const wideStats = createGpuCookStats();
+    expect(wide.planRun([member(derived)], ctx, wideStats)).not.toBeNull();
+    expect(wideStats.fallbacks).toEqual({});
   });
 
   it("missing attributes fall back with reason compile-error", () => {

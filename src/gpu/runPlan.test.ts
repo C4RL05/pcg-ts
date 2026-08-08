@@ -50,8 +50,14 @@ function plan(
   attributes = POINT_LAYOUT,
   maxBytes = Number.MAX_SAFE_INTEGER,
   needsGeometry = true,
+  acceptDerived = false,
 ): PlanShape {
-  const outcome = planResidentRun(members, { attributes, count, needsGeometry }, maxBytes);
+  const outcome = planResidentRun(
+    members,
+    { attributes, count, needsGeometry },
+    maxBytes,
+    acceptDerived,
+  );
   if (!("plan" in outcome)) throw new Error(`expected a plan, got ${outcome.reason}`);
   return outcome.plan as unknown as PlanShape;
 }
@@ -62,8 +68,14 @@ function rejection(
   attributes = POINT_LAYOUT,
   maxBytes = Number.MAX_SAFE_INTEGER,
   needsGeometry = true,
+  acceptDerived = false,
 ): string {
-  const outcome = planResidentRun(members, { attributes, count, needsGeometry }, maxBytes);
+  const outcome = planResidentRun(
+    members,
+    { attributes, count, needsGeometry },
+    maxBytes,
+    acceptDerived,
+  );
   if ("plan" in outcome) throw new Error("expected a rejection, got a plan");
   return outcome.reason;
 }

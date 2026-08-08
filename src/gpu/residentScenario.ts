@@ -30,6 +30,7 @@ import type {
   ResidentMemberDesc,
 } from "../fields/index.js";
 import { createGpuCookStats } from "../fields/index.js";
+import { resolverView } from "../fields/spec.js";
 import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
 import {
   jitterPoints,
@@ -264,7 +265,10 @@ function chainGraph(
  * only so the executor's run detection engages (and must never run).
  */
 function perNodeResolver(ev: GpuFieldEvaluator): GpuFieldResolver {
-  return {
+  // Through `resolverView`, never a hand-written object literal: a
+  // wrapper that drops `ev`'s `acceptDerivedSpecs` advertisement would
+  // resolve the wide population under narrow memo keys.
+  return resolverView(ev, {
     cacheSalt: `${ev.cacheSalt}|per-node`,
     resolveField: (field, ctx, stats) => ev.resolveField(field, ctx, stats),
     planRun: (_members, _ctx, stats) => {
@@ -274,7 +278,7 @@ function perNodeResolver(ev: GpuFieldEvaluator): GpuFieldResolver {
       return null;
     },
     executeRun: () => Promise.reject(new Error("perNodeResolver.executeRun must never be called")),
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,7 +1709,7 @@ async function memoryBound(
     attributes: attrDescs(geo),
     count,
     needsGeometry: true,
-  }, Number.MAX_SAFE_INTEGER);
+  }, Number.MAX_SAFE_INTEGER, false);
   if (!("plan" in outcome)) throw new Error(`memoryBound: reference plan rejected (${outcome.reason})`);
   const totalBytes = outcome.plan.totalBytes;
 

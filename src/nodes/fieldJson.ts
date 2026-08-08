@@ -40,6 +40,7 @@ import {
   div,
   dot,
   eq,
+  evaluateField,
   floor,
   ge,
   gt,
@@ -49,6 +50,7 @@ import {
   length,
   lerp,
   lt,
+  makeField,
   max,
   min,
   mul,
@@ -67,6 +69,7 @@ import {
   type FieldSpec,
   MAX_SPEC_DEPTH,
   attachAuthoredSpec,
+  attachSpec,
   peekFieldSpec,
 } from "../fields/spec.js";
 import {
@@ -234,8 +237,34 @@ register(
   },
 );
 
-register("position", [], `{ fn: "position" }`, () => position());
-register("index", [], `{ fn: "index" }`, () => index());
+/**
+ * A private copy of a leaf field the library hands out as a process-wide
+ * singleton (`position()`, `index()`).
+ *
+ * `fieldFromJson` stamps an AUTHORED spec on whatever it built, and
+ * provenance is what device eligibility turns on. Handing back the
+ * singleton would therefore stamp it: one `fieldFromJson({fn:"position"})`
+ * anywhere in a process would make EVERY later `position()` look authored
+ * — device eligibility would depend on module load order, which is not a
+ * property a deterministic library may have. (Harmless before v0.9 only
+ * because nothing else could carry a spec; the flip itself is as old as
+ * `fieldFromJson`.)
+ *
+ * The copy is indistinguishable in everything the library keys on: same
+ * `key`, same `tupleSize`, and evaluation delegates through
+ * `evaluateField`, so within one context it shares the singleton's
+ * memoized column rather than recomputing it — the same bytes, the same
+ * object. It carries the same derived spec, so a copy nested inside a
+ * larger expression composes exactly as the singleton would.
+ */
+function detachedLeaf<N extends number>(shared: Field<N>, spec: FieldSpec): Field<N> {
+  const copy = makeField<N>(shared.key, shared.tupleSize, (ctx) => evaluateField(shared, ctx));
+  attachSpec(copy, spec, 1);
+  return copy;
+}
+
+register("position", [], `{ fn: "position" }`, () => detachedLeaf(position(), { fn: "position" }));
+register("index", [], `{ fn: "index" }`, () => detachedLeaf(index(), { fn: "index" }));
 
 register("randomField", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
   const key = spec.key;

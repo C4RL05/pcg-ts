@@ -3,13 +3,27 @@
  * per-family float tolerances vs the CPU reference, and run-to-run
  * determinism — all executed in the plain-Node device runner. Budgets
  * are asserted tight, with the measured value on the reference adapter
- * (RTX 5090, D3D12) recorded next to each; see PARITY_CASES.
+ * (RTX 5090, D3D12) recorded next to each; see `PARITY_CASES` in
+ * `corpus.ts`.
+ *
+ * Each float family is measured twice: once for the AUTHORED spec
+ * (`fieldFromJson` JSON) and once for the code-authored twin carrying a
+ * DERIVED spec, against the same budget. `corpus.test.ts` pins that the
+ * two compile to the byte-identical kernel, so any divergence between
+ * the two measurements is a CPU-side difference, not a codegen one.
  */
 import { describe, expect, it } from "vitest";
 import { evaluateField, type Column } from "../fields/index.js";
-import { fieldFromJson, type FieldSpec, type FieldSpecArg } from "../nodes/fieldJson.js";
+import { fieldFromJson, getFieldSpec, type FieldSpec, type FieldSpecArg } from "../nodes/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
-import { CORPUS_LAYOUT, EXTENDED_SPECS } from "./corpus.js";
+import {
+  CORPUS_LAYOUT,
+  DERIVED_FIELDS,
+  EXTENDED_SPECS,
+  PARITY_CASES,
+  PARITY_COUNT,
+  PARITY_SEED,
+} from "./corpus.js";
 import { decodeRun, dispatchTask, runDeviceTasks, type RunnerTask } from "./runnerClient.js";
 import { deviceSuiteName, testDevice } from "./testDevice.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
@@ -68,6 +82,15 @@ function ulpDistance(a: number, b: number): number {
  * - Infinity for a NaN vs number mismatch.
  */
 function measureParity(cpu: Column, gpu: Column): { maxUlp: number; rangeUlp: number; range: number } {
+  // Shape BEFORE values, or the comparator scores a short column as
+  // perfect: the loops run to `cpu.data.length` and index `gpu.data[i]`,
+  // and for a truncated GPU column that is `undefined` — which is not
+  // NaN, so the NaN guard never fires, and `Math.abs(c - undefined)/unit`
+  // is NaN, which is never `> rangeUlp`. Every missing lane would be
+  // skipped without a trace and every non-`exact` family would pass. The
+  // bit-exact helper checks byteLength; this one has to check both.
+  expect(gpu.data.length, "GPU column length vs the CPU reference").toBe(cpu.data.length);
+  expect(gpu.tupleSize, "GPU column tupleSize vs the CPU reference").toBe(cpu.tupleSize);
   let range = 0;
   for (let i = 0; i < cpu.data.length; i++) {
     const a = Math.abs(cpu.data[i]);
@@ -109,97 +132,12 @@ const BITEXACT_COUNTS = [1, 63, 64, 65, 10_000];
 const BITEXACT_SEEDS = [0, 1, 0xdeadbeef, -7];
 
 // ---------------------------------------------------------------------------
-// float parity section: per-family max-ULP budgets vs the CPU reference.
-// Budgets are the values measured on the reference adapter (RTX 5090,
-// D3D12, Dawn) over 10_000 dense hash-derived inputs, seed 1 — recorded
-// in the comment per case and asserted as-measured (a different adapter
-// exceeding one is a finding, not noise).
-
-interface ParityCase {
-  readonly name: string;
-  readonly spec: FieldSpecArg;
-  /** Assert raw maxUlp 0 (bit-exact family) instead of a rangeUlp budget. */
-  readonly exact?: boolean;
-  /** rangeUlp budget (error in ULP units at the family's output range). */
-  readonly budget: number;
-}
-
-const P = { fn: "position" } as const;
-const PX = { fn: "component", args: [P], index: 0 } as const;
-const PY = { fn: "component", args: [P], index: 1 } as const;
-
-// Budgets: measured on RTX 5090 (D3D12, Dawn), 10_000 dense inputs,
-// then rounded up minimally. Each case's comment records the measured
-// (rangeUlp, raw maxUlp) pair — raw maxUlp inflation on smooth families
-// comes from lanes near output zero-crossings, where the CPU's f64
-// interior survives cancellation that f32 cannot (rangeUlp is the
-// honest metric there).
-const PARITY_CASES: ParityCase[] = [
-  // measured 0, 0 — double rounding innocuous for + - ×.
-  { name: "arith add/sub/mul", spec: EXTENDED_SPECS.arithChain, exact: true, budget: 0 },
-  // measured 0.76, 2 — f32 division within the 2.5-ULP WGSL bound.
-  { name: "div", spec: EXTENDED_SPECS.divChain, budget: 1 },
-  // measured 0.50, 3529 — CPU-formula lerp; maxUlp spike at zero crossings.
-  { name: "lerp", spec: { fn: "lerp", args: [PX, PY, { fn: "attribute", name: "density" }] }, budget: 1 },
-  // measured 0, 0.
-  { name: "clamp/min/max", spec: { fn: "clamp", args: [PX, { fn: "min", args: [PY, 0] }, { fn: "max", args: [{ fn: "abs", args: [PY] }, 1] }] }, exact: true, budget: 0 },
-  // measured 0, 0.
-  { name: "floor", spec: { fn: "floor", args: [PX] }, exact: true, budget: 0 },
-  // measured 0, 0 over a non-degenerate span.
-  { name: "remap", spec: EXTENDED_SPECS.remapField, budget: 1 },
-  // measured 1.09, 12288 — baked f32 stop constants vs CPU f64 segments.
-  { name: "ramp", spec: EXTENDED_SPECS.rampMultiStop, budget: 2 },
-  // measured 0, 0 away from knife edges.
-  { name: "select/compare", spec: EXTENDED_SPECS.selectAway, exact: true, budget: 0 },
-  // measured 6.50, 18432 over inputs in [-8, 8].
-  { name: "sin/cos", spec: EXTENDED_SPECS.trigChain, budget: 8 },
-  // measured 19.48, 4681 over inputs in [-1.45, 1.45].
-  { name: "tan", spec: { fn: "tan", args: [{ fn: "remap", args: [PX, -8, 8, -1.45, 1.45] }] }, budget: 24 },
-  // measured 503.99, 4623155 — ≈ 6.7e-5 absolute, the WGSL asin bound.
-  { name: "asin", spec: EXTENDED_SPECS.inverseTrig, budget: 512 },
-  // measured 359.09, 721 — same absolute-error class as asin.
-  { name: "acos", spec: { fn: "acos", args: [{ fn: "clamp", args: [{ fn: "attribute", name: "density" }, -0.9, 0.9] }] }, budget: 384 },
-  // measured 64.52, 2231.
-  { name: "atan2", spec: EXTENDED_SPECS.atanFamily, budget: 80 },
-  // measured 67.06, 2195.
-  { name: "atan", spec: { fn: "atan", args: [PX] }, budget: 80 },
-  // measured 1.50, 3 — sqrt/1-sqrt correctly rounded on this adapter.
-  { name: "length/normalize", spec: EXTENDED_SPECS.lengthNormalize, budget: 2 },
-  // measured 0.70, 305 — f32 dot accumulation vs CPU f64.
-  { name: "dot", spec: EXTENDED_SPECS.dotField, budget: 1 },
-  // measured 6.53, 208.
-  { name: "valueNoise raw", spec: { fn: "valueNoise", opts: { seed: 7, frequency: 0.35 } }, budget: 8 },
-  // measured 6.53, 208.
-  { name: "valueNoise normalized", spec: EXTENDED_SPECS.valueNoiseNorm, budget: 8 },
-  // measured 7.69, 50034 (raw spikes at the noise's zero crossings).
-  { name: "perlinNoise raw", spec: { fn: "perlinNoise", opts: { seed: 3, frequency: 0.5 } }, budget: 10 },
-  // measured 4.21, 10.
-  { name: "perlinNoise normalized", spec: EXTENDED_SPECS.perlinNoiseNorm, budget: 6 },
-  // measured 17.46, 76712.
-  { name: "simplexNoise raw", spec: { fn: "simplexNoise", opts: { seed: 11, frequency: 0.4 } }, budget: 24 },
-  // measured 8.55, 72.
-  { name: "simplexNoise normalized", spec: EXTENDED_SPECS.simplexNoiseNorm, budget: 12 },
-  // measured 5.16, 89.
-  { name: "worley f1", spec: EXTENDED_SPECS.worleyF1, budget: 8 },
-  // measured 4.71, 22.
-  { name: "worley f2", spec: EXTENDED_SPECS.worleyF2, budget: 8 },
-  // measured 9.42, 41868.
-  { name: "worley f2-f1 normalized", spec: EXTENDED_SPECS.worleyF2F1Norm, budget: 12 },
-  // measured 9.28, 43836.
-  { name: "worley exact f2-f1", spec: EXTENDED_SPECS.worleyExact, budget: 12 },
-  // measured 4.32, 29.
-  { name: "fbm value", spec: EXTENDED_SPECS.fbmValue, budget: 6 },
-  // measured 4.84, 12.
-  { name: "fbm perlin", spec: EXTENDED_SPECS.fbmPerlin, budget: 6 },
-  // measured 19.02, 212992.
-  { name: "fbm simplex", spec: EXTENDED_SPECS.fbmSimplex, budget: 24 },
-  // measured 4.81, 16.
-  { name: "fbm worley", spec: EXTENDED_SPECS.fbmWorley, budget: 6 },
-  // measured 9.77, 50.
-  { name: "composite", spec: EXTENDED_SPECS.composite, budget: 12 },
-];
-const PARITY_COUNT = 10_000;
-const PARITY_SEED = 1;
+// float parity section. `PARITY_CASES` (authored specs + measured
+// per-family budgets), `DERIVED_FIELDS` (their code-authored twins), and
+// PARITY_COUNT/PARITY_SEED live in `corpus.ts`: `corpus.test.ts` has to
+// pin the twins against the same authored specs this suite measures, and
+// importing one `*.test.ts` from another would re-register this whole
+// device suite inside that CPU-only one.
 
 describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
   it("hash/u32 streams are bit-exact across counts and seeds", () => {
@@ -265,6 +203,51 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // Measured tolerance table (phase-21 documentation source):
     console.log(`[parity ${testDevice!.label}]\n${lines.join("\n")}`);
     expect(over, "families exceeding their measured budget").toEqual([]);
+  });
+
+  it("code-authored (derived-spec) twins stay within the same measured budgets", () => {
+    // The comparison a user who wrote `mul(position(), 0.1)` actually
+    // cares about: the GPU result of the DERIVED spec against the CPU
+    // evaluation of THAT FIELD — not against a rebuild of the authored
+    // JSON. `corpus.test.ts` already pins that the two specs compile to
+    // the identical kernel, so reusing the authored budgets is sound and
+    // any drift here is a CPU-side difference.
+    const geo = makeCorpusGeometry(PARITY_COUNT);
+    const fields = PARITY_CASES.map((pc) => {
+      const make = DERIVED_FIELDS[pc.name];
+      expect(make, `${pc.name}: no code-authored twin`).toBeDefined();
+      return make();
+    });
+    const kernels = fields.map((field, i) => {
+      const spec = getFieldSpec(field);
+      expect(spec, `${PARITY_CASES[i].name}: derived spec`).toBeDefined();
+      return compileFieldSpec(spec as FieldSpec, CORPUS_LAYOUT);
+    });
+    const tasks = PARITY_CASES.map((pc, i) =>
+      dispatchTask(pc.name, kernels[i], geo, PARITY_COUNT, PARITY_SEED),
+    );
+    const results = runDeviceTasks(tasks);
+    const lines: string[] = [];
+    const over: string[] = [];
+    for (let i = 0; i < PARITY_CASES.length; i++) {
+      const pc = PARITY_CASES[i];
+      const result = results[i];
+      expect(result.errors, pc.name).toEqual([]);
+      const gpu = decodeRun(kernels[i], result.runs![0]);
+      const cpu = evaluateField(fields[i], { geo, domain: "point", seed: PARITY_SEED });
+      const m = measureParity(cpu, gpu);
+      lines.push(
+        `${pc.name}: rangeUlp=${m.rangeUlp.toFixed(2)} maxUlp=${m.maxUlp} range=${m.range.toPrecision(4)}` +
+          ` (${pc.exact === true ? "exact" : `budget ${pc.budget}`})`,
+      );
+      if (pc.exact === true) {
+        if (m.maxUlp !== 0) over.push(`${pc.name}: expected bit-exact, measured maxUlp ${m.maxUlp}`);
+      } else if (m.rangeUlp > pc.budget) {
+        over.push(`${pc.name}: measured rangeUlp ${m.rangeUlp.toFixed(2)} > budget ${pc.budget}`);
+      }
+    }
+    console.log(`[parity derived ${testDevice!.label}]\n${lines.join("\n")}`);
+    expect(over, "derived-spec families exceeding their measured budget").toEqual([]);
   });
 
   it("audit residual probes: NaN min/max, normalize extremes, lattice overflow, subnormals", () => {

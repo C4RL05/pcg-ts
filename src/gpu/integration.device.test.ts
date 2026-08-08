@@ -27,6 +27,16 @@ interface ScenarioOutput {
     pipelineCacheSize: number;
     empty: { length: number; type: string; stats: { dispatches: number; fallbacks: Record<string, number> } };
     noSpec: { isNull: boolean; stats: { fallbacks: Record<string, number> } };
+    derivedSpec: { isNull: boolean; stats: { fallbacks: Record<string, number> } };
+    derivedAccepted: {
+      resolved: boolean;
+      bitExact: boolean;
+      stats: { dispatches: number; fallbacks: Record<string, number> };
+      advertised: boolean;
+      defaultAdvertised: boolean;
+      opaqueStillNull: boolean;
+      opaqueStats: { fallbacks: Record<string, number> };
+    };
     stringAttr: { isNull: boolean; stats: { fallbacks: Record<string, number> } };
     u32Root: { type: string; bitExact: boolean };
     indexRoot: { type: string; bitExact: boolean };
@@ -46,6 +56,12 @@ interface ScenarioOutput {
   fallbackEquivalence: {
     gpuCookStats: { dispatches: number; fallbacks: Record<string, number> };
     bitExact: boolean;
+  };
+  derivedAdoption: {
+    gpuCookStats: { dispatches: number; fallbacks: Record<string, number> };
+    bitExact: boolean;
+    cachedSecondCook: number;
+    recookedWithoutResolver: number;
   };
   subgraph: {
     gpuFirst: { cooked: number; gpu: { dispatches: number }; bitExact: boolean };
@@ -130,6 +146,26 @@ describe.skipIf(testDevice === null)(deviceSuiteName("evaluator + cook integrati
     expect(scenario.basics.noSpec.stats.fallbacks).toEqual({ "no-spec": 1 });
     expect(scenario.basics.stringAttr.isNull).toBe(true);
     expect(scenario.basics.stringAttr.stats.fallbacks).toEqual({ "compile-error": 1 });
+    // A code-authored field is a different population from an
+    // indescribable one, and says so.
+    expect(scenario.basics.derivedSpec.isNull).toBe(true);
+    expect(scenario.basics.derivedSpec.stats.fallbacks).toEqual({ "derived-spec": 1 });
+  });
+
+  it("acceptDerivedSpecs resolves the code-authored field on the real device", () => {
+    const d = scenario.basics.derivedAccepted;
+    expect(d.defaultAdvertised).toBe(false); // the shipped default
+    expect(d.advertised).toBe(true);
+    expect(d.resolved).toBe(true);
+    expect(d.stats.dispatches).toBe(1);
+    expect(d.stats.fallbacks).toEqual({});
+    // `randomField` is a bit-exact hash port, so widening eligibility
+    // moved this field onto the device without moving a single byte.
+    expect(d.bitExact).toBe(true);
+    // The flag widens exactly one population: a makeField closure is
+    // still indescribable and still says "no-spec".
+    expect(d.opaqueStillNull).toBe(true);
+    expect(d.opaqueStats.fallbacks).toEqual({ "no-spec": 1 });
   });
 
   it("output column types mirror the CPU: u32/index/bool roots", () => {
@@ -173,7 +209,19 @@ describe.skipIf(testDevice === null)(deviceSuiteName("evaluator + cook integrati
   it("ineligible field under a gpu cook is byte-identical to a CPU cook", () => {
     expect(scenario.fallbackEquivalence.bitExact).toBe(true);
     expect(scenario.fallbackEquivalence.gpuCookStats.dispatches).toBe(0);
-    expect(scenario.fallbackEquivalence.gpuCookStats.fallbacks).toEqual({ "no-spec": 1 });
+    expect(scenario.fallbackEquivalence.gpuCookStats.fallbacks).toEqual({ "derived-spec": 1 });
+  });
+
+  it("an adopted code-authored field is salted as well as dispatched", () => {
+    const d = scenario.derivedAdoption;
+    expect(d.gpuCookStats.dispatches).toBe(1);
+    expect(d.gpuCookStats.fallbacks).toEqual({});
+    expect(d.bitExact).toBe(true);
+    // Same provenance twice: fully cached (2 nodes).
+    expect(d.cachedSecondCook).toBe(2);
+    // Drop the resolver and the node MUST recook — proof the widened
+    // acceptance widened the memo key with it, on real hardware.
+    expect(d.recookedWithoutResolver).toBe(1);
   });
 
   it("subgraphs forward the resolver and carry conservative provenance", () => {

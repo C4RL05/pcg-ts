@@ -194,6 +194,7 @@ function planFor(geo: Geometry, params: Record<string, unknown>) {
     [spawnMember(params)],
     { attributes, count: geo.attrs.point.count, needsGeometry: false },
     Number.MAX_SAFE_INTEGER,
+    false,
   );
   if (!("plan" in outcome)) throw new Error(`expected a plan, got ${outcome.reason}`);
   return outcome.plan;

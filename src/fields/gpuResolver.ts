@@ -16,8 +16,16 @@ import type { Column, EvalContext, Field } from "./types.js";
  *
  * Per-field reasons ({@link GpuFieldResolver.resolveField}):
  *
- * - `"no-spec"` — the field is code-authored and carries no serializable
- *   spec (`getFieldSpec` returned undefined), so it cannot be compiled.
+ * - `"no-spec"` — the field carries no serializable spec at all, so
+ *   nothing can be compiled: its evaluator is an arbitrary closure
+ *   (`makeField`), it is built over one, or its expression nests deeper
+ *   than the grammar's cap.
+ * - `"derived-spec"` — the field DOES describe itself, but that
+ *   description was derived from the combinator API rather than authored
+ *   through `fieldFromJson`, and this resolver does not advertise
+ *   `acceptDerivedSpecs`. The remedy is a flag, not a rewrite: construct
+ *   the evaluator with `acceptDerivedSpecs: true` (or author the field
+ *   via `fieldFromJson`) and the same expression resolves on the device.
  * - `"compile-error"` — the spec cannot be lowered to WGSL against the
  *   geometry's attribute layout (missing or string attribute, tuple size
  *   above 4, non-finite f32 constant, ...).
@@ -314,6 +322,22 @@ export interface GpuFieldResolver {
    * list entirely.
    */
   readonly residentTerminals?: readonly string[];
+  /**
+   * Does this resolver accept fields whose spec was DERIVED by the
+   * combinator API (`mul(position(), 0.1)`) rather than AUTHORED through
+   * `fieldFromJson`? Omitted or false — the default — means no: such
+   * fields evaluate on the CPU and count a `"derived-spec"` fallback, so
+   * every byte and every memo key is what a pre-v0.9 cook produced.
+   *
+   * This advertisement is the SINGLE source of truth for that decision.
+   * The executor reads it here to decide whether a node's memo key gains
+   * the `|gpu:` salt and whether the node may join a fused run; the
+   * resolver must act on exactly the same value when it decides to
+   * resolve a field or to plan a run. A resolver whose advertisement
+   * disagrees with its own behavior produces GPU bytes under a CPU memo
+   * key — see `deviceSpec` in `src/fields/spec.ts`.
+   */
+  readonly acceptDerivedSpecs?: boolean;
   /**
    * Resolve `field` over the context's domain on the GPU, or return
    * `null` (synchronously) when the field is ineligible. `stats`, when

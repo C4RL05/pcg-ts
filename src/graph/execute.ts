@@ -8,7 +8,7 @@ import {
   type ResidentMemberDesc,
   type ResidentRunResult,
 } from "../fields/index.js";
-import { peekAuthoredSpec } from "../fields/spec.js";
+import { acceptsDerivedSpecs, deviceSpec, resolverView } from "../fields/spec.js";
 import {
   makeDeviceInstancesItem,
   makeGeometryItem,
@@ -87,6 +87,15 @@ export interface CookOptions {
    * handle it receives and must dispose it, and the graph refuses to
    * pin device memory on its behalf, so a node that produced one always
    * recooks. Everything else about the cook is unchanged.
+   *
+   * A resolver advertising `acceptDerivedSpecs` widens which Field params
+   * are eligible from "authored via `fieldFromJson`" to "describable at
+   * all", which includes every combinator expression. The executor reads
+   * that advertisement to decide both which nodes are salted and which
+   * may fuse, and folds it into the salt itself, so cooks under the two
+   * settings never serve each other's bytes. Absent or false — the
+   * default — every produced byte and every memo key is what a pre-v0.9
+   * cook produced.
    */
   gpu?: GpuFieldResolver;
 }
@@ -203,28 +212,32 @@ function stableValueHash(v: unknown, path: string): string {
 }
 
 /**
- * Does the param tree hold at least one genuine Field carrying an
- * AUTHORED spec (`peekAuthoredSpec`)? Only such fields can ever be
- * GPU-resolved, so only they make a node's output depend on the
- * resolver. Walks the same containers `stableValueHash` accepts; other
- * values cannot contain Fields (or fail hashing first).
+ * Does the param tree hold at least one genuine Field the resolver would
+ * accept (`deviceSpec`)? Only such fields can ever be GPU-resolved, so
+ * only they make a node's output depend on the resolver. Walks the same
+ * containers `stableValueHash` accepts; other values cannot contain
+ * Fields (or fail hashing first).
  *
- * Authored, not merely spec'd: a combinator field derives a faithful
- * spec, but the evaluator declines derived specs, so counting one here
- * would salt a memo key for a node that then resolves on the CPU. This
- * predicate, `paramsFieldsAllSpecd`, and the evaluator's own gate are
- * one decision in three places and must agree exactly — disagreement is
- * the one way this becomes a stale-cache bug.
+ * `acceptDerived` is the resolver's own `acceptDerivedSpecs`
+ * advertisement, threaded in rather than re-derived: this predicate,
+ * `paramsFieldsAllSpecd`, the evaluator's per-field gate and the
+ * resident-run planner are ONE decision, and they ask it through one
+ * function with the flag as a required argument. Counting a field here
+ * that the resolver then declines (or the reverse) would salt a memo key
+ * for a node that resolved on the CPU (or leave a device-resolved node
+ * unsalted) — the one way this becomes a stale-cache bug.
  */
-function paramsHaveSpecField(v: unknown): boolean {
+function paramsHaveSpecField(v: unknown, acceptDerived: boolean): boolean {
   if (typeof v !== "object" || v === null) return false;
-  if (isField(v)) return peekAuthoredSpec(v) !== undefined;
-  if (Array.isArray(v)) return v.some(paramsHaveSpecField);
-  if (v instanceof Set) return [...v].some(paramsHaveSpecField);
-  if (v instanceof Map) return [...v.values()].some(paramsHaveSpecField);
+  if (isField(v)) return deviceSpec(v, acceptDerived) !== undefined;
+  if (Array.isArray(v)) return v.some((el) => paramsHaveSpecField(el, acceptDerived));
+  if (v instanceof Set) return [...v].some((el) => paramsHaveSpecField(el, acceptDerived));
+  if (v instanceof Map) return [...v.values()].some((el) => paramsHaveSpecField(el, acceptDerived));
   const proto = Object.getPrototypeOf(v) as object | null;
   if (proto === Object.prototype || proto === null) {
-    return Object.values(v as Record<string, unknown>).some(paramsHaveSpecField);
+    return Object.values(v as Record<string, unknown>).some((el) =>
+      paramsHaveSpecField(el, acceptDerived),
+    );
   }
   return false;
 }
@@ -240,7 +253,7 @@ function paramsHaveSpecField(v: unknown): boolean {
  * their counters land in the outermost sink.
  */
 function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResolver {
-  const view: { -readonly [K in keyof GpuFieldResolver]: GpuFieldResolver[K] } = {
+  const view: Omit<{ -readonly [K in keyof GpuFieldResolver]: GpuFieldResolver[K] }, "acceptDerivedSpecs"> = {
     cacheSalt: base.cacheSalt,
     resolveField: (field, ctx) => base.resolveField(field, ctx, sink),
   };
@@ -251,7 +264,14 @@ function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResol
     // it must survive the view (a nested cook sees the same set).
     if (base.residentTerminals !== undefined) view.residentTerminals = base.residentTerminals;
   }
-  return view;
+  // `acceptDerivedSpecs` is NOT copied here — `resolverView` copies it,
+  // and typing it `never` in the view argument makes writing it by hand a
+  // compile error. Unlike `residentTerminals` above it is unconditional:
+  // it governs the per-field seam, which run-less resolvers have too, and
+  // dropping it would leave the executor salting memo keys for the
+  // authored set while the resolver resolved the wider one — GPU bytes
+  // under a CPU key.
+  return resolverView(base, view);
 }
 
 /**
@@ -263,22 +283,27 @@ function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResol
 const RUN_KEY_VERSION = "run1";
 
 /**
- * Are all Fields in the param tree AUTHORED-spec'd (`peekAuthoredSpec`)?
- * A Field the run planner would decline forces a CPU fallback inside a
- * fused run, so nodes carrying one never join a run. Trees without any
- * Field are trivially true — plain values compile as constants. Reads
- * the same predicate as {@link paramsHaveSpecField}; see the note there.
+ * Are all Fields in the param tree ones the resolver would accept
+ * (`deviceSpec`)? A Field the run planner would decline forces a CPU
+ * fallback inside a fused run, so nodes carrying one never join a run.
+ * Trees without any Field are trivially true — plain values compile as
+ * constants. Reads the same predicate, with the same flag, as
+ * {@link paramsHaveSpecField}; see the note there.
  */
-function paramsFieldsAllSpecd(v: unknown): boolean {
+function paramsFieldsAllSpecd(v: unknown, acceptDerived: boolean): boolean {
   if (typeof v !== "object" || v === null) return true;
-  if (isField(v)) return peekAuthoredSpec(v) !== undefined;
-  if (Array.isArray(v)) return v.every(paramsFieldsAllSpecd);
+  if (isField(v)) return deviceSpec(v, acceptDerived) !== undefined;
+  if (Array.isArray(v)) return v.every((el) => paramsFieldsAllSpecd(el, acceptDerived));
   if (ArrayBuffer.isView(v)) return true;
-  if (v instanceof Set) return [...v].every(paramsFieldsAllSpecd);
-  if (v instanceof Map) return [...v.values()].every(paramsFieldsAllSpecd);
+  if (v instanceof Set) return [...v].every((el) => paramsFieldsAllSpecd(el, acceptDerived));
+  if (v instanceof Map) {
+    return [...v.values()].every((el) => paramsFieldsAllSpecd(el, acceptDerived));
+  }
   const proto = Object.getPrototypeOf(v) as object | null;
   if (proto === Object.prototype || proto === null) {
-    return Object.values(v as Record<string, unknown>).every(paramsFieldsAllSpecd);
+    return Object.values(v as Record<string, unknown>).every((el) =>
+      paramsFieldsAllSpecd(el, acceptDerived),
+    );
   }
   return true;
 }
@@ -341,7 +366,11 @@ function isTerminalShape(def: NodeState["def"]): boolean {
  * Returns `true`, `false`, or the machine-readable reason string
  * `eligible` returned — which the caller counts in `stats.gpu.fallbacks`.
  */
-function fusability(node: NodeState, residentTerminals: ReadonlySet<string>): boolean | string {
+function fusability(
+  node: NodeState,
+  residentTerminals: ReadonlySet<string>,
+  acceptDerived: boolean,
+): boolean | string {
   const def = node.def;
   if (def.resident === undefined) return false;
   if (def.resident.terminal === true) {
@@ -357,7 +386,7 @@ function fusability(node: NodeState, residentTerminals: ReadonlySet<string>): bo
     const verdict = def.resident.eligible(node.params);
     if (verdict !== true) return typeof verdict === "string" && verdict !== "" ? verdict : false;
   }
-  return paramsFieldsAllSpecd(node.params);
+  return paramsFieldsAllSpecd(node.params, acceptDerived);
 }
 
 /** One detected device-resident run: member node ids in chain order. */
@@ -401,6 +430,7 @@ function detectResidentRuns(
   graph: Graph,
   order: readonly string[],
   residentTerminals: ReadonlySet<string>,
+  acceptDerived: boolean,
 ): ResidentDetection {
   const byFirst = new Map<string, ResidentRun>();
   const optOuts = new Map<string, string>();
@@ -409,7 +439,7 @@ function detectResidentRuns(
   const hasOutputDecl = (id: string): boolean => graph._outputs.some((o) => o.node === id);
   /** Fusability, recording an author-actionable opt-out reason once per node. */
   const fusable = (node: NodeState): boolean => {
-    const verdict = fusability(node, residentTerminals);
+    const verdict = fusability(node, residentTerminals, acceptDerived);
     if (typeof verdict === "string") {
       optOuts.set(node.id, verdict);
       return false;
@@ -562,6 +592,26 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   const gpuStats = opts.gpu !== undefined ? createGpuCookStats() : undefined;
   const gpu =
     opts.gpu !== undefined && gpuStats !== undefined ? gpuStatsView(opts.gpu, gpuStats) : undefined;
+  // Read ONCE per cook, from the view the nodes will actually be handed,
+  // and passed to every eligibility question below. A second read (or a
+  // second interpretation of "absent means false") is how the memo-key
+  // salt and the resolver's acceptance drift apart.
+  const acceptDerived = acceptsDerivedSpecs(gpu);
+  /**
+   * The device identity folded into memo keys. `acceptDerivedSpecs`
+   * belongs in it, not only in the eligibility decision: two resolvers on
+   * the SAME adapter carry the same `cacheSalt`, yet one that accepts
+   * derived specs produces different bytes for the same node — a node
+   * holding one authored and one code-authored Field param is salted
+   * either way but resolves one field or two, and a `gpu: "always"` node
+   * (a subgraph) is salted either way while its inner cook changes
+   * entirely. Without this suffix those cooks would share a key and serve
+   * each other's bytes.
+   *
+   * Empty suffix when the flag is off, so every memo key a pre-v0.9 graph
+   * produced is byte-identical.
+   */
+  const gpuSalt = gpu === undefined ? "" : `${gpu.cacheSalt}${acceptDerived ? "+derived" : ""}`;
   const stats: CookStats = { cooked: 0, cached: 0, elapsedMs: 0 };
   if (gpuStats !== undefined) stats.gpu = gpuStats;
   const checkCancelled = (): void => {
@@ -578,7 +628,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   // one and produced bytes and memo keys are unchanged.
   const detection =
     gpu !== undefined && gpu.planRun !== undefined && gpu.executeRun !== undefined
-      ? detectResidentRuns(graph, order, new Set(gpu.residentTerminals ?? []))
+      ? detectResidentRuns(graph, order, new Set(gpu.residentTerminals ?? []), acceptDerived)
       : undefined;
   const runsByFirst = detection?.runs;
   // Author-actionable opt-outs (a resident node whose `eligible`
@@ -663,8 +713,9 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     // (or for non-adopting nodes) the key is byte-identical to before.
     const gpuMark =
       gpu !== undefined &&
-      (def.gpu === "always" || (def.gpu === "fields" && paramsHaveSpecField(node.params)))
-        ? `|gpu:${gpu.cacheSalt}`
+      (def.gpu === "always" ||
+        (def.gpu === "fields" && paramsHaveSpecField(node.params, acceptDerived)))
+        ? `|gpu:${gpuSalt}`
         : "";
     const key = `${def.type}|s${seed}|p${stableValueHash(node.params, "params")}|i${inputSig.join(
       ";",
@@ -767,7 +818,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
         seed,
       });
     }
-    const key = `${RUN_KEY_VERSION}|gpu:${gpu!.cacheSalt}|i${inputSig.join(";")}|m${memberKeys.join("")}`;
+    const key = `${RUN_KEY_VERSION}|gpu:${gpuSalt}|i${inputSig.join(";")}|m${memberKeys.join("")}`;
 
     if (terminal.cache !== undefined && terminal.cache.key === key && terminal.cache.volatile !== true) {
       const elapsed = performance.now() - runStart;

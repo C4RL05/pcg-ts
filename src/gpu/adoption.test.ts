@@ -9,7 +9,13 @@
  */
 import { describe, expect, it } from "vitest";
 import { createTriangleMesh } from "../data/index.js";
-import { evaluateField, randomField, type FieldLike, type GpuFieldResolver } from "../fields/index.js";
+import {
+  evaluateField,
+  makeField,
+  randomField,
+  type FieldLike,
+  type GpuFieldResolver,
+} from "../fields/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import {
   jitterPoints,
@@ -18,20 +24,28 @@ import {
   transformPoints,
   volumeSample,
 } from "../nodes/index.js";
-import { peekAuthoredSpec } from "../fields/spec.js";
+import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
 
-/** CPU-backed stub resolver (same contract as provenance.test.ts). */
-function stubResolver(salt: string): GpuFieldResolver & { calls: number } {
+/**
+ * CPU-backed stub resolver (same contract as provenance.test.ts). Its
+ * eligibility gate is the production one — `deviceSpec` with the flag it
+ * advertises — so the double cannot accept a set the executor did not
+ * salt, which is the property under test in this file.
+ */
+function stubResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } = {}): GpuFieldResolver & { calls: number } {
+  const accept = acceptsDerivedSpecs(opts);
   const stub: GpuFieldResolver & { calls: number } = {
     calls: 0,
     cacheSalt: salt,
+    acceptDerivedSpecs: accept,
     resolveField(field, ctx, stats) {
       stub.calls++;
-      if (peekAuthoredSpec(field) === undefined) {
-        if (stats !== undefined) stats.fallbacks["no-spec"] = (stats.fallbacks["no-spec"] ?? 0) + 1;
+      if (deviceSpec(field, accept) === undefined) {
+        const reason = specFallbackReason(field);
+        if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
         return null;
       }
       if (stats !== undefined) stats.dispatches++;
@@ -41,6 +55,15 @@ function stubResolver(salt: string): GpuFieldResolver & { calls: number } {
   };
   return stub;
 }
+
+/**
+ * A field no spec can ever name — an arbitrary closure — computing the
+ * same bytes as `randomField("authored")`, so the two populations
+ * ("indescribable" and "described but code-authored") differ only in
+ * provenance and their fallback reason, never in what they evaluate to.
+ */
+const opaqueField = (): FieldLike =>
+  makeField("opaque", 1, (ctx) => evaluateField(randomField("authored"), ctx));
 
 /** Unit square in the XY plane, two triangles (surfaceSample fixture). */
 function unitSquare(): ReturnType<typeof createTriangleMesh> {
@@ -182,11 +205,38 @@ describe.each(CASES)("gpu adoption: $name", (c) => {
 
   it("spec-less field under gpu falls back to byte-identical CPU bytes", async () => {
     const stub = stubResolver("stub|deviceA");
-    const gpuRun = await cook(c.build(randomField("authored")), { gpu: stub });
+    const gpuRun = await cook(c.build(opaqueField()), { gpu: stub });
     expect(gpuRun.stats.gpu!.dispatches).toBe(0);
     expect(gpuRun.stats.gpu!.fallbacks).toEqual({ "no-spec": 1 });
+    const cpuRun = await cook(c.build(opaqueField()));
+    expect(outAttrBytes(gpuRun, c.attr)).toEqual(outAttrBytes(cpuRun, c.attr));
+  });
+
+  it("code-authored field falls back as derived-spec, not no-spec", async () => {
+    // Same node, same param, a field that DOES describe itself but was
+    // built in code: the reason has to name the flag that would admit it,
+    // not claim the field is indescribable.
+    const stub = stubResolver("stub|deviceA");
+    const gpuRun = await cook(c.build(randomField("authored")), { gpu: stub });
+    expect(gpuRun.stats.gpu!.dispatches).toBe(0);
+    expect(gpuRun.stats.gpu!.fallbacks).toEqual({ "derived-spec": 1 });
     const cpuRun = await cook(c.build(randomField("authored")));
     expect(outAttrBytes(gpuRun, c.attr)).toEqual(outAttrBytes(cpuRun, c.attr));
+  });
+
+  it("acceptDerivedSpecs admits the same code-authored field", async () => {
+    const stub = stubResolver("stub|deviceA", { acceptDerivedSpecs: true });
+    const g = c.build(randomField("authored"));
+    const gpuRun = await cook(g, { gpu: stub });
+    expect(gpuRun.stats.gpu!.dispatches).toBe(1);
+    expect(gpuRun.stats.gpu!.fallbacks).toEqual({});
+    // ...and the widened acceptance is salted: a CPU cook of the same
+    // graph recooks rather than serving the device-resolved entry.
+    const cpuRun = await cook(g);
+    expect(cpuRun.stats.cooked).toBe(1);
+    // Still a genuinely spec-less field's answer, flag or no flag.
+    const opaque = await cook(c.build(opaqueField()), { gpu: stub });
+    expect(opaque.stats.gpu!.fallbacks).toEqual({ "no-spec": 1 });
   });
 
   it("plain-value params keep their cache across the gpu toggle", async () => {

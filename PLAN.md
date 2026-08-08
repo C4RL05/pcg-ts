@@ -861,6 +861,13 @@ Design decisions fixed up front:
   flag. With the gate off, a derived-spec field resolves on the CPU
   and counts a new reason `"derived-spec"`, distinct from `"no-spec"`,
   which keeps its meaning for genuinely spec-less fields.
+- Amended during the phase: `"derived-spec"` is scoped to the
+  **per-field** seam only. Making the fusion gate return it as well
+  double-counts — a node excluded from a run still falls back
+  per-field, and the same cause would be reported twice — and it
+  conflates the gate's own `"no-spec"` verdict. The reason answers
+  "why did this field stay on the CPU", not "why did this node leave
+  the run".
 - Parity corpus extended with the derived forms plus the three
   `02-forest` fields, on real hardware against existing per-family
   budgets.

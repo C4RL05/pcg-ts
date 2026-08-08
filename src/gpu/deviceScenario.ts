@@ -13,10 +13,12 @@ import {
   capture,
   createGpuCookStats,
   evaluateField,
+  makeField,
   randomField,
   type Column,
   type GpuFieldResolver,
 } from "../fields/index.js";
+import { resolverView } from "../fields/spec.js";
 import { Graph, cook, makeGeometryItem, subgraphNode, type CookResult } from "../graph/index.js";
 import { setAttribute } from "../nodes/attributes.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
@@ -80,8 +82,28 @@ async function main(): Promise<void> {
       emptyStats,
     )!;
 
+    // Two distinct ineligible populations: a field that cannot be
+    // described at all, and one that describes itself but was authored in
+    // code. They must report different reasons, and the second must flip
+    // to eligible under `acceptDerivedSpecs`.
     const noSpecStats = createGpuCookStats();
-    const noSpec = evaluator.resolveField(randomField("code-authored"), ctx, noSpecStats);
+    const opaque = makeField("opaque", 1, (c) => evaluateField(randomField("code-authored"), c));
+    const noSpec = evaluator.resolveField(opaque, ctx, noSpecStats);
+
+    const derivedStats = createGpuCookStats();
+    const derivedField = randomField("code-authored");
+    const derivedRes = evaluator.resolveField(derivedField, ctx, derivedStats);
+
+    const wideEvaluator = new GpuFieldEvaluator(structural, {
+      adapterInfo: adapter.info,
+      acceptDerivedSpecs: true,
+    });
+    const wideStats = createGpuCookStats();
+    const widePending = wideEvaluator.resolveField(derivedField, ctx, wideStats);
+    const wideCol = widePending === null ? null : await widePending;
+    const wideCpu = evaluateField(derivedField, ctx);
+    const wideOpaqueStats = createGpuCookStats();
+    const wideOpaque = wideEvaluator.resolveField(opaque, ctx, wideOpaqueStats);
 
     const strGeo = makeCorpusGeometry(8);
     strGeo.attrs.point.add("label", "string", 1);
@@ -108,6 +130,16 @@ async function main(): Promise<void> {
       pipelineCacheSize: evaluator.pipelineCacheSize,
       empty: { length: emptyCol.data.length, type: emptyCol.data.constructor.name, stats: emptyStats },
       noSpec: { isNull: noSpec === null, stats: noSpecStats },
+      derivedSpec: { isNull: derivedRes === null, stats: derivedStats },
+      derivedAccepted: {
+        resolved: wideCol !== null,
+        bitExact: wideCol !== null && bytesEqual(wideCpu, wideCol),
+        stats: wideStats,
+        advertised: wideEvaluator.acceptDerivedSpecs,
+        defaultAdvertised: evaluator.acceptDerivedSpecs,
+        opaqueStillNull: wideOpaque === null,
+        opaqueStats: wideOpaqueStats,
+      },
       stringAttr: { isNull: strRes === null, stats: strStats },
       u32Root: { type: u32Gpu.data.constructor.name, bitExact: bytesEqual(u32Cpu, u32Gpu) },
       indexRoot: { type: idxGpu.data.constructor.name, bitExact: bytesEqual(idxCpu, idxGpu) },
@@ -200,6 +232,34 @@ async function main(): Promise<void> {
       gpuCookStats: f1.stats.gpu,
       bitExact: bytesEqual(f1Col, attrColumn(f2, "d")),
     };
+
+    // ...and with the gate ON the same graph resolves on the device AND
+    // gains the salt: cooking it CPU-only afterwards must recook rather
+    // than serve the device bytes back.
+    const wide = new GpuFieldEvaluator(structural, {
+      adapterInfo: adapter.info,
+      acceptDerivedSpecs: true,
+    });
+    const g5 = new Graph(7);
+    const din5 = g5.add(dataInput);
+    g5.setParam(din5, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+    const sa5 = g5.add(setAttribute);
+    g5.setParam(sa5, "name", "d");
+    g5.setParam(sa5, "value", randomField("code-authored"));
+    g5.connect(din5, "out", sa5, "in");
+    g5.output(sa5, "out", "out");
+    const w1 = await cook(g5, { gpu: wide });
+    const w1Col = attrColumn(w1, "d");
+    const w2 = await cook(g5, { gpu: wide });
+    const w3 = await cook(g5);
+    out.derivedAdoption = {
+      gpuCookStats: w1.stats.gpu,
+      // The hash stream is a bit-exact port, so this expression is one of
+      // the populations that does not move at all on the device.
+      bitExact: bytesEqual(w1Col, attrColumn(f2, "d")),
+      cachedSecondCook: w2.stats.cached,
+      recookedWithoutResolver: w3.stats.cooked,
+    };
   }
 
   // -- subgraph forwarding ---------------------------------------------------
@@ -231,13 +291,17 @@ async function main(): Promise<void> {
   // -- World threading -------------------------------------------------------
   {
     const counts = { world: 0, update: 0 };
-    const countingResolver = (key: keyof typeof counts): GpuFieldResolver => ({
-      cacheSalt: evaluator.cacheSalt,
-      resolveField: (field, ctx, stats) => {
-        counts[key]++;
-        return evaluator.resolveField(field, ctx, stats);
-      },
-    });
+    // Through `resolverView`, never a hand-written object literal: a
+    // wrapper that drops the evaluator's `acceptDerivedSpecs`
+    // advertisement would resolve the wide population under narrow keys.
+    const countingResolver = (key: keyof typeof counts): GpuFieldResolver =>
+      resolverView(evaluator, {
+        cacheSalt: evaluator.cacheSalt,
+        resolveField: (field, ctx, stats) => {
+          counts[key]++;
+          return evaluator.resolveField(field, ctx, stats);
+        },
+      });
     const graph = new Graph(1);
     const din = graph.add(dataInput);
     graph.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(30))]);

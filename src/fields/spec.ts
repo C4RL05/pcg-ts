@@ -4,9 +4,10 @@
  *
  * This module sits below both `src/fields` (whose constructors DERIVE a
  * spec from their inputs' specs) and `src/nodes/fieldJson.ts` (whose
- * `fieldFromJson` REMEMBERS the author's original spec). It deliberately
+ * `fieldFromJson` REMEMBERS the author's original spec). At runtime it
  * imports nothing but `./types.js` so the combinators can attach specs
- * without `src/fields` ever depending on `src/nodes`.
+ * without `src/fields` ever depending on `src/nodes`; the resolver
+ * interface it forwards in {@link resolverView} is a type-only import.
  *
  * Two provenances, one channel:
  *
@@ -18,9 +19,11 @@
  *   very round-trip that validates derivation.
  *
  * The public {@link getFieldSpec} does not distinguish them (a spec is a
- * spec). {@link peekAuthoredSpec} does, for the seams that must keep
- * treating "authored via JSON" as the eligibility rule.
+ * spec). The internal `deviceSpec` does, because device eligibility
+ * depends on provenance: it is THE predicate every eligibility seam asks,
+ * and the only way to ask it.
  */
+import type { GpuFieldResolver } from "./gpuResolver.js";
 import { type Field, isField } from "./types.js";
 
 /** A JSON field expression: a constructor name plus its arguments. */
@@ -121,20 +124,100 @@ export function peekFieldSpec(field: Field): FieldSpec | undefined {
 }
 
 /**
- * @internal The field's spec only when it was AUTHORED via
- * `fieldFromJson`; undefined for derived specs and for spec-less fields.
+ * @internal **The** device-eligibility predicate: the spec a seam may
+ * compile for `field`, or undefined when the field must stay on the CPU.
  * Non-cloning, like {@link peekFieldSpec}.
  *
- * The device seams read specs through this: a derived spec describes a
+ * There is deliberately no provenance-blind and no flag-free variant of
+ * this question. Four seams decide it — the memo-key salt and the fusion
+ * gate (`src/graph/execute.ts`), the per-field resolution
+ * (`src/gpu/evaluator.ts`) and the resident-run planner
+ * (`src/gpu/run.ts`) — and if any two of them ever disagree, a node can
+ * resolve on the device without its memo key gaining the resolver's
+ * `|gpu:` salt, which serves GPU bytes to a CPU cook. Making this the
+ * single implementation, with the flag a REQUIRED argument, is what
+ * makes that disagreement a type error rather than a latent cache bug.
+ *
+ * `acceptDerivedSpecs` is the caller's `GpuFieldResolver`-advertised
+ * flag, read through {@link acceptsDerivedSpecs}. False (the default):
+ * only specs AUTHORED via `fieldFromJson` are eligible, so every byte a
+ * pre-v0.9 graph produced is unchanged — a derived spec describes a
  * field faithfully, but accepting one moves that field's evaluation from
  * the CPU (the bit-exact reference) to the GPU (a documented
- * approximation), which no existing graph asked for. Widening them is a
- * separate, opt-in decision.
+ * approximation) for a graph that never asked. True: any spec is
+ * eligible, authored or derived.
  */
-export function peekAuthoredSpec(field: Field): FieldSpec | undefined {
+export function deviceSpec(field: Field, acceptDerivedSpecs: boolean): FieldSpec | undefined {
   const spec = readSpec(field);
   if (spec === undefined) return undefined;
+  if (acceptDerivedSpecs) return spec;
   return DERIVED_SPECS.has(spec) ? undefined : spec;
+}
+
+/**
+ * @internal Why {@link deviceSpec} returned undefined, as the
+ * machine-readable fallback reason counted in `GpuCookStats.fallbacks`.
+ * `"no-spec"` keeps its original meaning — the field cannot be described
+ * at all (a `makeField` closure, a tree containing one, or a tree past
+ * `MAX_SPEC_DEPTH`) — and `"derived-spec"` names the new population: a
+ * field that describes itself perfectly well but was authored in code,
+ * which only `acceptDerivedSpecs` admits.
+ *
+ * Only meaningful when `deviceSpec` returned undefined; with the flag on
+ * a derived spec is eligible and never reaches a fallback count.
+ */
+export function specFallbackReason(field: Field): "no-spec" | "derived-spec" {
+  return readSpec(field) === undefined ? "no-spec" : "derived-spec";
+}
+
+/**
+ * @internal Interpret a resolver's (or an evaluator option bag's)
+ * `acceptDerivedSpecs` advertisement. The ONE place the option's absence
+ * is turned into `false`, so the evaluator that acts on the flag and the
+ * executor that salts memo keys for it can never read it differently.
+ * Structurally typed so this module keeps importing nothing but
+ * `./types.js`.
+ */
+export function acceptsDerivedSpecs(
+  source: { readonly acceptDerivedSpecs?: boolean } | undefined,
+): boolean {
+  return source?.acceptDerivedSpecs === true;
+}
+
+/**
+ * @internal Build a resolver VIEW — a resolver that delegates to `base` —
+ * carrying `base`'s `acceptDerivedSpecs` advertisement across unchanged.
+ * THE ONLY way a wrapper in this repository is allowed to be built.
+ *
+ * This is the fifth seam, and the one the type system cannot guard by
+ * itself. {@link deviceSpec} makes the flag a REQUIRED argument, so a
+ * seam that READS the predicate without it is a compile error. But
+ * `GpuFieldResolver.acceptDerivedSpecs` has to stay optional — resolvers
+ * written before v0.9 omit it — so a wrapper that FORGETS to forward it
+ * typechecks cleanly while silently narrowing what the executor believes
+ * the base will accept. The executor then salts memo keys for the
+ * authored population while the base resolves the wider one: GPU bytes
+ * written under a CPU key, and served to the next CPU-only cook.
+ *
+ * Two things close that hole here rather than in review:
+ *
+ * 1. The advertisement is copied by this function, so it cannot be
+ *    forgotten by a wrapper that uses it.
+ * 2. `view` may not carry `acceptDerivedSpecs` at all (typed `never`), so
+ *    re-declaring it by hand — the exact line that made the old
+ *    `gpuStatsView` mutable — is a type error. A resolver that decides
+ *    the flag decides it as a BASE, never as a view.
+ *
+ * `src/gpu/resolverView.test.ts` pins both the round-trip and the fact
+ * that every wrapper in `src/` is built through here.
+ */
+export function resolverView(
+  base: { readonly acceptDerivedSpecs?: boolean },
+  view: Omit<GpuFieldResolver, "acceptDerivedSpecs"> & { readonly acceptDerivedSpecs?: never },
+): GpuFieldResolver {
+  const out: { -readonly [K in keyof GpuFieldResolver]: GpuFieldResolver[K] } = { ...view };
+  if (base.acceptDerivedSpecs !== undefined) out.acceptDerivedSpecs = base.acceptDerivedSpecs;
+  return out;
 }
 
 /** @internal Was this exact spec object composed by a constructor? */
