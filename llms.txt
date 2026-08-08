@@ -199,13 +199,20 @@ In code, both `fieldFromJson(spec)` fields and combinator-composed
 fields serialize back via `fieldToJson` — a combinator derives its spec
 from its arguments, so since v0.9 a graph holding
 `mul(position(), 0.1)` serializes (before v0.9 `serializeGraph` threw
-and pointed at `fieldFromJson`). Only three cases refuse: a `makeField`
-closure, any field composed over one (the absent spec propagates), and
-a tree deeper than 256 levels — derivation refuses at exactly the depth
+and pointed at `fieldFromJson`). Four cases refuse: a `makeField`
+closure; any field composed over one (the absent spec propagates); a
+tree deeper than 256 levels — derivation refuses at exactly the depth
 `fieldFromJson` parses, so a spec that could not be re-parsed is never
-produced and no graph is written that cannot be read back. The refusal
-is one `fieldToJson` message naming all three causes and the fix, and
-`serializeGraph` prefixes it with `node "<id>" param "<key>": `.
+produced and no graph is written that cannot be read back; and an
+argument the constructor accepts but the grammar's parser rejects (a
+fractional `seed`, a non-finite `frequency`/`offset`/`constant`/`ramp`
+stop, an fbm `base` outside the built-in factories, `-0` anywhere).
+`fieldToJson` names the ONE cause that applied and the fix for it — for
+an opaque leaf it names that leaf's structural key, so a `makeField`
+buried deep in a combinator tree is identified rather than the
+constructor that noticed it; for an ungrammatical argument the message
+leads with the offending option (e.g. `` `seed` must be an integer ``).
+`serializeGraph` prefixes any of them with `node "<id>" param "<key>": `.
 Note this is about DESCRIBING a field, not about where it runs: device
 eligibility is narrower and additionally requires either an AUTHORED
 spec or `acceptDerivedSpecs` (see the GPU section).
@@ -392,7 +399,8 @@ Surface:
   v0.7 numbers stay comparable. The complete fallback-reason
   vocabulary:
   - `no-spec` — the field cannot be described at all: a `makeField`
-    closure, anything composed over one, or a tree past 256 levels
+    closure, anything composed over one, a tree past 256 levels, or an
+    argument the grammar's parser rejects
   - `derived-spec` — the field describes itself, but its spec was
     DERIVED by the combinator API and this resolver does not advertise
     `acceptDerivedSpecs`. Scoped to the PER-FIELD seam only: a node the

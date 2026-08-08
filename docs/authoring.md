@@ -52,7 +52,7 @@ from the combinator API — a combinator field derives its spec from its
 arguments. Since v0.9 there is therefore no authoring cliff between the
 pleasant API and the serializable one: a graph holding
 `mul(position(), 0.1)` round-trips, where before it could not be saved
-at all. Exactly three cases still refuse:
+at all. Four cases still refuse:
 
 1. a field built by `makeField` — an arbitrary closure that nothing can
    describe, and the deliberate escape hatch;
@@ -62,13 +62,30 @@ at all. Exactly three cases still refuse:
    Derivation refuses at exactly the depth `fieldFromJson` will parse,
    so a spec that could not be re-parsed is never produced — a graph
    that saves and cannot be reopened would be worse than one that
-   refuses to save.
+   refuses to save;
+4. an argument the constructor accepts but the grammar's parser does
+   not — `perlinNoise({ seed: 1.5 })` builds a working field (the seed
+   is coerced with `>>> 0`), but the grammar requires an integer, and a
+   spec `fieldFromJson` would reject is worse than none. Same for a
+   non-finite `frequency`/`offset`/`constant`/`ramp` stop, an fbm
+   `base` outside the built-in factories, and `-0` anywhere (JSON turns
+   it into `0`, and the two fields differ).
 
-`fieldToJson` throws one actionable message that names all three causes
-and the fix; `serializeGraph` prefixes it with the offending
-`node "<id>" param "<key>"`. (The absent spec records no reason for its
-absence, so the message enumerates rather than discriminates — the
-node/param prefix is what localizes the fault.)
+`fieldToJson` names the ONE cause that applied, and the offender:
+
+- **opaque, this field** — "It was built by makeField ... Rebuild it
+  with grammar constructors";
+- **opaque, a sub-expression** — the offending leaf's structural key,
+  so a `makeField` buried twelve combinator levels down is named
+  directly rather than the constructor that noticed it;
+- **too deep** — "It nests deeper than the grammar's cap of 256 levels
+  ... Flatten the expression";
+- **ungrammatical** — the message leads with the offending option, e.g.
+  `` `seed` must be an integer ``.
+
+`serializeGraph` prefixes any of them with the offending
+`node "<id>" param "<key>"`, so the fault is localized in the graph and
+in the field expression at once.
 
 Serializing is about *describing* a field. Whether it then runs on the
 GPU is a narrower question with an extra condition — see
@@ -547,7 +564,7 @@ structurally, and core code sees only the `GpuFieldResolver` interface
 the non-throwing probe — answers the first: since v0.9 it returns a
 spec both for fields built by `fieldFromJson` (*authored*) and for
 fields built from the combinator API (*derived*), and `undefined` only
-for the three cases listed under
+for the four cases listed under
 [Validation behavior](#validation-behavior). Eligibility is the
 narrower question, and it asks about provenance as well as
 describability.

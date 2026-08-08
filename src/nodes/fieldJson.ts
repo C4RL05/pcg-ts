@@ -71,6 +71,7 @@ import {
   attachAuthoredSpec,
   attachSpec,
   peekFieldSpec,
+  withheldReason,
 } from "../fields/spec.js";
 import { NOISE_BASES, WORLEY_OUTPUTS } from "../noise/bases.js";
 import {
@@ -502,13 +503,79 @@ export function fieldFromJson(spec: FieldSpec): Field {
   return field;
 }
 
+/** The refusal's shared opening — one prefix, four continuations. */
+const NO_SPEC = "fieldToJson: this field carries no JSON spec, so it cannot be serialized";
+
+/** How to build a field the grammar CAN name, named the same way twice. */
+const GRAMMAR = "grammar constructors (combinators, inputs, noise — see listFieldFns), or fieldFromJson";
+
+/**
+ * A structural key inside a message. Keys embed their children, so a
+ * deep expression's key is unbounded; an error nobody can read names its
+ * offender no better than one that says nothing.
+ */
+function nameKey(key: string): string {
+  return key.length <= 120 ? `\`${key}\`` : `\`${key.slice(0, 117)}...\` (truncated)`;
+}
+
+/**
+ * Why this spec-less field is spec-less, as one message naming the one
+ * cause that applied. The reason was recorded at the withhold site (see
+ * `WithheldReason`), because by the time the field arrives here every
+ * constructor that knew has returned.
+ */
+function noSpecMessage(field: Field): string {
+  const reason = withheldReason(field);
+  // No reason recorded means nothing WITHHELD one: `makeField` does not
+  // decline to describe its closure, it simply has nothing to describe.
+  // That is the only way to arrive here without a reason, because every
+  // constructor that declines records why.
+  //
+  // The `leafKey === field.key` disjunct is defensive, not a live path:
+  // `withheldOver` only ever mints an `opaque` naming a DIFFERENT field
+  // (the argument), and every combinator key embeds its arguments' keys,
+  // so the two cannot collide today. It is here so that a future site
+  // recording "this field is itself the opaque leaf" gets the accusation
+  // that describes it, rather than being told one of its own
+  // sub-expressions is at fault.
+  if (reason === undefined || (reason.kind === "opaque" && reason.leafKey === field.key)) {
+    return (
+      `${NO_SPEC}. It was built by makeField, whose evaluator is an arbitrary closure that ` +
+      `nothing can name — the deliberate escape hatch. Rebuild it with ${GRAMMAR}`
+    );
+  }
+  switch (reason.kind) {
+    case "opaque":
+      return (
+        `${NO_SPEC}. The sub-expression ${nameKey(reason.leafKey)} carries none of its own — a ` +
+        "makeField closure can never be named — and every field composed over it inherits that, " +
+        `because a combinator derives its spec from its arguments. Replace that sub-expression ` +
+        `with ${GRAMMAR}`
+      );
+    case "too-deep":
+      return (
+        `${NO_SPEC}. It nests deeper than the grammar's cap of ${MAX_SPEC_DEPTH} levels, which ` +
+        "fieldFromJson refuses to parse — and a spec that cannot be read back would be worse " +
+        "than none. Flatten the expression to fit under the cap"
+      );
+    case "ungrammatical":
+      return (
+        `${NO_SPEC}: ${reason.detail}. The constructor accepts values the grammar's parser does ` +
+        "not, and a spec fieldFromJson would reject would be worse than none. Use a value the " +
+        "grammar accepts, or build the field with fieldFromJson"
+      );
+  }
+}
+
 /**
  * Serialize a field back to its JSON spec. Fields built by
  * {@link fieldFromJson} return the author's original spec; fields built
  * with the combinator API return the spec derived from their inputs.
- * Fields that carry none — anything built with `makeField`, built over
- * such a field, or nested deeper than the grammar's cap — throw an
- * actionable error. See `getFieldSpec` for the non-throwing variant.
+ * Fields that carry none throw an actionable error naming the ONE cause
+ * that applied — an opaque `makeField` closure (its own, or a named
+ * sub-expression's), a tree past the grammar's depth cap, or an argument
+ * the grammar's parser would reject. See `getFieldSpec` for the
+ * non-throwing variant.
  */
 export function fieldToJson(field: Field): FieldSpec {
   if (!isField(field)) {
@@ -516,14 +583,7 @@ export function fieldToJson(field: Field): FieldSpec {
   }
   const spec = peekFieldSpec(field);
   if (spec === undefined) {
-    throw new FieldJsonError(
-      "fieldToJson: this field carries no JSON spec, so it cannot be serialized. " +
-        "Code-authored fields do carry one, but only when every part of the expression can be " +
-        "named in the grammar (see listFieldFns) and the tree is at most " +
-        `${MAX_SPEC_DEPTH} levels deep: a makeField closure can never be named, and everything ` +
-        "built over one inherits that. Replace the opaque part with grammar constructors " +
-        "(combinators, inputs, noise, or fieldFromJson), or flatten a deeper tree",
-    );
+    throw new FieldJsonError(noSpecMessage(field));
   }
   return structuredClone(spec) as FieldSpec;
 }

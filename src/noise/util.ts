@@ -12,10 +12,13 @@ import {
 import {
   type FieldSpec,
   MAX_SPEC_DEPTH,
+  type WithheldReason,
   attachSpec,
   isSpecNumber,
   peekFieldSpec,
+  recordWithheld,
   specDepth,
+  withheldOver,
 } from "../fields/spec.js";
 import { hashFinalize, hashMix, hashSeed } from "../random/hash.js";
 
@@ -126,11 +129,17 @@ export interface DerivedSpec {
  * the grammar lets `normalized` into. Pass undefined for anything else
  * (an `fbm` whose octave tree composed an `add` spec, say), never the
  * unrelated spec the field happens to carry.
+ *
+ * `withheld` is why `derived` is undefined, and is recorded on the
+ * wrapper for the same reason the spec is mirrored onto it: the wrapper
+ * is a fresh field, so it inherits neither, and a caller that mirrored
+ * only one of the two would leave the refusal unable to name its cause.
  */
 export function normalize01(
   inner: Field<1>,
   range: NoiseRange,
   derived?: DerivedSpec,
+  withheld?: WithheldReason,
 ): Field<1> {
   const [lo, hi] = range;
   const span = hi - lo;
@@ -150,6 +159,8 @@ export function normalize01(
   if (derived !== undefined) {
     const opts = derived.spec.opts as Record<string, unknown> | undefined;
     attachSpec(field, { ...derived.spec, opts: { ...opts, normalized: true } }, derived.depth);
+  } else if (withheld !== undefined) {
+    recordWithheld(field, withheld);
   }
   return field;
 }
@@ -161,37 +172,76 @@ export type NoiseFactory = (opts?: NoiseOpts) => Field<1>;
  * @internal How a noise factory names itself in the JSON grammar:
  * `fn` is its `listFieldFns()` entry (which is NOT the internal `kind`
  * string — `kind` also encodes worley's output/exact selection), and
- * `extraOpts` are the grammar-legal options beyond the shared five. A
- * factory passes `undefined` to opt out of deriving a spec at all.
+ * `extraOpts` are the grammar-legal options beyond the shared five.
+ *
+ * A factory that cannot name itself passes a {@link WithheldReason}
+ * instead of this. That is a REASON rather than an `undefined` so that
+ * opting out and saying why are the same act: a factory cannot decline
+ * silently and leave `fieldToJson` with nothing to report.
  */
 export interface NoiseSpecInfo {
   readonly fn: string;
   readonly extraOpts?: Readonly<Record<string, unknown>>;
 }
 
+/** @internal {@link noiseOptsSpec}' two outcomes: the `opts`, or why there are none. */
+export type NoiseOptsResult =
+  | { readonly opts: Record<string, unknown> }
+  | { readonly withheld: WithheldReason };
+
 /**
- * @internal The `opts` object of a derived noise spec, or undefined when
- * any option falls outside what the grammar's parser accepts. The
- * factories are looser than the parser (`seed` is coerced with `>>> 0`,
- * `frequency`/`offset` are never checked for finiteness), so a spec
- * derived from raw arguments could be one `fieldFromJson` would reject —
- * and a spec that cannot be parsed back must never be produced.
+ * @internal The `opts` object of a derived noise spec, or the reason no
+ * spec can be derived because an option falls outside what the grammar's
+ * parser accepts. The factories are looser than the parser (`seed` is
+ * coerced with `>>> 0`, `frequency`/`offset` are never checked for
+ * finiteness), so a spec derived from raw arguments could be one
+ * `fieldFromJson` would reject — and a spec that cannot be parsed back
+ * must never be produced.
  *
  * Values are the NORMALIZED ones that already feed the structural key,
  * so the rebuilt field is key-identical.
+ *
+ * `resolvedPosition` is called only when an explicit `opts.position`
+ * turns out to carry no spec, to name the root leaf of THAT expression —
+ * so the success path never resolves a position it does not need.
+ *
+ * `fn` prefixes each `ungrammatical` detail, because that reason is
+ * inherited verbatim by everything built over this field: without the
+ * factory's name, a "`seed` must be an integer" arriving from six levels
+ * up names the option but nothing that locates it.
  */
 export function noiseOptsSpec(
+  fn: string,
   opts: NoiseOpts,
   seed: number,
   frequency: number,
   offset: readonly number[],
   positionSpec: FieldSpec | undefined,
+  resolvedPosition: () => Field,
   extra: Readonly<Record<string, unknown>> | undefined,
-): Record<string, unknown> | undefined {
-  if (opts.seed !== undefined && !Number.isInteger(opts.seed)) return undefined;
-  if (!isSpecNumber(frequency)) return undefined;
-  if (offset.length !== 3 || !offset.every(isSpecNumber)) return undefined;
-  if (opts.position !== undefined && positionSpec === undefined) return undefined;
+): NoiseOptsResult {
+  if (opts.seed !== undefined && !Number.isInteger(opts.seed)) {
+    return { withheld: { kind: "ungrammatical", detail: `${fn}'s \`seed\` must be an integer` } };
+  }
+  if (!isSpecNumber(frequency)) {
+    return {
+      withheld: {
+        kind: "ungrammatical",
+        detail: `${fn}'s \`frequency\` must be finite, and not -0`,
+      },
+    };
+  }
+  if (offset.length !== 3 || !offset.every(isSpecNumber)) {
+    return {
+      withheld: {
+        kind: "ungrammatical",
+        detail: `${fn}'s \`offset\` must be three finite numbers, none of them -0`,
+      },
+    };
+  }
+  if (opts.position !== undefined && positionSpec === undefined) {
+    return { withheld: withheldOver(resolvedPosition()) };
+  }
   const out: Record<string, unknown> = {
     seed,
     frequency,
@@ -199,7 +249,7 @@ export function noiseOptsSpec(
   };
   if (opts.position !== undefined) out.position = positionSpec;
   if (extra !== undefined) Object.assign(out, extra);
-  return out;
+  return { opts: out };
 }
 
 /** Fixed-arity hashCombine(a, b): identical output, no rest-array alloc. */
@@ -247,7 +297,8 @@ export const GRAD3: Float32Array = new Float32Array([
  * {@link normalize01} (the raw path stays bit-identical).
  *
  * `spec` names the factory in the JSON grammar so the field can carry a
- * derived {@link FieldSpec}; pass `undefined` to derive none.
+ * derived {@link FieldSpec}; pass a {@link WithheldReason} to derive none
+ * and say why.
  */
 export function makeNoiseField(
   kind: string,
@@ -255,7 +306,7 @@ export function makeNoiseField(
   opts: NoiseOpts,
   rawRange: NoiseRange,
   makeSampler: (seed: number) => (x: number, y: number, z: number) => number,
-  spec: NoiseSpecInfo | undefined,
+  spec: NoiseSpecInfo | WithheldReason,
 ): Field<1> {
   const seed = (opts.seed ?? 0) >>> 0;
   const frequency = opts.frequency ?? 1;
@@ -285,19 +336,32 @@ export function makeNoiseField(
   // Only an EXPLICIT position lands in the spec (the default is implied by
   // its absence), so only that one contributes a nesting level.
   const positionSpec = opts.position === undefined ? undefined : peekFieldSpec(pos);
-  const optsSpec =
-    spec === undefined
-      ? undefined
-      : noiseOptsSpec(opts, seed, frequency, offset, positionSpec, spec.extraOpts);
   // One level for the noise spec itself, plus the position it nests.
   const depth = 1 + specDepth(positionSpec);
-  const derived: DerivedSpec | undefined =
-    spec !== undefined && optsSpec !== undefined && depth <= MAX_SPEC_DEPTH
-      ? { spec: { fn: spec.fn, opts: optsSpec }, depth }
-      : undefined;
+  let derived: DerivedSpec | undefined;
+  let withheld: WithheldReason | undefined;
+  if ("kind" in spec) {
+    withheld = spec;
+  } else {
+    const optsSpec = noiseOptsSpec(
+      spec.fn,
+      opts,
+      seed,
+      frequency,
+      offset,
+      positionSpec,
+      () => pos,
+      spec.extraOpts,
+    );
+    if ("withheld" in optsSpec) withheld = optsSpec.withheld;
+    else if (depth > MAX_SPEC_DEPTH) withheld = { kind: "too-deep" };
+    else derived = { spec: { fn: spec.fn, opts: optsSpec.opts }, depth };
+  }
   if (derived !== undefined) attachSpec(raw, derived.spec, derived.depth);
+  else if (withheld !== undefined) recordWithheld(raw, withheld);
   if (opts.normalized !== true) return raw;
   // The wrapper is a fresh field and needs its own spec; `normalize01`
-  // mirrors this one with `normalized: true`.
-  return normalize01(raw, rawRange, derived);
+  // mirrors this one with `normalized: true`, and mirrors the withheld
+  // reason when there is no spec to mirror.
+  return normalize01(raw, rawRange, derived, withheld);
 }

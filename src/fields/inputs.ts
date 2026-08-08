@@ -1,5 +1,5 @@
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
-import { attachSpec, isSpecNumber } from "./spec.js";
+import { attachSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
   type Field,
   type FieldLike,
@@ -33,6 +33,11 @@ export function constant(value: number | readonly number[]): Field {
   // spec carrying one would be rejected by `fieldFromJson`.
   if (values.every(isSpecNumber)) {
     attachSpec(field, { fn: "constant", value: typeof value === "number" ? value : values }, 1);
+  } else {
+    recordWithheld(field, {
+      kind: "ungrammatical",
+      detail: "constant's `value` must be finite, and not -0",
+    });
   }
   return field;
 }
@@ -80,6 +85,14 @@ export function attribute(name: string, tupleSize?: number): Field {
       tupleSize === undefined ? { fn: "attribute", name } : { fn: "attribute", name, tupleSize },
       1,
     );
+  } else {
+    recordWithheld(field, {
+      kind: "ungrammatical",
+      detail:
+        name === ""
+          ? "attribute's `name` must not be empty"
+          : "attribute's `tupleSize` must be a positive integer",
+    });
   }
   return field;
 }
@@ -133,6 +146,11 @@ export function randomField(key: number | string = 0): Field<1> {
   // it derives no spec.
   if (typeof key === "string" || isSpecNumber(key)) {
     attachSpec(field, { fn: "randomField", key }, 1);
+  } else {
+    recordWithheld(field, {
+      kind: "ungrammatical",
+      detail: "randomField's numeric `key` must be finite, and not -0",
+    });
   }
   return field;
 }

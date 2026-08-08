@@ -1,5 +1,5 @@
 import { resolveField } from "./inputs.js";
-import { attachArgsSpec, isSpecNumber } from "./spec.js";
+import { attachArgsSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
   type Column,
   type Field,
@@ -403,6 +403,12 @@ export function ramp(
   // Ascending order is already enforced above (more strictly than the
   // grammar checks), but finiteness is not — and the grammar requires it,
   // so it is checked BEFORE the spec is derived at all.
-  if (!ts.every(isSpecNumber) || !vs.every(isSpecNumber)) return field;
+  if (!ts.every(isSpecNumber) || !vs.every(isSpecNumber)) {
+    recordWithheld(field, {
+      kind: "ungrammatical",
+      detail: "ramp's `stops` positions and values must all be finite, and not -0",
+    });
+    return field;
+  }
   return attachArgsSpec(field, "ramp", [fa], { stops: stops.map((s) => [s[0], s[1]]) });
 }

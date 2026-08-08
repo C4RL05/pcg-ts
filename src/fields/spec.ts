@@ -73,6 +73,83 @@ const DERIVED_SPECS = new WeakSet<FieldSpec>();
  */
 const SPEC_DEPTH = new WeakMap<FieldSpec, number>();
 
+/**
+ * @internal Why a constructor declined to derive a spec — the one cause
+ * that actually applied, recorded where it is still known.
+ *
+ * Derivation withholds by returning a bare `undefined`, which propagates
+ * up the tree carrying no reason at all; by the time `fieldToJson` sees a
+ * spec-less field, every constructor that knew why has returned. So the
+ * reason is written down at the withhold site instead, and read back at
+ * the throw.
+ *
+ * - `opaque` — some leaf cannot be named in the grammar (a `makeField`
+ *   closure, normally). `leafKey` is the ROOT leaf's structural key, not
+ *   the immediate argument's: see {@link withheldOver}.
+ * - `too-deep` — the spec would nest past {@link MAX_SPEC_DEPTH}, which
+ *   `fieldFromJson` refuses to parse.
+ * - `ungrammatical` — a constructor accepted an argument the grammar's
+ *   parser would reject (a fractional `seed`, a non-finite `frequency`).
+ *   `detail` names the offending option.
+ */
+export type WithheldReason =
+  | { readonly kind: "opaque"; readonly leafKey: string }
+  | { readonly kind: "too-deep" }
+  | { readonly kind: "ungrammatical"; readonly detail: string };
+
+/**
+ * Why each spec-less field is spec-less. Keyed on the FIELD (a spec-less
+ * field has no spec object to key on) and held OUTSIDE the spec for the
+ * same reason {@link DERIVED_SPECS} is: `checkKeys` in `fieldJson.ts`
+ * rejects unknown keys, so a reason stored inside a spec would break the
+ * `fieldFromJson(getFieldSpec(f))` round trip.
+ *
+ * Written only on the withhold path, so a field that derives a spec pays
+ * nothing for this map existing.
+ */
+const WITHHELD = new WeakMap<Field, WithheldReason>();
+
+/** @internal Record why `field` carries no spec. Withhold path only. */
+export function recordWithheld(field: Field, reason: WithheldReason): void {
+  WITHHELD.set(field, reason);
+}
+
+/**
+ * @internal Why `field` carries no spec, for `fieldToJson`'s refusal
+ * message. Undefined when nothing recorded a reason — which is the
+ * `makeField` escape hatch itself: it never withholds anything, it simply
+ * never attaches, so there is no withhold site to record at.
+ */
+export function withheldReason(field: Field): WithheldReason | undefined {
+  return isField(field) ? WITHHELD.get(field) : undefined;
+}
+
+/**
+ * @internal The reason a constructor records when its argument `arg` has
+ * no spec. A constructor can only see THAT its argument is undescribable,
+ * never why, so the reason is inherited from `arg` rather than restated:
+ *
+ * - `arg` recorded a reason → the SAME reason, unchanged. An `opaque`
+ *   carries the root leaf's key, so twelve levels of combinator over one
+ *   buried `makeField` all report the `makeField` rather than the thing
+ *   next to the constructor. A `too-deep` stays `too-deep`, since
+ *   anything built over a too-deep tree is deeper still. An
+ *   `ungrammatical` keeps naming the offending option, which is the only
+ *   accurate thing anyone can say about it.
+ * - `arg` recorded nothing → nothing WITHHELD a spec from it, so it is a
+ *   `makeField` closure (every constructor that declines records why),
+ *   and its key names the leaf.
+ *
+ * That last step is what lets the `opaque` message assert `makeField` as
+ * fact: an `opaque` is minted here and nowhere else, and only for an
+ * argument no withhold site ever touched.
+ */
+export function withheldOver(arg: Field): WithheldReason {
+  const inherited = WITHHELD.get(arg);
+  if (inherited !== undefined) return inherited;
+  return { kind: "opaque", leafKey: arg.key };
+}
+
 function readSpec(field: Field): FieldSpec | undefined {
   if (!isField(field)) return undefined;
   const spec = (field as unknown as Record<symbol, unknown>)[FIELD_SPEC];
@@ -158,8 +235,9 @@ export function deviceSpec(field: Field, acceptDerivedSpecs: boolean): FieldSpec
  * @internal Why {@link deviceSpec} returned undefined, as the
  * machine-readable fallback reason counted in `GpuCookStats.fallbacks`.
  * `"no-spec"` keeps its original meaning — the field cannot be described
- * at all (a `makeField` closure, a tree containing one, or a tree past
- * `MAX_SPEC_DEPTH`) — and `"derived-spec"` names the new population: a
+ * at all (a `makeField` closure, a tree containing one, a tree past
+ * `MAX_SPEC_DEPTH`, or an argument the grammar's parser rejects; see
+ * {@link WithheldReason}) — and `"derived-spec"` names the new population: a
  * field that describes itself perfectly well but was authored in code,
  * which only `acceptDerivedSpecs` admits.
  *
@@ -270,28 +348,36 @@ export interface ArgSpecs {
   readonly depth: number;
 }
 
+/** @internal {@link argSpecs}' two outcomes: the specs, or why there are none. */
+export type ArgSpecsResult = ArgSpecs | { readonly withheld: WithheldReason };
+
 /**
- * @internal The specs of an argument list, or undefined if any argument
- * lacks one. This is the `undefined`-propagation rule that keeps derived
- * specs total: a tree describes itself only if every subtree does.
+ * @internal The specs of an argument list, or the reason there are none.
+ * This is the `undefined`-propagation rule that keeps derived specs
+ * total: a tree describes itself only if every subtree does.
  *
  * Depth propagates the same way. A tree past {@link MAX_SPEC_DEPTH}
  * withholds here rather than at the top, so the whole chain above it
  * withholds too — the alternative is a spec `fieldFromJson` throws on,
  * which is exactly what a saved graph must never contain.
+ *
+ * The reason rides back with the refusal rather than being re-derived by
+ * the caller: the two withhold conditions are decided HERE, in this
+ * order, and a second spelling of them elsewhere could drift into
+ * blaming the wrong one.
  */
-export function argSpecs(fields: readonly Field[]): ArgSpecs | undefined {
+export function argSpecs(fields: readonly Field[]): ArgSpecsResult {
   const specs: FieldSpec[] = [];
   let deepest = 0;
   for (const f of fields) {
     const spec = readSpec(f);
-    if (spec === undefined) return undefined;
+    if (spec === undefined) return { withheld: withheldOver(f) };
     const d = specDepth(spec);
     if (d > deepest) deepest = d;
     specs.push(spec);
   }
   const depth = deepest + 1;
-  if (depth > MAX_SPEC_DEPTH) return undefined;
+  if (depth > MAX_SPEC_DEPTH) return { withheld: { kind: "too-deep" } };
   return { specs, depth };
 }
 
@@ -311,7 +397,10 @@ export function argSpecs(fields: readonly Field[]): ArgSpecs | undefined {
  * `component`, `stops` for `ramp`). A constructor whose extra keys have
  * validity rules of their own checks them BEFORE calling — withholding is
  * all-or-nothing, and a spec carrying a key the parser rejects is worse
- * than no spec at all.
+ * than no spec at all. Such a constructor records its own
+ * {@link WithheldReason}; this epilogue records the two ARGUMENT-side
+ * ones ({@link argSpecs}), so all ~30 combinators discriminate their
+ * refusal without restating it.
  */
 export function attachArgsSpec<F extends Field>(
   field: F,
@@ -320,7 +409,10 @@ export function attachArgsSpec<F extends Field>(
   extra?: Readonly<Record<string, unknown>>,
 ): F {
   const args = argSpecs(from);
-  if (args === undefined) return field;
+  if ("withheld" in args) {
+    recordWithheld(field, args.withheld);
+    return field;
+  }
   attachSpec(field, { fn, args: args.specs, ...extra }, args.depth);
   return field;
 }

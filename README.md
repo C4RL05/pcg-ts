@@ -198,14 +198,20 @@ built from the combinator API — `mul(position(), 0.1)`,
 arguments, so it round-trips through `serializeGraph` exactly as a
 `fieldFromJson` spec does. Before v0.9 it did not: `serializeGraph`
 threw and pointed at `fieldFromJson`, so the pleasant authoring API and
-the serializable one were different APIs. Three cases still refuse, and
-the error names the node and param at fault: a field built by
-`makeField` (an arbitrary closure nothing can describe), any field
-composed over one (the absent spec propagates through every
-combinator), and a tree nested deeper than the grammar's 256-level cap.
-The last refuses on purpose — derivation stops at exactly the depth
-`fieldFromJson` will parse, so the library never writes a graph it
-could not read back.
+the serializable one were different APIs. Four cases still refuse: a
+field built by `makeField` (an arbitrary closure nothing can describe),
+any field composed over one (the absent spec propagates through every
+combinator), a tree nested deeper than the grammar's 256-level cap, and
+an argument the constructor accepts but the grammar's parser does not
+(`perlinNoise({ seed: 1.5 })` — the constructor coerces, the grammar
+requires an integer). The depth cap refuses on purpose — derivation
+stops at exactly the depth `fieldFromJson` will parse, so the library
+never writes a graph it could not read back.
+
+The error names the one cause that applied and the offender, not a list
+to choose from: the node and param at fault, plus — for an opaque leaf
+— that leaf's own structural key, so a `makeField` buried deep inside a
+combinator tree is named rather than the constructor above it.
 
 Serialization is complete: subgraph nodes carry their inner graph as a
 nested payload (`subgraph: { graph, inputs, outputs }`, recursively in

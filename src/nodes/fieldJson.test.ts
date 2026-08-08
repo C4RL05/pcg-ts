@@ -3,7 +3,9 @@ import { createPointCloud } from "../data/index.js";
 import {
   add,
   atan2,
+  attribute,
   component,
+  constant,
   cos,
   evaluateField,
   makeField,
@@ -12,6 +14,7 @@ import {
   remap,
   sin,
   type EvalContext,
+  type Field,
 } from "../fields/index.js";
 import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
 import { FieldJsonError, fieldFromJson, fieldToJson, listFieldFns, type FieldSpec } from "./fieldJson.js";
@@ -279,31 +282,166 @@ describe("fieldToJson", () => {
     expect(fieldFromJson(json).key).toBe(codeAuthored.key);
   });
 
-  it("throws an actionable error for fields with no derivable spec", () => {
-    // `makeField`'s evaluator is an arbitrary closure: no spec can
-    // describe it, and none is invented. This is the permanent
-    // spec-less case, and the error must name THAT cause — "authored in
-    // code" stopped being the reason when code-authored fields started
-    // carrying specs, and a regex matching only "fieldFromJson" could
-    // not see the drift.
-    const opaque = makeField("opaque", 1, (ctx) => ({
-      data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
-      tupleSize: 1,
+  it("rejects non-field values", () => {
+    expect(() => fieldToJson({ key: "fake", tupleSize: 1 } as never)).toThrow(/not a Field/);
+  });
+});
+
+/**
+ * The refusal names the ONE cause that applied, and the offender.
+ *
+ * Derivation withholds by returning a bare `undefined`, so the reason is
+ * recorded at the withhold site and read back here. What each of these
+ * tests actually pins is that the recorded reason SURVIVED to the
+ * message: an assertion on the shared prefix ("carries no JSON spec")
+ * would pass for every cause and could not tell whether discrimination
+ * happened at all, which is why each one also asserts the message does
+ * NOT read like the other causes.
+ */
+describe("fieldToJson refusals name their cause", () => {
+  /** `makeField`'s evaluator is an arbitrary closure. Structural key: "opaque". */
+  function opaque(tupleSize = 1): Field {
+    return makeField("opaque", tupleSize, (ctx) => ({
+      data: new Float32Array(ctx.geo.attrs[ctx.domain].count * tupleSize),
+      tupleSize,
     }));
-    expect(() => fieldToJson(opaque)).toThrow(FieldJsonError);
-    for (const field of [opaque, mul(opaque, 2)]) {
-      expect(() => fieldToJson(field)).toThrow(/carries no JSON spec/);
-      // The two real causes, and the fix for each.
-      expect(() => fieldToJson(field)).toThrow(/makeField closure can never be named/);
-      expect(() => fieldToJson(field)).toThrow(/at most 256 levels deep/);
-      expect(() => fieldToJson(field)).toThrow(/Replace the opaque part|flatten a deeper tree/);
-      // The old message blamed "authored in code", which is now false:
-      // `mul(position(), 2)` is authored in code and serializes fine.
-      expect(() => fieldToJson(field)).not.toThrow(/authored in code/);
+  }
+
+  it("blames makeField itself when the field IS the closure", () => {
+    // The permanent spec-less case, and the deliberate escape hatch. It
+    // is also the one that records no reason — nothing WITHHELD a spec,
+    // there was simply never one to attach — so this pins the fallback
+    // too: no reason recorded must still produce the right accusation,
+    // not a generic shrug.
+    expect(() => fieldToJson(opaque())).toThrow(FieldJsonError);
+    expect(() => fieldToJson(opaque())).toThrow(/It was built by makeField/);
+    expect(() => fieldToJson(opaque())).toThrow(/Rebuild it with grammar constructors/);
+    // Not blamed on a sub-expression, a depth cap, or a bad argument.
+    expect(() => fieldToJson(opaque())).not.toThrow(/sub-expression|256 levels|parser does not/);
+  });
+
+  it("names the ROOT leaf of a deep tree, not the immediate argument", () => {
+    // The case the old enumerating message could not localize at all: one
+    // `makeField` buried under twelve combinator levels. Every level
+    // withholds, and each inherits the leaf recorded below it — so the
+    // key reported must be the closure's, never the key of whatever node
+    // happened to sit next to the constructor that noticed.
+    const buried = mul(
+      add(
+        component(
+          remap(
+            atan2(cos(sin(add(mul(opaque(), 2), 1))), 3),
+            0,
+            1,
+            0,
+            10,
+          ),
+          0,
+        ),
+        4,
+      ),
+      5,
+    );
+    expect(() => fieldToJson(buried)).toThrow(FieldJsonError);
+    expect(() => fieldToJson(buried)).toThrow(/The sub-expression `opaque` carries none of its own/);
+    expect(() => fieldToJson(buried)).toThrow(/composed over it inherits that/);
+    // The immediate argument of the outermost `mul` is the `add` below
+    // it, whose key is long and starts with "add(" — naming THAT would be
+    // the "the thing next to me" failure this test exists to exclude.
+    expect(() => fieldToJson(buried)).not.toThrow(/sub-expression `add\(/);
+    // And the tree is not deep enough to be a depth-cap refusal.
+    expect(() => fieldToJson(buried)).not.toThrow(/256 levels/);
+
+    // Control: the identical tree over a describable leaf serializes, so
+    // what is refused is the leaf, not the twelve levels above it.
+    const same = mul(
+      add(
+        component(remap(atan2(cos(sin(add(mul(position(), 2), 1))), 3), 0, 1, 0, 10), 0),
+        4,
+      ),
+      5,
+    );
+    expect(() => fieldToJson(same)).not.toThrow();
+  });
+
+  it("blames the depth cap, and keeps blaming it further up the tree", () => {
+    // `position()` is level 1, so 256 adds reach level 257 — one past what
+    // `fieldFromJson` will parse back, so derivation refuses to produce
+    // it. Nothing here is opaque.
+    const chain = (levels: number): Field => {
+      let f: Field = position();
+      for (let i = 1; i < levels; i++) f = add(f, 1);
+      return f;
+    };
+    expect(() => fieldToJson(chain(256))).not.toThrow(); // at the cap
+    for (const levels of [257, 258, 300]) {
+      const deep = chain(levels);
+      expect(() => fieldToJson(deep), `${levels} levels`).toThrow(FieldJsonError);
+      expect(() => fieldToJson(deep), `${levels} levels`).toThrow(
+        /nests deeper than the grammar's cap of 256 levels/,
+      );
+      expect(() => fieldToJson(deep), `${levels} levels`).toThrow(/Flatten the expression/);
+      // Above the cap every level withholds because its ARGUMENT has no
+      // spec, which is also how an opaque leaf propagates. Reporting the
+      // argument's key here would accuse a `makeField` that does not
+      // exist — so the too-deep reason has to be inherited, not restated.
+      expect(() => fieldToJson(deep), `${levels} levels`).not.toThrow(/makeField|sub-expression/);
     }
   });
 
-  it("rejects non-field values", () => {
-    expect(() => fieldToJson({ key: "fake", tupleSize: 1 } as never)).toThrow(/not a Field/);
+  it("names the offending option when a constructor is looser than the grammar", () => {
+    // `perlinNoise` coerces the seed with `>>> 0`, so 1.5 builds a
+    // perfectly good field — but the grammar's parser requires an
+    // integer, and a spec it would reject is worse than none. The message
+    // must say WHICH option, since nothing about the field looks opaque.
+    const fractionalSeed = perlinNoise({ seed: 1.5 });
+    expect(() => fieldToJson(fractionalSeed)).toThrow(FieldJsonError);
+    expect(() => fieldToJson(fractionalSeed)).toThrow(/`seed` must be an integer/);
+    expect(() => fieldToJson(fractionalSeed)).not.toThrow(/makeField|256 levels/);
+
+    // A different option, so the detail is read from the reason rather
+    // than hard-coded into one message.
+    expect(() => fieldToJson(worleyNoise({ frequency: Infinity }))).toThrow(
+      /worleyNoise's `frequency` must be finite/,
+    );
+    // And an fbm option the octave tree could only blame indirectly.
+    expect(() => fieldToJson(fbm(perlinNoise, { lacunarity: Infinity }))).toThrow(
+      /fbm's `lacunarity` must be finite/,
+    );
+  });
+
+  it("keeps blaming the option when the ungrammatical leaf is nested", () => {
+    // An ungrammatical leaf is NOT opaque: `constant`, `attribute` and
+    // `perlinNoise` are grammar constructors, and the value handed to
+    // them is what the parser rejects. Composing over one must inherit
+    // that reason rather than downgrade it to "some sub-expression of
+    // yours is a makeField closure" — which would be false, and would
+    // send the reader looking for a closure that does not exist.
+    const nested: Array<[Field, RegExp]> = [
+      [mul(constant(NaN), 2), /constant's `value` must be finite/],
+      [add(mul(attribute(""), 2), 1), /attribute's `name` must not be empty/],
+      [sin(mul(perlinNoise({ seed: 1.5 }), 2)), /perlinNoise's `seed` must be an integer/],
+    ];
+    for (const [field, detail] of nested) {
+      expect(() => fieldToJson(field)).toThrow(detail);
+      // The accusation the old rule produced, and the reason this test
+      // exists: nothing here is a makeField closure.
+      expect(() => fieldToJson(field)).not.toThrow(/makeField|sub-expression/);
+    }
+  });
+
+  it("follows an opaque position through the noise factories to its leaf", () => {
+    // The noise paths withhold for reasons of their own, and a spec-less
+    // `position` is the one that is NOT ungrammatical: it is the same
+    // opaque-leaf case as a combinator's, and must report the same leaf.
+    for (const build of [
+      () => perlinNoise({ position: opaque(3) }),
+      () => simplexNoise({ position: opaque(3), normalized: true }),
+      () => fbm(perlinNoise, { position: opaque(3) }),
+    ]) {
+      expect(() => fieldToJson(build())).toThrow(
+        /The sub-expression `opaque` carries none of its own/,
+      );
+    }
   });
 });

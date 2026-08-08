@@ -140,8 +140,12 @@ describe("serializeGraph", () => {
     g.output(jit, "out", "result");
     expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
     expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
-    // Actionable means it states the fix, not just the refusal.
-    expect(() => serializeGraph(g)).toThrow(/Replace the opaque part with grammar constructors/);
+    // Actionable means it states the cause and the fix, not just the
+    // refusal: this field IS the closure, so it is blamed directly rather
+    // than being told some sub-expression of it is at fault.
+    expect(() => serializeGraph(g)).toThrow(/It was built by makeField/);
+    expect(() => serializeGraph(g)).toThrow(/Rebuild it with grammar constructors/);
+    expect(() => serializeGraph(g)).not.toThrow(/sub-expression/);
 
     // Negative control: swap in a describable field on the same param of
     // the same graph and it serializes — the refusal is this field, not
@@ -160,14 +164,13 @@ describe("serializeGraph", () => {
     g.output(jit, "out");
     expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
     expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
-    // Note the three refusals share ONE message template, which names all
-    // three causes: by the time `fieldToJson` sees the field, the absent
-    // spec records no reason for its absence. So this substring does not
-    // discriminate the composed case from the other two — the node and
-    // param prefix above is what localizes the fault. Pinned anyway, so
-    // that dropping the enumeration from the message reddens a test.
-    expect(() => serializeGraph(g)).toThrow(/makeField closure can never be named/);
-    expect(() => serializeGraph(g)).toThrow(/built over one inherits that/);
+    // The node/param prefix localizes the fault in the GRAPH; the message
+    // localizes it in the field expression, by naming the opaque leaf's
+    // structural key. `opaqueField()` builds `makeField("opaque", ...)`,
+    // so that key is "opaque" — the `mul` wrapped around it is not blamed.
+    expect(() => serializeGraph(g)).toThrow(/The sub-expression `opaque` carries none of its own/);
+    expect(() => serializeGraph(g)).toThrow(/composed over it inherits that/);
+    expect(() => serializeGraph(g)).not.toThrow(/It was built by makeField/);
   });
 
   it("refuses a field nested past the grammar's cap instead of writing an unloadable graph", () => {
@@ -181,7 +184,11 @@ describe("serializeGraph", () => {
     g.output(jit, "out");
     expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
     expect(() => serializeGraph(g)).toThrow(/node "jit" param "amount".*carries no JSON spec/);
-    expect(() => serializeGraph(g)).toThrow(/at most 256 levels deep/);
+    // The depth cap is the cause named, not one of three the reader has
+    // to choose between — nothing here is opaque or ungrammatical.
+    expect(() => serializeGraph(g)).toThrow(/nests deeper than the grammar's cap of 256 levels/);
+    expect(() => serializeGraph(g)).toThrow(/Flatten the expression/);
+    expect(() => serializeGraph(g)).not.toThrow(/makeField/);
 
     // One level shallower serializes AND loads back — the refusal is the
     // cap, not a blanket refusal of deep expressions.
