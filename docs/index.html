@@ -378,7 +378,7 @@
   <section>
     <p class="eyebrow">What it is</p>
     <h2>A node-graph PCG library, deterministic by construction</h2>
-    <p class="lead">pcg-ts generates content — scattered points, filtered sets, instanced geometry, streamed worlds — from <strong>seeded node graphs</strong>. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
+    <p class="lead">pcg-ts generates content — scattered and filtered points, sampled surfaces and splines, instanced geometry, streamed worlds around a moving camera — from <strong>seeded node graphs</strong> you build in code, in JSON, or in the visual editor. Any parameter can vary across space instead of being a constant. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. The heavy work moves to the GPU: instance matrices are composed there and handed straight to three.js, without ever touching the CPU. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
       <div class="stat"><b>1,561</b><span>tests, all green</span></div>
