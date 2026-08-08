@@ -203,7 +203,11 @@
   /* ---------- pillar cards ---------- */
   .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    /* Four cards, so two columns beats three: three leaves a lone card
+       stranded on a second row. The min() keeps it responsive without a
+       media query — below ~380px of track the grid drops to one column
+       on its own. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
     gap: 14px;
     margin: 18px 0 8px;
   }
@@ -378,7 +382,11 @@
   <section>
     <p class="eyebrow">What it is</p>
     <h2>A node-graph PCG library, deterministic by construction</h2>
-    <p class="lead">pcg-ts generates content — scattered and filtered points, sampled surfaces and splines, instanced geometry, streamed worlds around a moving camera — from <strong>seeded node graphs</strong> you build in code, in JSON, or in the visual editor. Any parameter can vary across space instead of being a constant. Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. The heavy work moves to the GPU: instance matrices are composed there and handed straight to three.js, without ever touching the CPU. It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
+    <p class="lead">pcg-ts generates content — scattered and filtered points, sampled surfaces and splines, instanced geometry, streamed worlds around a moving camera — from <strong>seeded node graphs</strong> you build in code, in JSON, or in the visual editor.</p>
+    <p>Any parameter can vary across space instead of being a constant: a value can be a function of where it lands, resolved per point.</p>
+    <p>Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths.</p>
+    <p>The heavy work moves to the GPU: field expressions compile to WGSL, and instance matrices are composed there and handed straight to three.js — without ever touching the CPU.</p>
+    <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
       <div class="stat"><b>1,561</b><span>tests, all green</span></div>
@@ -392,7 +400,7 @@
 
   <section>
     <p class="eyebrow">Foundations</p>
-    <h2>Four ideas, carried through everything</h2>
+    <h2>Four concepts the rest is built on</h2>
     <div class="cards">
       <div class="card">
         <h3>Attribute data model</h3>
@@ -420,7 +428,7 @@
 
     <div class="plate">
       <pre class="mermaid">
-%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis", "subGraphTitleMargin": {"top": 12, "bottom": 6}}}}%%
 flowchart TB
   subgraph L1["foundation"]
     direction LR
@@ -472,7 +480,7 @@ flowchart TB
     <div class="plate">
       <pre class="mermaid">
 %%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
-flowchart LR
+flowchart TB
   SEED(["seed + viewpoint"]) --> WORLD["World: coarse to fine levels"]
   WORLD --> CELLS["wanted cells: hysteresis · LRU"]
   CELLS --> COOK["cook per cell, seeded by coords"]
@@ -511,14 +519,14 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   <section>
     <p class="eyebrow">Built for agents</p>
-    <h2>The library is its own documentation</h2>
+    <h2>Runtime introspection and stable serialization</h2>
     <ul class="features">
       <li><b>Self-describing registry</b> — every node type exposes pins, param schemas, defaults, and prose descriptions at runtime; the node reference is generated from it, never hand-written.</li>
       <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
       <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
       <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
       <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>nodes.json</code>, an authoring guide with recipes, and the <a href="./manual.html">user manual</a>, whose second half is written for an agent driving the library programmatically.</li>
-      <li><b>Adversarially audited</b> — every release phase was probed by an independent audit agent before landing; the defects it found shipped fixed, with regression tests.</li>
+      <li><b>Independently audited</b> — each phase was reviewed by a separate agent before it landed, and the defects it found were fixed with regression tests before release.</li>
     </ul>
   </section>
 
@@ -541,7 +549,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   <section>
     <p class="eyebrow">Roadmap</p>
-    <h2>Shipped fast, audited always</h2>
+    <h2>What shipped in each release</h2>
     <ul class="roadmap">
       <li>
         <div class="rm-ver">v0.1.0 <small>2026-08-05</small></div>
