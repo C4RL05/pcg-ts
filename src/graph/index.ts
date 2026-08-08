@@ -4,7 +4,7 @@ export * from "./node.js";
 export {
   GRAPH_META_KEYS,
   Graph,
-  freezeGraphMeta,
+  validateGraphMeta,
   type DescribedConnection,
   type DescribedNode,
   type DescribedOutput,

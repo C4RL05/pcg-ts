@@ -7,9 +7,8 @@
  */
 import { isField } from "../fields/index.js";
 import {
-  GRAPH_META_KEYS,
   Graph,
-  freezeGraphMeta,
+  validateGraphMeta,
   getSubgraphPlumbing,
   getSubgraphSpec,
   subgraphNode,
@@ -134,36 +133,19 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * Validate and copy the optional `meta` block. Absent is fine; present
  * and malformed is a hard error naming the offending key and listing the
  * valid ones — a near-miss like "titel" must not cook silently.
+ *
+ * The rules live in `validateGraphMeta`, shared with `Graph.setMeta`, so
+ * the writer cannot accept what the reader refuses. Only the error TYPE
+ * is translated here, because everything deserialization rejects raises
+ * `GraphSerializationError`.
  */
 function readGraphMeta(v: unknown, where: string): GraphMeta | undefined {
   if (v === undefined) return undefined;
-  if (!isPlainObject(v)) {
-    fail(
-      `${where}: expected an object { title?, description?, tags? }, got ${JSON.stringify(v)}`,
-    );
+  try {
+    return validateGraphMeta(v, where);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
   }
-  for (const key of Object.keys(v)) {
-    if (!GRAPH_META_KEYS.includes(key)) {
-      fail(`${where}: unknown key "${key}"; valid keys: ${GRAPH_META_KEYS.join(", ")}`);
-    }
-  }
-  for (const key of ["title", "description"] as const) {
-    const value = v[key];
-    if (value !== undefined && typeof value !== "string") {
-      fail(`${where}.${key}: expected a string, got ${JSON.stringify(value)}`);
-    }
-  }
-  if (v.tags !== undefined) {
-    if (!Array.isArray(v.tags)) {
-      fail(`${where}.tags: expected an array of strings, got ${JSON.stringify(v.tags)}`);
-    }
-    v.tags.forEach((tag: unknown, i: number) => {
-      if (typeof tag !== "string") {
-        fail(`${where}.tags[${i}]: expected a string, got ${JSON.stringify(tag)}`);
-      }
-    });
-  }
-  return freezeGraphMeta(v as GraphMeta);
 }
 
 /**
@@ -397,7 +379,8 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
       seed: graph.seed,
       // Optional: omitted entirely when the graph declares no metadata, so
       // a graph that never used it serializes byte-identically to before.
-      ...(graph.meta !== undefined ? { meta: freezeGraphMeta(graph.meta) } : {}),
+      // `setMeta` already validated and froze it, so it is emitted as held.
+      ...(graph.meta !== undefined ? { meta: graph.meta } : {}),
       nodes,
       connections: graph._connections
         .filter((c) => !isPortal(c.from) && !isPortal(c.to))

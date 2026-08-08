@@ -78,10 +78,61 @@ const SCATTER_GRAPH = JSON.stringify({
   outputs: [{ id: "keep", pin: "out", name: "points" }],
 });
 
+/**
+ * A graph whose attributes are named nothing like its nodes, and whose
+ * statistics are known exactly: `elevation` is the element index (0..11),
+ * `overflow` is 1e39 stored as f32 — i.e. +Infinity in every slot — and
+ * `species` picks from ten strings by index.
+ */
+const ATTR_GRAPH = JSON.stringify({
+  formatVersion: 1,
+  seed: 3,
+  nodes: [
+    {
+      id: "src",
+      type: "pointScatterInBounds",
+      params: { count: 12, boundsMin: [0, 0, 0], boundsMax: [4, 0, 4] },
+    },
+    {
+      id: "elev",
+      type: "setAttribute",
+      params: { name: "elevation", domain: "point", type: "f32", value: { fn: "index" } },
+    },
+    {
+      id: "over",
+      type: "setAttribute",
+      params: { name: "overflow", domain: "point", type: "f32", value: 1e39 },
+    },
+    {
+      id: "kind",
+      type: "setAttribute",
+      params: {
+        name: "species",
+        domain: "point",
+        type: "string",
+        values: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
+        value: { fn: "index" },
+      },
+    },
+  ],
+  connections: [
+    { from: ["src", "out"], to: ["elev", "in"] },
+    { from: ["elev", "out"], to: ["over", "in"] },
+    { from: ["over", "out"], to: ["kind", "in"] },
+  ],
+  outputs: [{ id: "kind", pin: "out", name: "cloud" }],
+});
+
 const GRAPH = "/graphs/scatter.json";
+const ATTRS = "/graphs/attrs.json";
 
 function withGraph(extra: Record<string, string> = {}): FakeIo {
-  return fakeIo({ [GRAPH]: SCATTER_GRAPH, ...extra });
+  return fakeIo({ [GRAPH]: SCATTER_GRAPH, [ATTRS]: ATTR_GRAPH, ...extra });
+}
+
+/** The one output line starting with `name`, whitespace and all. */
+function lineFor(text: string, name: string): string {
+  return text.split("\n").find((line) => line.trim().startsWith(`${name} `)) ?? "";
 }
 
 describe("pcg cli — catalogs", () => {
@@ -141,7 +192,9 @@ describe("pcg cli — validate", () => {
     expect(text).toContain("seed 7  3 nodes  2 connections  1 output");
     expect(text).toContain("title:       scatter basics");
     expect(text).toContain("tags:        basics, scatter");
-    expect(text).toContain("points");
+    // The declared output, with the pin it reads — not merely the word
+    // "points" somewhere in the report.
+    expect(lineFor(text, "points")).toMatch(/^\s+points\s+<- keep\.out$/);
   });
 
   it("--json carries the meta block through", async () => {
@@ -197,15 +250,26 @@ describe("pcg cli — cook", () => {
     expect(text).toContain("geometry   points ");
   });
 
-  it("--stats adds the per-node breakdown", async () => {
+  it("--stats adds the per-node breakdown, and without it there is none", async () => {
+    const plain = withGraph();
+    expect(await runCli(["cook", GRAPH], plain.io)).toBe(EXIT_OK);
+    expect(plain.stdout()).not.toContain("per-node:");
+    expect(plain.stdout()).not.toContain("pointScatterInBounds");
+
     const io = withGraph();
     expect(await runCli(["cook", GRAPH, "--stats"], io.io)).toBe(EXIT_OK);
-    expect(io.stdout()).toContain("per-node:");
-    expect(io.stdout()).toContain("pointScatterInBounds");
-    expect(io.stdout()).toContain("cooked");
+    const text = io.stdout();
+    expect(text).toContain("per-node:");
+    expect(lineFor(text, "id")).toMatch(/^\s+id\s+type\s+state\s+elapsed$/);
+    // id, type, state, elapsed — the state column says which nodes ran and
+    // which were served from cache, in those words.
+    expect(lineFor(text, "scatter")).toMatch(
+      /^\s+scatter\s+pointScatterInBounds\s+cooked\s+[\d.]+ ms$/,
+    );
+    expect(lineFor(text, "keep")).toMatch(/^\s+keep\s+filterByAttribute\s+cooked\s+[\d.]+ ms$/);
   });
 
-  it("--out writes the JSON report", async () => {
+  it("--out writes the JSON report, and both renderings record the write", async () => {
     const io = withGraph();
     expect(await runCli(["cook", GRAPH, "--out", "/reports/cook.json"], io.io)).toBe(EXIT_OK);
     const report = JSON.parse(io.files["/reports/cook.json"]);
@@ -217,6 +281,13 @@ describe("pcg cli — cook", () => {
     ]);
     expect(report.outputs.points[0].kind).toBe("geometry");
     expect(io.stdout()).toContain("wrote /reports/cook.json");
+    // The text and the JSON describe the same run, so the file the run
+    // wrote is named in both.
+    expect(report.out).toBe("/reports/cook.json");
+
+    const none = withGraph();
+    await runCli(["cook", GRAPH, "--json"], none.io);
+    expect(JSON.parse(none.stdout()).out).toBeNull();
   });
 
   it("--seed changes the cooked result", async () => {
@@ -266,6 +337,36 @@ describe("pcg cli — cook", () => {
     expect(io.stderr()).toContain("declares no outputs");
     expect(io.stderr()).toContain("--node <id>");
   });
+
+  it("reports the seed that actually cooked, never the one that was typed", async () => {
+    const io = withGraph();
+    expect(await runCli(["cook", GRAPH, "--seed", "0"], io.io)).toBe(EXIT_OK);
+    expect(io.stdout()).toContain("(seed override 0)");
+
+    // Graph.setSeed keeps 32 bits, so anything above the range would cook
+    // as a different number: the flag is refused rather than truncated.
+    const tooBig = withGraph();
+    expect(await runCli(["cook", GRAPH, "--seed", "4294967296"], tooBig.io)).toBe(EXIT_USAGE);
+    expect(tooBig.stderr()).toContain(
+      'cook: flag "--seed" expects an integer in [0, 4294967295], got 4294967296',
+    );
+
+    const huge = withGraph();
+    expect(await runCli(["cook", GRAPH, "--seed", "9007199254740991"], huge.io)).toBe(EXIT_USAGE);
+    expect(huge.stderr()).toContain('flag "--seed" expects an integer in [0, 4294967295]');
+  });
+
+  it("refuses a budget of zero as a misuse, not as a run failure", async () => {
+    const io = withGraph();
+    expect(await runCli(["cook", GRAPH, "--budget", "0"], io.io)).toBe(EXIT_USAGE);
+    expect(io.stderr()).toContain(
+      'cook: flag "--budget" expects a number greater than 0 (milliseconds), got 0',
+    );
+
+    const negative = withGraph();
+    expect(await runCli(["cook", GRAPH, "--budget", "-5"], negative.io)).toBe(EXIT_USAGE);
+    expect(negative.stderr()).toContain('flag "--budget" expects a number greater than 0');
+  });
 });
 
 describe("pcg cli — inspect", () => {
@@ -275,7 +376,9 @@ describe("pcg cli — inspect", () => {
     const text = io.stdout();
     expect(text).toContain('node "height" pin "out"');
     expect(text).toContain("point — 64 elements");
-    expect(text).toContain("height");
+    // The height ATTRIBUTE, as a row of the statistics table — the node is
+    // also called "height", so a bare substring proves nothing.
+    expect(lineFor(text, "height")).toMatch(/^\s+height\s+f32\s+1\s+-?[\d.]+\s+-?[\d.]+\s+-?[\d.]+\s+0$/);
     expect(text).toContain("first 5 of 64 point rows:");
   });
 
@@ -331,10 +434,68 @@ describe("pcg cli — inspect", () => {
     expect(wrong.stderr()).toContain('unknown output "point"; declared outputs: points');
   });
 
-  it("an unknown domain lists the valid ones", async () => {
+  it("an unknown domain is a misuse, and lists the valid ones", async () => {
     const io = withGraph();
-    expect(await runCli(["inspect", GRAPH, "--domain", "points"], io.io)).toBe(EXIT_FAILURE);
-    expect(io.stderr()).toContain('unknown domain "points"; valid domains: point, vertex, primitive, detail');
+    expect(await runCli(["inspect", GRAPH, "--domain", "points"], io.io)).toBe(EXIT_USAGE);
+    expect(io.stderr()).toContain(
+      'inspect: flag "--domain" got unknown domain "points"; valid domains: point, vertex, primitive, detail',
+    );
+  });
+
+  it("prints each attribute by name, with its own statistics", async () => {
+    const io = withGraph();
+    expect(await runCli(["inspect", ATTRS, "--output", "cloud"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    // elevation is the element index over 12 points: 0..11, mean 5.5. The
+    // name is nothing like any node id in the graph, so finding it here
+    // means the attribute table really carries it.
+    expect(lineFor(text, "attr")).toMatch(/^\s+attr\s+type\s+tuple\s+min\s+max\s+mean\s+non-finite$/);
+    expect(lineFor(text, "elevation")).toMatch(/^\s+elevation\s+f32\s+1\s+0\s+11\s+5\.5\s+0$/);
+  });
+
+  it("shows non-finite values in the text, not only under --json", async () => {
+    const io = withGraph();
+    expect(await runCli(["inspect", ATTRS, "--output", "cloud"], io.io)).toBe(EXIT_OK);
+    // overflow is 1e39 in an f32 column, i.e. +Infinity in all 12 slots.
+    // Min/max/mean have nothing to say; the count is the whole answer, and
+    // a text report that omitted it would show an attribute that destroyed
+    // itself as an attribute with nothing to say.
+    expect(lineFor(io.stdout(), "overflow")).toMatch(/^\s+overflow\s+f32\s+1\s+12$/);
+
+    const json = withGraph();
+    await runCli(["inspect", ATTRS, "--output", "cloud", "--json"], json.io);
+    const report = JSON.parse(json.stdout());
+    const point = report.items[0].geometry.domains.find(
+      (d: { domain: string }) => d.domain === "point",
+    );
+    const overflow = point.attrs.find((a: { name: string }) => a.name === "overflow");
+    expect(overflow.nonFinite).toBe(12);
+    expect(overflow.min).toBeUndefined();
+  });
+
+  it("gives string attributes their own table, and says when the list is cut", async () => {
+    const io = withGraph();
+    expect(await runCli(["inspect", ATTRS, "--output", "cloud"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    // A distinct-value count printed under a `min` header is a lie an
+    // agent reading by column position will believe, so strings get their
+    // own headers rather than borrowing the numeric ones.
+    const headers = text.split("\n").filter((line) => line.trim().startsWith("attr "));
+    expect(headers).toHaveLength(2);
+    expect(headers[0]).toMatch(/^\s+attr\s+type\s+tuple\s+min\s+max\s+mean\s+non-finite$/);
+    expect(headers[1]).toMatch(/^\s+attr\s+type\s+tuple\s+distinct\s+values$/);
+    expect(lineFor(text, "species")).toMatch(
+      /^\s+species\s+string\s+1\s+10\s+"a" "b" "c" "d" "e" "f" "g" "h" \(\+2 more\)$/,
+    );
+  });
+
+  it("says --rows 0 was asked for, rather than that there was nothing to sample", async () => {
+    const io = withGraph();
+    expect(await runCli(["inspect", GRAPH, "--node", "scatter", "--rows", "0"], io.io)).toBe(
+      EXIT_OK,
+    );
+    expect(io.stdout()).toContain("point rows not sampled (--rows 0; 64 elements)");
+    expect(io.stdout()).not.toContain("no point rows to sample");
   });
 });
 
@@ -377,13 +538,45 @@ describe("pcg cli — render", () => {
     expect(await runCli(["render", GRAPH, "--attr", "nope", "--out", "/n.svg"], bad.io)).toBe(
       EXIT_FAILURE,
     );
-    expect(bad.stderr()).toContain('no point attribute "nope" to color by; point attributes: ');
+    expect(bad.stderr()).toContain(
+      'item 0 has no point attribute "nope" to color by; item 0 point attributes: ',
+    );
   });
 
   it("--json without --out is a misuse, not a failure", async () => {
     const io = withGraph();
     expect(await runCli(["render", GRAPH, "--json"], io.io)).toBe(EXIT_USAGE);
     expect(io.stderr()).toContain("--json needs --out");
+  });
+
+  it("a radius of zero is a misuse, like a width of zero on the same command", async () => {
+    const radius = withGraph();
+    expect(await runCli(["render", GRAPH, "--radius", "0", "--out", "/o.svg"], radius.io)).toBe(
+      EXIT_USAGE,
+    );
+    expect(radius.stderr()).toContain(
+      'render: flag "--radius" expects a number greater than 0 (pixels), got 0',
+    );
+
+    const width = withGraph();
+    expect(await runCli(["render", GRAPH, "--width", "0", "--out", "/o.svg"], width.io)).toBe(
+      EXIT_USAGE,
+    );
+  });
+
+  it("writes a picture in pixel space, whatever the world scale", async () => {
+    const io = withGraph();
+    expect(await runCli(["render", GRAPH, "--out", "/px.svg", "--width", "200", "--json"], io.io)).toBe(
+      EXIT_OK,
+    );
+    const svg = io.files["/px.svg"];
+    const report = JSON.parse(io.stdout());
+    expect(svg).toContain(`viewBox="0 0 200 ${report.height}"`);
+    expect(svg).toContain('r="1.5"');
+    expect(svg).not.toContain('r="0"');
+    // The report's bounds stay in world units — data about the cook.
+    expect(report.bounds.max[0]).toBeGreaterThan(1);
+    expect(io.stdout()).not.toContain("device-resident");
   });
 });
 
@@ -442,12 +635,84 @@ describe("pcg cli — the command line itself", () => {
 
     const fractional = withGraph();
     expect(await runCli(["cook", GRAPH, "--seed", "1.5"], fractional.io)).toBe(EXIT_USAGE);
-    expect(fractional.stderr()).toContain('flag "--seed" expects an integer >= 0, got 1.5');
+    expect(fractional.stderr()).toContain(
+      'flag "--seed" expects an integer in [0, 4294967295], got 1.5',
+    );
   });
 
   it("accepts --flag=value as well as --flag value", async () => {
     const io = withGraph();
     expect(await runCli(["cook", GRAPH, "--seed=3", "--json"], io.io)).toBe(EXIT_OK);
     expect(JSON.parse(io.stdout()).seed).toBe(3);
+  });
+
+  it("does not honour a help token that a flag is waiting to consume", async () => {
+    // The only path that used to return SUCCESS for a command line that
+    // cannot be parsed: in `pcg validate g.json && pcg cook g.json --out
+    // --help` the chain would proceed as if the cook had run.
+    const consumed = withGraph();
+    expect(await runCli(["cook", GRAPH, "--out", "--help"], consumed.io)).toBe(EXIT_USAGE);
+    expect(consumed.stderr()).toContain('cook: flag "--out" needs a value (--out <file>)');
+    expect(consumed.stdout()).toBe("");
+
+    // ...while help on an otherwise incomplete line still works, which is
+    // the whole reason the check existed.
+    const incomplete = fakeIo();
+    expect(await runCli(["inspect", "--help"], incomplete.io)).toBe(EXIT_OK);
+    expect(incomplete.stdout()).toContain("pcg inspect <graph.json> [flags]");
+
+    const short = fakeIo();
+    expect(await runCli(["render", "-h"], short.io)).toBe(EXIT_OK);
+    expect(short.stdout()).toContain("pcg render <graph.json> [flags]");
+
+    // After --, a help token is a positional like any other.
+    const ended = withGraph();
+    expect(await runCli(["nodes", "--", "--help"], ended.io)).toBe(EXIT_FAILURE);
+    expect(ended.stderr()).toContain('unknown node type "--help"');
+  });
+
+  it("rejects an empty value where a name or a path is required", async () => {
+    const empty = withGraph();
+    expect(await runCli(["cook", GRAPH, "--out="], empty.io)).toBe(EXIT_USAGE);
+    expect(empty.stderr()).toContain('cook: flag "--out" needs a non-empty value (--out <file>)');
+
+    const blank = withGraph();
+    expect(await runCli(["cook", GRAPH, "--out", "   "], blank.io)).toBe(EXIT_USAGE);
+    expect(blank.stderr()).toContain('flag "--out" needs a non-empty value');
+    expect(Object.keys(blank.files)).toEqual([GRAPH, ATTRS]);
+  });
+
+  it("states the exit-code rule in the top-level help", async () => {
+    const io = fakeIo();
+    expect(await runCli(["--help"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    expect(text).toContain("Exit codes:");
+    expect(text).toContain("1  a named thing does not exist");
+    expect(text).toContain("2  the command line itself is wrong");
+  });
+
+  it("keeps the two exit-code classes apart across commands", async () => {
+    // 1 = you named something that does not exist; 2 = the command line
+    // itself is wrong. A caller branching on the code depends on it.
+    const cases: readonly (readonly [readonly string[], number])[] = [
+      [["fields", "perlin"], EXIT_FAILURE],
+      [["nodes", "scatterPoints"], EXIT_FAILURE],
+      [["inspect", GRAPH, "--node", "nope"], EXIT_FAILURE],
+      [["inspect", GRAPH, "--output", "nope"], EXIT_FAILURE],
+      [["bake", GRAPH], EXIT_USAGE],
+      [["cook", GRAPH, "--stat"], EXIT_USAGE],
+      [["cook", GRAPH, "--budget", "0"], EXIT_USAGE],
+      [["cook", GRAPH, "--seed", "-1"], EXIT_USAGE],
+      [["inspect", GRAPH, "--domain", "bogus"], EXIT_USAGE],
+      [["inspect", GRAPH, "--rows", "-1"], EXIT_USAGE],
+      [["render", GRAPH, "--radius", "0", "--out", "/o.svg"], EXIT_USAGE],
+      [["render", GRAPH, "--width", "0", "--out", "/o.svg"], EXIT_USAGE],
+      [["render", GRAPH, "--max-points", "0", "--out", "/o.svg"], EXIT_USAGE],
+      [["cook", GRAPH, "--out", "--help"], EXIT_USAGE],
+    ];
+    for (const [argv, code] of cases) {
+      const io = withGraph();
+      expect(await runCli(argv, io.io), argv.join(" ")).toBe(code);
+    }
   });
 });

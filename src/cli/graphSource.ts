@@ -113,7 +113,20 @@ function tempOutputName(graph: Graph): string {
 /**
  * Cook the requested target and return its collection. With `node`, a
  * temporary output is declared, cooked alone (so only its upstream
- * subgraph runs), and removed again — including when the cook throws.
+ * subgraph runs), and removed again — including when the cook throws or
+ * the cook is cancelled.
+ *
+ * One caveat, precisely. The declared outputs, their order, every node's
+ * dirty flag, the seed and every memo cache come back exactly as they
+ * were; `Graph.version` does NOT. `Graph.output` and `Graph.removeOutput`
+ * each bump the counter and there is no API to put it back, so a graph
+ * that goes through here comes out at `version + 2`. Harmless for the
+ * CLI, which discards the graph after one command. It is not harmless
+ * when the graph is the BODY OF A SUBGRAPH node: the wrapping node folds
+ * the inner graph's `version` into its memo key, so calling `cookTarget`
+ * on a subgraph body invalidates the wrapping node's cache and forces a
+ * recook of everything downstream of it. Cook a throwaway copy, or accept
+ * the recook.
  */
 export async function cookTarget(
   graph: Graph,

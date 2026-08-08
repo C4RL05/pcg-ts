@@ -113,11 +113,6 @@ export interface GraphDescription {
 }
 
 /**
- * Code-first node graph: add node instances, connect pins, declare
- * terminal outputs, then cook with `cook(graph)`. Connections are
- * validated eagerly (pins, kinds, single-pin occupancy, cycles).
- */
-/**
  * Descriptive metadata about a graph: what it is and what it is for.
  * Carried through the serialized JSON as an optional `meta` block and
  * read back by {@link Graph.meta}. Purely descriptive — cooking never
@@ -133,22 +128,84 @@ export interface GraphMeta {
   readonly tags?: readonly string[];
 }
 
-/** Keys a {@link GraphMeta} object may carry, in canonical order. */
-export const GRAPH_META_KEYS: readonly string[] = ["title", "description", "tags"];
+/**
+ * Keys a {@link GraphMeta} object may carry, in canonical order. Frozen:
+ * the validator reads it to decide what is legal AND to write the error
+ * that lists the alternatives, so a caller who could push to it could
+ * make the library advertise a key it then silently drops.
+ */
+export const GRAPH_META_KEYS: readonly string[] = Object.freeze([
+  "title",
+  "description",
+  "tags",
+]);
 
 /**
- * Copy a {@link GraphMeta} into a frozen, canonical form: known keys only,
- * absent keys omitted, `tags` copied so later caller-side mutation cannot
- * reach into the graph. Assumes the value is already validated.
+ * Validate an untrusted value as {@link GraphMeta} and return a frozen,
+ * canonical copy: known keys only, absent keys omitted, `tags` copied so
+ * later caller-side mutation cannot reach into the graph.
+ *
+ * This is the ONE validator. `Graph.setMeta` and the JSON reader both go
+ * through it, because the two ends disagreeing is how you get a graph
+ * that saves and cannot be reopened: a writer that accepts
+ * `{ title: 7 }` hands the reader something it is right to refuse.
+ * `where` names the offender's location for the message.
  */
-export function freezeGraphMeta(meta: GraphMeta): GraphMeta {
+export function validateGraphMeta(value: unknown, where: string): GraphMeta {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new GraphValidationError(
+      `${where}: expected an object { title?, description?, tags? }, got ${JSON.stringify(value)}`,
+    );
+  }
+  const meta = value as Record<string, unknown>;
+  for (const key of Object.keys(meta)) {
+    if (!GRAPH_META_KEYS.includes(key)) {
+      throw new GraphValidationError(
+        `${where}: unknown key "${key}"; valid keys: ${GRAPH_META_KEYS.join(", ")}`,
+      );
+    }
+  }
   const out: { title?: string; description?: string; tags?: readonly string[] } = {};
-  if (meta.title !== undefined) out.title = meta.title;
-  if (meta.description !== undefined) out.description = meta.description;
-  if (meta.tags !== undefined) out.tags = Object.freeze([...meta.tags]);
+  for (const key of ["title", "description"] as const) {
+    const v = meta[key];
+    if (v === undefined) continue;
+    if (typeof v !== "string") {
+      throw new GraphValidationError(
+        `${where}.${key}: expected a string, got ${JSON.stringify(v)}`,
+      );
+    }
+    out[key] = v;
+  }
+  if (meta.tags !== undefined) {
+    const tags = meta.tags;
+    if (!Array.isArray(tags)) {
+      throw new GraphValidationError(
+        `${where}.tags: expected an array of strings, got ${JSON.stringify(tags)}`,
+      );
+    }
+    // Indexed, not forEach: forEach SKIPS holes, so a sparse array would
+    // validate clean and then serialize its holes as nulls — saved, and
+    // unreadable on the way back in.
+    const copy: string[] = [];
+    for (let i = 0; i < tags.length; i++) {
+      const tag: unknown = tags[i];
+      if (typeof tag !== "string") {
+        throw new GraphValidationError(
+          `${where}.tags[${i}]: expected a string, got ${JSON.stringify(tag)}`,
+        );
+      }
+      copy.push(tag);
+    }
+    out.tags = Object.freeze(copy);
+  }
   return Object.freeze(out);
 }
 
+/**
+ * Code-first node graph: add node instances, connect pins, declare
+ * terminal outputs, then cook with `cook(graph)`. Connections are
+ * validated eagerly (pins, kinds, single-pin occupancy, cycles).
+ */
 export class Graph {
   /** @internal Node instances in insertion order. */
   readonly _nodes = new Map<string, NodeState>();
@@ -185,14 +242,18 @@ export class Graph {
 
   /**
    * Attach descriptive metadata (or clear it with `undefined`). The value
-   * is copied and frozen. Metadata is not cook input — no node sees it,
-   * no memo key includes it — so this deliberately does NOT bump
-   * {@link Graph.version}: retitling a graph must not invalidate a single
-   * cache. `serializeGraph` writes it as the optional `meta` block and
-   * `deserializeGraph` reads it back.
+   * is validated by the same rules the JSON reader applies — an unknown
+   * key or a non-string title is rejected here rather than at load time,
+   * so what this accepts is exactly what `deserializeGraph` accepts — then
+   * copied and frozen.
+   *
+   * Metadata is not cook input — no node sees it, no memo key includes it
+   * — so this deliberately does NOT bump {@link Graph.version}: retitling
+   * a graph must not invalidate a single cache. `serializeGraph` writes it
+   * as the optional `meta` block and `deserializeGraph` reads it back.
    */
   setMeta(meta: GraphMeta | undefined): void {
-    this._meta = meta === undefined ? undefined : freezeGraphMeta(meta);
+    this._meta = meta === undefined ? undefined : validateGraphMeta(meta, "setMeta");
   }
 
   /**

@@ -96,6 +96,13 @@ export interface GeometrySummary {
   readonly domains: readonly DomainSummary[];
   /** Axis-aligned bounds of the point positions (`P`), when present and finite. */
   readonly bounds?: { readonly min: readonly number[]; readonly max: readonly number[] };
+  /**
+   * `P` slots excluded from {@link bounds} because they were not finite,
+   * when there were any. Present means the box does NOT contain every
+   * point, and every rendering of the bounds has to say so — a box
+   * printed as if it were complete is worse than no box at all.
+   */
+  readonly boundsExcluded?: number;
   /** Primitive counts per `primtype` value, when the attribute exists. */
   readonly primTypes?: Readonly<Record<string, number>>;
 }
@@ -114,6 +121,7 @@ export function geometrySummary(geo: Geometry): GeometrySummary {
     primitives: number;
     domains: DomainSummary[];
     bounds?: { min: number[]; max: number[] };
+    boundsExcluded?: number;
     primTypes?: Record<string, number>;
   } = {
     points: geo.pointCount,
@@ -129,6 +137,9 @@ export function geometrySummary(geo: Geometry): GeometrySummary {
         min: [...stats.min].slice(0, 3),
         max: [...stats.max].slice(0, 3),
       };
+      if (stats.nonFinite !== undefined && stats.nonFinite > 0) {
+        summary.boundsExcluded = stats.nonFinite;
+      }
     }
   }
   const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
@@ -206,7 +217,11 @@ export function itemLine(summary: ItemSummary): string {
   const bounds =
     g.bounds === undefined
       ? ""
-      : `  bounds ${g.bounds.min.map(fmtStat).join(",")} .. ${g.bounds.max.map(fmtStat).join(",")}`;
+      : `  bounds ${g.bounds.min.map(fmtStat).join(",")} .. ${g.bounds.max.map(fmtStat).join(",")}${
+          g.boundsExcluded === undefined
+            ? ""
+            : ` (excludes ${plural(g.boundsExcluded, "non-finite P value")})`
+        }`;
   return (
     `geometry   points ${g.points}  vertices ${g.vertices}  primitives ${g.primitives}` +
     `${bounds}  point attrs: ${attrListText(point?.attrs ?? [])}`

@@ -94,10 +94,23 @@ export function commandHelp(spec: CommandSpec): string {
 }
 
 /**
+ * The spelling a numeric flag value must have: an optional sign, decimal
+ * digits, an optional fraction and an optional exponent. Deliberately
+ * narrower than `Number`, which also accepts `0x10`, `0b11` and values
+ * padded with whitespace — near-misses that would proceed with a number
+ * the caller never wrote.
+ */
+const NUMBER_SPELLING = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/**
  * Parse one subcommand's arguments. Supports `--flag`, `--flag value`,
  * and `--flag=value`; `--` ends flag parsing. A repeated flag is an error
  * rather than a silent last-wins, because a repeat is nearly always a
  * mistake the caller wants to hear about.
+ *
+ * `-h` is the one short spelling accepted, as an alias for `--help`, and
+ * only in flag position: after `--`, or where a flag's value is expected
+ * (`--node -h`), it is an ordinary value like any other token.
  */
 export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArgs {
   const flags = allFlags(spec);
@@ -106,23 +119,32 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
   let onlyPositional = false;
 
   for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    if (onlyPositional || token === "-" || !token.startsWith("-")) {
-      positional.push(token);
+    const raw0 = argv[i];
+    if (onlyPositional || raw0 === "-" || !raw0.startsWith("-")) {
+      positional.push(raw0);
       continue;
     }
-    if (token === "--") {
+    if (raw0 === "--") {
       onlyPositional = true;
       continue;
     }
+    const token = raw0 === "-h" ? "--help" : raw0;
     if (!token.startsWith("--")) {
       throw new CliUsageError(
-        `${spec.name}: unknown flag "${token}" (short flags are not supported); valid flags: ${flagList(spec)}`,
+        `${spec.name}: unknown flag "${token}" (short flags are not supported, except -h for --help); valid flags: ${flagList(spec)}`,
       );
     }
     const eq = token.indexOf("=");
     const name = eq < 0 ? token.slice(2) : token.slice(2, eq);
     const inlineValue = eq < 0 ? undefined : token.slice(eq + 1);
+    if (name === "") {
+      // `--=x` is not the end-of-flags marker with something stuck to it;
+      // blaming `--`, which is legal on its own, sends the reader looking
+      // in the wrong place.
+      throw new CliUsageError(
+        `${spec.name}: empty flag name in "${token}"; write --<name>=<value>; valid flags: ${flagList(spec)}`,
+      );
+    }
     const flag = flags[name];
     if (flag === undefined) {
       throw new CliUsageError(
@@ -159,14 +181,19 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
       i++;
     }
     if (flag.kind === "number") {
-      const n = Number(raw);
-      if (raw.trim() === "" || !Number.isFinite(n)) {
+      const n = NUMBER_SPELLING.test(raw) ? Number(raw) : Number.NaN;
+      if (!Number.isFinite(n)) {
         throw new CliUsageError(
-          `${spec.name}: flag "--${name}" expects a finite number, got "${raw}"`,
+          `${spec.name}: flag "--${name}" expects a finite number, got "${raw}"; write plain decimal digits with an optional sign, fraction and exponent (12, -4, 1.5, 1e3) — not hex, not padded with spaces`,
         );
       }
       values.set(name, n);
     } else {
+      if (raw.trim() === "") {
+        throw new CliUsageError(
+          `${spec.name}: flag "--${name}" needs a non-empty value (--${name} <${flag.value ?? "value"}>)`,
+        );
+      }
       values.set(name, raw);
     }
   }
@@ -204,21 +231,26 @@ export function numberFlag(args: ParsedArgs, name: string): number | undefined {
 }
 
 /**
- * Read a number flag that must be a non-negative integer (counts, widths,
- * seeds). Names the command and flag on failure.
+ * Read a number flag that must be an integer in range (counts, widths,
+ * seeds). Names the command, the flag and the range on failure — a flag
+ * whose value is silently clamped or truncated is a near-miss that
+ * proceeds, and this CLI never does that.
  */
 export function intFlag(
   args: ParsedArgs,
   name: string,
   command: string,
-  opts: { min?: number } = {},
+  opts: { min?: number; max?: number } = {},
 ): number | undefined {
   const v = numberFlag(args, name);
   if (v === undefined) return undefined;
   const min = opts.min ?? 0;
-  if (!Number.isInteger(v) || v < min) {
+  const max = opts.max;
+  if (!Number.isInteger(v) || v < min || (max !== undefined && v > max)) {
     throw new CliUsageError(
-      `${command}: flag "--${name}" expects an integer >= ${min}, got ${v}`,
+      max === undefined
+        ? `${command}: flag "--${name}" expects an integer >= ${min}, got ${v}`
+        : `${command}: flag "--${name}" expects an integer in [${min}, ${max}], got ${v}`,
     );
   }
   return v;

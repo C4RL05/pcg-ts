@@ -29,7 +29,14 @@ import { fmtMs, fmtStat, plural, table } from "./format.js";
 import { type TargetOptions, cookTarget, loadGraph } from "./graphSource.js";
 import type { CliIo } from "./io.js";
 import { renderSvg } from "./render.js";
-import { type ItemSummary, attrListText, itemLine, sampleRows, summarizeItem } from "./summary.js";
+import {
+  type AttrStats,
+  type ItemSummary,
+  attrListText,
+  itemLine,
+  sampleRows,
+  summarizeItem,
+} from "./summary.js";
 
 /** What a command produced: one text rendering, one JSON rendering. */
 export interface CommandOutcome {
@@ -94,18 +101,35 @@ function targetOptions(args: ParsedArgs, command: string): TargetOptions {
   };
 }
 
-/** Cook options from the shared `--budget` flag. */
+/**
+ * Cook options from the shared `--budget` flag. A rejected flag VALUE is
+ * a misuse of the command line, exactly like `--width 0`, so it raises
+ * the usage error and exits 2 — a caller branching on the exit code must
+ * be able to tell "your flag is wrong" from "your graph is broken".
+ */
 function cookOptions(args: ParsedArgs, command: string): CookOptions {
   const budgetMs = numberFlag(args, "budget");
   if (budgetMs !== undefined && !(budgetMs > 0)) {
-    throw new CliError(`${command}: --budget must be greater than 0, got ${budgetMs}`);
+    throw new CliUsageError(
+      `${command}: flag "--budget" expects a number greater than 0 (milliseconds), got ${budgetMs}`,
+    );
   }
   return budgetMs === undefined ? {} : { budgetMs };
 }
 
-/** Apply `--seed` to a freshly loaded graph. */
-function applySeed(args: ParsedArgs, command: string, graph: { setSeed(n: number): void }): number | undefined {
-  const seed = intFlag(args, "seed", command, { min: 0 });
+/**
+ * The seed the graph will cook with. `Graph.setSeed` stores `seed >>> 0`,
+ * so anything outside the 32-bit range would cook with a different number
+ * than the one typed; the flag is range-checked instead of truncated, and
+ * the caller reports `graph.seed` rather than the raw flag so the text and
+ * the JSON always name the seed that actually ran.
+ */
+function applySeed(
+  args: ParsedArgs,
+  command: string,
+  graph: { setSeed(n: number): void },
+): number | undefined {
+  const seed = intFlag(args, "seed", command, { min: 0, max: 0xffffffff });
   if (seed !== undefined) graph.setSeed(seed);
   return seed;
 }
@@ -337,9 +361,11 @@ const cookCommand: Command = {
     for (const name of Object.keys(result.outputs)) {
       outputs[name] = [...result.outputs[name]].map(summarizeItem);
     }
+    const outPath = stringFlag(args, "out");
     const json = {
       path,
       seed: graph.seed,
+      out: outPath ?? null,
       stats: {
         cooked: result.stats.cooked,
         cached: result.stats.cached,
@@ -355,7 +381,7 @@ const cookCommand: Command = {
     };
 
     const lines = [
-      `cooked ${path}${seed !== undefined ? ` (seed override ${seed})` : ` (seed ${graph.seed})`}`,
+      `cooked ${path}${seed !== undefined ? ` (seed override ${graph.seed})` : ` (seed ${graph.seed})`}`,
       `${result.stats.cooked} cooked, ${result.stats.cached} cached, ${fmtMs(result.stats.elapsedMs)}`,
       "",
       "outputs:",
@@ -373,7 +399,6 @@ const cookCommand: Command = {
         ]),
       );
     }
-    const outPath = stringFlag(args, "out");
     if (outPath !== undefined) {
       io.writeFile(outPath, JSON.stringify(json, null, 2) + "\n");
       lines.push("", `wrote ${outPath}`);
@@ -385,6 +410,63 @@ const cookCommand: Command = {
 // ---------------------------------------------------------------------------
 // inspect
 // ---------------------------------------------------------------------------
+
+/**
+ * Per-attribute statistics as text. Numeric and string columns get
+ * separate tables because they have nothing to line up under: the table
+ * is documented as greppable by column position, and a distinct-value
+ * count printed beneath a `min` header is a lie an agent reading column 4
+ * will believe.
+ *
+ * `non-finite` is a column here and not only in `--json`. Min/max/mean
+ * exclude non-finite slots, so a column holding `+Infinity` reports a
+ * maximum that is wrong rather than absent — "did this node emit NaN?" is
+ * the first question of the authoring loop and the text has to answer it.
+ */
+function attrTables(attrs: readonly AttrStats[]): string[] {
+  const lines: string[] = [];
+  const numeric = attrs.filter((a) => a.type !== "string");
+  const strings = attrs.filter((a) => a.type === "string");
+  if (numeric.length > 0) {
+    lines.push(
+      ...table(
+        [
+          ["attr", "type", "tuple", "min", "max", "mean", "non-finite"],
+          ...numeric.map((a) => [
+            a.name,
+            a.type,
+            String(a.tupleSize),
+            a.min !== undefined ? a.min.map(fmtStat).join(",") : "",
+            a.max !== undefined ? a.max.map(fmtStat).join(",") : "",
+            a.mean !== undefined ? a.mean.map(fmtStat).join(",") : "",
+            String(a.nonFinite ?? 0),
+          ]),
+        ],
+        "    ",
+      ),
+    );
+  }
+  if (strings.length > 0) {
+    lines.push(
+      ...table(
+        [
+          ["attr", "type", "tuple", "distinct", "values"],
+          ...strings.map((a) => {
+            const values = a.values ?? [];
+            const distinct = a.distinct ?? values.length;
+            const shown = values.map((v) => JSON.stringify(v));
+            // The list is capped; without saying so, a 20-value column
+            // reads as a 8-value one.
+            if (distinct > values.length) shown.push(`(+${distinct - values.length} more)`);
+            return [a.name, a.type, String(a.tupleSize), String(distinct), shown.join(" ")];
+          }),
+        ],
+        "    ",
+      ),
+    );
+  }
+  return lines;
+}
 
 const inspectCommand: Command = {
   spec: {
@@ -410,8 +492,8 @@ const inspectCommand: Command = {
     const rows = intFlag(args, "rows", "inspect", { min: 0 }) ?? 5;
     const domainName = stringFlag(args, "domain") ?? "point";
     if (!(DOMAINS as readonly string[]).includes(domainName)) {
-      throw new CliError(
-        `inspect: unknown domain "${domainName}"; valid domains: ${DOMAINS.join(", ")}`,
+      throw new CliUsageError(
+        `inspect: flag "--domain" got unknown domain "${domainName}"; valid domains: ${DOMAINS.join(", ")}`,
       );
     }
     const domain = domainName as Domain;
@@ -441,22 +523,7 @@ const inspectCommand: Command = {
         lines.push(
           `  ${domainSummary.domain} — ${plural(domainSummary.count, "element")}: ${attrListText(domainSummary.attrs)}`,
         );
-        lines.push(
-          ...table(
-            [
-              ["attr", "type", "tuple", "min", "max", "mean"],
-              ...domainSummary.attrs.map((a) => [
-                a.name,
-                a.type,
-                String(a.tupleSize),
-                a.min !== undefined ? a.min.map(fmtStat).join(",") : a.distinct !== undefined ? `${a.distinct} distinct` : "",
-                a.max !== undefined ? a.max.map(fmtStat).join(",") : (a.values ?? []).map((v) => JSON.stringify(v)).join(" "),
-                a.mean !== undefined ? a.mean.map(fmtStat).join(",") : "",
-              ]),
-            ],
-            "    ",
-          ),
-        );
+        lines.push(...attrTables(domainSummary.attrs));
       }
       const item = items[i];
       if (item.kind !== "geometry") return;
@@ -465,8 +532,10 @@ const inspectCommand: Command = {
       if (sample.rows.length > 0) {
         lines.push(`  first ${sample.rows.length} of ${sample.total} ${domain} rows:`);
         lines.push(...table([sample.columns as string[], ...sample.rows.map((r) => [...r])], "    "));
+      } else if (rows === 0) {
+        lines.push(`  ${domain} rows not sampled (--rows 0; ${plural(sample.total, "element")})`);
       } else {
-        lines.push(`  no ${domain} rows to sample (${sample.total} elements)`);
+        lines.push(`  no ${domain} rows to sample (${plural(sample.total, "element")})`);
       }
     });
 
@@ -509,8 +578,16 @@ const renderCommand: Command = {
         description: "point attribute to color by: scalar ramp, vec3+ as RGB, strings categorical",
       },
       radius: { kind: "number", value: "px", description: "point radius in pixels (default 1.5)" },
-      "max-points": { kind: "number", value: "n", description: "drawn-point cap per geometry (default 50000)" },
-      "max-primitives": { kind: "number", value: "n", description: "drawn-primitive cap per geometry (default 20000)" },
+      "max-points": {
+        kind: "number",
+        value: "n",
+        description: "drawn-circle cap across the whole collection, points and instances (default 50000)",
+      },
+      "max-primitives": {
+        kind: "number",
+        value: "n",
+        description: "drawn-primitive cap across the whole collection (default 20000)",
+      },
     },
   },
   async run(args, io) {
@@ -531,7 +608,9 @@ const renderCommand: Command = {
     const attr = stringFlag(args, "attr");
     const radius = numberFlag(args, "radius");
     if (radius !== undefined && !(radius > 0)) {
-      throw new CliError(`render: --radius must be greater than 0, got ${radius}`);
+      throw new CliUsageError(
+        `render: flag "--radius" expects a number greater than 0 (pixels), got ${radius}`,
+      );
     }
     const maxPoints = intFlag(args, "max-points", "render", { min: 1 });
     const maxPrimitives = intFlag(args, "max-primitives", "render", { min: 1 });
@@ -553,6 +632,8 @@ const renderCommand: Command = {
       primitives: result.primitives,
       primitivesTotal: result.primitivesTotal,
       instances: result.instances,
+      instancesTotal: result.instancesTotal,
+      deviceInstances: result.deviceInstances,
       skipped: result.skipped,
       ...(result.colorAttr !== undefined ? { colorAttr: result.colorAttr } : {}),
       ...(result.bounds !== undefined ? { bounds: result.bounds } : {}),
@@ -560,17 +641,27 @@ const renderCommand: Command = {
     if (outPath === undefined) return { text: result.svg, json };
     io.writeFile(outPath, result.svg);
     const truncated =
-      result.points < result.pointsTotal || result.primitives < result.primitivesTotal;
+      result.points < result.pointsTotal ||
+      result.primitives < result.primitivesTotal ||
+      result.instances < result.instancesTotal;
     const text = [
       `wrote ${outPath}  ${result.width}x${result.height}`,
       `${path} — ${target.label}`,
-      `${result.points} of ${result.pointsTotal} points, ${result.primitives} of ${result.primitivesTotal} primitives, ${result.instances} instances${
+      `${result.points} of ${result.pointsTotal} points, ${result.primitives} of ${result.primitivesTotal} primitives, ${result.instances} of ${result.instancesTotal} instances${
         result.skipped > 0 ? `, ${result.skipped} skipped (non-finite)` : ""
       }${truncated ? " — capped, raise --max-points/--max-primitives to draw the rest" : ""}`,
+      // Never silently: a device-resident batch has no CPU transforms to
+      // draw, and a blank frame reporting "0 instances" is exactly the
+      // failure the throwing `batches` accessor exists to prevent.
+      ...(result.deviceInstances > 0
+        ? [
+            `${plural(result.deviceInstances, "instance")} not drawn: device-resident (transforms live in GPU buffers, never composed on the CPU)`,
+          ]
+        : []),
       ...(result.colorAttr !== undefined ? [`colored by "${result.colorAttr}"`] : []),
       ...(result.bounds !== undefined
         ? [
-            `bounds x ${fmtStat(result.bounds.min[0])}..${fmtStat(result.bounds.max[0])}  z ${fmtStat(result.bounds.min[1])}..${fmtStat(result.bounds.max[1])}`,
+            `bounds (world) x ${fmtStat(result.bounds.min[0])}..${fmtStat(result.bounds.max[0])}  z ${fmtStat(result.bounds.min[1])}..${fmtStat(result.bounds.max[1])}`,
           ]
         : ["nothing drawable in this collection"]),
     ].join("\n");

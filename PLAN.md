@@ -961,24 +961,88 @@ the agent-authoring plan beside it).
   bespoke script. Commit.
 
 ### Phase 36 — Subgraph params and the named-primitive registry
+
+Amended 2026-08-08 after two design surveys re-derived the mechanics
+against source. Four things the original entry assumed turned out to be
+wrong, and one prerequisite it did not know about; each correction is
+recorded with its reason rather than silently rewritten.
+
+- **Prerequisite, and the phase's real risk: the shared inner `Graph`.**
+  A subgraph wrapper writes the inner graph's seed and portal items and
+  *then* awaits `cook(inner)`, while `cook`'s overlap guard only engages
+  after those writes. Two outer graphs holding instances of one def,
+  cooked concurrently, therefore produce TORN results — measured, with
+  one graph's item cooked against another's seeds. That is a live
+  violation of the library's hardest invariant in shipped code (v0.9.1),
+  not a hypothetical, and the named-primitive registry promotes shared
+  inner graphs from exotic to normal. Fix first: a critical section per
+  inner graph acquired BEFORE the writes (deadlock-free because subgraph
+  nesting is acyclic), plus per-reference inner-graph instantiation.
+  Also fix, found beside it: cooking a self-wrapping graph hangs forever
+  with no error.
 - Exposed params on subgraph nodes: schema'd (`ParamSchema` including
-  `acceptsField`), forwarded to inner nodes, hashed into memo keys
-  exactly as native params are. The forwarding semantics are designed
-  before implementation — one exposed param may feed several inner
-  params, and `Field` values must survive end-to-end.
+  `acceptsField`), forwarded to inner nodes. CORRECTION: "hashed into
+  memo keys exactly as native params are" describes work that does not
+  exist — values held in the wrapping instance's own `params` record
+  already hash correctly with no executor change. The real deliverable
+  is that representation constraint (a def-level side table is provably
+  incapable of keying correctly, since a def is shared by instances and
+  `memoKey()` takes no arguments) plus write discipline: values are
+  written inward at COOK time with a quiet write, because a loud one
+  would change the transitive version key every cook and the wrapper
+  would never cache. CORRECTION: `Field` values surviving end-to-end is
+  the easy case, not the hard one — prototyped working, fan-out
+  included. Schemas are DERIVED from the inner targets through the
+  registry (never hand-written), defaults come from the target's live
+  value at wrap time so a tuned primitive keeps its tuning, and fan-out
+  requires identical `type`/`enum` across targets with `acceptsField`
+  ANDed and bounds intersected.
+- Fixes a house-rule violation on the way past: a param set on a
+  subgraph instance is silently DROPPED by `serializeGraph` today while
+  the reader hard-errors on the same data.
 - Named subgraph registry: `registerSubgraph(name, spec)`; serialized
-  graphs may reference a subgraph by name + content hash instead of
-  embedding; the loader resolves from the registry, unknown names
-  error listing what is registered; transitive version-key
-  invalidation extends to named refs.
+  graphs may reference a subgraph by name instead of embedding; the
+  loader resolves from the registry, unknown names error listing what
+  is registered. The registry stores a RECIPE (serialized JSON), never a
+  live `Graph` or a prebuilt `NodeDef`, because `subgraphNode` mutates
+  what it wraps and a live graph can be wrapped exactly once (measured).
+  CORRECTION: the content hash is OPTIONAL, not a mandatory pair with
+  the name. Mandatory pinning makes every primitive improvement a
+  breaking change for saved graphs; optional pinning means name-only
+  refs upgrade freely while an author who writes a hash has asked to be
+  pinned and gets a hard error on mismatch — so no mode warns and no
+  mode cooks a near-miss. Transitive version-key invalidation needs no
+  change (it is blind to how a def was built); a name-cycle guard does,
+  since the existing object-identity guard cannot see `a -> b -> a`.
+- Unknown keys on a serialized node object, and unknown top-level graph
+  keys, are silently ignored today. This phase introduces a `ref` key on
+  nodes, so a `"refs"` typo would cook as an ordinary subgraph node:
+  the leniency is fixed in the same commit that introduces `ref`. (Two
+  independent audits reached this defect from different directions.)
 - Catalog generator (`docs/primitives.json` + `.md`) reading the
-  assets' own meta; CI drift test.
+  assets' own meta, with the rendering in a module BOTH the script and
+  the test import, so the drift test cannot drift from the generator.
+  CORRECTION: there is no CI in this repo — no `.github/` directory
+  exists and no drift test exists today. The drift test is a vitest
+  test; `docs/nodes.md`/`nodes.json` are unprotected right now and get
+  the same treatment retroactively.
 - `pcg run <name> [--param k=v] [--in data.json]` — direct
-  fire-and-forget execution of a named primitive.
+  fire-and-forget execution of a named primitive. `--param` typing is
+  schema-directed through the existing `checkParamValue`, and needs a
+  repeatable-flag kind (`parseArgs` rejects any repeated flag today).
+  CORRECTION: `--in` cannot carry geometry — no JSON representation of
+  `Geometry` exists anywhere in the tree — so it binds value items only
+  and hard-errors on anything else, via `dataInput` nodes in the
+  synthesized wrapper.
 - Exit: a JSON graph referencing a named primitive with bound params
-  round-trips and cooks byte-identically to its embedded form;
-  exposed-param round-trip and cache-invalidation tests; catalog
-  generation idempotent; the drift test proven to redden. Commit.
+  round-trips and cooks byte-identically to its embedded form — within
+  one build, which is the only place it is achievable: an embedded
+  payload freezes the defaults and canonicalization of the build that
+  wrote it, and the optional pin hash is what turns cross-version
+  divergence from silent into stated. Plus: concurrent cooks of one
+  shared inner graph proven deterministic, exposed-param round-trip and
+  cache-invalidation tests, catalog generation idempotent, and the
+  drift test proven to redden. Commit.
 
 ### Phase 37 — Vocabulary v1, spatial index, predicate filters
 - `src/spatial`: extract the uniform grid hash living privately inside
