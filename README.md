@@ -332,7 +332,8 @@ field-capable selector that picks per point) and name it in
 ascending first-occurrence point order), and `orientAlongVector` turns
 a direction attribute (a surface normal, a spline tangent) into the
 standard `rot` quaternion without leaving the graph. Since v0.8.0 such
-a spawn is device-resident too, not just a CPU one. See
+a spawn can be device-resident too — composed on the GPU and handed to
+the renderer without a CPU round trip — not just a CPU one. See
 `examples/02-forest` and `examples/03-spline-fence`.
 
 Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
@@ -582,7 +583,9 @@ per-path output hashes, and a live deviation readout.
 
 A fused run normally ends by reading its result back to the CPU. With a
 WebGPU renderer on the other side there is no reason to: the instance
-matrices are already on the device the renderer draws from. Opt in with
+matrices already live in the memory of the same GPU device — a
+`GPUDevice`, WebGPU's handle to the GPU, not a device in the everyday
+sense — that the renderer draws from. Opt in with
 `deviceInstances: true` and a `spawnInstances` terminal composes every
 4×4 on the GPU and hands back **buffer handles** instead of
 `Float32Array`s — no readback, no CPU compose loop, and no
