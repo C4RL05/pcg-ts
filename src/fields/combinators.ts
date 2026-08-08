@@ -1,5 +1,5 @@
 import { resolveField } from "./inputs.js";
-import { argSpecs, attachSpec, isSpecNumber } from "./spec.js";
+import { attachArgsSpec, isSpecNumber } from "./spec.js";
 import {
   type Column,
   type Field,
@@ -64,9 +64,7 @@ function elementwise(
   // `kind` IS the grammar fn name for every elementwise combinator — one
   // derivation covers all 24. `elementwiseKindsAreRegisteredFns` in
   // spec.test.ts pins that correspondence so it cannot drift.
-  const args = argSpecs(fields);
-  if (args !== undefined) attachSpec(field, { fn: kind, args: args.specs }, args.depth);
-  return field;
+  return attachArgsSpec(field, kind, fields);
 }
 
 /** Elementwise a + b. */
@@ -262,9 +260,7 @@ export function dot(a: FieldLike, b: FieldLike): Field<1> {
     }
     return { data: out, tupleSize: 1 };
   });
-  const args = argSpecs([fa, fb]);
-  if (args !== undefined) attachSpec(field, { fn: "dot", args: args.specs }, args.depth);
-  return field;
+  return attachArgsSpec(field, "dot", [fa, fb]);
 }
 
 /** Euclidean length of each element tuple. */
@@ -285,9 +281,7 @@ export function length(a: FieldLike): Field<1> {
     }
     return { data: out, tupleSize: 1 };
   });
-  const args = argSpecs([fa]);
-  if (args !== undefined) attachSpec(field, { fn: "length", args: args.specs }, args.depth);
-  return field;
+  return attachArgsSpec(field, "length", [fa]);
 }
 
 /** Normalize each element tuple to unit length (zero tuples stay zero). */
@@ -309,9 +303,7 @@ export function normalize(a: FieldLike): Field {
     }
     return { data: out, tupleSize: ts };
   });
-  const args = argSpecs([fa]);
-  if (args !== undefined) attachSpec(field, { fn: "normalize", args: args.specs }, args.depth);
-  return field;
+  return attachArgsSpec(field, "normalize", [fa]);
 }
 
 /**
@@ -339,9 +331,7 @@ export function vec(...components: FieldLike[]): Field {
     }
     return { data: out, tupleSize: ts };
   });
-  const args = argSpecs(fields);
-  if (args !== undefined) attachSpec(field, { fn: "vec", args: args.specs }, args.depth);
-  return field;
+  return attachArgsSpec(field, "vec", fields);
 }
 
 /** Extract one component of each element tuple as a scalar field. */
@@ -362,11 +352,7 @@ export function component(a: FieldLike, componentIndex: number): Field<1> {
     return { data: out, tupleSize: 1 };
   });
   // `componentIndex` was already validated exactly as the grammar does.
-  const args = argSpecs([fa]);
-  if (args !== undefined) {
-    attachSpec(field, { fn: "component", args: args.specs, index: componentIndex }, args.depth);
-  }
-  return field;
+  return attachArgsSpec(field, "component", [fa], { index: componentIndex });
 }
 
 /**
@@ -415,14 +401,8 @@ export function ramp(
     return { data: out, tupleSize: 1 };
   });
   // Ascending order is already enforced above (more strictly than the
-  // grammar checks), but finiteness is not — and the grammar requires it.
-  const args = argSpecs([fa]);
-  if (args !== undefined && ts.every(isSpecNumber) && vs.every(isSpecNumber)) {
-    attachSpec(
-      field,
-      { fn: "ramp", args: args.specs, stops: stops.map((s) => [s[0], s[1]]) },
-      args.depth,
-    );
-  }
-  return field;
+  // grammar checks), but finiteness is not — and the grammar requires it,
+  // so it is checked BEFORE the spec is derived at all.
+  if (!ts.every(isSpecNumber) || !vs.every(isSpecNumber)) return field;
+  return attachArgsSpec(field, "ramp", [fa], { stops: stops.map((s) => [s[0], s[1]]) });
 }

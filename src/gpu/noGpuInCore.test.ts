@@ -7,10 +7,11 @@
  * side-effect import, dynamic import (string or template literal), or
  * require whose specifier crosses the boundary.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { collectSourceFiles } from "./testHelpers.js";
 
 const SRC_DIR = fileURLToPath(new URL("..", import.meta.url));
 const GPU_DIR = join(SRC_DIR, "gpu");
@@ -49,17 +50,12 @@ function targetsThree(spec: string): boolean {
   return spec.endsWith("/three") || spec.includes("/three/");
 }
 
-function walk(dir: string, skip: string | undefined, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (skip !== undefined && path === skip) continue;
-      walk(path, skip, out);
-    } else if (entry.isFile() && entry.name.endsWith(".ts")) {
-      out.push(path);
-    }
-  }
-}
+/**
+ * Both scans below cover TEST files too — a core test that imports
+ * src/gpu is exactly the leak this file exists to catch.
+ */
+const tsFiles = (dir: string, skipDir?: string): string[] =>
+  collectSourceFiles(dir, { includeTests: true, ...(skipDir !== undefined ? { skipDir } : {}) });
 
 describe("gpu layering", () => {
   it("detector flags every import form reaching src/gpu", () => {
@@ -91,8 +87,7 @@ describe("gpu layering", () => {
   });
 
   it("no core file imports src/gpu (only tests inside src/gpu may)", () => {
-    const files: string[] = [];
-    walk(SRC_DIR, GPU_DIR, files);
+    const files = tsFiles(SRC_DIR, GPU_DIR);
     expect(files.length).toBeGreaterThan(10); // sanity: the walk found the core
 
     const offenders = files
@@ -103,8 +98,7 @@ describe("gpu layering", () => {
   });
 
   it("src/gpu never imports three or src/three", () => {
-    const files: string[] = [];
-    walk(GPU_DIR, undefined, files);
+    const files = tsFiles(GPU_DIR);
     expect(files.length).toBeGreaterThan(3); // sanity: the walk found the gpu module
 
     const offenders = files

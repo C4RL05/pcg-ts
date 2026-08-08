@@ -9,13 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createTriangleMesh } from "../data/index.js";
-import {
-  evaluateField,
-  makeField,
-  randomField,
-  type FieldLike,
-  type GpuFieldResolver,
-} from "../fields/index.js";
+import { randomField, type FieldLike, type GpuFieldResolver } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import {
   jitterPoints,
@@ -24,16 +18,18 @@ import {
   transformPoints,
   volumeSample,
 } from "../nodes/index.js";
-import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
+import { acceptsDerivedSpecs } from "../fields/spec.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
+import { cpuResolveField, opaqueField } from "./testHelpers.js";
 
 /**
  * CPU-backed stub resolver (same contract as provenance.test.ts). Its
  * eligibility gate is the production one — `deviceSpec` with the flag it
- * advertises — so the double cannot accept a set the executor did not
- * salt, which is the property under test in this file.
+ * advertises, via the shared `cpuResolveField` — so the double cannot
+ * accept a set the executor did not salt, which is the property under test
+ * in this file.
  */
 function stubResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } = {}): GpuFieldResolver & { calls: number } {
   const accept = acceptsDerivedSpecs(opts);
@@ -43,27 +39,11 @@ function stubResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } = {})
     acceptDerivedSpecs: accept,
     resolveField(field, ctx, stats) {
       stub.calls++;
-      if (deviceSpec(field, accept) === undefined) {
-        const reason = specFallbackReason(field);
-        if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
-        return null;
-      }
-      if (stats !== undefined) stats.dispatches++;
-      const column = evaluateField(field, ctx);
-      return Promise.resolve({ data: column.data.slice() as typeof column.data, tupleSize: column.tupleSize });
+      return cpuResolveField(field, ctx, stats, accept);
     },
   };
   return stub;
 }
-
-/**
- * A field no spec can ever name — an arbitrary closure — computing the
- * same bytes as `randomField("authored")`, so the two populations
- * ("indescribable" and "described but code-authored") differ only in
- * provenance and their fallback reason, never in what they evaluate to.
- */
-const opaqueField = (): FieldLike =>
-  makeField("opaque", 1, (ctx) => evaluateField(randomField("authored"), ctx));
 
 /** Unit square in the XY plane, two triangles (surfaceSample fixture). */
 function unitSquare(): ReturnType<typeof createTriangleMesh> {

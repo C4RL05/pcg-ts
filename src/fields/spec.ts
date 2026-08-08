@@ -294,3 +294,33 @@ export function argSpecs(fields: readonly Field[]): ArgSpecs | undefined {
   if (depth > MAX_SPEC_DEPTH) return undefined;
   return { specs, depth };
 }
+
+/**
+ * @internal Derive `{fn, args}` from `from`'s specs and attach it to a
+ * freshly constructed `field`, returning the field so a constructor can
+ * `return attachArgsSpec(field, ...)`.
+ *
+ * THE way a combinator derives its spec. The withhold-on-`undefined` rule
+ * that keeps derivation total ({@link argSpecs}) lives here once instead
+ * of being restated at every constructor, so a combinator added later
+ * cannot forget it — the failure mode of forgetting is silent (a field
+ * that simply never describes itself), which is exactly the kind a shared
+ * epilogue should make impossible rather than leave reviewable.
+ *
+ * `extra` adds constructor-specific keys AFTER `args` (`index` for
+ * `component`, `stops` for `ramp`). A constructor whose extra keys have
+ * validity rules of their own checks them BEFORE calling — withholding is
+ * all-or-nothing, and a spec carrying a key the parser rejects is worse
+ * than no spec at all.
+ */
+export function attachArgsSpec<F extends Field>(
+  field: F,
+  fn: string,
+  from: readonly Field[],
+  extra?: Readonly<Record<string, unknown>>,
+): F {
+  const args = argSpecs(from);
+  if (args === undefined) return field;
+  attachSpec(field, { fn, args: args.specs, ...extra }, args.depth);
+  return field;
+}

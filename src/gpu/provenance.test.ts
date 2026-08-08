@@ -7,19 +7,15 @@
  * integration.device.test.ts.
  */
 import { describe, expect, it } from "vitest";
-import {
-  evaluateField,
-  makeField,
-  randomField,
-  type GpuFieldResolver,
-} from "../fields/index.js";
+import { randomField, type GpuFieldResolver } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem, subgraphNode } from "../graph/index.js";
 import { setAttribute } from "../nodes/index.js";
-import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
+import { acceptsDerivedSpecs } from "../fields/spec.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
+import { cpuResolveField, opaqueField } from "./testHelpers.js";
 
 const SPEC = { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "randomField", key: "jitter" }] };
 
@@ -41,14 +37,7 @@ function stubResolver(
     acceptDerivedSpecs: accept,
     resolveField(field, ctx, stats) {
       stub.calls++;
-      if (deviceSpec(field, accept) === undefined) {
-        const reason = specFallbackReason(field);
-        if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
-        return null;
-      }
-      if (stats !== undefined) stats.dispatches++;
-      const column = evaluateField(field, ctx);
-      return Promise.resolve({ data: column.data.slice() as typeof column.data, tupleSize: column.tupleSize });
+      return cpuResolveField(field, ctx, stats, accept);
     },
   };
   return stub;
@@ -182,9 +171,7 @@ describe("gpu memo-key provenance (stub resolver)", () => {
     // `no-spec` keeps its original meaning: a makeField closure can never
     // be named, so no flag admits it.
     for (const accept of [false, true]) {
-      const opaque = makeField("opaque", 1, (ctx) =>
-        evaluateField(randomField("authored"), ctx),
-      );
+      const opaque = opaqueField();
       const stub = stubResolver("stub|deviceA", { acceptDerivedSpecs: accept });
       const run = await cook(makeSetAttributeGraph(opaque), { gpu: stub });
       expect(run.stats.gpu!.fallbacks, `accept=${accept}`).toEqual({ "no-spec": 1 });

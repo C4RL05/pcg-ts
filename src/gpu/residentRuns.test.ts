@@ -13,7 +13,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  evaluateField,
   makeField,
   randomField,
   type GpuCookStats,
@@ -39,38 +38,21 @@ import {
   setBounds,
   transformPoints,
 } from "../nodes/index.js";
-import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
+import { acceptsDerivedSpecs } from "../fields/spec.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
 import type { Geometry } from "../data/index.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
+// `cpuResolveField` is the eligibility gate both fakes share (and the
+// other gpu suites' doubles with them): `accept` is the flag the fake
+// advertises, read through the production predicate, so a fake can never
+// resolve a field the executor did not salt.
+import { cpuResolveField } from "./testHelpers.js";
 
 function countFallback(stats: GpuCookStats | undefined, reason: string): null {
   if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
   return null;
-}
-
-/**
- * CPU-backed per-field resolution shared by both fakes. `accept` is the
- * flag the fake advertises, read through the production gate, so a fake
- * can never resolve a field the executor did not salt.
- */
-function cpuResolveField(
-  field: Parameters<GpuFieldResolver["resolveField"]>[0],
-  ctx: Parameters<GpuFieldResolver["resolveField"]>[1],
-  stats: GpuCookStats | undefined,
-  accept: boolean,
-): ReturnType<GpuFieldResolver["resolveField"]> {
-  if (deviceSpec(field, accept) === undefined) {
-    return countFallback(stats, specFallbackReason(field));
-  }
-  if (stats !== undefined) stats.dispatches++;
-  const column = evaluateField(field, ctx);
-  return Promise.resolve({
-    data: column.data.slice() as typeof column.data,
-    tupleSize: column.tupleSize,
-  });
 }
 
 interface FakeResolver extends GpuFieldResolver {

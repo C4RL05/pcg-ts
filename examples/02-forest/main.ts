@@ -218,9 +218,13 @@ function heightField(s: number): Field {
   return mul(remap(base, -1, 1, 0, 1), HEIGHT_SCALE);
 }
 
-const lowColor = new Color(0x37503a);
-const highColor = new Color(0x6d6f66);
-const steepColor = new Color(0x565149);
+// Terrain stays in the brown family end to end, so the trees have the
+// greens to themselves. The point of this demo is watching WHERE trees
+// land — off the steep faces, below the treeline — and that reads only
+// if ground and canopy separate on hue as well as brightness.
+const lowColor = new Color(0x3a2718); // damp soil in the valleys
+const highColor = new Color(0x7a6242); // dry tan toward the ridge
+const steepColor = new Color(0x2b2018); // bare earth on the steep faces
 
 /** Displace terrain vertices by the heightfield and recolor by height/slope. */
 function rebuildTerrain(s: number): void {
@@ -317,8 +321,10 @@ graph.connect(heightAttr, "out", slopeAttr, "in");
 // of the filters lets it join the height/slope run instead of sitting
 // between a filter and the string `setAttribute` as a chain of one,
 // where it would form no run at all. It costs stamping ~9000 scales
-// instead of ~5900, on the device, to save a materialization and a
-// readback on the host. (Declaration order is left alone because node
+// instead of ~5900 — on the device here, and on the CPU on the WebGL2
+// fallback path, which pays the extra 3100 with no evaluator at all — to
+// save a materialization and a readback on the host. (Declaration order
+// is left alone because node
 // ids are derived from insertion, and reordering the `add` calls would
 // reseed every node after it for no reason.)
 graph.connect(slopeAttr, "out", sizeAttr, "in");
@@ -379,13 +385,17 @@ function makeAssets(): AssetMap {
     pine: {
       geometry: pineGeo,
       material: [
-        new MeshStandardNodeMaterial({ color: 0x6e4a2f, roughness: 1 }),
-        new MeshStandardNodeMaterial({ color: 0x2f6b3c, roughness: 0.9 }),
+        // Trunk stays brown but darker than the ridge tan, so it reads as
+        // shadow against the ground rather than merging into it.
+        new MeshStandardNodeMaterial({ color: 0x4a3220, roughness: 1 }),
+        new MeshStandardNodeMaterial({ color: 0x38c94a, roughness: 0.9 }),
       ],
     },
     bush: {
       geometry: bushGeo,
-      material: new MeshStandardNodeMaterial({ color: 0x4c7a3d, roughness: 0.9 }),
+      // A yellower green than the pines: the two species stay legible
+      // against each other as well as against the ground.
+      material: new MeshStandardNodeMaterial({ color: 0x7ad94e, roughness: 0.9 }),
     },
   };
 }
@@ -723,10 +733,11 @@ why.textContent = [
   "",
   "Nothing about `scale` depends on filtering, though, so this graph",
   "stamps it BEFORE the filters, where it joins run 1 as a third member.",
-  "The trade is stamping ~9000 scales instead of ~5900, on the device,",
-  "to remove one host materialization and one readback. Worth knowing",
-  "when a chain looks unfusable: sometimes the fix is to move a node",
-  "rather than to teach the runtime a new trick.",
+  "The trade is stamping ~9000 scales instead of ~5900 — on the device",
+  "here, and on the CPU with no evaluator at all on the WebGL2 fallback",
+  "path — to remove one host materialization and one readback. Worth",
+  "knowing when a chain looks unfusable: sometimes the fix is to move a",
+  "node rather than to teach the runtime a new trick.",
   "",
   "So three real breaks are left — two filters and one string column —",
   "and not one of them is a spec problem:",

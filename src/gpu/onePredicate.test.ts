@@ -18,8 +18,7 @@
  * registry: a new adopting or resident node type fails this file until it
  * is covered, rather than silently escaping the property.
  */
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // The registry is populated by module side effects, and the drift pins
@@ -30,7 +29,6 @@ import "../index.js";
 import { createTriangleMesh } from "../data/index.js";
 import {
   evaluateField,
-  makeField,
   randomField,
   type FieldLike,
   type GpuCookStats,
@@ -38,7 +36,7 @@ import {
   type ResidentMemberDesc,
   type ResidentRunContext,
 } from "../fields/index.js";
-import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
+import { acceptsDerivedSpecs, deviceSpec } from "../fields/spec.js";
 import {
   Graph,
   cook,
@@ -62,6 +60,7 @@ import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { planResidentRun } from "./run.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
+import { collectSourceFiles, cpuResolveField, opaqueField } from "./testHelpers.js";
 
 // ---------------------------------------------------------------------------
 // The three field populations, differing only in provenance
@@ -71,8 +70,7 @@ const authored = (): FieldLike => fieldFromJson({ fn: "randomField", key: "autho
 /** The same expression written in code: eligible only with the flag. */
 const derived = (): FieldLike => randomField("authored");
 /** An arbitrary closure: eligible on no setting, ever. */
-const opaque = (): FieldLike =>
-  makeField("opaque", 1, (ctx) => evaluateField(randomField("authored"), ctx));
+const opaque = opaqueField;
 
 /** Every population's name → builder, and what each is worth per flag. */
 const POPULATIONS = [
@@ -105,19 +103,15 @@ function probeResolver(opts: { acceptDerivedSpecs?: boolean } = {}): ProbeResolv
     cacheSalt: "probe|deviceA",
     acceptDerivedSpecs: accept,
     resolveField(field, ctx, stats) {
-      if (deviceSpec(field, accept) === undefined) {
-        const reason = specFallbackReason(field);
-        probe.declined[reason] = (probe.declined[reason] ?? 0) + 1;
-        if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
-        return null;
-      }
-      probe.resolved++;
-      if (stats !== undefined) stats.dispatches++;
-      const column = evaluateField(field, ctx);
-      return Promise.resolve({
-        data: column.data.slice() as typeof column.data,
-        tupleSize: column.tupleSize,
+      const pending = cpuResolveField(field, ctx, stats, accept, {
+        onFallback: (reason) => {
+          probe.declined[reason] = (probe.declined[reason] ?? 0) + 1;
+        },
       });
+      // Non-null is exactly "the gate admitted it", so the tally below
+      // counts the fields that reached the device seam and nothing else.
+      if (pending !== null) probe.resolved++;
+      return pending;
     },
   };
   return probe;
@@ -307,18 +301,10 @@ function recordingRunResolver(opts: { acceptDerivedSpecs?: boolean } = {}): GpuF
     planned: [],
     cacheSalt: "probe|deviceA",
     acceptDerivedSpecs: accept,
-    resolveField: (field, ctx, stats) => {
-      if (deviceSpec(field, accept) === undefined) {
-        const reason = specFallbackReason(field);
-        if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
-        return null;
-      }
-      const column = evaluateField(field, ctx);
-      return Promise.resolve({
-        data: column.data.slice() as typeof column.data,
-        tupleSize: column.tupleSize,
-      });
-    },
+    // This fake pins run PLANNING, not dispatch accounting, so it counts
+    // fallbacks like every other double but leaves `stats.dispatches` alone.
+    resolveField: (field, ctx, stats) =>
+      cpuResolveField(field, ctx, stats, accept, { countDispatches: false }),
     planRun(members, _ctx, stats: GpuCookStats | undefined) {
       fake.planned.push(members.map((m) => m.id));
       if (stats !== undefined) {
@@ -607,21 +593,10 @@ describe("fieldFromJson never changes a live field's provenance", () => {
 
 const SRC_DIR = fileURLToPath(new URL("..", import.meta.url));
 
-function srcFiles(dir: string, out: string[]): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) srcFiles(path, out);
-    else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-      out.push(path);
-    }
-  }
-  return out;
-}
-
 /** Non-test source files declaring `gpu: "always"`, by path under src/. */
 function alwaysAdopterSources(): string[] {
   const hits: string[] = [];
-  for (const file of srcFiles(SRC_DIR, [])) {
+  for (const file of collectSourceFiles(SRC_DIR)) {
     const source = readFileSync(file, "utf8");
     for (const _ of source.matchAll(/^[ \t]*gpu:[ \t]*"always",[ \t]*$/gm)) {
       hits.push(file.slice(SRC_DIR.length).replace(/\\/g, "/"));

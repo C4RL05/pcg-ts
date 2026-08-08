@@ -230,14 +230,35 @@ function stableValueHash(v: unknown, path: string): string {
 function paramsHaveSpecField(v: unknown, acceptDerived: boolean): boolean {
   if (typeof v !== "object" || v === null) return false;
   if (isField(v)) return deviceSpec(v, acceptDerived) !== undefined;
-  if (Array.isArray(v)) return v.some((el) => paramsHaveSpecField(el, acceptDerived));
-  if (v instanceof Set) return [...v].some((el) => paramsHaveSpecField(el, acceptDerived));
-  if (v instanceof Map) return [...v.values()].some((el) => paramsHaveSpecField(el, acceptDerived));
+  // Recursion is written as explicit short-circuiting loops rather than
+  // `.some((el) => walk(el, acceptDerived))`: this runs per node per cook,
+  // and a callback form allocates one closure (and, for Set/Map, one
+  // spread array) at EVERY container level of every param tree.
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      if (paramsHaveSpecField(v[i], acceptDerived)) return true;
+    }
+    return false;
+  }
+  if (v instanceof Set) {
+    for (const el of v) {
+      if (paramsHaveSpecField(el, acceptDerived)) return true;
+    }
+    return false;
+  }
+  if (v instanceof Map) {
+    for (const el of v.values()) {
+      if (paramsHaveSpecField(el, acceptDerived)) return true;
+    }
+    return false;
+  }
   const proto = Object.getPrototypeOf(v) as object | null;
   if (proto === Object.prototype || proto === null) {
-    return Object.values(v as Record<string, unknown>).some((el) =>
-      paramsHaveSpecField(el, acceptDerived),
-    );
+    const rec = v as Record<string, unknown>;
+    for (const k in rec) {
+      if (Object.hasOwn(rec, k) && paramsHaveSpecField(rec[k], acceptDerived)) return true;
+    }
+    return false;
   }
   return false;
 }
@@ -293,17 +314,38 @@ const RUN_KEY_VERSION = "run1";
 function paramsFieldsAllSpecd(v: unknown, acceptDerived: boolean): boolean {
   if (typeof v !== "object" || v === null) return true;
   if (isField(v)) return deviceSpec(v, acceptDerived) !== undefined;
-  if (Array.isArray(v)) return v.every((el) => paramsFieldsAllSpecd(el, acceptDerived));
+  // Loops rather than `.every((el) => walk(el, acceptDerived))`, for the
+  // allocation reason in {@link paramsHaveSpecField}. Deliberately a
+  // second explicit walker and not a shared generator: the two gate the
+  // memo salt, they disagree on the empty case (no Field at all is
+  // "false" here and "true" there), and a generator would allocate on the
+  // very path this avoids allocating on.
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      if (!paramsFieldsAllSpecd(v[i], acceptDerived)) return false;
+    }
+    return true;
+  }
   if (ArrayBuffer.isView(v)) return true;
-  if (v instanceof Set) return [...v].every((el) => paramsFieldsAllSpecd(el, acceptDerived));
+  if (v instanceof Set) {
+    for (const el of v) {
+      if (!paramsFieldsAllSpecd(el, acceptDerived)) return false;
+    }
+    return true;
+  }
   if (v instanceof Map) {
-    return [...v.values()].every((el) => paramsFieldsAllSpecd(el, acceptDerived));
+    for (const el of v.values()) {
+      if (!paramsFieldsAllSpecd(el, acceptDerived)) return false;
+    }
+    return true;
   }
   const proto = Object.getPrototypeOf(v) as object | null;
   if (proto === Object.prototype || proto === null) {
-    return Object.values(v as Record<string, unknown>).every((el) =>
-      paramsFieldsAllSpecd(el, acceptDerived),
-    );
+    const rec = v as Record<string, unknown>;
+    for (const k in rec) {
+      if (Object.hasOwn(rec, k) && !paramsFieldsAllSpecd(rec[k], acceptDerived)) return false;
+    }
+    return true;
   }
   return true;
 }

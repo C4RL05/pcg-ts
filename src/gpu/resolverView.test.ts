@@ -19,21 +19,16 @@
  * the end-to-end consequence of losing it, and pins that every wrapper in
  * `src/` is built through the helper rather than by hand.
  */
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  evaluateField,
-  randomField,
-  type Column,
-  type GpuFieldResolver,
-} from "../fields/index.js";
-import { acceptsDerivedSpecs, deviceSpec, resolverView } from "../fields/spec.js";
+import { randomField, type GpuFieldResolver } from "../fields/index.js";
+import { acceptsDerivedSpecs, resolverView } from "../fields/spec.js";
 import { Graph, cook, makeGeometryItem, type CookResult } from "../graph/index.js";
 import { setAttribute } from "../nodes/index.js";
 import { dataInput } from "../runtime/index.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
+import { attrColumn, collectSourceFiles, cpuResolveField } from "./testHelpers.js";
 
 // ---------------------------------------------------------------------------
 // 1. The helper copies the advertisement and nothing else
@@ -114,12 +109,16 @@ function sentinelProbe(acceptDerivedSpecs: boolean): Probe {
     cacheSalt: "probe|deviceA",
     acceptDerivedSpecs,
     resolveField(field, ctx) {
-      if (deviceSpec(field, acceptDerivedSpecs) === undefined) return null;
+      // No `stats` argument: this probe counts nothing but its own
+      // resolutions, so the shared gate records neither dispatches nor
+      // fallbacks. The column it returns is already a fresh copy.
+      const pending = cpuResolveField(field, ctx, undefined, acceptDerivedSpecs);
+      if (pending === null) return null;
       probe.resolved++;
-      const column = evaluateField(field, ctx);
-      const data = column.data.slice() as Column["data"];
-      data.fill(SENTINEL);
-      return Promise.resolve({ data, tupleSize: column.tupleSize });
+      return pending.then((column) => {
+        column.data.fill(SENTINEL);
+        return column;
+      });
     },
   };
   return probe;
@@ -137,10 +136,7 @@ function derivedGraph(): { g: Graph; id: string } {
 }
 
 function attrValues(result: CookResult): number[] {
-  const item = result.outputs.out[0];
-  if (item.kind !== "geometry") throw new Error("expected a geometry item");
-  const attr = item.geo.attrs.point.require("d");
-  return [...attr.data.subarray(0, item.geo.attrs.point.count * attr.tupleSize)];
+  return [...attrColumn(result, "d").data];
 }
 
 describe("a wrapper that forwards the advertisement keeps device bytes out of a CPU cook", () => {
@@ -213,16 +209,6 @@ function countIn(source: string, re: RegExp): number {
   return [...source.matchAll(re)].length;
 }
 
-function walk(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) walk(path, out);
-    else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-      out.push(path);
-    }
-  }
-}
-
 describe("every resolver wrapper in src/ is built through resolverView", () => {
   it("the detector sees a resolver literal and ignores declarations", () => {
     expect(countIn("  cacheSalt: base.cacheSalt,\n", RESOLVER_LITERAL_RE)).toBe(1);
@@ -239,8 +225,7 @@ describe("every resolver wrapper in src/ is built through resolverView", () => {
   });
 
   it("each non-test source file builds as many resolvers as it views", () => {
-    const files: string[] = [];
-    walk(SRC_DIR, files);
+    const files = collectSourceFiles(SRC_DIR);
     expect(files.length).toBeGreaterThan(10); // sanity: the walk found src/
 
     let totalLiterals = 0;

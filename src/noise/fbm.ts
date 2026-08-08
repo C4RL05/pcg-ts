@@ -1,9 +1,16 @@
-import { type Field, add, mul, resolveField } from "../fields/index.js";
-import { MAX_SPEC_DEPTH, attachSpec, isSpecNumber, peekFieldSpec, specDepth } from "../fields/spec.js";
-import { hashCombine } from "../random/index.js";
-import { perlinNoise } from "./perlin.js";
-import { simplexNoise } from "./simplex.js";
+import { type Field, add, mul } from "../fields/index.js";
 import {
+  type FieldSpec,
+  MAX_SPEC_DEPTH,
+  attachSpec,
+  isSpecNumber,
+  peekFieldSpec,
+  specDepth,
+} from "../fields/spec.js";
+import { hashCombine } from "../random/index.js";
+import { NOISE_BASES } from "./bases.js";
+import {
+  type DerivedSpec,
   type NoiseFactory,
   type NoiseOpts,
   noiseOptsSpec,
@@ -11,28 +18,6 @@ import {
   normalize01,
   setNoiseOutputRange,
 } from "./util.js";
-import { valueNoise } from "./value.js";
-import { worleyNoise } from "./worley.js";
-
-/**
- * The four factories the JSON grammar's `base` names. A base outside
- * this table cannot be named in a spec, so an fbm over one derives no
- * `fbm` spec of its own — it keeps whatever spec its `add`/`mul` octave
- * tree composed, which is `undefined` unless every octave is spec'd.
- */
-const BUILT_IN_BASES: ReadonlyArray<readonly [NoiseFactory, string]> = [
-  [valueNoise, "valueNoise"],
-  [perlinNoise, "perlinNoise"],
-  [simplexNoise, "simplexNoise"],
-  [worleyNoise, "worleyNoise"],
-];
-
-function baseName(base: NoiseFactory): string | undefined {
-  for (const [factory, name] of BUILT_IN_BASES) {
-    if (factory === base) return name;
-  }
-  return undefined;
-}
 
 /** Options for {@link fbm}. */
 export interface FbmOpts extends NoiseOpts {
@@ -64,6 +49,10 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
     throw new Error(`fbm: octaves must be a positive integer, got ${octaves}`);
   }
   let sum: Field | undefined;
+  // Octave 0's field: its derived spec names the base in the grammar and
+  // carries the position spec, so `deriveFbmSpec` needs neither a linear
+  // scan of the base table nor a throwaway `resolveField(opts.position)`.
+  let firstLayer: Field<1> | undefined;
   let amplitude = 1;
   let octaveFrequency = frequency;
   let lo = 0;
@@ -76,6 +65,7 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
       offset: opts.offset,
       position: opts.position,
     });
+    if (o === 0) firstLayer = layer;
     const layerRange = noiseOutputRange(layer);
     if (layerRange === undefined) {
       rangeKnown = false;
@@ -93,7 +83,12 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
   // All terms are scalar fields, so the sum is too.
   const raw = sum as Field<1>;
   if (rangeKnown) setNoiseOutputRange(raw, [lo, hi]);
-  const derived = deriveFbmSpec(base, opts, { octaves, lacunarity, gain, seed, frequency });
+  const derived = deriveFbmSpec(
+    base,
+    firstLayer === undefined ? undefined : peekFieldSpec(firstLayer),
+    opts,
+    { octaves, lacunarity, gain, seed, frequency },
+  );
   if (derived !== undefined) attachSpec(raw, derived.spec, derived.depth);
   if (opts.normalized !== true) return raw;
   if (!rangeKnown) {
@@ -110,23 +105,31 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
         "for this octaves/gain configuration",
     );
   }
-  const wrapped = normalize01(raw, [lo, hi]);
-  if (derived !== undefined) {
-    attachSpec(
-      wrapped,
-      { ...derived.spec, opts: { ...derived.spec.opts, normalized: true } },
-      derived.depth,
-    );
-  }
-  return wrapped;
+  // The wrapper is a fresh field and needs its own spec; `normalize01`
+  // mirrors this one with `normalized: true`. Passing `derived` rather
+  // than whatever `raw` carries matters: with no `fbm` spec, `raw` keeps
+  // the octave tree's own (`add`) spec, and the grammar has no
+  // `normalized` option there.
+  return normalize01(raw, [lo, hi], derived);
 }
 
 /**
  * The derived spec for an fbm result and its nesting depth, or undefined
  * when it cannot be named in the grammar: a base outside {@link
- * BUILT_IN_BASES}, or an option outside what the grammar's parser accepts
+ * NOISE_BASES}, or an option outside what the grammar's parser accepts
  * (`fbm` never checks `lacunarity`/`gain` for finiteness, so those must
- * be filtered here).
+ * be filtered here). Withholding leaves the result carrying whatever spec
+ * its `add`/`mul` octave tree composed, which is `undefined` unless every
+ * octave is spec'd.
+ *
+ * `baseSpec` is octave 0's own derived spec. It supplies the base's
+ * grammar name and the position spec nested in its opts — but the name is
+ * only a CLAIM by the field, so it is checked against {@link NOISE_BASES}
+ * BY IDENTITY: a custom base that forwards to a built-in factory (say
+ * `(o) => worleyNoise({ ...o, output: "f2" })`) hands back a field whose
+ * spec says `worleyNoise`, and naming that as an fbm base would round-trip
+ * to a different field. Identity accepts exactly the four factories, which
+ * is what a scan of the table accepted.
  *
  * `octaves` is already validated identically by the constructor, and
  * `seed` by {@link noiseOptsSpec} — it rejects a non-integer `opts.seed`,
@@ -137,6 +140,7 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
  */
 function deriveFbmSpec(
   base: NoiseFactory,
+  baseSpec: FieldSpec | undefined,
   opts: FbmOpts,
   resolved: {
     octaves: number;
@@ -145,12 +149,20 @@ function deriveFbmSpec(
     seed: number;
     frequency: number;
   },
-): { spec: { fn: "fbm"; base: string; opts: Record<string, unknown> }; depth: number } | undefined {
-  const name = baseName(base);
-  if (name === undefined) return undefined;
+): DerivedSpec | undefined {
+  if (baseSpec === undefined) return undefined;
+  const name = baseSpec.fn;
+  if (NOISE_BASES[name] !== base) return undefined;
   if (!isSpecNumber(resolved.lacunarity) || !isSpecNumber(resolved.gain)) return undefined;
+  // The octave resolved `opts.position` already (it is passed verbatim),
+  // so its spec is the one a `resolveField` here would peek at: the very
+  // same object for a Field input, and for a bare number/tuple the spec
+  // of an equal constant, which is what a throwaway `resolveField` built
+  // anyway. Its absence still withholds, via `noiseOptsSpec` below.
   const positionSpec =
-    opts.position === undefined ? undefined : peekFieldSpec(resolveField(opts.position));
+    opts.position === undefined
+      ? undefined
+      : ((baseSpec.opts as Record<string, unknown> | undefined)?.position as FieldSpec | undefined);
   const optsSpec = noiseOptsSpec(
     opts,
     resolved.seed,

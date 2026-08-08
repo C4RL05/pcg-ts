@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { type EvalContext, type Field, evaluateField, mul, position } from "../fields/index.js";
+import type { FieldSpec } from "../fields/spec.js";
+import { fieldFromJson, getFieldSpec, listFieldFns } from "../nodes/fieldJson.js";
 import { hashCombine, hashFloat } from "../random/index.js";
+import { NOISE_BASES, WORLEY_OUTPUTS } from "./bases.js";
 import { fbm } from "./fbm.js";
 import { perlinNoise } from "./perlin.js";
 import { simplexNoise } from "./simplex.js";
@@ -253,6 +256,59 @@ describe("fbm", () => {
   it("validates octaves", () => {
     expect(() => fbm(perlinNoise, { octaves: 0 })).toThrow(/octaves/);
     expect(() => fbm(perlinNoise, { octaves: 1.5 })).toThrow(/octaves/);
+  });
+});
+
+describe("noise grammar tables", () => {
+  // `NOISE_BASES` / `WORLEY_OUTPUTS` are read by BOTH the spec derivers
+  // (this module) and the spec parser (`fieldFromJson`). These pin the
+  // agreement that makes them one table rather than two that drift: a
+  // deriver that emits a name the parser rejects is a graph that saves and
+  // cannot be reopened.
+
+  it("names every base exactly as that factory's own spec names itself", () => {
+    // This is what lets `fbm` recover a base's grammar name from the spec
+    // its octave carries instead of scanning the table.
+    for (const [name, factory] of Object.entries(NOISE_BASES)) {
+      expect(getFieldSpec(factory())).toEqual({ fn: name, opts: expect.any(Object) });
+    }
+  });
+
+  it("names only bases the parser accepts", () => {
+    const fns = listFieldFns();
+    for (const name of Object.keys(NOISE_BASES)) {
+      expect(fns).toContain(name);
+      // The parser's own base check reads the same table.
+      expect(() => fieldFromJson({ fn: "fbm", base: name })).not.toThrow();
+    }
+    expect(() => fieldFromJson({ fn: "fbm", base: "notANoise" })).toThrow(/fbm base must be one of/);
+  });
+
+  it("derives an fbm spec over every listed base that rebuilds the same field", () => {
+    for (const [name, factory] of Object.entries(NOISE_BASES)) {
+      const field = fbm(factory, { seed: 3, octaves: 2, lacunarity: 2.5, gain: 0.4 });
+      const spec = getFieldSpec(field);
+      expect(spec).toMatchObject({ fn: "fbm", base: name });
+      // The round trip is the whole point: same structural key means the
+      // reopened graph evaluates to the same bytes.
+      expect(fieldFromJson(spec as FieldSpec).key).toBe(field.key);
+    }
+  });
+
+  it("lists exactly the worley outputs the factory derives a spec for", () => {
+    for (const output of WORLEY_OUTPUTS) {
+      const opts = { output } as WorleyNoiseOpts;
+      const spec = getFieldSpec(worleyNoise(opts));
+      expect(spec).toMatchObject({ fn: "worleyNoise", opts: { output } });
+      expect(fieldFromJson(spec as FieldSpec).key).toBe(worleyNoise(opts).key);
+    }
+    // An output outside the shared list derives nothing and parses to
+    // nothing — the two ends withhold together.
+    const offGrammar = worleyNoise({ output: "f3" as WorleyNoiseOpts["output"] });
+    expect(getFieldSpec(offGrammar)).toBeUndefined();
+    expect(() => fieldFromJson({ fn: "worleyNoise", opts: { output: "f3" } })).toThrow(
+      /output must be one of: f1, f2, f2-f1/,
+    );
   });
 });
 

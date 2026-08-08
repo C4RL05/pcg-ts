@@ -102,12 +102,36 @@ export function setNoiseOutputRange(field: Field, range: NoiseRange): void {
   OUTPUT_RANGES.set(field, range);
 }
 
+/** @internal A derived spec and its nesting depth, as {@link attachSpec} takes them. */
+export interface DerivedSpec {
+  readonly spec: FieldSpec;
+  readonly depth: number;
+}
+
 /**
  * @internal Affine map of a scalar field from `[lo, hi]` to [0, 1]:
  * `out = (v - lo) / (hi - lo)`, endpoints kept in f64 so the result is
  * exactly the affine image of the (f32) raw output.
+ *
+ * `inner`'s spec does NOT carry over — this is a fresh field through
+ * `makeField` — so pass `inner`'s own derived spec (undefined when it has
+ * none) as `derived` and the wrapper gets the mirrored one: the same spec
+ * with `normalized: true`, which is exactly how the grammar reaches this
+ * shape. The mirroring lives here rather than at the call sites because
+ * this function is the ONLY thing that builds the wrapper, and two
+ * spellings of the rule could diverge into a spec whose round trip is a
+ * different field.
+ *
+ * `derived` must therefore be a NOISE spec — the only shape whose `opts`
+ * the grammar lets `normalized` into. Pass undefined for anything else
+ * (an `fbm` whose octave tree composed an `add` spec, say), never the
+ * unrelated spec the field happens to carry.
  */
-export function normalize01(inner: Field<1>, range: NoiseRange): Field<1> {
+export function normalize01(
+  inner: Field<1>,
+  range: NoiseRange,
+  derived?: DerivedSpec,
+): Field<1> {
   const [lo, hi] = range;
   const span = hi - lo;
   const field = makeField<1>(
@@ -123,6 +147,10 @@ export function normalize01(inner: Field<1>, range: NoiseRange): Field<1> {
     },
   );
   setNoiseOutputRange(field, [0, 1]);
+  if (derived !== undefined) {
+    const opts = derived.spec.opts as Record<string, unknown> | undefined;
+    attachSpec(field, { ...derived.spec, opts: { ...opts, normalized: true } }, derived.depth);
+  }
   return field;
 }
 
@@ -263,17 +291,13 @@ export function makeNoiseField(
       : noiseOptsSpec(opts, seed, frequency, offset, positionSpec, spec.extraOpts);
   // One level for the noise spec itself, plus the position it nests.
   const depth = 1 + specDepth(positionSpec);
-  const fitsDepth = depth <= MAX_SPEC_DEPTH;
-  if (spec !== undefined && optsSpec !== undefined && fitsDepth) {
-    attachSpec(raw, { fn: spec.fn, opts: optsSpec }, depth);
-  }
+  const derived: DerivedSpec | undefined =
+    spec !== undefined && optsSpec !== undefined && depth <= MAX_SPEC_DEPTH
+      ? { spec: { fn: spec.fn, opts: optsSpec }, depth }
+      : undefined;
+  if (derived !== undefined) attachSpec(raw, derived.spec, derived.depth);
   if (opts.normalized !== true) return raw;
-  // `normalize01` builds a fresh field through `makeField`, so the
-  // wrapper needs its own spec — the same one with `normalized: true`,
-  // which is exactly how the grammar reaches this shape.
-  const wrapped = normalize01(raw, rawRange);
-  if (spec !== undefined && optsSpec !== undefined && fitsDepth) {
-    attachSpec(wrapped, { fn: spec.fn, opts: { ...optsSpec, normalized: true } }, depth);
-  }
-  return wrapped;
+  // The wrapper is a fresh field and needs its own spec; `normalize01`
+  // mirrors this one with `normalized: true`.
+  return normalize01(raw, rawRange, derived);
 }

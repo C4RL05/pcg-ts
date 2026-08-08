@@ -72,15 +72,12 @@ import {
   attachSpec,
   peekFieldSpec,
 } from "../fields/spec.js";
+import { NOISE_BASES, WORLEY_OUTPUTS } from "../noise/bases.js";
 import {
   type FbmOpts,
-  type NoiseFactory,
   type NoiseOpts,
   type WorleyNoiseOpts,
   fbm,
-  perlinNoise,
-  simplexNoise,
-  valueNoise,
   worleyNoise,
 } from "../noise/index.js";
 
@@ -353,15 +350,14 @@ register(
 
 // -- noise -----------------------------------------------------------------
 
-const NOISE_FACTORIES: Record<string, NoiseFactory> = {
-  valueNoise,
-  perlinNoise,
-  simplexNoise,
-  worleyNoise,
-};
+// The base names and worley outputs come from `src/noise/bases.ts`, the
+// one table this parser and the spec derivers share. A local copy could
+// accept a name derivation never emits (dead grammar) or — the real
+// hazard — reject one it does, which is a graph that saves and cannot be
+// reopened.
+const NOISE_FACTORIES = NOISE_BASES;
 
 const NOISE_OPT_KEYS = ["seed", "frequency", "offset", "position", "normalized"] as const;
-const WORLEY_OUTPUTS = ["f1", "f2", "f2-f1"] as const;
 
 function parseNoiseOpts(
   spec: Record<string, unknown>,
@@ -432,7 +428,7 @@ register(
     const { opts, raw } = parseNoiseOpts(spec, path, ["output", "exact"]);
     const worleyOpts: WorleyNoiseOpts = { ...opts };
     if (raw.output !== undefined) {
-      if (typeof raw.output !== "string" || !(WORLEY_OUTPUTS as readonly string[]).includes(raw.output)) {
+      if (typeof raw.output !== "string" || !WORLEY_OUTPUTS.includes(raw.output)) {
         fail(`${path}.opts.output`, `output must be one of: ${WORLEY_OUTPUTS.join(", ")}`);
       }
       worleyOpts.output = raw.output as WorleyNoiseOpts["output"];

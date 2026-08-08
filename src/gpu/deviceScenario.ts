@@ -13,13 +13,12 @@ import {
   capture,
   createGpuCookStats,
   evaluateField,
-  makeField,
   randomField,
   type Column,
   type GpuFieldResolver,
 } from "../fields/index.js";
 import { resolverView } from "../fields/spec.js";
-import { Graph, cook, makeGeometryItem, subgraphNode, type CookResult } from "../graph/index.js";
+import { Graph, cook, makeGeometryItem, subgraphNode } from "../graph/index.js";
 import { setAttribute } from "../nodes/attributes.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/dataInput.js";
@@ -27,6 +26,7 @@ import { World } from "../runtime/world.js";
 import type { GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
+import { attrColumn, opaqueField } from "./testHelpers.js";
 
 function bytesEqual(a: Column, b: Column): boolean {
   if (a.tupleSize !== b.tupleSize) return false;
@@ -40,14 +40,6 @@ function bytesEqual(a: Column, b: Column): boolean {
 
 /** The bit-exact workhorse spec used across the cook scenarios. */
 const SPEC = { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "randomField", key: "jitter" }] };
-
-function attrColumn(result: CookResult, name: string): Column {
-  const item = result.outputs.out[0];
-  if (item.kind !== "geometry") throw new Error("scenario: expected a geometry item");
-  const attr = item.geo.attrs.point.require(name);
-  const n = item.geo.attrs.point.count * attr.tupleSize;
-  return { data: attr.data.subarray(0, n) as Column["data"], tupleSize: attr.tupleSize };
-}
 
 async function main(): Promise<void> {
   const gpu = create([]);
@@ -87,7 +79,7 @@ async function main(): Promise<void> {
     // code. They must report different reasons, and the second must flip
     // to eligible under `acceptDerivedSpecs`.
     const noSpecStats = createGpuCookStats();
-    const opaque = makeField("opaque", 1, (c) => evaluateField(randomField("code-authored"), c));
+    const opaque = opaqueField("code-authored");
     const noSpec = evaluator.resolveField(opaque, ctx, noSpecStats);
 
     const derivedStats = createGpuCookStats();

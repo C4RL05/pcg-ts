@@ -2,8 +2,13 @@ import type { Field } from "../fields/index.js";
 import { hashFloat } from "../random/hash.js";
 import { NOISE_RAW_RANGES, type NoiseOpts, type NoiseSpecInfo, hash5, makeNoiseField } from "./util.js";
 
-/** The `output` values the JSON grammar accepts (TS-only union at the call site). */
-const WORLEY_OUTPUTS: readonly string[] = ["f1", "f2", "f2-f1"];
+/**
+ * The `output` values the JSON grammar accepts (TS-only union at the call
+ * site). Re-exported by `bases.ts` and read by the grammar's parser, so
+ * the values this factory derives a spec for and the values the parser
+ * accepts are one list.
+ */
+export const WORLEY_OUTPUTS: readonly string[] = ["f1", "f2", "f2-f1"];
 
 /** Kind salt decorrelating worley noise from other noise types ("worl"). */
 export const WORLEY_SALT = 0x776f726c;
