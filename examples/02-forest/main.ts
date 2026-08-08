@@ -28,17 +28,26 @@
  * A resident run is a maximal linear chain of resident-capable nodes.
  * Since v0.9 the code-authored fields here each carry a *derived*
  * `FieldSpec`, and both evaluators are built with
- * `acceptDerivedSpecs: true`, so the two numeric `setAttribute`s fuse
+ * `acceptDerivedSpecs: true`, so all three numeric `setAttribute`s fuse
  * into one run and no field falls back to the CPU at all. Three chain
  * breaks survive, and none of them is about specs: the two
  * `filterByAttribute` nodes change the point count (a run's members
  * share one element count), and `setAttribute("species")` writes a
  * *string* column, which no resident node can produce. A full cook of
  * the device path therefore reads `resident runs / fused members` =
- * `2 / 3` and `device dispatches` = `7`, and the panel's "why the chain
+ * `2 / 4` and `device dispatches` = `8`, and the panel's "why the chain
  * still breaks in three places" section spells out every row. What the
  * device path buys is still the expensive thing: the compose and the
  * upload.
+ *
+ * `scale` is in that run only because of where it is WIRED, not because
+ * of anything the runtime learned — see the note beside the `connect`
+ * calls. Stamped after the filters it was a chain of one and resolved
+ * per node with its own readback; stamped before them it is member 3.
+ * Note the honest direction of the trade: `device dispatches` goes UP
+ * by one, because its apply kernel is now a step in the run, while a
+ * whole device-to-host round trip goes away. Dispatches are not the
+ * cost that matters here.
  *
  * Both the cook and the terrain rebuild are budgeted. That matters more
  * than it looks: a long synchronous cook can trip the browser's watchdog
@@ -289,12 +298,9 @@ const sizeAttr = graph.add(setAttribute, {
 // filters above are the others). A string column is CPU-only by
 // construction — no resident node can produce one — so this
 // `setAttribute` is not resident-capable whatever its `value` field
-// carries, and the chain breaks here, one node short of the spawn. It is
-// also what leaves `setAttribute("scale")` stranded: with a filter on one
-// side and this node on the other, `scale` is a chain of one, and a lone
-// non-terminal member forms no run. The spawn itself is still resident,
-// and still splits by `species`: the host plans the grouping and the
-// device composes one buffer per asset.
+// carries, and the chain breaks here, one node short of the spawn. The
+// spawn itself is still resident, and still splits by `species`: the
+// host plans the grouping and the device composes one buffer per asset.
 const speciesAttr = graph.add(setAttribute, {
   name: "species",
   type: "string",
@@ -305,10 +311,20 @@ const spawn = graph.add(spawnInstances, { assetId: "pine", assetAttr: "species" 
 graph.connect(terrainIn, "out", sample, "in");
 graph.connect(sample, "out", heightAttr, "in");
 graph.connect(heightAttr, "out", slopeAttr, "in");
-graph.connect(slopeAttr, "out", slopeFilter, "in");
+// Wiring order deliberately differs from declaration order: `scale` is
+// stamped BEFORE the two filters, not after. Nothing about it depends on
+// filtering — it reads only `randomField("size")` — and putting it ahead
+// of the filters lets it join the height/slope run instead of sitting
+// between a filter and the string `setAttribute` as a chain of one,
+// where it would form no run at all. It costs stamping ~9000 scales
+// instead of ~5900, on the device, to save a materialization and a
+// readback on the host. (Declaration order is left alone because node
+// ids are derived from insertion, and reordering the `add` calls would
+// reseed every node after it for no reason.)
+graph.connect(slopeAttr, "out", sizeAttr, "in");
+graph.connect(sizeAttr, "out", slopeFilter, "in");
 graph.connect(slopeFilter, "out", treelineFilter, "in");
-graph.connect(treelineFilter, "out", sizeAttr, "in");
-graph.connect(sizeAttr, "out", speciesAttr, "in");
+graph.connect(treelineFilter, "out", speciesAttr, "in");
 graph.connect(speciesAttr, "out", spawn, "in");
 graph.output(spawn, "instances", "instances");
 
@@ -677,15 +693,15 @@ why.textContent = [
   "A device-resident run is a maximal linear chain of resident-capable",
   "nodes, and a chain of ONE only counts when it ends in a resident",
   "terminal. Four of this graph's nine nodes are resident-capable on the",
-  "device path; three of them fuse, in two runs:",
+  "device path; ALL FOUR fuse, in two runs:",
   "",
   "  surfaceSample        cpu     changes the point count — never a member",
   "  setAttribute height  DEVICE  run 1, member 1",
   "  setAttribute slope   DEVICE  run 1, member 2",
+  "  setAttribute scale   DEVICE  run 1, member 3 — stamped BEFORE the",
+  "                               filters on purpose; see below",
   "  filterByAttribute    cpu     changes the point count — BREAK",
   "  filterByAttribute    cpu     changes the point count — BREAK",
-  "  setAttribute scale   device  field resolved per node; a lone member",
-  "                               is not a run — see below",
   "  setAttribute species cpu     string column: NOT resident-capable — BREAK",
   "  spawnInstances       DEVICE  run 2, the terminal — 1 dispatch per species",
   "",
@@ -698,12 +714,19 @@ why.textContent = [
   "fallbacks` reads `none` where v0.8 read `derived-spec ×3`. That is",
   "what bought run 1.",
   "",
-  "It did not buy `scale` a run, and no spec ever could have. `scale`",
-  "sits between a filter and a string setAttribute with nothing fusable",
-  "on either side, so its chain is one node long and it is not a",
-  "terminal — and a run of one is only formed for a resident terminal.",
-  "Its field does resolve on the device; it just resolves per node, with",
-  "its own readback, exactly as it would have before fusion existed.",
+  "`scale` is a lesson in graph ORDER rather than in specs. Written the",
+  "obvious way — stamp the size of the trees that survived — it sits",
+  "between a filter and a string setAttribute, fusable with nothing on",
+  "either side. Its chain is one node long and it is not a terminal, and",
+  "a run of one is only formed for a resident terminal, so it resolved",
+  "per node with its own readback. No spec could have fixed that.",
+  "",
+  "Nothing about `scale` depends on filtering, though, so this graph",
+  "stamps it BEFORE the filters, where it joins run 1 as a third member.",
+  "The trade is stamping ~9000 scales instead of ~5900, on the device,",
+  "to remove one host materialization and one readback. Worth knowing",
+  "when a chain looks unfusable: sometimes the fix is to move a node",
+  "rather than to teach the runtime a new trick.",
   "",
   "So three real breaks are left — two filters and one string column —",
   "and not one of them is a spec problem:",
@@ -721,12 +744,12 @@ why.textContent = [
   "member.",
   "",
   "Numbers to expect. A full cook of the device path reads `resident",
-  "runs / fused members` = 2 / 3 and `device dispatches` = 7. Recook",
+  "runs / fused members` = 2 / 4 and `device dispatches` = 8. Recook",
   "without changing anything and the memo cache serves the eight",
   "upstream nodes, so only the spawn re-runs and the same readouts read",
   "1 / 1 and 2 — device-resident output is never memo-cached, so the",
   "terminal always re-executes. On the CPU-readback toggle the spawn is",
-  "not a resident terminal, so a full cook reads 1 / 2: run 1 survives,",
+  "not a resident terminal, so a full cook reads 1 / 3: run 1 survives,",
   "the terminal does not.",
   "",
   "Anything appearing in `gpu fallbacks` other than `none` is this",
