@@ -35,7 +35,11 @@ import { makeRecooker } from "../shared/recook.js";
 import { createScene } from "../shared/scene.js";
 
 const AREA = 25; // scatter half-extent in world units
-const COUNT = 6000;
+// Candidates before the density filter. Kept modest on purpose: at
+// 6000 the survivors read as a solid mass and the thinning the
+// density field is doing stops being visible, which is the one thing
+// this example exists to show.
+const COUNT = 2600;
 
 // -- density field as a JSON spec (the agent-facing grammar) ---------------
 

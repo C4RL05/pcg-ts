@@ -578,9 +578,9 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
 
     <h3 id="ex-01">01 · Scatter basic — the minimal cook loop</h3>
     <figure>
-      <img src="manual-assets/01-scatter-basic.jpg" width="1454" height="783" loading="lazy" decoding="async"
-           alt="The scatter-basic demo: a control panel on the left shows seed, density frequency and a debug-points toggle above live stats reading 60 fps, 2903 of 6000 instances, 15.9 ms cook, 4 nodes cooked and 0 cached, with the density field's JSON spec printed below. The 3D viewport shows a dark ground plane densely covered with pale blue instanced boxes, clumped and thinned by the noise field." />
-      <figcaption><b>01 · scatter basic</b> — 2903 of 6000 candidates survived the probabilistic density filter, and the exact JSON that produced the density field is printed in the panel.</figcaption>
+      <img src="manual-assets/01-scatter-basic.jpg" width="2800" height="1720" loading="lazy" decoding="async"
+           alt="The scatter-basic demo: a control panel on the left shows seed, density frequency and a debug-points toggle above live stats reading 60 fps, 1254 of 2600 instances, a 10.8 ms cook, 4 nodes cooked and 0 cached, with the density field's JSON spec printed below. The 3D viewport shows a dark ground plane densely covered with pale blue instanced boxes, clumped and thinned by the noise field." />
+      <figcaption><b>01 · scatter basic</b> — 1254 of 2600 candidates survived the probabilistic density filter, and the exact JSON that produced the density field is printed in the panel.</figcaption>
     </figure>
     <p>The smallest complete pipeline: scatter uniformly in a box, write a <code>density</code> attribute from an fBm field built with <code>fieldFromJson</code>, drop points probabilistically against that density, spawn the survivors. It is the demo to read first because nothing is hidden — the field spec on screen is the literal parameter the graph cooks with, and re-entering the same seed reproduces the same scatter exactly.</p>
     <p class="demo-links">
