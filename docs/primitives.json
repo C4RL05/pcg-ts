@@ -706,6 +706,89 @@
     ]
   },
   {
+    "name": "filter/by-distance-to-curve",
+    "hash": "ea60d3a55b196c50",
+    "title": "Keep points by how far they are from a curve",
+    "description": "Measures each point's distance to the supplied `curve` and keeps or drops it by that distance — a clearance either side of a road, a band of reeds along a river, a strip of lamps beside a path. The densification is the content: a polyline's own points can be tens of metres apart, and measuring to THEM instead of to the curve reports huge distances mid-segment and cuts scalloped bites out of the result. The curve is therefore sampled every `resolution` units first, and the measurement is against those samples, so `resolution` is the accuracy of the answer. PRECONDITION: `curve` must carry polyline topology (`shape/path-loop`, `shape/path-meander`, or a `pointsToPath` node) — a point cloud is rejected as having no polylines. Several separate paths are all measured against; the nearest one wins. Fully deterministic. Reads `P` on both inputs; writes nothing.",
+    "tags": [
+      "filter",
+      "path",
+      "spatial",
+      "proximity"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      },
+      {
+        "name": "curve",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "comparison",
+        "schema": {
+          "type": "enum",
+          "default": "ge",
+          "description": "'ge' keeps what is far from the curve (a clearance either side of it), 'le' keeps what runs alongside it (a band).",
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge"
+          ]
+        },
+        "targets": [
+          {
+            "node": "dist",
+            "param": "comparison"
+          }
+        ]
+      },
+      {
+        "name": "distance",
+        "schema": {
+          "type": "f32",
+          "default": 5,
+          "description": "The band edge, in world units — how far from the curve the decision flips.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "dist",
+            "param": "distance"
+          }
+        ]
+      },
+      {
+        "name": "resolution",
+        "schema": {
+          "type": "f32",
+          "default": 1,
+          "description": "How finely the curve is sampled before distances are measured, in world units. It is the accuracy of the measurement, so keep it well under `distance`; smaller costs one more sample point per step along every path.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "dense",
+            "param": "spacing"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "filter/by-neighbor-count",
     "hash": "ee36765e9ee4552b",
     "title": "Keep points by how crowded they are",
@@ -1109,6 +1192,121 @@
     ]
   },
   {
+    "name": "place/along-curve",
+    "hash": "76f7ab52571ed822",
+    "title": "Space points along a curve and turn them to follow it",
+    "description": "Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a filter (filters and `mergePoints` drop topology). The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults — nothing written on the curve's own points survives, which is what `write/orient-along-path` is for. The output is still a path, so it can be resampled again. Fully deterministic.",
+    "tags": [
+      "place",
+      "curve",
+      "path",
+      "instancing"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "curve",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "axis",
+        "schema": {
+          "type": "enum",
+          "default": "+z",
+          "description": "Which local axis of the asset points along the curve. '+z' is the forward axis assets face by convention.",
+          "enum": [
+            "+x",
+            "-x",
+            "+y",
+            "-y",
+            "+z",
+            "-z"
+          ]
+        },
+        "targets": [
+          {
+            "node": "orient",
+            "param": "axis"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 24,
+          "description": "Points per path in 'count' mode. At least 2 (3 on a closed path); ignored in 'spacing' mode.",
+          "min": 2
+        },
+        "targets": [
+          {
+            "node": "resample",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "mode",
+        "schema": {
+          "type": "enum",
+          "default": "count",
+          "description": "'count' puts exactly `count` points on each path whatever its length; 'spacing' steps every `spacing` world units, so longer paths get more points — the right one for evenly pitched props.",
+          "enum": [
+            "count",
+            "spacing"
+          ]
+        },
+        "targets": [
+          {
+            "node": "resample",
+            "param": "mode"
+          }
+        ]
+      },
+      {
+        "name": "spacing",
+        "schema": {
+          "type": "f32",
+          "default": 1,
+          "description": "Distance between points in world units in 'spacing' mode. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "resample",
+            "param": "spacing"
+          }
+        ]
+      },
+      {
+        "name": "up",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            1,
+            0
+          ],
+          "description": "Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground."
+        },
+        "targets": [
+          {
+            "node": "orient",
+            "param": "up"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "place/drop-to-surface",
     "hash": "ddc00f2881334737",
     "title": "Drop points onto a mesh and discard the misses",
@@ -1462,16 +1660,253 @@
     ]
   },
   {
-    "name": "shape/ring",
-    "hash": "9be49a34ac454501",
-    "title": "Points evenly around a circle or an arc",
-    "description": "Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is the number of sample positions across the sweep with both ends included, so a full sweep drops the duplicate seam point and yields count - 1 points, while a partial sweep keeps all of them. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.",
+    "name": "shape/path-loop",
+    "hash": "2603767744729512",
+    "title": "A closed path around a circle",
+    "description": "Builds a CLOSED PATH — polyline topology, not a loose point cloud — around a circle in the XZ plane, then sizes, rotates and moves it. This is the curve source a saved graph reaches for: feed it to `place/along-curve`, `filter/by-distance-to-curve`, `write/orient-along-path` or the `splineSample` / `pathResample` nodes, which all report finding no polylines when handed a point cloud. COUNT: `count` is the number of corner points and exactly the number of points emitted; closure is structural (a trailing vertex back to the first point), so there is no duplicated seam point to trip over. Built on `shape/ring`, so the points also carry `scale` at 1. Fully deterministic. TOPOLOGY IS FRAGILE: every filter node and `mergePoints` drop it, so anything that must see a path has to come before the first filter.",
     "tags": [
       "shape",
       "curve",
+      "path",
       "radial"
     ],
-    "nodes": 7,
+    "nodes": 2,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Where the loop sits, in world units.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "ring",
+            "param": "center"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 24,
+          "description": "Corner points around the loop. At least 3 — two points cannot enclose anything — and higher counts make the polygon read as a circle.",
+          "min": 3
+        },
+        "targets": [
+          {
+            "node": "ring",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "rotate",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Rotation in degrees per world axis, applied about the origin before the loop is moved into place.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "ring",
+            "param": "rotate"
+          }
+        ]
+      },
+      {
+        "name": "size",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            8,
+            8,
+            8
+          ],
+          "description": "Radius of the loop in world units. A bare number is not accepted here: pass three numbers [8,8,8], or {\"fn\":\"constant\",\"value\":8} for a uniform one. Unequal components give an ellipse.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "ring",
+            "param": "size"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shape/path-meander",
+    "hash": "997b64b03a959e47",
+    "title": "A wandering open path between two ends",
+    "description": "Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so none of the recipe's own working columns reach the output and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: every filter node and `mergePoints` drop it, so a path that must stay a path has to reach its consumer before the first filter.",
+    "tags": [
+      "shape",
+      "curve",
+      "path",
+      "noise"
+    ],
+    "nodes": 8,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Where the shape sits, in world units.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "translate"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 33,
+          "description": "Points along the path, and the number of corners the wander is drawn from. A dozen or more before the wander reads as a curve rather than a zig-zag.",
+          "min": 2
+        },
+        "targets": [
+          {
+            "node": "line",
+            "param": "count"
+          },
+          {
+            "node": "even",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 3,
+          "description": "How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "freqAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "rotate",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Rotation in degrees per world axis, applied about the origin before the shape is moved into place.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "rotateEuler"
+          }
+        ]
+      },
+      {
+        "name": "size",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            40,
+            1,
+            40
+          ],
+          "description": "Extent in world units: X is the end-to-end length, Z scales the wander. A bare number is not accepted here: pass three numbers [40,1,40], or {\"fn\":\"constant\",\"value\":40}.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "scale"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "variantAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "wander",
+        "schema": {
+          "type": "f32",
+          "default": 0.15,
+          "description": "How far the path strays from the straight line between its ends, as a FRACTION of `size` — 0 is a straight line, 0.15 a gentle meander, 0.5 a loose one that can double back.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "ampAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shape/ring",
+    "hash": "ac1cddafb1a1492b",
+    "title": "Points evenly around a circle or an arc",
+    "description": "Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is exactly the number of points emitted, whatever `sweep` and `includeEnd` are. The seam is handled by `includeEnd`, not by deleting a point: left false (the default) the samples divide the sweep and the last one stops one step short, which is what a full circle needs — the end of a full sweep IS its start. Set it true for an arc that must touch both ends. Emits a loose point CLOUD, not a path: for polyline topology use `shape/path-loop`, which is this primitive plus the closure. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.",
+    "tags": [
+      "shape",
+      "radial",
+      "outline"
+    ],
+    "nodes": 6,
     "inputs": [],
     "outputs": [
       {
@@ -1504,13 +1939,27 @@
         "schema": {
           "type": "i32",
           "default": 24,
-          "description": "Sample positions across the sweep, both ends included. A full sweep drops the duplicate seam, so it yields count - 1 points.",
+          "description": "How many points to place, and exactly how many come out — the sweep is divided into this many samples.",
           "min": 1
         },
         "targets": [
           {
             "node": "line",
             "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "includeEnd",
+        "schema": {
+          "type": "bool",
+          "default": false,
+          "description": "Whether the last point lands exactly on the end of the sweep. Leave it false for a full circle: the end is the start, so a point there would sit on top of the first one. Set it true for a partial sweep pinned at both ends (a quarter arc whose corners must be occupied). It never changes how many points come out, only where the last one sits."
+        },
+        "targets": [
+          {
+            "node": "line",
+            "param": "includeEnd"
           }
         ]
       },
@@ -1682,11 +2131,11 @@
     "name": "shape/spiral",
     "hash": "62e4436dd187375e",
     "title": "Points winding outward over a number of turns",
-    "description": "Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.",
+    "description": "Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre and the outermost exactly on the rim. Emits a loose point CLOUD, not a path. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.",
     "tags": [
       "shape",
-      "curve",
-      "radial"
+      "radial",
+      "outline"
     ],
     "nodes": 6,
     "inputs": [],
@@ -2207,6 +2656,73 @@
           {
             "node": "nbr",
             "param": "radius"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/orient-along-path",
+    "hash": "ca79e90912aad86a",
+    "title": "Turn a path's own points to follow the path",
+    "description": "Writes a unit `tangent` along the polyline at every point of a path, then sets `rot` so each point faces that way — the points, their attributes and the topology all arrive and leave untouched. That is the whole difference from `place/along-curve`, which resamples: use this one when the points already mean something (a species, a scale, a colour, a point index other geometry refers to) and must survive being oriented. It is also the only way to orient the points of a path that was hand-built with `pointsToPath`, since a tangent otherwise exists only on points a sampler created. The tangent is the normalized central difference between each point's neighbours along the path, so it stays smooth through corners, and it wraps on a closed path. PRECONDITION: the input must carry polyline topology; a point on no polyline gets a zero tangent and deliberately keeps the `rot` it had. Run it BEFORE any filter — every filter node and `mergePoints` drop topology, and this node would then find no paths. Fully deterministic. Writes `tangent` and `rot`; `P` and the count are untouched.",
+    "tags": [
+      "write",
+      "curve",
+      "path",
+      "instancing"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "axis",
+        "schema": {
+          "type": "enum",
+          "default": "+z",
+          "description": "Which local axis of the asset points along the path. '+z' is the forward axis assets face by convention.",
+          "enum": [
+            "+x",
+            "-x",
+            "+y",
+            "-y",
+            "+z",
+            "-z"
+          ]
+        },
+        "targets": [
+          {
+            "node": "orient",
+            "param": "axis"
+          }
+        ]
+      },
+      {
+        "name": "up",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            1,
+            0
+          ],
+          "description": "Up hint fixing the roll around the path; leave it at world up for props that stand on the ground."
+        },
+        "targets": [
+          {
+            "node": "orient",
+            "param": "up"
           }
         ]
       }

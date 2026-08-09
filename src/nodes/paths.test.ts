@@ -284,6 +284,85 @@ describe("pathResample", () => {
     expect(topologyOf(loop).count).toEqual([5]);
   });
 
+  it("keeps the last spacing sample off a closed path's seam", async () => {
+    // A closed square of side 0.15 is 0.6000000238418579 long in f32 — a
+    // hair MORE than 3 * 0.2. Without the epsilon on the loop guard the
+    // fourth step at s = 0.6 slips in and lands on the seam: a duplicate
+    // of the start point and a zero-length closing segment.
+    const square = createPolyline([0, 0, 0, 0.15, 0, 0, 0.15, 0.15, 0, 0, 0.15, 0], {
+      closed: true,
+    });
+    const geo = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "spacing", spacing: 0.2 },
+          { in: [makeGeometryItem(square)] },
+        )
+      ).out,
+    );
+    expect(geo.pointCount).toBe(3);
+    expect(topologyOf(geo)).toEqual({ v: [0, 1, 2, 0], start: [0], count: [4] });
+    const p = positionsOf(geo);
+    expect(p[0]).toEqual([0, 0, 0]);
+    expect(p[1][0]).toBeCloseTo(0.15, 5);
+    expect(p[1][1]).toBeCloseTo(0.05, 5);
+    expect(p[2][0]).toBeCloseTo(0.05, 5);
+    expect(p[2][1]).toBeCloseTo(0.15, 5);
+    // The closing segment (last point back to the first) has real length.
+    expect(Math.hypot(p[2][0] - p[0][0], p[2][1] - p[0][1])).toBeGreaterThan(0.1);
+    // The same trap an order of magnitude down: L = 0.30000001192092896.
+    const small = createPolyline([0, 0, 0, 0.075, 0, 0, 0.075, 0.075, 0, 0, 0.075, 0], {
+      closed: true,
+    });
+    const geoSmall = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "spacing", spacing: 0.1 },
+          { in: [makeGeometryItem(small)] },
+        )
+      ).out,
+    );
+    expect(geoSmall.pointCount).toBe(3);
+  });
+
+  it("refuses a spacing that would blow past the sample budget", async () => {
+    // Spacing is the one mode whose output size nobody typed: a small
+    // number on a long path runs away silently.
+    const long = createPolyline([0, 0, 0, 1000, 0, 0]);
+    await expect(
+      runNode(pathResample, { mode: "spacing", spacing: 0.0009 }, { in: [makeGeometryItem(long)] }),
+    ).rejects.toThrow(
+      /pathResample: spacing 0\.0009 would place more than 1048576 samples.*use spacing >= 0\.00095/,
+    );
+  });
+
+  it("checks for cancellation while it walks a long path", async () => {
+    let calls = 0;
+    await pathResample.execute({
+      inputs: { in: [makeGeometryItem(createPolyline([0, 0, 0, 1000, 0, 0]))] },
+      params: { ...pathResample.defaultParams, mode: "spacing", spacing: 0.2 },
+      seed: 1,
+      checkCancelled() {
+        calls++;
+      },
+    });
+    expect(calls).toBeGreaterThan(1);
+  });
+
+  it("reports a bad mode or spacing before it looks at the geometry", async () => {
+    // A cloud with no polyline on it at all: the param error must still
+    // win, or an agent is sent to debug topology instead of its params.
+    const cloud = row(4);
+    await expect(
+      runNode(pathResample, { mode: "sideways" }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/unknown mode "sideways"; valid modes: count, spacing/);
+    await expect(
+      runNode(pathResample, { mode: "spacing", spacing: 0 }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/spacing must be > 0/);
+  });
+
   it("errors on degenerate counts, spacings and paths", async () => {
     const line = createPolyline([0, 0, 0, 10, 0, 0]);
     const square = createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true });
@@ -386,6 +465,58 @@ describe("writeTangents", () => {
     const tangent = geo.attrs.point.require("tangent");
     expect(tangent.getTuple(0)).toEqual([1, 0, 0]);
     expect(tangent.getTuple(2)).toEqual([0, 0, 0]);
+  });
+
+  it("falls back to the forward segment at a hairpin, keeping its direction", async () => {
+    // The path doubles back on itself, so point 1's two neighbours sit at
+    // the SAME position and the central difference is zero. The forward
+    // segment stands in, and its direction is the way the path LEAVES the
+    // apex (-x) — not the way it arrived.
+    const hairpin = createPolyline([0, 0, 0, 1, 0, 0, 0, 0, 0]);
+    const geo = firstGeo((await runNode(writeTangents, {}, { in: [makeGeometryItem(hairpin)] })).out);
+    const tangent = geo.attrs.point.require("tangent");
+    expect(tangent.getTuple(0)).toEqual([1, 0, 0]);
+    expect(tangent.getTuple(1)).toEqual([-1, 0, 0]);
+    expect(tangent.getTuple(2)).toEqual([-1, 0, 0]);
+  });
+
+  it("leaves a path whose points all coincide at zero", async () => {
+    const flat = createPolyline([2, 2, 2, 2, 2, 2, 2, 2, 2]);
+    const geo = firstGeo((await runNode(writeTangents, {}, { in: [makeGeometryItem(flat)] })).out);
+    const tangent = geo.attrs.point.require("tangent");
+    expect(tangent.getTuple(0)).toEqual([0, 0, 0]);
+    expect(tangent.getTuple(1)).toEqual([0, 0, 0]);
+    expect(tangent.getTuple(2)).toEqual([0, 0, 0]);
+  });
+
+  it("never writes into the geometry it was handed", async () => {
+    const src = createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0]);
+    const before = snapshotGeometry(src);
+    const geo = firstGeo((await runNode(writeTangents, {}, { in: [makeGeometryItem(src)] })).out);
+    expect(geo.attrs.point.require("tangent").getTuple(0)).toEqual([1, 0, 0]);
+    expect(src.attrs.point.has("tangent")).toBe(false);
+    expect(snapshotGeometry(src)).toEqual(before);
+    // ...and when the attribute is already there, its values stay put.
+    const existing = createPolyline([0, 0, 0, 1, 0, 0]);
+    const attr = existing.attrs.point.add("tangent", "f32", 3, [0, 0, 0]);
+    attr.setTuple(0, [9, 9, 9]);
+    attr.setTuple(1, [9, 9, 9]);
+    const snapshot = snapshotGeometry(existing);
+    const out = firstGeo(
+      (await runNode(writeTangents, {}, { in: [makeGeometryItem(existing)] })).out,
+    );
+    expect(out.attrs.point.require("tangent").getTuple(0)).toEqual([1, 0, 0]);
+    expect(snapshotGeometry(existing)).toEqual(snapshot);
+  });
+
+  it("reports a bad name before it looks at the geometry", async () => {
+    const cloud = row(3);
+    await expect(
+      runNode(writeTangents, { name: "P" }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/cannot be "P"/);
+    await expect(
+      runNode(writeTangents, { name: "" }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/must be a non-empty attribute name/);
   });
 
   it("writes under another name and refuses to clobber P", async () => {

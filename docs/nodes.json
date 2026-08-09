@@ -583,7 +583,7 @@
       "spacing": {
         "type": "f32",
         "default": 1,
-        "description": "Distance between samples in world units when mode is 'spacing'. Must be > 0, and small enough to leave at least 2 samples on each open path (3 on a closed one). Ignored in 'count' mode.",
+        "description": "Distance between samples in world units when mode is 'spacing'. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under 1048576 samples. Ignored in 'count' mode.",
         "min": 0
       }
     }
@@ -1493,7 +1493,7 @@
   },
   {
     "type": "writeTangents",
-    "description": "Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path. This is the tangent source for paths that were never spline-sampled: splineSample emits `tangent` only for the new points it creates, so a path built with pointsToPath has none, and orientAlongVector (which reads a direction field, typically the tangent attribute) has nothing to consume. The tangent at a point is the normalized central difference between its neighbours along the path, which stays smooth through corners; at the ends of an open path it is the adjacent segment direction, and a closed path wraps around. When the neighbours coincide the forward segment is used, then the backward one. Points not referenced by any polyline get [0, 0, 0] — orientAlongVector deliberately leaves a zero direction's rot untouched. A point visited by more than one polyline takes the tangent of the last one in primitive order. Every filter node and mergePoints drop topology, so run this before any filtering, not after.",
+    "description": "Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path. This is the tangent source for paths that were never spline-sampled: splineSample emits `tangent` only for the new points it creates, so a path built with pointsToPath has none, and orientAlongVector (which reads a direction field, typically the tangent attribute) has nothing to consume. The tangent at a point is the normalized central difference between its neighbours along the path, which stays smooth through corners; at the ends of an open path it is the adjacent segment direction, and a closed path wraps around. When the two neighbours coincide — a hairpin, where the path doubles back on itself — the forward segment direction stands in, pointing the way the path LEAVES the point. A point whose neighbours all sit on top of it, and any point not referenced by any polyline, gets [0, 0, 0] — orientAlongVector deliberately leaves a zero direction's rot untouched. A point visited by more than one polyline takes the tangent of the last one in primitive order. Every filter node and mergePoints drop topology, so run this before any filtering, not after.",
     "category": "attribute",
     "inputs": [
       {

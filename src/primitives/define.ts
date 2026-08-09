@@ -51,14 +51,29 @@ import {
  *
  * - `shape` → geometry: a point set describing a region or skeleton, built
  *   at unit size around the origin and placed by a trailing transform.
+ *   The `shape/path-*` entries carry polyline topology as well.
  * - `fill` → geometry: turns a region into a distribution of points.
  * - `transform` geometry → geometry: changes `P`; the count is preserved.
  * - `compose` geometry x geometry → geometry: combines two point sets.
  * - `filter` geometry → geometry: removes points; `P` is untouched.
- * - `place` geometry (+ host mesh) → geometry: puts points on or against
- *   supplied geometry.
+ * - `place` geometry (+ host geometry) → geometry: puts points on or
+ *   against supplied geometry — a mesh for the terrain entries, a path for
+ *   `place/along-curve`.
  * - `write` geometry → geometry: creates or sets attributes; the count and
  *   `P` are untouched, and the spawner terminal lives here.
+ *
+ * A family is about pin shape, so "curve" is not one of them: a curve
+ * source is a `shape`, a curve consumer is a `place` or a `filter` by what
+ * it does to the points. The cross-family grouping is a pair of TAGS, and
+ * they are load-bearing rather than decorative, because an agent chains by
+ * them:
+ *
+ * - `path` — the primitive takes a path in or gives one out; it is the
+ *   topic tag for the whole set.
+ * - `curve` — stricter, and the one a chain depends on: the primitive's
+ *   OUTPUT carries polyline topology, so another curve consumer can be
+ *   wired straight onto it. A primitive that only READS a curve and emits
+ *   a plain cloud must not carry it.
  */
 export const PRIMITIVE_FAMILIES = [
   "shape",

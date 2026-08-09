@@ -1,13 +1,18 @@
 /**
  * `place/*` — put points on or against supplied geometry. Every entry has
- * a geometry input pin for the host's mesh.
+ * a geometry input pin for the host it works against: a `surface` mesh for
+ * the terrain ones, a `curve` for the path one.
  *
- * Until this phase the family could not exist in a saved graph at all:
+ * Until phase 37 the family could not exist in a saved graph at all:
  * `dataInput` was the only door for a mesh and its items are injected at
  * runtime, so a serialized graph carried none. `meshPrimitive` is the
  * mesh source that changes that — a plane or a box, built in-graph, with
  * the uv and triangle topology `surfaceSample` and the raycast mapping
  * need. Feed one into `surface` and everything here cooks from JSON.
+ *
+ * `place/along-curve` was CUT in that phase for exactly the same reason on
+ * the curve side, and `pointsToPath` (and `shape/path-loop` over it) is
+ * what brings it back.
  */
 import { attr } from "./expr.js";
 import { definePrimitive } from "./define.js";
@@ -183,6 +188,58 @@ export function registerPlacePrimitives(): void {
         ],
         description: "Longest drop that still counts as a landing, in world units. 0 means unlimited.",
         min: 0,
+      },
+    ],
+  });
+
+  definePrimitive("place/along-curve", {
+    title: "Space points along a curve and turn them to follow it",
+    description:
+      "Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a filter (filters and `mergePoints` drop topology). The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults — nothing written on the curve's own points survives, which is what `write/orient-along-path` is for. The output is still a path, so it can be resampled again. Fully deterministic.",
+    tags: ["curve", "path", "instancing"],
+    nodes: [
+      { id: "resample", type: "pathResample", params: { mode: "count", count: 24, spacing: 1 } },
+      {
+        id: "orient",
+        type: "orientAlongVector",
+        // The tangent pathResample just wrote, read back by name. This
+        // coupling is the primitive: the sampler's output attribute and
+        // the orienting field have to agree, and nothing else states it.
+        params: { direction: attr("tangent", 3), up: [0, 1, 0], axis: "+z" },
+      },
+    ],
+    connections: [{ from: ["resample", "out"], to: ["orient", "in"] }],
+    inputs: [{ name: "curve", node: "resample", pin: "in" }],
+    outputs: [{ name: "out", node: "orient", pin: "out" }],
+    params: [
+      {
+        name: "mode",
+        targets: [{ node: "resample", param: "mode" }],
+        description:
+          "'count' puts exactly `count` points on each path whatever its length; 'spacing' steps every `spacing` world units, so longer paths get more points — the right one for evenly pitched props.",
+      },
+      {
+        name: "count",
+        targets: [{ node: "resample", param: "count" }],
+        description: "Points per path in 'count' mode. At least 2 (3 on a closed path); ignored in 'spacing' mode.",
+        min: 2,
+      },
+      {
+        name: "spacing",
+        targets: [{ node: "resample", param: "spacing" }],
+        description:
+          "Distance between points in world units in 'spacing' mode. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode.",
+        min: 0,
+      },
+      {
+        name: "axis",
+        targets: [{ node: "orient", param: "axis" }],
+        description: "Which local axis of the asset points along the curve. '+z' is the forward axis assets face by convention.",
+      },
+      {
+        name: "up",
+        targets: [{ node: "orient", param: "up" }],
+        description: "Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground.",
       },
     ],
   });

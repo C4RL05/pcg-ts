@@ -20,10 +20,13 @@
  * **Registration order is a dependency order, not a stylistic one.** A
  * recipe that references another primitive by name is canonicalized at
  * registration, which materializes the reference — so the referenced name
- * must already be registered. Three primitives nest today:
+ * must already be registered. Five primitives nest today, three across
+ * family modules (which fixes the call order below) and two within one
+ * module (which fixes the order of the `definePrimitive` calls inside it):
  * `place/on-surface` -> `write/height-slope`, `place/plantable` ->
- * `place/on-surface`, and `fill/scatter-by-density` ->
- * `filter/thin-by-density`.
+ * `place/on-surface`, `fill/scatter-by-density` ->
+ * `filter/thin-by-density`, `filter/by-distance-to-curve` ->
+ * `filter/by-distance-to`, and `shape/path-loop` -> `shape/ring`.
  */
 import { registerComposePrimitives } from "./compose.js";
 import { registerFillPrimitives } from "./fill.js";

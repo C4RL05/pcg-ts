@@ -5,3 +5,8 @@ coverage/
 .vite/
 .DS_Store
 .test-results.json
+
+# Scratch git worktrees used to isolate concurrent agents. These are real
+# repositories, so an unqualified `git add -A` commits one as a gitlink and
+# the next clone gets a dangling submodule reference it cannot resolve.
+.claude/worktrees/

@@ -127,6 +127,39 @@ function meshWithNormal(id: string): Source {
   };
 }
 
+/** How many points {@link curve} puts on its path. */
+const CURVE_POINTS = 9;
+
+/** Half the length of {@link curve}, which runs along X through the origin. */
+const CURVE_HALF_LENGTH = 20;
+
+/**
+ * A PATH a saved graph can carry: a straight open polyline along X through
+ * the origin, built from raw nodes rather than from `shape/path-loop` so
+ * the curve consumers are not tested through a curve producer. Straight on
+ * purpose — every tangent is exactly +X, so orientation is checkable
+ * against a number rather than against a trend.
+ */
+function curve(id: string): Source {
+  return {
+    nodes: [
+      {
+        id: `${id}_line`,
+        type: "pointLine",
+        params: {
+          count: CURVE_POINTS,
+          start: [-CURVE_HALF_LENGTH, 0, 0],
+          end: [CURVE_HALF_LENGTH, 0, 0],
+          includeEnd: true,
+        },
+      },
+      { id, type: "pointsToPath", params: { closed: false, groupAttr: "", orderAttr: "" } },
+    ],
+    connections: [{ from: [`${id}_line`, "out"], to: [id, "in"] }],
+    out: [id, "out"],
+  };
+}
+
 /** Points carrying the flat per-triangle `normal` `surfaceSample` writes. */
 function pointsWithNormal(id: string): Source {
   const base = mesh(`${id}_mesh`);
@@ -152,6 +185,8 @@ const FIXTURES: Record<string, Record<string, (id: string) => Source>> = {
   "shape/spiral": {},
   "shape/disc": {},
   "shape/sphere-points": {},
+  "shape/path-loop": {},
+  "shape/path-meander": {},
 
   "fill/scatter-even": {},
   "fill/scatter-by-density": {},
@@ -170,11 +205,13 @@ const FIXTURES: Record<string, Record<string, (id: string) => Source>> = {
   "filter/inside-radius": { in: points },
   "filter/by-distance-to": { in: points, features: fewPoints },
   "filter/by-neighbor-count": { in: points },
+  "filter/by-distance-to-curve": { in: points, curve },
 
   "place/on-surface": { surface: mesh },
   "place/plantable": { surface: mesh },
   "place/drop-to-surface": { points: pointsAbove, surface: mesh },
   "place/align-to-surface": { points: pointsAbove, surface: meshWithNormal },
+  "place/along-curve": { curve },
 
   "write/height-slope": { in: pointsWithNormal },
   "write/density-from-noise": { in: points },
@@ -183,6 +220,7 @@ const FIXTURES: Record<string, Record<string, (id: string) => Source>> = {
   "write/color-from-attribute": { in: points },
   "write/local-density": { in: points },
   "write/instances-by-species": { in: points },
+  "write/orient-along-path": { in: curve },
 };
 
 /**
@@ -456,24 +494,49 @@ function geo(outputs: Record<string, DataCollection>, key = "main_out") {
 }
 
 describe("shape/", () => {
-  it("ring lands every point on the circle of the requested size", async () => {
+  it("ring emits exactly `count` points on the circle of the requested size", async () => {
+    // `count` means count. It used to mean "count - 1 on a full sweep",
+    // because the recipe sampled both ends of the turn and then paid a
+    // filter node to delete the duplicate; the half-open `includeEnd`
+    // mode means the duplicate is never created.
     const g = geo(await cookOne("shape/ring", { count: 25, size: [10, 10, 10] }));
-    expect(g.pointCount).toBe(24); // the duplicate seam point is dropped
+    expect(g.pointCount).toBe(25);
     const P = g.attrs.point.require("P");
     for (let i = 0; i < g.pointCount; i++) {
       const r = Math.hypot(P.get(i, 0), P.get(i, 2));
       expect(r).toBeCloseTo(10, 3);
       expect(P.get(i, 1)).toBeCloseTo(0, 6);
     }
+    // ...and no two of them are the same place: the seam never existed.
+    const gap = Math.hypot(P.get(24, 0) - P.get(0, 0), P.get(24, 2) - P.get(0, 2));
+    expect(gap).toBeGreaterThan(1);
   });
 
-  it("ring keeps both ends of a partial sweep", async () => {
-    const g = geo(await cookOne("shape/ring", { count: 25, sweep: 0.5 }));
-    expect(g.pointCount).toBe(25);
+  it("ring pins the far end of a partial sweep only when asked", async () => {
+    const open = geo(await cookOne("shape/ring", { count: 25, sweep: 0.5, size: [10, 10, 10] }));
+    const pinned = geo(
+      await cookOne("shape/ring", { count: 25, sweep: 0.5, size: [10, 10, 10], includeEnd: true }),
+    );
+    // The knob moves the last sample; it never changes how many there are.
+    expect(open.pointCount).toBe(25);
+    expect(pinned.pointCount).toBe(25);
+    const pinnedP = pinned.attrs.point.require("P");
+    expect(pinnedP.get(24, 0)).toBeCloseTo(-10, 4); // half a turn round
+    expect(pinnedP.get(24, 2)).toBeCloseTo(0, 4);
+    const openP = open.attrs.point.require("P");
+    expect(openP.get(24, 0)).toBeGreaterThan(-10); // one step short of it
+    expect(openP.get(24, 2)).toBeGreaterThan(0.5);
   });
 
   it("shapes leave the per-point scale attribute at 1", async () => {
-    for (const name of ["shape/ring", "shape/spiral", "shape/disc", "shape/sphere-points"]) {
+    for (const name of [
+      "shape/ring",
+      "shape/spiral",
+      "shape/disc",
+      "shape/sphere-points",
+      "shape/path-loop",
+      "shape/path-meander",
+    ]) {
       const g = geo(await cookOne(name, { size: [12, 12, 12] }));
       const scale = g.attrs.point.require("scale");
       for (let i = 0; i < g.pointCount; i++) {
@@ -861,5 +924,218 @@ describe("write/", () => {
     expect(instances.batches.reduce((n, b) => n + b.count, 0)).toBe(FIXTURE_POINTS);
     const points = geo(outputs, "main_points");
     expect(points.attrs.point.names()).toContain("kind");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The curve set: the primitives that make, consume or measure against a path
+// ---------------------------------------------------------------------------
+
+/** Every primitive tagged `curve` — its output must carry topology. */
+const CURVE_TAGGED = listSubgraphs()
+  .filter((e) => (e.meta?.tags ?? []).includes("curve"))
+  .map((e) => e.name)
+  .sort();
+
+/** The segment lengths of the first polyline of a geometry. */
+function segmentLengths(g: ReturnType<typeof geo>): number[] {
+  const P = g.attrs.point.require("P");
+  const start = g.primVertexStart[0];
+  const n = g.primVertexCount[0];
+  const out: number[] = [];
+  for (let k = 0; k + 1 < n; k++) {
+    const a = g.vertexToPoint[start + k];
+    const b = g.vertexToPoint[start + k + 1];
+    out.push(Math.hypot(P.get(b, 0) - P.get(a, 0), P.get(b, 1) - P.get(a, 1), P.get(b, 2) - P.get(a, 2)));
+  }
+  return out;
+}
+
+describe("the curve set", () => {
+  it("the `curve` tag means the output really is a path", async () => {
+    // The tag an agent chains by. `shape/ring` and `shape/spiral` carried
+    // it while emitting loose points, so ring -> a curve consumer was a
+    // hard error the catalog had promised would work.
+    expect(CURVE_TAGGED.length).toBeGreaterThanOrEqual(4);
+    for (const name of ["shape/ring", "shape/spiral"]) expect(CURVE_TAGGED).not.toContain(name);
+    for (const name of CURVE_TAGGED) {
+      const g = geo(await cookOne(name));
+      expect(g.primitiveCount, `${name} is tagged curve but emits no primitives`).toBeGreaterThan(0);
+      expect(g.vertexToPoint.length, `${name} is tagged curve but has no vertices`).toBeGreaterThan(0);
+    }
+  });
+
+  it("path-loop closes structurally, with no duplicated seam point", async () => {
+    const g = geo(await cookOne("shape/path-loop", { count: 12, size: [10, 10, 10] }));
+    expect(g.pointCount).toBe(12);
+    expect(g.primitiveCount).toBe(1);
+    // 13 vertices over 12 points: the closure is the trailing vertex.
+    expect(g.primVertexCount[0]).toBe(13);
+    expect(g.vertexToPoint[12]).toBe(g.vertexToPoint[0]);
+    const P = g.attrs.point.require("P");
+    for (let i = 0; i < g.pointCount; i++) {
+      expect(Math.hypot(P.get(i, 0), P.get(i, 2))).toBeCloseTo(10, 3);
+    }
+    // Even spacing round the loop, including across the seam.
+    const seg = segmentLengths(g);
+    expect(Math.max(...seg) - Math.min(...seg)).toBeLessThan(1e-4);
+  });
+
+  it("path-loop feeds a curve consumer where the ring cannot", async () => {
+    // The whole point of the tag fix, cooked from JSON both ways.
+    const chain = (source: string): SerializedGraph => ({
+      formatVersion: 1,
+      seed: 11,
+      nodes: [
+        { id: "src", type: "subgraph", params: { count: 16 }, ref: { name: source } },
+        { id: "along", type: "subgraph", params: { count: 8 }, ref: { name: "place/along-curve" } },
+      ],
+      connections: [{ from: ["src", "out"], to: ["along", "curve"] }],
+      outputs: [{ id: "along", pin: "out", name: "main_out" }],
+    });
+    const g = geo(await cookGraph(chain("shape/path-loop")));
+    expect(g.pointCount).toBe(8);
+    await expect(cookGraph(chain("shape/ring"))).rejects.toThrow(/no polyline primitives/);
+  });
+
+  it("path-meander wanders, stays a path, and comes out evenly spaced", async () => {
+    const g = geo(await cookOne("shape/path-meander", { count: 40, wander: 0.2 }));
+    expect(g.pointCount).toBe(40);
+    expect(g.primitiveCount).toBe(1);
+    expect(g.primVertexCount[0]).toBe(40); // open: no trailing vertex
+    const P = g.attrs.point.require("P");
+    let maxZ = 0;
+    for (let i = 0; i < g.pointCount; i++) maxZ = Math.max(maxZ, Math.abs(P.get(i, 2)));
+    expect(maxZ).toBeGreaterThan(1); // it really left the straight line
+
+    // The resample is the content: displacing a line sideways stretches
+    // the segments where the wander is steep. Measured on this exact
+    // recipe with the resample removed, the longest segment is 1.33x the
+    // shortest at this wander (and 2.4x at wander 0.5); resampled it is
+    // 1.05x. The residual is not unevenness — the samples are evenly
+    // spaced along the ARC, and a chord that cuts a corner is shorter
+    // than the arc it spans.
+    const seg = segmentLengths(g);
+    expect(Math.max(...seg) / Math.min(...seg)).toBeLessThan(1.06);
+
+    // Fresh points: the three parameter attributes never reach the output,
+    // and the sampler's own columns are there instead.
+    for (const scratch of ["freq", "variant", "amp"]) {
+      expect(g.attrs.point.names()).not.toContain(scratch);
+    }
+    expect(g.attrs.point.names()).toContain("tangent");
+    expect(g.attrs.point.names()).toContain("curveU");
+  });
+
+  it("path-meander at wander 0 is a straight line of the requested length", async () => {
+    const g = geo(await cookOne("shape/path-meander", { count: 20, wander: 0, size: [60, 1, 60] }));
+    const P = g.attrs.point.require("P");
+    for (let i = 0; i < g.pointCount; i++) expect(P.get(i, 2)).toBeCloseTo(0, 5);
+    expect(P.get(0, 0)).toBeCloseTo(-30, 4);
+    expect(P.get(g.pointCount - 1, 0)).toBeCloseTo(30, 4);
+  });
+
+  it("along-curve spaces points by arc length and faces them along the curve", async () => {
+    const byCount = geo(await cookOne("place/along-curve", { count: 5 }));
+    expect(byCount.pointCount).toBe(5);
+    const P = byCount.attrs.point.require("P");
+    for (let i = 0; i < 5; i++) {
+      expect(P.get(i, 0)).toBeCloseTo(-CURVE_HALF_LENGTH + i * 10, 4);
+      expect(P.get(i, 2)).toBeCloseTo(0, 5);
+    }
+    // Every tangent is +X on a straight curve, and every rot follows it.
+    const tangent = byCount.attrs.point.require("tangent");
+    const rot = byCount.attrs.point.require("rot");
+    for (let i = 0; i < 5; i++) {
+      expect(tangent.get(i, 0)).toBeCloseTo(1, 5);
+      expect(tangent.get(i, 2)).toBeCloseTo(0, 5);
+      expect(rot.get(i, 3)).not.toBeCloseTo(1, 3); // not the identity
+      expect(rot.get(i, 3)).toBeCloseTo(rot.get(0, 3), 6);
+    }
+    expect(byCount.attrs.point.names()).toContain("curveU");
+    // Still a path: it can be resampled again.
+    expect(byCount.primitiveCount).toBe(1);
+
+    // 'spacing' steps in world units and always lands on the far end.
+    const bySpacing = geo(await cookOne("place/along-curve", { mode: "spacing", spacing: 5 }));
+    expect(bySpacing.pointCount).toBe(9);
+    const Q = bySpacing.attrs.point.require("P");
+    expect(Q.get(8, 0)).toBeCloseTo(CURVE_HALF_LENGTH, 4);
+  });
+
+  it("orient-along-path keeps the points and their attributes, and orients them", async () => {
+    // The claim that separates it from place/along-curve, measured: a
+    // column written on the path's own points survives being oriented.
+    const graph: SerializedGraph = {
+      formatVersion: 1,
+      seed: 3,
+      nodes: [
+        {
+          id: "line",
+          type: "pointLine",
+          params: { count: 7, start: [-12, 0, 0], end: [12, 0, 0], includeEnd: true },
+        },
+        {
+          id: "mark",
+          type: "setAttribute",
+          params: {
+            name: "post",
+            domain: "point",
+            type: "f32",
+            tupleSize: 1,
+            value: { fn: "component", args: [{ fn: "position" }], index: 0 },
+          },
+        },
+        { id: "path", type: "pointsToPath", params: { closed: false, groupAttr: "", orderAttr: "" } },
+        { id: "orient", type: "subgraph", params: {}, ref: { name: "write/orient-along-path" } },
+      ],
+      connections: [
+        { from: ["line", "out"], to: ["mark", "in"] },
+        { from: ["mark", "out"], to: ["path", "in"] },
+        { from: ["path", "out"], to: ["orient", "in"] },
+      ],
+      outputs: [{ id: "orient", pin: "out", name: "main_out" }],
+    };
+    const g = geo(await cookGraph(graph));
+    expect(g.pointCount).toBe(7); // nothing resampled, nothing dropped
+    expect(g.primitiveCount).toBe(1); // and it is still a path
+    const P = g.attrs.point.require("P");
+    const post = g.attrs.point.require("post");
+    const tangent = g.attrs.point.require("tangent");
+    for (let i = 0; i < g.pointCount; i++) {
+      expect(P.get(i, 0)).toBeCloseTo(-12 + i * 4, 4); // P untouched
+      expect(post.get(i, 0)).toBeCloseTo(-12 + i * 4, 4); // the column survived
+      expect(tangent.get(i, 0)).toBeCloseTo(1, 5); // including at both ends
+    }
+    // The same direction through the same orienting node as place/along-curve.
+    const along = geo(await cookOne("place/along-curve", { count: 5 }));
+    for (let c = 0; c < 4; c++) {
+      expect(g.attrs.point.require("rot").get(0, c)).toBeCloseTo(
+        along.attrs.point.require("rot").get(0, c),
+        6,
+      );
+    }
+  });
+
+  it("by-distance-to-curve bands around the curve, and the densification matters", async () => {
+    const near = geo(await cookOne("filter/by-distance-to-curve", { distance: 4, comparison: "le", resolution: 0.25 }));
+    const far = geo(await cookOne("filter/by-distance-to-curve", { distance: 4, comparison: "ge", resolution: 0.25 }));
+    expect(near.pointCount + far.pointCount).toBe(FIXTURE_POINTS);
+    expect(near.pointCount).toBeGreaterThan(0);
+    expect(near.attrs.point.names()).not.toContain("__nearDist");
+    const P = near.attrs.point.require("P");
+    for (let i = 0; i < near.pointCount; i++) {
+      // The curve is the X axis, so the true distance is |z|.
+      expect(Math.abs(P.get(i, 2))).toBeLessThanOrEqual(4 + 1e-3);
+    }
+
+    // Coarse sampling measures to points ON the curve that are up to half
+    // a step away along it, so it over-states every distance and eats into
+    // the band. That is the error the primitive exists to avoid, and it is
+    // invisible in a count unless it is compared.
+    const coarse = geo(
+      await cookOne("filter/by-distance-to-curve", { distance: 4, comparison: "le", resolution: 6 }),
+    );
+    expect(coarse.pointCount).toBeLessThan(near.pointCount);
   });
 });

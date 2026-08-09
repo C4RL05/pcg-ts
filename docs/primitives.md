@@ -2,7 +2,7 @@
 
 Generated from the named-subgraph registry (`listSubgraphs()`) by `node scripts/gen-primitives.mjs` — do not edit by hand. The same catalog, machine-readable, is in [primitives.json](./primitives.json). For the graph JSON format, including how a graph references a primitive by name, see [authoring.md](./authoring.md); for the node types a primitive is built from, [nodes.md](./nodes.md).
 
-29 registered primitives, alphabetical:
+34 registered primitives, alphabetical:
 
 - [compose/merge-tagged](#composemerge-tagged) — Merge two clouds and remember which is which
 - [compose/scatter-copies](#composescatter-copies) — Copy a whole cloud onto every target point
@@ -11,15 +11,19 @@ Generated from the named-subgraph registry (`listSubgraphs()`) by `node scripts/
 - [fill/scatter-even](#fillscatter-even) — Scatter points with a guaranteed minimum spacing
 - [fill/volume-by-noise](#fillvolume-by-noise) — Carve connected volumes out of a solid box
 - [filter/by-distance-to](#filterby-distance-to) — Keep points by how far they are from another cloud
+- [filter/by-distance-to-curve](#filterby-distance-to-curve) — Keep points by how far they are from a curve
 - [filter/by-neighbor-count](#filterby-neighbor-count) — Keep points by how crowded they are
 - [filter/inside-radius](#filterinside-radius) — Keep the points within a radius of a centre
 - [filter/mask-by-noise](#filtermask-by-noise) — Keep the points where a noise field is above a threshold
 - [filter/thin-by-density](#filterthin-by-density) — Thin a point cloud by a noise density
 - [place/align-to-surface](#placealign-to-surface) — Stand each point up along the surface under it
+- [place/along-curve](#placealong-curve) — Space points along a curve and turn them to follow it
 - [place/drop-to-surface](#placedrop-to-surface) — Drop points onto a mesh and discard the misses
 - [place/on-surface](#placeon-surface) — Scatter points across a mesh with height and slope
 - [place/plantable](#placeplantable) — Scatter points only where vegetation could grow
 - [shape/disc](#shapedisc) — Points scattered uniformly inside a circle
+- [shape/path-loop](#shapepath-loop) — A closed path around a circle
+- [shape/path-meander](#shapepath-meander) — A wandering open path between two ends
 - [shape/ring](#shapering) — Points evenly around a circle or an arc
 - [shape/sphere-points](#shapesphere-points) — Points scattered uniformly on a sphere
 - [shape/spiral](#shapespiral) — Points winding outward over a number of turns
@@ -31,6 +35,7 @@ Generated from the named-subgraph registry (`listSubgraphs()`) by `node scripts/
 - [write/height-slope](#writeheight-slope) — Stamp height and slope from a surface normal
 - [write/instances-by-species](#writeinstances-by-species) — Pick one asset per point and emit the instances
 - [write/local-density](#writelocal-density) — Write how crowded each point is as a density
+- [write/orient-along-path](#writeorient-along-path) — Turn a path's own points to follow the path
 - [write/random-scale](#writerandom-scale) — Write one uniform random size per point
 - [write/random-yaw](#writerandom-yaw) — Turn each point to face a random direction
 
@@ -213,6 +218,30 @@ Measures each point's distance to the nearest point of a second cloud and keeps 
 
 Run it: `pcg run filter/by-distance-to`
 
+## filter/by-distance-to-curve
+
+**Keep points by how far they are from a curve**
+
+Measures each point's distance to the supplied `curve` and keeps or drops it by that distance — a clearance either side of a road, a band of reeds along a river, a strip of lamps beside a path. The densification is the content: a polyline's own points can be tens of metres apart, and measuring to THEM instead of to the curve reports huge distances mid-segment and cuts scalloped bites out of the result. The curve is therefore sampled every `resolution` units first, and the measurement is against those samples, so `resolution` is the accuracy of the answer. PRECONDITION: `curve` must carry polyline topology (`shape/path-loop`, `shape/path-meander`, or a `pointsToPath` node) — a point cloud is rejected as having no polylines. Several separate paths are all measured against; the nearest one wins. Fully deterministic. Reads `P` on both inputs; writes nothing.
+
+**Content hash:** `ea60d3a55b196c50`
+
+**Tags:** `filter`, `path`, `spatial`, `proximity`
+
+**Inputs:** `in` (geometry), `curve` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Writes to | Description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `comparison` | enum | `"ge"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | dist.comparison | 'ge' keeps what is far from the curve (a clearance either side of it), 'le' keeps what runs alongside it (a band). |
+| `distance` | f32 | `5` | >= 0 |  |  | dist.distance | The band edge, in world units — how far from the curve the decision flips. |
+| `resolution` | f32 | `1` | >= 0 |  |  | dense.spacing | How finely the curve is sampled before distances are measured, in world units. It is the accuracy of the measurement, so keep it well under `distance`; smaller costs one more sample point per step along every path. |
+
+Run it: `pcg run filter/by-distance-to-curve`
+
 ## filter/by-neighbor-count
 
 **Keep points by how crowded they are**
@@ -334,6 +363,32 @@ Casts a ray from every point onto a mesh, reads the surface `normal` where it la
 
 Run it: `pcg run place/align-to-surface`
 
+## place/along-curve
+
+**Space points along a curve and turn them to follow it**
+
+Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a filter (filters and `mergePoints` drop topology). The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults — nothing written on the curve's own points survives, which is what `write/orient-along-path` is for. The output is still a path, so it can be resampled again. Fully deterministic.
+
+**Content hash:** `76f7ab52571ed822`
+
+**Tags:** `place`, `curve`, `path`, `instancing`
+
+**Inputs:** `curve` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Writes to | Description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `axis` | enum | `"+z"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | orient.axis | Which local axis of the asset points along the curve. '+z' is the forward axis assets face by convention. |
+| `count` | i32 | `24` | >= 2 |  |  | resample.count | Points per path in 'count' mode. At least 2 (3 on a closed path); ignored in 'spacing' mode. |
+| `mode` | enum | `"count"` |  | `count`, `spacing` |  | resample.mode | 'count' puts exactly `count` points on each path whatever its length; 'spacing' steps every `spacing` world units, so longer paths get more points — the right one for evenly pitched props. |
+| `spacing` | f32 | `1` | >= 0 |  |  | resample.spacing | Distance between points in world units in 'spacing' mode. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode. |
+| `up` | vec3 | `[0,1,0]` |  |  |  | orient.up | Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground. |
+
+Run it: `pcg run place/along-curve`
+
 ## place/drop-to-surface
 
 **Drop points onto a mesh and discard the misses**
@@ -433,15 +488,40 @@ Scatters points uniformly inside a disc in the XZ plane by scattering a square a
 
 Run it: `pcg run shape/disc`
 
-## shape/ring
+## shape/path-loop
 
-**Points evenly around a circle or an arc**
+**A closed path around a circle**
 
-Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is the number of sample positions across the sweep with both ends included, so a full sweep drops the duplicate seam point and yields count - 1 points, while a partial sweep keeps all of them. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.
+Builds a CLOSED PATH — polyline topology, not a loose point cloud — around a circle in the XZ plane, then sizes, rotates and moves it. This is the curve source a saved graph reaches for: feed it to `place/along-curve`, `filter/by-distance-to-curve`, `write/orient-along-path` or the `splineSample` / `pathResample` nodes, which all report finding no polylines when handed a point cloud. COUNT: `count` is the number of corner points and exactly the number of points emitted; closure is structural (a trailing vertex back to the first point), so there is no duplicated seam point to trip over. Built on `shape/ring`, so the points also carry `scale` at 1. Fully deterministic. TOPOLOGY IS FRAGILE: every filter node and `mergePoints` drop it, so anything that must see a path has to come before the first filter.
 
-**Content hash:** `9be49a34ac454501`
+**Content hash:** `2603767744729512`
 
-**Tags:** `shape`, `curve`, `radial`
+**Tags:** `shape`, `curve`, `path`, `radial`
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Writes to | Description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `center` | vec3 | `[0,0,0]` |  |  | yes | ring.center | Where the loop sits, in world units. |
+| `count` | i32 | `24` | >= 3 |  |  | ring.count | Corner points around the loop. At least 3 — two points cannot enclose anything — and higher counts make the polygon read as a circle. |
+| `rotate` | vec3 | `[0,0,0]` |  |  | yes | ring.rotate | Rotation in degrees per world axis, applied about the origin before the loop is moved into place. |
+| `size` | vec3 | `[8,8,8]` |  |  | yes | ring.size | Radius of the loop in world units. A bare number is not accepted here: pass three numbers [8,8,8], or {"fn":"constant","value":8} for a uniform one. Unequal components give an ellipse. |
+
+Run it: `pcg run shape/path-loop`
+
+## shape/path-meander
+
+**A wandering open path between two ends**
+
+Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so none of the recipe's own working columns reach the output and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: every filter node and `mergePoints` drop it, so a path that must stay a path has to reach its consumer before the first filter.
+
+**Content hash:** `997b64b03a959e47`
+
+**Tags:** `shape`, `curve`, `path`, `noise`
 
 **Inputs:** *(none)*
 
@@ -452,7 +532,36 @@ Places points evenly around a circle in the XZ plane, optionally sweeping only p
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `center` | vec3 | `[0,0,0]` |  |  | yes | place.translate | Where the shape sits, in world units. |
-| `count` | i32 | `24` | >= 1 |  |  | line.count | Sample positions across the sweep, both ends included. A full sweep drops the duplicate seam, so it yields count - 1 points. |
+| `count` | i32 | `33` | >= 2 |  |  | line.count, even.count | Points along the path, and the number of corners the wander is drawn from. A dozen or more before the wander reads as a curve rather than a zig-zag. |
+| `frequency` | f32 | `3` |  |  | yes | freqAttr.value | How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves. |
+| `rotate` | vec3 | `[0,0,0]` |  |  | yes | place.rotateEuler | Rotation in degrees per world axis, applied about the origin before the shape is moved into place. |
+| `size` | vec3 | `[40,1,40]` |  |  | yes | place.scale | Extent in world units: X is the end-to-end length, Z scales the wander. A bare number is not accepted here: pass three numbers [40,1,40], or {"fn":"constant","value":40}. |
+| `variant` | f32 | `0` |  |  | yes | variantAttr.value | Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field. |
+| `wander` | f32 | `0.15` |  |  | yes | ampAttr.value | How far the path strays from the straight line between its ends, as a FRACTION of `size` — 0 is a straight line, 0.15 a gentle meander, 0.5 a loose one that can double back. |
+
+Run it: `pcg run shape/path-meander`
+
+## shape/ring
+
+**Points evenly around a circle or an arc**
+
+Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is exactly the number of points emitted, whatever `sweep` and `includeEnd` are. The seam is handled by `includeEnd`, not by deleting a point: left false (the default) the samples divide the sweep and the last one stops one step short, which is what a full circle needs — the end of a full sweep IS its start. Set it true for an arc that must touch both ends. Emits a loose point CLOUD, not a path: for polyline topology use `shape/path-loop`, which is this primitive plus the closure. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.
+
+**Content hash:** `ac1cddafb1a1492b`
+
+**Tags:** `shape`, `radial`, `outline`
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Writes to | Description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `center` | vec3 | `[0,0,0]` |  |  | yes | place.translate | Where the shape sits, in world units. |
+| `count` | i32 | `24` | >= 1 |  |  | line.count | How many points to place, and exactly how many come out — the sweep is divided into this many samples. |
+| `includeEnd` | bool | `false` |  |  |  | line.includeEnd | Whether the last point lands exactly on the end of the sweep. Leave it false for a full circle: the end is the start, so a point there would sit on top of the first one. Set it true for a partial sweep pinned at both ends (a quarter arc whose corners must be occupied). It never changes how many points come out, only where the last one sits. |
 | `rotate` | vec3 | `[0,0,0]` |  |  | yes | place.rotateEuler | Rotation in degrees per world axis, applied about the origin before the shape is moved into place. |
 | `size` | vec3 | `[8,8,8]` |  |  | yes | place.scale | Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {"fn":"constant","value":8} for a uniform one. Unequal components give an ellipse or an ellipsoid. |
 | `sweep` | f32 | `1` | 0..1 |  | yes | sweepAttr.value | How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc. |
@@ -489,11 +598,11 @@ Run it: `pcg run shape/sphere-points`
 
 **Points winding outward over a number of turns**
 
-Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.
+Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre and the outermost exactly on the rim. Emits a loose point CLOUD, not a path. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.
 
 **Content hash:** `62e4436dd187375e`
 
-**Tags:** `shape`, `curve`, `radial`
+**Tags:** `shape`, `radial`, `outline`
 
 **Inputs:** *(none)*
 
@@ -689,6 +798,29 @@ Counts each point's neighbours within a radius and rescales the counts to 0..1 o
 | `radius` | f32 | `5` | >= 0 |  |  | nbr.radius | How far around each point counts as its neighbourhood, in world units. |
 
 Run it: `pcg run write/local-density`
+
+## write/orient-along-path
+
+**Turn a path's own points to follow the path**
+
+Writes a unit `tangent` along the polyline at every point of a path, then sets `rot` so each point faces that way — the points, their attributes and the topology all arrive and leave untouched. That is the whole difference from `place/along-curve`, which resamples: use this one when the points already mean something (a species, a scale, a colour, a point index other geometry refers to) and must survive being oriented. It is also the only way to orient the points of a path that was hand-built with `pointsToPath`, since a tangent otherwise exists only on points a sampler created. The tangent is the normalized central difference between each point's neighbours along the path, so it stays smooth through corners, and it wraps on a closed path. PRECONDITION: the input must carry polyline topology; a point on no polyline gets a zero tangent and deliberately keeps the `rot` it had. Run it BEFORE any filter — every filter node and `mergePoints` drop topology, and this node would then find no paths. Fully deterministic. Writes `tangent` and `rot`; `P` and the count are untouched.
+
+**Content hash:** `ca79e90912aad86a`
+
+**Tags:** `write`, `curve`, `path`, `instancing`
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Writes to | Description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `axis` | enum | `"+z"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | orient.axis | Which local axis of the asset points along the path. '+z' is the forward axis assets face by convention. |
+| `up` | vec3 | `[0,1,0]` |  |  |  | orient.up | Up hint fixing the roll around the path; leave it at world up for props that stand on the ground. |
+
+Run it: `pcg run write/orient-along-path`
 
 ## write/random-scale
 

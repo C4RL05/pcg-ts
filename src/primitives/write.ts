@@ -200,6 +200,41 @@ export function registerWritePrimitives(): void {
     ],
   });
 
+  definePrimitive("write/orient-along-path", {
+    title: "Turn a path's own points to follow the path",
+    description:
+      "Writes a unit `tangent` along the polyline at every point of a path, then sets `rot` so each point faces that way — the points, their attributes and the topology all arrive and leave untouched. That is the whole difference from `place/along-curve`, which resamples: use this one when the points already mean something (a species, a scale, a colour, a point index other geometry refers to) and must survive being oriented. It is also the only way to orient the points of a path that was hand-built with `pointsToPath`, since a tangent otherwise exists only on points a sampler created. The tangent is the normalized central difference between each point's neighbours along the path, so it stays smooth through corners, and it wraps on a closed path. PRECONDITION: the input must carry polyline topology; a point on no polyline gets a zero tangent and deliberately keeps the `rot` it had. Run it BEFORE any filter — every filter node and `mergePoints` drop topology, and this node would then find no paths. Fully deterministic. Writes `tangent` and `rot`; `P` and the count are untouched.",
+    tags: ["curve", "path", "instancing"],
+    nodes: [
+      { id: "tangents", type: "writeTangents", params: { name: "tangent" } },
+      {
+        id: "orient",
+        type: "orientAlongVector",
+        // Reads back exactly what the node above wrote. The attribute NAME
+        // is deliberately not exposed: it lives inside this field spec as
+        // well as in the param above, and nothing inside a field spec is
+        // reachable from an exposed param — a `name` knob would move one
+        // half of the pair and silently orient nothing.
+        params: { direction: attr("tangent", 3), up: [0, 1, 0], axis: "+z" },
+      },
+    ],
+    connections: [{ from: ["tangents", "out"], to: ["orient", "in"] }],
+    inputs: [{ name: "in", node: "tangents", pin: "in" }],
+    outputs: [{ name: "out", node: "orient", pin: "out" }],
+    params: [
+      {
+        name: "axis",
+        targets: [{ node: "orient", param: "axis" }],
+        description: "Which local axis of the asset points along the path. '+z' is the forward axis assets face by convention.",
+      },
+      {
+        name: "up",
+        targets: [{ node: "orient", param: "up" }],
+        description: "Up hint fixing the roll around the path; leave it at world up for props that stand on the ground.",
+      },
+    ],
+  });
+
   definePrimitive("write/color-from-attribute", {
     title: "Turn a scalar attribute into a colour gradient",
     description:

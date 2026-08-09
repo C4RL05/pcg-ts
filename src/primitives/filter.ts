@@ -300,4 +300,51 @@ export function registerFilterPrimitives(): void {
       },
     ],
   });
+
+  // Declared after `filter/by-distance-to`: it references it by name, and
+  // a referenced primitive must already be registered when this recipe is
+  // canonicalized.
+  definePrimitive("filter/by-distance-to-curve", {
+    title: "Keep points by how far they are from a curve",
+    description:
+      "Measures each point's distance to the supplied `curve` and keeps or drops it by that distance — a clearance either side of a road, a band of reeds along a river, a strip of lamps beside a path. The densification is the content: a polyline's own points can be tens of metres apart, and measuring to THEM instead of to the curve reports huge distances mid-segment and cuts scalloped bites out of the result. The curve is therefore sampled every `resolution` units first, and the measurement is against those samples, so `resolution` is the accuracy of the answer. PRECONDITION: `curve` must carry polyline topology (`shape/path-loop`, `shape/path-meander`, or a `pointsToPath` node) — a point cloud is rejected as having no polylines. Several separate paths are all measured against; the nearest one wins. Fully deterministic. Reads `P` on both inputs; writes nothing.",
+    // `path` but NOT `curve`: it reads a curve and emits the plain point
+    // cloud its `in` pin was given, minus points. Nothing downstream can
+    // treat the result as a path.
+    tags: ["path", "spatial", "proximity"],
+    nodes: [
+      {
+        id: "dense",
+        type: "splineSample",
+        params: { mode: "spacing", count: 10, spacing: 1 },
+      },
+      { id: "dist", type: "subgraph", params: {}, ref: { name: "filter/by-distance-to" } },
+    ],
+    connections: [{ from: ["dense", "out"], to: ["dist", "features"] }],
+    inputs: [
+      { name: "in", node: "dist", pin: "in" },
+      { name: "curve", node: "dense", pin: "in" },
+    ],
+    outputs: [{ name: "out", node: "dist", pin: "out" }],
+    params: [
+      {
+        name: "distance",
+        targets: [{ node: "dist", param: "distance" }],
+        description: "The band edge, in world units — how far from the curve the decision flips.",
+        min: 0,
+      },
+      {
+        name: "comparison",
+        targets: [{ node: "dist", param: "comparison" }],
+        description: "'ge' keeps what is far from the curve (a clearance either side of it), 'le' keeps what runs alongside it (a band).",
+      },
+      {
+        name: "resolution",
+        targets: [{ node: "dense", param: "spacing" }],
+        description:
+          "How finely the curve is sampled before distances are measured, in world units. It is the accuracy of the measurement, so keep it well under `distance`; smaller costs one more sample point per step along every path.",
+        min: 0,
+      },
+    ],
+  });
 }

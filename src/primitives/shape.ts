@@ -22,9 +22,16 @@
  *   spawn assets eight times too big — and the `scale: [0,0,0]` trick
  *   would zero it outright, spawning nothing at all. Each recipe therefore
  *   ends by resetting `scale` to 1. Placement is layout, not asset size.
+ *
+ * Two of them emit a PATH rather than a point cloud — polyline topology
+ * over the points, built by a trailing `pointsToPath`. They are the
+ * family's answer to "where does a curve come from in a saved graph", and
+ * they carry the `curve` tag, which on this catalog means exactly one
+ * thing: the OUTPUT carries polyline topology. `shape/ring` and
+ * `shape/spiral` trace a curve's outline as loose points and do not.
  */
 import type { SerializedNode } from "../index.js";
-import { TAU, attr, call, component, constant, position, vec } from "./expr.js";
+import { TAU, attr, call, component, constant, position, tunableFbm, vec } from "./expr.js";
 import { type PrimitiveParamDecl, definePrimitive } from "./define.js";
 
 /** Reset the per-point `scale` attribute after placement. See the header. */
@@ -51,13 +58,17 @@ function place(): SerializedNode {
   };
 }
 
-/** The three placement knobs, identical across the family. */
-function placementParams(): PrimitiveParamDecl[] {
+/**
+ * The three placement knobs, identical across the family. `sizeDescription`
+ * overrides the first one where "radius" is the wrong word for the shape.
+ */
+function placementParams(sizeDescription?: string): PrimitiveParamDecl[] {
   return [
     {
       name: "size",
       targets: [{ node: "place", param: "scale" }],
       description:
+        sizeDescription ??
         'Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {"fn":"constant","value":8} for a uniform one. Unequal components give an ellipse or an ellipsoid.',
       acceptsField: true,
     },
@@ -92,24 +103,23 @@ export function registerShapePrimitives(): void {
   definePrimitive("shape/ring", {
     title: "Points evenly around a circle or an arc",
     description:
-      "Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is the number of sample positions across the sweep with both ends included, so a full sweep drops the duplicate seam point and yields count - 1 points, while a partial sweep keeps all of them. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.",
-    tags: ["curve", "radial"],
+      "Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is exactly the number of points emitted, whatever `sweep` and `includeEnd` are. The seam is handled by `includeEnd`, not by deleting a point: left false (the default) the samples divide the sweep and the last one stops one step short, which is what a full circle needs — the end of a full sweep IS its start. Set it true for an arc that must touch both ends. Emits a loose point CLOUD, not a path: for polyline topology use `shape/path-loop`, which is this primitive plus the closure. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.",
+    tags: ["radial", "outline"],
     nodes: [
-      { id: "line", type: "pointLine", params: { count: 24, start: [0, 0, 0], end: [1, 0, 0] } },
+      {
+        id: "line",
+        type: "pointLine",
+        // includeEnd false is the seam fix: sampling [0, 1) gives `count`
+        // distinct angles round a full sweep with no duplicate at the
+        // start, where the old recipe sampled [0, 1] and then paid a
+        // whole filter node to delete the duplicate — which also made
+        // `count` mean "count - 1".
+        params: { count: 24, start: [0, 0, 0], end: [1, 0, 0], includeEnd: false },
+      },
       {
         id: "sweepAttr",
         type: "setAttribute",
         params: { name: "sweep", domain: "point", type: "f32", tupleSize: 1, value: 1 },
-      },
-      {
-        id: "seam",
-        type: "filterByExpression",
-        params: {
-          // Keep everything on a partial sweep; on a full one drop the
-          // last sample, which sits exactly on the first.
-          predicate: call("max", call("lt", u(), 1), call("lt", attr("sweep"), 1)),
-          seed: 0,
-        },
       },
       {
         id: "ring",
@@ -130,8 +140,7 @@ export function registerShapePrimitives(): void {
     ],
     connections: [
       { from: ["line", "out"], to: ["sweepAttr", "in"] },
-      { from: ["sweepAttr", "out"], to: ["seam", "in"] },
-      { from: ["seam", "out"], to: ["ring", "in"] },
+      { from: ["sweepAttr", "out"], to: ["ring", "in"] },
       { from: ["ring", "out"], to: ["place", "in"] },
       { from: ["place", "out"], to: ["reset", "in"] },
       { from: ["reset", "out"], to: ["cleanup", "in"] },
@@ -141,7 +150,7 @@ export function registerShapePrimitives(): void {
       {
         name: "count",
         targets: [{ node: "line", param: "count" }],
-        description: "Sample positions across the sweep, both ends included. A full sweep drops the duplicate seam, so it yields count - 1 points.",
+        description: "How many points to place, and exactly how many come out — the sweep is divided into this many samples.",
         min: 1,
       },
       {
@@ -152,6 +161,12 @@ export function registerShapePrimitives(): void {
         max: 1,
         acceptsField: true,
       },
+      {
+        name: "includeEnd",
+        targets: [{ node: "line", param: "includeEnd" }],
+        description:
+          "Whether the last point lands exactly on the end of the sweep. Leave it false for a full circle: the end is the start, so a point there would sit on top of the first one. Set it true for a partial sweep pinned at both ends (a quarter arc whose corners must be occupied). It never changes how many points come out, only where the last one sits.",
+      },
       ...placementParams(),
     ],
   });
@@ -159,10 +174,12 @@ export function registerShapePrimitives(): void {
   definePrimitive("shape/spiral", {
     title: "Points winding outward over a number of turns",
     description:
-      "Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.",
-    tags: ["curve", "radial"],
+      "Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre and the outermost exactly on the rim. Emits a loose point CLOUD, not a path. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.",
+    tags: ["radial", "outline"],
     nodes: [
-      { id: "line", type: "pointLine", params: { count: 160, start: [0, 0, 0], end: [1, 0, 0] } },
+      // includeEnd stays true, unlike `shape/ring`: a spiral's end is a
+      // real endpoint on the outer rim, not a seam that meets its start.
+      { id: "line", type: "pointLine", params: { count: 160, start: [0, 0, 0], end: [1, 0, 0], includeEnd: true } },
       {
         id: "turnsAttr",
         type: "setAttribute",
@@ -208,6 +225,164 @@ export function registerShapePrimitives(): void {
         acceptsField: true,
       },
       ...placementParams(),
+    ],
+  });
+
+  definePrimitive("shape/path-loop", {
+    title: "A closed path around a circle",
+    description:
+      "Builds a CLOSED PATH — polyline topology, not a loose point cloud — around a circle in the XZ plane, then sizes, rotates and moves it. This is the curve source a saved graph reaches for: feed it to `place/along-curve`, `filter/by-distance-to-curve`, `write/orient-along-path` or the `splineSample` / `pathResample` nodes, which all report finding no polylines when handed a point cloud. COUNT: `count` is the number of corner points and exactly the number of points emitted; closure is structural (a trailing vertex back to the first point), so there is no duplicated seam point to trip over. Built on `shape/ring`, so the points also carry `scale` at 1. Fully deterministic. TOPOLOGY IS FRAGILE: every filter node and `mergePoints` drop it, so anything that must see a path has to come before the first filter.",
+    tags: ["curve", "path", "radial"],
+    nodes: [
+      // sweep 1 and includeEnd false are the closed-loop pairing, and they
+      // are authored rather than exposed: a partial sweep would need
+      // `closed` false as well, and one exposed param cannot derive the
+      // other (fan-out carries one identical value, with no arithmetic and
+      // no negation). An open arc is a different primitive, not a flag.
+      {
+        id: "ring",
+        type: "subgraph",
+        params: { count: 24, sweep: 1, includeEnd: false },
+        ref: { name: "shape/ring" },
+      },
+      {
+        id: "path",
+        type: "pointsToPath",
+        params: { closed: true, groupAttr: "", orderAttr: "" },
+      },
+    ],
+    connections: [{ from: ["ring", "out"], to: ["path", "in"] }],
+    outputs: [{ name: "out", node: "path", pin: "out" }],
+    params: [
+      {
+        name: "count",
+        targets: [{ node: "ring", param: "count" }],
+        description: "Corner points around the loop. At least 3 — two points cannot enclose anything — and higher counts make the polygon read as a circle.",
+        min: 3,
+      },
+      {
+        name: "size",
+        targets: [{ node: "ring", param: "size" }],
+        description:
+          'Radius of the loop in world units. A bare number is not accepted here: pass three numbers [8,8,8], or {"fn":"constant","value":8} for a uniform one. Unequal components give an ellipse.',
+        acceptsField: true,
+      },
+      {
+        name: "rotate",
+        targets: [{ node: "ring", param: "rotate" }],
+        description: "Rotation in degrees per world axis, applied about the origin before the loop is moved into place.",
+        acceptsField: true,
+      },
+      {
+        name: "center",
+        targets: [{ node: "ring", param: "center" }],
+        description: "Where the loop sits, in world units.",
+        acceptsField: true,
+      },
+    ],
+  });
+
+  definePrimitive("shape/path-meander", {
+    title: "A wandering open path between two ends",
+    description:
+      "Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so none of the recipe's own working columns reach the output and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: every filter node and `mergePoints` drop it, so a path that must stay a path has to reach its consumer before the first filter.",
+    tags: ["curve", "path", "noise"],
+    nodes: [
+      // Unit space: a line from -0.5 to +0.5 along X, wandering in Z, with
+      // the trailing `place` doing the arithmetic exposed params cannot.
+      {
+        id: "line",
+        type: "pointLine",
+        params: { count: 33, start: [-0.5, 0, 0], end: [0.5, 0, 0], includeEnd: true },
+      },
+      {
+        id: "freqAttr",
+        type: "setAttribute",
+        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 3 },
+      },
+      {
+        id: "variantAttr",
+        type: "setAttribute",
+        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
+      },
+      {
+        id: "ampAttr",
+        type: "setAttribute",
+        params: { name: "amp", domain: "point", type: "f32", tupleSize: 1, value: 0.15 },
+      },
+      {
+        id: "wander",
+        type: "transformPoints",
+        params: {
+          scale: [1, 1, 1],
+          rotateEuler: [0, 0, 0],
+          // Sideways (Z) at scale 1: a delta, so nothing else is touched.
+          translate: vec(
+            0,
+            0,
+            call("mul", attr("amp"), call("remap", tunableFbm("freq", "variant"), 0, 1, -1, 1)),
+          ),
+        },
+      },
+      // The family's trailing placement transform, at a road's scale
+      // rather than a prop's: 40 units end to end.
+      {
+        id: "place",
+        type: "transformPoints",
+        params: { scale: [40, 1, 40], rotateEuler: [0, 0, 0], translate: [0, 0, 0] },
+      },
+      { id: "path", type: "pointsToPath", params: { closed: false, groupAttr: "", orderAttr: "" } },
+      // No `removeAttribute` and no `scale` reset: pathResample builds NEW
+      // points carrying the standard attributes plus `tangent` and
+      // `curveU`, so the three parameter attributes and the placement's
+      // scale never reach the output. The tests assert exactly that.
+      { id: "even", type: "pathResample", params: { mode: "count", count: 33, spacing: 1 } },
+    ],
+    connections: [
+      { from: ["line", "out"], to: ["freqAttr", "in"] },
+      { from: ["freqAttr", "out"], to: ["variantAttr", "in"] },
+      { from: ["variantAttr", "out"], to: ["ampAttr", "in"] },
+      { from: ["ampAttr", "out"], to: ["wander", "in"] },
+      { from: ["wander", "out"], to: ["place", "in"] },
+      { from: ["place", "out"], to: ["path", "in"] },
+      { from: ["path", "out"], to: ["even", "in"] },
+    ],
+    outputs: [{ name: "out", node: "even", pin: "out" }],
+    params: [
+      {
+        name: "count",
+        targets: [
+          { node: "line", param: "count" },
+          { node: "even", param: "count" },
+        ],
+        description:
+          "Points along the path, and the number of corners the wander is drawn from. A dozen or more before the wander reads as a curve rather than a zig-zag.",
+        min: 2,
+      },
+      {
+        name: "wander",
+        targets: [{ node: "ampAttr", param: "value" }],
+        description:
+          "How far the path strays from the straight line between its ends, as a FRACTION of `size` — 0 is a straight line, 0.15 a gentle meander, 0.5 a loose one that can double back.",
+        acceptsField: true,
+      },
+      {
+        name: "frequency",
+        targets: [{ node: "freqAttr", param: "value" }],
+        description:
+          "How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves.",
+        acceptsField: true,
+      },
+      {
+        name: "variant",
+        targets: [{ node: "variantAttr", param: "value" }],
+        description:
+          "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
+        acceptsField: true,
+      },
+      ...placementParams(
+        'Extent in world units: X is the end-to-end length, Z scales the wander. A bare number is not accepted here: pass three numbers [40,1,40], or {"fn":"constant","value":40}.',
+      ),
     ],
   });
 

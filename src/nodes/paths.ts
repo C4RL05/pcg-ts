@@ -161,12 +161,15 @@ export const pointsToPath = standardNode<PointsToPathParams>({
     const primVertexCount: number[] = [];
     for (const id of ids) {
       const indices = grouped.get(id) as number[];
-      const where = groupName === "" ? "the input" : `group ${id} (attribute "${groupName}")`;
       if (indices.length < 2) {
+        // Only a group can be this short: with no groupAttr the single
+        // bucket holds every point, and `np < 2` above already rejected
+        // that case — so there is no "the input" wording to reach here.
         throw new Error(
-          `pointsToPath: ${where} has ${indices.length} point; every path needs at least 2 — drop that group upstream or give it another point`,
+          `pointsToPath: group ${id} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream or give it another point`,
         );
       }
+      const where = groupName === "" ? "the input" : `group ${id} (attribute "${groupName}")`;
       if (closed && indices.length < 3) {
         throw new Error(
           `pointsToPath: ${where} has 2 points and closed is true, which would fold the path back over itself; set closed false, or give the path at least 3 points`,
@@ -188,6 +191,14 @@ export interface PathResampleParams {
   count: number;
   spacing: number;
 }
+
+/**
+ * Ceiling on the points one `pathResample` may emit in 'spacing' mode.
+ * 'count' mode is bounded by a number the author typed; a spacing is not,
+ * so a small one on a long path runs away silently — the same hazard
+ * volumeSample bounds with MAX_VOLUME_POINTS, and bounded the same way.
+ */
+const MAX_RESAMPLE_POINTS = 1_048_576;
 
 /** Even arc-length resampling of each polyline primitive. */
 export const pathResample = standardNode<PathResampleParams>({
@@ -217,17 +228,24 @@ export const pathResample = standardNode<PathResampleParams>({
       default: 1,
       min: 0,
       description:
-        "Distance between samples in world units when mode is 'spacing'. Must be > 0, and small enough to leave at least 2 samples on each open path (3 on a closed one). Ignored in 'count' mode.",
+        `Distance between samples in world units when mode is 'spacing'. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under ${MAX_RESAMPLE_POINTS} samples. Ignored in 'count' mode.`,
     },
   },
-  execute({ inputs, params, seed }) {
-    const geo = requireGeometry(inputs, "in", "pathResample");
-    const tables = polylineArcTables(geo, "pathResample");
+  execute({ inputs, params, seed, checkCancelled }) {
+    // Params before geometry: a bad param reported as "no polyline
+    // primitives" sends the author to debug the wrong thing entirely.
     if (params.mode !== "count" && params.mode !== "spacing") {
       throw new Error(
         `pathResample: unknown mode "${params.mode}"; valid modes: count, spacing`,
       );
     }
+    if (params.mode === "spacing" && !(params.spacing > 0)) {
+      throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${params.spacing}`);
+    }
+    const geo = requireGeometry(inputs, "in", "pathResample");
+    const tables = polylineArcTables(geo, "pathResample");
+    // Only needed to name a spacing that would fit the budget below.
+    const totalLength = tables.reduce((sum, table) => sum + table.length, 0);
 
     // Arc-length positions per path, validated before anything is built.
     const perPath: number[][] = [];
@@ -254,15 +272,23 @@ export const pathResample = standardNode<PathResampleParams>({
         for (let i = 0; i < n; i++) positions.push((i * L) / denom);
       } else {
         const sp = params.spacing;
-        if (!(sp > 0)) {
-          throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${sp}`);
-        }
+        // The epsilon is load-bearing on a closed path: without it a step
+        // that lands a float-hair short of the total length slips in as an
+        // extra sample on the seam, duplicating the start point and
+        // closing the path with a zero-length segment.
         const eps = sp * 1e-6;
         // Index * spacing rather than a running sum: no accumulated drift,
         // and the same positions on every platform.
         for (let i = 0; ; i++) {
+          if ((i & 1023) === 0) checkCancelled();
           const s = i * sp;
           if (s >= L - eps) break;
+          if (total + positions.length >= MAX_RESAMPLE_POINTS) {
+            const fit = totalLength / Math.max(1, MAX_RESAMPLE_POINTS - tables.length);
+            throw new Error(
+              `pathResample: spacing ${sp} would place more than ${MAX_RESAMPLE_POINTS} samples over the input's ${tables.length} path(s), whose total length is ${totalLength}; use spacing >= ${fit}, or switch mode to 'count'`,
+            );
+          }
           positions.push(s);
         }
         if (!table.closed) positions.push(L);
@@ -288,6 +314,7 @@ export const pathResample = standardNode<PathResampleParams>({
       const positions = perPath[ti];
       const L = table.length;
       for (let i = 0; i < positions.length; i++) {
+        if ((w & 1023) === 0) checkCancelled();
         const s = positions[i];
         locateOnArcLength(at, table.cum, s);
         const lo = at[0];
@@ -339,7 +366,7 @@ export const writeTangents = standardNode<WriteTangentsParams>({
   type: "writeTangents",
   category: "attribute",
   description:
-    "Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path. This is the tangent source for paths that were never spline-sampled: splineSample emits `tangent` only for the new points it creates, so a path built with pointsToPath has none, and orientAlongVector (which reads a direction field, typically the tangent attribute) has nothing to consume. The tangent at a point is the normalized central difference between its neighbours along the path, which stays smooth through corners; at the ends of an open path it is the adjacent segment direction, and a closed path wraps around. When the neighbours coincide the forward segment is used, then the backward one. Points not referenced by any polyline get [0, 0, 0] — orientAlongVector deliberately leaves a zero direction's rot untouched. A point visited by more than one polyline takes the tangent of the last one in primitive order. Every filter node and mergePoints drop topology, so run this before any filtering, not after.",
+    "Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path. This is the tangent source for paths that were never spline-sampled: splineSample emits `tangent` only for the new points it creates, so a path built with pointsToPath has none, and orientAlongVector (which reads a direction field, typically the tangent attribute) has nothing to consume. The tangent at a point is the normalized central difference between its neighbours along the path, which stays smooth through corners; at the ends of an open path it is the adjacent segment direction, and a closed path wraps around. When the two neighbours coincide — a hairpin, where the path doubles back on itself — the forward segment direction stands in, pointing the way the path LEAVES the point. A point whose neighbours all sit on top of it, and any point not referenced by any polyline, gets [0, 0, 0] — orientAlongVector deliberately leaves a zero direction's rot untouched. A point visited by more than one polyline takes the tangent of the last one in primitive order. Every filter node and mergePoints drop topology, so run this before any filtering, not after.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -351,9 +378,8 @@ export const writeTangents = standardNode<WriteTangentsParams>({
     },
   },
   execute({ inputs, params }) {
-    // cloneGeometry preserves topology; gatherPoints and mergePoints do not.
-    const geo = cloneGeometry(requireGeometry(inputs, "in", "writeTangents"));
-    const tables = polylineArcTables(geo, "writeTangents");
+    // Params before geometry: a bad name reported as "no polyline
+    // primitives" sends the author to debug the wrong thing entirely.
     const name = params.name;
     if (name === "") {
       throw new Error(
@@ -365,6 +391,11 @@ export const writeTangents = standardNode<WriteTangentsParams>({
         'writeTangents: param "name" cannot be "P" — that would overwrite the positions the tangents are computed from; use "tangent" or another name',
       );
     }
+    // cloneGeometry preserves topology; gatherPoints and mergePoints do not.
+    // It is also what keeps this node pure: the input is a cached upstream
+    // object, and this is the one path node that writes into its geometry.
+    const geo = cloneGeometry(requireGeometry(inputs, "in", "writeTangents"));
+    const tables = polylineArcTables(geo, "writeTangents");
     const dst = geo.attrs.point.replace(name, "f32", 3, [0, 0, 0]);
     const P = geo.attrs.point.require("P");
     const pd = P.data;
@@ -381,8 +412,8 @@ export const writeTangents = standardNode<WriteTangentsParams>({
         const cur = pts[k] * ps;
         const prev = (table.closed ? pts[(k + m - 1) % m] : pts[k > 0 ? k - 1 : 0]) * ps;
         const next = (table.closed ? pts[(k + 1) % m] : pts[k + 1 < nv ? k + 1 : nv - 1]) * ps;
-        // Central difference, falling back to the segments it is made of
-        // when the neighbours land on top of each other.
+        // Central difference, falling back to the forward segment when the
+        // two neighbours land on top of each other (a hairpin).
         let dx = pd[next] - pd[prev];
         let dy = pd[next + 1] - pd[prev + 1];
         let dz = pd[next + 2] - pd[prev + 2];
@@ -393,12 +424,13 @@ export const writeTangents = standardNode<WriteTangentsParams>({
           dz = pd[next + 2] - pd[cur + 2];
           sq = dx * dx + dy * dy + dz * dz;
         }
-        if (sq === 0) {
-          dx = pd[cur] - pd[prev];
-          dy = pd[cur + 1] - pd[prev + 1];
-          dz = pd[cur + 2] - pd[prev + 2];
-          sq = dx * dx + dy * dy + dz * dz;
-        }
+        // There is deliberately NO backward fallback after this one, and
+        // restoring it would only add dead code: reaching it needs `next`
+        // to coincide with `prev` AND with `cur`, which makes `cur` and
+        // `prev` coincide too, so `cur - prev` could only ever be zero.
+        // P is f32 (polylineArcTables requires it), so `sq === 0` really
+        // does mean the deltas are exactly 0 — the smallest nonzero gap
+        // between two f32 values squares to ~2e-90, far from underflow.
         if (sq === 0) continue; // every neighbour coincides: leave [0, 0, 0]
         const inv = 1 / Math.sqrt(sq);
         const o = pts[k] * 3;
