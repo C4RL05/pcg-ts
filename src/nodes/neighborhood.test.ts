@@ -384,6 +384,63 @@ describe("pointNeighborhood", () => {
       runNode(pointNeighborhood, { radius: 1 }, { in: [makeGeometryItem(geo)] }),
     ).rejects.toThrow(/tupleSize 2, but distances need x, y and z/);
   });
+
+  it("refuses to DELETE an existing attribute of another shape, P included", async () => {
+    // countAttr and averageOutAttr are REPORTING slots: the node picks the
+    // shape (u32 tuple 1, f32 at averageAttr's tuple size), so an existing
+    // column of another shape is not overwritten by `replace`, it is
+    // dropped and re-added. `countAttr: "P"` therefore used to turn every
+    // position into a neighbour count and return a geometry that still
+    // cooked with the right point count and no positions left in it — the
+    // plausible-looking cook, which is the worst thing this library can
+    // produce. Same rule, same message shape as transferAttribute's
+    // hitAttr / missCountAttr.
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    await expect(
+      runNode(pointNeighborhood, { radius: 1, countAttr: "P" }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(
+      /pointNeighborhood: countAttr "P" already exists on the input's point domain as f32x3.*would DELETE.*nbrCount/s,
+    );
+    // The refusal costs nothing: it happens before any write, so the input
+    // still holds its positions.
+    expect(cloud.attrs.point.require("P").tupleSize).toBe(3);
+
+    const tagged = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    tagged.attrs.point.add("tag", "i32", 1, -1).data.set([5, 6]);
+    await expect(
+      runNode(
+        pointNeighborhood,
+        { radius: 2, countAttr: "", averageAttr: "P", averageOutAttr: "tag" },
+        { in: [makeGeometryItem(tagged)] },
+      ),
+    ).rejects.toThrow(
+      /pointNeighborhood: averageOutAttr "tag" already exists on the input's point domain as i32.*written as f32x3.*would DELETE.*nbrAvg/s,
+    );
+  });
+
+  it("still reuses and resets an existing column of the SAME shape", async () => {
+    // The refusal must not widen into "never touch an existing name".
+    // Re-running the node over its own output is the ordinary case, and
+    // averaging an attribute into its own name (already asserted above)
+    // depends on the same allowance.
+    const cloud = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [50, 0, 0],
+    ]);
+    cloud.attrs.point.add("nbrCount", "u32", 1, 0).data.set([99, 99, 99]);
+    const geo = firstGeo(
+      (await runNode(pointNeighborhood, { radius: 1 }, { in: [makeGeometryItem(cloud)] })).out,
+    ) as ReturnType<typeof createPointCloud>;
+    // 99 was stale, not a starting value: the column describes THIS cook.
+    expect(attrTuples(geo, "nbrCount").flat()).toEqual([1, 1, 0]);
+  });
 });
 
 describe("sampleNearestPoint", () => {
@@ -581,5 +638,63 @@ describe("sampleNearestPoint", () => {
     await expect(runNode(sampleNearestPoint, {}, { in: one })).rejects.toThrow(
       /input pin "source" has no geometry connected/,
     );
+  });
+
+  it("refuses to DELETE an existing attribute of another shape, P included", async () => {
+    // distanceAttr and indexAttr are the same REPORTING slots as
+    // pointNeighborhood's: f32 tuple 1 and i32 tuple 1, both chosen by the
+    // node. `outAttribute` is deliberately NOT in this rule — its shape
+    // comes from the source attribute being copied and overwriting is what
+    // a copy IS, exactly as transferAttribute's `name` is exempt there.
+    const dst = cloudAt([
+      [0, 0, 0],
+      [10, 0, 0],
+    ]);
+    const source = [makeGeometryItem(cloudAt([[3, 0, 0]]))];
+    await expect(
+      runNode(
+        sampleNearestPoint,
+        { distanceAttr: "P" },
+        { in: [makeGeometryItem(dst)], source },
+      ),
+    ).rejects.toThrow(
+      /sampleNearestPoint: distanceAttr "P" already exists on the input's point domain as f32x3.*would DELETE.*nearDist/s,
+    );
+    expect(dst.attrs.point.require("P").tupleSize).toBe(3);
+
+    const uvDst = cloudAt([[0, 0, 0]]);
+    uvDst.attrs.point.add("uv", "f32", 2, 0).data.set([0.25, 0.5]);
+    await expect(
+      runNode(
+        sampleNearestPoint,
+        { distanceAttr: "", indexAttr: "uv" },
+        { in: [makeGeometryItem(uvDst)], source },
+      ),
+    ).rejects.toThrow(
+      /sampleNearestPoint: indexAttr "uv" already exists on the input's point domain as f32x2.*written as i32.*would DELETE.*nearIndex/s,
+    );
+  });
+
+  it("still reuses and resets an existing column of the SAME shape", async () => {
+    const dst = cloudAt([
+      [0, 0, 0],
+      [10, 0, 0],
+    ]);
+    dst.attrs.point.add("nearDist", "f32", 1, 0).data.set([99, 99]);
+    dst.attrs.point.add("nearIdx", "i32", 1, -1).data.set([7, 7]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          sampleNearestPoint,
+          { indexAttr: "nearIdx" },
+          {
+            in: [makeGeometryItem(dst)],
+            source: [makeGeometryItem(cloudAt([[3, 0, 0]]))],
+          },
+        )
+      ).out,
+    ) as ReturnType<typeof createPointCloud>;
+    expect(attrTuples(geo, "nearDist").flat()).toEqual([3, 7]);
+    expect(attrTuples(geo, "nearIdx").flat()).toEqual([0, 0]);
   });
 });

@@ -14,10 +14,13 @@
  * actually breaks: a filter that stopped filtering, a node that stopped
  * writing its attribute, a cloud that landed somewhere else.
  *
- * Float-exactness belongs in the last test instead, which cooks each
- * graph twice and compares the raw bytes. That compares a run against
- * itself rather than against a stored constant, so it tests determinism —
- * the hard invariant — and no intended change can make it stale.
+ * Float-exactness belongs in the last two tests instead, which cook each
+ * graph twice and compare the raw bytes. Those compare a run against
+ * itself rather than against a stored constant, so they test determinism —
+ * the hard invariant — and no intended change can make them stale. They
+ * differ only in what they vary between the two cooks: nothing (same
+ * options twice), and the cook budget (straight through vs. fully
+ * partitioned).
  *
  * If the golden test fails on a change you meant to make, re-derive it
  * and read the diff: `npm run build && npm run corpus:golden`.
@@ -25,7 +28,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { deserializeGraph } from "../src/index.js";
+import { type DataCollection, cook, deserializeGraph } from "../src/index.js";
 import {
   CORPUS_TIME_LIMIT_MS,
   type CorpusGolden,
@@ -43,19 +46,62 @@ const corpus = loadCorpus(ROOT);
 const golden = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as CorpusGolden;
 
 /** Where two rendered structures first differ, as one line each. */
-function firstDifference(actual: string, expected: string): string {
-  const a = actual.split("\n");
-  const e = expected.split("\n");
-  for (let i = 0; i < Math.max(a.length, e.length); i++) {
-    if (a[i] !== e[i]) {
+function firstDifference(left: string, right: string, leftLabel: string, rightLabel: string): string {
+  const a = left.split("\n");
+  const b = right.split("\n");
+  const width = Math.max(leftLabel.length, rightLabel.length);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] !== b[i]) {
       return [
         `first difference at line ${i + 1}:`,
-        `  first cook:  ${a[i] === undefined ? "<end>" : a[i]}`,
-        `  second cook: ${e[i] === undefined ? "<end>" : e[i]}`,
+        `  ${(leftLabel + ":").padEnd(width + 1)}  ${a[i] === undefined ? "<end>" : a[i]}`,
+        `  ${(rightLabel + ":").padEnd(width + 1)}  ${b[i] === undefined ? "<end>" : b[i]}`,
       ].join("\n");
     }
   }
   return "structures differ only in trailing bytes";
+}
+
+/**
+ * Float-exact comparison of two cooks, and the only one in this file:
+ * both determinism tests go through it so they can never drift into two
+ * subtly different notions of "identical". `corpusFingerprint` hashes
+ * every attribute column, the topology arrays and every instance
+ * transform, so a single flipped bit shows up here. Returns `undefined`
+ * when the two agree, or a rendered first difference when they do not.
+ */
+function fingerprintDifference(
+  left: Record<string, DataCollection>,
+  right: Record<string, DataCollection>,
+  leftLabel: string,
+  rightLabel: string,
+): string | undefined {
+  const a = JSON.stringify(corpusFingerprint(left), null, 1);
+  const b = JSON.stringify(corpusFingerprint(right), null, 1);
+  return a === b ? undefined : firstDifference(a, b, leftLabel, rightLabel);
+}
+
+/**
+ * Cook every declared output of a corpus graph at one specific budget.
+ *
+ * `cookCorpusGraph` pins its own budget (it is shared with the golden
+ * generator, which must never record under different options than the
+ * test checks), so the partition-safety test below — the one test whose
+ * whole subject IS the budget — needs to set it directly. Everything
+ * else about the cook matches `cookCorpusGraph`: a fresh
+ * deserialization, no output selection, no GPU.
+ *
+ * `budgetMs: undefined` never yields; `budgetMs: 0` yields after every
+ * node. Both are real settings, not "off" — see the note on the
+ * partition-safety test.
+ */
+async function cookAtBudget(
+  json: unknown,
+  budgetMs: number | undefined,
+): Promise<Record<string, DataCollection>> {
+  const graph = deserializeGraph(json);
+  const { outputs } = await cook(graph, budgetMs === undefined ? {} : { budgetMs });
+  return outputs;
 }
 
 describe("example corpus", () => {
@@ -147,18 +193,52 @@ describe("example corpus", () => {
       it("cooks byte-identically twice (determinism)", async () => {
         // Two separate deserializations, so the second cook re-derives
         // everything instead of serving one warm memo cache.
-        const first = corpusFingerprint((await cookCorpusGraph(entry.json)).outputs);
-        const second = corpusFingerprint((await cookCorpusGraph(entry.json)).outputs);
-        const a = JSON.stringify(first, null, 1);
-        const b = JSON.stringify(second, null, 1);
-        if (a !== b) {
+        const first = (await cookCorpusGraph(entry.json)).outputs;
+        const second = (await cookCorpusGraph(entry.json)).outputs;
+        const diff = fingerprintDifference(first, second, "first cook", "second cook");
+        if (diff !== undefined) {
           throw new Error(
             [
               `${entry.path}: two cooks of the same graph produced different bytes.`,
               "Determinism is a hard invariant — same seed, same output, whatever the",
               "cook order — so this is a bug in a node, not a golden to update.",
               "",
-              firstDifference(a, b),
+              diff,
+            ].join("\n"),
+          );
+        }
+      });
+
+      it("cooks identically fully partitioned as straight through (partition safety)", async () => {
+        // THE OTHER HALF OF "WHATEVER THE COOK ORDER". The test above
+        // varies nothing between the two cooks; this one varies the only
+        // thing the runtime lets a graph observe about how its work was
+        // sliced. A budgeted cook yields to the event loop and resumes,
+        // so a node that accumulates across calls, reads a shared
+        // mutable, or depends on wall-clock time can see a different
+        // slice of the world per partition and produce different bytes.
+        //
+        // `budgetMs: 0` is maximum partitioning, not "no budget": the
+        // scheduler's guard is `budgetMs !== undefined && elapsed >
+        // budgetMs` (src/graph/execute.ts), so 0 yields after every
+        // single node rather than disabling the check. It forwards into
+        // subgraph nodes' inner cooks the same way. This is exactly the
+        // check `skills/performance-and-budgets/SKILL.md` asks graph
+        // authors to run on their own graphs, so the corpus runs it too.
+        const whole = await cookAtBudget(entry.json, undefined);
+        const partitioned = await cookAtBudget(entry.json, 0);
+        const diff = fingerprintDifference(whole, partitioned, "unbudgeted", "budgetMs: 0");
+        if (diff !== undefined) {
+          throw new Error(
+            [
+              `${entry.path}: cooking fully partitioned produced different bytes than`,
+              "cooking straight through. Some node in this graph depends on how the",
+              "cook was sliced — accumulated state that survives a yield, a read of",
+              "shared mutable state, or wall-clock time. Determinism is a hard",
+              "invariant and the budget is not allowed to change the result, so this",
+              "is a bug in a node, not a golden to update.",
+              "",
+              diff,
             ].join("\n"),
           );
         }

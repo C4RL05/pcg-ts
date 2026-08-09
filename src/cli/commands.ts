@@ -122,9 +122,15 @@ function targetOptions(args: ParsedArgs, command: string): TargetOptions {
  */
 function cookOptions(args: ParsedArgs, command: string): CookOptions {
   const budgetMs = numberFlag(args, "budget");
-  if (budgetMs !== undefined && !(budgetMs > 0)) {
+  // 0 is ALLOWED and meaningful: every budget check in the executor is
+  // `budgetMs !== undefined`, never a truthiness test, so 0 yields after
+  // every node — maximum partitioning. That is the partition-safety
+  // check `skills/performance-and-budgets` tells authors to run, and
+  // rejecting it here made the documented check impossible from the CLI
+  // while the cook() API accepted it. Negative and NaN are still misuse.
+  if (budgetMs !== undefined && !(budgetMs >= 0)) {
     throw new CliUsageError(
-      `${command}: flag "--budget" expects a number greater than 0 (milliseconds), got ${budgetMs}`,
+      `${command}: flag "--budget" expects a non-negative number of milliseconds, got ${budgetMs}. Use --budget 0 to yield after every node (maximum partitioning), which is how you check a graph cooks identically however the work is split.`,
     );
   }
   return budgetMs === undefined ? {} : { budgetMs };

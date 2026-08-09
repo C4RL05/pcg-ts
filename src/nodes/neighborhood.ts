@@ -12,7 +12,13 @@
  * same reason: float addition is order-dependent, so the byte-exact
  * result must not depend on which internal path a query took.
  */
-import type { AttrDefault, Attribute, Geometry } from "../data/index.js";
+import type {
+  AttrDefault,
+  AttrType,
+  Attribute,
+  AttributeSet,
+  Geometry,
+} from "../data/index.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid, type PositionView } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
@@ -21,6 +27,56 @@ import { requireGeometry } from "./util.js";
 /** Numeric ascending comparator (Array#sort is lexicographic by default). */
 function ascending(a: number, b: number): number {
   return a - b;
+}
+
+/** `f32x3`, or just `bool` when the tuple is 1 — transferAttribute's spelling. */
+function shapeLabel(type: AttrType, tupleSize: number): string {
+  return tupleSize === 1 ? type : `${type}x${tupleSize}`;
+}
+
+/**
+ * Guard for the four REPORTING params of this module — `countAttr` and
+ * `averageOutAttr` on pointNeighborhood, `distanceAttr` and `indexAttr` on
+ * sampleNearestPoint. The rule is `transferAttribute`'s, restated here
+ * because it is the library's rule and not that node's: a slot whose SHAPE
+ * the node chooses (a u32 count, an f32 distance, an i32 index, an f32
+ * average at the source's tuple size) must not land on a name the input
+ * already holds under a different shape. `AttributeSet.replace` drops the
+ * column and re-adds it, so `countAttr: "P"` quietly turned every position
+ * into a neighbour count and returned a geometry that still cooked, still
+ * had the right point count, and had lost the positions. A
+ * plausible-looking cook is the worst failure this library can produce, so
+ * it is refused.
+ *
+ * Only the destructive case is refused. An existing column of the SAME
+ * shape is still reused and reset in place — that is what makes re-running
+ * a node over its own output ordinary, and what lets `averageOutAttr` name
+ * `averageAttr` and average in place. `sampleNearestPoint.outAttribute` is
+ * deliberately NOT covered: its shape comes from the source attribute
+ * being copied, and overwriting is what a copy IS, exactly as
+ * `transferAttribute.name` is exempt there.
+ */
+function requireReportSlot(
+  attrs: AttributeSet,
+  nodeType: string,
+  param: string,
+  name: string,
+  type: AttrType,
+  tupleSize: number,
+  suggestion: string,
+): void {
+  const existing = attrs.get(name);
+  if (existing === undefined) return;
+  if (existing.type === type && existing.tupleSize === tupleSize) return;
+  const want = shapeLabel(type, tupleSize);
+  throw new Error(
+    `${nodeType}: ${param} "${name}" already exists on the input's point domain as ` +
+      `${shapeLabel(existing.type, existing.tupleSize)}, but ${param} is written as ${want} — ` +
+      `writing it would DELETE the "${name}" column and everything in it, and the cook would ` +
+      `look fine afterwards. Give ${param} a name of its own (e.g. "${suggestion}"), or remove ` +
+      `"${name}" from the input first with removeAttribute if it is genuinely dead. A name that ` +
+      `already holds ${want} is fine: that column is reset, not deleted.`,
+  );
 }
 
 /**
@@ -107,7 +163,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
   type: "pointNeighborhood",
   category: "attribute",
   description:
-    "Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging \"P\" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed.",
+    "Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging \"P\" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed — countAttr and averageOutAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it (a same-shape column is reused and reset).",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -135,7 +191,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       type: "string",
       default: "nbrCount",
       description:
-        "Name of the u32 point attribute receiving the neighbor count. Empty writes no count (then averageAttr must be set).",
+        "Name of the u32 point attribute receiving the neighbor count. Empty writes no count (then averageAttr must be set). The shape is this node's to pick (u32, tuple 1), so a name the input already holds under a DIFFERENT shape is REFUSED, not overwritten: writing it would delete that column outright and the cook would still look fine (countAttr \"P\" would leave a point cloud with no positions). An existing u32 tuple-1 column of the same name IS reused and reset, so re-running this node over its own output is fine. To write over something of another shape, removeAttribute it first, or pick another name.",
     },
     averageAttr: {
       type: "string",
@@ -147,7 +203,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       type: "string",
       default: "nbrAvg",
       description:
-        "Name of the f32 point attribute receiving the neighbor average; it takes averageAttr's tuple size. Required when averageAttr is set, ignored otherwise. Naming it the same as averageAttr overwrites in place.",
+        "Name of the f32 point attribute receiving the neighbor average; it takes averageAttr's tuple size. Required when averageAttr is set, ignored otherwise. Naming it the same as averageAttr overwrites in place — allowed whenever that attribute is ALREADY f32 at the same tuple size, which \"P\" is. Otherwise the shape is this node's to pick, and a name the input holds under a DIFFERENT shape is REFUSED rather than deleted and re-added: averaging an i32, u32 or bool attribute needs an output name of its own, since the average is always f32. An existing column of the matching f32 shape IS reused and reset.",
     },
   },
   execute({ inputs, params, checkCancelled }) {
@@ -166,6 +222,12 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
     }
     const n = geo.pointCount;
     const set = geo.attrs.point;
+    // Checked before any work: a refusal must cost nothing, and neither
+    // slot's shape depends on anything read below (averageOutAttr's tuple
+    // size does, so its check waits for `ts`).
+    if (wantCount) {
+      requireReportSlot(set, "pointNeighborhood", "countAttr", params.countAttr, "u32", 1, "nbrCount");
+    }
     const view = positionView(geo, "pointNeighborhood", "in");
 
     let source: Attribute | undefined;
@@ -189,6 +251,19 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       }
       source = attr;
       ts = attr.tupleSize;
+      // Same shape as averageAttr passes, which is what keeps averaging an
+      // f32 attribute into its own name an in-place overwrite; an i32 or
+      // bool source needs a distinct output name, because the average is
+      // always f32.
+      requireReportSlot(
+        set,
+        "pointNeighborhood",
+        "averageOutAttr",
+        params.averageOutAttr,
+        "f32",
+        ts,
+        "nbrAvg",
+      );
     }
 
     const counts = wantCount ? new Uint32Array(n) : undefined;
@@ -292,7 +367,7 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
   type: "sampleNearestPoint",
   category: "attribute",
   description:
-    "For every point of `in`, finds the nearest point of the `source` cloud in 3D (positions from P, ties resolved toward the lowest source index) and records what it found on the output's point domain: distanceAttr gets the distance (f32), indexAttr the source point index (i32), and `attribute`/`outAttribute` copy one of the source's point attributes across. This is the node that answers HOW FAR — transferAttribute's 'nearest' mapping copies a value but never reveals the distance, so banding by proximity to a road, a river or a set of landmarks needs this one. A point that finds nothing (an empty source, a non-finite position, or nothing within maxDistance) is a miss: its distance is Infinity, its index is -1, and a copied attribute keeps its prior value (the attribute default when it did not exist), so a miss is testable per point rather than only as a total. Uses a uniform spatial grid, so large clouds are fine.",
+    "For every point of `in`, finds the nearest point of the `source` cloud in 3D (positions from P, ties resolved toward the lowest source index) and records what it found on the output's point domain: distanceAttr gets the distance (f32), indexAttr the source point index (i32), and `attribute`/`outAttribute` copy one of the source's point attributes across. This is the node that answers HOW FAR — transferAttribute's 'nearest' mapping copies a value but never reveals the distance, so banding by proximity to a road, a river or a set of landmarks needs this one. A point that finds nothing (an empty source, a non-finite position, or nothing within maxDistance) is a miss: its distance is Infinity, its index is -1, and a copied attribute keeps its prior value (the attribute default when it did not exist), so a miss is testable per point rather than only as a total. distanceAttr and indexAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it (a same-shape column is reused and reset); `outAttribute` is exempt, since a copy takes its shape from the source. Uses a uniform spatial grid, so large clouds are fine.",
   inputs: [
     { name: "in", kind: "geometry" },
     { name: "source", kind: "geometry" },
@@ -303,13 +378,13 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
       type: "string",
       default: "nearDist",
       description:
-        "Name of the f32 point attribute receiving the distance to the nearest source point, in world units (Infinity on a miss). Empty writes no distance.",
+        "Name of the f32 point attribute receiving the distance to the nearest source point, in world units (Infinity on a miss). Empty writes no distance. The shape is this node's to pick (f32, tuple 1), so a name the input already holds under a DIFFERENT shape is REFUSED, not overwritten — writing it would delete that column and the cook would still look fine. A same-shape column IS reused and reset; to write over another shape, removeAttribute it first or pick another name.",
     },
     indexAttr: {
       type: "string",
       default: "",
       description:
-        "Name of the i32 point attribute receiving the nearest source point's index, or -1 on a miss. Empty (the default) writes no index.",
+        "Name of the i32 point attribute receiving the nearest source point's index, or -1 on a miss. Empty (the default) writes no index. Same rule as distanceAttr: the shape is this node's to pick (i32, tuple 1), so a name the input holds under a DIFFERENT shape is REFUSED rather than deleted and re-added, while a same-shape column is reused and reset. `attribute`/`outAttribute` are exempt — a copy takes its shape from the source and overwriting is the point.",
     },
     attribute: {
       type: "string",
@@ -340,6 +415,30 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
     if (!wantDistance && !wantIndex && !wantCopy) {
       throw new Error(
         'sampleNearestPoint: nothing to write — set distanceAttr, indexAttr, or `attribute` (the source attribute to copy); all three are currently empty',
+      );
+    }
+    // Before any query: a refusal must cost nothing. `outAttribute` is not
+    // checked — see requireReportSlot for why a copy target is exempt.
+    if (wantDistance) {
+      requireReportSlot(
+        dst.attrs.point,
+        "sampleNearestPoint",
+        "distanceAttr",
+        params.distanceAttr,
+        "f32",
+        1,
+        "nearDist",
+      );
+    }
+    if (wantIndex) {
+      requireReportSlot(
+        dst.attrs.point,
+        "sampleNearestPoint",
+        "indexAttr",
+        params.indexAttr,
+        "i32",
+        1,
+        "nearIndex",
       );
     }
     const n = dst.pointCount;

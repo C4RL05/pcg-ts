@@ -401,7 +401,7 @@ console.<span class="n">log</span>(result.stats);</code></pre></div>
 
     <p>Cook the same graph again and both nodes are served from the memo cache — <code>{ cooked: 0, cached: 2 }</code>. Change one parameter with <code>graph.setParam(scatter, "count", 1000)</code> and only that node and everything downstream of it recooks. Nothing else moves; nothing is deep-hashed.</p>
 
-    <p>Two details worth internalising immediately. First, the second argument to <code>graph.add</code> is a partial parameter object — anything you omit takes its schema default, and the defaults are published in the registry, not hidden in the source. Second, <code>result.outputs.points</code> is a <em>collection</em> of data items, not a single geometry: <code>firstGeometry</code> is the convenience accessor for the common case where you know there is exactly one.</p>
+    <p>Two details worth internalising immediately. First, the second argument to <code>graph.add</code> is a partial parameter object — anything you omit takes its schema default, and the defaults are published in the registry, not hidden in the source. Second, <code>result.outputs.points</code> is a <em>collection</em> of data items, not a single geometry: <code>firstGeometry</code> is the convenience accessor for the common case where you know there is exactly one. That "exactly one" is load-bearing inside the graph too — a node that processes a single geometry <em>errors</em> when a pin hands it several (as <code>partitionByAttribute</code> and a multi-item subgraph both can), rather than quietly taking the first and discarding the rest. The error names the three ways out; <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a> ("One pin, many geometries") works through them.</p>
   </section>
 
   <section id="model">
@@ -432,7 +432,7 @@ console.<span class="n">log</span>(result.stats);</code></pre></div>
 
     <h3>2.2 · Fields: values that resolve late</h3>
     <p>A <code>Field&lt;T&gt;</code> is a deferred computation. It is not a number; it is a description of how to produce one column of numbers once it knows a geometry, a domain and a seed. Field-capable node parameters accept <code>T | Field&lt;T&gt;</code>, so the same slot takes <code>0.5</code> or a four-octave noise expression, and the node does not care which.</p>
-    <p>Fields compose before any geometry exists. Inputs (<code>position()</code>, <code>attribute(name)</code>, <code>index()</code>, <code>randomField(key)</code>), arithmetic and comparison combinators, the full trig set, <code>clamp</code>/<code>lerp</code>/<code>remap</code>/<code>select</code>/<code>ramp</code>, vector operations, and five noise families all return fields.</p>
+    <p>Fields compose before any geometry exists. Inputs (<code>position()</code>, <code>attribute(name)</code>, <code>index()</code>, <code>fraction()</code>, <code>randomField(key)</code>), arithmetic and comparison combinators, the full trig set, <code>clamp</code>/<code>lerp</code>/<code>remap</code>/<code>select</code>/<code>ramp</code>, vector operations, and five noise families all return fields.</p>
 
     <div class="codeblock"><pre><code><span class="k">import</span> { createPointCloud, capture, attribute, clamp, add, mul, worleyNoise } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
@@ -902,12 +902,13 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
     <p>Note the generated id: a code-built node is named <code>&lt;type&gt;_&lt;n&gt;</code>, whereas a node loaded from JSON keeps the id you gave it. Both appear verbatim in error messages and in <code>describe()</code>, so meaningful ids in your documents pay for themselves the first time something fails.</p>
 
     <h3>listFieldFns()</h3>
-    <p>Returns the complete field-expression vocabulary as a sorted array of 41 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
+    <p>Returns the complete field-expression vocabulary as a sorted array of 42 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
     <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>,
- <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"ge"</span>, <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>,
- <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>, <span class="s">"mul"</span>, <span class="s">"ne"</span>, <span class="s">"normalize"</span>, <span class="s">"perlinNoise"</span>,
- <span class="s">"position"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>,
- <span class="s">"sub"</span>, <span class="s">"tan"</span>, <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
+ <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>,
+ <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>, <span class="s">"mul"</span>,
+ <span class="s">"ne"</span>, <span class="s">"normalize"</span>, <span class="s">"perlinNoise"</span>, <span class="s">"position"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>,
+ <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>, <span class="s">"valueNoise"</span>,
+ <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>docs/nodes.json as an offline catalog</h3>
     <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 35 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
@@ -1050,7 +1051,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <h3>What an agent can emit — and what it cannot</h3>
     <p>This is the boundary that matters most, because it is asymmetric and easy to get wrong in the safe-looking direction.</p>
-    <p><strong>You can emit any field the grammar describes.</strong> Those 41 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
+    <p><strong>You can emit any field the grammar describes.</strong> Those 42 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
     <p><strong>You cannot emit a code-authored field, and you cannot serialize one.</strong> A field composed with the code combinators — <code>clamp(add(0.2, mul(worleyNoise(...), 0.9)), 0, 1)</code> — cooks perfectly well but has no spec. <code>getFieldSpec</code> returns <code>undefined</code> for it, and <code>serializeGraph</code> on a graph containing one cannot represent that parameter. There is no specification for arbitrary code-authored fields, and there will not be one, because there is nothing finite to specify.</p>
     <p>Two consequences follow directly, and both are practical rather than theoretical:</p>
     <ul>
@@ -1105,9 +1106,9 @@ GraphValidationError: unknown output <span class="s">"pts"</span>; declared outp
     <div class="code-label">Field grammar — the fn list and the exact arity</div>
     <div class="codeblock"><pre><code>FieldJsonError: $: unknown field fn <span class="s">"perlin"</span>; valid fns: abs, acos, add, asin,
 atan, atan2, attribute, clamp, component, constant, cos, div, dot, eq, fbm,
-floor, ge, gt, index, le, length, lerp, lt, max, min, mul, normalize,
-perlinNoise, position, ramp, randomField, remap, select, simplexNoise, sin,
-sub, tan, valueNoise, vec, worleyNoise
+floor, fraction, ge, gt, index, le, length, lerp, lt, max, min, mul, ne,
+normalize, perlinNoise, position, ramp, randomField, remap, select,
+simplexNoise, sin, sub, tan, valueNoise, vec, worleyNoise
 
 FieldJsonError: $: fn <span class="s">"clamp"</span> expects exactly 3 args, got 2</code></pre></div>
     <p>The <code>$</code> prefix is a path into the spec: nested failures report the position of the offending sub-expression rather than only the root.</p>
@@ -1292,7 +1293,7 @@ g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep"
 } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
 <span class="k">const</span> types = <span class="n">listNodeTypes</span>();               <span class="c">// 35 entries, each fully self-describing</span>
-<span class="k">const</span> fns = <span class="n">listFieldFns</span>();                 <span class="c">// 41 field fns — the closed vocabulary</span>
+<span class="k">const</span> fns = <span class="n">listFieldFns</span>();                 <span class="c">// 42 field fns — the closed vocabulary</span>
 
 <span class="c">// Plan against the schemas rather than against memory.</span>
 <span class="k">const</span> scatterSchema = types.<span class="n">find</span>(t => t.type === <span class="s">"pointScatterInBounds"</span>).params;

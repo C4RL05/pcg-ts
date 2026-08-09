@@ -8,6 +8,7 @@ import {
   transferNearest,
   transferRaycast,
   transferUv,
+  type AttributeSet,
   type AttrType,
   type Domain,
   type PromoteMode,
@@ -259,6 +260,51 @@ export const promoteAttribute = standardNode<PromoteAttributeParams>({
   },
 });
 
+/** `f32x3`, or just `bool` when the tuple is 1 — the golden's spelling. */
+function shapeLabel(type: AttrType, tupleSize: number): string {
+  return tupleSize === 1 ? type : `${type}x${tupleSize}`;
+}
+
+/**
+ * Guard for `transferAttribute`'s two REPORTING params, `hitAttr` and
+ * `missCountAttr`. They differ from `name` in a way that decides this: the
+ * shape they write is chosen by the node (a bool flag, a u32 count), not by
+ * the source, and overwriting is not their job — so a destination that
+ * already carries the name under a different shape is not overwritten, it is
+ * DELETED. `AttributeSet.replace` drops the column and re-adds it, which
+ * means `hitAttr: "P"` quietly turned every position into a bool flag and
+ * returned a geometry that still cooked, still had the right point count,
+ * and had lost the positions. A plausible-looking cook is the worst failure
+ * this library can produce, so it is refused.
+ *
+ * Only the destructive case is refused. An existing column of the SAME shape
+ * is still reused and reset in place, which is what makes the flag describe
+ * THIS transfer only, and the `name` param still overwrites freely — that is
+ * what a transfer IS.
+ */
+function requireReportSlot(
+  attrs: AttributeSet,
+  domain: "point" | "detail",
+  param: "hitAttr" | "missCountAttr",
+  name: string,
+  type: AttrType,
+  tupleSize: number,
+): void {
+  const existing = attrs.get(name);
+  if (existing === undefined) return;
+  if (existing.type === type && existing.tupleSize === tupleSize) return;
+  const want = shapeLabel(type, tupleSize);
+  const suggestion = param === "hitAttr" ? "__hit" : "__missed";
+  throw new Error(
+    `transferAttribute: ${param} "${name}" already exists on the input's ${domain} domain as ` +
+      `${shapeLabel(existing.type, existing.tupleSize)}, but ${param} is written as ${want} — ` +
+      `writing it would DELETE the "${name}" column and everything in it, and the cook would ` +
+      `look fine afterwards. Give ${param} a name of its own (a "__" prefix marks it internal, ` +
+      `e.g. "${suggestion}"), or remove "${name}" from the input first if it is genuinely dead. ` +
+      `A name that already holds ${want} is fine: that column is reset, not deleted.`,
+  );
+}
+
 /** Params of {@link transferAttribute}. */
 export interface TransferAttributeParams {
   name: string;
@@ -333,13 +379,13 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       type: "string",
       default: "",
       description:
-        "When non-empty, writes the number of missed destination points into a u32 detail attribute of this name on the output (mapping 'nearest' always writes 0 — every point is assigned). Empty = don't record. For which points those were, see hitAttr.",
+        "When non-empty, writes the number of missed destination points into a u32 detail attribute of this name on the output (mapping 'nearest' always writes 0 — every point is assigned). Empty = don't record. For which points those were, see hitAttr. This is a reporting slot whose shape this node picks (u32, tuple 1), so a name the input's DETAIL domain already holds under a different shape is REFUSED rather than deleted and re-added — give it a name of its own (a \"__\" prefix marks it internal, e.g. \"__missed\") or removeAttribute the clash first. A same-shape column is reused and reset.",
     },
     hitAttr: {
       type: "string",
       default: "",
       description:
-        "When non-empty, writes a per-point flag of this name onto the OUTPUT'S POINT DOMAIN (bool, tuple 1). The polarity is the HIT, not the miss — the inverse of missCountAttr, which counts the zeros: 1 means this point found a source and received a transferred value, 0 means it missed and kept its prior value (the attribute default when it had none). Every point is written, so the column never carries a stale value: mapping 'nearest' leaves it all 1 (every point is assigned), and a source with nothing to search — every triangle degenerate — leaves it all 0, since nothing was found. Feed it to filterByAttribute (comparison 'eq', value 1) to keep only the points that landed, then removeAttribute to clean it up. Must differ from `name`, which the flag would otherwise overwrite. Empty = don't record.",
+        "When non-empty, writes a per-point flag of this name onto the OUTPUT'S POINT DOMAIN (bool, tuple 1). The polarity is the HIT, not the miss — the inverse of missCountAttr, which counts the zeros: 1 means this point found a source and received a transferred value, 0 means it missed and kept its prior value (the attribute default when it had none). Every point is written, so the column never carries a stale value: mapping 'nearest' leaves it all 1 (every point is assigned), and a source with nothing to search — every triangle degenerate — leaves it all 0, since nothing was found. Feed it to filterByAttribute (comparison 'eq', value 1) to keep only the points that landed, then removeAttribute to clean it up. Two names are refused rather than written: `name`, which the flag would otherwise overwrite, and any point attribute the input ALREADY holds under a different shape — the flag's shape is this node's to pick, so writing it there would delete that column and everything in it while the cook still looked fine (hitAttr \"P\" would leave a point cloud with no positions). An existing bool tuple-1 column of the same name IS reused and reset, which is what keeps the flag describing THIS transfer only. On a clash, give the flag a name of its own (a \"__\" prefix marks it internal, e.g. \"__hit\") or removeAttribute the existing column first. Empty = don't record.",
     },
   },
   execute({ inputs, params }) {
@@ -350,6 +396,15 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       throw new Error(
         `transferAttribute: hitAttr "${params.hitAttr}" is the same as name — the hit flag would overwrite the attribute just transferred; give hitAttr a distinct name (a "__" prefix marks it internal, e.g. "__hit") or leave it empty to skip the flag`,
       );
+    }
+    // Checked BEFORE any work: a refusal must cost nothing, and the only
+    // column the transfer itself adds is `name`, which the guard above
+    // already separates from both reporting slots.
+    if (params.hitAttr !== "") {
+      requireReportSlot(dst.attrs.point, "point", "hitAttr", params.hitAttr, "bool", 1);
+    }
+    if (params.missCountAttr !== "") {
+      requireReportSlot(dst.attrs.detail, "detail", "missCountAttr", params.missCountAttr, "u32", 1);
     }
     let missCount = 0;
     // Per-point outcome of the SAME query that wrote the values, kept only

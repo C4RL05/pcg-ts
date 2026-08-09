@@ -356,16 +356,20 @@ describe("pcg cli — cook", () => {
     expect(huge.stderr()).toContain('flag "--seed" expects an integer in [0, 4294967295]');
   });
 
-  it("refuses a budget of zero as a misuse, not as a run failure", async () => {
+  // A budget of 0 is a real budget, not "off": the executor tests
+  // `budgetMs !== undefined`, so 0 yields after every node. That is the
+  // maximum-partitioning check the performance skill documents, so the
+  // CLI has to accept it — it used to reject it, which made the
+  // documented check reachable from the API but not the command line.
+  it("accepts a budget of zero as maximum partitioning", async () => {
     const io = withGraph();
-    expect(await runCli(["cook", GRAPH, "--budget", "0"], io.io)).toBe(EXIT_USAGE);
-    expect(io.stderr()).toContain(
-      'cook: flag "--budget" expects a number greater than 0 (milliseconds), got 0',
-    );
+    expect(await runCli(["cook", GRAPH, "--budget", "0"], io.io)).toBe(EXIT_OK);
+  });
 
+  it("refuses a negative budget as a misuse, not as a run failure", async () => {
     const negative = withGraph();
     expect(await runCli(["cook", GRAPH, "--budget", "-5"], negative.io)).toBe(EXIT_USAGE);
-    expect(negative.stderr()).toContain('flag "--budget" expects a number greater than 0');
+    expect(negative.stderr()).toContain('flag "--budget" expects a non-negative number');
   });
 });
 
@@ -701,7 +705,7 @@ describe("pcg cli — the command line itself", () => {
       [["inspect", GRAPH, "--output", "nope"], EXIT_FAILURE],
       [["bake", GRAPH], EXIT_USAGE],
       [["cook", GRAPH, "--stat"], EXIT_USAGE],
-      [["cook", GRAPH, "--budget", "0"], EXIT_USAGE],
+      [["cook", GRAPH, "--budget", "-5"], EXIT_USAGE],
       [["cook", GRAPH, "--seed", "-1"], EXIT_USAGE],
       [["inspect", GRAPH, "--domain", "bogus"], EXIT_USAGE],
       [["inspect", GRAPH, "--rows", "-1"], EXIT_USAGE],

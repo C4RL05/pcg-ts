@@ -11,11 +11,12 @@ errors name the offending node, pin, or param. Agent-facing entry points:
 [llms.txt](./llms.txt), [docs/nodes.md](./docs/nodes.md),
 [docs/primitives.md](./docs/primitives.md),
 [docs/examples.md](./docs/examples.md),
-[docs/authoring.md](./docs/authoring.md), and two doctrine skills in
+[docs/authoring.md](./docs/authoring.md), and three doctrine skills in
 [skills/](./skills) — `graph-authoring` (what to read first, primitive
-or nodes, the validate → cook → inspect loop) and `determinism` (the
-seed chain, and how to verify reproducibility rather than assume it).
-All of them ship inside the npm package.
+or nodes, the validate → cook → inspect loop), `determinism` (the
+seed chain, and how to verify reproducibility rather than assume it) and
+`performance-and-budgets` (what a cook costs, the two different budgets,
+and reading `pcg cook --stats`). All of them ship inside the npm package.
 
 **One-page overview:** <https://c4rl05.github.io/pcg-ts/> — what it is,
 architecture and pipeline diagrams, and the roadmap.

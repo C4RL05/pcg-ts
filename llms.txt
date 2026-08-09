@@ -16,6 +16,19 @@ driven programmatically: node capabilities are enumerable at runtime
 - Data flows through graphs as collections of items: geometry items,
   value items (plain numbers/strings/bools), instances items (transform
   batches for renderers). Items carry tags and a revision id (`rev`).
+- A pin carries a COLLECTION, and one connection can put many geometries
+  on it (`partitionByAttribute` emits one per distinct value; a subgraph
+  or `dataInput` forwards however many it holds). A node that processes
+  exactly one geometry ERRORS when handed several, rather than silently
+  using the first — that would look like a successful cook. There is no
+  for-each node and no in-graph way to select one item of a collection.
+  The three fixes, all named in the error: insert `mergePoints` to
+  concatenate them back into one cloud (points-only — rebuild any path
+  after it with `pointsToPath`), move the op UPSTREAM of the split so it
+  runs once on the whole cloud, or drive the per-item loop from
+  TypeScript, where `collection.filter((i) => i.kind === "geometry")`
+  gives you all of them and `filterByTag(collection, "<attr>=<value>")`
+  picks one by the tag `partitionByAttribute` wrote.
 - A `Geometry` holds four attribute domains: point, vertex, primitive,
   detail (always 1 element), plus topology (vertex->point map, primitive
   vertex ranges). Point-only clouds are the common fast path.
@@ -226,12 +239,20 @@ graph round-trips and cooks identically. Rebuilding via
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 41 fns (`listFieldFns()`):
+into `constant`). All 42 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
   - `{ fn: "attribute", name: "density", tupleSize?: 1 }` (numeric attrs only)
   - `{ fn: "position" }` — reads P (tuple 3); `{ fn: "index" }` — 0,1,2,...
+  - `{ fn: "fraction" }` — normalized index `i / (count - 1)`, spanning
+    [0, 1] CLOSED: exactly 0 on the first element and exactly 1 on the
+    last, the same convention as `pointLine`'s `includeEnd`. A single
+    element gives 0, an empty domain gives nothing. Because the endpoints
+    coincide, a periodic function repeats its start value at the last
+    element — scale by `(count - 1) / count` for a seam-free loop. Its
+    value depends on how many elements share the domain, so it says
+    "position along this thing", never "position in the world"
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
   - 2 args: `add sub mul div min max lt le gt ge eq ne dot atan2`
@@ -335,7 +356,7 @@ spawn, io, composite.
 - splineSample — arc-length sampling along polyline primitives, treating every polyline of the input as ONE concatenated curve (emits tangent, curveU); its in-graph source is pointsToPath or pathResample, and its own output is a plain point CLOUD, no longer a path
 - subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
-- transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail); `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
+- transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail) and reportable PER POINT via `hitAttr` (bool point, tuple 1, empty = don't write): 1 = this point found a source and received a value, 0 = it missed and kept its prior one. Polarity is the HIT, the inverse of what `missCountAttr` counts. Every point is written, so the column is never stale — `mapping: "nearest"` leaves it all 1 (nothing can miss), a source with nothing to search leaves it all 0. Must differ from `name`. Feed it to filterByAttribute (comparison "eq", value 1) to keep only the points that landed, then removeAttribute to clean up — one ray decides both the move and the discard, which is what `place/drop-to-surface` does in three nodes with no second raycast; `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)
 - valueConstant — emit a constant number as a value item
 - volumeSample — jittered grid fill of a box or of the input geometry's bounds
@@ -1049,10 +1070,10 @@ GraphSerializationError, FieldJsonError, WorldValidationError.
 
 ## Skills (doctrine, in the standard Agent Skills format)
 
-Two short skills ship in the package under `skills/`. They carry HOW TO
-WORK, where this file and the generated references carry WHAT EXISTS —
-neither skill lists a node, a primitive or a param, because a pasted
-listing goes stale and a stale skill is worse than none.
+Three short skills ship in the package under `skills/`. They carry HOW TO
+WORK, where this file and the generated references carry WHAT EXISTS — no
+skill lists a node, a primitive or a param, because a pasted listing goes
+stale and a stale skill is worse than none.
 
 - `skills/graph-authoring/SKILL.md` — load before writing or editing
   graph JSON, when choosing between a shipped primitive and hand-wired
@@ -1067,17 +1088,26 @@ listing goes stale and a stale skill is worse than none.
   provably cannot, why noise varies through position rather than seed,
   the GPU approximation boundary, and how to VERIFY reproducibility
   instead of assuming it.
+- `skills/performance-and-budgets/SKILL.md` — load when a cook is slower
+  than expected, when reading `pcg cook --stats`, when choosing a budget
+  for a frame loop or a World update, when sizing candidate counts or
+  placing a filter, or before optimizing anything inside the library.
+  The two unrelated budgets (a cook's yield budget vs. a World update's
+  stop budget), what each stats number means, the cost asymmetry you
+  control, the SoA rules for hot loops, and the optimization determinism
+  forbids.
 
 ## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
 
-28 single-concept graphs at `examples/graphs/basics-*.json`, each named
-by what it teaches and carrying its own `meta` block. Every one cooks
-from JSON alone — no `dataInput`, whose items never survive
-serialization — so any of them can be copied, run and modified with
-nothing but the CLI. The index is generated from the files' own meta
-plus what each graph structurally contains (node types at any nesting
-depth, primitives referenced by name, declared outputs), and a drift
-test fails if the corpus changes without regenerating it.
+34 graphs under `examples/graphs/`, each named by what it teaches and
+carrying its own `meta` block: 28 single-concept `basics-*.json`, plus
+the 6-file staged pipeline `pipeline-*.json` below. Every one cooks from
+JSON alone — no `dataInput`, whose items never survive serialization —
+so any of them can be copied, run and modified with nothing but the CLI.
+The index is generated from the files' own meta plus what each graph
+structurally contains (node types at any nesting depth, primitives
+referenced by name, declared outputs), and a drift test fails if the
+corpus changes without regenerating it.
 
 Read one close to your goal before authoring: it is faster than
 assembling a graph from the reference, and it is guaranteed to load,
@@ -1087,10 +1117,39 @@ bounds within tolerance — never float dumps, which would fight every
 legitimate change), and cooks each one TWICE to assert byte-identical
 output.
 
+### The staged pipeline (`examples/graphs/pipeline-*.json`)
+
+A settlement built in four stages — `pipeline-1-boundary` →
+`-2-districts` → `-3-lots` → `-4-detail` — plus `-3-lots-edits` and
+`-4-detail-edits`, the same two stages with an authored edit layer.
+
+The mechanism is a FLAT SUPERSET, not a subgraph or an include: each
+stage's file is the previous stage's file plus new nodes, connections
+and outputs. Nothing is removed, no shared node is retuned, no param is
+edited, and all six share one graph seed (40100). Every earlier stage
+therefore reproduces BIT-IDENTICALLY inside every later one, because a
+node's seed is `hashCombine(graphSeed, hashString(nodeId))` — node-local
+and independent of DAG position — so adding a whole district layer
+downstream cannot perturb the terrain upstream of it. Measured NOT to
+work, and recorded so it is not retried: wrapping an earlier stage as a
+subgraph payload breaks the bit-identity, because the wrapper re-derives
+the inner seed from its own node seed.
+
+The `-edits` variants demonstrate that an edit is LOCAL, as an assertion
+rather than a hope: authored geometry enters through a slot the base
+reserved (an unconnected `mergePoints` named `edits`), and `terrain`,
+`boundary` and `districts` stay bit-identical while `lots` changes. A
+stage may only ADD; `tests/pipeline.test.ts` fails the superset check on
+any retuned or dropped shared node, which no per-file golden would
+notice. The same suite caps the set at 1000 instances across a stage's
+declared outputs — a stage that outgrows the cap is shrunk, the cap is
+not raised.
+
 ## Pointers
 
 - README.md — human tour with runnable examples
-- skills/ — the two doctrine skills above (graph-authoring, determinism)
+- skills/ — the three doctrine skills above (graph-authoring,
+  determinism, performance-and-budgets)
 - docs/examples.md — the example corpus indexed by what each file
   teaches; docs/examples.json is the same, machine-readable
 - docs/nodes.md — full generated node reference (pins, params, defaults, ranges)

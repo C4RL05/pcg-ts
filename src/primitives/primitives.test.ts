@@ -762,7 +762,9 @@ describe("filter/", () => {
 function tiltedDrop(
   span: readonly [number, number],
   count: number,
-  poison = false,
+  poison: false | "bool" | "f32" = false,
+  height = 30,
+  exposeInput = false,
 ): SerializedGraph {
   const nodes: SerializedNode[] = [
     {
@@ -787,8 +789,8 @@ function tiltedDrop(
       type: "pointScatterInBounds",
       params: {
         count,
-        boundsMin: [span[0], 30, span[0]],
-        boundsMax: [span[1], 30, span[1]],
+        boundsMin: [span[0], height, span[0]],
+        boundsMax: [span[1], height, span[1]],
         seed: 4,
       },
     },
@@ -798,18 +800,22 @@ function tiltedDrop(
     { from: ["mesh", "out"], to: ["tilt", "in"] },
     { from: ["tilt", "out"], to: ["drop", "surface"] },
   ];
-  if (poison) {
+  if (poison !== false) {
     nodes.push({
       id: "stamp",
       type: "setAttribute",
-      params: { name: "__onSurface", domain: "point", type: "f32", tupleSize: 1, value: 1 },
+      params: { name: "__onSurface", domain: "point", type: poison, tupleSize: 1, value: 1 },
     });
     connections.push({ from: ["pts", "out"], to: ["stamp", "in"] });
     connections.push({ from: ["stamp", "out"], to: ["drop", "points"] });
   } else {
     connections.push({ from: ["pts", "out"], to: ["drop", "points"] });
   }
-  return { formatVersion: 1, seed: 5, nodes, connections, outputs: [{ id: "drop", pin: "out", name: "main_out" }] };
+  const outputs = [{ id: "drop", pin: "out", name: "main_out" }];
+  // The points as they were BEFORE the drop, so a test can compare each
+  // survivor against its own input rather than against a summary of them.
+  if (exposeInput) outputs.push({ id: "pts", pin: "out", name: "before" });
+  return { formatVersion: 1, seed: 5, nodes, connections, outputs };
 }
 
 describe("place/", () => {
@@ -929,6 +935,42 @@ describe("place/", () => {
     }
   });
 
+  it("drop-to-surface drops STRAIGHT DOWN: x and z survive the landing", async () => {
+    // `direction` is [0,-1,0] and the param text says so — "drops straight
+    // down" — but nothing was checking the two components that makes true.
+    // A count cannot: tip the ray to [0,-1,0.08] and every point still
+    // lands on the plane, in exactly the same number, about 2.4 units away
+    // in z from where it was authored. That is a scatter silently sheared
+    // sideways, and it is what a drop must never do — the whole reason to
+    // drop rather than to re-scatter is that the xz layout is the answer
+    // and only the height is unknown. The span is narrow enough that every
+    // ray hits, so survivor i IS input i and they can be compared directly.
+    const out = await cookGraph(tiltedDrop([-8, 8], 400, false, 30, true));
+    const after = geo(out);
+    const before = geo(out, "before");
+    expect(after.pointCount).toBe(before.pointCount);
+    const A = after.attrs.point.require("P");
+    const B = before.attrs.point.require("P");
+    for (let i = 0; i < after.pointCount; i++) {
+      expect(A.get(i, 0), `point ${i} x`).toBe(B.get(i, 0));
+      expect(A.get(i, 2), `point ${i} z`).toBe(B.get(i, 2));
+      // ...and the drop did happen, or preserving xz is trivially true.
+      expect(A.get(i, 1)).toBeLessThan(B.get(i, 1) - 1);
+    }
+  });
+
+  it("drop-to-surface is unbounded by default: no drop is too long", async () => {
+    // `maxDistance` is 0 and the param text says 0 means unlimited, but
+    // every other fixture drops from y = 30, so any cap above that reads
+    // as unlimited too — a default of 100 passed the whole suite. A drop
+    // is a authored-height-agnostic operation: points parked far above the
+    // terrain (a scatter in an unbounded level, a layout authored at a
+    // round altitude) have to reach it. So: 4000 units up, same plane,
+    // every point still lands.
+    const g = geo(await cookGraph(tiltedDrop([-8, 8], 200, false, 4000)));
+    expect(g.pointCount).toBe(200);
+  });
+
   it("drop-to-surface's internal flag cannot be poisoned by the input's attributes", async () => {
     // The flag is an INTERNAL name, and an internal name is only internal
     // until an input happens to carry it. The old recipe transferred a
@@ -938,10 +980,17 @@ describe("place/", () => {
     // floating. `hitAttr` writes every point unconditionally, so stamping
     // the name on the input changes NOTHING: same count, same points.
     const clean = geo(await cookGraph(tiltedDrop([-40, 40], 2000)));
-    const poisoned = geo(await cookGraph(tiltedDrop([-40, 40], 2000, true)));
+    const poisoned = geo(await cookGraph(tiltedDrop([-40, 40], 2000, "bool")));
     expect(poisoned.pointCount).toBe(clean.pointCount);
     expect(snapshotGeometry(poisoned)).toEqual(snapshotGeometry(clean));
     expect(poisoned.attrs.point.names()).not.toContain("__onSurface");
+
+    // A collision under another SHAPE is the case the flag cannot absorb:
+    // writing it would delete the input's own column. The primitive stops
+    // and names the collision rather than cooking something plausible.
+    await expect(cookGraph(tiltedDrop([-40, 40], 200, "f32"))).rejects.toThrow(
+      /hitAttr "__onSurface" already exists on the input's point domain as f32/,
+    );
   });
 
   it("align-to-surface writes rot from the transferred normal", async () => {

@@ -1282,6 +1282,34 @@ the plan left open is settled here.**
 - Exit: every pipeline step cooks in CI; docs idempotent; release
   tagged. Commit.
 
+### Carried out of phase 40 — reporting slots that still clobber
+
+Phase 40 closed a class of silent data loss: a param naming an attribute
+the NODE shapes (a "reporting slot") used `replace()`, which deletes and
+re-adds on a shape mismatch — so `hitAttr: "P"` turned positions into a
+`bool` column with no error, producing a plausible-looking cook. Fixed on
+`transferAttribute` (`hitAttr`, `missCountAttr`) and `pointNeighborhood`
+/ `sampleNearestPoint` (`countAttr`, `averageOutAttr`, `distanceAttr`,
+`indexAttr`): a differently-shaped existing column is refused, a
+same-shaped one is still reused and reset.
+
+Three sites were found with the same hole and NOT fixed, because they
+were outside the fixing agent's ownership. They are cheap and should go
+together, not one at a time:
+- `attributeReduce.outName` (`src/nodes/attributes.ts`, detail domain,
+  u32×1 and f32×ts) — a genuine reporting slot, same clobber.
+- `writeTangents.name` (`src/nodes/paths.ts`, f32×3) — guards only
+  `name === "P"`; any other differently-shaped column dies silently.
+- `attributeRemap.outName` (`src/nodes/attributes.ts`, always f32×ts) —
+  **borderline, think before copying the rule**: an in-place i32→f32
+  remap is intended usage, so a blanket refusal would break a legitimate
+  case. This one needs a narrower rule than the other two.
+
+Also carried: the guard helper is currently duplicated locally in two
+modules. `src/nodes/util.ts` is its home, but it must NOT simply be
+exported from a node module — `src/nodes/index.ts` does `export *`, so
+that would leak it into the public package surface.
+
 ## Phases (v0.12) — topology, planned 2026-08-08
 
 The one genuine data-model expansion in this arc (edges/adjacency),

@@ -1,6 +1,6 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 12:44",
+  "updated": "2026-08-09 14:07",
   "currentPhase": 40,
   "phases": [
     {
@@ -211,7 +211,7 @@
     {
       "id": 40,
       "title": "Staged pipeline, skills v2, docs, v0.11.0",
-      "state": "active"
+      "state": "done"
     },
     {
       "id": 41,
@@ -220,13 +220,17 @@
     }
   ],
   "tests": {
-    "passed": 2338,
+    "passed": 2463,
     "failed": 0,
-    "total": 2338,
-    "lastRun": "2026-08-09 12:25"
+    "total": 2463,
+    "lastRun": "2026-08-09 14:07"
   },
   "blockers": [],
   "log": [
+    {
+      "time": "2026-08-09 14:07",
+      "message": "Phase 40 complete: the staged pipeline, v0.11.0. Six pipeline graphs (boundary, districts, lots, detail, plus lots/detail edit variants) staged as flat supersets — each stage is the previous file byte-for-byte plus additions, which works because a node seed is hashCombine(graphSeed, hashString(nodeId)), node-local and DAG-position independent. The subgraph route was measured NOT to work (201 vs 205 points) because the wrapper re-derives the inner seed. transferAttribute gained hitAttr (hit polarity, so an unwritten column defaults to the safe reading) and place/drop-to-surface went from five nodes to three; proving that reddened exposed a latent bug where the old marker transfer inherited a pre-existing __onSurface. A fraction field input over [0,1], consistent with pointLine includeEnd. The performance-and-budgets skill, which corrected three of its own briefed claims by measurement: the warm/cold gap is JIT and not caching, and the partition-safety check it documents did not exist as a test — it does now, over all 34 corpus graphs at float-exact fidelity, proven to redden under an injected order dependency. Silent truncation became a diagnostic: requireGeometry took item[0] and discarded the rest, and the GPU resident-run fusion path made the same graph throw on CPU and cook on GPU. A class of silent clobber closed on six reporting-slot params, with three more recorded in PLAN. CI added (Node 20 and 22) including a generated-artifact idempotence check, since the repo had no CI at all while several phases claimed cooks-in-CI as an exit criterion."
+    },
     {
       "time": "2026-08-09 12:25",
       "message": "Phase 39 complete: path authoring. pointsToPath closes the polyline half of the geometry gap sighted five times — the library had a polyline consumer, type, render branch and inspect branch, and no in-graph producer, so no path could exist in a serialized graph. Nodes 32 to 35 (pointsToPath, pathResample, writeTangents), primitives 29 to 34 (including place/along-curve, which phase 37 cut for exactly this missing source), corpus 23 to 28, field fns 40 to 41. pathResample forced splineSample arc-length table into a shared helper; behavior preservation proven by a frozen pre-extraction copy compared byte-exact over 49 cases, and the frozen copy was itself checked against git so the proof is not circular. Two independent audits: 17 of 21 mutations killed with the four survivors clustered in writeTangents fallback (untested, one branch unreachable while the other was sign-sensitive), and a phase-level verifier that confirmed all four exit criteria and found the topology rule stated backwards in 11 shipped strings. A catalog-wide measurement pass rewrote 22 param descriptions to state their measured laws and found fill/scatter-clustered spread.y inert, fixed with the default preserving byte-identical output. Recorded as NOT to schedule: rescaling the shared noise convention, because utilization is not constant and a constant factor turns reliable undershoot into overshoot, while a per-cook fit would break determinism under partitioned cooking."

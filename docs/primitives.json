@@ -1310,7 +1310,7 @@
     "name": "place/drop-to-surface",
     "hash": "8240be26af3cc83a",
     "title": "Drop points onto a mesh and discard the misses",
-    "description": "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. ONE ray is cast: the transfer moves `P` to the hit and reports per point whether it found anything, so the discard reads the outcome of the very ray that did the moving. A miss keeps its prior position and is filtered out. Fully deterministic. Reads and writes `P`; the internal `__onSurface` flag column is removed again.",
+    "description": "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. THREE nodes casting ONE ray: the transfer moves `P` to the hit AND reports per point whether it found anything, so the filter that discards the misses reads the outcome of the very ray that did the moving. It used to be five nodes and two rays, the second cast only to recover what the first already knew; there is nothing left to get out of order. A miss keeps its prior position and is filtered out. Fully deterministic. Reads and writes `P`; the internal `__onSurface` flag column (bool, tuple 1) is removed again. PRECONDITION: the input must not already carry `__onSurface` under a different shape — the hit flag refuses to delete an existing column, so it stops instead of cooking something plausible; an input holding the name as a bool is harmless, since every point is rewritten.",
     "tags": [
       "place",
       "surface",

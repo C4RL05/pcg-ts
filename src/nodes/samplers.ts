@@ -314,11 +314,13 @@ export const volumeSample = standardNode<VolumeSampleParams>({
       type: "f32",
       default: 1,
       description:
-        "Requested grid cell edge length in world units, and a LOWER BOUND rather than " +
-        "the cell you get. Each axis is divided into floor(extent / cellSize) whole cells " +
-        "(at least one), so the actual cell is extent / that count and is always >= " +
-        "cellSize: an extent of 20 with cellSize 12 yields ONE 20-wide cell, not a 12-wide " +
-        "one. Divide evenly to get the cell you asked for. Must be > 0.",
+        "Requested grid cell edge length in world units — a REQUEST, not the cell you get. " +
+        "Each axis is divided into max(1, floor(extent / cellSize)) whole cells, so the " +
+        "actual cell is extent / that count. When the extent is not a multiple you get a " +
+        "LARGER cell (extent 20, cellSize 12 -> one 20-wide cell); when the extent is " +
+        "smaller than cellSize you get a SMALLER one (extent 20, cellSize 25 -> one 20-wide " +
+        "cell, since an axis always has at least one cell). It equals cellSize exactly when " +
+        "the extent divides evenly by it. Must be > 0.",
     },
     jitter: {
       type: "f32",

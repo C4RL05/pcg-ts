@@ -3,7 +3,7 @@
  * bounds stamping. All clone their inputs before mutating (the executor
  * caches inputs by reference).
  */
-import { Geometry, type AttrDefault } from "../data/index.js";
+import { Geometry, type AttrDefault, createPointCloud } from "../data/index.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
@@ -295,6 +295,17 @@ export const mergePoints = standardNode<MergePointsParams>({
   params: {},
   execute({ inputs }) {
     const items = geometryItems(inputs.in);
+    // Nothing connected: emit an EMPTY STANDARD cloud, not a bare
+    // Geometry. The union of no inputs is no attributes, which is
+    // internally consistent and useless — the result would not even
+    // carry P, so the next node rejects it for a reason that has
+    // nothing to do with what the author did wrong. An unconnected
+    // multi-pin is a legitimate "slot to fill later" (the staged
+    // pipeline's edit layer is exactly that), so it must produce a
+    // valid empty cloud rather than a malformed one.
+    if (items.length === 0) {
+      return { out: [makeGeometryItem(createPointCloud(0))] };
+    }
     const out = new Geometry();
     const outSet = out.attrs.point;
     // Union of attributes, first-occurrence order and shape.

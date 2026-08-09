@@ -322,7 +322,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 41 names at runtime.
+256 levels). `listFieldFns()` returns all 42 names at runtime.
 
 ### Inputs
 
@@ -332,7 +332,23 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 | `attribute` | `{ fn, name: "density", tupleSize?: 1 }` | Reads a numeric attribute of the target domain (string attributes are not readable as fields; `tupleSize`, when given, must match) |
 | `position` | `{ fn }` | The `P` attribute (f32, tuple 3) |
 | `index` | `{ fn }` | Element index 0, 1, 2, ... |
+| `fraction` | `{ fn }` | Normalized element index, `index / (count - 1)` |
 | `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, index) |
+
+`fraction` spans **[0, 1] closed**: exactly 0 on the first element and
+exactly 1 on the last, matching `pointLine`'s `includeEnd: true`
+convention, so five elements give 0, 0.25, 0.5, 0.75, 1. A single
+element gives 0 (the divisor is clamped, never zero) and an empty domain
+gives an empty column. Because the endpoints coincide, a periodic
+function fed straight from `fraction` repeats its start value at the last
+element — scale by `(count - 1) / count` when you want a seam-free loop.
+
+Its value is a function of how many elements share the domain, so it
+answers "how far along this thing" and never "where in the world": the
+same point gets a different `fraction` after any upstream filter changes
+the count, and a different one again in a `World` cell that holds a
+different number of elements. Use `position` for anything that must agree
+across partitions.
 
 ### Elementwise combinators
 
@@ -656,6 +672,45 @@ boundary — a rebuilt graph is fully validated but starts with cold
 caches. The two stay consistent: after any mutation,
 `serializeGraph(graph)` reflects the current structure and round-trips.
 
+## One pin, many geometries
+
+A pin carries a **collection**, not a geometry, and a single connection
+can put several geometries on it. Two ordinary ways that happens:
+`partitionByAttribute` emits one geometry per distinct value, and a
+`subgraph` or `dataInput` forwards however many items it holds.
+
+Most nodes process exactly one geometry. Handed several, **they error**:
+
+```
+transferAttribute: input pin "in" received 3 geometries, but
+transferAttribute processes exactly ONE. Using the first and discarding
+the other 2 would look like a successful cook, so it is an error instead.
+```
+
+That is the trade being made. Taking the first item is the friendlier
+behavior right up to the moment it is wrong, and then it is a cook that
+succeeds, reports plausible counts, renders a plausible picture, and has
+silently dropped two thirds of the work — the failure this library is
+least able to help you find. An error at the pin names the node and the
+count instead.
+
+**There is no for-each node, and no in-graph node that selects one item
+of a collection.** This is a real limitation, not an omission you can
+route around inside the JSON. Three fixes, and the error message lists
+all three:
+
+1. **Merge.** Insert `mergePoints` between the source and the node, to
+   concatenate the geometries back into one cloud. It is points-only, so
+   rebuild any path after it with `pointsToPath` (see "A path that goes
+   through a filter stops being a path").
+2. **Move the op upstream of the split**, so it runs once on the whole
+   cloud before it is partitioned. Usually the right answer when the
+   operation does not actually depend on the partitioning.
+3. **Drive it from TypeScript**, where a collection is an ordinary array:
+   `collection.filter((item) => item.kind === "geometry")` gives you all
+   of them to loop over, and `filterByTag(collection, "<attr>=<value>")`
+   picks one by the tag `partitionByAttribute` wrote.
+
 ## Transfer mappings
 
 `transferAttribute` copies an attribute from a second geometry (its
@@ -690,6 +745,27 @@ The policies both mesh mappings share:
   never invented. Name a `missCountAttr` and the node writes the miss
   total into a u32 detail attribute so a graph can assert on it;
   `nearest` assigns every point and always reports 0.
+- **Which points missed.** `missCountAttr` gives the total; `hitAttr`
+  gives the per-point answer. Name one and the node writes a bool
+  attribute of that name (tuple 1) onto the output's point domain, where
+  **1 means this point found a source** and received a transferred
+  value and 0 means it missed and kept its prior one. The polarity is
+  the hit, the inverse of what `missCountAttr` counts. Every point is
+  written and the column is replaced rather than merged, so it can never
+  carry a stale value: `nearest` leaves it all 1, and a source with
+  nothing to search — every triangle degenerate — leaves it all 0. It
+  must differ from `name`, which it would otherwise overwrite; empty
+  (the default) writes nothing.
+
+  This is what lets one ray decide both the move and the discard.
+  Transfer `P` by `raycast` with a `hitAttr`, keep the hits with
+  `filterByAttribute` (comparison `eq`, value 1), then `removeAttribute`
+  to clean up — three nodes reading the outcome of the very ray that did
+  the moving. `place/drop-to-surface` is exactly those three nodes. Do
+  not recover the same information by casting a second ray from the
+  snapped positions: the snapped point sits *on* the surface, so a
+  forward-only second ray can start a hair below a tilted plane and miss
+  what the first ray hit.
 - **Determinism.** Degenerate triangles are skipped, tie-breaks are by
   lowest index, and the acceleration grids are provably result-neutral;
   the epsilon policy is exported (`TRANSFER_BARY_EPS`,
@@ -841,7 +917,13 @@ built by hand with `pointsToPath` has no `tangent` at all until
 something writes one, because only a sampler emits it and only for the
 points it created.
 
-## Staged pipelines (per-output cooking)
+## Staged pipelines
+
+Two independent mechanisms, often wanted together: cooking *part* of one
+graph at a time, and authoring a *sequence of files* where each is the
+previous one extended.
+
+### Staging inside one graph (per-output cooking)
 
 `cook(graph, { outputs: ["name"] })` cooks only the named declared
 outputs: the pass visits just their upstream nodes, and the result
@@ -863,6 +945,56 @@ const stage2 = await cook(graph, { outputs: ["instances"] }); // shared upstream
 In a `World`, `LevelDef.cookOutputs` applies the same selection per
 cell: the level cooks and stores only those outputs (names are
 validated against the graph's declared outputs at World construction).
+
+### Staging across files (the flat superset)
+
+The shipped example of a multi-file pipeline is
+`examples/graphs/pipeline-*.json`: a settlement built as
+`pipeline-1-boundary` → `-2-districts` → `-3-lots` → `-4-detail`, plus
+`-3-lots-edits` and `-4-detail-edits`.
+
+The mechanism is deliberately the dullest one available — **each stage's
+file is the previous stage's file plus new nodes, connections and
+outputs.** Not an include, not a subgraph payload, not a patch format.
+Nothing is removed, no shared node is retuned, no param is edited, and
+all six carry the same graph seed. Every earlier stage therefore
+reproduces bit-identically inside every later one, and you can open any
+stage on its own and cook it.
+
+That works because of the seed chain and nothing else. A node's seed is
+`hashCombine(graphSeed, hashString(nodeId))` — derived from its **id**,
+not from its position in the DAG, its index, or its distance from an
+output. Appending a whole district layer downstream of the terrain
+cannot move the terrain, because no input to the terrain's seed
+mentions the district layer.
+
+Two consequences worth stating explicitly:
+
+- **Renaming a node breaks the chain**, since the id is the seed. A
+  stage that renames a shared node is no longer an extension of its
+  base, even though every file still cooks and still validates.
+- **Wrapping an earlier stage as a subgraph does not work**, and this
+  was measured rather than assumed. A `subgraph` node derives its inner
+  seed from the wrapper's own node seed (`hashCombine(nodeSeed,
+  hashString("subgraph"))`), so the inner nodes get different seeds than
+  they had as top-level nodes and the stage no longer reproduces
+  bit-identically. Copy the nodes; do not wrap them.
+
+**Reserving an edit slot.** The `-edits` variants add authored geometry
+and wire it into a slot the base already reserved — an unconnected
+`mergePoints` node named `edits`, sitting downstream of the terrain, the
+wall and the district pass. Feeding a new branch into a reserved slot
+keeps the file a superset; rewiring an existing edge does not, because
+it changes what the earlier stage cooks. The payoff is that locality is
+provable: `terrain`, `boundary` and `districts` stay bit-identical
+between base and edited, while `lots` changes.
+
+`tests/pipeline.test.ts` enforces all of this — one shared seed, no
+dropped node, no retuned param, no dropped connection, no moved output,
+the upstream outputs bit-identical across each base/edited pair, and a
+ceiling of 1000 instances across a stage's declared outputs. That last
+one carries a rule as much as a number: a stage that outgrows its budget
+is shrunk, the budget is not raised.
 
 ## Per-cell seeding
 

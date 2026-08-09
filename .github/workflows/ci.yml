@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Determinism is a hard invariant here — "same seed, same output
+        # across runs and platforms" is a claim the suite asserts, so it
+        # is worth running on more than one runtime.
+        #
+        # NOT package.json's `engines` floor of >=18: that describes what
+        # a CONSUMER needs to run the built library, and it still does.
+        # The dev toolchain is stricter than the package — vitest needs
+        # ^20 || ^22 || >=24 and vite needs ^20.19 || >=22.12, so the
+        # suite cannot run on 18 at all.
+        node: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # Order matters: typecheck first, because vitest does NOT typecheck
+      # and this project has had green test runs hiding type errors.
+      - run: npm run check
+
+      - run: npm test
+
+      # The build is also the docs generator's input — scripts/gen-*.mjs
+      # read dist/, so a broken build silently produces a stale reference.
+      - run: npm run build
+
+      # The generated docs, the example corpus and status.html are all
+      # committed artifacts. Regenerating them must be a no-op on a clean
+      # checkout; if it is not, someone changed a source of truth and did
+      # not regenerate, and the repo is shipping a doc that disagrees
+      # with the code.
+      - name: Generated artifacts are up to date
+        run: |
+          npm run docs
+          npm run status
+          git diff --exit-code -- docs status.html status.json \
+            || { echo "::error::Generated files are stale. Run 'npm run docs && npm run status' and commit the result."; exit 1; }

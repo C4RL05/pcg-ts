@@ -19,7 +19,14 @@
  * superset is checked here directly, and the bit-identity it buys is
  * checked against `corpusFingerprint` — the same float-exact hash the
  * determinism test uses, run across two DIFFERENT graphs instead of two
- * cooks of one.
+ * cooks of one — for EVERY pair, chained and edited alike.
+ *
+ * "Superset" includes the ORDER of the edges into a multi-input pin. That
+ * is not pedantry: a merge consumes its connections in file order and the
+ * prune behind it is index-greedy, so order is what makes an authored edit
+ * beat a generated lot. Swapping two edges into one pin removes nothing,
+ * renames nothing and retunes nothing — and changes the cook. See
+ * `connectionKeys`.
  *
  * The `-edits` variants are the payoff. An edited stage is its base plus
  * authored geometry and ONE connection into a slot the base reserved, so
@@ -115,13 +122,32 @@ function nodesById(graph: Json): Map<string, Json> {
   return out;
 }
 
-/** `from.pin -> to.pin`, the identity of one edge. */
+/**
+ * `from.pin -> to.pin #n`, the identity of one edge — where `n` is the
+ * edge's ORDINAL among the connections sharing its destination pin.
+ *
+ * The ordinal is not decoration. A multi-input pin consumes its connections
+ * in file order, and the pipeline's whole edit mechanism is built on that:
+ * `compose/merge-tagged` concatenates in the order it receives, and the
+ * `selfPrune` behind it is index-greedy, so whichever branch is connected
+ * FIRST wins every contested position. Authored edits beat generated lots
+ * by construction, not by luck. Key an edge by its endpoints alone and
+ * swapping two connections into one pin is invisible: measured, swapping
+ * the two feeding `editPts.in` in pipeline-4-detail-edits.json changes
+ * `lots`, `footprints` and `buildings`, and every structural check here
+ * still passed. A test that cannot see order cannot protect the property
+ * the pipeline is built on.
+ */
 function connectionKeys(graph: Json): Set<string> {
   const out = new Set<string>();
+  const seen = new Map<string, number>();
   for (const c of graph.connections as Json[]) {
     const from = c.from as [string, string];
     const to = c.to as [string, string];
-    out.add(`${from[0]}.${from[1]} -> ${to[0]}.${to[1]}`);
+    const dst = `${to[0]}.${to[1]}`;
+    const ordinal = (seen.get(dst) ?? -1) + 1;
+    seen.set(dst, ordinal);
+    out.add(`${from[0]}.${from[1]} -> ${dst} #${ordinal}`);
   }
   return out;
 }
@@ -130,6 +156,22 @@ function outputsByName(graph: Json): Map<string, string> {
   const out = new Map<string, string>();
   for (const o of graph.outputs as Json[]) out.set(String(o.name), `${String(o.id)}.${String(o.pin)}`);
   return out;
+}
+
+/**
+ * Float-exact fingerprint of one stage's cook, memoized. Six files feed
+ * two comparison loops, so without this the suite cooks the same graph up
+ * to three times.
+ */
+const fingerprints = new Map<string, Promise<Record<string, unknown>>>();
+
+function fingerprintOf(file: string): Promise<Record<string, unknown>> {
+  let pending = fingerprints.get(file);
+  if (pending === undefined) {
+    pending = cookCorpusGraph(graphOf(file)).then((r) => corpusFingerprint(r.outputs));
+    fingerprints.set(file, pending);
+  }
+  return pending;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +183,35 @@ describe("staged pipeline", () => {
     const missing = [...CHAIN, ...EDITED].flat().filter((f) => !stages.has(f));
     expect([...new Set(missing)]).toEqual([]);
     expect(stages.size).toBe(6);
+  });
+
+  it("compares connections by ORDER, not just by endpoints", () => {
+    // A guard on the instrument rather than on the corpus. The superset
+    // check below is only as strong as what `connectionKeys` can
+    // distinguish, and for most of this suite's life it could not
+    // distinguish anything about order: two connections into one pin,
+    // swapped, produced the identical key set. That is a mutation the whole
+    // file was written to catch and did not. Stated here directly, the day
+    // someone simplifies the ordinal away is the day this reddens — no cook
+    // required, and no corpus file has to be carrying a shared pin for the
+    // rule to hold.
+    const edge = (from: string, to: string): Json => ({ from: [from, "out"], to: [to, "in"] });
+    const forward = connectionKeys({ connections: [edge("a", "m"), edge("b", "m")] });
+    const swapped = connectionKeys({ connections: [edge("b", "m"), edge("a", "m")] });
+    expect(forward.size).toBe(2);
+    expect([...forward].sort()).not.toEqual([...swapped].sort());
+    // ...and the two must not be interchangeable in either direction, which
+    // is what makes a swap read as a DROPPED connection in the check below.
+    expect([...forward].filter((k) => !swapped.has(k))).toHaveLength(2);
+
+    // The corpus really does exercise this: the guard would be vacuous if
+    // no shipped stage fed a pin from two places.
+    const shared = new Map<string, number>();
+    for (const c of graphOf("pipeline-4-detail-edits.json").connections as Json[]) {
+      const to = c.to as [string, string];
+      shared.set(`${to[0]}.${to[1]}`, (shared.get(`${to[0]}.${to[1]}`) ?? 0) + 1);
+    }
+    expect([...shared.values()].filter((n) => n > 1).length).toBeGreaterThan(0);
   });
 
   it("every stage shares one graph seed", () => {
@@ -233,12 +304,16 @@ describe("staged pipeline", () => {
   }
 
   for (const [base, ext] of CHAIN) {
-    it(`${ext} reproduces every output ${base} declares`, () => {
-      // The golden is count-level, which is the right granularity here: it
-      // is re-derived from a real cook of both files, so an output that
-      // moved shows up as a count, an attribute or a bounds difference.
-      // Byte-exactness for the pairs where it matters most is asserted
-      // against the fingerprint below.
+    it(`${ext} reproduces every output ${base} declares`, async () => {
+      // TWO granularities, and the coarse one alone would not be the claim
+      // the docstring makes. The golden is count-level: re-derived from a
+      // real cook of both files, so an output that moved shows up as a
+      // count, an attribute or a bounds difference — but two cooks can
+      // agree on all of those and still differ in every float. The
+      // fingerprint is the actual claim, the same float-exact hash the
+      // determinism test uses, run across two DIFFERENT graphs: a stage
+      // reproduces its predecessor BIT-identically, not merely to the
+      // nearest rounded bound.
       const a = golden.examples[base];
       const b = golden.examples[ext];
       expect(a, `${base} has no golden entry`).toBeDefined();
@@ -246,13 +321,33 @@ describe("staged pipeline", () => {
       for (const name of Object.keys(a?.outputs ?? {})) {
         expect(b?.outputs[name], `output "${name}" of ${ext} vs ${base}`).toEqual(a?.outputs[name]);
       }
+
+      const before = await fingerprintOf(base);
+      const after = await fingerprintOf(ext);
+      for (const name of Object.keys(a?.outputs ?? {})) {
+        expect(after[name], `output "${name}" is missing from ${ext}`).toBeDefined();
+        if (JSON.stringify(after[name]) !== JSON.stringify(before[name])) {
+          throw new Error(
+            [
+              `${CORPUS_DIR}/${ext}: output "${name}" is not bit-identical to ${base}.`,
+              "",
+              "A later stage only ADDS to an earlier one, and a node's seed is derived",
+              "from the graph seed and its own id — never from its position in the DAG —",
+              "so nothing added downstream can perturb this. A difference means a shared",
+              "node was retuned, the graph seed moved, or an edge into a MULTI-INPUT pin",
+              "changed order: order decides which branch a merge sees first, and",
+              "selfPrune is index-greedy, so it decides which points survive.",
+            ].join("\n"),
+          );
+        }
+      }
     });
   }
 
   for (const [base, ext] of EDITED) {
     it(`${ext} changes only what the edit can reach`, async () => {
-      const before = corpusFingerprint((await cookCorpusGraph(graphOf(base))).outputs);
-      const after = corpusFingerprint((await cookCorpusGraph(graphOf(ext))).outputs);
+      const before = await fingerprintOf(base);
+      const after = await fingerprintOf(ext);
       for (const name of UPSTREAM_OF_EDITS) {
         expect(after[name], `output "${name}" is upstream of the edit slot`).toBeDefined();
         if (JSON.stringify(after[name]) !== JSON.stringify(before[name])) {

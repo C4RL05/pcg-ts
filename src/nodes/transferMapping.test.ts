@@ -339,15 +339,19 @@ describe("transferAttribute hitAttr (per-point miss flag)", () => {
     const sameType = await run(dst, { name: "val", mapping: "raycast", hitAttr: "__hit" });
     expect(flags(sameType)).toEqual([1, 0]);
 
+    // A collision under a DIFFERENT shape used to be resolved the other way
+    // — the column was deleted and re-added as the flag — which is the
+    // clobber the guard below refuses. The hazard is the same one read from
+    // the other side: the node cannot know whether a differently shaped
+    // column is a stale flag or the graph's own data, so it stops.
     const wrongType = dstCloud([
       { p: [5, 7, 2.5], uv: [0, 0] },
       { p: [50, 7, 50], uv: [0, 0] },
     ]);
     wrongType.attrs.point.add("__hit", "f32", 3).data.set([9, 9, 9, 9, 9, 9]);
-    const replaced = await run(wrongType, { name: "val", mapping: "raycast", hitAttr: "__hit" });
-    expect(replaced.attrs.point.require("__hit").type).toBe("bool");
-    expect(replaced.attrs.point.require("__hit").tupleSize).toBe(1);
-    expect(flags(replaced)).toEqual([1, 0]);
+    await expect(
+      run(wrongType, { name: "val", mapping: "raycast", hitAttr: "__hit" }),
+    ).rejects.toThrow(/hitAttr "__hit" already exists on the input's point domain as f32x3/);
   });
 
   it("rejects a hitAttr that would overwrite the transferred attribute", async () => {
@@ -360,6 +364,62 @@ describe("transferAttribute hitAttr (per-point miss flag)", () => {
     ).rejects.toThrow(
       /transferAttribute: hitAttr "val" is the same as name .* give hitAttr a distinct name/s,
     );
+  });
+
+  it("refuses to DELETE an existing attribute of another shape, P included", async () => {
+    // The worst failure this project can produce is a plausible-looking
+    // cook, and this was one: `replace` deletes and re-adds on a shape
+    // mismatch, so `hitAttr: "P"` turned every position into a bool flag
+    // and returned a geometry that still cooked, still had the right point
+    // count, and had lost the positions. The `hitAttr === name` guard could
+    // not see it — the collision is with an attribute the transfer never
+    // touches. Any existing name of a different shape is refused now, and
+    // the message has to name all four things an agent needs: the node, the
+    // param, the attribute, and what to do instead.
+    const dst = dstCloud([
+      { p: [5, 7, 2.5], uv: [0.5, 0.25] },
+      { p: [50, 7, 50], uv: [3, 3] },
+    ]);
+    await expect(run(dst, { name: "val", mapping: "raycast", hitAttr: "P" })).rejects.toThrow(
+      /transferAttribute: hitAttr "P" already exists on the input's point domain as f32x3.*would DELETE.*__hit/s,
+    );
+    // The input is not consumed by the refusal: the node threw before it
+    // wrote anything, so P is still P.
+    expect(dst.attrs.point.require("P").type).toBe("f32");
+    expect(dst.attrs.point.require("P").tupleSize).toBe(3);
+  });
+
+  it("refuses the same clobber through missCountAttr, on the detail domain", async () => {
+    // Same hole, same `replace`, different domain — a guard that closes one
+    // and not the other is an invitation to find the other.
+    const dst = dstCloud([{ p: [5, 7, 2.5], uv: [0.5, 0.25] }]);
+    dst.attrs.detail.add("label", "f32", 3).setTuple(0, [1, 2, 3]);
+    await expect(
+      run(dst, { name: "val", mapping: "raycast", missCountAttr: "label" }),
+    ).rejects.toThrow(
+      /transferAttribute: missCountAttr "label" already exists on the input's detail domain as f32x3.*would DELETE.*__missed/s,
+    );
+  });
+
+  it("still reuses an existing column of the SAME shape, on both channels", async () => {
+    // The refusal must not widen into "never touch an existing name":
+    // reusing a correctly shaped column is the documented behaviour both
+    // params rely on, and resetting it is what keeps the flag describing
+    // THIS transfer only.
+    const dst = dstCloud([
+      { p: [5, 7, 2.5], uv: [0, 0] }, // hits
+      { p: [50, 7, 50], uv: [0, 0] }, // misses
+    ]);
+    dst.attrs.point.add("__hit", "bool", 1).data.set([1, 1]);
+    dst.attrs.detail.add("missed", "u32", 1).set(0, 99);
+    const out = await run(dst, {
+      name: "val",
+      mapping: "raycast",
+      hitAttr: "__hit",
+      missCountAttr: "missed",
+    });
+    expect(flags(out)).toEqual([1, 0]);
+    expect(out.attrs.detail.require("missed").get(0)).toBe(1);
   });
 
   it("is per-point, so reordering the destination permutes the flags exactly", async () => {
