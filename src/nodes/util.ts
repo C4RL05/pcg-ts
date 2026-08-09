@@ -3,7 +3,7 @@
  * field resolution, point gathering/compaction, and quaternion math.
  * Not part of the public API.
  */
-import { Geometry, type AttrDefault } from "../data/index.js";
+import { Geometry, PRIMTYPE_ATTR, type AttrDefault } from "../data/index.js";
 import {
   type Column,
   type Field,
@@ -138,6 +138,138 @@ export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometr
     const dst = dstSet.require(attr.name);
     for (let j = 0; j < n; j++) dst.copyFrom(attr, indices[j], j, 1);
   }
+  return out;
+}
+
+/**
+ * The arc-length table of ONE polyline primitive: the walk along its
+ * vertices, per-segment geometry, and the running length. Every path node
+ * measures distance through this — sampling, resampling and tangents all
+ * need the same numbers, and computing them twice is how two nodes drift
+ * apart.
+ *
+ * All arrays are SoA typed arrays holding f64 values (positions are read
+ * from an f32 column, so no precision is lost or invented). A polyline of
+ * `nv` vertices has `nv - 1` segments; segment `k` runs from vertex `k`
+ * to vertex `k + 1`.
+ */
+export interface PolylineArcTable {
+  /** Index of this primitive in the source geometry. */
+  readonly prim: number;
+  /**
+   * Point index of each vertex along the path, in walk order. A closed
+   * path repeats its first point as the last entry — closure is
+   * structural, carried by the topology and nothing else.
+   */
+  readonly points: Uint32Array;
+  /** Start position of each segment, 3 per segment. */
+  readonly segStart: Float64Array;
+  /** Segment delta (unnormalized direction), 3 per segment. */
+  readonly segDir: Float64Array;
+  /** Segment length, one per segment. */
+  readonly segLen: Float64Array;
+  /** Length before each segment; `nSeg + 1` entries, `cum[0] === 0`. */
+  readonly cum: Float64Array;
+  /** Total arc length of this polyline (`cum[nSeg]`). */
+  readonly length: number;
+  /** Whether the last vertex references the first vertex's point. */
+  readonly closed: boolean;
+}
+
+/**
+ * Build one {@link PolylineArcTable} per polyline primitive, in primitive
+ * index order. Primitives with fewer than 2 vertices are skipped, and so
+ * are primitives whose `primtype` is not `"polyline"` (a geometry with no
+ * `primtype` attribute at all has every multi-vertex primitive treated as
+ * a polyline). Throws — naming `nodeType` — when the input has no usable
+ * polyline, because a path node with no path is always an authoring
+ * mistake worth reporting loudly.
+ */
+export function polylineArcTables(geo: Geometry, nodeType: string): PolylineArcTable[] {
+  const P = geo.attrs.point.get("P");
+  if (!P || P.type !== "f32" || P.tupleSize < 3) {
+    throw new Error(`${nodeType}: input needs a point attribute "P" (f32, tupleSize >= 3)`);
+  }
+  const pd = P.data;
+  const ps = P.tupleSize;
+  const v2p = geo.vertexToPoint;
+  const starts = geo.primVertexStart;
+  const counts = geo.primVertexCount;
+  const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
+  const tables: PolylineArcTable[] = [];
+  for (let p = 0; p < geo.primitiveCount; p++) {
+    const nv = counts[p];
+    if (nv < 2) continue;
+    if (primType && primType.getString(p) !== "polyline") continue;
+    const v0 = starts[p];
+    const nSeg = nv - 1;
+    const points = new Uint32Array(nv);
+    for (let k = 0; k < nv; k++) points[k] = v2p[v0 + k];
+    const segStart = new Float64Array(nSeg * 3);
+    const segDir = new Float64Array(nSeg * 3);
+    const segLen = new Float64Array(nSeg);
+    const cum = new Float64Array(nSeg + 1);
+    for (let k = 0; k < nSeg; k++) {
+      const a = points[k] * ps;
+      const b = points[k + 1] * ps;
+      const dx = pd[b] - pd[a];
+      const dy = pd[b + 1] - pd[a + 1];
+      const dz = pd[b + 2] - pd[a + 2];
+      segStart[k * 3] = pd[a];
+      segStart[k * 3 + 1] = pd[a + 1];
+      segStart[k * 3 + 2] = pd[a + 2];
+      segDir[k * 3] = dx;
+      segDir[k * 3 + 1] = dy;
+      segDir[k * 3 + 2] = dz;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      segLen[k] = len;
+      cum[k + 1] = cum[k] + len;
+    }
+    tables.push({
+      prim: p,
+      points,
+      segStart,
+      segDir,
+      segLen,
+      cum,
+      length: cum[nSeg],
+      closed: points[0] === points[nv - 1],
+    });
+  }
+  if (tables.length === 0) {
+    throw new Error(
+      `${nodeType}: input has no polyline primitives (build one in-graph with pointsToPath, or in TypeScript with createPolyline; note that every filter node and mergePoints drop topology, so a path must reach this node without passing through one)`,
+    );
+  }
+  return tables;
+}
+
+/**
+ * Locate the arc-length position `s` on a cumulative-length array
+ * (`cum[0] === 0`, one entry per segment boundary), writing
+ * `[segment index, t]` into `out` — a caller-owned scratch tuple, because
+ * this runs once per sample and per-sample allocation is exactly what the
+ * SoA hot-path rule forbids. `t` is in [0, 1] along the segment.
+ * Positions past the end clamp to the last segment, and a zero-length
+ * segment reports `t = 0`, so the answer is always a real segment.
+ *
+ * The segment length is taken as `cum[seg + 1] - cum[seg]` rather than a
+ * stored per-segment length. That is deliberate: the difference and the
+ * stored length are not the same f64 in general, and every sampler in the
+ * library must agree on which one it means.
+ */
+export function locateOnArcLength(out: number[], cum: Float64Array, s: number): number[] {
+  // First segment j with cum[j + 1] > s; clamp to the last segment.
+  let lo = 0;
+  let hi = cum.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid + 1] > s) hi = mid;
+    else lo = mid + 1;
+  }
+  const segLen = cum[lo + 1] - cum[lo];
+  out[0] = lo;
+  out[1] = segLen > 0 ? Math.min((s - cum[lo]) / segLen, 1) : 0;
   return out;
 }
 

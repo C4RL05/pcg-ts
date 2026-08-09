@@ -23,6 +23,7 @@ import {
   max,
   min,
   mul,
+  ne,
   normalize,
   ramp,
   remap,
@@ -193,6 +194,45 @@ describe("compare and select", () => {
     expect(asArray(ctx, gt(x, 0.5))).toEqual([1, 0, 0]);
     expect(asArray(ctx, ge(x, 0.5))).toEqual([1, 1, 0]);
     expect(asArray(ctx, eq(x, 0.5))).toEqual([0, 1, 0]);
+    expect(asArray(ctx, ne(x, 0.5))).toEqual([1, 0, 1]);
+  });
+
+  it("ne is the exact complement of eq", () => {
+    // The contract `filterByExpression` advertises: `ne` is not an
+    // independent near-equality test with its own tolerance, it is
+    // `1 - eq` on every input, including the ones that make float
+    // comparison interesting.
+    const pairs: Array<[number, number]> = [
+      [0.5, 0.5],
+      [0.5, 0.500001],
+      [0, -0],
+      [1e-30, 0],
+      [1 / 3, 0.3333333333333333],
+      [16777216, 16777217], // both round to the same f32
+      [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+      [Number.NaN, Number.NaN],
+      [Number.NaN, 1],
+    ];
+    for (const [a, b] of pairs) {
+      const same = asArray(ctx, eq(a, b));
+      const opposite = asArray(ctx, ne(a, b));
+      expect(opposite, `ne(${a}, ${b})`).toEqual(same.map((v) => 1 - v));
+    }
+  });
+
+  it("ne complements eq elementwise over a whole domain", () => {
+    const lhs = component(position(), 0);
+    const rhss: Array<number | ReturnType<typeof component>> = [
+      0.5,
+      -1,
+      0,
+      component(position(), 1),
+    ];
+    for (const rhs of rhss) {
+      const same = asArray(ctx, eq(lhs, rhs));
+      const opposite = asArray(ctx, ne(lhs, rhs));
+      expect(opposite).toEqual(same.map((v) => 1 - v));
+    }
   });
 
   it("selects elementwise with broadcasting", () => {

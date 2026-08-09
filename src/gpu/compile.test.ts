@@ -207,6 +207,7 @@ describe("grammar coverage", () => {
     gt: { fn: "gt", args: [1, 2] },
     ge: { fn: "ge", args: [1, 2] },
     eq: { fn: "eq", args: [1, 2] },
+    ne: { fn: "ne", args: [1, 2] },
     dot: { fn: "dot", args: [[1, 2, 3], [4, 5, 6]] },
     length: { fn: "length", args: [[1, 2, 3]] },
     normalize: { fn: "normalize", args: [[1, 2, 3]] },
@@ -401,6 +402,17 @@ describe("codegen structure", () => {
     expect(lt.wgsl).toMatch(/select\(0f, 1f, v\d+ < v\d+\)/);
     const sel = compileFieldSpec({ fn: "select", args: [{ fn: "attribute", name: "density" }, 1, 2] }, LAYOUT);
     expect(sel.wgsl).toMatch(/select\(v\d+, v\d+, v\d+ != 0f\)/);
+  });
+
+  it("ne codegen is eq's codegen with the operator negated", () => {
+    // The CPU pair is exact complements; the device pair has to be the
+    // same two lines apart from `==` / `!=`, or the GPU path would answer
+    // a different question than the one the node advertises.
+    const args: FieldSpecArg[] = [{ fn: "attribute", name: "density" }, 1];
+    const eqWgsl = compileFieldSpec({ fn: "eq", args }, LAYOUT).wgsl;
+    const neWgsl = compileFieldSpec({ fn: "ne", args }, LAYOUT).wgsl;
+    expect(neWgsl).toMatch(/select\(0f, 1f, v\d+ != v\d+\)/);
+    expect(neWgsl).toBe(eqWgsl.replace(" == ", " != "));
   });
 
   it("normalize guards zero tuples like the CPU", () => {

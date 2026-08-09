@@ -370,6 +370,7 @@ registerElementwise("le", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(siz
 registerElementwise("gt", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} > ${a[1]})`);
 registerElementwise("ge", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} >= ${a[1]})`);
 registerElementwise("eq", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} == ${a[1]})`);
+registerElementwise("ne", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} != ${a[1]})`);
 
 // remap needs intermediate values (degenerate input span maps to outMin,
 // mirroring the CPU; the divisor is guarded so no Inf/NaN is produced in

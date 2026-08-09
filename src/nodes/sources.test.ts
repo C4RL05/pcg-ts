@@ -43,6 +43,104 @@ describe("pointLine", () => {
     );
     expect(positionsOf(geo)).toEqual([[5, 5, 5]]);
   });
+
+  it("defaults to includeEnd, matching an explicit true", async () => {
+    // The default is the shipped behavior: adding the param must not move
+    // a single position, so the two runs are compared to each other AND to
+    // the endpoint-inclusive layout.
+    const implicit = firstGeo(
+      (await runNode(pointLine, { count: 5, start: [0, 0, 0], end: [4, 0, 0] })).out,
+    );
+    const explicit = firstGeo(
+      (
+        await runNode(pointLine, {
+          count: 5,
+          start: [0, 0, 0],
+          end: [4, 0, 0],
+          includeEnd: true,
+        })
+      ).out,
+    );
+    expect(pointLine.defaultParams.includeEnd).toBe(true);
+    expect(snapshotGeometry(implicit)).toEqual(snapshotGeometry(explicit));
+    expect(positionsOf(implicit)).toEqual([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+      [3, 0, 0],
+      [4, 0, 0],
+    ]);
+  });
+
+  it("includeEnd false stops one step short of end", async () => {
+    // Four samples over [0, 4) step by 4/4 = 1 and never reach 4, so the
+    // count is the number of DISTINCT positions a wrapping sweep gets.
+    const geo = firstGeo(
+      (
+        await runNode(pointLine, {
+          count: 4,
+          start: [0, 0, 0],
+          end: [4, 0, 0],
+          includeEnd: false,
+        })
+      ).out,
+    );
+    expect(positionsOf(geo)).toEqual([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+      [3, 0, 0],
+    ]);
+  });
+
+  it("exclusive count n covers the same positions as inclusive count n + 1, minus the seam", async () => {
+    // The relationship the ring rewiring depends on: dropping the seam
+    // point is exactly what the exclusive mode does, so a primitive no
+    // longer needs an extra filter node to do it.
+    const closed = firstGeo(
+      (
+        await runNode(pointLine, {
+          count: 7,
+          start: [0, 0, 0],
+          end: [1, 0, 0],
+          includeEnd: false,
+        })
+      ).out,
+    );
+    const openWithSeam = firstGeo(
+      (await runNode(pointLine, { count: 8, start: [0, 0, 0], end: [1, 0, 0] })).out,
+    );
+    expect(closed.pointCount).toBe(7);
+    expect(positionsOf(closed)).toEqual(positionsOf(openWithSeam).slice(0, 7));
+  });
+
+  it("count 1 places a single point at start under both modes", async () => {
+    // Degenerate: one sample has no step to take, so there is nothing for
+    // the excluded endpoint to be short of. Both modes emit start.
+    for (const includeEnd of [true, false]) {
+      const geo = firstGeo(
+        (
+          await runNode(pointLine, { count: 1, start: [5, 5, 5], end: [9, 9, 9], includeEnd })
+        ).out,
+      );
+      expect(positionsOf(geo), `includeEnd ${includeEnd}`).toEqual([[5, 5, 5]]);
+    }
+  });
+
+  it("count 0 emits an empty point cloud under both modes", async () => {
+    // Below the schema minimum of 1, so unreachable through a validated
+    // graph — pinned anyway because the executor must stay total rather
+    // than divide by zero or emit a stray point.
+    for (const includeEnd of [true, false]) {
+      const geo = firstGeo(
+        (
+          await runNode(pointLine, { count: 0, start: [0, 0, 0], end: [1, 0, 0], includeEnd })
+        ).out,
+      );
+      expect(geo.pointCount, `includeEnd ${includeEnd}`).toBe(0);
+      expect(positionsOf(geo), `includeEnd ${includeEnd}`).toEqual([]);
+    }
+  });
 });
 
 describe("pointScatterInBounds", () => {

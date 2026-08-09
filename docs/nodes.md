@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-32 node types, grouped by `category` (node sections below are alphabetical):
+35 node types, grouped by `category` (node sections below are alphabetical):
 
 **attribute**
 
@@ -15,6 +15,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [sampleNearestPoint](#samplenearestpoint) — For every point of `in`, finds the nearest point of the `source` cloud in 3D (positions from P, ties resolved toward the lowest source index) and records what it found on the output's point domain: distanceAttr gets the distance (f32), indexAttr the source point index (i32), and `attribute`/`outAttribute` copy one of the source's point attributes across.
 - [setAttribute](#setattribute) — Creates or overwrites an attribute on the chosen domain.
 - [transferAttribute](#transferattribute) — Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain.
+- [writeTangents](#writetangents) — Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path.
 
 **composite**
 
@@ -39,11 +40,13 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible.
 - [mergePoints](#mergepoints) — Concatenates the points of every connected geometry, in connection order, into one point cloud.
 - [orientAlongVector](#orientalongvector) — Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll.
+- [pointsToPath](#pointstopath) — Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph.
 - [setBounds](#setbounds) — Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing.
 - [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
 
 **sampler**
 
+- [pathResample](#pathresample) — Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed.
 - [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
 - [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
 - [volumeSample](#volumesample) — Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell.
@@ -52,7 +55,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 
 - [meshPrimitive](#meshprimitive) — Builds a parametric triangle mesh with no input: shape 'plane' is one axis-aligned rectangle, shape 'box' is six of them around a volume.
 - [pointGrid](#pointgrid) — Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis.
-- [pointLine](#pointline) — Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start).
+- [pointLine](#pointline) — Creates `count` evenly spaced points on the straight segment from start to end.
 - [pointScatterInBounds](#pointscatterinbounds) — Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax].
 
 **spawn**
@@ -290,6 +293,24 @@ Splits the input into one point cloud per distinct value of an i32, u32, or stri
 | --- | --- | --- | --- | --- | --- | --- |
 | `name` | string | `"name"` |  |  |  | Point attribute to partition by. Must be i32, u32, or string with tuple size 1. |
 
+## pathResample
+
+Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units and an open path always ends on its true endpoint, so it never comes back shorter than it went in. Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Downstream, every filter node and mergePoints drop topology, so a resampled path that passes through one stops being a path.
+
+**Category:** sampler
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `mode` | enum | `"count"` |  | `count`, `spacing` |  | How samples are placed: 'count' puts exactly `count` samples on each path; 'spacing' steps every `spacing` units along each path. |
+| `count` | i32 | `10` | >= 2 |  |  | Samples per path when mode is 'count'. Minimum 2 for an open path and 3 for a closed one — below that the result would not be a path. Ignored in 'spacing' mode. |
+| `spacing` | f32 | `1` | >= 0 |  |  | Distance between samples in world units when mode is 'spacing'. Must be > 0, and small enough to leave at least 2 samples on each open path (3 on a closed one). Ignored in 'count' mode. |
+
 ## pointGrid
 
 Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis. Point order is X fastest, then Y, then Z. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
@@ -312,7 +333,7 @@ Creates a regular grid of points: countX * countY * countZ points starting at or
 
 ## pointLine
 
-Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start). Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
+Creates `count` evenly spaced points on the straight segment from start to end. By default both endpoints are included, so the last point sits exactly on end; set includeEnd false to sample the half-open range instead, stopping one step short of end — which is what a sweep that wraps back on itself needs so its first and last samples are not the same place. count 1 places a single point at start in either mode. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.
 
 **Category:** source
 
@@ -327,6 +348,7 @@ Creates `count` evenly spaced points on the straight segment from start to end, 
 | `count` | i32 | `10` | >= 1 |  |  | Number of points to place. Minimum 1. |
 | `start` | vec3 | `[0,0,0]` |  |  |  | World position of the first point. |
 | `end` | vec3 | `[10,0,0]` |  |  |  | World position of the last point. |
+| `includeEnd` | bool | `true` |  |  |  | Whether `end` is one of the emitted positions. true (the default) samples the closed range [start, end]: `count` points stepping (end - start) / (count - 1), the first on start and the last exactly on end — use it for a run of points with both ends pinned, such as a fence between two posts. false samples the half-open range [start, end): `count` points stepping (end - start) / count, the last one step short of end — use it when the segment is a parameter that wraps, so a closed shape gets `count` distinct positions and no duplicate seam. count 1 emits a single point at start in both modes; count 0 emits nothing. |
 
 ## pointNeighborhood
 
@@ -367,6 +389,24 @@ Scatters `count` points uniformly inside the axis-aligned box [boundsMin, bounds
 | `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner of the box, in world units. |
 | `boundsMax` | vec3 | `[1,1,1]` |  |  |  | Maximum corner of the box, in world units. Should be >= boundsMin per component. |
 | `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the scatter. |
+
+## pointsToPath
+
+Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group id, emitted in ascending group id. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: every filter node and mergePoints drop topology, so a path that passes through one stops being a path — put this node after the filtering, not before.
+
+**Category:** point op
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `closed` | bool | `false` |  |  |  | Close each path by appending a trailing vertex back to its first point (structural closure — no attribute is written). A closed path needs at least 3 points; 2 would fold the path back onto itself and is an error. |
+| `groupAttr` | string | `""` |  |  |  | Name of a scalar numeric point attribute holding a group id, splitting the cloud into one path per distinct id (paths are emitted in ascending id). Ids must be whole numbers — write them with setAttribute (type 'i32'). Leave empty to build a single path over every point. |
+| `orderAttr` | string | `""` |  |  |  | Name of a scalar numeric point attribute to order each path by, ascending; ties break to the lower point index, so the result never depends on sort implementation. Values must be finite. Leave empty to use point index order. |
 
 ## projectToPlane
 
@@ -518,7 +558,7 @@ Spawner terminal: converts the input point cloud into render-agnostic instance b
 
 ## splineSample
 
-Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1].
+Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: every filter node and mergePoints drop it, so a path that passes through one stops being a path and this node will report that it found no polylines.
 
 **Category:** sampler
 
@@ -640,3 +680,19 @@ Fills an axis-aligned box with a regular grid of points: each axis is divided in
 | `cellSize` | f32 | `1` |  |  |  | Grid cell edge length in world units. Must be > 0. |
 | `jitter` | f32 | `0` | 0..1 |  | yes | Per-cell jitter amount in [0, 1]: fraction of the cell size each point may move from its cell center, per axis. Field-capable (evaluated on the grid centers). |
 | `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the jitter. |
+
+## writeTangents
+
+Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path. This is the tangent source for paths that were never spline-sampled: splineSample emits `tangent` only for the new points it creates, so a path built with pointsToPath has none, and orientAlongVector (which reads a direction field, typically the tangent attribute) has nothing to consume. The tangent at a point is the normalized central difference between its neighbours along the path, which stays smooth through corners; at the ends of an open path it is the adjacent segment direction, and a closed path wraps around. When the neighbours coincide the forward segment is used, then the backward one. Points not referenced by any polyline get [0, 0, 0] — orientAlongVector deliberately leaves a zero direction's rot untouched. A point visited by more than one polyline takes the tangent of the last one in primitive order. Every filter node and mergePoints drop topology, so run this before any filtering, not after.
+
+**Category:** attribute
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `name` | string | `"tangent"` |  |  |  | Attribute to write (created, or replaced when it exists with another shape). The default 'tangent' is the name splineSample emits and the one an orientAlongVector direction field usually reads. Cannot be 'P'. |

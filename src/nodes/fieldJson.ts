@@ -11,7 +11,7 @@
  * - `{ fn: "position" }` / `{ fn: "index" }`
  * - `{ fn: "randomField", key?: 0 | "salt" }`
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
- *   lt, le, gt, ge, eq, dot, atan2 (2 args); abs, floor, length,
+ *   lt, le, gt, ge, eq, ne, dot, atan2 (2 args); abs, floor, length,
  *   normalize, sin, cos, tan, asin, acos, atan (1 arg); clamp, lerp,
  *   select (3); remap (5); vec (1+)
  * - `{ fn: "component", args: [a], index: 0 }`
@@ -54,6 +54,7 @@ import {
   max,
   min,
   mul,
+  ne,
   normalize,
   position,
   ramp,
@@ -290,6 +291,7 @@ registerFixed("le", 2, (f) => le(f[0], f[1]));
 registerFixed("gt", 2, (f) => gt(f[0], f[1]));
 registerFixed("ge", 2, (f) => ge(f[0], f[1]));
 registerFixed("eq", 2, (f) => eq(f[0], f[1]));
+registerFixed("ne", 2, (f) => ne(f[0], f[1]));
 registerFixed("dot", 2, (f) => dot(f[0], f[1]));
 registerFixed("length", 1, (f) => length(f[0]));
 registerFixed("normalize", 1, (f) => normalize(f[0]));

@@ -10,6 +10,8 @@ import {
   type FieldParam,
   gatherPoints,
   geometryItems,
+  locateOnArcLength,
+  polylineArcTables,
   requireGeometry,
   requireTuple,
   resolveOnMaybeGpu,
@@ -174,7 +176,7 @@ export const splineSample = standardNode<SplineSampleParams>({
   type: "splineSample",
   category: "sampler",
   description:
-    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1].",
+    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: every filter node and mergePoints drop it, so a path that passes through one stops being a path and this node will report that it found no polylines.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -201,49 +203,33 @@ export const splineSample = standardNode<SplineSampleParams>({
   },
   execute({ inputs, params, seed }) {
     const geo = requireGeometry(inputs, "in", "splineSample");
-    const P = geo.attrs.point.get("P");
-    if (!P || P.type !== "f32" || P.tupleSize < 3) {
-      throw new Error('splineSample: input needs a point attribute "P" (f32, tupleSize >= 3)');
-    }
-    const pd = P.data;
-    const ps = P.tupleSize;
-    const v2p = geo.vertexToPoint;
-    const starts = geo.primVertexStart;
-    const counts = geo.primVertexCount;
-    const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
 
-    // Collect segments of all polyline primitives, concatenated.
-    const segAx: number[] = [];
-    const segDir: number[] = []; // per-segment direction (unnormalized)
-    const cum: number[] = [0]; // cumulative length; cum[j] = length before segment j
+    // One arc-length table per polyline primitive, then concatenated into
+    // a single curve — the node's documented "all polylines as one" rule.
+    // Concatenating with the tables' own per-segment lengths keeps the
+    // running total accumulated segment by segment in path order, which
+    // is what makes this identical to the pre-extraction single pass.
+    const tables = polylineArcTables(geo, "splineSample");
+    let nSeg = 0;
+    for (const table of tables) nSeg += table.segLen.length;
+    const segAx = new Float64Array(nSeg * 3);
+    const segDir = new Float64Array(nSeg * 3); // per-segment direction (unnormalized)
+    const cum = new Float64Array(nSeg + 1); // cumulative length; cum[j] = length before segment j
     let closedCount = 0;
-    let polylineCount = 0;
-    for (let p = 0; p < geo.primitiveCount; p++) {
-      const nv = counts[p];
-      if (nv < 2) continue;
-      if (primType && primType.getString(p) !== "polyline") continue;
-      polylineCount++;
-      const v0 = starts[p];
-      if (v2p[v0] === v2p[v0 + nv - 1]) closedCount++;
-      for (let v = v0; v < v0 + nv - 1; v++) {
-        const a = v2p[v] * ps;
-        const b = v2p[v + 1] * ps;
-        const dx = pd[b] - pd[a];
-        const dy = pd[b + 1] - pd[a + 1];
-        const dz = pd[b + 2] - pd[a + 2];
-        segAx.push(pd[a], pd[a + 1], pd[a + 2]);
-        segDir.push(dx, dy, dz);
-        cum.push(cum[cum.length - 1] + Math.sqrt(dx * dx + dy * dy + dz * dz));
+    let j = 0;
+    for (const table of tables) {
+      if (table.closed) closedCount++;
+      for (let k = 0; k < table.segLen.length; k++) {
+        for (let c = 0; c < 3; c++) {
+          segAx[j * 3 + c] = table.segStart[k * 3 + c];
+          segDir[j * 3 + c] = table.segDir[k * 3 + c];
+        }
+        cum[j + 1] = cum[j] + table.segLen[k];
+        j++;
       }
     }
-    if (polylineCount === 0) {
-      throw new Error(
-        "splineSample: input has no polyline primitives (build them with createPolyline)",
-      );
-    }
-    const nSeg = segDir.length / 3;
     const L = cum[nSeg];
-    const allClosed = closedCount === polylineCount;
+    const allClosed = closedCount === tables.length;
 
     // Sample arc-length positions.
     const positions: number[] = [];
@@ -269,18 +255,12 @@ export const splineSample = standardNode<SplineSampleParams>({
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
     const seeds = out.attrs.point.require("seed").data;
+    const at = [0, 0]; // scratch [segment, t] reused by every sample
     for (let i = 0; i < n; i++) {
       const s = positions[i];
-      // First segment j with cum[j + 1] > s; clamp to the last segment.
-      let lo = 0;
-      let hi = nSeg - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (cum[mid + 1] > s) hi = mid;
-        else lo = mid + 1;
-      }
-      const segLen = cum[lo + 1] - cum[lo];
-      const t = segLen > 0 ? Math.min((s - cum[lo]) / segLen, 1) : 0;
+      locateOnArcLength(at, cum, s);
+      const lo = at[0];
+      const t = at[1];
       const dx = segDir[lo * 3];
       const dy = segDir[lo * 3 + 1];
       const dz = segDir[lo * 3 + 2];

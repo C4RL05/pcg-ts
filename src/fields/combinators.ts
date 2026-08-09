@@ -62,7 +62,7 @@ function elementwise(
     return { data: out, tupleSize: ts };
   });
   // `kind` IS the grammar fn name for every elementwise combinator — one
-  // derivation covers all 24. `elementwiseKindsAreRegisteredFns` in
+  // derivation covers all 25. `elementwiseKindsAreRegisteredFns` in
   // spec.test.ts pins that correspondence so it cannot drift.
   return attachArgsSpec(field, kind, fields);
 }
@@ -240,6 +240,17 @@ export function ge(a: FieldLike, b: FieldLike): Field {
 /** Elementwise exact equality as 1/0. */
 export function eq(a: FieldLike, b: FieldLike): Field {
   return elementwise("eq", [a, b], (v) => (v[0] === v[1] ? 1 : 0));
+}
+
+/**
+ * Elementwise exact inequality as 1/0 — the exact complement of
+ * {@link eq}, tolerance-free like it: floats are compared bit-for-bit
+ * after the usual f32 rounding, so `ne` on two computed values is a test
+ * of identical results, not of "far enough apart". Reach for
+ * `gt(abs(sub(a, b)), epsilon)` when you meant approximate.
+ */
+export function ne(a: FieldLike, b: FieldLike): Field {
+  return elementwise("ne", [a, b], (v) => (v[0] !== v[1] ? 1 : 0));
 }
 
 /** Dot product per element (scalars broadcast): sum over components of a*b. */

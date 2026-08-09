@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { createPointCloud, createPolyline, createTriangleMesh } from "../data/index.js";
+import {
+  PRIMTYPE_ATTR,
+  createPointCloud,
+  createPolyline,
+  createTriangleMesh,
+  setPolylineTopology,
+  type Geometry,
+} from "../data/index.js";
 import { makeGeometryItem } from "../graph/index.js";
+import { hashCombine } from "../random/index.js";
 import { fieldFromJson, splineSample, surfaceSample, volumeSample } from "./index.js";
 import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
 
@@ -176,6 +184,178 @@ describe("splineSample", () => {
       runNode(splineSample, {}, { in: [makeGeometryItem(unitSquare())] }),
     ).rejects.toThrow(/no polyline primitives/);
   });
+});
+
+/**
+ * `splineSample`'s arc-length table moved out into the shared
+ * `polylineArcTables` helper so the path nodes could measure a curve the
+ * same way. The goldens above are the first proof that the move changed
+ * nothing; this is the second, and the sharper one — they only pin a
+ * handful of round numbers, while a floating-point regression in the
+ * concatenation would hide in the digits they never look at.
+ *
+ * `legacySplineSample` is the execute body EXACTLY as it stood before the
+ * extraction, frozen. It must never be "kept up to date": the moment it
+ * tracks the node it stops being evidence. If it ever disagrees with the
+ * node, the extraction is wrong — not this oracle.
+ */
+function legacySplineSample(
+  geo: Geometry,
+  params: { mode: string; count: number; spacing: number },
+  seed: number,
+): Geometry {
+  const P = geo.attrs.point.get("P");
+  if (!P || P.type !== "f32" || P.tupleSize < 3) {
+    throw new Error('splineSample: input needs a point attribute "P" (f32, tupleSize >= 3)');
+  }
+  const pd = P.data;
+  const ps = P.tupleSize;
+  const v2p = geo.vertexToPoint;
+  const starts = geo.primVertexStart;
+  const counts = geo.primVertexCount;
+  const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
+
+  const segAx: number[] = [];
+  const segDir: number[] = [];
+  const cum: number[] = [0];
+  let closedCount = 0;
+  let polylineCount = 0;
+  for (let p = 0; p < geo.primitiveCount; p++) {
+    const nv = counts[p];
+    if (nv < 2) continue;
+    if (primType && primType.getString(p) !== "polyline") continue;
+    polylineCount++;
+    const v0 = starts[p];
+    if (v2p[v0] === v2p[v0 + nv - 1]) closedCount++;
+    for (let v = v0; v < v0 + nv - 1; v++) {
+      const a = v2p[v] * ps;
+      const b = v2p[v + 1] * ps;
+      const dx = pd[b] - pd[a];
+      const dy = pd[b + 1] - pd[a + 1];
+      const dz = pd[b + 2] - pd[a + 2];
+      segAx.push(pd[a], pd[a + 1], pd[a + 2]);
+      segDir.push(dx, dy, dz);
+      cum.push(cum[cum.length - 1] + Math.sqrt(dx * dx + dy * dy + dz * dz));
+    }
+  }
+  if (polylineCount === 0) {
+    throw new Error(
+      "splineSample: input has no polyline primitives (build them with createPolyline)",
+    );
+  }
+  const nSeg = segDir.length / 3;
+  const L = cum[nSeg];
+  const allClosed = closedCount === polylineCount;
+
+  const positions: number[] = [];
+  if (params.mode === "count") {
+    const n = params.count;
+    const denom = allClosed ? n : Math.max(1, n - 1);
+    for (let i = 0; i < n; i++) positions.push((i * L) / denom);
+  } else {
+    const sp = params.spacing;
+    if (!(sp > 0)) {
+      throw new Error(`splineSample: spacing must be > 0 in 'spacing' mode, got ${sp}`);
+    }
+    const eps = sp * 1e-6;
+    for (let s = 0; s <= L + eps; s += sp) {
+      if (allClosed && s >= L - eps && positions.length > 0) break;
+      positions.push(Math.min(s, L));
+    }
+  }
+
+  const n = positions.length;
+  const out = createPointCloud(n);
+  const op = out.attrs.point.require("P").data;
+  const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
+  const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
+  const seeds = out.attrs.point.require("seed").data;
+  for (let i = 0; i < n; i++) {
+    const s = positions[i];
+    let lo = 0;
+    let hi = nSeg - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cum[mid + 1] > s) hi = mid;
+      else lo = mid + 1;
+    }
+    const segLen = cum[lo + 1] - cum[lo];
+    const t = segLen > 0 ? Math.min((s - cum[lo]) / segLen, 1) : 0;
+    const dx = segDir[lo * 3];
+    const dy = segDir[lo * 3 + 1];
+    const dz = segDir[lo * 3 + 2];
+    op[i * 3] = segAx[lo * 3] + dx * t;
+    op[i * 3 + 1] = segAx[lo * 3 + 1] + dy * t;
+    op[i * 3 + 2] = segAx[lo * 3 + 2] + dz * t;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len > 0) {
+      tangent[i * 3] = dx / len;
+      tangent[i * 3 + 1] = dy / len;
+      tangent[i * 3 + 2] = dz / len;
+    }
+    curveU[i] = L > 0 ? s / L : 0;
+    seeds[i] = hashCombine(seed, i);
+  }
+  return out;
+}
+
+describe("splineSample arc-length extraction", () => {
+  /** Two polylines over one cloud, so the concatenation is exercised. */
+  function pair(a: readonly number[], b: readonly number[], closeB: boolean): Geometry {
+    const na = a.length / 3;
+    const nb = b.length / 3;
+    const geo = createPointCloud(na + nb);
+    const P = geo.attrs.point.require("P").data;
+    P.set(a, 0);
+    P.set(b, na * 3);
+    const indices: number[] = [];
+    for (let i = 0; i < na; i++) indices.push(i);
+    for (let i = 0; i < nb; i++) indices.push(na + i);
+    if (closeB) indices.push(na);
+    setPolylineTopology(
+      geo,
+      indices,
+      [0, na],
+      [na, nb + (closeB ? 1 : 0)],
+    );
+    return geo;
+  }
+
+  /** Deliberately awkward geometry: diagonals, tiny and huge segments. */
+  const IRRATIONAL = [0, 0, 0, 1, 1, 1, -3.7, 2.5, 0.001, 900.25, -0.5, 17, 900.25, -0.5, 17];
+  const CASES: Array<[string, Geometry]> = [
+    ["open L", createPolyline([0, 0, 0, 10, 0, 0, 10, 10, 0])],
+    ["closed square", createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true })],
+    ["irrational 3D", createPolyline(IRRATIONAL)],
+    ["irrational closed", createPolyline(IRRATIONAL, { closed: true })],
+    ["two open", pair([0, 0, 0, 3, 4, 0], IRRATIONAL, false)],
+    ["open + closed", pair(IRRATIONAL, [0, 0, 0, 2, 0, 0, 2, 2, 0], true)],
+    ["repeated points", createPolyline([0, 0, 0, 0, 0, 0, 5, 0, 0, 5, 0, 0, 5, 9, 0])],
+  ];
+  const PARAMS: Array<{ mode: string; count: number; spacing: number }> = [
+    { mode: "count", count: 1, spacing: 1 },
+    { mode: "count", count: 2, spacing: 1 },
+    { mode: "count", count: 5, spacing: 1 },
+    { mode: "count", count: 37, spacing: 1 },
+    { mode: "spacing", count: 10, spacing: 0.3 },
+    { mode: "spacing", count: 10, spacing: 1.7 },
+    { mode: "spacing", count: 10, spacing: 7 },
+  ];
+
+  for (const [name, geo] of CASES) {
+    it(`matches the pre-extraction implementation byte for byte: ${name}`, async () => {
+      for (const params of PARAMS) {
+        const live = firstGeo(
+          (await runNode(splineSample, params, { in: [makeGeometryItem(geo)] }, 9)).out,
+        );
+        const legacy = legacySplineSample(geo, params, 9);
+        expect(snapshotGeometry(live), `${name} / ${JSON.stringify(params)}`).toEqual(
+          snapshotGeometry(legacy),
+        );
+        expect(live.pointCount).toBeGreaterThan(0);
+      }
+    });
+  }
 });
 
 describe("volumeSample", () => {

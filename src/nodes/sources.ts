@@ -72,20 +72,27 @@ export interface PointLineParams {
   count: number;
   start: readonly number[];
   end: readonly number[];
+  includeEnd: boolean;
 }
 
-/** Evenly spaced points on the segment from `start` to `end`, inclusive. */
+/** Evenly spaced points on the segment from `start` to `end`. */
 export const pointLine = standardNode<PointLineParams>({
   type: "pointLine",
   category: "source",
   description:
-    "Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start). Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
+    "Creates `count` evenly spaced points on the straight segment from start to end. By default both endpoints are included, so the last point sits exactly on end; set includeEnd false to sample the half-open range instead, stopping one step short of end — which is what a sweep that wraps back on itself needs so its first and last samples are not the same place. count 1 places a single point at start in either mode. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
   inputs: [],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
     count: { type: "i32", default: 10, min: 1, description: "Number of points to place. Minimum 1." },
     start: { type: "vec3", default: [0, 0, 0], description: "World position of the first point." },
     end: { type: "vec3", default: [10, 0, 0], description: "World position of the last point." },
+    includeEnd: {
+      type: "bool",
+      default: true,
+      description:
+        "Whether `end` is one of the emitted positions. true (the default) samples the closed range [start, end]: `count` points stepping (end - start) / (count - 1), the first on start and the last exactly on end — use it for a run of points with both ends pinned, such as a fence between two posts. false samples the half-open range [start, end): `count` points stepping (end - start) / count, the last one step short of end — use it when the segment is a parameter that wraps, so a closed shape gets `count` distinct positions and no duplicate seam. count 1 emits a single point at start in both modes; count 0 emits nothing.",
+    },
   },
   execute({ params, seed }) {
     const n = params.count;
@@ -94,8 +101,13 @@ export const pointLine = standardNode<PointLineParams>({
     const geo = createPointCloud(n);
     const P = geo.attrs.point.require("P").data;
     const seeds = geo.attrs.point.require("seed").data;
+    // Inclusive divides by the number of GAPS (n - 1), so the last point
+    // lands on `end`; exclusive divides by the number of SAMPLES (n), so
+    // the last point stops one step short. Only the inclusive branch can
+    // divide by zero, and it keeps its original n === 1 guard so its
+    // output is bit-identical to the pre-includeEnd node.
     for (let i = 0; i < n; i++) {
-      const t = n === 1 ? 0 : i / (n - 1);
+      const t = params.includeEnd ? (n === 1 ? 0 : i / (n - 1)) : i / n;
       P[i * 3] = ax + (bx - ax) * t;
       P[i * 3 + 1] = ay + (by - ay) * t;
       P[i * 3 + 2] = az + (bz - az) * t;

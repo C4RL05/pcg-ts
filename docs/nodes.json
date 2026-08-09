@@ -547,6 +547,48 @@
     }
   },
   {
+    "type": "pathResample",
+    "description": "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units and an open path always ends on its true endpoint, so it never comes back shorter than it went in. Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Downstream, every filter node and mergePoints drop topology, so a resampled path that passes through one stops being a path.",
+    "category": "sampler",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "mode": {
+        "type": "enum",
+        "default": "count",
+        "description": "How samples are placed: 'count' puts exactly `count` samples on each path; 'spacing' steps every `spacing` units along each path.",
+        "enum": [
+          "count",
+          "spacing"
+        ]
+      },
+      "count": {
+        "type": "i32",
+        "default": 10,
+        "description": "Samples per path when mode is 'count'. Minimum 2 for an open path and 3 for a closed one — below that the result would not be a path. Ignored in 'spacing' mode.",
+        "min": 2
+      },
+      "spacing": {
+        "type": "f32",
+        "default": 1,
+        "description": "Distance between samples in world units when mode is 'spacing'. Must be > 0, and small enough to leave at least 2 samples on each open path (3 on a closed one). Ignored in 'count' mode.",
+        "min": 0
+      }
+    }
+  },
+  {
     "type": "pointGrid",
     "description": "Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis. Point order is X fastest, then Y, then Z. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
     "category": "source",
@@ -599,7 +641,7 @@
   },
   {
     "type": "pointLine",
-    "description": "Creates `count` evenly spaced points on the straight segment from start to end, both endpoints included (count 1 places a single point at start). Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
+    "description": "Creates `count` evenly spaced points on the straight segment from start to end. By default both endpoints are included, so the last point sits exactly on end; set includeEnd false to sample the half-open range instead, stopping one step short of end — which is what a sweep that wraps back on itself needs so its first and last samples are not the same place. count 1 places a single point at start in either mode. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
     "category": "source",
     "inputs": [],
     "outputs": [
@@ -633,6 +675,11 @@
           0
         ],
         "description": "World position of the last point."
+      },
+      "includeEnd": {
+        "type": "bool",
+        "default": true,
+        "description": "Whether `end` is one of the emitted positions. true (the default) samples the closed range [start, end]: `count` points stepping (end - start) / (count - 1), the first on start and the last exactly on end — use it for a run of points with both ends pinned, such as a fence between two posts. false samples the half-open range [start, end): `count` points stepping (end - start) / count, the last one step short of end — use it when the segment is a parameter that wraps, so a closed shape gets `count` distinct positions and no duplicate seam. count 1 emits a single point at start in both modes; count 0 emits nothing."
       }
     }
   },
@@ -730,6 +777,42 @@
         "type": "u32",
         "default": 0,
         "description": "Extra seed folded into the node seed; change it to re-roll the scatter."
+      }
+    }
+  },
+  {
+    "type": "pointsToPath",
+    "description": "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group id, emitted in ascending group id. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: every filter node and mergePoints drop topology, so a path that passes through one stops being a path — put this node after the filtering, not before.",
+    "category": "point op",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "closed": {
+        "type": "bool",
+        "default": false,
+        "description": "Close each path by appending a trailing vertex back to its first point (structural closure — no attribute is written). A closed path needs at least 3 points; 2 would fold the path back onto itself and is an error."
+      },
+      "groupAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Name of a scalar numeric point attribute holding a group id, splitting the cloud into one path per distinct id (paths are emitted in ascending id). Ids must be whole numbers — write them with setAttribute (type 'i32'). Leave empty to build a single path over every point."
+      },
+      "orderAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Name of a scalar numeric point attribute to order each path by, ascending; ties break to the lower point index, so the result never depends on sort implementation. Values must be finite. Leave empty to use point index order."
       }
     }
   },
@@ -1112,7 +1195,7 @@
   },
   {
     "type": "splineSample",
-    "description": "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1].",
+    "description": "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: every filter node and mergePoints drop it, so a path that passes through one stops being a path and this node will report that it found no polylines.",
     "category": "sampler",
     "inputs": [
       {
@@ -1405,6 +1488,32 @@
         "type": "u32",
         "default": 0,
         "description": "Extra seed folded into the node seed; change it to re-roll the jitter."
+      }
+    }
+  },
+  {
+    "type": "writeTangents",
+    "description": "Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived — the output is still a path. This is the tangent source for paths that were never spline-sampled: splineSample emits `tangent` only for the new points it creates, so a path built with pointsToPath has none, and orientAlongVector (which reads a direction field, typically the tangent attribute) has nothing to consume. The tangent at a point is the normalized central difference between its neighbours along the path, which stays smooth through corners; at the ends of an open path it is the adjacent segment direction, and a closed path wraps around. When the neighbours coincide the forward segment is used, then the backward one. Points not referenced by any polyline get [0, 0, 0] — orientAlongVector deliberately leaves a zero direction's rot untouched. A point visited by more than one polyline takes the tangent of the last one in primitive order. Every filter node and mergePoints drop topology, so run this before any filtering, not after.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "name": {
+        "type": "string",
+        "default": "tangent",
+        "description": "Attribute to write (created, or replaced when it exists with another shape). The default 'tangent' is the name splineSample emits and the one an orientAlongVector direction field usually reads. Cannot be 'P'."
       }
     }
   }

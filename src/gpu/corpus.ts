@@ -98,6 +98,7 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   gt: { fn: "gt", args: [1, 2] },
   ge: { fn: "ge", args: [1, 2] },
   eq: { fn: "eq", args: [1, 2] },
+  ne: { fn: "ne", args: [1, 2] },
   dot: { fn: "dot", args: [[1, 2, 3], [4, 5, 6]] },
   length: { fn: "length", args: [[1, 2, 3]] },
   normalize: { fn: "normalize", args: [[1, 2, 3]] },

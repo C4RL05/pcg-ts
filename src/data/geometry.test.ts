@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { Geometry, PRIMTYPE_ATTR, createPolyline, createTriangleMesh } from "./geometry.js";
+import {
+  Geometry,
+  PRIMTYPE_ATTR,
+  createPolyline,
+  createTriangleMesh,
+  setPolylineTopology,
+} from "./geometry.js";
 
 // Unit quad split into two triangles sharing the edge (p1, p2).
 const QUAD_POSITIONS = [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0];
@@ -107,5 +113,73 @@ describe("createPolyline", () => {
   it("rejects malformed input", () => {
     expect(() => createPolyline([0, 0, 0])).toThrow(/at least 2 points/);
     expect(() => createPolyline([0, 0])).toThrow(/multiple of 3/);
+  });
+});
+
+describe("setPolylineTopology", () => {
+  /** Five points in a row, carrying a non-standard attribute. */
+  function cloud(): Geometry {
+    const geo = new Geometry();
+    const P = geo.attrs.point.add("P", "f32", 3);
+    const tag = geo.attrs.point.add("tag", "i32", 1, -1);
+    geo.attrs.point.resize(5);
+    for (let i = 0; i < 5; i++) {
+      P.setTuple(i, [i, 0, 0]);
+      tag.set(i, i * 10);
+    }
+    return geo;
+  }
+
+  it("builds several polylines over the geometry's own points", () => {
+    const geo = cloud();
+    setPolylineTopology(geo, [0, 1, 2, 3, 4, 3], [0, 4], [4, 2]);
+    expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2, 3, 4, 3]);
+    expect(Array.from(geo.primVertexStart)).toEqual([0, 4]);
+    expect(Array.from(geo.primVertexCount)).toEqual([4, 2]);
+    const primType = geo.attrs.primitive.require(PRIMTYPE_ATTR);
+    expect([0, 1].map((p) => primType.getString(p))).toEqual(["polyline", "polyline"]);
+  });
+
+  it("keeps every point attribute, including non-standard ones", () => {
+    const geo = cloud();
+    setPolylineTopology(geo, [0, 1, 2, 3, 4], [0], [5]);
+    expect(geo.pointCount).toBe(5);
+    expect(geo.attrs.point.require("P").getTuple(3)).toEqual([3, 0, 0]);
+    expect(geo.attrs.point.require("tag").get(3)).toBe(30);
+  });
+
+  it("carries structural closure with no closed attribute", () => {
+    const geo = cloud();
+    setPolylineTopology(geo, [0, 1, 2, 0], [0], [4]);
+    expect(geo.vertexToPoint[0]).toBe(geo.vertexToPoint[3]);
+    // The only primitive attribute is the type; closure lives in topology.
+    expect(geo.attrs.primitive.names()).toEqual([PRIMTYPE_ATTR]);
+  });
+
+  it("drops vertex and primitive attributes of the topology it replaces", () => {
+    const geo = createTriangleMesh(QUAD_POSITIONS, QUAD_TRIANGLES);
+    geo.attrs.vertex.add("corner", "i32", 1, 7);
+    geo.attrs.primitive.add("area", "f32", 1, 0.5);
+    setPolylineTopology(geo, [0, 1, 3, 2], [0], [4]);
+    expect(geo.attrs.vertex.names()).toEqual([]);
+    expect(geo.attrs.primitive.names()).toEqual([PRIMTYPE_ATTR]);
+    expect(geo.attrs.primitive.require(PRIMTYPE_ATTR).getString(0)).toBe("polyline");
+    expect(geo.pointCount).toBe(4);
+  });
+
+  it("rejects malformed topology with an actionable message", () => {
+    expect(() => setPolylineTopology(cloud(), [0, 1], [0], [2, 2])).toThrow(
+      /one entry per polyline/,
+    );
+    expect(() => setPolylineTopology(cloud(), [0, 1, 2], [0, 2], [2, 1])).toThrow(
+      /polyline 1 has 1 vertices; a polyline needs at least 2/,
+    );
+    expect(() => setPolylineTopology(cloud(), [0, 9], [0], [2])).toThrow(
+      /references point 9, which is not a whole number in \[0, 5\)/,
+    );
+    expect(() => setPolylineTopology(cloud(), [0, 1.5], [0], [2])).toThrow(/not a whole number/);
+    expect(() => setPolylineTopology(cloud(), [0, 1, 2], [1], [3])).toThrow(
+      /spans vertices \[1, 4\) but only 3 vertex indices were given/,
+    );
   });
 });

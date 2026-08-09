@@ -39,6 +39,7 @@ import {
   max,
   min,
   mul,
+  ne,
   normalize,
   ramp,
   remap,
@@ -211,7 +212,7 @@ const CASES: Case[] = [
   { name: "randomField negative key", make: () => randomField(-3) },
   { name: "randomField string key", make: () => randomField("species") },
 
-  // -- elementwise (24) -----------------------------------------------
+  // -- elementwise (25) -----------------------------------------------
   ...spread("add", BINARY, (a) => add(a[0], a[1])),
   ...spread("sub", BINARY, (a) => sub(a[0], a[1])),
   ...spread("mul", BINARY, (a) => mul(a[0], a[1])),
@@ -224,6 +225,7 @@ const CASES: Case[] = [
   ...spread("gt", BINARY, (a) => gt(a[0], a[1])),
   ...spread("ge", BINARY, (a) => ge(a[0], a[1])),
   ...spread("eq", BINARY, (a) => eq(a[0], a[1])),
+  ...spread("ne", BINARY, (a) => ne(a[0], a[1])),
   ...spread("abs", UNARY, (a) => abs(a[0])),
   ...spread("floor", UNARY, (a) => floor(a[0])),
   ...spread("sin", UNARY, (a) => sin(a[0])),
@@ -423,10 +425,11 @@ describe("elementwise kind ↔ grammar fn", () => {
     ["gt", () => gt(1, 2)],
     ["ge", () => ge(1, 2)],
     ["eq", () => eq(1, 2)],
+    ["ne", () => ne(1, 2)],
   ];
 
-  it("names 24 constructors, each a registered fn", () => {
-    expect(ELEMENTWISE.length).toBe(24);
+  it("names 25 constructors, each a registered fn", () => {
+    expect(ELEMENTWISE.length).toBe(25);
     const registered = new Set(listFieldFns());
     for (const [name, make] of ELEMENTWISE) {
       expect(getFieldSpec(make())?.fn, `${name}: derived fn`).toBe(name);

@@ -123,6 +123,74 @@ export function createTriangleMesh(
 }
 
 /**
+ * Replace a geometry's topology with polyline primitives over its OWN
+ * points, and stamp every primitive's {@link PRIMTYPE_ATTR} to
+ * `"polyline"`. This is the factory nodes build paths through: they
+ * assemble flat scratch arrays and hand them over, rather than calling
+ * {@link Geometry.setTopology} (which knows nothing about polylines)
+ * themselves.
+ *
+ * `pointIndices` is the concatenated vertex list; polyline `p` owns
+ * `pointIndices[primVertexStart[p] .. + primVertexCount[p])`. Closure is
+ * structural and has no flag: a closed polyline simply ends with a vertex
+ * referencing its own first point, which is what consumers detect.
+ *
+ * Point attributes survive untouched, so a node can clone a point cloud
+ * and give it topology without losing a column. Existing vertex and
+ * primitive attributes are dropped: the topology they described is gone,
+ * and keeping them would leave values belonging to elements that no
+ * longer exist.
+ */
+export function setPolylineTopology(
+  geo: Geometry,
+  pointIndices: ArrayLike<number>,
+  primVertexStart: ArrayLike<number>,
+  primVertexCount: ArrayLike<number>,
+): void {
+  if (primVertexStart.length !== primVertexCount.length) {
+    throw new Error(
+      `setPolylineTopology: primVertexStart has ${primVertexStart.length} entries and primVertexCount has ${primVertexCount.length}; they need one entry per polyline`,
+    );
+  }
+  const np = geo.pointCount;
+  const nv = pointIndices.length;
+  const vertexToPoint = new Uint32Array(nv);
+  for (let v = 0; v < nv; v++) {
+    const idx = pointIndices[v];
+    if (!Number.isInteger(idx) || idx < 0 || idx >= np) {
+      throw new Error(
+        `setPolylineTopology: vertex ${v} references point ${idx}, which is not a whole number in [0, ${np})`,
+      );
+    }
+    vertexToPoint[v] = idx;
+  }
+  for (let p = 0; p < primVertexCount.length; p++) {
+    const start = primVertexStart[p];
+    const count = primVertexCount[p];
+    if (count < 2) {
+      throw new Error(
+        `setPolylineTopology: polyline ${p} has ${count} vertices; a polyline needs at least 2 (drop it, or give it another point)`,
+      );
+    }
+    if (start < 0 || start + count > nv) {
+      throw new Error(
+        `setPolylineTopology: polyline ${p} spans vertices [${start}, ${start + count}) but only ${nv} vertex indices were given`,
+      );
+    }
+  }
+  for (const domain of ["vertex", "primitive"] as const) {
+    const set = geo.attrs[domain];
+    for (const name of set.names()) set.remove(name);
+  }
+  geo.setTopology(
+    vertexToPoint,
+    Uint32Array.from(primVertexStart),
+    Uint32Array.from(primVertexCount),
+  );
+  geo.attrs.primitive.add(PRIMTYPE_ATTR, "string", 1, "polyline" satisfies PrimType);
+}
+
+/**
  * Build a polyline Geometry from flat xyz positions: one `polyline`
  * primitive whose vertices reference the points in order. With
  * `closed: true` an extra final vertex references point 0.
@@ -148,7 +216,6 @@ export function createPolyline(
   const vertexToPoint = new Uint32Array(nv);
   for (let v = 0; v < np; v++) vertexToPoint[v] = v;
   // With closed, the trailing vertex is already 0.
-  geo.setTopology(vertexToPoint, Uint32Array.of(0), Uint32Array.of(nv));
-  geo.attrs.primitive.add(PRIMTYPE_ATTR, "string", 1, "polyline" satisfies PrimType);
+  setPolylineTopology(geo, vertexToPoint, Uint32Array.of(0), Uint32Array.of(nv));
   return geo;
 }

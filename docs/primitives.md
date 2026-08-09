@@ -439,7 +439,7 @@ Run it: `pcg run shape/disc`
 
 Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is the number of sample positions across the sweep with both ends included, so a full sweep drops the duplicate seam point and yields count - 1 points, while a partial sweep keeps all of them. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.
 
-**Content hash:** `0358287dfaffb7af`
+**Content hash:** `9be49a34ac454501`
 
 **Tags:** `shape`, `curve`, `radial`
 
@@ -491,7 +491,7 @@ Run it: `pcg run shape/sphere-points`
 
 Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.
 
-**Content hash:** `ed8fda6b7134ace1`
+**Content hash:** `62e4436dd187375e`
 
 **Tags:** `shape`, `curve`, `radial`
 

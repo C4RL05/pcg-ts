@@ -244,6 +244,7 @@ describe("fieldFromJson", () => {
       "gt",
       "ge",
       "eq",
+      "ne",
       "dot",
       "length",
       "normalize",
