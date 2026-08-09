@@ -22,21 +22,30 @@
  * cooks of one — for EVERY pair, chained and edited alike.
  *
  * "Superset" includes the ORDER of the edges into a multi-input pin. That
- * is not pedantry: a merge consumes its connections in file order and the
- * prune behind it is index-greedy, so order is what makes an authored edit
- * beat a generated lot. Swapping two edges into one pin removes nothing,
- * renames nothing and retunes nothing — and changes the cook. See
- * `connectionKeys`.
+ * is not pedantry: a merge consumes its connections in file order, and
+ * that order IS the point indexing every node downstream of it sees — the
+ * prune behind it settles a priority tie on the LOWER index, and the
+ * survivors come out in input order. Swapping two edges into one pin
+ * removes nothing, renames nothing and retunes nothing — and changes the
+ * cook. See `connectionKeys`.
  *
  * The `-edits` variants are the payoff. An edited stage is its base plus
  * authored geometry and ONE connection into a slot the base reserved, so
  * it is a superset too — and `terrain`, `boundary` and `districts` stay
  * bit-identical while `lots` changes. That is the claim "an edit is local"
  * as an assertion rather than a hope.
+ *
+ * What makes the authored points win is a PARAMETER, not a position: they
+ * carry `locked = 1`, the base stamps `locked = 0` on the procedural side,
+ * and the `lots` prune ranks by `priority: attribute("locked")`. The edit
+ * is merged onto pin `b` — LAST, at the highest indices — precisely so
+ * that nothing about the outcome can be read as an artifact of where it
+ * was wired.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { DataCollection } from "../src/index.js";
 import { type CorpusGolden, cookCorpusGraph, corpusFingerprint } from "../src/docs/corpus.js";
 import { CORPUS_DIR, type CorpusFile, loadCorpus } from "../src/docs/examples.js";
 
@@ -127,12 +136,14 @@ function nodesById(graph: Json): Map<string, Json> {
  * edge's ORDINAL among the connections sharing its destination pin.
  *
  * The ordinal is not decoration. A multi-input pin consumes its connections
- * in file order, and the pipeline's whole edit mechanism is built on that:
- * `compose/merge-tagged` concatenates in the order it receives, and the
- * `selfPrune` behind it is index-greedy, so whichever branch is connected
- * FIRST wins every contested position. Authored edits beat generated lots
- * by construction, not by luck. Key an edge by its endpoints alone and
- * swapping two connections into one pin is invisible: measured, swapping
+ * in file order, and that order is the point indexing every node downstream
+ * sees: `mergePoints` concatenates in the order it receives, `selfPrune`
+ * settles a tie between equal priorities on the lower index, and its
+ * survivors leave in input order. (WHO survives no longer rides on it —
+ * that is `priority` now — but the indices still decide the ties and the
+ * ordering, which is enough to move every float downstream.) Key an edge
+ * by its endpoints alone and swapping two connections into one pin is
+ * invisible: measured, swapping
  * the two feeding `editPts.in` in pipeline-4-detail-edits.json changes
  * `lots`, `footprints` and `buildings`, and every structural check here
  * still passed. A test that cannot see order cannot protect the property
@@ -159,19 +170,60 @@ function outputsByName(graph: Json): Map<string, string> {
 }
 
 /**
- * Float-exact fingerprint of one stage's cook, memoized. Six files feed
- * two comparison loops, so without this the suite cooks the same graph up
- * to three times.
+ * One stage's cook, memoized. Six files feed three comparison loops, so
+ * without this the suite cooks the same graph up to four times.
  */
-const fingerprints = new Map<string, Promise<Record<string, unknown>>>();
+const cooks = new Map<string, Promise<Awaited<ReturnType<typeof cookCorpusGraph>>>>();
 
-function fingerprintOf(file: string): Promise<Record<string, unknown>> {
-  let pending = fingerprints.get(file);
+function cookOf(file: string): Promise<Awaited<ReturnType<typeof cookCorpusGraph>>> {
+  let pending = cooks.get(file);
   if (pending === undefined) {
-    pending = cookCorpusGraph(graphOf(file)).then((r) => corpusFingerprint(r.outputs));
-    fingerprints.set(file, pending);
+    pending = cookCorpusGraph(graphOf(file));
+    cooks.set(file, pending);
   }
   return pending;
+}
+
+/** Float-exact fingerprint of one stage's cook. */
+function fingerprintOf(file: string): Promise<Record<string, unknown>> {
+  return cookOf(file).then((r) => corpusFingerprint(r.outputs));
+}
+
+/**
+ * How many points of an output carry `locked = 1` — the flag the authored
+ * edit layer stamps and the `lots` prune reads as `priority`.
+ */
+function lockedCount(outputs: Record<string, DataCollection>, name: string): number {
+  const items = outputs[name] ?? [];
+  let n = 0;
+  for (const item of items) {
+    if (item.kind !== "geometry") continue;
+    const set = item.geo.attrs.point;
+    const locked = [...set].find((a) => a.name === "locked");
+    if (locked === undefined) {
+      throw new Error(
+        `output "${name}" carries no "locked" attribute. The base stamps it on the ` +
+          "procedural branch (node `lotLock`) so that `attribute(\"locked\")` resolves " +
+          "even in the unedited stages — without it the prune's `priority` field has " +
+          "nothing to read.",
+      );
+    }
+    for (let i = 0; i < set.count; i++) if (locked.getTuple(i)[0] === 1) n++;
+  }
+  return n;
+}
+
+/** Points the authored edit layer introduces, read off the edit nodes' own params. */
+function authoredPointCount(file: string): number {
+  const nodes = nodesById(graphOf(file));
+  const row = nodes.get("editRow")?.params as { count: number } | undefined;
+  const block = nodes.get("editBlock")?.params as
+    | { countX: number; countY: number; countZ: number }
+    | undefined;
+  if (row === undefined || block === undefined) {
+    throw new Error(`${CORPUS_DIR}/${file} has no editRow/editBlock: it is not an edited stage.`);
+  }
+  return row.count + block.countX * block.countY * block.countZ;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,8 +387,9 @@ describe("staged pipeline", () => {
               "from the graph seed and its own id — never from its position in the DAG —",
               "so nothing added downstream can perturb this. A difference means a shared",
               "node was retuned, the graph seed moved, or an edge into a MULTI-INPUT pin",
-              "changed order: order decides which branch a merge sees first, and",
-              "selfPrune is index-greedy, so it decides which points survive.",
+              "changed order: order decides which branch a merge sees first, which is the",
+              "point indexing selfPrune breaks its priority ties on and emits its",
+              "survivors in.",
             ].join("\n"),
           );
         }
@@ -367,7 +420,63 @@ describe("staged pipeline", () => {
       // ...and it must actually reach something, or the variant is a copy.
       expect(JSON.stringify(after.lots)).not.toBe(JSON.stringify(before.lots));
     });
+
+    it(`${ext} lands the authored layer WHOLE`, async () => {
+      // The claim the variant exists to make: every hand-placed plot comes
+      // out the far side of the prune. Counted from the edit nodes' own
+      // params rather than from a literal, so retuning the terrace or the
+      // block moves the expectation with it and a plot lost to the prune
+      // still reddens.
+      const { outputs } = await cookOf(ext);
+      expect(lockedCount(outputs, "lots")).toBe(authoredPointCount(ext));
+    });
+
+    it(`${base} reserves the rank the edit uses`, async () => {
+      // The other half, and the reason the base is not merely unaffected:
+      // `attribute("locked")` has to resolve in the UNEDITED stage too, so
+      // the base stamps the flag on the procedural branch. Nothing carries
+      // 1 there — every point ties at 0 and the prune is the plain
+      // index-greedy one, which is exactly what priority's default means.
+      const { outputs } = await cookOf(base);
+      expect(lockedCount(outputs, "lots")).toBe(0);
+    });
   }
+
+  it("the authored plots win on PRIORITY, not on where they were merged", async () => {
+    // The regression this whole rewiring exists to prevent. Before it, the
+    // edit was merged onto pin `a` and won because the prune was
+    // index-greedy — except it did not: the pre-merge clearance was wider
+    // than the prune radius, so no authored/procedural pair ever actually
+    // contested a spot and the documented mechanism never fired. A corpus
+    // that teaches an inert parameter is worse than one that teaches a
+    // trick, so the parameter is checked here by REMOVING it: strip
+    // `priority` from the prune and authored plots must start losing.
+    const file = "pipeline-3-lots-edits.json";
+    const withPriority = lockedCount((await cookOf(file)).outputs, "lots");
+    expect(withPriority).toBe(authoredPointCount(file));
+
+    const stripped = JSON.parse(JSON.stringify(graphOf(file))) as Json;
+    const lots = nodesById(stripped).get("lots");
+    const params = lots?.params as Record<string, unknown> | undefined;
+    expect(params, 'node "lots" has no params').toBeDefined();
+    expect(params?.priority, 'node "lots" no longer ranks by `priority`').toBeDefined();
+    delete params?.priority;
+
+    const without = lockedCount((await cookCorpusGraph(stripped)).outputs, "lots");
+    if (without >= withPriority) {
+      throw new Error(
+        [
+          `${CORPUS_DIR}/${file}: removing \`priority\` from the \`lots\` prune changed nothing —`,
+          `${without} of the ${withPriority} authored plots still survive without it.`,
+          "",
+          "That means the graph wins its contested spots some other way (most likely the",
+          "`clear` exclusion radius grew back past the prune's minDistance), and the",
+          "description's claim that survival is a value the points carry is no longer",
+          "true of this file. Fix the graph, not this test.",
+        ].join("\n"),
+      );
+    }
+  });
 
   for (const file of [...stages.keys()].sort()) {
     it(`${file} stays inside the instance budget`, () => {

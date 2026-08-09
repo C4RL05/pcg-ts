@@ -1319,6 +1319,189 @@ policy are recorded as open questions in the survey and must be
 settled before implementation. Re-survey at cycle start.
 
 ### Phase 41 — Topology, vocabulary v3, docs, v0.12.0
+
+**RE-SURVEYED at cycle start 2026-08-09, as this section required. The
+phase SPLITS. Three surveys — encoding, determinism, demand — agreed
+that the phase as written cannot be built in one pass, and the reason is
+a prerequisite nobody had priced. Original text preserved at the bottom
+of this section.**
+
+#### The three settled questions
+
+**Encoding: side-car CSR** in `src/spatial/adjacency.ts`, following
+`uniformGrid`'s precedent and NOT re-exported from `src/index.ts`. An
+edge DOMAIN was costed at ~20 hand-edited files, takes `promote`'s
+ordered-pair matrix from 12 pairs to 20 (8 new pair semantics, several
+with no natural meaning), and permanently widens the exported `Domain`
+union. The decisive argument is not cost, it is staleness: a side-car
+cannot go stale, because `cloneGeometry` returns a new object, so the
+index is simply absent and recomputed. An edge array living ON the
+geometry rides that clone into all seven-plus topology-destroying nodes
+and must be dropped at each — failing SILENTLY into a cook that still
+looks fine, which is the failure class this codebase names as its worst.
+Promoting a proven CSR to a domain later is additive; the reverse is the
+expensive mistake. No option forces a format bump: the serialized format
+never carries geometry.
+
+**Tiebreak: hash stable element IDENTITY, never index.** Identity is
+`(bits(Px), bits(Py), bits(Pz), seed)` — the u32 bit pattern of the
+stored f32 position plus the standard per-point `seed`. Order by (1) the
+op's metric, (2) `pointKey` ascending, (3) the raw tuple componentwise
+to break hash collisions. Edges canonicalize their endpoints the same
+way. NEITHER identity alone works, both verified: `seed` defaults to 0
+for hand-built and `dataInput` clouds and collides after `copyToPoints`,
+while position alone collides on coincident points, which `snapToGrid`
+deliberately creates. Never pass a float to `hashCombine` — it truncates
+toward zero.
+
+**Halo: derived, never fetched.** A cell recomputes its halo from
+`(worldSeed, levelIndex, coords)` the way noise does. `World` exposes no
+sibling accessor, and `cells3d.test.ts` already pins "a cube's content is
+independent of which neighbours exist" as a contract — a fetched halo
+breaks it, and neighbours are LRU-evictable anyway.
+
+#### The blocker that splits the phase
+
+**No existing source is halo-derivable, so no cross-partition op can be
+correct yet.** `pointScatterInBounds` computes positions as a FUNCTION OF
+THE BOUNDS, so widening the bounds to form a halo moves every point and
+reproduces nothing. A world-anchored scatter — points as a pure function
+of the world lattice cell — is a prerequisite for all of this and is not
+in the phase.
+
+Also recorded, because it changes what phase 40's test proves: the
+executor yields AFTER `cookNode` returns, so **node bodies are atomic
+under a budget**. The 34-graph partition-safety test guards
+time-partitioning and can never catch a data-partitioning bug. The
+cross-partition ops need different tests: permutation equivariance,
+split-with-halo equals whole, two-cell seam agreement.
+
+#### The re-cut, decided 2026-08-09
+
+One phase becomes three, because the prerequisite is not a topology
+prerequisite. Direction given at the time: **prioritize the most solid
+long-term construction; breaking compatibility is free, because the
+package has zero users.** That removes cost-of-migration from every
+decision below — but note it does NOT change the encoding choice, whose
+decisive argument was silent staleness, not migration cost.
+
+- **Phase 41** — priority pruning and the carried fixes. v0.12.0.
+- **Phase 42** — world-anchored sources: close the hole in the runtime
+  pillar, on its own merits.
+- **Phase 43** — topology, shipped with its consumer.
+
+**A single-partition-only topology was considered and REJECTED** even
+though it is the cheapest path to edges. It ships a permanent
+restriction into the public API, and a restriction is the one thing that
+cannot be retracted later without changing behavior for whoever worked
+around it. It also costs the pillar: "deterministic by construction"
+with an asterisk is a weaker claim than the one the agent-authoring
+thesis rests on. Zero users makes breaking changes free; it does not
+make a shipped exemption free, because the exemption would be a
+permanent design fact rather than a migration.
+
+#### Phase 41 — priority pruning and carried fixes, v0.12.0
+
+No topology. Everything here has a caller today.
+
+- **`selfPrune` gains priority**, which is what `pruneByPriority` really
+  was. It is the only item in the original four with a workaround
+  already shipped: `pipeline-3-lots-edits.json` gets authored-beats-
+  procedural by placing authored points on pin `a` of
+  `compose/merge-tagged` so the index-greedy prune keeps them, and
+  `docs/examples.md` documents that as winning "BY CONSTRUCTION rather
+  than by luck". Extend rather than add a node: multiple inputs, a
+  priority attribute, and a field-capable `minDistance` (the per-point
+  radius that has been open in the backlog since before phase 37).
+  Existing goldens must not move — greedy stays the default rule.
+- Rewire the pipeline edits variant onto it, so the trick becomes a
+  parameter and the corpus stops teaching a workaround.
+- Sweep the three carried reporting-slot clobber sites recorded below.
+- Docs; version 0.12.0, tag. (Publish stays user-driven.)
+- Exit: `selfPrune`'s existing goldens unmoved; the edits variant still
+  proves edit locality; corpus and catalog green; docs idempotent.
+
+### Phase 42 — World-anchored sources, cross-partition foundations
+
+**Scheduled on its own merits, not as topology's tax.** The runtime
+pillar claims hierarchical generation across grid levels with an
+unbounded level above and partitioned, cancellable cooking. It does not
+hold for any op that must see slightly outside its own cell, because
+`pointScatterInBounds` computes positions as a FUNCTION OF THE BOUNDS
+(`src/nodes/sources.ts`): widening the bounds to form a halo moves every
+point, so the halo reproduces nothing. Every neighbourhood-style op
+inherits this, not just edges.
+
+- A world-anchored scatter: point positions as a pure function of
+  `(worldSeed, levelIndex, cellCoords, index)`, so any window over the
+  world yields the same points for the region it covers. This is the
+  same discipline noise already follows, applied to a source.
+- The halo contract, made real and documented: a cell DERIVES its halo
+  from world coordinates, never fetches it from siblings. `World`
+  exposes no sibling accessor, neighbours are LRU-evictable, and
+  `cells3d.test.ts` already pins "a cube's content is independent of
+  which neighbours exist" — a fetched halo would break a contract the
+  suite asserts today.
+- **The three test kinds that do not exist yet**, and are the real
+  deliverable: permutation equivariance (shuffle input order, same
+  output), split-with-halo equals whole (cook a region whole, then in
+  cells, compare), and two-cell seam agreement (both sides of a boundary
+  agree on who owns what). Phase 40's partition-safety test cannot cover
+  any of these: the executor yields AFTER `cookNode` returns, so node
+  bodies are atomic under a budget — that test guards time-partitioning
+  only.
+- Exit: a world-anchored source cooking in the corpus; the three test
+  kinds green over it; a documented halo contract; docs idempotent.
+
+### Phase 43 — Topology, shipped with its consumer
+
+Schedulable only once phase 42 lands AND a pipeline stage 5 — a road
+network between district centres — is committed as the deliverable. The
+vocabulary ships with its caller, the rule `writeTangents` was held to
+in phase 39. Three of the four originally planned nodes had no caller;
+this is what earning one looks like.
+
+- Adjacency as a side-car CSR in `src/spatial/adjacency.ts`, following
+  `uniformGrid`'s precedent, not re-exported from `src/index.ts`.
+- `connectPoints` over the neighbour lists `pointNeighborhood` already
+  computes and discards — **plus an edges-to-polylines node, which the
+  original plan omits.** Nothing can consume edges today: `pointsToPath`
+  lays a path over the SAME points with one group id each, so a vertex
+  of degree > 1 is structurally inexpressible. That is the phase-39 gap
+  in reverse — a source with no sink — and both must ship in one wave.
+- Radius mode only at first. A `k`-nearest mode is a rank over the
+  present population, which is the fit-to-data trap phase 40 recorded;
+  radius mode is halo-exact at `haloWidth >= radius`.
+- `refineCluster`: MST mode ONLY. Six of its seven proposed modes have
+  zero references outside the roadmap, and the name collides with
+  `fill/scatter-clustered`, which already means clumps-with-no-edges.
+- **`findPath` is CUT as specified.** No finite halo suffices for a
+  global shortest path. If it returns, it is restricted to an unbounded
+  or single-partition level with results pushed down through
+  `ctx.parent.outputs` — and that restriction is the design, stated up
+  front, not a footnote discovered later.
+- **Revisit the encoding once, here, and only on this trigger:** the
+  side-car was chosen because a derived index cannot go stale, while an
+  edge array on `Geometry` rides `cloneGeometry` into every
+  topology-destroying node and fails silently. That argument covers a
+  DERIVED index. If edges need user-facing ATTRIBUTES — road width,
+  kind, authored per edge and promoted or transferred like any other —
+  then they are authored data, not a derived index, and a real edge
+  domain becomes the correct answer rather than the expensive one. With
+  zero users the ~20-file cost and the widened `Domain` union are
+  affordable; what must not happen is drifting into a half-domain
+  because the side-car was already there.
+
+#### The original exit criterion was unsatisfiable
+
+"The survey's 15-node batch is complete" cannot be met: `filterGroup` was
+deferred in 37, `pathSmooth` and `pathFuseCollinear` cut in 39, so 12 is
+the ceiling — and phase 39 shipped two items that were never in the
+batch. Replaced above with criteria that can actually fail.
+
+<details>
+<summary>Original phase 41 text, before the 2026-08-09 re-survey</summary>
+
 - Edge/adjacency topology with materialized CSR adjacency, built
   deterministically and cached per input.
 - New nodes: `connectPoints`, `refineCluster`, `findPath`, and
@@ -1330,6 +1513,8 @@ settled before implementation. Re-survey at cycle start.
 - Exit: the survey's 15-node batch is complete; cook-order-independence
   tests for the cross-partition ops green; catalog and corpus green;
   docs idempotent; release tagged. Commit.
+
+</details>
 
 ## Stretch — surveyed and NOT scheduled
 

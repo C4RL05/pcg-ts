@@ -12,71 +12,15 @@
  * same reason: float addition is order-dependent, so the byte-exact
  * result must not depend on which internal path a query took.
  */
-import type {
-  AttrDefault,
-  AttrType,
-  Attribute,
-  AttributeSet,
-  Geometry,
-} from "../data/index.js";
+import type { AttrDefault, Attribute, Geometry } from "../data/index.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid, type PositionView } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { requireGeometry } from "./util.js";
+import { requireGeometry, requireReportSlot } from "./util.js";
 
 /** Numeric ascending comparator (Array#sort is lexicographic by default). */
 function ascending(a: number, b: number): number {
   return a - b;
-}
-
-/** `f32x3`, or just `bool` when the tuple is 1 — transferAttribute's spelling. */
-function shapeLabel(type: AttrType, tupleSize: number): string {
-  return tupleSize === 1 ? type : `${type}x${tupleSize}`;
-}
-
-/**
- * Guard for the four REPORTING params of this module — `countAttr` and
- * `averageOutAttr` on pointNeighborhood, `distanceAttr` and `indexAttr` on
- * sampleNearestPoint. The rule is `transferAttribute`'s, restated here
- * because it is the library's rule and not that node's: a slot whose SHAPE
- * the node chooses (a u32 count, an f32 distance, an i32 index, an f32
- * average at the source's tuple size) must not land on a name the input
- * already holds under a different shape. `AttributeSet.replace` drops the
- * column and re-adds it, so `countAttr: "P"` quietly turned every position
- * into a neighbour count and returned a geometry that still cooked, still
- * had the right point count, and had lost the positions. A
- * plausible-looking cook is the worst failure this library can produce, so
- * it is refused.
- *
- * Only the destructive case is refused. An existing column of the SAME
- * shape is still reused and reset in place — that is what makes re-running
- * a node over its own output ordinary, and what lets `averageOutAttr` name
- * `averageAttr` and average in place. `sampleNearestPoint.outAttribute` is
- * deliberately NOT covered: its shape comes from the source attribute
- * being copied, and overwriting is what a copy IS, exactly as
- * `transferAttribute.name` is exempt there.
- */
-function requireReportSlot(
-  attrs: AttributeSet,
-  nodeType: string,
-  param: string,
-  name: string,
-  type: AttrType,
-  tupleSize: number,
-  suggestion: string,
-): void {
-  const existing = attrs.get(name);
-  if (existing === undefined) return;
-  if (existing.type === type && existing.tupleSize === tupleSize) return;
-  const want = shapeLabel(type, tupleSize);
-  throw new Error(
-    `${nodeType}: ${param} "${name}" already exists on the input's point domain as ` +
-      `${shapeLabel(existing.type, existing.tupleSize)}, but ${param} is written as ${want} — ` +
-      `writing it would DELETE the "${name}" column and everything in it, and the cook would ` +
-      `look fine afterwards. Give ${param} a name of its own (e.g. "${suggestion}"), or remove ` +
-      `"${name}" from the input first with removeAttribute if it is genuinely dead. A name that ` +
-      `already holds ${want} is fine: that column is reset, not deleted.`,
-  );
 }
 
 /**
@@ -226,7 +170,16 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
     // slot's shape depends on anything read below (averageOutAttr's tuple
     // size does, so its check waits for `ts`).
     if (wantCount) {
-      requireReportSlot(set, "pointNeighborhood", "countAttr", params.countAttr, "u32", 1, "nbrCount");
+      requireReportSlot({
+        attrs: set,
+        nodeType: "pointNeighborhood",
+        param: "countAttr",
+        name: params.countAttr,
+        type: "u32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "nbrCount",
+      });
     }
     const view = positionView(geo, "pointNeighborhood", "in");
 
@@ -255,15 +208,16 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       // f32 attribute into its own name an in-place overwrite; an i32 or
       // bool source needs a distinct output name, because the average is
       // always f32.
-      requireReportSlot(
-        set,
-        "pointNeighborhood",
-        "averageOutAttr",
-        params.averageOutAttr,
-        "f32",
-        ts,
-        "nbrAvg",
-      );
+      requireReportSlot({
+        attrs: set,
+        nodeType: "pointNeighborhood",
+        param: "averageOutAttr",
+        name: params.averageOutAttr,
+        type: "f32",
+        tupleSize: ts,
+        domain: "point",
+        suggestion: "nbrAvg",
+      });
     }
 
     const counts = wantCount ? new Uint32Array(n) : undefined;
@@ -420,26 +374,28 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
     // Before any query: a refusal must cost nothing. `outAttribute` is not
     // checked — see requireReportSlot for why a copy target is exempt.
     if (wantDistance) {
-      requireReportSlot(
-        dst.attrs.point,
-        "sampleNearestPoint",
-        "distanceAttr",
-        params.distanceAttr,
-        "f32",
-        1,
-        "nearDist",
-      );
+      requireReportSlot({
+        attrs: dst.attrs.point,
+        nodeType: "sampleNearestPoint",
+        param: "distanceAttr",
+        name: params.distanceAttr,
+        type: "f32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "nearDist",
+      });
     }
     if (wantIndex) {
-      requireReportSlot(
-        dst.attrs.point,
-        "sampleNearestPoint",
-        "indexAttr",
-        params.indexAttr,
-        "i32",
-        1,
-        "nearIndex",
-      );
+      requireReportSlot({
+        attrs: dst.attrs.point,
+        nodeType: "sampleNearestPoint",
+        param: "indexAttr",
+        name: params.indexAttr,
+        type: "i32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "nearIndex",
+      });
     }
     const n = dst.pointCount;
     const dstView = positionView(dst, "sampleNearestPoint", "in");

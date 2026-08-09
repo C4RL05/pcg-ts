@@ -3,6 +3,8 @@
  * comparisons, minimum mutual distance, or project them onto a plane.
  * Filters output points only (topology is not carried).
  */
+import type { Geometry } from "../data/index.js";
+import type { Column } from "../fields/index.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { UniformGrid } from "../spatial/index.js";
@@ -262,15 +264,38 @@ export const filterByExpression = standardNode<FilterByExpressionParams>({
 
 /** Params of {@link selfPrune}. */
 export interface SelfPruneParams {
-  minDistance: number;
+  minDistance: FieldParam;
+  priority: FieldParam;
 }
 
-/** Greedy minimum-distance pruning in point-index order. */
+/**
+ * Resolve one of {@link selfPrune}'s field-capable params to exactly one
+ * number per point. The message names the node, the param and the fix,
+ * because a vector here is the likely mistake: the standard `scale`
+ * attribute is a vec3, and a radius or a rank is a single number.
+ */
+function selfPruneScalar(
+  geo: Geometry,
+  param: "minDistance" | "priority",
+  value: FieldParam,
+  seed: number,
+  what: string,
+): Column {
+  const col = resolveOn(geo, "point", value, seed);
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `selfPrune: param "${param}" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — ${what} is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
+    );
+  }
+  return col;
+}
+
+/** Greedy minimum-distance pruning, ordered by priority then point index. */
 export const selfPrune = standardNode<SelfPruneParams>({
   type: "selfPrune",
   category: "filter",
   description:
-    "Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win). Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.",
+    "Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away. The order decides who wins, and it is `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point index — so with priority left alone, every point ties and this is exactly the index-greedy prune it has always been. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -278,18 +303,30 @@ export const selfPrune = standardNode<SelfPruneParams>({
       type: "f32",
       default: 1,
       min: 0,
+      acceptsField: true,
       description:
-        "Minimum allowed distance between any two kept points, in world units. 0 keeps every point.",
+        "Minimum allowed distance between two kept points, in world units. As a FIELD it is a per-point radius, evaluated on the input's points, and two points conflict when they are closer than the LARGER of their two radii (never the smaller, which would let a big point be crowded by a small one, and never the sum, which would double the spacing of an evenly-sized cloud and so disagree with the same number passed plainly). A per-point radius that is 0, negative or NaN claims no room of its own, but such a point can still be pruned by a bigger neighbour. A PLAIN 0 (or less) turns the node off: every point survives, topology included, and `priority` is not evaluated. A field never takes that shortcut — it always outputs a point cloud, so what the output IS never depends on the numbers that come back.",
+    },
+    priority: {
+      type: "f32",
+      default: 0,
+      acceptsField: true,
+      description:
+        "Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them has the lower index — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute(\"locked\") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField(\"key\") thins without the spatial bias of index order, re-rolling when the key changes. Equal priorities break to the LOWER point index, and NaN ranks lowest. The default 0 ties every point, which reproduces the index-greedy prune exactly. This decides WHO survives, never the output order.",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = requireGeometry(inputs, "in", "selfPrune");
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
     const n = geo.pointCount;
-    const minDist = params.minDistance;
-    if (!(minDist > 0)) {
+    // A plain non-positive minDistance turns the node off, as it always
+    // has: the input passes through cloned, topology and all. A FIELD
+    // never takes this path, even when every value it returns is 0 —
+    // whether the output carries topology must not depend on the data.
+    const uniform = typeof params.minDistance === "number" ? params.minDistance : undefined;
+    if (uniform !== undefined && !(uniform > 0)) {
       // Nothing to prune; pass a cloned input through.
       return { out: [makeGeometryItem(cloneGeometry(geo))] };
     }
@@ -302,16 +339,109 @@ export const selfPrune = standardNode<SelfPruneParams>({
         `selfPrune: point attribute "P" has tupleSize ${ps}, but distances need x, y and z (tupleSize 3); something upstream overwrote P with a narrower attribute`,
       );
     }
-    // One cell per minimum distance, so the survivors already kept within
-    // reach of a candidate are exactly the 3x3x3 block around its cell.
-    const grid = new UniformGrid({ data: pd, stride: ps, count: n }, minDist);
-    const keep: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const o = i * ps;
-      if (grid.hasPointCloserThan(pd[o], pd[o + 1], pd[o + 2], minDist)) continue;
-      keep.push(i);
-      grid.insert(i);
+    // Both params resolve before anything is decided; nothing here
+    // mutates the geometry, so columns that alias attribute storage stay
+    // valid for the whole scan.
+    const radii =
+      uniform === undefined
+        ? selfPruneScalar(geo, "minDistance", params.minDistance, nodeSeed, "a radius")
+        : undefined;
+    const ranks =
+      typeof params.priority === "number"
+        ? undefined
+        : selfPruneScalar(geo, "priority", params.priority, nodeSeed, "a rank");
+    // Visit order: priority descending, ties to the lower index. The
+    // tiebreak is the point INDEX deliberately, not a hashed identity:
+    // it is what makes a constant priority (the default) reduce to the
+    // shipped greedy exactly, and this node is single-partition — index
+    // is a stable name for a point here, which it is not in the
+    // cross-partition ops that need identity hashing.
+    let order: Uint32Array | undefined;
+    if (ranks !== undefined) {
+      const rank = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = ranks.data[i];
+        // NaN ranks lowest rather than poisoning the comparator.
+        rank[i] = v === v ? v : Number.NEGATIVE_INFINITY;
+      }
+      order = new Uint32Array(n);
+      for (let i = 0; i < n; i++) order[i] = i;
+      // A difference of two infinities is NaN, which is falsy, so equal
+      // infinite ranks fall through to the index like any other tie.
+      order.sort((a, b) => rank[b] - rank[a] || a - b);
     }
+    const kept = new Uint8Array(n);
+    const view = { data: pd, stride: ps, count: n };
+    if (radii === undefined) {
+      const minDist = uniform as number;
+      // One cell per minimum distance, so the survivors already kept
+      // within reach of a candidate are exactly the 3x3x3 block around
+      // its cell.
+      const grid = new UniformGrid(view, minDist);
+      for (let k = 0; k < n; k++) {
+        const i = order === undefined ? k : order[k];
+        const o = i * ps;
+        if (grid.hasPointCloserThan(pd[o], pd[o + 1], pd[o + 2], minDist)) continue;
+        kept[i] = 1;
+        grid.insert(i);
+      }
+    } else {
+      // Per-point radii. Each point's CLAIM is its radius when that is
+      // positive and 0 otherwise, so a negative or NaN radius claims
+      // nothing (and, unlike a raw NaN, cannot wipe out a neighbour's
+      // claim through the max below).
+      const claim = new Float64Array(n);
+      let cellSize = 0;
+      for (let i = 0; i < n; i++) {
+        const v = radii.data[i];
+        const c = v > 0 ? v : 0;
+        claim[i] = c;
+        if (c > cellSize && c < Number.POSITIVE_INFINITY) cellSize = c;
+      }
+      // Cell size never decides an answer, only how many cells a query
+      // touches — the pair test below is exact whatever it is. The
+      // largest FINITE claim makes the usual case (radii within a small
+      // factor of each other) a 3x3x3 block; an all-zero or all-infinite
+      // set has no informative size, so 1 stands in.
+      const grid = new UniformGrid(view, cellSize > 0 ? cellSize : 1);
+      const hits: number[] = [];
+      // Largest claim among the points kept so far: a candidate has to
+      // look that far out, because a kept point's own radius can reach
+      // the candidate even when the candidate's cannot reach back.
+      let widest = 0;
+      for (let k = 0; k < n; k++) {
+        const i = order === undefined ? k : order[k];
+        const o = i * ps;
+        const x = pd[o];
+        const y = pd[o + 1];
+        const z = pd[o + 2];
+        const rc = claim[i];
+        const reach = rc > widest ? rc : widest;
+        let blocked = false;
+        if (reach > 0) {
+          grid.queryRadius(x, y, z, reach, hits);
+          for (const j of hits) {
+            const rj = claim[j];
+            // The LARGER radius decides the pair — see the param docs.
+            const limit = rc > rj ? rc : rj;
+            const q = j * ps;
+            const dx = pd[q] - x;
+            const dy = pd[q + 1] - y;
+            const dz = pd[q + 2] - z;
+            if (dx * dx + dy * dy + dz * dz < limit * limit) {
+              blocked = true;
+              break;
+            }
+          }
+        }
+        if (blocked) continue;
+        kept[i] = 1;
+        grid.insert(i);
+        if (rc > widest) widest = rc;
+      }
+    }
+    const keep: number[] = [];
+    for (let i = 0; i < n; i++) if (kept[i] === 1) keep.push(i);
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
   },
 });

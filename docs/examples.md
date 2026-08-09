@@ -36,7 +36,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/4 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/4 — district centres and the field they claim
-- [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/4, edited — hand-placed plots that win by construction
+- [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/4, edited — hand-placed plots that win on priority
 - [pipeline-3-lots.json](#pipeline-3-lotsjson) — staged pipeline 3/4 — a street, its frontage band, and lot footprints
 - [pipeline-4-detail-edits.json](#pipeline-4-detail-editsjson) — staged pipeline 4/4, edited — the full settlement with authored plots
 - [pipeline-4-detail.json](#pipeline-4-detailjson) — staged pipeline 4/4 — buildings, wall posts and forest
@@ -583,9 +583,9 @@ Cook it: `pcg cook examples/graphs/pipeline-2-districts.json --stats`
 
 ## pipeline-3-lots-edits.json
 
-**staged pipeline 3/4, edited — hand-placed plots that win by construction**
+**staged pipeline 3/4, edited — hand-placed plots that win on priority**
 
-`pipeline-3-lots.json` verbatim, plus an authored edit layer: a `pointLine` terrace and a `pointGrid` block dropped onto the same terrain, stamped with a `locked` flag, and wired into the edit slot the base reserved — ONE connection is the whole edit. It lands twice: as the `features` of a `filter/by-distance-to` that clears procedural lots within 8 units, and on pin `a` of `compose/merge-tagged`, which puts authored points at lower indices than procedural ones, so the index-greedy `selfPrune` keeps them BY CONSTRUCTION rather than by luck. The point of the variant: `terrain`, `boundary` and `districts` cook bit-identically to the base while `lots` and `footprints` change — the edit is provably local.
+`pipeline-3-lots.json` verbatim, plus an authored edit layer: a `pointLine` terrace and a `pointGrid` block dropped onto the same terrain, stamped `locked = 1`, and wired into the edit slot the base reserved — ONE connection is the whole edit. It lands twice: as the `features` of a `filter/by-distance-to` that keeps procedural lots 3 units clear of it, and on pin `b` of `compose/merge-tagged`, which appends the authored points AFTER the procedural ones at the HIGHEST indices — the worst place an index-greedy prune could put them. They take every contested spot anyway, because `selfPrune` ranks by `priority: attribute("locked")`: higher wins, ties fall to the lower index, so the 12 authored points are visited first and the procedural ones prune against them. Survival is a value the points carry, not a position in a merge — drop the `priority` param and 8 of the 12 lose their spots to procedural neighbours; move the edit back to pin `a` and the same 12 survive. The point of the variant: `terrain`, `boundary` and `districts` cook bit-identically to the base while `lots` and `footprints` change — the edit is provably local.
 
 **Tags:** `pipeline`, `staged`, `edits`, `authoring`
 
@@ -603,7 +603,7 @@ Cook it: `pcg cook examples/graphs/pipeline-3-lots-edits.json --stats`
 
 **staged pipeline 3/4 — a street, its frontage band, and lot footprints**
 
-Stages 1-2 verbatim, plus building plots. ADDS `lots` and `footprints`: the district centres are ordered by bearing and closed into a spine street, the district field is cut to a frontage band (within 11 of the street, at least 4 off it), each survivor is turned to face the nearest street sample and given a random size, and `selfPrune` spaces them 7 apart. A 4-corner ring copied onto every lot and grouped by `lotId` becomes one closed quad per plot. Note the reserved EDIT SLOT: `edits` is a `mergePoints` with nothing connected, so it cooks to an empty cloud that clears nothing and merges nothing — see the `-edits` variant, which is this file plus authored geometry and one connection. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
+Stages 1-2 verbatim, plus building plots. ADDS `lots` and `footprints`: the district centres are ordered by bearing and closed into a spine street, the district field is cut to a frontage band (within 11 of the street, at least 4 off it), each survivor is turned to face the nearest street sample and given a random size, and `selfPrune` spaces them 7 apart. A 4-corner ring copied onto every lot and grouped by `lotId` becomes one closed quad per plot. Note the reserved EDIT SLOT: `edits` is a `mergePoints` with nothing connected, so it cooks to an empty cloud that clears nothing and merges nothing — see the `-edits` variant, which is this file plus authored geometry and one connection. The slot comes with a RANK as well as a wire: procedural lots are stamped `locked = 0` on their way into the merge and the prune reads `priority: attribute("locked")`, so a point arriving through the slot at 1 outranks every procedural neighbour it contests. Here nothing arrives, every point ties at 0, and the prune is exactly the index-greedy one it has always been — which is what `priority`'s default is for. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
 
 **Tags:** `pipeline`, `staged`, `path`, `placement`
 

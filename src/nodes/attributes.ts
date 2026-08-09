@@ -8,7 +8,6 @@ import {
   transferNearest,
   transferRaycast,
   transferUv,
-  type AttributeSet,
   type AttrType,
   type Domain,
   type PromoteMode,
@@ -24,6 +23,7 @@ import {
   geometryItems,
   requireGeometry,
   requireGeometryItem,
+  requireReportSlot,
   resolveOn,
   tryResolveOnGpu,
 } from "./util.js";
@@ -260,51 +260,6 @@ export const promoteAttribute = standardNode<PromoteAttributeParams>({
   },
 });
 
-/** `f32x3`, or just `bool` when the tuple is 1 — the golden's spelling. */
-function shapeLabel(type: AttrType, tupleSize: number): string {
-  return tupleSize === 1 ? type : `${type}x${tupleSize}`;
-}
-
-/**
- * Guard for `transferAttribute`'s two REPORTING params, `hitAttr` and
- * `missCountAttr`. They differ from `name` in a way that decides this: the
- * shape they write is chosen by the node (a bool flag, a u32 count), not by
- * the source, and overwriting is not their job — so a destination that
- * already carries the name under a different shape is not overwritten, it is
- * DELETED. `AttributeSet.replace` drops the column and re-adds it, which
- * means `hitAttr: "P"` quietly turned every position into a bool flag and
- * returned a geometry that still cooked, still had the right point count,
- * and had lost the positions. A plausible-looking cook is the worst failure
- * this library can produce, so it is refused.
- *
- * Only the destructive case is refused. An existing column of the SAME shape
- * is still reused and reset in place, which is what makes the flag describe
- * THIS transfer only, and the `name` param still overwrites freely — that is
- * what a transfer IS.
- */
-function requireReportSlot(
-  attrs: AttributeSet,
-  domain: "point" | "detail",
-  param: "hitAttr" | "missCountAttr",
-  name: string,
-  type: AttrType,
-  tupleSize: number,
-): void {
-  const existing = attrs.get(name);
-  if (existing === undefined) return;
-  if (existing.type === type && existing.tupleSize === tupleSize) return;
-  const want = shapeLabel(type, tupleSize);
-  const suggestion = param === "hitAttr" ? "__hit" : "__missed";
-  throw new Error(
-    `transferAttribute: ${param} "${name}" already exists on the input's ${domain} domain as ` +
-      `${shapeLabel(existing.type, existing.tupleSize)}, but ${param} is written as ${want} — ` +
-      `writing it would DELETE the "${name}" column and everything in it, and the cook would ` +
-      `look fine afterwards. Give ${param} a name of its own (a "__" prefix marks it internal, ` +
-      `e.g. "${suggestion}"), or remove "${name}" from the input first if it is genuinely dead. ` +
-      `A name that already holds ${want} is fine: that column is reset, not deleted.`,
-  );
-}
-
 /** Params of {@link transferAttribute}. */
 export interface TransferAttributeParams {
   name: string;
@@ -401,10 +356,28 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
     // column the transfer itself adds is `name`, which the guard above
     // already separates from both reporting slots.
     if (params.hitAttr !== "") {
-      requireReportSlot(dst.attrs.point, "point", "hitAttr", params.hitAttr, "bool", 1);
+      requireReportSlot({
+        attrs: dst.attrs.point,
+        nodeType: "transferAttribute",
+        param: "hitAttr",
+        name: params.hitAttr,
+        type: "bool",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "__hit",
+      });
     }
     if (params.missCountAttr !== "") {
-      requireReportSlot(dst.attrs.detail, "detail", "missCountAttr", params.missCountAttr, "u32", 1);
+      requireReportSlot({
+        attrs: dst.attrs.detail,
+        nodeType: "transferAttribute",
+        param: "missCountAttr",
+        name: params.missCountAttr,
+        type: "u32",
+        tupleSize: 1,
+        domain: "detail",
+        suggestion: "__missed",
+      });
     }
     let missCount = 0;
     // Per-point outcome of the SAME query that wrote the values, kept only
@@ -495,7 +468,7 @@ export const attributeReduce = standardNode<AttributeReduceParams>({
       type: "string",
       default: "",
       description:
-        "Name of the detail attribute to write. Empty (the default) reuses `name`, which is what promoting would have produced; give distinct names to hold several reductions of one attribute at once.",
+        "Name of the detail attribute to write. Empty (the default) reuses `name`, which is what promoting would have produced; give distinct names to hold several reductions of one attribute at once. The shape is this node's to pick (f32 at the source's tuple size, or u32 for mode 'count'), so a name the DETAIL domain already holds under a different shape is REFUSED rather than deleted and re-added — writing it would destroy that column while the cook still looked fine. A same-shape column is reused and reset. The one exception is reducing a detail attribute into its own name: there the column replaced is the column read, so it converts in place.",
     },
   },
   execute({ inputs, params }) {
@@ -510,6 +483,19 @@ export const attributeReduce = standardNode<AttributeReduceParams>({
       );
     }
     if (mode === "count") {
+      // Mode count reads no attribute, so there is no in-place case here:
+      // whatever sits under `outName` is destroyed, not rewritten from
+      // itself. Checked before the write, which is the whole node.
+      requireReportSlot({
+        attrs: geo.attrs.detail,
+        nodeType: "attributeReduce",
+        param: "outName",
+        name: outName,
+        type: "u32",
+        tupleSize: 1,
+        domain: "detail",
+        suggestion: `${outName}_count`,
+      });
       geo.attrs.detail.replace(outName, "u32", 1, 0).set(0, set.count);
       return { out: [makeGeometryItem(geo)] };
     }
@@ -530,6 +516,23 @@ export const attributeReduce = standardNode<AttributeReduceParams>({
       );
     }
     const ts = attr.tupleSize;
+    // Checked once the written shape is known (it is the source's tuple
+    // size) and before the accumulation, so a refusal costs nothing. The
+    // one existing column this MAY replace is the source itself, which only
+    // happens when the reduction reads the detail domain it writes: there
+    // the single element is rewritten from its own value, so `replace`
+    // converts rather than destroys.
+    requireReportSlot({
+      attrs: geo.attrs.detail,
+      nodeType: "attributeReduce",
+      param: "outName",
+      name: outName,
+      type: "f32",
+      tupleSize: ts,
+      domain: "detail",
+      suggestion: `${outName}_${mode}`,
+      source: attr,
+    });
     const n = set.count;
     const data = attr.data;
     // Accumulate in float64 regardless of the source type, so a long f32
@@ -594,7 +597,7 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
       type: "string",
       default: "",
       description:
-        "Name of the f32 attribute to write on the same domain. Empty (the default) rewrites `name` in place, which also converts an integer attribute to f32.",
+        "Name of the f32 attribute to write on the same domain. Empty (the default) rewrites `name` in place, which also converts an integer attribute to f32. Writing over a DIFFERENT attribute that already exists with another shape is REFUSED rather than deleted and re-added — remapping into an i32 `id` or into `P` would destroy that column while the cook still looked fine. A same-shape column is reused, and the in-place conversion above stays legal because there the column replaced is the one being read.",
     },
     domain: {
       type: "enum",
@@ -649,6 +652,29 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
       );
     }
     const ts = attr.tupleSize;
+    const outName = params.outName !== "" ? params.outName : params.name;
+    // The narrower rule this node needs. The result is always f32, so the
+    // blanket reporting-slot refusal would outlaw the conversion `outName`
+    // documents: an empty outName rewrites `name` itself, which is how an
+    // i32/u32 attribute (a neighbour count, an id) becomes an f32 density.
+    // `source: attr` is what separates the two — the write lands on the
+    // very column that was just read, so `replace` converts it instead of
+    // deleting someone else's data. Every other differently-shaped column
+    // is still refused, including one of the same tuple size under a
+    // different name (an i32 `id`), which the write would silently erase.
+    // Checked before the fit pass and the value loop: a refusal costs
+    // nothing.
+    requireReportSlot({
+      attrs: set,
+      nodeType: "attributeRemap",
+      param: "outName",
+      name: outName,
+      type: "f32",
+      tupleSize: ts,
+      domain,
+      suggestion: `${outName}_remap`,
+      source: attr,
+    });
     const n = set.count;
     const source = attr.data;
     let inMin = params.inMin;
@@ -702,7 +728,6 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
       }
       values[i] = mapped;
     }
-    const outName = params.outName !== "" ? params.outName : params.name;
     const target = set.replace(outName, "f32", ts, 0);
     const data = target.data;
     for (let i = 0; i < n * ts; i++) data[i] = values[i];

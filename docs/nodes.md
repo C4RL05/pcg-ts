@@ -28,7 +28,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [filterByDensity](#filterbydensity) — Filters points by their `density` point attribute (f32, tuple 1).
 - [filterByExpression](#filterbyexpression) — Keeps points where a field-capable `predicate` evaluates to a non-zero number.
 - [projectToPlane](#projecttoplane) — Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero).
-- [selfPrune](#selfprune) — Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win).
+- [selfPrune](#selfprune) — Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away.
 
 **io**
 
@@ -83,7 +83,7 @@ Collapses a numeric attribute over a whole domain into a single value on the det
 | `name` | string | `"density"` |  |  |  | Numeric attribute to reduce (tuple 1..4). Must exist on `domain`. Ignored by mode 'count', which counts elements and may leave this empty. |
 | `domain` | enum | `"point"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain to reduce over: point, vertex, primitive, or detail (one element). |
 | `mode` | enum | `"max"` |  | `sum`, `min`, `max`, `average`, `count` |  | How the elements collapse: sum, min, max, average (each componentwise over the tuple, NaN elements skipped), or count (how many elements the domain has, ignoring `name`). |
-| `outName` | string | `""` |  |  |  | Name of the detail attribute to write. Empty (the default) reuses `name`, which is what promoting would have produced; give distinct names to hold several reductions of one attribute at once. |
+| `outName` | string | `""` |  |  |  | Name of the detail attribute to write. Empty (the default) reuses `name`, which is what promoting would have produced; give distinct names to hold several reductions of one attribute at once. The shape is this node's to pick (f32 at the source's tuple size, or u32 for mode 'count'), so a name the DETAIL domain already holds under a different shape is REFUSED rather than deleted and re-added — writing it would destroy that column while the cook still looked fine. A same-shape column is reused and reset. The one exception is reducing a detail attribute into its own name: there the column replaced is the column read, so it converts in place. |
 
 ## attributeRemap
 
@@ -100,7 +100,7 @@ Rescales a numeric attribute linearly from an input range to an output range, wr
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `name` | string | `"density"` |  |  |  | Numeric attribute to rescale (tuple 1..4). Must exist on `domain`. |
-| `outName` | string | `""` |  |  |  | Name of the f32 attribute to write on the same domain. Empty (the default) rewrites `name` in place, which also converts an integer attribute to f32. |
+| `outName` | string | `""` |  |  |  | Name of the f32 attribute to write on the same domain. Empty (the default) rewrites `name` in place, which also converts an integer attribute to f32. Writing over a DIFFERENT attribute that already exists with another shape is REFUSED rather than deleted and re-added — remapping into an i32 `id` or into `P` would destroy that column while the cook still looked fine. A same-shape column is reused, and the in-place conversion above stays legal because there the column replaced is the one being read. |
 | `domain` | enum | `"point"` |  | `point`, `vertex`, `primitive`, `detail` |  | Domain the attribute lives on: point, vertex, primitive, or detail. |
 | `mode` | enum | `"range"` |  | `range`, `fit` |  | 'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax. |
 | `inMin` | f32 | `-1` |  |  |  | Value mapped to outMin, in mode 'range'. Ignored in mode 'fit'. |
@@ -485,7 +485,7 @@ For every point of `in`, finds the nearest point of the `source` cloud in 3D (po
 
 ## selfPrune
 
-Enforces a minimum distance between points: scans points in index order and keeps a point only when every previously kept point is at least minDistance away (deterministic greedy — lower indices win). Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.
+Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away. The order decides who wins, and it is `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point index — so with priority left alone, every point ties and this is exactly the index-greedy prune it has always been. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.
 
 **Category:** filter
 
@@ -497,7 +497,8 @@ Enforces a minimum distance between points: scans points in index order and keep
 
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `minDistance` | f32 | `1` | >= 0 |  |  | Minimum allowed distance between any two kept points, in world units. 0 keeps every point. |
+| `minDistance` | f32 | `1` | >= 0 |  | yes | Minimum allowed distance between two kept points, in world units. As a FIELD it is a per-point radius, evaluated on the input's points, and two points conflict when they are closer than the LARGER of their two radii (never the smaller, which would let a big point be crowded by a small one, and never the sum, which would double the spacing of an evenly-sized cloud and so disagree with the same number passed plainly). A per-point radius that is 0, negative or NaN claims no room of its own, but such a point can still be pruned by a bigger neighbour. A PLAIN 0 (or less) turns the node off: every point survives, topology included, and `priority` is not evaluated. A field never takes that shortcut — it always outputs a point cloud, so what the output IS never depends on the numbers that come back. |
+| `priority` | f32 | `0` |  |  | yes | Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them has the lower index — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute("locked") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField("key") thins without the spatial bias of index order, re-rolling when the key changes. Equal priorities break to the LOWER point index, and NaN ranks lowest. The default 0 ties every point, which reproduces the index-greedy prune exactly. This decides WHO survives, never the output order. |
 
 ## setAttribute
 
@@ -696,4 +697,4 @@ Writes a unit `tangent` (f32 tuple 3) onto the points of every polyline primitiv
 
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `name` | string | `"tangent"` |  |  |  | Attribute to write (created, or replaced when it exists with another shape). The default 'tangent' is the name splineSample emits and the one an orientAlongVector direction field usually reads. Cannot be 'P'. |
+| `name` | string | `"tangent"` |  |  |  | Attribute to write (created, or reset when it already exists as f32 tuple 3). The default 'tangent' is the name splineSample emits and the one an orientAlongVector direction field usually reads. The shape is this node's to pick, so a name the input's point domain already holds under a DIFFERENT shape is REFUSED rather than deleted and re-added — writing it would destroy that column and everything in it while the cook still looked fine. Give the tangents a name of their own, or removeAttribute the clash first. 'P' is refused outright, same shape or not: it is what the tangents are computed from. |

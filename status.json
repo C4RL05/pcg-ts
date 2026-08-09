@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 14:07",
-  "currentPhase": 40,
+  "updated": "2026-08-09 15:45",
+  "currentPhase": 41,
   "phases": [
     {
       "id": "plan",
@@ -215,18 +215,32 @@
     },
     {
       "id": 41,
-      "title": "Topology, vocabulary v3, docs, v0.12.0",
+      "title": "Priority pruning, carried fixes, v0.12.0",
+      "state": "done"
+    },
+    {
+      "id": 42,
+      "title": "World-anchored sources, cross-partition foundations",
+      "state": "pending"
+    },
+    {
+      "id": 43,
+      "title": "Topology, shipped with its consumer",
       "state": "pending"
     }
   ],
   "tests": {
-    "passed": 2463,
+    "passed": 2484,
     "failed": 0,
-    "total": 2463,
-    "lastRun": "2026-08-09 14:07"
+    "total": 2484,
+    "lastRun": "2026-08-09 15:45"
   },
   "blockers": [],
   "log": [
+    {
+      "time": "2026-08-09 15:45",
+      "message": "Phase 41 re-surveyed and SPLIT into three. Three surveys (encoding, determinism, demand) agreed the topology phase as written could not be built in one pass. Demand: three of the four proposed nodes had no caller, and the one with real shipped demand (pruneByPriority) was not a topology node at all — it was selfPrune with more inputs. Encoding: side-car CSR wins over an edge domain because a derived index cannot go stale (cloneGeometry returns a new object, so it is simply absent and recomputed) whereas an edge array on the geometry rides that clone into every topology-destroying node and fails silently. Determinism: no existing source is halo-derivable, because pointScatterInBounds computes positions as a function of the bounds, so widening for a halo moves every point — a hole in the runtime pillar that blocks every cross-partition op, not just edges. Also recorded: phase 40 partition test cannot catch data-partitioning bugs, since the executor yields after cookNode returns and node bodies are atomic under a budget. Phase 41 shipped as priority pruning: selfPrune gains a field-capable minDistance (per-point radius, max(rA,rB) symmetry — the backlog most-wanted filter since before phase 37) and a priority param (higher wins, default 0 so no golden moved). The pipeline edits variant was rewired onto it, which exposed that the shipped corpus BY CONSTRUCTION lesson was vacuous: clear 8-unit exclusion exceeded the prune 7-unit minDistance, so no authored/procedural pair ever contested and neither the merge-order trick nor a naive priority ever fired. Tightened so the contest is real and guarded by a mutation-checked test. The three carried reporting-slot clobber sites closed and the guard de-duplicated into nodes/util.ts without growing the public surface. Phases 42 (world-anchored sources) and 43 (topology with its consumer) added; single-partition-only topology rejected because a shipped exemption is permanent where a breaking change is not."
+    },
     {
       "time": "2026-08-09 14:07",
       "message": "Phase 40 complete: the staged pipeline, v0.11.0. Six pipeline graphs (boundary, districts, lots, detail, plus lots/detail edit variants) staged as flat supersets — each stage is the previous file byte-for-byte plus additions, which works because a node seed is hashCombine(graphSeed, hashString(nodeId)), node-local and DAG-position independent. The subgraph route was measured NOT to work (201 vs 205 points) because the wrapper re-derives the inner seed. transferAttribute gained hitAttr (hit polarity, so an unwritten column defaults to the safe reading) and place/drop-to-surface went from five nodes to three; proving that reddened exposed a latent bug where the old marker transfer inherited a pre-existing __onSurface. A fraction field input over [0,1], consistent with pointLine includeEnd. The performance-and-budgets skill, which corrected three of its own briefed claims by measurement: the warm/cold gap is JIT and not caching, and the partition-safety check it documents did not exist as a test — it does now, over all 34 corpus graphs at float-exact fidelity, proven to redden under an injected order dependency. Silent truncation became a diagnostic: requireGeometry took item[0] and discarded the rest, and the GPU resident-run fusion path made the same graph throw on CPU and cook on GPU. A class of silent clobber closed on six reporting-slot params, with three more recorded in PLAN. CI added (Node 20 and 22) including a generated-artifact idempotence check, since the repo had no CI at all while several phases claimed cooks-in-CI as an exit criterion."

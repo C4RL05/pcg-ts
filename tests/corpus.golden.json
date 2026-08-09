@@ -1479,12 +1479,12 @@
                 "boundsMax:f32x3",
                 "color:f32x4",
                 "seed:u32",
-                "locked:i32",
-                "origin:string",
                 "districtDist:f32",
                 "district:i32",
                 "districtKind:string",
-                "streetP:f32x3"
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
               ]
             },
             "bounds": {
@@ -1677,11 +1677,12 @@
                 "boundsMax:f32x3",
                 "color:f32x4",
                 "seed:u32",
-                "origin:string",
                 "districtDist:f32",
                 "district:i32",
                 "districtKind:string",
-                "streetP:f32x3"
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
               ]
             },
             "bounds": {
@@ -1896,12 +1897,12 @@
                 "boundsMax:f32x3",
                 "color:f32x4",
                 "seed:u32",
-                "locked:i32",
-                "origin:string",
                 "districtDist:f32",
                 "district:i32",
                 "districtKind:string",
-                "streetP:f32x3"
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
               ]
             },
             "bounds": {
@@ -2152,11 +2153,12 @@
                 "boundsMax:f32x3",
                 "color:f32x4",
                 "seed:u32",
-                "origin:string",
                 "districtDist:f32",
                 "district:i32",
                 "districtKind:string",
-                "streetP:f32x3"
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
               ]
             },
             "bounds": {

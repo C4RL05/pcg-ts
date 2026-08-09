@@ -2,8 +2,8 @@
   "formatVersion": 1,
   "seed": 40100,
   "meta": {
-    "title": "staged pipeline 3/4, edited — hand-placed plots that win by construction",
-    "description": "`pipeline-3-lots.json` verbatim, plus an authored edit layer: a `pointLine` terrace and a `pointGrid` block dropped onto the same terrain, stamped with a `locked` flag, and wired into the edit slot the base reserved — ONE connection is the whole edit. It lands twice: as the `features` of a `filter/by-distance-to` that clears procedural lots within 8 units, and on pin `a` of `compose/merge-tagged`, which puts authored points at lower indices than procedural ones, so the index-greedy `selfPrune` keeps them BY CONSTRUCTION rather than by luck. The point of the variant: `terrain`, `boundary` and `districts` cook bit-identically to the base while `lots` and `footprints` change — the edit is provably local.",
+    "title": "staged pipeline 3/4, edited — hand-placed plots that win on priority",
+    "description": "`pipeline-3-lots.json` verbatim, plus an authored edit layer: a `pointLine` terrace and a `pointGrid` block dropped onto the same terrain, stamped `locked = 1`, and wired into the edit slot the base reserved — ONE connection is the whole edit. It lands twice: as the `features` of a `filter/by-distance-to` that keeps procedural lots 3 units clear of it, and on pin `b` of `compose/merge-tagged`, which appends the authored points AFTER the procedural ones at the HIGHEST indices — the worst place an index-greedy prune could put them. They take every contested spot anyway, because `selfPrune` ranks by `priority: attribute(\"locked\")`: higher wins, ties fall to the lower index, so the 12 authored points are visited first and the procedural ones prune against them. Survival is a value the points carry, not a position in a merge — drop the `priority` param and 8 of the 12 lose their spots to procedural neighbours; move the edit back to pin `a` and the same 12 survive. The point of the variant: `terrain`, `boundary` and `districts` cook bit-identically to the base while `lots` and `footprints` change — the edit is provably local.",
     "tags": [
       "pipeline",
       "staged",
@@ -434,10 +434,21 @@
       "type": "subgraph",
       "params": {
         "comparison": "ge",
-        "distance": 8
+        "distance": 3
       },
       "ref": {
         "name": "filter/by-distance-to"
+      }
+    },
+    {
+      "id": "lotLock",
+      "type": "setAttribute",
+      "params": {
+        "name": "locked",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": 0
       }
     },
     {
@@ -445,8 +456,8 @@
       "type": "subgraph",
       "params": {
         "kindAttr": "origin",
-        "nameA": "authored",
-        "nameB": "procedural"
+        "nameA": "procedural",
+        "nameB": "authored"
       },
       "ref": {
         "name": "compose/merge-tagged"
@@ -456,7 +467,12 @@
       "id": "lots",
       "type": "selfPrune",
       "params": {
-        "minDistance": 7
+        "minDistance": 7,
+        "priority": {
+          "fn": "attribute",
+          "name": "locked",
+          "tupleSize": 1
+        }
       }
     },
     {
@@ -863,7 +879,7 @@
       ],
       "to": [
         "lotMerge",
-        "a"
+        "b"
       ]
     },
     {
@@ -872,8 +888,18 @@
         "out"
       ],
       "to": [
+        "lotLock",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "lotLock",
+        "out"
+      ],
+      "to": [
         "lotMerge",
-        "b"
+        "a"
       ]
     },
     {

@@ -434,10 +434,21 @@
       "type": "subgraph",
       "params": {
         "comparison": "ge",
-        "distance": 8
+        "distance": 3
       },
       "ref": {
         "name": "filter/by-distance-to"
+      }
+    },
+    {
+      "id": "lotLock",
+      "type": "setAttribute",
+      "params": {
+        "name": "locked",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": 0
       }
     },
     {
@@ -445,8 +456,8 @@
       "type": "subgraph",
       "params": {
         "kindAttr": "origin",
-        "nameA": "authored",
-        "nameB": "procedural"
+        "nameA": "procedural",
+        "nameB": "authored"
       },
       "ref": {
         "name": "compose/merge-tagged"
@@ -456,7 +467,12 @@
       "id": "lots",
       "type": "selfPrune",
       "params": {
-        "minDistance": 7
+        "minDistance": 7,
+        "priority": {
+          "fn": "attribute",
+          "name": "locked",
+          "tupleSize": 1
+        }
       }
     },
     {
@@ -976,7 +992,7 @@
       ],
       "to": [
         "lotMerge",
-        "a"
+        "b"
       ]
     },
     {
@@ -985,8 +1001,18 @@
         "out"
       ],
       "to": [
+        "lotLock",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "lotLock",
+        "out"
+      ],
+      "to": [
         "lotMerge",
-        "b"
+        "a"
       ]
     },
     {

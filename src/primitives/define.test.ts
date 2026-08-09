@@ -129,16 +129,19 @@ describe("acceptsField is asserted, not assumed", () => {
   });
 
   it("REFUSES a plain target that asserts it, naming the target", () => {
+    // `scatter.seed` is the plain target here because the fixture's other
+    // candidate stopped being one: selfPrune's minDistance became
+    // field-capable (a per-point radius) in the priority-pruning work.
     expect(() =>
       define(freshName(), [
         {
-          name: "spacing",
-          targets: [{ node: "prune", param: "minDistance" }],
-          description: "Minimum spacing.",
+          name: "variant",
+          targets: [{ node: "scatter", param: "seed" }],
+          description: "Which random stream to draw.",
           acceptsField: true,
         },
       ]),
-    ).toThrow(/"prune"\.minDistance does not accept fields/);
+    ).toThrow(/"scatter"\.seed does not accept fields/);
   });
 
   it("REFUSES a fan-out that would silently AND the capability away", () => {

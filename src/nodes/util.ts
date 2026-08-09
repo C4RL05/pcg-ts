@@ -3,7 +3,14 @@
  * field resolution, point gathering/compaction, and quaternion math.
  * Not part of the public API.
  */
-import { Geometry, PRIMTYPE_ATTR, type AttrDefault } from "../data/index.js";
+import {
+  Geometry,
+  PRIMTYPE_ATTR,
+  type AttrDefault,
+  type AttrType,
+  type Attribute,
+  type AttributeSet,
+} from "../data/index.js";
 import {
   type Column,
   type Field,
@@ -183,6 +190,81 @@ export function requireTuple(
 /** Read component k of element i, broadcasting scalar columns. */
 export function readComp(col: Column, i: number, k: number): number {
   return col.tupleSize === 1 ? col.data[i] : col.data[i * col.tupleSize + k];
+}
+
+/** `f32x3`, or just `bool` when the tuple is 1 — the golden's spelling. */
+function shapeLabel(type: AttrType, tupleSize: number): string {
+  return tupleSize === 1 ? type : `${type}x${tupleSize}`;
+}
+
+/** One reporting slot to check — see {@link requireReportSlot}. */
+export interface ReportSlot {
+  /** Attribute set the slot is written to (NOT always the one it reads). */
+  readonly attrs: AttributeSet;
+  /** Node type, for the message. */
+  readonly nodeType: string;
+  /** Param that named the slot, for the message (e.g. "hitAttr"). */
+  readonly param: string;
+  /** Attribute name the param resolved to. */
+  readonly name: string;
+  /** Type the node writes there. */
+  readonly type: AttrType;
+  /** Tuple size the node writes there. */
+  readonly tupleSize: number;
+  /** Domain of {@link attrs}, for the message (e.g. "point"). */
+  readonly domain: string;
+  /** A name that would not collide, offered as the fix. */
+  readonly suggestion: string;
+  /**
+   * The column this node just READ and is rewriting from its own
+   * contents, when the slot can legitimately land on it — an in-place
+   * conversion, not a clobber. Omit for a pure report.
+   */
+  readonly source?: Attribute | undefined;
+}
+
+/**
+ * The library's rule for REPORTING SLOTS: a param that names an attribute
+ * whose SHAPE the node picks, not the data (a bool hit flag, a u32 count,
+ * an f32 distance, an i32 index, a reduction, a remap result).
+ * `AttributeSet.replace` resets a column of the same shape but DELETES and
+ * re-adds one of any other shape, so a slot pointed at an existing column
+ * of a different shape quietly destroyed it: `hitAttr: "P"` turned every
+ * position into a bool flag and returned a geometry that still cooked and
+ * still had the right point count, minus its positions. A
+ * plausible-looking cook is the worst failure this library can produce, so
+ * the destructive case is refused here instead.
+ *
+ * Only that case. An existing column of the SAME shape is still reused and
+ * reset in place — that is what makes re-running a node over its own
+ * output ordinary, and what lets `averageOutAttr` name `averageAttr` and
+ * average in place.
+ *
+ * Two kinds of slot are deliberately NOT covered. A COPY TARGET
+ * (`transferAttribute.name`, `sampleNearestPoint.outAttribute`) takes its
+ * shape from the source attribute, and overwriting is what a copy IS. And
+ * an IN-PLACE rewrite passes `source`: when the existing column is the very
+ * column the node read, replacing it destroys nothing that was not about
+ * to be rewritten from its own values — `attributeRemap` with an empty
+ * `outName` converting an i32 attribute to f32 is the documented case.
+ * Identity, not name equality, is the test: an attribute of the same name
+ * on another domain is a different column and stays refused.
+ */
+export function requireReportSlot(slot: ReportSlot): void {
+  const existing = slot.attrs.get(slot.name);
+  if (existing === undefined) return;
+  if (existing.type === slot.type && existing.tupleSize === slot.tupleSize) return;
+  if (slot.source !== undefined && existing === slot.source) return;
+  const want = shapeLabel(slot.type, slot.tupleSize);
+  throw new Error(
+    `${slot.nodeType}: ${slot.param} "${slot.name}" already exists on the input's ` +
+      `${slot.domain} domain as ${shapeLabel(existing.type, existing.tupleSize)}, but ` +
+      `${slot.param} is written as ${want} — writing it would DELETE the "${slot.name}" column ` +
+      `and everything in it, and the cook would look fine afterwards. Give ${slot.param} a name ` +
+      `of its own (e.g. "${slot.suggestion}" — a "__" prefix marks a name internal), or remove ` +
+      `"${slot.name}" from the input first with removeAttribute if it is genuinely dead. A name ` +
+      `that already holds ${want} is fine: that column is reset, not deleted.`,
+  );
 }
 
 /**

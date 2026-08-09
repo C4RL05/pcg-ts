@@ -385,7 +385,7 @@
   },
   {
     "name": "fill/scatter-even",
-    "hash": "f87469cb73593828",
+    "hash": "5101d582741d3f99",
     "title": "Scatter points with a guaranteed minimum spacing",
     "description": "Scatters candidates through a box and then removes any that fall closer than a minimum distance, giving evenly spaced points with no visible clumping — for anything with physical extent: trees, rocks, buildings. COUNT: over-scatter deliberately. The output count is EMERGENT and approaches a ceiling of about 0.7 x area / minDistance squared from BELOW — the default 4000 candidates reach only about 85% of it — so raising `count` keeps adding a few points for a long time, while the way to get materially more is a smaller `minDistance`. The scan is a deterministic greedy pass in index order, not a Poisson-disc sample, so the count is not controllable and looping to hit a target count will not converge. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly.",
     "tags": [
@@ -459,6 +459,7 @@
           "type": "f32",
           "default": 2,
           "description": "Closest two kept points may be, in world units — and it is exact, not approximate: the measured nearest pair sits at minDistance to within a rounding error. This is the real knob, because the count follows it as an inverse square: the achievable maximum is about 0.7 * area / minDistance^2, so halving it makes room for four times as many points (and needs four times the `count` to find them).",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [

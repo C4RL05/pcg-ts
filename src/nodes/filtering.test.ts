@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
+import { attribute, constant, position, randomField } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import {
   filterByAttribute,
@@ -15,6 +16,19 @@ function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);
   const P = geo.attrs.point.require("P");
   positions.forEach((p, i) => P.setTuple(i, p));
+  return geo;
+}
+
+/** A cloud plus one scalar f32 point attribute per named value list. */
+function cloudWith(
+  positions: number[][],
+  attrs: Record<string, number[]>,
+): ReturnType<typeof createPointCloud> {
+  const geo = cloudAt(positions);
+  for (const [name, values] of Object.entries(attrs)) {
+    const attr = geo.attrs.point.add(name, "f32", 1, 0);
+    values.forEach((v, i) => attr.set(i, v));
+  }
   return geo;
 }
 
@@ -300,6 +314,225 @@ describe("selfPrune", () => {
     expect(kept).toEqual(greedy(pts, 1));
     expect(kept.length).toBe(7);
     expect(kept[3]).toEqual([-Infinity, 0, 0]);
+  });
+
+  /** Survivor positions for one `priority` / `minDistance` configuration. */
+  async function survivors(
+    geo: ReturnType<typeof createPointCloud>,
+    params: Record<string, unknown>,
+  ): Promise<number[][]> {
+    return positionsOf(
+      firstGeo((await runNode(selfPrune, params as never, { in: [makeGeometryItem(geo)] })).out),
+    );
+  }
+
+  describe("priority", () => {
+    // Half a minDistance apart: exactly one of the two can survive, so
+    // whichever comes back names the winner with no ambiguity.
+    const pair = [
+      [0, 0, 0],
+      [0.5, 0, 0],
+    ];
+
+    it("lets the HIGHER priority win, whatever the index order", async () => {
+      const won = (rank: number[]) =>
+        survivors(cloudWith(pair, { rank }), { minDistance: 1, priority: attribute("rank") });
+      // The later point wins on priority alone — the greedy would keep the first.
+      expect(await won([0, 1])).toEqual([[0.5, 0, 0]]);
+      // Polarity, stated the other way round: a LOWER value never wins.
+      expect(await won([1, 0])).toEqual([[0, 0, 0]]);
+      // Equal priority falls back to the shipped rule: the lower index.
+      expect(await won([0, 0])).toEqual([[0, 0, 0]]);
+      expect(await won([4, 4])).toEqual([[0, 0, 0]]);
+    });
+
+    it("ranks NaN lowest", async () => {
+      const won = (rank: number[]) =>
+        survivors(cloudWith(pair, { rank }), { minDistance: 1, priority: attribute("rank") });
+      expect(await won([NaN, 0])).toEqual([[0.5, 0, 0]]);
+      expect(await won([0, NaN])).toEqual([[0, 0, 0]]);
+      // Two unrankable points still break their tie by index.
+      expect(await won([NaN, NaN])).toEqual([[0, 0, 0]]);
+    });
+
+    it("reproduces the shipped greedy exactly when every point ties", async () => {
+      const grid = firstGeo((await runNode(pointGrid, { countX: 10, countY: 1, countZ: 10 })).out);
+      const item = makeGeometryItem(grid);
+      const base = firstGeo(
+        (await runNode(selfPrune, { minDistance: 1.5 }, { in: [item] })).out,
+      );
+      for (const priority of [0, 5, -3, constant(7), attribute("density")]) {
+        const same = firstGeo(
+          (await runNode(selfPrune, { minDistance: 1.5, priority } as never, { in: [item] })).out,
+        );
+        expect(snapshotGeometry(same)).toEqual(snapshotGeometry(base));
+      }
+    });
+
+    it("decides WHO survives, never the order they come out in", async () => {
+      // Index 2 outranks everything, prunes index 0, and index 1 is far
+      // enough away to be untouched. Emitting in priority order would put
+      // [0.25, 0, 0] first.
+      const geo = cloudWith(
+        [
+          [0, 0, 0],
+          [5, 0, 0],
+          [0.25, 0, 0],
+        ],
+        { rank: [0, 0, 9] },
+      );
+      expect(await survivors(geo, { minDistance: 1, priority: attribute("rank") })).toEqual([
+        [5, 0, 0],
+        [0.25, 0, 0],
+      ]);
+    });
+
+    it("is deterministic under a random priority, and re-rolls with the key", async () => {
+      const grid = firstGeo((await runNode(pointGrid, { countX: 12, countY: 1, countZ: 12 })).out);
+      const item = makeGeometryItem(grid);
+      const run = (key: string) =>
+        runNode(selfPrune, { minDistance: 1.5, priority: randomField(key) } as never, {
+          in: [item],
+        }, 5);
+      const a = firstGeo((await run("thin")).out);
+      const b = firstGeo((await run("thin")).out);
+      expect(snapshotGeometry(a)).toEqual(snapshotGeometry(b));
+      // The negative half: a different key must actually move the result.
+      const c = firstGeo((await run("other")).out);
+      expect(snapshotGeometry(c)).not.toEqual(snapshotGeometry(a));
+    });
+  });
+
+  describe("per-point minDistance", () => {
+    it("agrees with the same number passed plainly", async () => {
+      const grid = firstGeo((await runNode(pointGrid, { countX: 10, countY: 1, countZ: 10 })).out);
+      const item = makeGeometryItem(grid);
+      for (const minDistance of [0.5, 1.5, 2]) {
+        const plain = firstGeo((await runNode(selfPrune, { minDistance }, { in: [item] })).out);
+        const field = firstGeo(
+          (
+            await runNode(selfPrune, { minDistance: constant(minDistance) } as never, {
+              in: [item],
+            })
+          ).out,
+        );
+        expect(snapshotGeometry(field)).toEqual(snapshotGeometry(plain));
+      }
+    });
+
+    it("conflicts a pair on the LARGER of the two radii", async () => {
+      // 2 apart: inside the big claim of 3, outside the small claim of 0.5.
+      // A rule reading only the candidate's own radius would keep both.
+      expect(
+        await survivors(
+          cloudWith(
+            [
+              [0, 0, 0],
+              [2, 0, 0],
+            ],
+            { crown: [3, 0.5] },
+          ),
+          { minDistance: attribute("crown") },
+        ),
+      ).toEqual([[0, 0, 0]]);
+      // Symmetric: swapping the two swaps the survivor, and never keeps both.
+      expect(
+        await survivors(
+          cloudWith(
+            [
+              [2, 0, 0],
+              [0, 0, 0],
+            ],
+            { crown: [0.5, 3] },
+          ),
+          { minDistance: attribute("crown") },
+        ),
+      ).toEqual([[2, 0, 0]]);
+    });
+
+    it("does not add the two radii up", async () => {
+      // 1.5 apart, each claiming 1: the max rule keeps both, a sum rule
+      // (radii as touching discs) would have pruned one.
+      expect(
+        await survivors(
+          cloudWith(
+            [
+              [0, 0, 0],
+              [1.5, 0, 0],
+            ],
+            { crown: [1, 1] },
+          ),
+          { minDistance: attribute("crown") },
+        ),
+      ).toEqual([
+        [0, 0, 0],
+        [1.5, 0, 0],
+      ]);
+    });
+
+    it("treats 0, negative and NaN radii as claiming nothing, but still prunes them", async () => {
+      expect(
+        await survivors(
+          cloudWith(
+            [
+              [0, 0, 0],
+              [2, 0, 0],
+              [8, 0, 0],
+              [8.25, 0, 0],
+            ],
+            { crown: [3, NaN, -1, 0] },
+          ),
+          { minDistance: attribute("crown") },
+        ),
+      ).toEqual([
+        [0, 0, 0],
+        [8, 0, 0],
+        [8.25, 0, 0],
+      ]);
+    });
+
+    it("lets priority beat radius", async () => {
+      // The small, high-priority point is placed first and the big one
+      // then loses to it — authored beats procedural by saying so.
+      expect(
+        await survivors(
+          cloudWith(
+            [
+              [0, 0, 0],
+              [2, 0, 0],
+            ],
+            { crown: [3, 0.5], rank: [0, 1] },
+          ),
+          { minDistance: attribute("crown"), priority: attribute("rank") },
+        ),
+      ).toEqual([[2, 0, 0]]);
+    });
+
+    it("keeps every point when the radii are all zero, as a point cloud", async () => {
+      const geo = cloudWith(
+        [
+          [0, 0, 0],
+          [0, 0, 0],
+        ],
+        { crown: [0, 0] },
+      );
+      expect(await survivors(geo, { minDistance: attribute("crown") })).toEqual([
+        [0, 0, 0],
+        [0, 0, 0],
+      ]);
+    });
+
+    it("names the node and the param when a field is not one number per point", async () => {
+      const geo = cloudAt([[0, 0, 0]]);
+      await expect(
+        runNode(selfPrune, { minDistance: position() } as never, { in: [makeGeometryItem(geo)] }),
+      ).rejects.toThrow(/selfPrune: param "minDistance" must evaluate to ONE number per point/);
+      await expect(
+        runNode(selfPrune, { minDistance: 1, priority: position() } as never, {
+          in: [makeGeometryItem(geo)],
+        }),
+      ).rejects.toThrow(/selfPrune: param "priority" must evaluate to ONE number per point/);
+    });
   });
 });
 

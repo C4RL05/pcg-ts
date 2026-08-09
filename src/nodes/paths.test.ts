@@ -569,6 +569,31 @@ describe("writeTangents", () => {
     ).rejects.toThrow(/must be a non-empty attribute name/);
   });
 
+  it("refuses a name that already holds another shape, and reuses one that fits", async () => {
+    // `name` is a reporting slot: the shape is this node's to pick (f32
+    // tuple 3), so `replace` would DELETE a differently shaped column and
+    // re-add it, and the cook would still look fine. Guarding only "P" left
+    // every other column open — an i32 tag under the tangent's name was
+    // silently turned into three floats.
+    const tagged = createPolyline([0, 0, 0, 1, 0, 0]);
+    tagged.attrs.point.add("tag", "i32", 1, 0).data.set([5, 6]);
+    await expect(
+      runNode(writeTangents, { name: "tag" }, { in: [makeGeometryItem(tagged)] }),
+    ).rejects.toThrow(
+      /writeTangents: name "tag" already exists on the input's point domain as i32, but name is written as f32x3.*would DELETE.*tangent/s,
+    );
+    // The refusal costs nothing: it happens before the clone and before any
+    // write, so the input still holds its column.
+    expect(tagged.attrs.point.require("tag").type).toBe("i32");
+    // Same shape under another name is still reused, not refused.
+    const fits = createPolyline([0, 0, 0, 1, 0, 0]);
+    fits.attrs.point.add("dir", "f32", 3, [0, 0, 0]);
+    const out = firstGeo(
+      (await runNode(writeTangents, { name: "dir" }, { in: [makeGeometryItem(fits)] })).out,
+    );
+    expect(out.attrs.point.require("dir").getTuple(0)).toEqual([1, 0, 0]);
+  });
+
   it("writes under another name and refuses to clobber P", async () => {
     const line = createPolyline([0, 0, 0, 1, 0, 0]);
     const geo = firstGeo(

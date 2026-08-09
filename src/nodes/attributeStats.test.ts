@@ -141,6 +141,58 @@ describe("attributeReduce", () => {
     ).rejects.toThrow(/string attribute and cannot be reduced/);
   });
 
+  it("refuses an outName that would delete a differently-shaped detail column", async () => {
+    // outName is a reporting slot: the shape is this node's to pick (f32 at
+    // the source tuple size, u32 for count), so `replace` DELETES a column
+    // of any other shape and re-adds it — silently, into a cook that still
+    // looks fine. Only the destructive case is refused.
+    const geo = withValues([1, 2]);
+    geo.attrs.detail.add("label", "f32", 3, 0).setTuple(0, [1, 2, 3]);
+    await expect(
+      runNode(
+        attributeReduce,
+        { name: "v", mode: "max", outName: "label" },
+        { in: [makeGeometryItem(geo)] },
+      ),
+    ).rejects.toThrow(
+      /attributeReduce: outName "label" already exists on the input's detail domain as f32x3, but outName is written as f32.*would DELETE.*label_max/s,
+    );
+    // Mode count reads no attribute at all, so nothing about it is in place.
+    await expect(
+      runNode(
+        attributeReduce,
+        { name: "", mode: "count", outName: "label" },
+        { in: [makeGeometryItem(geo)] },
+      ),
+    ).rejects.toThrow(/attributeReduce: outName "label".*written as u32.*would DELETE/s);
+    // The refusal costs nothing: it happens before any write.
+    expect(geo.attrs.detail.require("label").tupleSize).toBe(3);
+  });
+
+  it("reuses a same-shaped detail column, and reducing detail into itself is in place", async () => {
+    const geo = withValues([1, 2]);
+    geo.attrs.detail.add("v", "f32", 1, 0).set(0, 99);
+    // outName defaults to `name`, which here already exists on detail with
+    // the shape this reduction writes: reset, not deleted.
+    expect((await reduce(geo, { name: "v", mode: "sum" })).attrs.detail.require("v").get(0)).toBe(3);
+    // Reducing a DETAIL attribute into its own name replaces the very
+    // column it read, converting it to f32. Nothing is destroyed that was
+    // not about to be rewritten from its own value, so it stays allowed.
+    const one = createPointCloud(1);
+    one.attrs.detail.add("n", "i32", 1, 0).set(0, 7);
+    const out = firstGeo(
+      (
+        await runNode(
+          attributeReduce,
+          { name: "n", domain: "detail", mode: "sum" },
+          { in: [makeGeometryItem(one)] },
+        )
+      ).out,
+    );
+    expect(out.attrs.detail.require("n").type).toBe("f32");
+    expect(out.attrs.detail.require("n").get(0)).toBe(7);
+  });
+
   it("is deterministic and seed-independent", async () => {
     const geo = withValues([1, 2, 3, 4]);
     const a = await reduce(geo, { name: "v", mode: "average", outName: "r" });
@@ -301,6 +353,46 @@ describe("attributeRemap", () => {
     await expect(
       runNode(attributeRemap, { name: "s" }, { in: [makeGeometryItem(strings)] }),
     ).rejects.toThrow(/string attribute and has no numeric range/);
+  });
+
+  it("refuses an outName that would delete another column, but not the in-place rewrite", async () => {
+    // The narrower rule this node needs: the result is always f32, so the
+    // blanket "refuse a differently-shaped existing column" would outlaw the
+    // DOCUMENTED in-place integer conversion (outName empty, i32/u32 source).
+    // What is refused is a differently-shaped column that is NOT the source.
+    const geo = withValues([0, 1]);
+    await expect(
+      runNode(attributeRemap, { name: "v", outName: "P" }, { in: [makeGeometryItem(geo)] }),
+    ).rejects.toThrow(
+      /attributeRemap: outName "P" already exists on the input's point domain as f32x3, but outName is written as f32.*would DELETE.*P_remap/s,
+    );
+    expect(geo.attrs.point.require("P").tupleSize).toBe(3);
+    // Same tuple size, different type, and not the source: an i32 column
+    // under another name is destroyed by the write, so it is refused too.
+    const tagged = withValues([0, 1]);
+    tagged.attrs.point.add("id", "i32", 1, 0).data.set([5, 6]);
+    await expect(
+      runNode(attributeRemap, { name: "v", outName: "id" }, { in: [makeGeometryItem(tagged)] }),
+    ).rejects.toThrow(
+      /attributeRemap: outName "id" already exists on the input's point domain as i32.*would DELETE/s,
+    );
+    expect(tagged.attrs.point.require("id").type).toBe("i32");
+    // The identical shape change IS allowed when the column is the source:
+    // an in-place u32 -> f32 remap, which outName's own doc promises.
+    const counts = createPointCloud(3);
+    counts.attrs.point.add("nbrCount", "u32", 1, 0).data.set([0, 2, 4]);
+    const out = firstGeo(
+      (
+        await runNode(
+          attributeRemap,
+          { name: "nbrCount", mode: "fit" },
+          { in: [makeGeometryItem(counts)] },
+        )
+      ).out,
+    );
+    const remapped = out.attrs.point.require("nbrCount");
+    expect(remapped.type).toBe("f32");
+    expect(Array.from(remapped.data.subarray(0, 3))).toEqual([0, 0.5, 1]);
   });
 
   it("is deterministic and seed-independent", async () => {

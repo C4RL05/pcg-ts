@@ -40,7 +40,12 @@ import {
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
-import { locateOnArcLength, polylineArcTables, requireGeometry } from "./util.js";
+import {
+  locateOnArcLength,
+  polylineArcTables,
+  requireGeometry,
+  requireReportSlot,
+} from "./util.js";
 
 /**
  * Resolve a param that names a scalar numeric point attribute, with an
@@ -382,7 +387,7 @@ export const writeTangents = standardNode<WriteTangentsParams>({
       type: "string",
       default: "tangent",
       description:
-        "Attribute to write (created, or replaced when it exists with another shape). The default 'tangent' is the name splineSample emits and the one an orientAlongVector direction field usually reads. Cannot be 'P'.",
+        "Attribute to write (created, or reset when it already exists as f32 tuple 3). The default 'tangent' is the name splineSample emits and the one an orientAlongVector direction field usually reads. The shape is this node's to pick, so a name the input's point domain already holds under a DIFFERENT shape is REFUSED rather than deleted and re-added — writing it would destroy that column and everything in it while the cook still looked fine. Give the tangents a name of their own, or removeAttribute the clash first. 'P' is refused outright, same shape or not: it is what the tangents are computed from.",
     },
   },
   execute({ inputs, params }) {
@@ -399,10 +404,27 @@ export const writeTangents = standardNode<WriteTangentsParams>({
         'writeTangents: param "name" cannot be "P" — that would overwrite the positions the tangents are computed from; use "tangent" or another name',
       );
     }
+    const src = requireGeometry(inputs, "in", "writeTangents");
+    // `name` is a reporting slot: the shape is this node's (f32 tuple 3),
+    // so `replace` would DELETE a differently shaped column and re-add it,
+    // and the cook would still look fine. Refusing only "P" left every
+    // other column open. Checked before the clone and before the arc
+    // tables — a refusal must cost nothing, and a name clash reported as
+    // "no polyline primitives" sends the author to debug the wrong thing.
+    requireReportSlot({
+      attrs: src.attrs.point,
+      nodeType: "writeTangents",
+      param: "name",
+      name,
+      type: "f32",
+      tupleSize: 3,
+      domain: "point",
+      suggestion: "tangent",
+    });
     // cloneGeometry preserves topology; gatherPoints and mergePoints do not.
     // It is also what keeps this node pure: the input is a cached upstream
     // object, and this is the one path node that writes into its geometry.
-    const geo = cloneGeometry(requireGeometry(inputs, "in", "writeTangents"));
+    const geo = cloneGeometry(src);
     const tables = polylineArcTables(geo, "writeTangents");
     const dst = geo.attrs.point.replace(name, "f32", 3, [0, 0, 0]);
     const P = geo.attrs.point.require("P");
