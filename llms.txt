@@ -304,20 +304,27 @@ spec or `acceptDerivedSpecs` (see the GPU section).
 categorized: source, sampler, point op, filter, attribute, value,
 spawn, io, composite.
 
+- attributeReduce — reduce an attribute across a domain to one detail value (sum/min/max/average/count); unlike promoteAttribute it writes under its own `outName` (so a min and a max can coexist), adds `count`, and SKIPS non-finite values instead of propagating them
+- attributeRemap — remap an attribute's range: `range` maps a stated [inMin, inMax] onto [outMin, outMax], `fit` measures the actual finite range first (the only way to normalize, since no param can read a value out of the geometry); NaN stays NaN rather than becoming a valid-looking number
 - copyToPoints — copy a source cloud onto every target point, composing transforms and seeds
 - dataInput — emit externally injected DataItems (`items` set via graph.setParam; serializes as `items: []`, re-bind live data after deserializing)
 - filterByAttribute — keep points where a scalar/string attribute passes a comparison
 - filterByBounds — keep points inside/outside an axis-aligned box
 - filterByDensity — keep points by `density` (threshold or probabilistic)
+- filterByExpression — keep points where a field-capable boolean `predicate` is positive; NaN never survives (`v>0||v<0`, not `!==0`), and a tuple>1 predicate is refused rather than broadcast
 - jitterPoints — deterministic random offset per point (field-capable amount)
 - mergePoints — concatenate point clouds (multi input), union of attributes
+- meshPrimitive — SOURCE of triangle-mesh geometry in-graph: a subdivided `plane` (orientation xz/xy/yz, normal along the positive third axis) or a `box` (six faces, per-face points so uv seams are exact); emits P, uv and `poly` primitives. This is the only way to make mesh geometry from JSON — dataInput carries nothing through serialization — so it is what feeds surfaceSample, transferAttribute raycast/uv, and splineSample's mesh-side neighbours
 - orientAlongVector — write `rot` quaternions so a local axis (default `+z`) follows a field-capable direction (e.g. a tangent/normal attribute), `up` hint fixes roll; zero directions keep their rot
 - partitionByAttribute — split into per-value point clouds, tagged `name=value`
 - pointGrid — regular grid of points
 - pointLine — evenly spaced points on a segment
+- pointNeighborhood — per-point neighbour statistics from the shared uniform grid: a count within `radius`, and optionally the average of another attribute over those neighbours; `maxCount` keeps the NEAREST N (ties to lower index) and accumulation is always in ascending point index, so a capped average is bit-stable; a point with no neighbours averages to its OWN value, so differences like `P - nbrP` are exactly zero for isolates
 - pointScatterInBounds — uniform random points in a box
 - projectToPlane — orthogonal projection of points onto a plane
 - promoteAttribute — move an attribute between domains (first/average/sum/min/max)
+- removeAttribute — delete named attributes from a domain (`strict` errors on a missing name); refuses to delete point `P`
+- sampleNearestPoint — look up the nearest point of a second `source` cloud per point: distance, source index, and optionally copy one of its attributes; misses report distance Infinity / index -1 and leave a copied attribute at its prior value
 - selfPrune — greedy minimum-distance thinning (lowest index wins)
 - setAttribute — create/overwrite an attribute from a field-capable value; `type: "string"` picks per element from a `values` list by numeric selector (floor+clamp, total) or writes a constant `stringValue`; optional `seed` param folds into the field evaluation (0 = node seed unchanged)
 - setBounds — stamp boundsMin/boundsMax on every point

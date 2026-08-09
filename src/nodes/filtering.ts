@@ -7,7 +7,7 @@ import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { gatherPoints, requireGeometry } from "./util.js";
+import { type FieldParam, gatherPoints, requireGeometry, resolveOn } from "./util.js";
 
 /** Params of {@link filterByDensity}. */
 export interface FilterByDensityParams {
@@ -196,6 +196,65 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
                     : v >= rhs;
         if (pass) keep.push(i);
       }
+    }
+    return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+  },
+});
+
+/** Params of {@link filterByExpression}. */
+export interface FilterByExpressionParams {
+  predicate: FieldParam;
+  seed: number;
+}
+
+/** Keep points where a boolean field predicate holds. */
+export const filterByExpression = standardNode<FilterByExpressionParams>({
+  type: "filterByExpression",
+  category: "filter",
+  description:
+    "Keeps points where a field-capable `predicate` evaluates to a non-zero number. The predicate is resolved once over the input's point domain, so it can read position, any attribute, noise, or per-point randomness — which means a test that would otherwise need a scratch attribute plus filterByAttribute becomes one node, with no leftover column on the output. Comparison field functions (gt/ge/lt/le/eq/ne) already yield 1 and 0, and combining them with mul acts as AND, max as OR. NaN never passes, so a predicate that fails to compute drops the point instead of keeping it. The predicate must evaluate to tuple size 1: comparisons broadcast elementwise, so comparing a vector yields a vector of flags, which is not a decision. Output is a point cloud of the survivors with all attributes carried.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    predicate: {
+      type: "f32",
+      default: 1,
+      acceptsField: true,
+      description:
+        "Per-point test: non-zero keeps the point, 0 and NaN drop it. Field-capable and evaluated on the input's points. The default 1 keeps everything, so an unconfigured node passes its input through.",
+    },
+    seed: {
+      type: "u32",
+      default: 0,
+      description:
+        "Extra seed for evaluating `predicate`: 0 (the default) uses the node's derived seed unchanged; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the evaluation context (randomField, and the per-point seed attribute) but NOT noise, whose seed lives inside its own field spec.",
+    },
+  },
+  execute({ inputs, params, seed: nodeSeed }) {
+    const geo = requireGeometry(inputs, "in", "filterByExpression");
+    const seed = params.seed === 0 ? nodeSeed : hashCombine(nodeSeed, params.seed);
+    // Deliberately NOT a `gpu: "fields"` adopter, unlike every other node
+    // with a field-capable param. The device path is a documented
+    // approximation of the CPU one, tolerated elsewhere because it moves a
+    // VALUE by an ulp. Here the value is a decision: a point sitting exactly
+    // on the predicate boundary flips in or out, which changes the surviving
+    // COUNT, and with it every downstream index, per-point seed and cache
+    // key. Adopting is one line plus a fixture in the bidirectional guard at
+    // src/gpu/onePredicate.test.ts — do it only with a parity budget
+    // expressed in surviving points, not in ulps.
+    const col = resolveOn(geo, "point", params.predicate, seed);
+    if (col.tupleSize !== 1) {
+      throw new Error(
+        `filterByExpression: predicate must evaluate to tuple size 1 (one flag per point), got tuple size ${col.tupleSize}; field comparisons broadcast elementwise, so comparing a vector such as gt(position(), 0) yields one flag per component — compare a single component instead, e.g. gt(component(position(), 1), 0)`,
+      );
+    }
+    const data = col.data;
+    const keep: number[] = [];
+    for (let i = 0; i < geo.pointCount; i++) {
+      // `> 0 || < 0` is the non-zero test that also rejects NaN, where
+      // `!== 0` would keep it.
+      const v = data[i];
+      if (v > 0 || v < 0) keep.push(i);
     }
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
   },

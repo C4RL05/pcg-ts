@@ -368,6 +368,316 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
   },
 });
 
+/** Params of {@link attributeReduce}. */
+export interface AttributeReduceParams {
+  name: string;
+  domain: string;
+  mode: string;
+  outName: string;
+}
+
+/** Reduce an attribute across a domain into one detail-domain value. */
+export const attributeReduce = standardNode<AttributeReduceParams>({
+  type: "attributeReduce",
+  category: "attribute",
+  description:
+    "Collapses a numeric attribute over a whole domain into a single value on the detail domain: sum, min, max, average (all f32, componentwise, keeping the source tuple size) or count (u32, the number of elements — this mode reads no attribute). NaN elements are ignored by every mode, and average divides by however many were left, so one bad element cannot destroy the statistic; this is the deliberate difference from promoteAttribute point->detail, which propagates NaN. The other difference is outName: two reductions of one attribute (a min AND a max) can coexist, which promoting cannot do because both would land on the same detail name. Over an empty domain sum and average are 0, min is Infinity, max is -Infinity, count is 0. Note that a detail attribute is NOT readable from a point-domain field (a field reads the domain it lands on), so a reduction is for hosts, inspection and cook-stat reporting — to rescale an attribute by its own observed range use attributeRemap's 'fit' mode, which measures it internally.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    name: {
+      type: "string",
+      default: "density",
+      description:
+        "Numeric attribute to reduce (tuple 1..4). Must exist on `domain`. Ignored by mode 'count', which counts elements and may leave this empty.",
+    },
+    domain: {
+      type: "enum",
+      default: "point",
+      enum: [...DOMAIN_ENUM],
+      description: "Domain to reduce over: point, vertex, primitive, or detail (one element).",
+    },
+    mode: {
+      type: "enum",
+      default: "max",
+      enum: ["sum", "min", "max", "average", "count"],
+      description:
+        "How the elements collapse: sum, min, max, average (each componentwise over the tuple, NaN elements skipped), or count (how many elements the domain has, ignoring `name`).",
+    },
+    outName: {
+      type: "string",
+      default: "",
+      description:
+        "Name of the detail attribute to write. Empty (the default) reuses `name`, which is what promoting would have produced; give distinct names to hold several reductions of one attribute at once.",
+    },
+  },
+  execute({ inputs, params }) {
+    const geo = cloneGeometry(requireGeometry(inputs, "in", "attributeReduce"));
+    const domain = params.domain as Domain;
+    const set = geo.attrs[domain];
+    const mode = params.mode;
+    const outName = params.outName !== "" ? params.outName : params.name;
+    if (outName === "") {
+      throw new Error(
+        `attributeReduce: no output name — mode "${mode}" left \`name\` empty and \`outName\` is empty too; set outName to the detail attribute the result should be written to`,
+      );
+    }
+    if (mode === "count") {
+      geo.attrs.detail.replace(outName, "u32", 1, 0).set(0, set.count);
+      return { out: [makeGeometryItem(geo)] };
+    }
+    const attr = set.get(params.name);
+    if (!attr) {
+      throw new Error(
+        `attributeReduce: ${domain} attribute "${params.name}" not found; available: ${set.names().join(", ") || "(none)"}`,
+      );
+    }
+    if (attr.type === "string") {
+      throw new Error(
+        `attributeReduce: attribute "${params.name}" is a string attribute and cannot be reduced with mode "${mode}"; reduce a numeric attribute (f32/i32/u32/bool), or use mode "count"`,
+      );
+    }
+    if (attr.tupleSize > 4) {
+      throw new Error(
+        `attributeReduce: attribute "${params.name}" has tupleSize ${attr.tupleSize}; reduction supports tuple sizes 1 to 4`,
+      );
+    }
+    const ts = attr.tupleSize;
+    const n = set.count;
+    const data = attr.data;
+    // Accumulate in float64 regardless of the source type, so a long f32
+    // sum does not lose the tail.
+    const acc = new Float64Array(ts);
+    const kept = new Uint32Array(ts);
+    if (mode === "min") acc.fill(Number.POSITIVE_INFINITY);
+    else if (mode === "max") acc.fill(Number.NEGATIVE_INFINITY);
+    for (let i = 0; i < n; i++) {
+      const o = i * ts;
+      for (let k = 0; k < ts; k++) {
+        const v = data[o + k];
+        // NaN is skipped, not propagated: `v !== v` is the NaN test that
+        // does not depend on Number.isNaN's argument coercion.
+        if (v !== v) continue;
+        kept[k]++;
+        if (mode === "min") {
+          if (v < acc[k]) acc[k] = v;
+        } else if (mode === "max") {
+          if (v > acc[k]) acc[k] = v;
+        } else {
+          acc[k] += v;
+        }
+      }
+    }
+    const out = geo.attrs.detail.replace(outName, "f32", ts, 0);
+    for (let k = 0; k < ts; k++) {
+      out.set(0, mode === "average" ? (kept[k] === 0 ? 0 : acc[k] / kept[k]) : acc[k], k);
+    }
+    return { out: [makeGeometryItem(geo)] };
+  },
+});
+
+/** Params of {@link attributeRemap}. */
+export interface AttributeRemapParams {
+  name: string;
+  outName: string;
+  domain: string;
+  mode: string;
+  inMin: number;
+  inMax: number;
+  outMin: number;
+  outMax: number;
+  clamp: boolean;
+}
+
+/** Rescale an attribute from one numeric range to another. */
+export const attributeRemap = standardNode<AttributeRemapParams>({
+  type: "attributeRemap",
+  category: "attribute",
+  description:
+    "Rescales a numeric attribute linearly from an input range to an output range, writing f32. Mode 'range' uses inMin/inMax as given — the hand-tuned remap(x, -1, 1, 0, 1) that every noise-driven graph writes. Mode 'fit' MEASURES the attribute's own range over the domain first (ignoring NaN) and uses that, which is what turns any invented quantity — a neighbor count, a hand-built score — into a usable 0..1 density or color input without knowing its scale in advance; it is also why this node needs no help from attributeReduce, whose detail-domain output no field or param could have read back anyway. An empty input range (inMin == inMax, or a fit over zero usable elements) maps everything to outMin, matching the `remap` field function. Tuples remap componentwise against one shared range, and NaN stays NaN in every mode — including the empty-range case, so unmeasurable data never turns into a valid-looking value. Reversed output ranges are fine and invert the values.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    name: {
+      type: "string",
+      default: "density",
+      description: "Numeric attribute to rescale (tuple 1..4). Must exist on `domain`.",
+    },
+    outName: {
+      type: "string",
+      default: "",
+      description:
+        "Name of the f32 attribute to write on the same domain. Empty (the default) rewrites `name` in place, which also converts an integer attribute to f32.",
+    },
+    domain: {
+      type: "enum",
+      default: "point",
+      enum: [...DOMAIN_ENUM],
+      description: "Domain the attribute lives on: point, vertex, primitive, or detail.",
+    },
+    mode: {
+      type: "enum",
+      default: "range",
+      enum: ["range", "fit"],
+      description:
+        "'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax.",
+    },
+    inMin: {
+      type: "f32",
+      default: -1,
+      description: "Value mapped to outMin, in mode 'range'. Ignored in mode 'fit'.",
+    },
+    inMax: {
+      type: "f32",
+      default: 1,
+      description: "Value mapped to outMax, in mode 'range'. Ignored in mode 'fit'.",
+    },
+    outMin: { type: "f32", default: 0, description: "Value inMin maps to." },
+    outMax: { type: "f32", default: 1, description: "Value inMax maps to." },
+    clamp: {
+      type: "bool",
+      default: false,
+      description:
+        "Hold results inside the output range (whichever of outMin/outMax is smaller or larger). False (the default) extrapolates, matching the `remap` field function; true is the usual choice when the result feeds density or color. In mode 'fit' it only affects NaN-free data trivially, since fitted values already land inside the range.",
+    },
+  },
+  execute({ inputs, params }) {
+    const geo = cloneGeometry(requireGeometry(inputs, "in", "attributeRemap"));
+    const domain = params.domain as Domain;
+    const set = geo.attrs[domain];
+    const attr = set.get(params.name);
+    if (!attr) {
+      throw new Error(
+        `attributeRemap: ${domain} attribute "${params.name}" not found; available: ${set.names().join(", ") || "(none)"}`,
+      );
+    }
+    if (attr.type === "string") {
+      throw new Error(
+        `attributeRemap: attribute "${params.name}" is a string attribute and has no numeric range; remap a numeric attribute (f32/i32/u32/bool)`,
+      );
+    }
+    if (attr.tupleSize > 4) {
+      throw new Error(
+        `attributeRemap: attribute "${params.name}" has tupleSize ${attr.tupleSize}; remapping supports tuple sizes 1 to 4`,
+      );
+    }
+    const ts = attr.tupleSize;
+    const n = set.count;
+    const source = attr.data;
+    let inMin = params.inMin;
+    let inMax = params.inMax;
+    if (params.mode === "fit") {
+      inMin = Number.POSITIVE_INFINITY;
+      inMax = Number.NEGATIVE_INFINITY;
+      for (let i = 0; i < n * ts; i++) {
+        // NaN needs no test of its own: both comparisons are false for it,
+        // so it can never become the measured minimum or maximum.
+        const v = source[i];
+        if (v < inMin) inMin = v;
+        if (v > inMax) inMax = v;
+      }
+      // Nothing usable (empty domain, or every element NaN): an empty
+      // range, which the span-0 rule below handles. Currently this cannot
+      // change an output — it fires only when no element is finite, and
+      // those elements are all NaN, which both paths map to NaN (verified
+      // over every input family: all-NaN, empty, ±Infinity, mixed). It
+      // stays because without it correctness rests on
+      // (v - Infinity) / -Infinity being NaN, and because it is what keeps
+      // the branch honest if the NaN rule below ever changes.
+      if (inMin > inMax) {
+        inMin = 0;
+        inMax = 0;
+      }
+    }
+    const span = inMax - inMin;
+    const outMin = params.outMin;
+    const outMax = params.outMax;
+    const lo = Math.min(outMin, outMax);
+    const hi = Math.max(outMin, outMax);
+    const clamp = params.clamp;
+    // Read every source value before replacing: an in-place remap of an
+    // f32 attribute reuses the same storage.
+    const values = new Float64Array(n * ts);
+    for (let i = 0; i < n * ts; i++) {
+      const v = source[i];
+      // NaN survives the empty-range shortcut too: turning unmeasurable
+      // data into a valid-looking outMin would hide it from every
+      // downstream test.
+      let mapped =
+        span === 0
+          ? v !== v
+            ? v
+            : outMin
+          : outMin + ((v - inMin) / span) * (outMax - outMin);
+      if (clamp) {
+        if (mapped < lo) mapped = lo;
+        else if (mapped > hi) mapped = hi;
+      }
+      values[i] = mapped;
+    }
+    const outName = params.outName !== "" ? params.outName : params.name;
+    const target = set.replace(outName, "f32", ts, 0);
+    const data = target.data;
+    for (let i = 0; i < n * ts; i++) data[i] = values[i];
+    return { out: [makeGeometryItem(geo)] };
+  },
+});
+
+/** Params of {@link removeAttribute}. */
+export interface RemoveAttributeParams {
+  names: readonly string[];
+  domain: string;
+  strict: boolean;
+}
+
+/** Delete attributes from a domain. */
+export const removeAttribute = standardNode<RemoveAttributeParams>({
+  type: "removeAttribute",
+  category: "attribute",
+  description:
+    "Deletes named attributes from one domain. Every idiom that carries a value between nodes — a scratch column feeding a filter, a parameter attribute read back by a field, a hit marker recovered from a transfer — leaves that column on the output forever; this is the only way to take it off again. Unknown names are an error by default, so a typo does not silently leave the debris it was meant to remove; set strict false when a name may legitimately be absent. Removing the point attribute \"P\" is refused: it is the position every downstream node reads, and dropping it turns a clear failure here into an obscure one later.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    names: {
+      type: "stringList",
+      default: [],
+      description:
+        "Attribute names to delete, in any order. An empty list removes nothing (and is not an error, so a graph can leave the node in place with nothing to clean).",
+    },
+    domain: {
+      type: "enum",
+      default: "point",
+      enum: [...DOMAIN_ENUM],
+      description: "Domain to delete from: point, vertex, primitive, or detail.",
+    },
+    strict: {
+      type: "bool",
+      default: true,
+      description:
+        "Error when a listed name does not exist on the domain, naming the available attributes. False makes removal best-effort and skips missing names.",
+    },
+  },
+  execute({ inputs, params }) {
+    const geo = cloneGeometry(requireGeometry(inputs, "in", "removeAttribute"));
+    const domain = params.domain as Domain;
+    const set = geo.attrs[domain];
+    for (const name of params.names) {
+      if (domain === "point" && name === "P") {
+        throw new Error(
+          'removeAttribute: refusing to remove the point attribute "P" — it holds the positions every downstream node reads; remove the derived attribute instead, or build a fresh geometry',
+        );
+      }
+      if (!set.remove(name) && params.strict) {
+        throw new Error(
+          `removeAttribute: ${domain} attribute "${name}" not found; available: ${set.names().join(", ") || "(none)"} (set strict false to skip names that may be absent)`,
+        );
+      }
+    }
+    return { out: [makeGeometryItem(geo)] };
+  },
+});
+
 /** Params of {@link partitionByAttribute}. */
 export interface PartitionByAttributeParams {
   name: string;

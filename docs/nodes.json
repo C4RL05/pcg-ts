@@ -1,5 +1,135 @@
 [
   {
+    "type": "attributeReduce",
+    "description": "Collapses a numeric attribute over a whole domain into a single value on the detail domain: sum, min, max, average (all f32, componentwise, keeping the source tuple size) or count (u32, the number of elements — this mode reads no attribute). NaN elements are ignored by every mode, and average divides by however many were left, so one bad element cannot destroy the statistic; this is the deliberate difference from promoteAttribute point->detail, which propagates NaN. The other difference is outName: two reductions of one attribute (a min AND a max) can coexist, which promoting cannot do because both would land on the same detail name. Over an empty domain sum and average are 0, min is Infinity, max is -Infinity, count is 0. Note that a detail attribute is NOT readable from a point-domain field (a field reads the domain it lands on), so a reduction is for hosts, inspection and cook-stat reporting — to rescale an attribute by its own observed range use attributeRemap's 'fit' mode, which measures it internally.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "name": {
+        "type": "string",
+        "default": "density",
+        "description": "Numeric attribute to reduce (tuple 1..4). Must exist on `domain`. Ignored by mode 'count', which counts elements and may leave this empty."
+      },
+      "domain": {
+        "type": "enum",
+        "default": "point",
+        "description": "Domain to reduce over: point, vertex, primitive, or detail (one element).",
+        "enum": [
+          "point",
+          "vertex",
+          "primitive",
+          "detail"
+        ]
+      },
+      "mode": {
+        "type": "enum",
+        "default": "max",
+        "description": "How the elements collapse: sum, min, max, average (each componentwise over the tuple, NaN elements skipped), or count (how many elements the domain has, ignoring `name`).",
+        "enum": [
+          "sum",
+          "min",
+          "max",
+          "average",
+          "count"
+        ]
+      },
+      "outName": {
+        "type": "string",
+        "default": "",
+        "description": "Name of the detail attribute to write. Empty (the default) reuses `name`, which is what promoting would have produced; give distinct names to hold several reductions of one attribute at once."
+      }
+    }
+  },
+  {
+    "type": "attributeRemap",
+    "description": "Rescales a numeric attribute linearly from an input range to an output range, writing f32. Mode 'range' uses inMin/inMax as given — the hand-tuned remap(x, -1, 1, 0, 1) that every noise-driven graph writes. Mode 'fit' MEASURES the attribute's own range over the domain first (ignoring NaN) and uses that, which is what turns any invented quantity — a neighbor count, a hand-built score — into a usable 0..1 density or color input without knowing its scale in advance; it is also why this node needs no help from attributeReduce, whose detail-domain output no field or param could have read back anyway. An empty input range (inMin == inMax, or a fit over zero usable elements) maps everything to outMin, matching the `remap` field function. Tuples remap componentwise against one shared range, and NaN stays NaN in every mode — including the empty-range case, so unmeasurable data never turns into a valid-looking value. Reversed output ranges are fine and invert the values.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "name": {
+        "type": "string",
+        "default": "density",
+        "description": "Numeric attribute to rescale (tuple 1..4). Must exist on `domain`."
+      },
+      "outName": {
+        "type": "string",
+        "default": "",
+        "description": "Name of the f32 attribute to write on the same domain. Empty (the default) rewrites `name` in place, which also converts an integer attribute to f32."
+      },
+      "domain": {
+        "type": "enum",
+        "default": "point",
+        "description": "Domain the attribute lives on: point, vertex, primitive, or detail.",
+        "enum": [
+          "point",
+          "vertex",
+          "primitive",
+          "detail"
+        ]
+      },
+      "mode": {
+        "type": "enum",
+        "default": "range",
+        "description": "'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax.",
+        "enum": [
+          "range",
+          "fit"
+        ]
+      },
+      "inMin": {
+        "type": "f32",
+        "default": -1,
+        "description": "Value mapped to outMin, in mode 'range'. Ignored in mode 'fit'."
+      },
+      "inMax": {
+        "type": "f32",
+        "default": 1,
+        "description": "Value mapped to outMax, in mode 'range'. Ignored in mode 'fit'."
+      },
+      "outMin": {
+        "type": "f32",
+        "default": 0,
+        "description": "Value inMin maps to."
+      },
+      "outMax": {
+        "type": "f32",
+        "default": 1,
+        "description": "Value inMax maps to."
+      },
+      "clamp": {
+        "type": "bool",
+        "default": false,
+        "description": "Hold results inside the output range (whichever of outMin/outMax is smaller or larger). False (the default) extrapolates, matching the `remap` field function; true is the usual choice when the result feeds density or color. In mode 'fit' it only affects NaN-free data trivially, since fitted values already land inside the range."
+      }
+    }
+  },
+  {
     "type": "copyToPoints",
     "description": "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity.",
     "category": "point op",
@@ -182,6 +312,38 @@
     }
   },
   {
+    "type": "filterByExpression",
+    "description": "Keeps points where a field-capable `predicate` evaluates to a non-zero number. The predicate is resolved once over the input's point domain, so it can read position, any attribute, noise, or per-point randomness — which means a test that would otherwise need a scratch attribute plus filterByAttribute becomes one node, with no leftover column on the output. Comparison field functions (gt/ge/lt/le/eq/ne) already yield 1 and 0, and combining them with mul acts as AND, max as OR. NaN never passes, so a predicate that fails to compute drops the point instead of keeping it. The predicate must evaluate to tuple size 1: comparisons broadcast elementwise, so comparing a vector yields a vector of flags, which is not a decision. Output is a point cloud of the survivors with all attributes carried.",
+    "category": "filter",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "predicate": {
+        "type": "f32",
+        "default": 1,
+        "description": "Per-point test: non-zero keeps the point, 0 and NaN drop it. Field-capable and evaluated on the input's points. The default 1 keeps everything, so an unconfigured node passes its input through.",
+        "acceptsField": true
+      },
+      "seed": {
+        "type": "u32",
+        "default": 0,
+        "description": "Extra seed for evaluating `predicate`: 0 (the default) uses the node's derived seed unchanged; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the evaluation context (randomField, and the per-point seed attribute) but NOT noise, whose seed lives inside its own field spec."
+      }
+    }
+  },
+  {
     "type": "jitterPoints",
     "description": "Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible. amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).",
     "category": "point op",
@@ -236,6 +398,74 @@
       }
     ],
     "params": {}
+  },
+  {
+    "type": "meshPrimitive",
+    "description": "Builds a parametric triangle mesh with no input: shape 'plane' is one axis-aligned rectangle, shape 'box' is six of them around a volume. Output carries P (f32 tuple 3), a uv point attribute (f32 tuple 2) running 0..1 across each face, and one 3-vertex 'poly' primitive per triangle — everything surfaceSample, transferAttribute's 'uv' and 'raycast' mappings, and promoteAttribute need. This is the only mesh source that survives serialization: dataInput's items are injected at runtime and a saved graph carries none, so a graph that must cook from JSON alone gets its surface from here. Plane normals point along the positive third axis (+y for orientation 'xz', +z for 'xy', +x for 'yz'); box normals point outward. Point order is u fastest then v, one block per face in the order +x, -x, +y, -y, +z, -z; a box's faces do not share points, so uv seams are exact. A zero size component makes degenerate (zero-area) triangles, which area-weighted sampling and the raycast mapping skip.",
+    "category": "source",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "shape": {
+        "type": "enum",
+        "default": "plane",
+        "description": "'plane' builds one rectangle in the world plane named by `orientation`; 'box' builds a closed six-sided box of the full `size` extents (and ignores `orientation`).",
+        "enum": [
+          "plane",
+          "box"
+        ]
+      },
+      "size": {
+        "type": "vec3",
+        "default": [
+          10,
+          10,
+          10
+        ],
+        "description": "Full extents along world x, y, z, in world units (not half-extents). For 'plane', the component along the plane's normal axis is ignored.",
+        "min": 0
+      },
+      "center": {
+        "type": "vec3",
+        "default": [
+          0,
+          0,
+          0
+        ],
+        "description": "World position of the shape's center."
+      },
+      "orientation": {
+        "type": "enum",
+        "default": "xz",
+        "description": "Which world plane a 'plane' lies in, and so which axis is its normal: 'xz' is the ground plane (normal +y), 'xy' faces +z, 'yz' faces +x. Ignored for 'box'.",
+        "enum": [
+          "xz",
+          "xy",
+          "yz"
+        ]
+      },
+      "subdivisions": {
+        "type": "vec3",
+        "default": [
+          1,
+          1,
+          1
+        ],
+        "description": "Quads along world x, y, z — whole numbers, minimum 1. A plane uses the two components of its own axes ([1,1,1] is a single quad, two triangles); a box uses all three, each face taking the two that span it. More subdivisions give finer sampling and a finer uv/raycast target.",
+        "min": 1
+      },
+      "flip": {
+        "type": "bool",
+        "default": false,
+        "description": "Reverse every triangle's winding, which flips the surface normals — a plane becomes a ceiling, a box becomes an inward-facing room."
+      }
+    }
   },
   {
     "type": "orientAlongVector",
@@ -407,6 +637,59 @@
     }
   },
   {
+    "type": "pointNeighborhood",
+    "description": "Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging \"P\" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "radius": {
+        "type": "f32",
+        "default": 1,
+        "description": "Neighborhood radius in world units, boundary included. 0 searches nothing: every count is 0 and every average falls back to the point's own value.",
+        "min": 0
+      },
+      "maxCount": {
+        "type": "i32",
+        "default": 0,
+        "description": "Cap on how many neighbors each point keeps: the nearest maxCount of them, ties resolved toward the lower point index. 0 (the default) keeps every neighbor within the radius. Use it to bound the cost in dense clouds.",
+        "min": 0
+      },
+      "includeSelf": {
+        "type": "bool",
+        "default": false,
+        "description": "Count the point itself as one of its neighbors (and include its own value in the average). False (the default) measures the OTHER points, so an isolated point counts 0."
+      },
+      "countAttr": {
+        "type": "string",
+        "default": "nbrCount",
+        "description": "Name of the u32 point attribute receiving the neighbor count. Empty writes no count (then averageAttr must be set)."
+      },
+      "averageAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Numeric point attribute (tuple 1..4) to average over each point's neighbors, for example \"P\". Empty (the default) computes no average."
+      },
+      "averageOutAttr": {
+        "type": "string",
+        "default": "nbrAvg",
+        "description": "Name of the f32 point attribute receiving the neighbor average; it takes averageAttr's tuple size. Required when averageAttr is set, ignored otherwise. Naming it the same as averageAttr overwrites in place."
+      }
+    }
+  },
+  {
     "type": "pointScatterInBounds",
     "description": "Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax]. Each coordinate is an independent deterministic hash of (seed, point index, axis) — same seed always reproduces the same points, independent of evaluation order. Emits a standard point cloud.",
     "category": "source",
@@ -551,6 +834,100 @@
           "min",
           "max"
         ]
+      }
+    }
+  },
+  {
+    "type": "removeAttribute",
+    "description": "Deletes named attributes from one domain. Every idiom that carries a value between nodes — a scratch column feeding a filter, a parameter attribute read back by a field, a hit marker recovered from a transfer — leaves that column on the output forever; this is the only way to take it off again. Unknown names are an error by default, so a typo does not silently leave the debris it was meant to remove; set strict false when a name may legitimately be absent. Removing the point attribute \"P\" is refused: it is the position every downstream node reads, and dropping it turns a clear failure here into an obscure one later.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "names": {
+        "type": "stringList",
+        "default": [],
+        "description": "Attribute names to delete, in any order. An empty list removes nothing (and is not an error, so a graph can leave the node in place with nothing to clean)."
+      },
+      "domain": {
+        "type": "enum",
+        "default": "point",
+        "description": "Domain to delete from: point, vertex, primitive, or detail.",
+        "enum": [
+          "point",
+          "vertex",
+          "primitive",
+          "detail"
+        ]
+      },
+      "strict": {
+        "type": "bool",
+        "default": true,
+        "description": "Error when a listed name does not exist on the domain, naming the available attributes. False makes removal best-effort and skips missing names."
+      }
+    }
+  },
+  {
+    "type": "sampleNearestPoint",
+    "description": "For every point of `in`, finds the nearest point of the `source` cloud in 3D (positions from P, ties resolved toward the lowest source index) and records what it found on the output's point domain: distanceAttr gets the distance (f32), indexAttr the source point index (i32), and `attribute`/`outAttribute` copy one of the source's point attributes across. This is the node that answers HOW FAR — transferAttribute's 'nearest' mapping copies a value but never reveals the distance, so banding by proximity to a road, a river or a set of landmarks needs this one. A point that finds nothing (an empty source, a non-finite position, or nothing within maxDistance) is a miss: its distance is Infinity, its index is -1, and a copied attribute keeps its prior value (the attribute default when it did not exist), so a miss is testable per point rather than only as a total. Uses a uniform spatial grid, so large clouds are fine.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      },
+      {
+        "name": "source",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "distanceAttr": {
+        "type": "string",
+        "default": "nearDist",
+        "description": "Name of the f32 point attribute receiving the distance to the nearest source point, in world units (Infinity on a miss). Empty writes no distance."
+      },
+      "indexAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Name of the i32 point attribute receiving the nearest source point's index, or -1 on a miss. Empty (the default) writes no index."
+      },
+      "attribute": {
+        "type": "string",
+        "default": "",
+        "description": "Point attribute of the `source` geometry to copy from the nearest source point. Empty (the default) copies nothing. Any type, including string."
+      },
+      "outAttribute": {
+        "type": "string",
+        "default": "",
+        "description": "Name to store the copied attribute under on the output. Empty (the default) reuses `attribute`'s own name. Ignored when `attribute` is empty."
+      },
+      "maxDistance": {
+        "type": "f32",
+        "default": 0,
+        "description": "Largest distance that still counts as a find, in world units. 0 (the default) means unlimited; beyond it a point is a miss.",
+        "min": 0
       }
     }
   },
