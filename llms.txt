@@ -226,7 +226,7 @@ graph round-trips and cooks identically. Rebuilding via
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 40 fns (`listFieldFns()`):
+into `constant`). All 41 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
@@ -234,9 +234,9 @@ into `constant`). All 40 fns (`listFieldFns()`):
   - `{ fn: "position" }` — reads P (tuple 3); `{ fn: "index" }` — 0,1,2,...
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
-  - 2 args: `add sub mul div min max lt le gt ge eq dot atan2`
-    (comparisons emit 1/0; `dot` reduces tuples to a scalar; `atan2`
-    args are [y, x], radians)
+  - 2 args: `add sub mul div min max lt le gt ge eq ne dot atan2`
+    (comparisons emit 1/0, and `ne` is the exact complement of `eq`;
+    `dot` reduces tuples to a scalar; `atan2` args are [y, x], radians)
   - 1 arg: `abs floor length normalize sin cos tan asin acos atan`
     (trig in radians, elementwise)
   - 3 args: `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b)
@@ -315,13 +315,15 @@ spawn, io, composite.
 - filterByExpression — keep points where a field-capable boolean `predicate` is positive; NaN never survives (`v>0||v<0`, not `!==0`), and a tuple>1 predicate is refused rather than broadcast
 - jitterPoints — deterministic random offset per point (field-capable amount)
 - mergePoints — concatenate point clouds (multi input), union of attributes
-- meshPrimitive — SOURCE of triangle-mesh geometry in-graph: a subdivided `plane` (orientation xz/xy/yz, normal along the positive third axis) or a `box` (six faces, per-face points so uv seams are exact); emits P, uv and `poly` primitives. This is the only way to make mesh geometry from JSON — dataInput carries nothing through serialization — so it is what feeds surfaceSample, transferAttribute raycast/uv, and splineSample's mesh-side neighbours
+- meshPrimitive — SOURCE of triangle-mesh geometry in-graph: a subdivided `plane` (orientation xz/xy/yz, normal along the positive third axis) or a `box` (six faces, per-face points so uv seams are exact); emits P, uv and `poly` primitives. This is the only way to make mesh geometry from JSON — dataInput carries nothing through serialization — so it is what feeds surfaceSample and transferAttribute raycast/uv. It does NOT feed splineSample, which reads `polyline` primitives and skips every other primitive type; the in-graph source of a polyline is pointsToPath (see "Paths")
 - orientAlongVector — write `rot` quaternions so a local axis (default `+z`) follows a field-capable direction (e.g. a tangent/normal attribute), `up` hint fixes roll; zero directions keep their rot
 - partitionByAttribute — split into per-value point clouds, tagged `name=value`
+- pathResample — resample every polyline at even arc-length steps, per path rather than across all of them, and emit a PATH (topology survives, closure survives); `mode: "count"` fixes the sample count per path, `"spacing"` fixes the world-unit step
 - pointGrid — regular grid of points
-- pointLine — evenly spaced points on a segment
+- pointLine — evenly spaced points on a segment; `includeEnd` (default true) samples the closed range [start, end], false samples the half-open [start, end) so a sweep that wraps has no duplicate seam
 - pointNeighborhood — per-point neighbour statistics from the shared uniform grid: a count within `radius`, and optionally the average of another attribute over those neighbours; `maxCount` keeps the NEAREST N (ties to lower index) and accumulation is always in ascending point index, so a capped average is bit-stable; a point with no neighbours averages to its OWN value, so differences like `P - nbrP` are exactly zero for isolates
 - pointScatterInBounds — uniform random points in a box
+- pointsToPath — the only node that turns a point cloud INTO a path, so the only way to start one in a serialized graph: builds `polyline` primitives over the SAME points, so every point attribute survives; `closed` appends the structural trailing vertex, `groupAttr` splits the cloud into one path per id, `orderAttr` orders each path (ties to the lower point index)
 - projectToPlane — orthogonal projection of points onto a plane
 - promoteAttribute — move an attribute between domains (first/average/sum/min/max)
 - removeAttribute — delete named attributes from a domain (`strict` errors on a missing name); refuses to delete point `P`
@@ -330,17 +332,69 @@ spawn, io, composite.
 - setAttribute — create/overwrite an attribute from a field-capable value; `type: "string"` picks per element from a `values` list by numeric selector (floor+clamp, total) or writes a constant `stringValue`; optional `seed` param folds into the field evaluation (0 = node seed unchanged)
 - setBounds — stamp boundsMin/boundsMax on every point
 - spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`); one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order
-- splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
+- splineSample — arc-length sampling along polyline primitives, treating every polyline of the input as ONE concatenated curve (emits tangent, curveU); its in-graph source is pointsToPath or pathResample, and its own output is a plain point CLOUD, no longer a path
 - subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
 - transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail); `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)
 - valueConstant — emit a constant number as a value item
 - volumeSample — jittered grid fill of a box or of the input geometry's bounds
+- writeTangents — write a unit `tangent` onto a path's OWN points (points, attributes and topology all pass through untouched), for paths that were never spline-sampled; the tangent is the normalized central difference between neighbours along the path and wraps on a closed one, so orientAlongVector has something to read
+
+## Paths (polyline topology)
+
+A path is not a point type and not an attribute. It is TOPOLOGY laid over
+points that already exist: `polyline` primitives whose vertices reference
+point indices, sitting alongside the usual point domain. The points keep
+every attribute they had; the path is the statement that they are visited
+in an order.
+
+- **Producing one.** `pointsToPath` is the only node that turns a point
+  cloud INTO a path, so it is the only way to start one in a serialized
+  graph — it builds polylines over the SAME points it is given, so
+  nothing written upstream is lost. The `shape/path-loop` and `shape/path-meander`
+  primitives are the ready-made sources built on it. In TypeScript,
+  `createPolyline` and (with the three adapter) `fromCurve` do the same
+  job; a JSON author cannot call either, which is why `pointsToPath`
+  exists. `pathResample` and `place/along-curve` take a path and emit a
+  path, so they extend a chain rather than start one.
+- **Closure is structural.** A closed path is one whose last vertex
+  references the path's first point. There is NO `closed` attribute: do
+  not write one, do not look for one, and do not test closure by
+  comparing positions. `pointsToPath`'s `closed` param appends that
+  trailing vertex and writes nothing else; every consumer detects closure
+  the same way. A closed path needs at least 3 points.
+- **Order is a contract.** Within a path the points are visited in
+  ascending point index — the order they arrived on the node's input —
+  unless `orderAttr` names a numeric point attribute to sort by
+  ascending, and ties in that key ALWAYS break to the lower point index.
+  There is no sort-stability question and no arrival-order dependence.
+  `groupAttr` splits one cloud into one path per distinct (whole-number)
+  group id, emitted in ascending id.
+- **A path that goes through a filter STOPS being a path.** Every filter
+  node that can REMOVE points routes through `gatherPoints`, which
+  rebuilds the point domain from the survivors and drops topology with
+  it; `mergePoints` and `partitionByAttribute` drop it too. Only nodes
+  that clone (`cloneGeometry`) preserve it — among the filters that is
+  `projectToPlane`, which moves points without removing any. Nothing
+  warns at the point of loss — it is silent there, and surfaces later as
+  a path consumer reporting that it found no polylines. So: filter
+  FIRST, then `pointsToPath`, and put
+  every path op (`pathResample`, `writeTangents`, `splineSample`,
+  `place/along-curve`, `write/orient-along-path`,
+  `filter/by-distance-to-curve` on its `curve` pin) after the last
+  filter, never before it.
+- **Consuming one.** `splineSample` treats every polyline of its input as
+  one concatenated curve and emits a plain point CLOUD (topology ends
+  there); `pathResample` measures each path on its own length and emits a
+  path. `writeTangents` and `write/orient-along-path` write onto a path's
+  own points and hand the path back unchanged — that is the only way to
+  orient points that carry meaning, since a sampler's output points are
+  new ones.
 
 ## Primitive library (full catalog: docs/primitives.md, machine-readable: docs/primitives.json)
 
-29 named subgraphs — the vocabulary a graph is written IN. **They
+34 named subgraphs — the vocabulary a graph is written IN. **They
 register on import of their own subpath**, so nothing resolves until
 something imports it; `import "pcg-ts"` deliberately does not:
 
@@ -355,22 +409,25 @@ Reference one from JSON with `{"type":"subgraph","ref":{"name":"..."},
 Names are `<family>/<kebab-case>` over a CLOSED set of seven families,
 and the family is a promise about the pin shape:
 
-- shape (4) — a point set from nothing, built at unit size and placed by
-  a trailing transform: ring, spiral, disc, sphere-points
+- shape (6) — a point set from nothing, built at unit size and placed by
+  a trailing transform: ring, spiral, disc, sphere-points, and the two
+  that carry polyline topology instead of a loose cloud — path-loop,
+  path-meander
 - fill (4) — turn a region into a distribution: scatter-even (minimum
   spacing), scatter-by-density (noise clumps), scatter-clustered,
   volume-by-noise (carved 3D volumes)
 - transform (3) — change P, keep the count: displace-by-noise,
   snap-to-grid, relax-spacing
 - compose (2) — combine two clouds: merge-tagged, scatter-copies
-- filter (5) — remove points, never move one, never leave a column
+- filter (6) — remove points, never move one, never leave a column
   behind: thin-by-density, mask-by-noise, inside-radius, by-distance-to,
-  by-neighbor-count
-- place (4) — against a supplied mesh (feed it `meshPrimitive`):
-  on-surface, plantable, drop-to-surface, align-to-surface
-- write (7) — set attributes: height-slope, density-from-noise,
+  by-neighbor-count, by-distance-to-curve
+- place (5) — against a supplied GEOMETRY, not always a mesh: on-surface,
+  plantable, drop-to-surface, align-to-surface take a mesh (feed them
+  `meshPrimitive`); along-curve takes a curve (feed it a path)
+- write (8) — set attributes: height-slope, density-from-noise,
   random-scale, random-yaw, color-from-attribute, local-density,
-  instances-by-species
+  instances-by-species, orient-along-path
 
 Three rules an agent needs before choosing one:
 
@@ -407,6 +464,13 @@ Three rules an agent needs before choosing one:
   internals. Clone with `cloneGeometry(geo)` before mutating. Arrays
   bound into params (e.g. dataInput `items`) are captured by reference —
   treat as frozen after binding; bind a fresh array to change data.
+- Topology is fragile and its loss is silent: every filter node that can
+  remove points routes through `gatherPoints`, which rebuilds the point
+  domain and drops primitive topology with it, and `mergePoints` and
+  `partitionByAttribute` do the same. Only nodes that clone
+  (`cloneGeometry`) preserve it. A path that passes through one of the
+  others stops being a path, with no warning at the point of loss — see
+  "Paths".
 - Column lifetime: an evaluated field Column may alias attribute storage
   and is valid only until the geometry is mutated or resized; results
   memoize per EvalContext object, so make a fresh context after mutation.

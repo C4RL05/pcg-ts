@@ -188,7 +188,8 @@ Names are `<family>/<kebab-case>` over a closed set of seven families —
 family is a promise about the pin shape: `shape` and `fill` produce
 geometry from nothing, `transform` changes `P` and keeps the count,
 `filter` removes points without moving any, `compose` combines two,
-`place` works against a supplied mesh, `write` sets attributes. Node
+`place` works against a supplied geometry — a mesh for the surface
+members, a path for `place/along-curve` — `write` sets attributes. Node
 types are camelCase with no separator, so a name containing `/` can never
 be mistaken for a `"type"`.
 
@@ -698,6 +699,135 @@ The node covers the common cases; the data-layer functions
 (`transferNearest`, `transferUv`, `transferRaycast`) additionally
 accept a `cellSize` grid hint (lookup cost only — never results), and
 `transferUv` a `uvDomain` override forcing the source UV domain.
+
+## Paths
+
+A path is not a new kind of point and not an attribute on one. It is
+**topology** laid over points that already exist: `polyline` primitives
+whose vertices reference point indices, living beside the point domain
+rather than replacing it. The points keep every attribute they were
+carrying; the path is the added statement that they are visited in an
+order.
+
+`pointsToPath` is the only node that turns a point cloud into a path,
+which makes it the only way to start one from serialized JSON —
+`createPolyline` is a TypeScript function a JSON author cannot call. It
+builds polylines over the *same* points it is handed, so nothing written
+upstream is lost. (`pathResample` also emits polyline topology, but it
+derives it from a path it was already given; it extends a chain rather
+than starting one.)
+`shape/path-loop` and `shape/path-meander` are the ready-made sources
+built on it, and the generated catalogs
+([nodes.md](./nodes.md), [primitives.md](./primitives.md)) say which
+consumers require polyline topology on which pin.
+
+### Closure is structural
+
+A closed path is one whose last vertex references the path's first
+point. That is the entire representation. There is **no `closed`
+attribute** — do not write one, do not look for one, and do not infer
+closure by comparing the first and last positions. `pointsToPath`'s
+`closed` param appends that trailing vertex and writes nothing else, and
+every consumer detects closure by reading the topology, so there is
+nothing that can disagree with anything else. (A dedicated attribute was
+considered and rejected for exactly that reason: a second copy of a fact
+is a second copy that can go wrong.) A closed path needs at least three
+points; two would fold the path back onto itself and is an error.
+
+### Order is a contract
+
+Within a path the points are visited in **ascending point index** — the
+order they arrived on the node's input — unless `orderAttr` names a
+finite numeric point attribute to sort by, ascending. **Ties in that key
+always break to the lower point index**, so the result never depends on
+the sort implementation, and there is no arrival-order or cook-order
+component to it. `groupAttr` splits one cloud into one path per distinct
+group id (whole numbers, typically written with `setAttribute` at type
+`i32`), and the paths are emitted in ascending id.
+
+### A path that goes through a filter stops being a path
+
+This is the one that bites first. Every filter node that can remove
+points routes through `gatherPoints`, which rebuilds the point domain
+from the survivors and drops primitive topology with it. `mergePoints`
+and `partitionByAttribute` drop it the same way. Only a node that clones
+(`cloneGeometry`) preserves it — among the filter-category nodes that is
+`projectToPlane` alone, which moves points without removing any, so
+"filter" is not quite the boundary: **removing or recombining points**
+is.
+
+Nothing warns at the filter. The loss is silent where it happens and
+surfaces somewhere else entirely, as a path consumer reporting that it
+found no polylines — a confusing error, because the node it names is not
+the node at fault. So the ordering rule is:
+
+> **Filter first, then build the path.** Every path op belongs after the
+> last filter, never before it.
+
+That covers `pathResample`, `writeTangents` and `splineSample`, and the
+`curve` input of the path-consuming primitives. If a graph genuinely
+needs to remove points from something that is already a path, remove
+them first and rebuild with `pointsToPath` — there is no in-place
+repair.
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 7,
+  "nodes": [
+    { "id": "line", "type": "pointLine",
+      "params": { "count": 12, "start": [0, 0, 0], "end": [40, 0, 0] } },
+    { "id": "wobble", "type": "jitterPoints", "params": { "amount": [0, 0, 3] } },
+    { "id": "gap", "type": "filterByExpression",
+      "params": { "predicate": { "fn": "ne", "args": [{ "fn": "index" }, 4] } } },
+    { "id": "path", "type": "pointsToPath", "params": { "closed": false } },
+    { "id": "posts", "type": "pathResample",
+      "params": { "mode": "spacing", "spacing": 2.5 } },
+    { "id": "aim", "type": "orientAlongVector",
+      "params": { "axis": "+z",
+                  "direction": { "fn": "attribute", "name": "tangent", "tupleSize": 3 } } }
+  ],
+  "connections": [
+    { "from": ["line", "out"], "to": ["wobble", "in"] },
+    { "from": ["wobble", "out"], "to": ["gap", "in"] },
+    { "from": ["gap", "out"], "to": ["path", "in"] },
+    { "from": ["path", "out"], "to": ["posts", "in"] },
+    { "from": ["posts", "out"], "to": ["aim", "in"] }
+  ],
+  "outputs": [{ "id": "aim", "pin": "out", "name": "fence" }]
+}
+```
+
+The filter runs before `pointsToPath`, so the path is built over exactly
+the points that survive. Swap those two nodes and `pcg validate` still
+says `ok` — the structure is fine, only the meaning is gone — and the
+cook then fails at `posts`, three nodes downstream of the mistake:
+
+```
+node "posts" failed: pathResample: input has no polyline primitives
+(build one in-graph with pointsToPath, or in TypeScript with
+createPolyline; note that every filter node and mergePoints drop
+topology, so a path must reach this node without passing through one)
+```
+
+### Sampling a path, and keeping one
+
+Two nodes read a path and they do different things with it:
+
+| | Treats each path | Emits | Point attributes |
+| --- | --- | --- | --- |
+| `splineSample` | all polylines as one concatenated curve | a point **cloud** — topology ends here | new points; `tangent` and `curveU` |
+| `pathResample` | each on its own arc length, kept separate | a **path**, closed if the input was | new points; `tangent` and `curveU` |
+
+Both create new points, so nothing the original points carried survives
+either one. When the points already mean something — a species, a scale,
+an index other geometry refers to — do not resample: `writeTangents`
+writes a `tangent` onto a path's own points and hands back the same
+points, attributes and topology, which is what `orientAlongVector` needs
+to read, and what `write/orient-along-path` packages as one step. A path
+built by hand with `pointsToPath` has no `tangent` at all until
+something writes one, because only a sampler emits it and only for the
+points it created.
 
 ## Staged pipelines (per-output cooking)
 

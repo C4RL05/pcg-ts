@@ -1,0 +1,53 @@
+{
+  "formatVersion": 1,
+  "seed": 1026,
+  "meta": {
+    "title": "turn a path's own points to follow it",
+    "description": "A path built by `pointsToPath` carries no `tangent` — only a sampler writes one, for the points it created — so `orientAlongVector` has nothing to read. `writeTangents` supplies it, from the normalized central difference between each point's neighbours along the polyline, which stays smooth through corners and wraps on a closed path. Both nodes keep the points, their attributes and the topology exactly as they arrived, so the `width` column written before the path was built is still on the output after the rotation: that is the whole difference from `place/along-curve`, which resamples and hands back new points carrying none of it. Run the pair BEFORE any filter — every filter drops topology, and `writeTangents` would then find no paths.",
+    "tags": ["basics", "path", "rotation", "attributes"]
+  },
+  "nodes": [
+    {
+      "id": "ring",
+      "type": "subgraph",
+      "params": { "count": 16, "size": [18, 18, 18] },
+      "ref": { "name": "shape/ring" }
+    },
+    {
+      "id": "width",
+      "type": "setAttribute",
+      "params": {
+        "name": "width",
+        "domain": "point",
+        "type": "f32",
+        "value": { "fn": "remap", "args": [{ "fn": "randomField", "key": "width" }, 0, 1, 0.7, 1.5] }
+      }
+    },
+    {
+      "id": "path",
+      "type": "pointsToPath",
+      "params": { "closed": true }
+    },
+    {
+      "id": "tangents",
+      "type": "writeTangents",
+      "params": { "name": "tangent" }
+    },
+    {
+      "id": "face",
+      "type": "orientAlongVector",
+      "params": {
+        "direction": { "fn": "attribute", "name": "tangent", "tupleSize": 3 },
+        "up": [0, 1, 0],
+        "axis": "+z"
+      }
+    }
+  ],
+  "connections": [
+    { "from": ["ring", "out"], "to": ["width", "in"] },
+    { "from": ["width", "out"], "to": ["path", "in"] },
+    { "from": ["path", "out"], "to": ["tangents", "in"] },
+    { "from": ["tangents", "out"], "to": ["face", "in"] }
+  ],
+  "outputs": [{ "id": "face", "pin": "out", "name": "path" }]
+}

@@ -425,6 +425,51 @@
         ]
       }
     },
+    "basics-orient-along-path.json": {
+      "outputs": {
+        "path": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 16,
+              "vertex": 17,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "width:f32",
+                "tangent:f32x3"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -18,
+                0,
+                -18
+              ],
+              "max": [
+                18,
+                0,
+                18
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-orient-along-vector.json": {
       "outputs": {
         "points": [
@@ -582,6 +627,95 @@
         ]
       }
     },
+    "basics-path-resample.json": {
+      "outputs": {
+        "path": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 28,
+              "vertex": 29,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -30,
+                0,
+                -10
+              ],
+              "max": [
+                30,
+                0,
+                10
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-paths-by-group.json": {
+      "outputs": {
+        "paths": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 40,
+              "vertex": 40,
+              "primitive": 4,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "row:i32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                0,
+                0,
+                0
+              ],
+              "max": [
+                36,
+                0,
+                24
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-point-grid.json": {
       "outputs": {
         "points": [
@@ -616,6 +750,49 @@
                 22,
                 0,
                 22
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-points-to-path.json": {
+      "outputs": {
+        "path": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 12,
+              "vertex": 13,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16,
+                0,
+                -16
+              ],
+              "max": [
+                16,
+                0,
+                16
               ]
             }
           }
@@ -697,6 +874,24 @@
                 15
               ]
             }
+          }
+        ]
+      }
+    },
+    "basics-props-along-a-path.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 17,
+            "batches": [
+              {
+                "assetId": "lamp",
+                "count": 17
+              }
+            ]
           }
         ]
       }

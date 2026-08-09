@@ -1035,6 +1035,67 @@ describe("the curve set", () => {
     expect(P.get(g.pointCount - 1, 0)).toBeCloseTo(30, 4);
   });
 
+  it("path-meander strays by the amount `wander` advertises, and never doubles back", async () => {
+    // Descriptions are the agent API, so the numbers `wander` quotes are
+    // asserted rather than left to drift. The knob scales a NOMINAL +/-1
+    // noise term: four octaves of normalized fBm sampled along a single
+    // line only cover part of that range, so the peak deviation lands near
+    // 0.22 * wander * size.z. That shortfall is the catalog's shared noise
+    // convention — transform/displace-by-noise builds the same term the
+    // same way and reaches ~0.4 of nominal over a 2D spread — not a
+    // scaling bug here. What an agent needs is that it is STATED and that
+    // it is linear, and both are pinned below.
+    const peak = async (params: Record<string, unknown>) => {
+      const g = geo(await cookOne("shape/path-meander", { count: 200, ...params }));
+      const P = g.attrs.point.require("P");
+      let m = 0;
+      for (let i = 0; i < g.pointCount; i++) m = Math.max(m, Math.abs(P.get(i, 2)));
+      return m;
+    };
+
+    const base = await peak({ wander: 0.5, size: [80, 1, 60] });
+    expect(base / (0.5 * 60)).toBeCloseTo(0.2177, 3);
+    // Exactly linear in `wander` and in size.z: a doubled knob doubles the
+    // stray, which is what makes the figure above predictive at all.
+    expect(await peak({ wander: 1, size: [80, 1, 60] })).toBeCloseTo(2 * base, 4);
+    expect(await peak({ wander: 0.5, size: [80, 1, 120] })).toBeCloseTo(2 * base, 4);
+    // The two strays the description quotes for the default size [40,1,40].
+    const gentle = await peak({ wander: 0.15 });
+    expect(gentle).toBeGreaterThan(1.25);
+    expect(gentle).toBeLessThan(1.35);
+    const loose = await peak({ wander: 0.5 });
+    expect(loose).toBeGreaterThan(4.3);
+    expect(loose).toBeLessThan(4.45);
+    // ...and the inverse rule it gives: wander ~ 4.6 * f peaks at f * size.z.
+    expect((await peak({ wander: 4.6 * 0.25, size: [80, 1, 60] })) / 60).toBeCloseTo(0.25, 2);
+
+    // The band the description puts on that 0.22 as `frequency` and
+    // `variant` move the noise window. These are the measured extremes:
+    // 0.135 at variant 7, 0.309 at variant 13.3, 0.152 at frequency 0.5.
+    for (const params of [
+      { frequency: 0.5 },
+      { frequency: 12 },
+      { variant: 7 },
+      { variant: 13.3 },
+      { variant: 100 },
+    ]) {
+      const ratio = (await peak({ wander: 0.5, size: [80, 1, 60], ...params })) / 30;
+      expect(ratio, `${JSON.stringify(params)} left the documented band`).toBeGreaterThan(0.13);
+      expect(ratio, `${JSON.stringify(params)} left the documented band`).toBeLessThan(0.31);
+    }
+
+    // The description's other claim, and the reason no amount of amplitude
+    // could ever buy the "doubles back" the old wording promised: the
+    // wander is sideways only, so the path is a height field along X.
+    for (const wander of [0.5, 2, 10]) {
+      const g = geo(await cookOne("shape/path-meander", { count: 200, wander, size: [80, 1, 60] }));
+      const P = g.attrs.point.require("P");
+      for (let i = 1; i < g.pointCount; i++) {
+        expect(P.get(i, 0), `wander ${wander} reversed along X`).toBeGreaterThan(P.get(i - 1, 0));
+      }
+    }
+  });
+
   it("along-curve spaces points by arc length and faces them along the curve", async () => {
     const byCount = geo(await cookOne("place/along-curve", { count: 5 }));
     expect(byCount.pointCount).toBe(5);

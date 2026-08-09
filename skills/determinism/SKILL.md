@@ -33,6 +33,12 @@ Three consequences that decide real design questions:
   renumbers everything downstream, so every per-point value, per-point seed
   and cache key downstream changes too. A filter is the loudest version of
   this.
+- **Ordering is a determinism surface too, and it uses the same tiebreak.**
+  Anywhere the library has to order elements — a path's vertex order in
+  `pointsToPath`, a capped neighbour set, a shared-edge transfer hit — ties
+  break to the *lower index*, never to arrival order, sort stability or
+  partition completion. Hold to that rule in anything you add; it is what
+  makes an order reproducible without being a random draw.
 
 A subgraph's inner seed derives from the wrapping node's seed, so two
 instances of the same primitive in one graph get different randomness, and
@@ -50,8 +56,9 @@ graphs authored before the param exists keep bit-identical output.
 and the per-point `seed` attribute.
 
 **It does not touch noise.** A noise field carries its own seed *inside its
-spec*, so `valueNoise` / `perlin` / `simplex` / `worley` / `fbm` are
-completely unaffected by a node-level seed. Measured, not assumed: on a fixed
+spec*, so `valueNoise` / `perlinNoise` / `simplexNoise` / `worleyNoise` /
+`fbm` — the grammar's actual names, which is what a `fn` field must say —
+are completely unaffected by a node-level seed. Measured, not assumed: on a fixed
 16-point grid, changing `setAttribute.seed` from 0 to 99 moved a
 `randomField` attribute (mean 0.5003 to 0.5584) and left a `perlinNoise`
 attribute bit-identical (min −0.19169002771377563, max 0.20500269532203674,

@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-23 examples, alphabetical by file:
+28 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -17,11 +17,16 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
 - [basics-mesh-primitive.json](#basics-mesh-primitivejson) — build a mesh a saved graph can cook
 - [basics-neighborhood-count.json](#basics-neighborhood-countjson) — measure how crowded each point is
+- [basics-orient-along-path.json](#basics-orient-along-pathjson) — turn a path's own points to follow it
 - [basics-orient-along-vector.json](#basics-orient-along-vectorjson) — turn each point to face a direction
 - [basics-partition-by-attribute.json](#basics-partition-by-attributejson) — split one cloud into labelled groups
+- [basics-path-resample.json](#basics-path-resamplejson) — even out the spacing along a path
+- [basics-paths-by-group.json](#basics-paths-by-groupjson) — cut one cloud into several separate paths
 - [basics-point-grid.json](#basics-point-gridjson) — place points on a regular grid
+- [basics-points-to-path.json](#basics-points-to-pathjson) — build a path from a point cloud
 - [basics-primitive-ref.json](#basics-primitive-refjson) — reference a shipped primitive by name
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
+- [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-spawn-by-species.json](#basics-spawn-by-speciesjson) — spawn a different asset per point
 - [basics-spawn-instances.json](#basics-spawn-instancesjson) — turn points into instance batches
@@ -228,6 +233,24 @@ Cook it: `pcg cook examples/graphs/basics-mesh-primitive.json --stats`
 
 Cook it: `pcg cook examples/graphs/basics-neighborhood-count.json --stats`
 
+## basics-orient-along-path.json
+
+**turn a path's own points to follow it**
+
+A path built by `pointsToPath` carries no `tangent` — only a sampler writes one, for the points it created — so `orientAlongVector` has nothing to read. `writeTangents` supplies it, from the normalized central difference between each point's neighbours along the polyline, which stays smooth through corners and wraps on a closed path. Both nodes keep the points, their attributes and the topology exactly as they arrived, so the `width` column written before the path was built is still on the output after the rotation: that is the whole difference from `place/along-curve`, which resamples and hands back new points carrying none of it. Run the pair BEFORE any filter — every filter drops topology, and `writeTangents` would then find no paths.
+
+**Tags:** `basics`, `path`, `rotation`, `attributes`
+
+**Seed:** 1026
+
+**Node types:** `orientAlongVector`, `pointsToPath`, `setAttribute`, `subgraph`, `writeTangents`
+
+**Primitives:** `shape/ring`
+
+**Outputs:** `path` (from `face`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-orient-along-path.json --stats`
+
 ## basics-orient-along-vector.json
 
 **turn each point to face a direction**
@@ -264,6 +287,42 @@ Cook it: `pcg cook examples/graphs/basics-orient-along-vector.json --stats`
 
 Cook it: `pcg cook examples/graphs/basics-partition-by-attribute.json --stats`
 
+## basics-path-resample.json
+
+**even out the spacing along a path**
+
+`pathResample` walks each polyline's own arc length and places new points at even steps along it, which is a different operation from thinning a cloud: `selfPrune` keeps a subset of the points it was handed, while this creates points that were never there. The ellipse shows why it is needed — `shape/ring` spaces its points evenly in ANGLE, and on anything that is not a circle that leaves them bunched at the two ends of the long axis. `count` mode places exactly that many samples on every path whatever its length, and on a closed one they divide it without duplicating the start, so every step here comes out equal; `spacing` mode steps a fixed number of world units instead, so a longer path simply gets more points. The output is still a path and a closed one comes back closed, but the points are new: they carry `tangent` and `curveU`, and nothing written on the input's points is carried across.
+
+**Tags:** `basics`, `path`, `resample`, `spacing`
+
+**Seed:** 1025
+
+**Node types:** `pathResample`, `pointsToPath`, `subgraph`
+
+**Primitives:** `shape/ring`
+
+**Outputs:** `path` (from `even`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-path-resample.json --stats`
+
+## basics-paths-by-group.json
+
+**cut one cloud into several separate paths**
+
+With `groupAttr` set, `pointsToPath` splits the cloud by a whole-number point attribute and emits one polyline per distinct id, in ascending id — four rows here become four independent paths over the same 40 points, not one path zig-zagging between them. The ids come from a `setAttribute` of type i32 reading world Z, which is what keeps the grouping a property of the geometry rather than a hardcoded list. Within a group the points are visited in input index order; `orderAttr` is the companion knob when that order is not the one the path should follow, and its ties always break to the lower index so the result never depends on the sort.
+
+**Tags:** `basics`, `path`, `groups`, `attributes`
+
+**Seed:** 1027
+
+**Node types:** `pointGrid`, `pointsToPath`, `setAttribute`
+
+**Primitives:** *(none)*
+
+**Outputs:** `paths` (from `paths`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-paths-by-group.json --stats`
+
 ## basics-point-grid.json
 
 **place points on a regular grid**
@@ -281,6 +340,24 @@ The deterministic counterpart to scattering: `pointGrid` places countX * countY 
 **Outputs:** `points` (from `grid`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-point-grid.json --stats`
+
+## basics-points-to-path.json
+
+**build a path from a point cloud**
+
+`pointsToPath` is the only way a saved graph can produce polyline geometry: it lays one `polyline` primitive over the points it was given, so the points and every attribute on them survive untouched and only topology is added. Visiting order is the input's point order unless `orderAttr` names a sort key. `closed` appends a trailing vertex referencing the first point — closure is structural, not a flag, so a closed path over 12 points has 13 vertices and there is no duplicated seam point to trip over. `shape/path-loop` is exactly this pair of nodes under one name.
+
+**Tags:** `basics`, `path`, `topology`, `source`
+
+**Seed:** 1024
+
+**Node types:** `pointsToPath`, `subgraph`
+
+**Primitives:** `shape/ring`
+
+**Outputs:** `path` (from `path`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-points-to-path.json --stats`
 
 ## basics-primitive-ref.json
 
@@ -317,6 +394,24 @@ Attributes live on domains — point, vertex, primitive, detail — and `promote
 **Outputs:** `mesh` (from `perFace`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-promote-attribute.json --stats`
+
+## basics-props-along-a-path.json
+
+**space props evenly along a curve**
+
+Two primitives cover the whole road-and-lamp-posts shape: `shape/path-meander` is a curve SOURCE — an open path that wanders off a straight line by noise and is re-evened by arc length, needing no cloud to start from — and `place/along-curve` resamples it and turns every new point to face the way the curve goes, so a `spacing` of 6 means a post every 6 world units however long the road turns out to be. The points `place/along-curve` emits are new ones carrying `P`, `tangent`, `curveU` and `rot`; when the curve's own points matter instead, `write/orient-along-path` orients them in place. Note what varies: the meander carries its noise seed inside a field spec, so `variant` is its only re-roll.
+
+**Tags:** `basics`, `primitives`, `path`, `placement`
+
+**Seed:** 1028
+
+**Node types:** `spawnInstances`, `subgraph`
+
+**Primitives:** `place/along-curve`, `shape/path-meander`
+
+**Outputs:** `instances` (from `spawn`.`instances`)
+
+Cook it: `pcg cook examples/graphs/basics-props-along-a-path.json --stats`
 
 ## basics-scatter-in-bounds.json
 

@@ -284,6 +284,52 @@ describe("pathResample", () => {
     expect(topologyOf(loop).count).toEqual([5]);
   });
 
+  it("keeps the spacing step exact on a closed path, leaving a short remainder at the seam", async () => {
+    // A closed square of side 10.75 is 43 units around — not a whole
+    // multiple of a 5-unit step. The step is deliberately NOT stretched to
+    // 43/9 = 4.777... to make the samples come out even: every step is
+    // exactly 5 and the loop closes on whatever is left over, here 3.
+    // That is the design — a predictable param beats a clever one, and
+    // `spacing` says so — so a later change that "fixes" the seam by
+    // stretching the step breaks this test on purpose. `count` mode is
+    // the documented way to divide a loop evenly, asserted at the end.
+    const side = 10.75;
+    const square = createPolyline([0, 0, 0, side, 0, 0, side, side, 0, 0, side, 0], {
+      closed: true,
+    });
+    const geo = firstGeo(
+      (await runNode(pathResample, { mode: "spacing", spacing: 5 }, { in: [makeGeometryItem(square)] }))
+        .out,
+    );
+    expect(geo.pointCount).toBe(9); // floor(43 / 5) + 1: the start, counted once
+    expect(topologyOf(geo).count).toEqual([10]); // still closed: 9 + the seam vertex
+
+    // Arc length is what `spacing` promises, and curveU is s / length, so
+    // curveU * 43 is the true arc position. Chord length is NOT the
+    // measure here: a chord that cuts a corner is shorter than the arc it
+    // spans (4.32 against 5 on this square), which is geometry, not
+    // unevenness — measuring the steps with hypot would pin the wrong fact.
+    const u = geo.attrs.point.require("curveU");
+    for (let i = 0; i < geo.pointCount; i++) expect(u.get(i) * 43).toBeCloseTo(i * 5, 4);
+    // The remainder: the last sample sits at 40, so the closing segment
+    // back to the start spans 3 — shorter than `spacing`, and exactly what
+    // the loop had left over. Here it is also a straight run down one
+    // side, so the chord measures it too.
+    expect((1 - u.get(8)) * 43).toBeCloseTo(3, 4);
+    const p = positionsOf(geo);
+    expect(p[8][0]).toBeCloseTo(0, 4);
+    expect(p[8][1]).toBeCloseTo(3, 4);
+    expect(Math.hypot(p[8][0] - p[0][0], p[8][1] - p[0][1], p[8][2] - p[0][2])).toBeCloseTo(3, 4);
+
+    // 'count' on the same loop: the length divided evenly, no remainder.
+    const even = firstGeo(
+      (await runNode(pathResample, { mode: "count", count: 9 }, { in: [makeGeometryItem(square)] }))
+        .out,
+    );
+    const ue = even.attrs.point.require("curveU");
+    for (let i = 0; i < even.pointCount; i++) expect(ue.get(i) * 43).toBeCloseTo((i * 43) / 9, 4);
+  });
+
   it("keeps the last spacing sample off a closed path's seam", async () => {
     // A closed square of side 0.15 is 0.6000000238418579 long in f32 — a
     // hair MORE than 3 * 0.2. Without the epsilon on the loop guard the

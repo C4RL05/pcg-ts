@@ -1,0 +1,45 @@
+{
+  "formatVersion": 1,
+  "seed": 1027,
+  "meta": {
+    "title": "cut one cloud into several separate paths",
+    "description": "With `groupAttr` set, `pointsToPath` splits the cloud by a whole-number point attribute and emits one polyline per distinct id, in ascending id — four rows here become four independent paths over the same 40 points, not one path zig-zagging between them. The ids come from a `setAttribute` of type i32 reading world Z, which is what keeps the grouping a property of the geometry rather than a hardcoded list. Within a group the points are visited in input index order; `orderAttr` is the companion knob when that order is not the one the path should follow, and its ties always break to the lower index so the result never depends on the sort.",
+    "tags": ["basics", "path", "groups", "attributes"]
+  },
+  "nodes": [
+    {
+      "id": "grid",
+      "type": "pointGrid",
+      "params": {
+        "countX": 10,
+        "countY": 1,
+        "countZ": 4,
+        "spacing": [4, 0, 8],
+        "origin": [0, 0, 0]
+      }
+    },
+    {
+      "id": "row",
+      "type": "setAttribute",
+      "params": {
+        "name": "row",
+        "domain": "point",
+        "type": "i32",
+        "value": {
+          "fn": "div",
+          "args": [{ "fn": "component", "args": [{ "fn": "position" }], "index": 2 }, 8]
+        }
+      }
+    },
+    {
+      "id": "paths",
+      "type": "pointsToPath",
+      "params": { "groupAttr": "row" }
+    }
+  ],
+  "connections": [
+    { "from": ["grid", "out"], "to": ["row", "in"] },
+    { "from": ["row", "out"], "to": ["paths", "in"] }
+  ],
+  "outputs": [{ "id": "paths", "pin": "out", "name": "paths" }]
+}

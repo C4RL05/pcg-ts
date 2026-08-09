@@ -281,6 +281,30 @@ that moves where the field is sampled. The generated reference is
 fill/scatter-even --param minDistance=3` cooks one from the command line
 with no graph file at all.
 
+### Paths
+
+A path is topology, not a point type and not an attribute: `polyline`
+primitives whose vertices reference point indices, sitting beside the
+point domain rather than replacing it. The points keep everything they
+were carrying; the path adds the statement that they are visited in an
+order. `pointsToPath` lays that topology over points a graph already
+made — the only way to start a path from serialized JSON — and the shipped
+`shape/path-*` primitives are the ready-made sources built on it. From
+there, `pathResample` respaces one, `writeTangents` gives its own points
+a direction, and `splineSample` walks it by arc length.
+
+Two contracts are worth knowing before the first path graph. **Closure
+is structural** — a closed path is one whose last vertex references its
+first point, and there is no `closed` attribute to write or read, so
+nothing can disagree with the geometry. And **a path that passes through
+a filter stops being a path**: every filter that can remove a point
+rebuilds the point domain from the survivors and drops topology with it,
+as do `mergePoints` and `partitionByAttribute`, and only a node that
+clones preserves it. Nothing warns where the loss happens, so build the
+path after the last filter. The full contract, including the ordering
+rules, is in
+[docs/authoring.md](./docs/authoring.md#paths).
+
 ## Hierarchical streaming
 
 A `World` streams cells of grid levels (coarse to fine, one graph per

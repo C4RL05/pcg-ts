@@ -548,7 +548,7 @@
   },
   {
     "type": "pathResample",
-    "description": "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units and an open path always ends on its true endpoint, so it never comes back shorter than it went in. Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Downstream, every filter node and mergePoints drop topology, so a resampled path that passes through one stops being a path.",
+    "description": "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Downstream, every filter node and mergePoints drop topology, so a resampled path that passes through one stops being a path.",
     "category": "sampler",
     "inputs": [
       {
@@ -583,7 +583,7 @@
       "spacing": {
         "type": "f32",
         "default": 1,
-        "description": "Distance between samples in world units when mode is 'spacing'. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under 1048576 samples. Ignored in 'count' mode.",
+        "description": "Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than `spacing` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under `spacing`. To divide a loop EVENLY, switch mode to 'count': it splits the length into `count` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under 1048576 samples. Ignored in 'count' mode.",
         "min": 0
       }
     }
@@ -1114,7 +1114,7 @@
       "seed": {
         "type": "u32",
         "default": 0,
-        "description": "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but NOT noise: a noise field carries its own seed inside its spec, so valueNoise/perlin/simplex/worley/fbm are unaffected here and are varied through their own `opts.seed`, or by moving the positions they sample. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level."
+        "description": "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but NOT noise: a noise field carries its own seed inside its spec, so `valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise` and `fbm` are unaffected here and are varied through their own `opts.seed`, or by moving the positions they sample. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level."
       }
     }
   },

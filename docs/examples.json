@@ -289,6 +289,37 @@
     ]
   },
   {
+    "file": "basics-orient-along-path.json",
+    "path": "examples/graphs/basics-orient-along-path.json",
+    "title": "turn a path's own points to follow it",
+    "description": "A path built by `pointsToPath` carries no `tangent` — only a sampler writes one, for the points it created — so `orientAlongVector` has nothing to read. `writeTangents` supplies it, from the normalized central difference between each point's neighbours along the polyline, which stays smooth through corners and wraps on a closed path. Both nodes keep the points, their attributes and the topology exactly as they arrived, so the `width` column written before the path was built is still on the output after the rotation: that is the whole difference from `place/along-curve`, which resamples and hands back new points carrying none of it. Run the pair BEFORE any filter — every filter drops topology, and `writeTangents` would then find no paths.",
+    "tags": [
+      "basics",
+      "path",
+      "rotation",
+      "attributes"
+    ],
+    "seed": 1026,
+    "nodeCount": 5,
+    "nodeTypes": [
+      "orientAlongVector",
+      "pointsToPath",
+      "setAttribute",
+      "subgraph",
+      "writeTangents"
+    ],
+    "primitives": [
+      "shape/ring"
+    ],
+    "outputs": [
+      {
+        "name": "path",
+        "node": "face",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-orient-along-vector.json",
     "path": "examples/graphs/basics-orient-along-vector.json",
     "title": "turn each point to face a direction",
@@ -342,6 +373,62 @@
     ]
   },
   {
+    "file": "basics-path-resample.json",
+    "path": "examples/graphs/basics-path-resample.json",
+    "title": "even out the spacing along a path",
+    "description": "`pathResample` walks each polyline's own arc length and places new points at even steps along it, which is a different operation from thinning a cloud: `selfPrune` keeps a subset of the points it was handed, while this creates points that were never there. The ellipse shows why it is needed — `shape/ring` spaces its points evenly in ANGLE, and on anything that is not a circle that leaves them bunched at the two ends of the long axis. `count` mode places exactly that many samples on every path whatever its length, and on a closed one they divide it without duplicating the start, so every step here comes out equal; `spacing` mode steps a fixed number of world units instead, so a longer path simply gets more points. The output is still a path and a closed one comes back closed, but the points are new: they carry `tangent` and `curveU`, and nothing written on the input's points is carried across.",
+    "tags": [
+      "basics",
+      "path",
+      "resample",
+      "spacing"
+    ],
+    "seed": 1025,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pathResample",
+      "pointsToPath",
+      "subgraph"
+    ],
+    "primitives": [
+      "shape/ring"
+    ],
+    "outputs": [
+      {
+        "name": "path",
+        "node": "even",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-paths-by-group.json",
+    "path": "examples/graphs/basics-paths-by-group.json",
+    "title": "cut one cloud into several separate paths",
+    "description": "With `groupAttr` set, `pointsToPath` splits the cloud by a whole-number point attribute and emits one polyline per distinct id, in ascending id — four rows here become four independent paths over the same 40 points, not one path zig-zagging between them. The ids come from a `setAttribute` of type i32 reading world Z, which is what keeps the grouping a property of the geometry rather than a hardcoded list. Within a group the points are visited in input index order; `orderAttr` is the companion knob when that order is not the one the path should follow, and its ties always break to the lower index so the result never depends on the sort.",
+    "tags": [
+      "basics",
+      "path",
+      "groups",
+      "attributes"
+    ],
+    "seed": 1027,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pointGrid",
+      "pointsToPath",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "paths",
+        "node": "paths",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-point-grid.json",
     "path": "examples/graphs/basics-point-grid.json",
     "title": "place points on a regular grid",
@@ -361,6 +448,34 @@
       {
         "name": "points",
         "node": "grid",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-points-to-path.json",
+    "path": "examples/graphs/basics-points-to-path.json",
+    "title": "build a path from a point cloud",
+    "description": "`pointsToPath` is the only way a saved graph can produce polyline geometry: it lays one `polyline` primitive over the points it was given, so the points and every attribute on them survive untouched and only topology is added. Visiting order is the input's point order unless `orderAttr` names a sort key. `closed` appends a trailing vertex referencing the first point — closure is structural, not a flag, so a closed path over 12 points has 13 vertices and there is no duplicated seam point to trip over. `shape/path-loop` is exactly this pair of nodes under one name.",
+    "tags": [
+      "basics",
+      "path",
+      "topology",
+      "source"
+    ],
+    "seed": 1024,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "pointsToPath",
+      "subgraph"
+    ],
+    "primitives": [
+      "shape/ring"
+    ],
+    "outputs": [
+      {
+        "name": "path",
+        "node": "path",
         "pin": "out"
       }
     ]
@@ -416,6 +531,35 @@
         "name": "mesh",
         "node": "perFace",
         "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-props-along-a-path.json",
+    "path": "examples/graphs/basics-props-along-a-path.json",
+    "title": "space props evenly along a curve",
+    "description": "Two primitives cover the whole road-and-lamp-posts shape: `shape/path-meander` is a curve SOURCE — an open path that wanders off a straight line by noise and is re-evened by arc length, needing no cloud to start from — and `place/along-curve` resamples it and turns every new point to face the way the curve goes, so a `spacing` of 6 means a post every 6 world units however long the road turns out to be. The points `place/along-curve` emits are new ones carrying `P`, `tangent`, `curveU` and `rot`; when the curve's own points matter instead, `write/orient-along-path` orients them in place. Note what varies: the meander carries its noise seed inside a field spec, so `variant` is its only re-roll.",
+    "tags": [
+      "basics",
+      "primitives",
+      "path",
+      "placement"
+    ],
+    "seed": 1028,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "spawnInstances",
+      "subgraph"
+    ],
+    "primitives": [
+      "place/along-curve",
+      "shape/path-meander"
+    ],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
       }
     ]
   },

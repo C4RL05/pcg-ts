@@ -147,6 +147,21 @@ reproducing `fill/scatter-even` are ten nodes nobody tested, with defaults
 nobody tuned. Scan `docs/primitives.md` before wiring — that is what step 1
 is for.
 
+**Filtering a path, then wondering where it went.** A path is topology
+(`polyline` primitives over the points), not an attribute. Every filter node
+that can remove a point rebuilds the point domain from the survivors and drops
+that topology with it, and so do `mergePoints` and `partitionByAttribute`;
+only a node that clones preserves it. Nothing warns where the loss happens.
+What you get instead is a path consumer several nodes later
+reporting that it found no polylines — naming a node that is not the one at
+fault. **Filter first, build the path after.** The same ordering applies to
+every path op and to the `curve` pin of the path-consuming primitives; there
+is no in-place repair, so a path that must lose points is rebuilt with
+`pointsToPath`. The contract, including why closure is structural and how
+vertex order is decided, is in `docs/authoring.md` ("Paths"); which pins
+require polyline topology is stated per entry in `docs/nodes.md` and
+`docs/primitives.md`.
+
 **Assuming a graph is correct because it cooked.** A cook that errors on
 nothing is not evidence. A graph whose filter keeps zero points reports
 `points 0` and exits `0`. Correct means: the counts are in the range you

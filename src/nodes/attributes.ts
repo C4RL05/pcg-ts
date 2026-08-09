@@ -97,7 +97,7 @@ export const setAttribute = standardNode<SetAttributeParams>({
       type: "u32",
       default: 0,
       description:
-        "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but NOT noise: a noise field carries its own seed inside its spec, so valueNoise/perlin/simplex/worley/fbm are unaffected here and are varied through their own `opts.seed`, or by moving the positions they sample. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level.",
+        "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but NOT noise: a noise field carries its own seed inside its spec, so `valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise` and `fbm` are unaffected here and are varied through their own `opts.seed`, or by moving the positions they sample. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level.",
     },
   },
   // Numeric mode resolves `value` on the GPU when a cook carries a

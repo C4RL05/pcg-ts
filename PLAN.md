@@ -1182,6 +1182,9 @@ the plan left open is settled here.**
   message tells JSON authors to build polylines with `createPolyline`,
   a function a JSON author cannot call. This is the same shape as the
   mesh gap phase 37 closed, and the fifth sighting of the one gap.
+  Precisely: it is the only node that turns a point CLOUD into a path.
+  `pathResample` also writes polyline topology, but only onto a path it
+  was handed — it can continue a path and never start one.
 - **Representation: reuse, do not extend.** A path is what
   `createPolyline` already emits, and closure stays STRUCTURAL — a
   trailing vertex referencing point 0, which is what `splineSample`
@@ -1232,10 +1235,17 @@ the plan left open is settled here.**
   point clouds, so an agent chaining ring → `splineSample` by tag hits a
   hard error. Both are promises to an agent that the code does not keep.
 - **Topology is fragile and the node descriptions must say so.** Every
-  filter routes through `gatherPoints`, which drops topology, as does
-  `mergePoints`; only `cloneGeometry` preserves it. Every path op must
-  clone, and a path flowing through a filter stops being a path — an
-  agent will hit this on its first graph if nothing warns it.
+  path op must clone, and a path flowing through a filter stops being a
+  path — an agent will hit this on its first graph if nothing warns it.
+  - *Correction, verified against source during the docs pass: the rule
+    is NOT "every filter drops topology", which is how the survey put it
+    and how this plan first recorded it. It is every op that REMOVES
+    POINTS, because those route through `gatherPoints`. `projectToPlane`
+    is categorised `filter` and preserves topology (it clones); and
+    `partitionByAttribute` is categorised `attribute` and DROPS it. So
+    the category is not the predicate — removing points is. Stated the
+    wrong way, an agent trusts `partitionByAttribute` and distrusts
+    `projectToPlane`, both backwards.*
 - Exit: nodes tested and the reference regenerated; `splineSample`
   goldens unmoved across the helper extraction; path primitives
   catalogued and cooking FROM JSON with no `dataInput`; path corpus

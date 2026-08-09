@@ -620,7 +620,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
            alt="The spline-fence demo: the panel reports 60 fps, 57 posts, a fence length of 90.6 units and a 1.7 ms cook. The viewport shows a closed, irregular loop of wooden fence posts joined by two horizontal rails, standing on a faint dark blue grid plane. Every post's flat face is turned to follow the curve." />
       <figcaption><b>03 · spline fence</b> — 57 posts along 90.6 units of curve, each rotated so its local axis follows the tangent the sampler emitted.</figcaption>
     </figure>
-    <p>A Catmull-Rom curve enters through <code>fromCurve</code>; <code>splineSample</code> walks it by arc length at a chosen spacing and emits <code>tangent</code> and <code>curveU</code> per sample. <code>orientAlongVector</code> then turns that tangent attribute into the standard <code>rot</code> quaternion, with an up hint to fix roll. The whole "posts face along the fence" behaviour is one node reading one attribute — no per-instance matrix maths in application code, and zero directions simply keep their existing rotation instead of producing NaNs.</p>
+    <p>A Catmull-Rom curve enters through <code>fromCurve</code>; <code>splineSample</code> walks it by arc length at a chosen spacing and emits <code>tangent</code> and <code>curveU</code> per sample. <code>orientAlongVector</code> then turns that tangent attribute into the standard <code>rot</code> quaternion, with an up hint to fix roll. The whole "posts face along the fence" behaviour is one node reading one attribute — no per-instance matrix maths in application code, and zero directions simply keep their existing rotation instead of producing NaNs. <code>fromCurve</code> is the three.js route in; a saved graph with no application code behind it reaches for <code>pointsToPath</code> instead, which lays polyline topology over points a graph already made.</p>
     <p class="demo-links">
       <span class="chip">splineSample · orientAlongVector · spawnInstances · dataInput</span>
       <span class="chip">three: fromCurve · toInstancedMeshes</span>
@@ -811,10 +811,11 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
     <p>Error strings in this library are treated as part of the API surface: they name the offending node, pin or parameter, and they list the valid alternatives instead of leaving you to search for them. Reading the message is usually faster than reading the code. Chapter 11 shows the real strings and how a program should react to them; for a human the practical advice is shorter — the message names the thing, and the second half of the message is the fix.</p>
     <p>The typed classes let you distinguish causes when you need to: <code>GraphValidationError</code> (bad structure or unknown pins), <code>GraphCycleError</code>, <code>NodeExecutionError</code> (carries <code>.nodeId</code>), <code>CookCancelledError</code>, <code>GraphSerializationError</code>, <code>FieldJsonError</code>, and <code>WorldValidationError</code>.</p>
 
-    <h3>Four contracts whose violations are invisible</h3>
-    <p>Most confusing behaviour in practice comes from one of four mutation contracts, each of which fails quietly rather than loudly:</p>
+    <h3>Five contracts whose violations are invisible</h3>
+    <p>Most confusing behaviour in practice comes from one of five contracts, each of which fails quietly rather than loudly:</p>
     <ul>
       <li><strong>Cook results are immutable.</strong> They alias live cache internals. Mutating one corrupts the cache with no error — clone first with <code>cloneGeometry</code>.</li>
+      <li><strong>Removing points destroys topology.</strong> Every filter that can drop a point rebuilds the point domain from the survivors and loses primitive topology with it, as do <code>mergePoints</code> and <code>partitionByAttribute</code>; only a node that clones preserves it. So a path that passes through one stops being a path — silently, where it happens, surfacing much later as a path consumer reporting that it found no polylines. Build the path after the last filter, not before it.</li>
       <li><strong>Bound arrays are frozen by convention.</strong> An array bound into a parameter is captured by reference. Mutate it in place and stored cell outputs change with no staleness signal. Bind a fresh array.</li>
       <li><strong>Columns are transient.</strong> An evaluated column may alias attribute storage and is only valid until the geometry is mutated or resized.</li>
       <li><strong>Do not edit a graph mid-cook.</strong> Edits during an in-flight <code>cook</code> or <code>World.update</code> are detected and heal on the next pass — but that pass may return a torn mix of old and new state.</li>
@@ -909,7 +910,7 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
  <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>docs/nodes.json as an offline catalog</h3>
-    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 32 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
+    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 35 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
     <div class="note">
       <span class="tag">Discovery checklist</span>
       <p>Before emitting a graph: confirm the type exists (<code>hasNodeType</code>), confirm each parameter name is in <code>params</code>, confirm enum values against <code>enum</code> and numbers against <code>min</code>/<code>max</code>, confirm a field spec is only used where <code>acceptsField</code> is true, and confirm pin names against <code>inputs</code>/<code>outputs</code>. Every one of those checks the deserializer will also make — but making them first turns a thrown error into a corrected emission.</p>
@@ -1014,7 +1015,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
     <table>
       <thead><tr><th>Args</th><th>Functions</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td>2</td><td><code>add sub mul div min max lt le gt ge eq dot atan2</code></td><td>Comparisons emit 1 or 0. <code>dot</code> reduces tuples to a scalar. <code>atan2</code> takes <code>[y, x]</code>, radians.</td></tr>
+        <tr><td>2</td><td><code>add sub mul div min max lt le gt ge eq ne dot atan2</code></td><td>Comparisons emit 1 or 0, and <code>ne</code> is the exact complement of <code>eq</code>. <code>dot</code> reduces tuples to a scalar. <code>atan2</code> takes <code>[y, x]</code>, radians.</td></tr>
         <tr><td>1</td><td><code>abs floor length normalize sin cos tan asin acos atan</code></td><td>Trigonometry in radians, elementwise.</td></tr>
         <tr><td>3</td><td><code>clamp</code> (x, lo, hi) · <code>lerp</code> (a, b, t) · <code>select</code> (cond, a, b)</td><td></td></tr>
         <tr><td>5</td><td><code>remap</code> (x, inMin, inMax, outMin, outMax)</td><td>Unclamped — wrap in <code>clamp</code> if you need the bound.</td></tr>
@@ -1290,8 +1291,8 @@ g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep"
   deserializeGraph, serializeGraph, cook, firstGeometry, fieldFromJson,
 } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
-<span class="k">const</span> types = <span class="n">listNodeTypes</span>();               <span class="c">// 32 entries, each fully self-describing</span>
-<span class="k">const</span> fns = <span class="n">listFieldFns</span>();                 <span class="c">// 40 field fns — the closed vocabulary</span>
+<span class="k">const</span> types = <span class="n">listNodeTypes</span>();               <span class="c">// 35 entries, each fully self-describing</span>
+<span class="k">const</span> fns = <span class="n">listFieldFns</span>();                 <span class="c">// 41 field fns — the closed vocabulary</span>
 
 <span class="c">// Plan against the schemas rather than against memory.</span>
 <span class="k">const</span> scatterSchema = types.<span class="n">find</span>(t => t.type === <span class="s">"pointScatterInBounds"</span>).params;
