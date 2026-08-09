@@ -42,15 +42,24 @@ jobs:
 
       - run: npm ci
 
-      # Order matters: typecheck first, because vitest does NOT typecheck
-      # and this project has had green test runs hiding type errors.
+      # BUILD FIRST. Not the obvious order, and the first CI run proved
+      # why: examples/** import the library by package NAME ("pcg-ts",
+      # "pcg-ts/three", "pcg-ts/gpu"), which resolves through the
+      # package.json exports map into dist/. A clean checkout has no
+      # dist/, so `tsc --noEmit` cannot resolve them and reports 79
+      # errors that never appear on a developer machine, where dist/ is
+      # always lying around from the last build. Reproduce it locally by
+      # moving dist/ aside before running the typecheck.
+      #
+      # The build is also the docs generators' input — scripts/gen-*.mjs
+      # read dist/ — so it has to precede that step regardless.
+      - run: npm run build
+
+      # Typecheck before the tests: vitest does NOT typecheck, and this
+      # project has had green test runs hiding type errors.
       - run: npm run check
 
       - run: npm test
-
-      # The build is also the docs generator's input — scripts/gen-*.mjs
-      # read dist/, so a broken build silently produces a stale reference.
-      - run: npm run build
 
       # The generated docs, the example corpus and status.html are all
       # committed artifacts. Regenerating them must be a no-op on a clean
