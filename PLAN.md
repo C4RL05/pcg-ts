@@ -1080,6 +1080,14 @@ recorded with its reason rather than silently rewritten.
   (`partitionByAttribute`) emits a collection, and the exposed-pin model
   has no collection-shaped output. Settle what it filters before
   building it; a node no primitive can reach is not vocabulary.
+  - *Correction, re-survey 2026-08-09: the DEFERRAL stands but the
+    reason above is wrong, and would send whoever picks this up next
+    hunting a mechanism that already exists. Pins ARE collection-shaped
+    (`DataCollection = DataItem[]`, and subgraphs forward the whole
+    array). The real blocker is that `requireGeometry` takes item[0] and
+    discards the rest, so the collection never survives into a node.
+    `filterGroup` itself is ~30 lines on top of `filterByTag`; it stays
+    inventory until for-each semantics exist, not until pins change.*
 - The first ~30 primitives across shape / fill / transform / compose /
   filter / place / write, built on the node set above; all catalogued.
   Names are `<family>/<kebab-case>`: node types are camelCase with no
@@ -1160,14 +1168,78 @@ Planned from the same research pass; re-survey at cycle start per the
 usual protocol before treating the phase split as fixed.
 
 ### Phase 39 — Path authoring, vocabulary v2
-- Node-level path authoring over the existing polyline structure:
-  `pointsToPath` (the unblocking node — nothing else in the curve
-  family can exist until a path can be *made* in-graph),
-  `writeTangents`, `pathResample` (reusing `splineSample`'s arc-length
-  table), `pathSmooth`, `pathFuseCollinear`.
-- Trace/subdivide-verb primitives; path basics examples.
-- Exit: nodes tested and the reference regenerated; path primitives
-  catalogued; path corpus green. Commit.
+**Re-surveyed at cycle start 2026-08-09 as the note above requires. The
+split below REPLACES the planned one: two of the five planned nodes are
+cut, two backlog items are folded in, and the representation question
+the plan left open is settled here.**
+
+- `pointsToPath` — the unblocking node, and the reason the phase exists.
+  Confirmed from two independent directions: the library has a polyline
+  CONSUMER (`splineSample`), a polyline TYPE (`primtype`), a `pcg
+  render` branch and a `pcg inspect` branch — and ZERO in-graph
+  producers. All nine `splineSample` call sites are TypeScript or
+  `dataInput`; not one cooks from serialized JSON, and its own error
+  message tells JSON authors to build polylines with `createPolyline`,
+  a function a JSON author cannot call. This is the same shape as the
+  mesh gap phase 37 closed, and the fifth sighting of the one gap.
+- **Representation: reuse, do not extend.** A path is what
+  `createPolyline` already emits, and closure stays STRUCTURAL — a
+  trailing vertex referencing point 0, which is what `splineSample`
+  already detects. An explicit `closed` primitive attribute was
+  considered and REJECTED: nothing would read it, so it is a debris
+  column that can disagree with the structure that is actually
+  authoritative — precisely the failure `removeAttribute` was added to
+  clean up. A new `PrimType` was also rejected: it forces edits at four
+  consumers and collides with phase 41, the scheduled data-model
+  expansion. Build through a `src/data` factory the way `meshPrimitive`
+  does; a node never touches `setTopology` itself.
+- `pathResample`, which REQUIRES extracting `splineSample`'s arc-length
+  table (today a local `cum[]`/`segDir[]` concatenated across every
+  polyline at once) into a shared helper, then re-expressing
+  `splineSample` on it. `splineSample`'s existing goldens must not
+  move — that is the proof the extraction was behavior-preserving, the
+  standard `selfPrune`'s goldens set in phase 37.
+- `writeTangents` ONLY IF a path primitive consumes it. `splineSample`
+  already emits `tangent` and `orientAlongVector` already reads it, so
+  the node exists to serve paths that were not spline-sampled. It ships
+  with its caller or it does not ship.
+- **`pathSmooth` and `pathFuseCollinear` are CUT.** The re-survey found
+  zero references to either outside this plan — no caller, no
+  primitive, no example, no demo. That is the same bar that deferred
+  `filterGroup`: a node no primitive can reach is not vocabulary. The
+  plan does not get an exemption from its own rule.
+- **Folded in from the node-capability backlog** (kept with the research
+  notes), both path-adjacent, both fixing something already shipped
+  rather than adding a wish:
+  - `pointLine` gains an exclusive-end mode. `shape/ring` currently
+    carries an entire extra `filterByExpression` node to drop the
+    duplicate seam point, which makes its `count` mean "count − 1".
+    Note the primitive needs BOTH modes and an exposed param cannot
+    derive one from the other (no arithmetic in fan-out), so the
+    rewiring is a real edit, not a flag flip.
+  - The missing `ne` field function is added. `filterByExpression`'s own
+    description advertises `ne` to agents and no such function exists —
+    error messages and descriptions are the agent API, so this is a bug
+    against a shipped surface, not a feature request.
+- Trace/subdivide-verb primitives — the first curve family, since 0 of
+  the 29 shipped primitives touch a polyline — and path basics
+  examples. The corpus has no path example and its golden harness
+  already pins per-domain counts, so it needs only a source.
+- **Drift to fix in-phase, both found by the re-survey:** llms.txt
+  claims `meshPrimitive` feeds "splineSample's mesh-side neighbours",
+  but it emits `poly` and `splineSample` skips non-`polyline` prims;
+  and `shape/ring`/`shape/spiral` are tagged `curve` while emitting
+  point clouds, so an agent chaining ring → `splineSample` by tag hits a
+  hard error. Both are promises to an agent that the code does not keep.
+- **Topology is fragile and the node descriptions must say so.** Every
+  filter routes through `gatherPoints`, which drops topology, as does
+  `mergePoints`; only `cloneGeometry` preserves it. Every path op must
+  clone, and a path flowing through a filter stops being a path — an
+  agent will hit this on its first graph if nothing warns it.
+- Exit: nodes tested and the reference regenerated; `splineSample`
+  goldens unmoved across the helper extraction; path primitives
+  catalogued and cooking FROM JSON with no `dataInput`; path corpus
+  green including double-cook determinism. Commit.
 
 ### Phase 40 — Staged pipeline, skills v2, docs, v0.11.0
 - One staged pipeline in the corpus (settlement-scale: boundary →
@@ -1175,6 +1247,28 @@ usual protocol before treating the phase split as fixed.
   previous; base + edits variants.
 - `performance-and-budgets` skill (SoA rules, partitioned cooking,
   reading cook stats). Docs; version 0.11.0, tag, GitHub release.
+- **Backlog candidates, re-validated 2026-08-09** and carried here
+  rather than into 39, which is already full:
+  - A per-point miss flag on `transferAttribute` — the best cost/payoff
+    in the backlog. The per-point `hit` array ALREADY exists inside
+    `transferMapping`; only a detail-domain total is exposed. Today
+    `place/drop-to-surface` casts a second ray and stamps a marker
+    purely to recover what the first ray knew: five nodes where three
+    would do. It is also where phase 37's mutation testing found a real
+    bug, so deleting the workaround deletes the bug's surface.
+  - A `fraction`/element-count field input. Both runtimes already have
+    the number (CPU `elementCount`, and the GPU kernel already carries
+    `params.count` as a uniform). The cost is not the arithmetic: every
+    grammar function is a fixed five-site change including a WGSL
+    handler, because the GPU corpus test pins the corpus to
+    `listFieldFns()` and requires every entry to compile. No CPU-only
+    escape hatch exists, by design.
+  - A field-capable `setBounds` is DROPPED, not deferred: the backlog
+    claim was overstated. `setAttribute` is already field-capable and
+    writes any name at tuple 3, so per-point bounds are already
+    expressible; and the examples cited as "restating constants" restate
+    an aggregate bounding SPHERE for culling, which per-point bounds
+    would not remove. Recorded so it is not re-derived later.
 - Exit: every pipeline step cooks in CI; docs idempotent; release
   tagged. Commit.
 
