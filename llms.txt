@@ -376,7 +376,11 @@ in an order.
   rebuilds the point domain from the survivors and drops topology with
   it; `mergePoints` and `partitionByAttribute` drop it too. Only nodes
   that clone (`cloneGeometry`) preserve it — among the filters that is
-  `projectToPlane`, which moves points without removing any. Nothing
+  `projectToPlane`, which moves points without removing any. It is CAN
+  remove, not did: `filterByAttribute` drops topology even when its
+  predicate keeps every point. And the node's category decides nothing —
+  `projectToPlane` is categorised `filter` and preserves,
+  `partitionByAttribute` is categorised `attribute` and drops. Nothing
   warns at the point of loss — it is silent there, and surfaces later as
   a path consumer reporting that it found no polylines. So: filter
   FIRST, then `pointsToPath`, and put
@@ -1066,7 +1070,7 @@ listing goes stale and a stale skill is worse than none.
 
 ## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
 
-23 single-concept graphs at `examples/graphs/basics-*.json`, each named
+28 single-concept graphs at `examples/graphs/basics-*.json`, each named
 by what it teaches and carrying its own `meta` block. Every one cooks
 from JSON alone — no `dataInput`, whose items never survive
 serialization — so any of them can be copied, run and modified with

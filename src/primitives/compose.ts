@@ -97,7 +97,7 @@ export function registerComposePrimitives(): void {
         name: "jitter",
         targets: [{ node: "jit", param: "amount" }],
         description:
-          "Maximum random offset per axis, in world units — what makes copied clusters look placed rather than stamped. Set it to [0,0,0] for exact copies.",
+          "Random offset per axis, in world units, uniform and SYMMETRIC: each copy moves somewhere in -jitter..+jitter on each axis independently, so the spread is 2 * jitter wide, not jitter, and the measured extremes sit on the bound exactly. What makes copied clusters look placed rather than stamped. The default [0.5,0,0.5] jitters in the ground plane only — the zero on Y is what keeps copies from sinking through a surface. Set it to [0,0,0] for exact copies.",
         acceptsField: true,
       },
       {

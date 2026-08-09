@@ -237,8 +237,12 @@ export function polylineArcTables(geo: Geometry, nodeType: string): PolylineArcT
     });
   }
   if (tables.length === 0) {
+    const what =
+      geo.primitiveCount === 0
+        ? `the input is a plain point cloud (${geo.pointCount} points, 0 primitives)`
+        : `the input has ${geo.primitiveCount} primitives but no usable polyline among them (a polyline needs primtype "polyline" and at least 2 vertices)`;
     throw new Error(
-      `${nodeType}: input has no polyline primitives (build one in-graph with pointsToPath, or in TypeScript with createPolyline; note that every filter node and mergePoints drop topology, so a path must reach this node without passing through one)`,
+      `${nodeType}: input has no polyline primitives — ${what}. Build a path in-graph with pointsToPath (or createPolyline in TypeScript). If one WAS built upstream, a node between it and ${nodeType} dropped the topology: any node that can REMOVE points rebuilds the point domain from the survivors and the primitives go with it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and mergePoints does the same when it concatenates clouds. Category is not the rule: projectToPlane is categorised "filter" but preserves topology, and filterByAttribute drops it even when its predicate keeps every point. Fix by moving pointsToPath after those nodes, so the path is built over the points that survive.`,
     );
   }
   return tables;

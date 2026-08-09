@@ -26,7 +26,7 @@ export function registerWritePrimitives(): void {
   definePrimitive("write/height-slope", {
     title: "Stamp height and slope from a surface normal",
     description:
-      "Writes the two standard terrain quantities onto points that already carry a surface normal: `height` (f32) is the world Y of each point, and `slope` (f32) is 1 - normal.y, so 0 is dead flat and 1 is a vertical wall. Downstream filters can then test ground suitability without re-deriving either. PRECONDITION: the input must carry a `normal` point attribute (f32, tuple 3) — `surfaceSample` writes one, and `place/align-to-surface` transfers one from a mesh; without it the cook fails naming the missing attribute. Fully deterministic: two instances of this primitive produce identical output.",
+      "Writes the two standard terrain quantities onto points that already carry a surface normal: `height` (f32) is the world Y of each point, and `slope` (f32) is 1 - normal.y, so 0 is dead flat and 1 is a vertical wall. That scale is 1 - cos(angle) and so is NOT linear in degrees — it is compressed at the flat end, where 30 degrees is only 0.134 and 45 is 0.293, and half the scale (0.5) is already 60 degrees. Downstream filters can then test ground suitability without re-deriving either. PRECONDITION: the input must carry a `normal` point attribute (f32, tuple 3) — `surfaceSample` writes one, and `place/align-to-surface` transfers one from a mesh; without it the cook fails naming the missing attribute. Fully deterministic: two instances of this primitive produce identical output.",
     tags: ["terrain", "attributes"],
     nodes: [
       {
@@ -108,7 +108,7 @@ export function registerWritePrimitives(): void {
   definePrimitive("write/random-scale", {
     title: "Write one uniform random size per point",
     description:
-      "Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per point between min and max, the same value on all three axes. The uniformity is the content: a hand-written version reaches for a separate random per axis and gets an asset stretched differently in x, y and z, which reads as a modelling error rather than as variety. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically, and `seed` re-rolls one of them explicitly. Writes `scale`; reads nothing.",
+      "Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per point, drawn uniformly between min and max — both ends reachable — and written the same on all three axes. It REPLACES `scale` rather than multiplying it, so anything an earlier node wrote there is discarded and two of these in a chain do not compound. The uniformity is the content: a hand-written version reaches for a separate random per axis and gets an asset stretched differently in x, y and z, which reads as a modelling error rather than as variety. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically, and `seed` re-rolls one of them explicitly. Writes `scale`; reads nothing.",
     tags: ["scatter", "instancing"],
     nodes: [
       {
@@ -203,7 +203,7 @@ export function registerWritePrimitives(): void {
   definePrimitive("write/orient-along-path", {
     title: "Turn a path's own points to follow the path",
     description:
-      "Writes a unit `tangent` along the polyline at every point of a path, then sets `rot` so each point faces that way — the points, their attributes and the topology all arrive and leave untouched. That is the whole difference from `place/along-curve`, which resamples: use this one when the points already mean something (a species, a scale, a colour, a point index other geometry refers to) and must survive being oriented. It is also the only way to orient the points of a path that was hand-built with `pointsToPath`, since a tangent otherwise exists only on points a sampler created. The tangent is the normalized central difference between each point's neighbours along the path, so it stays smooth through corners, and it wraps on a closed path. PRECONDITION: the input must carry polyline topology; a point on no polyline gets a zero tangent and deliberately keeps the `rot` it had. Run it BEFORE any filter — every filter node and `mergePoints` drop topology, and this node would then find no paths. Fully deterministic. Writes `tangent` and `rot`; `P` and the count are untouched.",
+      "Writes a unit `tangent` along the polyline at every point of a path, then sets `rot` so each point faces that way — the points, their attributes and the topology all arrive and leave untouched. That is the whole difference from `place/along-curve`, which resamples: use this one when the points already mean something (a species, a scale, a colour, a point index other geometry refers to) and must survive being oriented. It is also the only way to orient the points of a path that was hand-built with `pointsToPath`, since a tangent otherwise exists only on points a sampler created. The tangent is the normalized central difference between each point's neighbours along the path, so it stays smooth through corners, and it wraps on a closed path. PRECONDITION: the input must carry polyline topology; a point on no polyline gets a zero tangent and deliberately keeps the `rot` it had. Run it BEFORE anything that can REMOVE points — the `filter/*` family, `partitionByAttribute` and `mergePoints` all drop topology, and this node would then find no paths. Category is not the predicate: `filterByAttribute` drops it even when its predicate keeps every point, while `projectToPlane` is a `filter` that preserves it by cloning. Fully deterministic. Writes `tangent` and `rot`; `P` and the count are untouched.",
     tags: ["curve", "path", "instancing"],
     nodes: [
       { id: "tangents", type: "writeTangents", params: { name: "tangent" } },
@@ -350,7 +350,8 @@ export function registerWritePrimitives(): void {
       {
         name: "radius",
         targets: [{ node: "nbr", param: "radius" }],
-        description: "How far around each point counts as its neighbourhood, in world units.",
+        description:
+          "How far around each point counts as its neighbourhood, in world units. It changes the ORDERING of the densities, never their range: the counts are refitted to 0..1 over whatever spread they happen to have, so the emptiest point is always exactly 0 and the fullest always exactly 1 at every radius, and even a perfectly uniform scatter comes out spanning the full 0..1 (measured mean 0.56). Two consequences an agent has to plan around: the values are NOT comparable between two clouds, two radii or two cooks with different counts, and a threshold like 0.8 means 'the top of THIS cloud' rather than any absolute crowding. For an absolute measure, read the raw neighbour count with a `pointNeighborhood` node instead.",
         min: 0,
       },
     ],

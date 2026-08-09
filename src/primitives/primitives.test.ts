@@ -1200,3 +1200,588 @@ describe("the curve set", () => {
     expect(coarse.pointCount).toBeLessThan(near.pointCount);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The numbers the catalog quotes
+// ---------------------------------------------------------------------------
+
+/**
+ * Descriptions are the agent API, so every magnitude a param description
+ * PROMISES is asserted here rather than left to drift. A documented number
+ * with no test is the next thing to go stale, and the failure mode is
+ * silent: the recipe still cooks, the catalog still reads well, and an
+ * agent plans against a figure that stopped being true.
+ *
+ * The recurring theme is the catalog's shared noise convention. Four
+ * octaves of Perlin fBm are normalized against their THEORETICAL sum
+ * range, and the realized values only cover the middle ~0.42 of it —
+ * measured 0.29..0.71 on a wide 2D spread, widening toward 0.26..0.76 with
+ * far more samples. Everything built on `amp * remap(fbm01, 0,1,-1,1)`
+ * therefore delivers about 0.41 of its nominal amplitude, and every 0..1
+ * threshold over the same field has all of its travel between about 0.32
+ * and 0.68. That is a convention, not a bug in any one recipe, and the job
+ * of these tests is to hold the STATED figures to the measured ones.
+ */
+
+/** A driver graph with explicit per-pin feeds, for laws the fixtures cannot reach. */
+function lawGraph(
+  name: string,
+  params: Record<string, unknown>,
+  feeds: Record<string, (id: string) => Source> = {},
+): SerializedGraph {
+  const entry = getRegisteredSubgraph(name);
+  const nodes: SerializedNode[] = [];
+  const connections: SerializedConnection[] = [];
+  const outputs: { id: string; pin: string; name: string }[] = [];
+  for (const pin of entry.subgraph.inputs) {
+    const make = feeds[pin.name];
+    // A pin with no feed is left unconnected on purpose: it is how
+    // `fill/volume-by-noise` is measured against its own bounds params.
+    if (make === undefined) continue;
+    const source = make(`src_${pin.name}`);
+    nodes.push(...source.nodes);
+    connections.push(...(source.connections ?? []));
+    connections.push({ from: source.out, to: ["main", pin.name] });
+  }
+  nodes.push({ id: "main", type: "subgraph", params, ref: { name } });
+  for (const pin of entry.subgraph.outputs) {
+    outputs.push({ id: "main", pin: pin.name, name: `main_${pin.name}` });
+  }
+  return { formatVersion: 1, seed: 2026, nodes, connections, outputs };
+}
+
+async function cookLaw(
+  name: string,
+  params: Record<string, unknown>,
+  feeds: Record<string, (id: string) => Source> = {},
+) {
+  return geo(await cookGraph(lawGraph(name, params, feeds)));
+}
+
+/** A scatter of any size over any box — the sample the noise laws need. */
+function box(count: number, lo: readonly number[], hi: readonly number[], seed = 7) {
+  return (id: string): Source => ({
+    nodes: [
+      { id, type: "pointScatterInBounds", params: { count, boundsMin: [...lo], boundsMax: [...hi], seed } },
+    ],
+    out: [id, "out"],
+  });
+}
+
+/** Points carrying a normal tilted `deg` degrees off vertical. */
+function tiltedNormal(deg: number) {
+  const r = (deg * Math.PI) / 180;
+  return (id: string): Source => ({
+    nodes: [
+      { id: `${id}_p`, type: "pointLine", params: { count: 4, start: [0, 3, 0], end: [1, 3, 0], includeEnd: true } },
+      {
+        id,
+        type: "setAttribute",
+        params: {
+          name: "normal",
+          domain: "point",
+          type: "f32",
+          tupleSize: 3,
+          value: { fn: "constant", value: [Math.sin(r), Math.cos(r), 0] },
+        },
+      },
+    ],
+    connections: [{ from: [`${id}_p`, "out"], to: [id, "in"] }],
+    out: [id, "out"],
+  });
+}
+
+/** Every value of one attribute component, in point order. */
+function column(g: ReturnType<typeof geo>, name: string, comp = 0): number[] {
+  const a = g.attrs.point.require(name);
+  const out: number[] = [];
+  for (let i = 0; i < g.pointCount; i++) out.push(a.get(i, comp));
+  return out;
+}
+
+/** The wide 2D spread the noise laws are quoted against. */
+const SPREAD = box(20000, [-300, 0, -300], [300, 0, 300]);
+
+describe("the magnitudes the descriptions promise", () => {
+  it("displace-by-noise reaches ~0.41 of `amount`, not `amount`", async () => {
+    // The description's central claim, and the reason it no longer says
+    // "points move between -amount and +amount": the knob scales a term
+    // whose NOMINAL range is +/-1, and normalized fBm only covers the
+    // middle of it.
+    const peak = async (params: Record<string, unknown>, cloud = SPREAD) => {
+      const ys = column(await cookLaw("transform/displace-by-noise", params, { in: cloud }), "P", 1);
+      const amount = (params.amount as number | undefined) ?? 4;
+      return {
+        peak: Math.max(...ys.map(Math.abs)) / amount,
+        mean: ys.reduce((a, b) => a + b, 0) / ys.length / amount,
+      };
+    };
+    const base = await peak({ amount: 4 });
+    expect(base.peak).toBeCloseTo(0.4224, 3);
+    // Exactly linear in `amount`: the quoted 0.41 is predictive only
+    // because a doubled knob doubles every displacement.
+    expect((await peak({ amount: 1 })).peak).toBeCloseTo(base.peak, 6);
+    expect((await peak({ amount: 40 })).peak).toBeCloseTo(base.peak, 6);
+    // "the average height does not move", within 1% of `amount`.
+    expect(Math.abs(base.mean)).toBeLessThan(0.01);
+    // The band the description puts on that 0.41 as `frequency` moves the
+    // sampled window: measured 0.425 at 0.01 and 0.487 at 1.
+    for (const frequency of [0.01, 0.05, 0.2, 1]) {
+      const p = (await peak({ amount: 4, frequency })).peak;
+      expect(p, `frequency ${frequency} left the documented band`).toBeGreaterThan(0.38);
+      expect(p, `frequency ${frequency} left the documented band`).toBeLessThan(0.49);
+    }
+    // ...and the inverse rule it gives: amount ~ 2.4 * h peaks at h.
+    const g = await cookLaw("transform/displace-by-noise", { amount: 2.4 * 10 }, { in: SPREAD });
+    expect(Math.max(...column(g, "P", 1).map(Math.abs))).toBeCloseTo(10, 0);
+
+    // The description's sharpest claim, and the one an agent is most
+    // likely to be burnt by: what sets the coverage is how much FIELD the
+    // cloud spans (extent x frequency), not how many points it holds. A
+    // 30-unit patch at the default frequency spans about one period and
+    // reaches 0.25 of `amount` at every count.
+    const patch = async (count: number) =>
+      (await peak({ amount: 4 }, box(count, [-15, 0, -15], [15, 0, 15]))).peak;
+    for (const count of [100, 1000, 20000]) {
+      const p = await patch(count);
+      expect(p, `${count} points on a 30-unit patch`).toBeGreaterThan(0.24);
+      expect(p, `${count} points on a 30-unit patch`).toBeLessThan(0.27);
+    }
+  });
+
+  it("mask-by-noise spends its whole travel between 0.32 and 0.68", async () => {
+    // The five figures the `threshold` description quotes, and the two
+    // dead zones that made the old "1 keeps nothing and 0 keeps
+    // everything" wording useless for planning.
+    const kept = async (threshold: number) =>
+      (await cookLaw("filter/mask-by-noise", { threshold }, { in: SPREAD })).pointCount / 20000;
+    for (const [threshold, fraction] of [
+      [0.42, 0.89],
+      [0.46, 0.75],
+      [0.5, 0.5],
+      [0.55, 0.23],
+      [0.59, 0.09],
+    ] as const) {
+      expect(await kept(threshold), `threshold ${threshold}`).toBeCloseTo(fraction, 1);
+    }
+    // The ends: everything below 0.32, nothing above 0.68 — so a
+    // threshold of 0.8 does NOT keep a fifth of the points.
+    expect(await kept(0.32)).toBeGreaterThan(0.99);
+    expect(await kept(0.2)).toBe(1);
+    expect(await kept(0.68)).toBeLessThan(0.01);
+    expect(await kept(0.8)).toBe(0);
+  });
+
+  it("volume-by-noise carves over the same narrow threshold band", async () => {
+    // Same field read in 3D, and the description's warning that the band's
+    // CENTRE moves: a 32-unit box at frequency 0.05 samples a small window
+    // of the field, so 0.5 keeps two thirds here rather than half.
+    const kept = async (threshold: number) => (await cookLaw("fill/volume-by-noise", { threshold })).pointCount;
+    const solid = await kept(0.3);
+    expect(solid).toBeGreaterThan(4000);
+    for (const [threshold, fraction] of [
+      [0.45, 0.85],
+      [0.5, 0.65],
+      [0.55, 0.41],
+      [0.6, 0.18],
+    ] as const) {
+      expect((await kept(threshold)) / solid, `threshold ${threshold}`).toBeCloseTo(fraction, 1);
+    }
+    expect(await kept(0.7)).toBe(0);
+  });
+
+  it("volume-by-noise costs 8x per halving only in three dimensions", async () => {
+    // floor(extent / cellSize) per axis, at least 1, multiplied — and the
+    // two quoted count series, which differ for exactly that reason.
+    // Bounds from the PARAMS divide evenly and give the clean powers.
+    const exact: number[] = [];
+    for (const cellSize of [8, 4, 2, 1]) {
+      exact.push(
+        (
+          await cookLaw("fill/volume-by-noise", {
+            cellSize,
+            threshold: 0,
+            boundsMin: [0, 0, 0],
+            boundsMax: [32, 32, 32],
+          })
+        ).pointCount,
+      );
+    }
+    expect(exact).toEqual([64, 512, 4096, 32768]);
+    // Bounds taken from a SCATTER land just under 32, so every axis loses
+    // its last whole cell and the counts drop a step: 3, 7, 15, 31 per axis.
+    const cube = { in: box(2000, [-16, -16, -16], [16, 16, 16]) };
+    const counts: number[] = [];
+    for (const cellSize of [8, 4, 2, 1]) {
+      counts.push((await cookLaw("fill/volume-by-noise", { cellSize, threshold: 0 }, cube)).pointCount);
+    }
+    expect(counts).toEqual([27, 343, 3375, 29791]);
+    // The ratio approaches 8 from above as the missing cell stops mattering.
+    expect((counts[3] as number) / (counts[2] as number)).toBeGreaterThan(8);
+    expect((counts[3] as number) / (counts[2] as number)).toBeLessThan(9);
+    // Over a FLAT region the same halving costs four times, not eight.
+    const flat = { in: box(2000, [-16, 0, -16], [16, 0, 16]) };
+    const coarse = (await cookLaw("fill/volume-by-noise", { cellSize: 2, threshold: 0 }, flat)).pointCount;
+    const fine = (await cookLaw("fill/volume-by-noise", { cellSize: 1, threshold: 0 }, flat)).pointCount;
+    expect(fine / coarse).toBeGreaterThan(3.8);
+    expect(fine / coarse).toBeLessThan(4.4);
+  });
+
+  it("volume-by-noise jitter never leaves its own cell, at any jitter", async () => {
+    // The primitive's structural promise, and the one an agent builds
+    // non-overlap on: at jitter 1 a point reaches the FACE of its cell and
+    // stops. What the "0.53 * cellSize" measurement really showed is that
+    // the cell is not always the `cellSize` asked for — the grid divides
+    // the extent into whole cells, so the cell is only `cellSize` when the
+    // extent is a multiple of it, and wider otherwise.
+    const measure = async (params: Record<string, unknown>, feeds: Record<string, (id: string) => Source>) => {
+      const lattice = await cookLaw("fill/volume-by-noise", { ...params, threshold: 0, jitter: 0 }, feeds);
+      const A = lattice.attrs.point.require("P");
+      // The cell the grid actually used, PER AXIS: the step between lattice
+      // nodes. The three differ whenever the bounds are not a cube.
+      const cell = [0, 1, 2].map((axis) => {
+        const vs = [...new Set(column(lattice, "P", axis))].sort((a, b) => a - b);
+        return (vs[1] as number) - (vs[0] as number);
+      });
+      const at = async (jitter: number) => {
+        const g = await cookLaw("fill/volume-by-noise", { ...params, threshold: 0, jitter }, feeds);
+        const B = g.attrs.point.require("P");
+        const worst = [0, 0, 0];
+        for (let i = 0; i < g.pointCount; i++) {
+          for (let c = 0; c < 3; c++) worst[c] = Math.max(worst[c] as number, Math.abs(B.get(i, c) - A.get(i, c)));
+        }
+        // Containment is per point and per axis, not just at the extreme:
+        // every point is still inside the cell it was generated in.
+        for (let c = 0; c < 3; c++) {
+          expect(worst[c] as number, `jitter ${jitter} left its cell on axis ${c}`).toBeLessThan(
+            (cell[c] as number) / 2,
+          );
+        }
+        return { worst, peak: Math.max(...worst) };
+      };
+      return { cell, count: lattice.pointCount, at };
+    };
+
+    // An extent that divides evenly: the cell IS `cellSize`, and jitter 1
+    // reaches half of the number typed, to within a rounding error.
+    const even = await measure({ cellSize: 2, boundsMin: [0, 0, 0], boundsMax: [32, 32, 32] }, {});
+    for (const c of even.cell) expect(c).toBeCloseTo(2, 5);
+    expect((await even.at(1)).peak).toBeCloseTo(1, 4);
+    expect((await even.at(0.5)).peak).toBeCloseTo(0.5, 4);
+
+    // Bounds from a scatter: the extent falls just short of 32, 15 whole
+    // cells of 2.13 fit, and half of THAT is the 1.066 measured before —
+    // 0.53 of `cellSize`, but still exactly half a cell.
+    const cube = { in: box(2000, [-16, -16, -16], [16, 16, 16]) };
+    const odd = await measure({ cellSize: 2 }, cube);
+    for (const c of odd.cell) expect(c).toBeGreaterThan(2);
+    const hard = await odd.at(1);
+    expect(hard.peak).toBeCloseTo(1.066, 2);
+    expect(hard.peak).toBeGreaterThan(1); // past half of `cellSize`...
+    // ...never past half a cell, on any axis.
+    for (let c = 0; c < 3; c++) {
+      expect((hard.worst[c] as number) / (odd.cell[c] as number)).toBeCloseTo(0.5, 3);
+    }
+    // Linear in jitter.
+    expect((await odd.at(0.5)).peak / hard.peak).toBeCloseTo(0.5, 6);
+
+    // And the consequence the guarantee exists for: disjoint cells mean
+    // neighbours along an axis keep their order and stay at least
+    // (1 - jitter) * cell apart, however hard the grid is jittered.
+    const lattice = await cookLaw(
+      "fill/volume-by-noise",
+      { cellSize: 4, threshold: 0, jitter: 0, boundsMin: [0, 0, 0], boundsMax: [32, 32, 32] },
+      {},
+    );
+    const rows = new Map<string, number[]>();
+    const L = lattice.attrs.point.require("P");
+    for (let i = 0; i < lattice.pointCount; i++) {
+      const key = `${L.get(i, 1)},${L.get(i, 2)}`;
+      const row = rows.get(key) ?? [];
+      row.push(i);
+      rows.set(key, row);
+    }
+    for (const jitter of [0.5, 1]) {
+      const g = await cookLaw(
+        "fill/volume-by-noise",
+        { cellSize: 4, threshold: 0, jitter, boundsMin: [0, 0, 0], boundsMax: [32, 32, 32] },
+        {},
+      );
+      const J = g.attrs.point.require("P");
+      let closest = Infinity;
+      for (const row of rows.values()) {
+        const sorted = [...row].sort((a, b) => L.get(a, 0) - L.get(b, 0));
+        for (let k = 1; k < sorted.length; k++) {
+          closest = Math.min(closest, J.get(sorted[k] as number, 0) - J.get(sorted[k - 1] as number, 0));
+        }
+      }
+      expect(closest, `jitter ${jitter} let two neighbours cross`).toBeGreaterThan(0);
+      expect(closest, `jitter ${jitter} broke the (1 - jitter) * cell floor`).toBeGreaterThanOrEqual(
+        (1 - jitter) * 4 - 1e-4,
+      );
+    }
+  });
+
+  it("scatter-even approaches its packing ceiling from below", async () => {
+    // The `count` description's whole point: the survivor count keeps
+    // climbing long after over-scattering looks sufficient, so "however
+    // many fit" was never reached at the default.
+    const n = async (count: number) =>
+      (
+        await cookLaw("fill/scatter-even", {
+          count,
+          minDistance: 2,
+          boundsMin: [0, 0, 0],
+          boundsMax: [50, 0, 50],
+        })
+      ).pointCount;
+    const quoted = [373, 414, 435, 442];
+    expect([await n(4000), await n(16000), await n(64000), await n(200000)]).toEqual(quoted);
+    // The ceiling: ~0.7 * area / minDistance^2 = ~437 here, and the
+    // default `count` reaches 85% of it.
+    const ceiling = (0.7 * 50 * 50) / (2 * 2);
+    expect((quoted[3] as number) / ceiling).toBeGreaterThan(0.98);
+    expect((quoted[0] as number) / (quoted[3] as number)).toBeCloseTo(0.85, 1);
+    // ...and the inverse square in `minDistance`: four times the spacing
+    // squared leaves a quarter of the room.
+    const wide = await cookLaw("fill/scatter-even", {
+      count: 64000,
+      minDistance: 4,
+      boundsMin: [0, 0, 0],
+      boundsMax: [50, 0, 50],
+    });
+    expect((wide.pointCount * 16) / 2500).toBeGreaterThan(0.65);
+  });
+
+  it("scatter-clustered spreads a box on all three axes, `spread.y` included", async () => {
+    // The group is a BOX, and every component of `spread` is a live axis —
+    // the flatness an agent sees at the defaults is the default value
+    // [4, 0, 4], not the shape of the primitive.
+    // `perCluster` is what samples the group's shape — one local cloud is
+    // copied to every centre — so the reach is drawn from that many uniform
+    // values per axis, not from the output count.
+    const params = { clusters: 20, perCluster: 300, boundsMin: [0, 0, 0], boundsMax: [100, 0, 100] };
+    const centres = await cookLaw("fill/scatter-clustered", { ...params, spread: [0, 0, 0] });
+    const reach = async (spread: readonly number[], axis: number) => {
+      const g = await cookLaw("fill/scatter-clustered", { ...params, spread: [...spread] });
+      const A = centres.attrs.point.require("P");
+      const B = g.attrs.point.require("P");
+      let worst = 0;
+      for (let i = 0; i < g.pointCount; i++) worst = Math.max(worst, Math.abs(B.get(i, axis) - A.get(i, axis)));
+      return worst / (spread[axis] as number);
+    };
+    // Y answers exactly as X and Z do, and is exactly linear in the value.
+    expect(await reach([4, 40, 4], 1)).toBeGreaterThan(0.9);
+    expect(await reach([4, 40, 4], 1)).toBeLessThan(1);
+    expect(await reach([4, 40, 4], 1)).toBeCloseTo(await reach([4, 9, 4], 1), 6);
+    // ...and it moves Y ONLY: the same groups, given height.
+    const flat = await cookLaw("fill/scatter-clustered", { ...params, spread: [4, 0, 4] });
+    const tall = await cookLaw("fill/scatter-clustered", { ...params, spread: [4, 40, 4] });
+    expect(column(tall, "P", 0)).toEqual(column(flat, "P", 0));
+    expect(column(tall, "P", 2)).toEqual(column(flat, "P", 2));
+    expect(column(tall, "P", 1)).not.toEqual(column(flat, "P", 1));
+    // A zero Y is still the flat ground patch, on the nose — and that is
+    // what the shipped default gives, so a village stays on the ground.
+    for (const y of column(flat, "P", 1)) expect(y).toBe(0);
+    for (const y of column(await cookLaw("fill/scatter-clustered", {}), "P", 1)) expect(y).toBe(0);
+    // The reach is exactly linear in `spread`, measured against the same
+    // groups collapsed onto their centres.
+    // 0.96 rather than 1.00 is how close 600 uniform draws get to their own
+    // bound, not evidence of a different bound.
+    expect(await reach([4, 0, 4], 0)).toBeCloseTo(await reach([9, 0, 9], 0), 6);
+    expect(await reach([4, 0, 4], 0)).toBeGreaterThan(0.9);
+    expect(await reach([4, 0, 4], 0)).toBeLessThan(1);
+    // The overhang, asserted as INTENDED rather than tolerated:
+    // `boundsMin`/`boundsMax` bound the CENTRES, so the points leave the
+    // box by up to `spread` on every side and nothing clamps them — a
+    // group straddling the edge is a whole group, not a clipped one. The
+    // bound on the overhang is `spread` exactly, which is what makes
+    // insetting the bounds by `spread` a reliable way to contain the
+    // points when a caller needs that.
+    const overhang = { clusters: 200, perCluster: 20, boundsMin: [0, 0, 0], boundsMax: [100, 0, 100] };
+    const xs = column(await cookLaw("fill/scatter-clustered", { ...overhang, spread: [9, 9, 9] }), "P", 0);
+    expect(Math.min(...xs)).toBeLessThan(0);
+    expect(Math.max(...xs)).toBeGreaterThan(100);
+    expect(Math.min(...xs)).toBeGreaterThan(-9);
+    expect(Math.max(...xs)).toBeLessThan(109);
+    // ...and the same overhang on Y once the group has height, which is
+    // new ground: a volumetric group reaches below the centre plane too.
+    const ys = column(await cookLaw("fill/scatter-clustered", { ...overhang, spread: [9, 9, 9] }), "P", 1);
+    expect(Math.min(...ys)).toBeLessThan(0);
+    expect(Math.min(...ys)).toBeGreaterThan(-9);
+    expect(Math.max(...ys)).toBeGreaterThan(0);
+    expect(Math.max(...ys)).toBeLessThan(9);
+  });
+
+  it("the slope scale is 1 - cos(angle), so 0.3 is 45 degrees and not 27", async () => {
+    // `place/plantable`'s `maxSlope` is quoted in these anchors, and the
+    // compression at the flat end is the whole reason they are listed.
+    for (const [deg, slope] of [
+      [0, 0],
+      [10, 0.0152],
+      [20, 0.0603],
+      [30, 0.134],
+      [45, 0.2929],
+      [60, 0.5],
+      [75, 0.7412],
+      [90, 1],
+    ] as const) {
+      const g = await cookLaw("write/height-slope", {}, { in: tiltedNormal(deg) });
+      expect(g.attrs.point.require("slope").get(0, 0), `${deg} degrees`).toBeCloseTo(slope, 3);
+      expect(slope).toBeCloseTo(1 - Math.cos((deg * Math.PI) / 180), 3);
+    }
+    // The default `maxSlope` of 0.3 admits 45 degrees and rejects 60.
+    expect(1 - Math.cos(Math.PI / 4)).toBeLessThan(0.3);
+    expect(1 - Math.cos(Math.PI / 3)).toBeGreaterThan(0.3);
+  });
+
+  it("along-curve pitches every step but the last at `spacing`", async () => {
+    // The leftover step is the fact the one-line description hid: props are
+    // evenly pitched except at the far end of every path.
+    const gaps = async (params: Record<string, unknown>) => {
+      const g = await cookLaw("place/along-curve", params, { curve });
+      const P = g.attrs.point.require("P");
+      const out: number[] = [];
+      for (let i = 1; i < g.pointCount; i++) out.push(Math.round((P.get(i, 0) - P.get(i - 1, 0)) * 1e4) / 1e4);
+      return out;
+    };
+    // A 40-unit curve at spacing 7: five full steps and a short one.
+    expect(await gaps({ mode: "spacing", spacing: 7 })).toEqual([7, 7, 7, 7, 7, 5]);
+    expect(await gaps({ mode: "spacing", spacing: 12 })).toEqual([12, 12, 12, 4]);
+    // floor(length / spacing) + 2, or + 1 when it divides exactly.
+    for (const spacing of [3, 6, 7, 12]) {
+      const expected = Math.floor((2 * CURVE_HALF_LENGTH) / spacing) + 2;
+      expect((await gaps({ mode: "spacing", spacing })).length + 1, `spacing ${spacing}`).toBe(expected);
+    }
+    expect((await gaps({ mode: "spacing", spacing: 1 })).length + 1).toBe(41);
+    // 'count' mode is exact instead: length / (count - 1), both ends on.
+    for (const count of [5, 24]) {
+      for (const gap of await gaps({ mode: "count", count })) {
+        expect(gap).toBeCloseTo((2 * CURVE_HALF_LENGTH) / (count - 1), 3);
+      }
+    }
+  });
+
+  it("by-distance-to-curve loses band as `resolution` coarsens, never gains", async () => {
+    // The quoted loss table. Sampling a curve sparsely can only push points
+    // further from the nearest sample, so the band shrinks monotonically.
+    const feeds = { in: box(20000, [-25, 0, -25], [25, 0, 25]), curve };
+    const kept: number[] = [];
+    for (const resolution of [0.1, 1, 2, 5, 10, 20]) {
+      kept.push(
+        (await cookLaw("filter/by-distance-to-curve", { distance: 5, comparison: "le", resolution }, feeds))
+          .pointCount,
+      );
+    }
+    const exact = kept[0] as number;
+    for (let i = 1; i < kept.length; i++) expect(kept[i]).toBeLessThanOrEqual(kept[i - 1] as number);
+    // resolution = distance / 5 is within half a percent; = distance loses
+    // ~4%; = 2 * distance loses ~18%; = 4 * distance loses about half.
+    expect(1 - (kept[1] as number) / exact).toBeLessThan(0.005);
+    expect(1 - (kept[3] as number) / exact).toBeCloseTo(0.04, 2);
+    expect(1 - (kept[4] as number) / exact).toBeCloseTo(0.18, 1);
+    expect(1 - (kept[5] as number) / exact).toBeGreaterThan(0.4);
+  });
+
+  it("local-density always fills 0..1, whatever the radius", async () => {
+    // The trap the `radius` description now names: the fit is per-cook, so
+    // a density of 0.8 is never an absolute crowding.
+    for (const radius of [2, 5, 20]) {
+      const d = column(
+        await cookLaw("write/local-density", { radius }, { in: box(3000, [-40, 0, -40], [40, 0, 40]) }),
+        "density",
+      );
+      expect(Math.min(...d), `radius ${radius}`).toBe(0);
+      expect(Math.max(...d), `radius ${radius}`).toBe(1);
+    }
+  });
+
+  it("relax-spacing travel is exactly linear in `strength`", async () => {
+    const travel = async (strength: number, radius: number) => {
+      const at = async (s: number) =>
+        (
+          await cookLaw("transform/relax-spacing", { strength: s, radius }, { in: points })
+        ).attrs.point.require("P");
+      const A = await at(0);
+      const B = await at(strength);
+      let sum = 0;
+      for (let i = 0; i < FIXTURE_POINTS; i++) {
+        sum += Math.hypot(B.get(i, 0) - A.get(i, 0), B.get(i, 1) - A.get(i, 1), B.get(i, 2) - A.get(i, 2));
+      }
+      return sum / FIXTURE_POINTS;
+    };
+    // strength * (position - neighbourhood centroid): doubling the knob
+    // doubles the travel exactly, and `radius` sets the scale it is a
+    // fraction OF.
+    const half = await travel(0.5, 4);
+    expect(half).toBeCloseTo(0.42, 1);
+    expect(await travel(1, 4)).toBeCloseTo(2 * half, 6);
+    expect(await travel(0.5, 12)).toBeCloseTo(1.5, 1);
+  });
+
+  it("scatter-copies jitter is symmetric and reaches its bound exactly", async () => {
+    const feeds = { source: box(20, [-1, 0, -1], [1, 0, 1], 3), target: box(2000, [-50, 0, -50], [50, 0, 50]) };
+    const exact = await cookLaw("compose/scatter-copies", { jitter: [0, 0, 0] }, feeds);
+    const A = exact.attrs.point.require("P");
+    for (const j of [1, 6]) {
+      const g = await cookLaw("compose/scatter-copies", { jitter: [j, j, j] }, feeds);
+      const B = g.attrs.point.require("P");
+      let lo = 0;
+      let hi = 0;
+      for (let i = 0; i < g.pointCount; i++) {
+        for (const c of [0, 1, 2]) {
+          const d = B.get(i, c) - A.get(i, c);
+          lo = Math.min(lo, d);
+          hi = Math.max(hi, d);
+        }
+      }
+      // -jitter..+jitter on every axis: a spread of 2 * jitter, not jitter.
+      expect(lo / j, `jitter ${j}`).toBeCloseTo(-1, 3);
+      expect(hi / j, `jitter ${j}`).toBeCloseTo(1, 3);
+    }
+  });
+
+  it("random-scale replaces `scale` rather than multiplying it", async () => {
+    const preScaled = (id: string): Source => ({
+      nodes: [
+        ...box(200, [0, 0, 0], [10, 0, 10], 4)(`${id}_p`).nodes,
+        {
+          id,
+          type: "setAttribute",
+          params: {
+            name: "scale",
+            domain: "point",
+            type: "f32",
+            tupleSize: 3,
+            value: { fn: "constant", value: [3, 3, 3] },
+          },
+        },
+      ],
+      connections: [{ from: [`${id}_p`, "out"], to: [id, "in"] }],
+      out: [id, "out"],
+    });
+    const s = column(await cookLaw("write/random-scale", { min: 0.7, max: 1.4 }, { in: preScaled }), "scale");
+    // An incoming scale of 3 leaves no trace: the range is min..max, and
+    // both ends are reached rather than merely approached.
+    expect(Math.min(...s)).toBeGreaterThanOrEqual(0.7);
+    expect(Math.min(...s)).toBeLessThan(0.71);
+    expect(Math.max(...s)).toBeLessThanOrEqual(1.4);
+    expect(Math.max(...s)).toBeGreaterThan(1.39);
+  });
+
+  it("the acceptance rates the shape descriptions quote are the geometric ones", async () => {
+    // 78.5% and 52.4% are pi/4 and pi/6, asserted at a sample size where
+    // the difference between "about" and "wrong" would show.
+    expect((await cookLaw("shape/disc", { count: 100000 })).pointCount / 100000).toBeCloseTo(Math.PI / 4, 2);
+    expect((await cookLaw("shape/sphere-points", { count: 100000 })).pointCount / 100000).toBeCloseTo(
+      Math.PI / 6,
+      2,
+    );
+    // ...and "roughly half" for the density-driven one, which is the MEAN
+    // of the normalized field rather than a rejection ratio — the one
+    // place the narrow realized range costs nothing, since the mean is
+    // 0.5 however little of 0..1 the field reaches.
+    const thinned = await cookLaw("filter/thin-by-density", {}, { in: SPREAD });
+    expect(thinned.pointCount / 20000).toBeCloseTo(0.5, 1);
+  });
+});

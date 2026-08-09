@@ -1305,6 +1305,30 @@ settled before implementation. Re-survey at cycle start.
 
 ## Stretch — surveyed and NOT scheduled
 
+- **Rescaling the shared noise convention so an amplitude knob reaches
+  its stated bound.** Measured 2026-08-09 across all 34 primitives.
+  **Recommendation: do not schedule.** Every noise-amplitude param
+  under-delivers, because the catalog's shared `amp × remap(normalized
+  fBm)` term normalizes against fBm's THEORETICAL range while its
+  realized range is far narrower: `transform/displace-by-noise` reaches
+  0.42 of its promised `±amount`, and the threshold knobs on
+  `filter/mask-by-noise` and `fill/volume-by-noise` do all their travel
+  inside 0.32–0.68 rather than 0–1. The obvious fix is a two-line
+  constant rescale in `tunableFbm`, and it is wrong: utilization is NOT
+  a constant — 0.42 on a wide 2D cloud, 0.50 in 3D, 0.25 on a patch
+  spanning about one period — so a constant factor converts systematic
+  UNDER-delivery into position-dependent error, overshooting to 1.17×
+  on wide high-frequency clouds. An `amount` that sometimes EXCEEDS its
+  stated bound is worse than one that reliably undershoots it. A
+  per-cook fit to the realized range would be exact and breaks the
+  determinism invariant outright: under partitioned cooking each
+  partition would fit its own range, so the same point would move
+  differently depending on how the work was split. What shipped instead
+  is the honest alternative — every one of these params now documents
+  its measured law and band, with tests pinning them. If a
+  true-amplitude knob is ever wanted, add it opt-in beside the existing
+  one; do not move what already ships.
+
 - **Device-produced asset keys** (make `setAttribute` resident in
   string `values` mode). Surveyed 2026-08-07; **recommendation: do not
   schedule.** Recorded here so it is not picked up later on the

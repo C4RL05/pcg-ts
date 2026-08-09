@@ -1,6 +1,6 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 10:26",
+  "updated": "2026-08-09 12:25",
   "currentPhase": 39,
   "phases": [
     {
@@ -206,7 +206,7 @@
     {
       "id": 39,
       "title": "Path authoring, vocabulary v2",
-      "state": "active"
+      "state": "done"
     },
     {
       "id": 40,
@@ -220,13 +220,17 @@
     }
   ],
   "tests": {
-    "passed": 2217,
+    "passed": 2338,
     "failed": 0,
-    "total": 2217,
-    "lastRun": "2026-08-09 09:57"
+    "total": 2338,
+    "lastRun": "2026-08-09 12:25"
   },
   "blockers": [],
   "log": [
+    {
+      "time": "2026-08-09 12:25",
+      "message": "Phase 39 complete: path authoring. pointsToPath closes the polyline half of the geometry gap sighted five times — the library had a polyline consumer, type, render branch and inspect branch, and no in-graph producer, so no path could exist in a serialized graph. Nodes 32 to 35 (pointsToPath, pathResample, writeTangents), primitives 29 to 34 (including place/along-curve, which phase 37 cut for exactly this missing source), corpus 23 to 28, field fns 40 to 41. pathResample forced splineSample arc-length table into a shared helper; behavior preservation proven by a frozen pre-extraction copy compared byte-exact over 49 cases, and the frozen copy was itself checked against git so the proof is not circular. Two independent audits: 17 of 21 mutations killed with the four survivors clustered in writeTangents fallback (untested, one branch unreachable while the other was sign-sensitive), and a phase-level verifier that confirmed all four exit criteria and found the topology rule stated backwards in 11 shipped strings. A catalog-wide measurement pass rewrote 22 param descriptions to state their measured laws and found fill/scatter-clustered spread.y inert, fixed with the default preserving byte-identical output. Recorded as NOT to schedule: rescaling the shared noise convention, because utilization is not constant and a constant factor turns reliable undershoot into overshoot, while a per-cook fit would break determinism under partitioned cooking."
+    },
     {
       "time": "2026-08-09 10:26",
       "message": "Phase 39 re-surveyed at cycle start, as PLAN required before treating the v0.11 split as fixed. The split changed: pathSmooth and pathFuseCollinear are CUT (zero references outside the plan — no caller, no primitive, no example, which is the same bar that deferred filterGroup), pointsToPath is confirmed as the unblocking node from two directions (a polyline consumer, type, render branch and inspect branch all exist; in-graph producers do not, and none of splineSample nine call sites cooks from JSON), and two backlog items are folded in: pointLine exclusive-end and the missing ne field function that filterByExpression already advertises to agents. Representation settled as reuse: closure stays structural, an explicit closed flag was rejected as a debris column that can disagree with the authoritative structure. Also corrected phase 37 record: filterGroup deferral stands but its stated reason was wrong — pins are collection-shaped; requireGeometry taking item[0] is the real blocker."

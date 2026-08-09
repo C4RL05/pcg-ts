@@ -322,7 +322,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 40 names at runtime.
+256 levels). `listFieldFns()` returns all 41 names at runtime.
 
 ### Inputs
 
@@ -343,7 +343,7 @@ store as f32.
 | Arity | fns |
 | --- | --- |
 | 1 | `abs`, `floor`, `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero), and trig `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (radians, elementwise) |
-| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq` emitting 1/0 |
+| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq`, `ne` emitting 1/0 (`ne` is the exact complement of `eq`) |
 | 3 | `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b — cond non-zero picks a) |
 | 5 | `remap` (x, inMin, inMax, outMin, outMax — linear, unclamped; degenerate input range yields outMin) |
 
@@ -754,7 +754,11 @@ and `partitionByAttribute` drop it the same way. Only a node that clones
 (`cloneGeometry`) preserves it — among the filter-category nodes that is
 `projectToPlane` alone, which moves points without removing any, so
 "filter" is not quite the boundary: **removing or recombining points**
-is.
+is. The category decides nothing in either direction: `projectToPlane`
+is categorised `filter` and preserves topology, `partitionByAttribute`
+is categorised `attribute` and drops it. And the test is **can** remove,
+not did — `filterByAttribute` drops topology even when its predicate
+keeps every point, because it routes through `gatherPoints` regardless.
 
 Nothing warns at the filter. The loss is silent where it happens and
 surfaces somewhere else entirely, as a path consumer reporting that it
@@ -804,10 +808,18 @@ says `ok` — the structure is fine, only the meaning is gone — and the
 cook then fails at `posts`, three nodes downstream of the mistake:
 
 ```
-node "posts" failed: pathResample: input has no polyline primitives
-(build one in-graph with pointsToPath, or in TypeScript with
-createPolyline; note that every filter node and mergePoints drop
-topology, so a path must reach this node without passing through one)
+node "posts" failed: pathResample: input has no polyline primitives —
+the input is a plain point cloud (11 points, 0 primitives). Build a path
+in-graph with pointsToPath (or createPolyline in TypeScript). If one WAS
+built upstream, a node between it and pathResample dropped the topology:
+any node that can REMOVE points rebuilds the point domain from the
+survivors and the primitives go with it — filterByDensity,
+filterByBounds, filterByAttribute, filterByExpression, selfPrune,
+partitionByAttribute — and mergePoints does the same when it
+concatenates clouds. Category is not the rule: projectToPlane is
+categorised "filter" but preserves topology, and filterByAttribute drops
+it even when its predicate keeps every point. Fix by moving pointsToPath
+after those nodes, so the path is built over the points that survive.
 ```
 
 ### Sampling a path, and keeping one

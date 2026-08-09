@@ -98,7 +98,8 @@ export function registerPlacePrimitives(): void {
       {
         name: "maxSlope",
         targets: [{ node: "slope", param: "value" }],
-        description: "Steepest ground still plantable, on the 0..1 slope scale (0 is flat, 1 is a vertical wall).",
+        description:
+          "Steepest ground still plantable, on the `slope` scale `write/height-slope` writes — which is 1 - cos(angle), NOT a fraction of 90 degrees, so it is heavily compressed at the flat end and half the scale already covers two thirds of the range of real slopes. The default 0.3 is therefore a 45-degree limit, not the 27-degree one a linear reading gives. The anchors, measured: 10 degrees is 0.015, 20 is 0.060, 30 is 0.134, 45 is 0.293, 60 is 0.500, 75 is 0.741, 90 is 1. Inverted, for a limit of A degrees pass 1 - cos(A).",
       },
       {
         name: "maxHeight",
@@ -195,7 +196,7 @@ export function registerPlacePrimitives(): void {
   definePrimitive("place/along-curve", {
     title: "Space points along a curve and turn them to follow it",
     description:
-      "Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a filter (filters and `mergePoints` drop topology). The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults — nothing written on the curve's own points survives, which is what `write/orient-along-path` is for. The output is still a path, so it can be resampled again. Fully deterministic.",
+      "Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a step that can REMOVE points: the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy topology, and `filterByAttribute` does so even when its predicate keeps every point. Category is not the rule — `projectToPlane` is a `filter` that preserves it, because it clones. The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults — nothing written on the curve's own points survives, which is what `write/orient-along-path` is for. The output is still a path, so it can be resampled again. Fully deterministic.",
     tags: ["curve", "path", "instancing"],
     nodes: [
       { id: "resample", type: "pathResample", params: { mode: "count", count: 24, spacing: 1 } },
@@ -221,14 +222,15 @@ export function registerPlacePrimitives(): void {
       {
         name: "count",
         targets: [{ node: "resample", param: "count" }],
-        description: "Points per path in 'count' mode. At least 2 (3 on a closed path); ignored in 'spacing' mode.",
+        description:
+          "Points per path in 'count' mode: exactly this many come out, whatever the path's length, and they are evenly spaced at length / (count - 1) — so a 40-unit path at count 5 pitches them every 10 units, and the two ends are always occupied. At least 2 (3 on a closed path); ignored in 'spacing' mode.",
         min: 2,
       },
       {
         name: "spacing",
         targets: [{ node: "resample", param: "spacing" }],
         description:
-          "Distance between points in world units in 'spacing' mode. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode.",
+          "Distance between points in world units in 'spacing' mode — exact for every step except the LAST, which is the leftover. The walk starts at the beginning of each path, steps `spacing` until another step would overshoot, then puts a final point exactly on the end: a 40-unit path at spacing 7 comes out with gaps 7, 7, 7, 7, 7, 5. So the count per path is floor(length / spacing) + 2, or length / spacing + 1 when it divides exactly, and the far end is always the short one. For props that must be evenly pitched the whole way, pick a `spacing` that divides the path length. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode.",
         min: 0,
       },
       {

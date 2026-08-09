@@ -4,12 +4,16 @@ import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import {
   deserializeGraph,
   fieldFromJson,
+  filterByAttribute,
   filterByDensity,
   orientAlongVector,
+  partitionByAttribute,
   pathResample,
   pointScatterInBounds,
   pointsToPath,
+  projectToPlane,
   serializeGraph,
+  setAttribute,
   splineSample,
   writeTangents,
 } from "./index.js";
@@ -433,7 +437,7 @@ describe("pathResample", () => {
     ).rejects.toThrow(/primitive 0 has zero length/);
     await expect(
       runNode(pathResample, {}, { in: [makeGeometryItem(row(4))] }),
-    ).rejects.toThrow(/no polyline primitives \(build one in-graph with pointsToPath/);
+    ).rejects.toThrow(/no polyline primitives — the input is a plain point cloud \(4 points, 0 primitives\)/);
     await expect(
       runNode(pathResample, { mode: "sideways" }, { in: [makeGeometryItem(line)] }),
     ).rejects.toThrow(/unknown mode "sideways"; valid modes: count, spacing/);
@@ -679,5 +683,85 @@ describe("paths in a serialized graph", () => {
     g.connect(filter, "out", resample, "in");
     g.output(resample, "out", "result");
     await expect(cook(g)).rejects.toThrow(/no polyline primitives/);
+  });
+});
+
+/**
+ * The topology rule, pinned in BOTH directions so it cannot silently
+ * invert again. The predicate is CAN REMOVE POINTS — those ops route
+ * through `gatherPoints`, which rebuilds the point domain and leaves the
+ * primitives behind. The node's category decides nothing, and neither
+ * does whether a point was actually removed on this run. A wording that
+ * says "every filter node drops topology" is wrong in both directions,
+ * and each direction below is one of them.
+ */
+describe("what drops topology, and what does not", () => {
+  /** A cloud, made a path, routed through `mid`, then resampled. */
+  function pathThrough(mid: (g: Graph) => { id: string }): Graph {
+    const g = new Graph(5);
+    const src = g.add(
+      pointScatterInBounds,
+      { count: 8, boundsMin: [0, 0, 0], boundsMax: [10, 0, 10] },
+      "src",
+    );
+    const grp = g.add(setAttribute, { name: "grp", type: "i32", value: 0 }, "grp");
+    const path = g.add(pointsToPath, {}, "path");
+    const through = mid(g);
+    const resample = g.add(pathResample, { mode: "count", count: 6 }, "resample");
+    g.connect(src, "out", grp, "in");
+    g.connect(grp, "out", path, "in");
+    g.connect(path, "out", through, "in");
+    g.connect(through, "out", resample, "in");
+    g.output(resample, "out", "result");
+    return g;
+  }
+
+  /** The message of the rejection, or "" if the cook succeeded. */
+  async function cookError(g: Graph): Promise<string> {
+    return await cook(g).then(
+      () => "",
+      (e: unknown) => (e as Error).message,
+    );
+  }
+
+  it("drops it through partitionByAttribute — categorised `attribute`, removes nothing here", async () => {
+    // Every point carries grp=0, so this partitions into ONE group holding
+    // the whole cloud. It still gathers, so the topology is gone: the test
+    // is "can remove", not "did remove".
+    const msg = await cookError(pathThrough((g) => g.add(partitionByAttribute, { name: "grp" }, "split")));
+    expect(msg).toMatch(/pathResample: input has no polyline primitives/);
+    // The error has to name the kind of node at fault, or an agent reads
+    // its graph looking for a "filter" that is not there.
+    expect(msg).toMatch(/plain point cloud \(8 points, 0 primitives\)/);
+    expect(msg).toMatch(/partitionByAttribute/);
+    expect(msg).toMatch(/moving pointsToPath after those nodes/);
+  });
+
+  it("drops it through filterByAttribute even when the predicate keeps every point", async () => {
+    // density >= 0 is true for every point of a standard cloud.
+    const msg = await cookError(
+      pathThrough((g) =>
+        g.add(filterByAttribute, { attribute: "density", comparison: "ge", value: 0 }, "keepAll"),
+      ),
+    );
+    expect(msg).toMatch(/no polyline primitives/);
+    expect(msg).toMatch(/plain point cloud \(8 points, 0 primitives\)/);
+  });
+
+  it("keeps it through projectToPlane — categorised `filter`, but it clones", async () => {
+    const g = pathThrough((h) =>
+      h.add(projectToPlane, { origin: [0, 0, 0], normal: [0, 1, 0] }, "flat"),
+    );
+    const out = firstGeo((await cook(g)).outputs.result);
+    // The path survived the "filter" and pathResample re-emitted one.
+    expect(out.primitiveCount).toBe(1);
+    expect(out.pointCount).toBe(6);
+  });
+
+  it("keeps it through the attribute ops that clone", async () => {
+    const g = pathThrough((h) => h.add(setAttribute, { name: "mark", value: 1 }, "mark"));
+    const out = firstGeo((await cook(g)).outputs.result);
+    expect(out.primitiveCount).toBe(1);
+    expect(out.pointCount).toBe(6);
   });
 });

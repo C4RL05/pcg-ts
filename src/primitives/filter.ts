@@ -81,7 +81,7 @@ export function registerFilterPrimitives(): void {
   definePrimitive("filter/mask-by-noise", {
     title: "Keep the points where a noise field is above a threshold",
     description:
-      "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing (every scratch column is removed again).",
+      "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less — but the usable band is only about 0.32 to 0.68, not the full 0..1 the param's range suggests; the `threshold` description gives the measured table. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing (every scratch column is removed again).",
     tags: ["noise", "mask"],
     nodes: [
       {
@@ -122,7 +122,8 @@ export function registerFilterPrimitives(): void {
       {
         name: "threshold",
         targets: [{ node: "threshAttr", param: "value" }],
-        description: "Where the cut falls on the 0..1 noise. 0.5 keeps about half; 1 keeps nothing and 0 keeps everything.",
+        description:
+          "Where the cut falls on the 0..1 noise — but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.32 (keeps everything) and 0.68 (keeps nothing). Four octaves of normalized fBm come out bell-shaped around 0.5 with a standard deviation near 0.065, never at the ends: the theoretical 0..1 is the nominal range of the term, not the values it takes. Measured on a wide 2D spread: 0.42 keeps ~89%, 0.46 ~75%, 0.50 ~50%, 0.55 ~23%, 0.59 ~9%. So a threshold of 0.8 does not keep a fifth, it keeps NOTHING, and 0.2 does not keep four fifths, it keeps everything. `frequency`, `variant` and how widely the points sample the field move the two ends by a few hundredths.",
         min: 0,
         max: 1,
         acceptsField: true,
@@ -342,7 +343,7 @@ export function registerFilterPrimitives(): void {
         name: "resolution",
         targets: [{ node: "dense", param: "spacing" }],
         description:
-          "How finely the curve is sampled before distances are measured, in world units. It is the accuracy of the measurement, so keep it well under `distance`; smaller costs one more sample point per step along every path.",
+          "How finely the curve is sampled before distances are measured, in world units. It is the accuracy of the measurement, and it only ever UNDERSTATES the band — sampling a curve sparsely puts every point further from the nearest sample than it is from the curve, so points are lost from the edges, never gained. Measured against a 5-unit band on a straight curve: resolution 1 (a fifth of `distance`) loses 0.2% of the points, 2 loses 0.7%, 5 (equal to `distance`) loses 4%, 10 loses 18% and 20 loses half. A fifth of `distance` is the practical floor; below that it only costs sample points, one more per step along every path.",
         min: 0,
       },
     ],

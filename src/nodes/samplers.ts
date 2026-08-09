@@ -176,7 +176,7 @@ export const splineSample = standardNode<SplineSampleParams>({
   type: "splineSample",
   category: "sampler",
   description:
-    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: every filter node and mergePoints drop it, so a path that passes through one stops being a path and this node will report that it found no polylines.",
+    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: any node that can REMOVE points drops it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path and this node will report that it found no polylines. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -313,7 +313,12 @@ export const volumeSample = standardNode<VolumeSampleParams>({
     cellSize: {
       type: "f32",
       default: 1,
-      description: "Grid cell edge length in world units. Must be > 0.",
+      description:
+        "Requested grid cell edge length in world units, and a LOWER BOUND rather than " +
+        "the cell you get. Each axis is divided into floor(extent / cellSize) whole cells " +
+        "(at least one), so the actual cell is extent / that count and is always >= " +
+        "cellSize: an extent of 20 with cellSize 12 yields ONE 20-wide cell, not a 12-wide " +
+        "one. Divide evenly to get the cell you asked for. Must be > 0.",
     },
     jitter: {
       type: "f32",
