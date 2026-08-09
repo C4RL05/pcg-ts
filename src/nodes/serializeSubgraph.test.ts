@@ -268,16 +268,23 @@ describe("subgraph serialization", () => {
     expect(snapshotGeometry(firstGeo(r2.outputs.result))).not.toEqual(snap1);
   });
 
-  it("detects a subgraph node whose inner graph is the graph being serialized", () => {
+  // A subgraph cycle is now refused where it is created — `Graph.add` is
+  // the only place one can be, since a def carries no edge until it is
+  // placed — so these two assert the earlier, stronger failure AND, past a
+  // door that bypasses it, that serialization's own guard still holds.
+  it("refuses to add a node whose inner graph is the graph itself, and still detects one forced in", () => {
     const g = new Graph();
     const xf = g.add(transformPoints, undefined, "xf");
     const def = subgraphNode(g, [], [{ name: "out", node: xf, pin: "out" }]);
-    g.add(def, undefined, "ouro");
+    expect(() => g.add(def, undefined, "ouro")).toThrow(
+      /cannot add subgraph node "ouro": its definition wraps this very graph/,
+    );
+    g._nodes.set("ouro", { id: "ouro", def, params: {}, dirty: true, cache: undefined });
     expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
     expect(() => serializeGraph(g)).toThrow(/node "ouro".*cycle/);
   });
 
-  it("detects an indirect subgraph cycle (A wraps B wraps A)", () => {
+  it("refuses to close an indirect subgraph cycle (A wraps B wraps A), and still detects one forced in", () => {
     const a = new Graph();
     const a1 = a.add(transformPoints, undefined, "a1");
     const b = new Graph();
@@ -285,7 +292,10 @@ describe("subgraph serialization", () => {
     const defA = subgraphNode(a, [], [{ name: "out", node: a1, pin: "out" }]);
     b.add(defA, undefined, "subA");
     const defB = subgraphNode(b, [], [{ name: "out", node: b1, pin: "out" }]);
-    a.add(defB, undefined, "subB");
+    expect(() => a.add(defB, undefined, "subB")).toThrow(
+      /cannot add subgraph node "subB": its definition wraps a graph that reaches back to this one through subgraph node "subA"/,
+    );
+    a._nodes.set("subB", { id: "subB", def: defB, params: {}, dirty: true, cache: undefined });
     expect(() => serializeGraph(a)).toThrow(GraphSerializationError);
     // Breadcrumb names the outer node, the innermost names the cycle.
     expect(() => serializeGraph(a)).toThrow(/node "subB" inner graph:.*node "subA".*cycle/);

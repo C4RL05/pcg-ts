@@ -29,7 +29,7 @@ A serialized graph is one JSON object (`SerializedGraph`):
 | --- | --- |
 | `formatVersion` | Always `1`. Other values are rejected with the supported version named. |
 | `seed` | Graph seed (finite number, used as u32). Every node's seed is `hashCombine(seed, hashString(nodeId))`. |
-| `nodes` | Node instances. `id` must be unique and non-empty; `type` must be a registered node type; `params` maps param names to values. Omitted params take their schema defaults. A `subgraph` node additionally carries a `subgraph` payload (below). |
+| `nodes` | Node instances. `id` must be unique and non-empty; `type` must be a registered node type; `params` maps param names to values. Omitted params take their schema defaults. A `subgraph` node additionally carries either a `subgraph` payload or a `ref` (below); no other node type may carry either. |
 | `connections` | Directed edges `from: [nodeId, outputPin]` to `to: [nodeId, inputPin]`. Pin kinds must be compatible (`any` matches everything); an input pin accepts one connection unless declared `multi`; cycles are rejected. |
 | `outputs` | Declared terminal outputs. Cooking pulls from these (and cooks only what they reach); `name` keys the collection in `CookResult.outputs`. |
 
@@ -44,6 +44,31 @@ valid:
 - wrong param value → expected type/enum/bounds and the offending value
 - unknown connection endpoint or pin → error listing known nodes / valid pins
 - kind mismatch, occupied single pin, or cycle → the specific edge named
+- unknown *key*, at any object position — the graph object, a node
+  object, a `subgraph` payload, a `ref`, a connection, a declared output,
+  an exposed-pin declaration, an exposed-param declaration or one of its
+  `targets` — → error naming the key and listing the valid ones
+- `type`, `enum` or `acceptsField` on an exposed-param declaration →
+  refused by name, with the reason: they are derived from the targets'
+  registered schemas, not authored, so a declaration cannot claim a type
+  or a field capability the inner params do not have
+
+The unknown-key rule is worth stating plainly, because **the format is
+closed**. Until v0.10 an unrecognized key was ignored, which is how `meta`
+could be added in v0.9 and still be read by every earlier v1 reader. That
+leniency is spent: a reader that ignores what it does not recognize cannot
+tell a new field from a typo, and `"refs"` for `"ref"` would have cooked as
+an ordinary subgraph node — a near-miss, silently. The consequence is
+deliberate and permanent: **a future format field arrives with a
+`formatVersion` bump**, never by riding along unnoticed. There is no
+annotation or comment key either; descriptive text belongs in the `meta`
+block, or — for an exposed param — in its own `description`.
+
+The rule holds at every object position, not only the outer ones, because
+a lenient nested object is the same near-miss one level down and the
+nested positions are where the plausible typos live: `description` on a
+declared output, `kind` on an exposed pin, `maximum` for `max` on an
+exposed param.
 
 `serializeGraph` enforces the same schemas on the way out, and requires
 every node to be a registered type (`standardNode`). Field-valued params
@@ -109,16 +134,144 @@ Serialization is complete — two node types have special shapes:
   on the node, exactly as a standard node keeps its schemas in the
   registry and its values on the node. A declaration carries only the
   authored part: `type`, `enum` and `acceptsField` are re-derived from
-  the targets' registered schemas on load, so a payload cannot claim a
+  the targets' registered schemas on load, and authoring one is refused
+  by name rather than quietly dropped, so a payload cannot claim a
   capability the inner params do not have. `params` is `{}` and the
   payload's `params` key is absent when the node exposes none.
   Deserialization rebuilds the inner graph and re-wraps it through
   `subgraphNode`, so nested subgraphs round-trip and cook
-  byte-identically.
+  byte-identically. A subgraph node may instead carry
+  `ref: { name, hash? }` — see [Named subgraphs](#named-subgraphs) — and
+  the two are mutually exclusive.
 - A `dataInput` node serializes with `items: []`: live `DataItems` are
   runtime-injected (via `graph.setParam` or a `World` bind), never
   embedded in JSON. After deserializing, re-bind the items before
   cooking.
+
+A reader older than v0.10 meeting a `ref` node reports `a "subgraph" node
+needs a "subgraph" payload object ... got undefined`. Misleading, but a
+hard error rather than a miscook — which is why `formatVersion` stays 1:
+bumping it would invalidate every existing v1 graph in the wild to buy a
+better message on builds whose messages cannot be changed retroactively.
+
+## Named subgraphs
+
+A subgraph node can reference a registered subgraph BY NAME instead of
+embedding a copy of it:
+
+```json
+{ "id": "trees", "type": "subgraph",
+  "params": { "spacing": 4 },
+  "ref": { "name": "scatter/grid" } }
+```
+
+Register the recipe first — the name must be registered before any graph
+referencing it is deserialized, the same ordering constraint node types
+have, satisfied the same way (one side-effecting index module):
+
+```ts
+import { registerSubgraph } from "pcg-ts";
+
+registerSubgraph("scatter/grid", {
+  graph: innerGraph,                              // live Graph or SerializedGraph
+  inputs: [{ name: "bounds", node: "b", pin: "in" }],
+  outputs: [{ name: "out", node: "xf", pin: "out" }],
+  params: [{ name: "spacing", targets: [{ node: "g", param: "spacingX" }],
+             description: "Grid spacing in metres.", default: 2 }],
+});
+```
+
+**What is stored is a recipe, never a live graph.** `subgraphNode`
+mutates what it wraps (it injects a `__in_<name>` portal node per exposed
+input and an `__out_<name>` output per exposed output), so a live `Graph`
+can be wrapped exactly once. Every reference therefore materializes a
+fresh graph and definition, through the same `deserializeGraph` →
+`subgraphNode` path an embedded payload takes. Three consequences follow,
+and they are the contract:
+
+- **A reference and an embedded copy of the same recipe cook
+  byte-identically** — same output bytes, same cache decisions, same
+  transitive version key. They travel one construction route; there is no
+  second one.
+- **Two references to one name share nothing.** Each owns its inner
+  graph and its per-node caches, so editing one through
+  `getSubgraphSpec(def).graph` invalidates only that one. (They also
+  produce *different* output, because each derives its inner seed from
+  its own outer node id — that is correct, not a defect.)
+- **The registry is not a live-update channel.** Resolution happens once,
+  at load; a loaded graph holds its own materialized inner graph and no
+  later registration reaches it. Duplicate names throw, mirroring
+  `standardNode`, and there is no public unregister. To hot-reload a
+  primitive, reload the graph.
+
+`registerSubgraph` canonicalizes the recipe at registration —
+`serializeGraph(deserializeGraph(authored))` — so a sparsely authored
+recipe and a fully-filled one become one payload, and every structural
+error (unknown node type, bad param, an exposed pin naming a missing
+inner node, an `__in_`/`__out_` collision) is reported there, with the
+author's stack, rather than at some consumer's `deserializeGraph`.
+
+Editing a referenced primitive's inner graph in place and then saving is
+refused, naming the node: writing the reference back out would write the
+*registry's* content and silently discard the edit.
+
+### Pinning: the optional content hash
+
+`hash` in a `ref` is **optional**, and the two modes are the whole design:
+
+| `hash` | contract | on a change to the primitive |
+| --- | --- | --- |
+| absent (default) | "give me the library's current `scatter/grid`" | resolves, cooks, no friction |
+| present | "cook exactly what I authored against" | **hard error** naming both hashes |
+
+Neither mode warns. A library warning lands in a CI log or a console the
+agent driving the graph never reads, which makes "resolve and warn"
+operationally indistinguishable from resolving silently — the class the
+determinism pillar exists to exclude. Mandatory pinning would be the
+opposite failure: every improvement to a shipped primitive would break
+every saved graph referencing it.
+
+`registerSubgraph` returns the hash; `subgraphContentHash(payload)`
+computes one. What it covers is the contract:
+
+- **Covered** — every node id, type and param value; connections;
+  declared outputs; the exposed pin mappings; each exposed param's name,
+  targets, default and bounds. A nested `ref` contributes the referenced
+  *name* (and its own pin hash, when it carries one), not the content
+  behind it.
+- **Excluded, at every nesting level** — `meta` blocks, graph `seed`s,
+  and exposed-param `description` strings.
+
+The exclusions are not oversights. A payload's `seed` is inert at cook
+time (every cook derives the inner seed from the outer node seed and
+overwrites it), so it cannot change a cooked byte. And `Graph.setMeta`
+deliberately does not bump `version`, because retitling a graph must not
+invalidate a cache — hashing `meta` would reintroduce exactly that
+invalidation sideways, breaking every pinned graph on a typo fix in a
+description.
+
+Object keys are sorted before hashing, so reordering a node type's param
+schema cannot move a primitive's hash.
+
+**The boundary worth knowing.** The hash, and byte-identity between the
+by-name and embedded forms, hold **within one build**. Across library
+versions neither can, by any design: an embedded payload freezes the
+defaults and canonicalization of the build that wrote it, while a
+registry entry is re-derived from the current build, so adding a param to
+any node type a primitive uses moves its hash. The optional pin is
+precisely what turns that divergence from silent into stated.
+
+### Subgraph nesting is acyclic, and enforced
+
+A graph may not contain a node whose definition wraps it, directly or
+through a chain. `Graph.add` refuses one — the only moment the cycle can
+be caught, since a subgraph definition carries no edge until it is
+placed. Cooking such a graph could only hang: the inner cook re-enters
+the same graph's exclusive section, where a re-entrant call is
+indistinguishable from a concurrent one. Named references get the same
+treatment: a recipe that references the subgraph being registered is
+refused by `registerSubgraph`, and a name cycle reaching a name already
+on the resolution path is refused by `deserializeGraph`.
 
 ## The field-expression grammar
 

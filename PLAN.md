@@ -1034,6 +1034,13 @@ recorded with its reason rather than silently rewritten.
   `Geometry` exists anywhere in the tree — so it binds value items only
   and hard-errors on anything else, via `dataInput` nodes in the
   synthesized wrapper.
+- Recorded, not fixed, from the registry audit: the content hash is
+  sensitive to `connections` ARRAY ORDER and canonicalization does not
+  normalize it, so a semantically identical re-authoring hard-errors
+  every pinned graph; and `params: []` on an embedded payload is not a
+  serialization fixed point (unreachable for registered recipes, which
+  omit the key entirely). Both want a decision when the first real
+  primitives exercise pinning.
 - Exit: a JSON graph referencing a named primitive with bound params
   round-trips and cooks byte-identically to its embedded form — within
   one build, which is the only place it is achievable: an embedded
@@ -1054,9 +1061,21 @@ recorded with its reason rather than silently rewritten.
   the filter family), `filterGroup`, `attributeRemap`.
 - The first ~30 primitives across shape / fill / transform / compose /
   filter / place / write, built on the node set above; all catalogued.
+- **Wire the assets to the tools.** Phase 36 shipped the registry
+  mechanism, the catalog generator and `pcg run`, and all three work —
+  but nothing is registered, so the catalog is a (deliberately explicit)
+  empty file and `pcg run` can only report that no subgraphs exist.
+  Registration happens by importing the module that declares them, so
+  when the assets land behind `pcg-ts/primitives`, the CLI and the
+  catalog generator must import that subpath or they will keep reporting
+  an empty registry while the primitives sit in the package. Also then:
+  add `docs/primitives.md`/`.json` to package.json `files` (left out
+  while nothing references them) and pin them in the bin test the way
+  the node reference is pinned.
 - Exit: node count 25 → 31 with the reference regenerated; every
   primitive validates and cooks in CI; double-cook determinism over
-  the primitive set. Commit.
+  the primitive set; `pcg run <a real primitive>` cooks from a clean
+  install, and the catalog is non-empty. Commit.
 
 ### Phase 38 — Example corpus, skills, docs, v0.10.0
 - ~20 single-concept examples (`examples/graphs/basics-*.json`), each

@@ -7,9 +7,12 @@ import {
   type CommandSpec,
   CliUsageError,
   boolFlag,
+  commandHelp,
   intFlag,
+  listFlag,
   numberFlag,
   parseArgs,
+  parseNumberValue,
   stringFlag,
 } from "./args.js";
 
@@ -24,6 +27,7 @@ const SPEC: CommandSpec = {
     out: { kind: "string", value: "path", description: "where to write" },
     width: { kind: "number", value: "px", description: "how wide" },
     stats: { kind: "boolean", description: "print stats" },
+    set: { kind: "strings", value: "k=v", description: "set one thing" },
   },
 };
 
@@ -108,6 +112,61 @@ describe("parseArgs", () => {
     // After --, and in a flag's value position, it is just a token.
     expect(parseArgs(["a.json", "--", "-h"], SPEC).positional).toEqual(["a.json", "-h"]);
     expect(stringFlag(parseArgs(["a.json", "--out", "-h"], SPEC), "out")).toBe("-h");
+  });
+
+  it("collects a repeatable flag's values in order, and only that flag's", () => {
+    const args = parseArgs(
+      ["a.json", "--set", "a=1", "--set=b=2", "--set", "c=3", "--out", "x"],
+      SPEC,
+    );
+    expect(listFlag(args, "set")).toEqual(["a=1", "b=2", "c=3"]);
+    // A repeat of the same flag used to throw; every OTHER flag still does.
+    expect(stringFlag(args, "out")).toBe("x");
+    expect(listFlag(parseArgs(["a.json"], SPEC), "set")).toEqual([]);
+  });
+
+  it("still refuses a repeat of every flag that is not declared repeatable", () => {
+    for (const argv of [
+      ["a.json", "--out", "x", "--out", "y"],
+      ["a.json", "--width", "1", "--width", "2"],
+      ["a.json", "--stats", "--stats"],
+      ["a.json", "--json", "--json"],
+    ]) {
+      expect(() => parseArgs(argv, SPEC), argv.join(" ")).toThrow(CliUsageError);
+      expect(() => parseArgs(argv, SPEC), argv.join(" ")).toThrow("was given more than once");
+    }
+  });
+
+  it("applies the ordinary value rules to each occurrence of a repeatable flag", () => {
+    for (const [argv, message] of [
+      [["a.json", "--set", "a=1", "--set"], 'demo: flag "--set" needs a value (--set <k=v>)'],
+      [["a.json", "--set="], 'demo: flag "--set" needs a non-empty value'],
+      [["a.json", "--set", "a=1", "--set", "   "], 'demo: flag "--set" needs a non-empty value'],
+    ] as const) {
+      expect(() => parseArgs(argv, SPEC), argv.join(" ")).toThrow(message);
+    }
+  });
+
+  it("refuses to read a flag through the wrong accessor, loudly", () => {
+    const args = parseArgs(["a.json", "--set", "a=1", "--out", "x"], SPEC);
+    expect(() => stringFlag(args, "set")).toThrow("declared repeatable");
+    expect(() => listFlag(args, "out")).toThrow("not declared repeatable");
+  });
+
+  it("marks a repeatable flag as repeatable in help, derived from its kind", () => {
+    const help = commandHelp(SPEC);
+    expect(help).toContain("--set <k=v>");
+    expect(help).toContain("set one thing (repeatable)");
+    expect(help).not.toContain("where to write (repeatable)");
+  });
+
+  it("parseNumberValue is the one number spelling, shared with --flag values", () => {
+    expect(parseNumberValue("12")).toBe(12);
+    expect(parseNumberValue("-4.5")).toBe(-4.5);
+    expect(parseNumberValue("1e3")).toBe(1000);
+    for (const bad of ["0x10", " 12 ", "1_000", "Infinity", "1e400", "", "abc"]) {
+      expect(parseNumberValue(bad), bad).toBeUndefined();
+    }
   });
 
   it("lists every valid flag, common ones included", () => {

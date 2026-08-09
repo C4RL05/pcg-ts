@@ -149,7 +149,9 @@ and pin named.
   exposedParams)` wraps a whole graph as one node with its own persistent
   inner caches. Exposed params give the wrapper its own knobs, each bound
   to one or more inner params, with schemas derived from those params
-  rather than hand-written.
+  rather than hand-written. `registerSubgraph(name, recipe)` publishes one
+  under a name, so a serialized graph can reference it instead of
+  embedding a copy — and cook byte-identically either way.
 - **Live editing.** `removeNode` cascades: every connection touching the
   node and every output declared on it go with it, in a single version
   bump — downstream nodes recook on the next cook, untouched branches
@@ -220,11 +222,14 @@ combinator tree is named rather than the constructor above it.
 Serialization is complete: subgraph nodes carry their inner graph as a
 nested payload (`subgraph: { graph, inputs, outputs, params }`,
 recursively in the same format, with exposed-param values on the node
-itself), and `dataInput` nodes serialize with an empty `items`
+itself) or as a reference to a registered one (`ref: { name, hash? }`,
+where the optional hash pins the reference and a mismatch is an error,
+never a warning), and `dataInput` nodes serialize with an empty `items`
 list — live data items are runtime-injected, so re-bind them after
 deserializing. Deserialization validates node types, param schemas,
-bounds, enum membership, pins, and connections — every error names the
-node, param, or pin at fault and lists what would be valid. See
+bounds, enum membership, pins, connections, and the key sets themselves
+at every object position — every error names the node, param, pin, or key
+at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node

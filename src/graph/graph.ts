@@ -2,6 +2,7 @@ import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphCycleError, GraphValidationError } from "./errors.js";
 import type { NodeDef, PinDef } from "./node.js";
+import { wrappedGraphOf } from "./subgraphLink.js";
 
 /**
  * Reference to a node instance in a graph. Carries the param type of its
@@ -59,6 +60,53 @@ function findPin(pins: readonly PinDef[], name: string): PinDef | undefined {
 
 function listPins(pins: readonly PinDef[]): string {
   return pins.map((p) => `"${p.name}"`).join(", ") || "(none)";
+}
+
+/**
+ * Ids of the subgraph nodes leading from `from` back to `target` through
+ * the "contains a node that wraps" relation, or `undefined` when `target`
+ * is unreachable. `[]` means `from` IS `target` — a direct self-wrap.
+ *
+ * `seen` is a visited set rather than a path set, and it is load-bearing,
+ * not defensive. The invariant this walk enforces means the forest is
+ * already acyclic, so a path set would also terminate — but a legitimate
+ * acyclic forest can hold exponentially many PATHS over linearly many
+ * GRAPHS (each level wrapping two instances of the level below is the
+ * shape), and only a visited set walks graphs rather than paths. Pinned by
+ * the diamond-chain test in `subgraph.test.ts`; it terminates on a forest
+ * corrupted some other way too, which is the lesser of its two jobs.
+ */
+function wrapPathTo(from: Graph, target: Graph, seen: Set<Graph>): string[] | undefined {
+  if (from === target) return [];
+  if (seen.has(from)) return undefined;
+  seen.add(from);
+  for (const state of from._nodes.values()) {
+    const next = wrappedGraphOf(state.def);
+    if (next === undefined) continue;
+    const rest = wrapPathTo(next, target, seen);
+    if (rest !== undefined) return [state.id, ...rest];
+  }
+  return undefined;
+}
+
+/**
+ * Refuse an `add` that would let `graph` reach itself through subgraph
+ * nesting. Costs one WeakMap lookup for a non-subgraph def, and a walk of
+ * the wrapped forest for a subgraph one — build-time work, never per cook.
+ */
+function checkNoWrapCycle(graph: Graph, def: object, id: string | undefined): void {
+  const wrapped = wrappedGraphOf(def);
+  if (wrapped === undefined) return;
+  const path = wrapPathTo(wrapped, graph, new Set());
+  if (path === undefined) return;
+  const what = id === undefined ? "a subgraph node" : `subgraph node "${id}"`;
+  const route =
+    path.length === 0
+      ? "its definition wraps this very graph"
+      : `its definition wraps a graph that reaches back to this one through subgraph ${path.length === 1 ? "node" : "nodes"} ${path.map((p) => `"${p}"`).join(" -> ")}`;
+  throw new GraphValidationError(
+    `cannot add ${what}: ${route}; a graph may not contain a node that wraps it, directly or transitively — cooking one would re-enter the inner graph's own cook and never finish. Wrap an independent graph instead.`,
+  );
 }
 
 /**
@@ -269,8 +317,19 @@ export class Graph {
   /**
    * Add a node instance. `params` shallow-merges over the definition's
    * defaults. Omitting `id` assigns a deterministic `type_N` id.
+   *
+   * A node whose definition wraps this graph — directly, or through a
+   * chain of subgraph nodes — is refused here, before the graph can hold
+   * it. This is the ONLY moment the cycle can be caught statically: a
+   * subgraph def carries no edge on its own, and `subgraphNode(inner)`
+   * cannot see a loop that does not exist until the def is placed. Cook
+   * time is too late, because a self-wrapping cook re-enters the inner
+   * graph's exclusive section and a re-entrant call is indistinguishable
+   * there from a genuinely concurrent one — so it would hang rather than
+   * report anything.
    */
   add<P>(def: NodeDef<P>, params?: Partial<P>, id?: string): NodeHandle<P> {
+    checkNoWrapCycle(this, def as unknown as object, id);
     let nodeId: string;
     if (id !== undefined) {
       if (this._nodes.has(id)) {

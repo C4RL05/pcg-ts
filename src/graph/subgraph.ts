@@ -6,6 +6,9 @@ import { cook, withExclusiveGraph } from "./execute.js";
 import type { Graph, NodeHandle } from "./graph.js";
 import { defineNode, type NodeDef, type PinDef, type PinKind } from "./node.js";
 import { type ParamSchema, type ParamValue, paramValueError } from "./params.js";
+// The spec map lives one module over so `graph.ts` can read it without
+// importing this one back; see subgraphLink.ts.
+import { subgraphSpecs } from "./subgraphLink.js";
 
 /** Maps an outer pin name onto a pin of a node inside the inner graph. */
 export interface ExposedPin {
@@ -120,7 +123,6 @@ export interface SubgraphPlumbing {
   readonly outputNames: ReadonlySet<string>;
 }
 
-const subgraphSpecs = new WeakMap<object, SubgraphSpec>();
 const plumbingByGraph = new WeakMap<Graph, { portalIds: Set<string>; outputNames: Set<string> }>();
 
 function plumbingOf(graph: Graph): { portalIds: Set<string>; outputNames: Set<string> } {

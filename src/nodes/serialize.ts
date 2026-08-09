@@ -24,6 +24,18 @@ import {
 import { type FieldSpec, fieldFromJson, fieldToJson } from "./fieldJson.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./registry.js";
 import { type ExposedParamDecl, resolveExposedParam } from "./subgraphParams.js";
+// Import cycle, deliberate and safe: the registry stores serialized
+// recipes (so it needs this module's writer and reader) and this module
+// must resolve names (so it needs the registry's lookups). Neither module
+// touches the other at evaluation time — only function declarations cross
+// the edge, and they are hoisted.
+import {
+  _registeredSubgraphKey,
+  _subgraphKey,
+  getRegisteredSubgraph,
+  hasRegisteredSubgraph,
+  unknownSubgraphMessage,
+} from "./subgraphRegistry.js";
 
 /** Errors raised while serializing or deserializing graphs. */
 export class GraphSerializationError extends Error {
@@ -80,6 +92,23 @@ export interface SerializedSubgraph {
   readonly params?: readonly SerializedExposedParam[];
 }
 
+/**
+ * A `subgraph` node's reference to a registered subgraph (see
+ * `registerSubgraph`), carried instead of an embedded `subgraph` payload.
+ */
+export interface SerializedSubgraphRef {
+  /** Registered subgraph name; resolved at load time. */
+  readonly name: string;
+  /**
+   * OPTIONAL content hash (see `subgraphContentHash`). Absent — the
+   * default — means "whatever the registry currently holds", so a
+   * primitive can be improved under saved graphs. Present means the author
+   * asked to be pinned, and a mismatch is a hard error rather than a
+   * warning that lets a near-miss cook.
+   */
+  readonly hash?: string;
+}
+
 /** One node instance in a serialized graph. */
 export interface SerializedNode {
   readonly id: string;
@@ -88,12 +117,19 @@ export interface SerializedNode {
   /**
    * Param values; field-valued params carry FieldSpec objects. On a
    * `subgraph` node these are its exposed params' values — the
-   * declarations live in the `subgraph` payload, the way a standard
-   * node's schemas live in the registry.
+   * declarations live in the `subgraph` payload (or, for a reference, in
+   * the registered recipe), the way a standard node's schemas live in the
+   * registry.
    */
   readonly params: Record<string, unknown>;
   /** Present on `subgraph` nodes only: the inner graph payload. */
   readonly subgraph?: SerializedSubgraph;
+  /**
+   * Present on `subgraph` nodes only, and mutually exclusive with
+   * {@link SerializedNode.subgraph}: a reference to a registered subgraph
+   * by name.
+   */
+  readonly ref?: SerializedSubgraphRef;
 }
 
 /** One connection: [nodeId, pinName] to [nodeId, pinName]. */
@@ -127,9 +163,91 @@ export interface SerializedGraph {
 
 const FORMAT_VERSION = 1;
 
+/**
+ * The complete key sets of the format. Anything else is a hard error, not
+ * a silently ignored extra.
+ *
+ * **This closes the additive-extension door, on purpose.** `meta` could be
+ * added to a graph in v0.9 and still be read by every earlier v1 reader,
+ * because unknown keys were ignored. That leniency is now spent: a reader
+ * that ignores what it does not recognize cannot tell a new field from a
+ * typo, and `"refs"` for `"ref"` would have cooked as an ordinary subgraph
+ * node — a near-miss, silently. A future format field therefore arrives
+ * with a `formatVersion` bump rather than riding along unnoticed.
+ *
+ * The rule holds at EVERY object position, not only the outer ones — a
+ * lenient nested object is the same near-miss one level down, and the
+ * nested positions are where the plausible typos live (`enum` or
+ * `acceptsField` on an exposed param, `description` on a declared output).
+ */
+const GRAPH_KEYS = ["formatVersion", "seed", "meta", "nodes", "connections", "outputs"] as const;
+const NODE_KEYS = ["id", "type", "params", "subgraph", "ref"] as const;
+const SUBGRAPH_PAYLOAD_KEYS = ["graph", "inputs", "outputs", "params"] as const;
+const SUBGRAPH_REF_KEYS = ["name", "hash"] as const;
+const CONNECTION_KEYS = ["from", "to"] as const;
+const OUTPUT_KEYS = ["id", "pin", "name"] as const;
+const EXPOSED_PIN_KEYS = ["name", "node", "pin"] as const;
+const EXPOSED_PARAM_KEYS = ["name", "targets", "description", "default", "min", "max"] as const;
+const EXPOSED_PARAM_TARGET_KEYS = ["node", "param"] as const;
+
+/**
+ * Keys refused with a reason of their own rather than as plain unknowns.
+ *
+ * An exposed param's `type`, `enum` and `acceptsField` are real
+ * {@link ParamSchema} field names, so an author or an agent will reach for
+ * them — but the schema is RE-DERIVED from the targets' registered
+ * schemas, never read from the payload. Accepting them would let a payload
+ * claim a type or a field capability the inner params do not have;
+ * ignoring them would drop an author's stated intent without a word. So
+ * they are named, with the reason.
+ */
+const DERIVED_EXPOSED_PARAM_KEYS: Readonly<Record<string, string>> = {
+  type: "derived from the targets' registered schemas; remove it",
+  enum: "derived from the targets' registered schemas; remove it",
+  acceptsField: "derived from the targets' registered schemas; remove it",
+};
+
 function fail(message: string): never {
   throw new GraphSerializationError(message);
 }
+
+/**
+ * Refuse any key outside `valid`, naming the offender and listing them.
+ *
+ * `refused` names keys that are not merely unrecognized but deliberately
+ * not authorable, and says why — a near-miss an author would otherwise
+ * repeat.
+ */
+function checkKeys(
+  obj: Record<string, unknown>,
+  valid: readonly string[],
+  where: string,
+  note: string,
+  refused: Readonly<Record<string, string>> = {},
+): void {
+  for (const key of Object.keys(obj)) {
+    if (valid.includes(key)) continue;
+    const reason = Object.prototype.hasOwnProperty.call(refused, key) ? refused[key] : undefined;
+    if (reason !== undefined) {
+      fail(
+        `${where}: key ${JSON.stringify(key)} cannot be authored — it is ${reason}. Valid keys: ${valid.join(", ")}`,
+      );
+    }
+    fail(`${where}: unknown key ${JSON.stringify(key)}; valid keys: ${valid.join(", ")}${note}`);
+  }
+}
+
+/** Shared tail of both unknown-key messages: why there is no escape hatch. */
+const NO_ANNOTATION_KEY =
+  '. The format is closed — an unrecognized key is a typo, not an extension, so a future field arrives with a formatVersion bump. There is no annotation key: descriptive text belongs in the graph\'s "meta" block ({ title, description, tags })';
+
+/**
+ * Same statement for exposed-param declarations, which DO have a place for
+ * prose — their own `description` — so pointing at the graph's `meta` block
+ * would be the wrong instruction here.
+ */
+const EXPOSED_PARAM_NO_ANNOTATION_KEY =
+  '. The format is closed — an unrecognized key is a typo, not an extension, so a future field arrives with a formatVersion bump. Prose about this param belongs in its "description"';
 
 /**
  * Registry entry for the subgraph composite. Metadata-only: instances are
@@ -142,7 +260,7 @@ standardNode<Record<string, never>>({
   type: "subgraph",
   category: "composite",
   description:
-    "Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in \"params\" and its inner graph plus the exposed pin and param DECLARATIONS in a nested payload under \"subgraph\" ({ graph, inputs, outputs, params }), recursively in the same versioned format.",
+    "Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in \"params\" and its inner graph plus the exposed pin and param DECLARATIONS either inline under \"subgraph\" ({ graph, inputs, outputs, params }), recursively in the same versioned format, or by reference under \"ref\" ({ name, hash? }) to a subgraph registered with registerSubgraph. \"subgraph\" and \"ref\" are mutually exclusive; a ref's \"hash\" is optional, and pins the reference to that exact content (a mismatch is an error, never a warning).",
   inputs: [],
   outputs: [],
   params: {},
@@ -258,8 +376,58 @@ export function serializeGraph(graph: Graph): SerializedGraph {
   return serializeGraphRec(graph, new Set());
 }
 
-/** Serialize one subgraph node as its nested payload; `seen` holds the graphs on the current path. */
+/**
+ * @internal Reference recorded against a def materialized from a `ref`, so
+ * serialization writes the reference back out instead of re-embedding the
+ * primitive. Keyed on the def, which is created fresh per reference (see
+ * `registerSubgraph`), so two references never share a record.
+ */
+const subgraphRefs = new WeakMap<object, SerializedSubgraphRef>();
+
+/** @internal Remember the reference a materialized def came from. */
+function recordSubgraphRef(def: object, ref: SerializedSubgraphRef): void {
+  subgraphRefs.set(def, ref);
+}
+
+/**
+ * Serialize one subgraph node: as a `ref` when its def was materialized
+ * from one, as an embedded payload otherwise. `seen` holds the graphs on
+ * the current path.
+ *
+ * The embedded payload is built either way. It is what the node's own
+ * `params` are validated against, and comparing it with the registered
+ * recipe is what keeps a reference honest: an edit made through
+ * `getSubgraphSpec(def).graph` would otherwise vanish the moment the graph
+ * was saved, since writing `ref` back out writes the REGISTRY's content,
+ * not the edited graph's.
+ */
 function serializeSubgraphNode(
+  id: string,
+  nodeParams: Record<string, unknown>,
+  spec: SubgraphSpec,
+  seen: Set<Graph>,
+  def: object,
+): SerializedNode {
+  const embedded = buildEmbeddedSubgraphNode(id, nodeParams, spec, seen);
+  const ref = subgraphRefs.get(def);
+  if (ref === undefined) return embedded;
+  const registered = _registeredSubgraphKey(ref.name);
+  if (registered === undefined) {
+    fail(
+      `cannot serialize node "${id}": it was loaded from the registered subgraph "${ref.name}", which is no longer registered; register it again before serializing, or rebuild the node from an embedded "subgraph" payload`,
+    );
+  }
+  // `embedded.subgraph` is always present: buildEmbeddedSubgraphNode sets it.
+  if (_subgraphKey(embedded.subgraph as SerializedSubgraph) !== registered) {
+    fail(
+      `cannot serialize node "${id}": it references the registered subgraph "${ref.name}", but its inner graph no longer matches the registered recipe — writing the reference back out would silently discard the edit. Edit a referenced primitive by registering it under a new name, or drop the reference by rebuilding the node from an embedded "subgraph" payload`,
+    );
+  }
+  return { id, type: "subgraph", params: embedded.params, ref };
+}
+
+/** Serialize one subgraph node as its nested payload; `seen` holds the graphs on the current path. */
+function buildEmbeddedSubgraphNode(
   id: string,
   nodeParams: Record<string, unknown>,
   spec: SubgraphSpec,
@@ -455,7 +623,7 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
       if (isPortal(state.id)) continue;
       const spec = getSubgraphSpec(state.def);
       if (spec !== undefined) {
-        nodes.push(serializeSubgraphNode(state.id, state.params, spec, seen));
+        nodes.push(serializeSubgraphNode(state.id, state.params, spec, seen, state.def));
         continue;
       }
       const type = state.def.type;
@@ -539,6 +707,7 @@ function readExposedPins(v: unknown, inner: Graph, where: string): ExposedPin[] 
     ) {
       fail(`${where}[${i}]: expected { name, node, pin } strings, got ${JSON.stringify(e)}`);
     }
+    checkKeys(e, EXPOSED_PIN_KEYS, `${where}[${i}]`, NO_ANNOTATION_KEY);
     if (!inner._nodes.has(e.node)) {
       fail(
         `${where}[${i}] ("${e.name}"): unknown inner node "${e.node}"; inner nodes: ${[...inner._nodes.keys()].join(", ")}`,
@@ -567,6 +736,13 @@ function readExposedParams(v: unknown, inner: Graph, where: string): ExposedPara
         `${where}[${i}]: expected { name, targets, description, default } with string name and description, got ${JSON.stringify(e)}`,
       );
     }
+    checkKeys(
+      e,
+      EXPOSED_PARAM_KEYS,
+      `${where}[${i}] ("${e.name}")`,
+      EXPOSED_PARAM_NO_ANNOTATION_KEY,
+      DERIVED_EXPOSED_PARAM_KEYS,
+    );
     if (!Array.isArray(e.targets) || e.targets.length === 0) {
       fail(
         `${where}[${i}] ("${e.name}"): "targets" must be a non-empty array of { node, param } objects, got ${JSON.stringify(e.targets)}`,
@@ -578,6 +754,12 @@ function readExposedParams(v: unknown, inner: Graph, where: string): ExposedPara
           `${where}[${i}] ("${e.name}") targets[${j}]: expected { node, param } strings, got ${JSON.stringify(t)}`,
         );
       }
+      checkKeys(
+        t,
+        EXPOSED_PARAM_TARGET_KEYS,
+        `${where}[${i}] ("${e.name}") targets[${j}]`,
+        NO_ANNOTATION_KEY,
+      );
       if (!inner._nodes.has(t.node)) {
         fail(
           `${where}[${i}] ("${e.name}") targets[${j}]: unknown inner node "${t.node}"; inner nodes: ${[...inner._nodes.keys()].join(", ")}`,
@@ -609,40 +791,143 @@ function readExposedParams(v: unknown, inner: Graph, where: string): ExposedPara
 }
 
 /**
- * Rebuild one subgraph node from its nested payload: recursively
- * deserialize the inner graph, then re-wrap it through `subgraphNode` so
- * the instance is indistinguishable from a code-first one. `seenPayloads`
- * guards against self-referencing payload objects.
+ * @internal Threaded through deserialization: both acyclicity guards.
+ */
+interface ReadContext {
+  /** Payload objects on the current path, by object identity. */
+  readonly seenPayloads: Set<object>;
+  /**
+   * Registered subgraph names on the current resolution path, in order.
+   * Object identity cannot see a NAME cycle — "a" referencing "b"
+   * referencing "a" involves three distinct payload objects — so names
+   * need a guard of their own.
+   */
+  readonly seenNames: Set<string>;
+}
+
+/** Read and validate a node's `ref` object. */
+function readSubgraphRef(id: string, v: unknown): SerializedSubgraphRef {
+  if (!isPlainObject(v)) {
+    fail(
+      `node "${id}": "ref" must be an object { name, hash? } naming a registered subgraph, got ${JSON.stringify(v)}`,
+    );
+  }
+  checkKeys(
+    v,
+    SUBGRAPH_REF_KEYS,
+    `node "${id}" ref`,
+    " (a reference carries the registered name and, when it pins itself, that content hash — nothing else)",
+  );
+  if (typeof v.name !== "string" || v.name === "") {
+    fail(
+      `node "${id}": "ref".name must be a non-empty string naming a registered subgraph, got ${JSON.stringify(v.name)}`,
+    );
+  }
+  if (v.hash !== undefined && typeof v.hash !== "string") {
+    fail(
+      `node "${id}": "ref".hash must be a string when present (the hash registerSubgraph reported), got ${JSON.stringify(v.hash)}`,
+    );
+  }
+  return { name: v.name, ...(typeof v.hash === "string" ? { hash: v.hash } : {}) };
+}
+
+/**
+ * Rebuild one subgraph node, from a registered name (`ref`) or from an
+ * embedded payload (`subgraph`) — never both. Either way the node is built
+ * by the same code below, so a reference and an embedded copy of the same
+ * recipe produce the same def, the same memo key and the same cooked bytes.
  */
 function addSubgraphNode(
   graph: Graph,
   id: string,
   nodeJson: Record<string, unknown>,
   paramsJson: Record<string, unknown>,
-  seenPayloads: Set<object>,
+  ctx: ReadContext,
 ): NodeHandle {
+  const refJson = nodeJson.ref;
   const payload = nodeJson.subgraph;
-  if (!isPlainObject(payload)) {
+  if (refJson !== undefined && payload !== undefined) {
     fail(
-      `node "${id}": a "subgraph" node needs a "subgraph" payload object { graph, inputs, outputs } carrying its inner graph, got ${JSON.stringify(payload)}`,
+      `node "${id}": carries both "ref" and "subgraph"; a subgraph node either references a registered subgraph by name ("ref") or embeds its inner graph ("subgraph"), never both — remove whichever is not intended`,
     );
   }
-  if (seenPayloads.has(payload)) {
+  if (refJson !== undefined) {
+    const ref = readSubgraphRef(id, refJson);
+    if (ctx.seenNames.has(ref.name)) {
+      fail(
+        `node "${id}": subgraph reference cycle ${[...ctx.seenNames, ref.name].map((n) => JSON.stringify(n)).join(" -> ")}; named subgraph references must be acyclic — resolving one would resolve itself forever`,
+      );
+    }
+    if (!hasRegisteredSubgraph(ref.name)) {
+      fail(`node "${id}": ${unknownSubgraphMessage(ref.name)}`);
+    }
+    const entry = getRegisteredSubgraph(ref.name);
+    // A pin is opt-in, and a mismatch is a hard error: the author who
+    // wrote a hash asked to cook exactly what they authored against. A
+    // ref WITHOUT one follows the registry, so improving a primitive
+    // never breaks a saved graph. Neither mode warns — a library warning
+    // reaches nobody, which makes it indistinguishable from cooking the
+    // near-miss silently.
+    if (ref.hash !== undefined && ref.hash !== entry.hash) {
+      fail(
+        `node "${id}": subgraph "${ref.name}" is pinned to content hash ${ref.hash}, but the registered one hashes ${entry.hash} — the primitive changed since this graph was written. Re-save the graph to adopt the new version, or remove "hash" from the ref to follow the registry.`,
+      );
+    }
+    ctx.seenNames.add(ref.name);
+    try {
+      return buildSubgraphNode(
+        graph,
+        id,
+        entry.subgraph as unknown as Record<string, unknown>,
+        paramsJson,
+        ctx,
+        ref,
+      );
+    } finally {
+      ctx.seenNames.delete(ref.name);
+    }
+  }
+  if (!isPlainObject(payload)) {
+    fail(
+      `node "${id}": a "subgraph" node needs a "subgraph" payload object { graph, inputs, outputs } carrying its inner graph, or a "ref" { name } naming a registered one, got ${JSON.stringify(payload)}`,
+    );
+  }
+  if (ctx.seenPayloads.has(payload)) {
     fail(
       `node "${id}": its subgraph payload reaches itself (a payload cycle); subgraph nesting must be acyclic`,
     );
   }
-  seenPayloads.add(payload);
+  ctx.seenPayloads.add(payload);
+  try {
+    return buildSubgraphNode(graph, id, payload, paramsJson, ctx, undefined);
+  } finally {
+    ctx.seenPayloads.delete(payload);
+  }
+}
+
+/**
+ * The one construction route: recursively deserialize the inner graph,
+ * then re-wrap it through `subgraphNode` so the instance is
+ * indistinguishable from a code-first one. `ref`, when present, is
+ * recorded against the def so serialization writes the reference back out.
+ */
+function buildSubgraphNode(
+  graph: Graph,
+  id: string,
+  payload: Record<string, unknown>,
+  paramsJson: Record<string, unknown>,
+  ctx: ReadContext,
+  ref: SerializedSubgraphRef | undefined,
+): NodeHandle {
+  checkKeys(payload, SUBGRAPH_PAYLOAD_KEYS, `node "${id}" subgraph payload`, NO_ANNOTATION_KEY);
   let inner: Graph;
   try {
-    inner = deserializeGraphRec(payload.graph, seenPayloads);
+    inner = deserializeGraphRec(payload.graph, ctx);
   } catch (err) {
     if (err instanceof GraphSerializationError) {
       fail(`node "${id}" inner graph: ${err.message}`);
     }
     throw err;
-  } finally {
-    seenPayloads.delete(payload);
   }
   const inputs = readExposedPins(payload.inputs, inner, `node "${id}" subgraph inputs`);
   const outputs = readExposedPins(payload.outputs, inner, `node "${id}" subgraph outputs`);
@@ -683,7 +968,7 @@ function addSubgraphNode(
     const schema = declared.get(key);
     if (schema === undefined) {
       fail(
-        `node "${id}": unknown param "${key}"; this subgraph node exposes: ${[...declared.keys()].join(", ") || "(none)"} (an exposed param must be declared in the node's "subgraph" payload under "params")`,
+        `node "${id}": unknown param "${key}"; this subgraph node exposes: ${[...declared.keys()].join(", ") || "(none)"} (an exposed param must be declared under "params" ${ref === undefined ? 'in the node\'s "subgraph" payload' : `in the registered recipe of "${ref.name}"`})`,
       );
     }
     const where = `node "${id}" param "${key}"`;
@@ -698,6 +983,10 @@ function addSubgraphNode(
       params[key] = Array.isArray(value) ? [...(value as unknown[])] : value;
     }
   }
+  // Recorded per DEF, and a def is created fresh for every reference (a
+  // live graph can be wrapped exactly once), so no two references share
+  // this record and serialization can write each one back out as it came.
+  if (ref !== undefined) recordSubgraphRef(def as object, ref);
   return graph.add(def, params, id);
 }
 
@@ -708,6 +997,11 @@ function addSubgraphNode(
  * every connection and output references existing nodes and pins —
  * errors name the offending node id, param, or pin and list what would
  * be valid.
+ *
+ * The key sets are closed at EVERY object position — the graph, a node, a
+ * `subgraph` payload, a `ref`, a connection, a declared output, an
+ * exposed-pin or exposed-param declaration, an exposed-param target — so
+ * an unrecognized key is named rather than ignored.
  *
  * The optional `meta` block ({ title?, description?, tags? }) is read
  * onto {@link Graph.setMeta}; an unknown key inside it is an error, not a
@@ -720,13 +1014,14 @@ function addSubgraphNode(
  * at runtime (e.g. by the World) after deserialization.
  */
 export function deserializeGraph(json: unknown): Graph {
-  return deserializeGraphRec(json, new Set());
+  return deserializeGraphRec(json, { seenPayloads: new Set(), seenNames: new Set() });
 }
 
-function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
+function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
   if (!isPlainObject(json)) {
     fail(`deserializeGraph: expected a serialized graph object, got ${JSON.stringify(json)}`);
   }
+  checkKeys(json, GRAPH_KEYS, "deserializeGraph", NO_ANNOTATION_KEY);
   if (json.formatVersion !== FORMAT_VERSION) {
     fail(
       `unsupported formatVersion ${JSON.stringify(json.formatVersion)}; this build reads formatVersion ${FORMAT_VERSION}`,
@@ -758,6 +1053,7 @@ function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
     if (handles.has(id)) {
       fail(`nodes[${i}]: duplicate node id "${id}"`);
     }
+    checkKeys(nodeJson, NODE_KEYS, `node "${id}"`, NO_ANNOTATION_KEY);
     const type = nodeJson.type;
     if (typeof type !== "string") {
       fail(`node "${id}": type must be a string, got ${JSON.stringify(type)}`);
@@ -775,8 +1071,18 @@ function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
       fail(`node "${id}": params must be an object, got ${JSON.stringify(nodeJson.params)}`);
     }
     if (type === "subgraph") {
-      handles.set(id, addSubgraphNode(graph, id, nodeJson, paramsJson, seenPayloads));
+      handles.set(id, addSubgraphNode(graph, id, nodeJson, paramsJson, ctx));
       return;
+    }
+    // Both keys are subgraph plumbing. Carried by any other type they are
+    // a mistake — and one that used to be ignored, which is exactly how a
+    // graph cooks something other than what it says.
+    for (const key of ["subgraph", "ref"] as const) {
+      if (nodeJson[key] !== undefined) {
+        fail(
+          `node "${id}": type "${type}" is not a subgraph node, so it cannot carry "${key}"; only nodes of type "subgraph" wrap an inner graph (inline under "subgraph", or by name under "ref")`,
+        );
+      }
     }
     const reg = getNodeType(type);
     const params: Record<string, unknown> = {};
@@ -806,6 +1112,7 @@ function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
     if (!isPlainObject(connJson)) {
       fail(`connections[${i}]: expected a connection object, got ${JSON.stringify(connJson)}`);
     }
+    checkKeys(connJson, CONNECTION_KEYS, `connections[${i}]`, NO_ANNOTATION_KEY);
     const [fromId, fromPin] = checkEndpoint(connJson.from, `connections[${i}].from`);
     const [toId, toPin] = checkEndpoint(connJson.to, `connections[${i}].to`);
     const from = handles.get(fromId);
@@ -835,6 +1142,7 @@ function deserializeGraphRec(json: unknown, seenPayloads: Set<object>): Graph {
     if (!isPlainObject(outJson)) {
       fail(`outputs[${i}]: expected an output object, got ${JSON.stringify(outJson)}`);
     }
+    checkKeys(outJson, OUTPUT_KEYS, `outputs[${i}]`, NO_ANNOTATION_KEY);
     const { id, pin, name } = outJson;
     if (typeof id !== "string" || typeof pin !== "string" || typeof name !== "string") {
       fail(`outputs[${i}]: expected { id, pin, name } strings, got ${JSON.stringify(outJson)}`);

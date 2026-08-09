@@ -8,6 +8,24 @@ export * from "./registry.js";
 export * from "./fieldJson.js";
 export * from "./subgraphParams.js";
 export * from "./serialize.js";
+// Named exports rather than `export *`: the registry's test doors
+// (`__resetSubgraphRegistry`, `__defineSubgraphUnchecked`) and its
+// serialization-internal helpers are deliberately not part of the package.
+export {
+  getRegisteredSubgraph,
+  hasRegisteredSubgraph,
+  listSubgraphs,
+  registerSubgraph,
+  subgraphContentHash,
+  type RegisteredSubgraph,
+  // The element types of a SubgraphRegistrationSpec. Exported so a caller
+  // can NAME them — build a `RegistrationPin[]` in a helper, type a
+  // parameter — rather than only pass matching object literals inline.
+  type RegistrationNodeRef,
+  type RegistrationParam,
+  type RegistrationPin,
+  type SubgraphRegistrationSpec,
+} from "./subgraphRegistry.js";
 export * from "./sources.js";
 export * from "./samplers.js";
 export * from "./pointOps.js";

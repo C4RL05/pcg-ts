@@ -46,11 +46,29 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
   declarations (`{ name, targets, description, default, min?, max? }`;
   `type`/`enum`/`acceptsField` are re-derived from the targets on load,
   never read from JSON) — so nested subgraphs round-trip. Its own
-  `params` hold the exposed params' values. A
+  `params` hold the exposed params' values. INSTEAD of `subgraph` it may
+  carry `ref: { name, hash? }`, referencing a subgraph registered with
+  `registerSubgraph` (below); the two keys are mutually exclusive and no
+  other node type may carry either. A
   `dataInput` node serializes with `items: []` (live DataItems are
   runtime-injected; re-bind after deserializing).
 - `connections`: [{ `from`: [nodeId, outputPin], `to`: [nodeId, inputPin] }]
 - `outputs`: [{ `id`: nodeId, `pin`: outputPin, `name`: result key }]
+
+The key sets above are COMPLETE, at EVERY object position: the graph
+object, a node object, a `subgraph` payload, a `ref`, a connection, a
+declared output, an exposed-pin declaration, an exposed-param declaration
+and each of its `targets`. An unknown key at any of them is a hard error
+naming it and listing the valid ones. The format is closed: a future
+field arrives with a `formatVersion` bump, not by riding along unnoticed,
+and there is no annotation key (descriptive text goes in `meta`, or in an
+exposed param's own `description`).
+
+An exposed-param declaration carries ONLY { `name`, `targets`,
+`description`, `default`?, `min`?, `max`? }. Writing `type`, `enum` or
+`acceptsField` on one is refused by name: the schema is derived from the
+targets' registered schemas, so a declaration cannot claim a type or a
+field capability the inner params do not have.
 
 Complete minimal example (deserializes and cooks as-is):
 
@@ -161,6 +179,43 @@ frozen snapshots with no mutation path that bypasses version bumps.
   the exposed param and the offending inner target. Two exposed params
   binding the same inner slot, or one listing a slot twice, is a hard
   error naming the params and the slot.
+- `registerSubgraph(name, spec)` — publish a subgraph under a name so
+  serialized graphs can reference it with `ref: { name, hash? }` instead
+  of embedding it. `spec` is `{ graph, inputs?, outputs?, params? }` where
+  `graph` is a live `Graph` or a `SerializedGraph` and the rest are the
+  serialized exposed-pin / exposed-param declarations. The registry stores
+  a canonicalized RECIPE (`serializeGraph(deserializeGraph(...))`), never
+  a live graph: `subgraphNode` mutates what it wraps, so every reference
+  materializes a fresh graph and def through the same
+  `deserializeGraph` → `subgraphNode` path an embedded payload takes.
+  Hence: a reference and an embedded copy of one recipe cook
+  byte-identically (same bytes, same cache decisions, same memo key,
+  within one build); two references to one name share no inner graph and
+  no caches; and the registry is not a live-update channel (resolution
+  happens once at load; duplicate names throw; there is no unregister).
+  Returns `{ name, subgraph, hash, meta? }`, frozen.
+- `getRegisteredSubgraph(name)` / `hasRegisteredSubgraph(name)` /
+  `listSubgraphs()` — lookup (throws listing every registered name),
+  membership, and the full list in registration order.
+- `subgraphContentHash(payload)` — 16 hex digits. COVERS node ids, types
+  and param values, connections, declared outputs, exposed pin mappings,
+  and each exposed param's name/targets/default/bounds; a nested `ref`
+  contributes the referenced NAME, not its content. EXCLUDES `meta`,
+  graph `seed`s and exposed-param `description`s at every level (none can
+  change a cooked byte, and hashing `meta` would make a typo fix break
+  every pinned graph). Object keys are sorted, so reordering a param
+  schema does not move a hash. Stable within one build only.
+- `ref.hash` is OPTIONAL: absent means "the registry's current version"
+  and upgrades freely; present means the author pinned it and a mismatch
+  is a hard error naming both hashes. Neither mode warns; neither cooks a
+  near-miss.
+- Subgraph nesting must be acyclic and is enforced statically: `Graph.add`
+  refuses a node whose def wraps the graph it is added to (directly or
+  through a chain), `registerSubgraph` refuses a recipe referencing the
+  name being registered, and `deserializeGraph` refuses a name cycle.
+  Editing a referenced primitive's inner graph in place and then
+  serializing is refused, rather than silently writing the registry's
+  content back out.
 
 Mutations keep serialization consistent: `serializeGraph` of a mutated
 graph round-trips and cooks identically. Rebuilding via
@@ -268,7 +323,7 @@ spawn, io, composite.
 - setBounds — stamp boundsMin/boundsMax on every point
 - spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`); one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order
 - splineSample — arc-length sampling along polyline primitives (emits tangent, curveU)
-- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively
+- subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal)
 - transferAttribute — transfer an attribute from a `source` geometry onto the input's points; `mapping`: "nearest" (closest source point in 3D, never misses), "uv" (destination point-domain UVs located in the source triangulation's UV space; source UVs read from the vertex domain when present — seam-correct — else point), "raycast" (forward-only ray per point: `direction` or per-point `directionAttr`, nearest hit, optional `maxDistance`). uv/raycast need a triangle source; f32 interpolates barycentrically, i32/u32/bool/string take the dominant corner (largest weight, ties → first corner); shared-edge/equal-distance ties → lowest source primitive index; misses keep the prior value (attribute default if new), count reportable via `missCountAttr` (u32 detail); `attrDomain: "vertex"` reads per-corner source values. Grid acceleration is result-neutral; epsilon policy exported (TRANSFER_BARY_EPS, TRANSFER_AREA_EPS, TRANSFER_DET_EPS, TRANSFER_BOX_PAD_REL)
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)

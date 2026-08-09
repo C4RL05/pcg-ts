@@ -64,7 +64,9 @@
     "examples": "vite --config examples/vite.config.ts",
     "examples:pages": "vite build --config examples/vite.config.ts --base=./ --outDir ../docs/examples --emptyOutDir",
     "status": "node scripts/status.mjs",
+    "docs": "npm run docs:nodes && npm run docs:primitives",
     "docs:nodes": "node scripts/gen-node-reference.mjs",
+    "docs:primitives": "node scripts/gen-primitives.mjs",
     "prepublishOnly": "npm run check && npm test && npm run build"
   },
   "peerDependencies": {

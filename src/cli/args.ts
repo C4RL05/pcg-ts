@@ -13,8 +13,15 @@ export class CliUsageError extends Error {
   }
 }
 
-/** What a flag carries. */
-export type FlagKind = "boolean" | "string" | "number";
+/**
+ * What a flag carries. `strings` is the one REPEATABLE kind: it collects
+ * every occurrence into a list, in the order given, where every other kind
+ * refuses a repeat. It exists because `--param k=v` is the first flag for
+ * which a repeat is correct rather than a mistake, and because the
+ * alternative spelling (`--param k=v,k2=v2`) is unusable when commas
+ * already occur inside a value, as they do in `vec3`.
+ */
+export type FlagKind = "boolean" | "string" | "number" | "strings";
 
 /** One declared flag. */
 export interface FlagSpec {
@@ -45,10 +52,13 @@ export const COMMON_FLAGS: Readonly<Record<string, FlagSpec>> = {
   help: { kind: "boolean", description: "print this command's usage and exit" },
 };
 
+/** One flag's parsed value; a list for the repeatable `strings` kind. */
+export type FlagValue = string | number | boolean | readonly string[];
+
 /** Parsed command line for one subcommand. */
 export interface ParsedArgs {
   readonly positional: readonly string[];
-  readonly flags: ReadonlyMap<string, string | number | boolean>;
+  readonly flags: ReadonlyMap<string, FlagValue>;
 }
 
 function allFlags(spec: CommandSpec): Record<string, FlagSpec> {
@@ -88,7 +98,11 @@ export function commandHelp(spec: CommandSpec): string {
   const width = Math.max(...names.map((n) => label(n).length));
   lines.push("Flags:");
   for (const name of names) {
-    lines.push(`  ${label(name).padEnd(width)}  ${flags[name].description}`);
+    // "(repeatable)" is derived from the kind, never written by hand: a
+    // repeatable flag whose description forgot to say so is exactly the
+    // drift help text exists to prevent.
+    const repeat = flags[name].kind === "strings" ? " (repeatable)" : "";
+    lines.push(`  ${label(name).padEnd(width)}  ${flags[name].description}${repeat}`);
   }
   return lines.join("\n") + "\n";
 }
@@ -103,10 +117,23 @@ export function commandHelp(spec: CommandSpec): string {
 const NUMBER_SPELLING = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 /**
+ * The number a CLI value spells, or `undefined` when it does not spell one
+ * under {@link NUMBER_SPELLING}. Exported so a value parsed from inside a
+ * flag (a `--param k=v` assignment, say) accepts exactly the spellings a
+ * numeric flag does, rather than a second, laxer rule.
+ */
+export function parseNumberValue(raw: string): number | undefined {
+  if (!NUMBER_SPELLING.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
  * Parse one subcommand's arguments. Supports `--flag`, `--flag value`,
  * and `--flag=value`; `--` ends flag parsing. A repeated flag is an error
  * rather than a silent last-wins, because a repeat is nearly always a
- * mistake the caller wants to hear about.
+ * mistake the caller wants to hear about — except for the `strings` kind,
+ * which is declared repeatable and collects its occurrences in order.
  *
  * `-h` is the one short spelling accepted, as an alias for `--help`, and
  * only in flag position: after `--`, or where a flag's value is expected
@@ -114,7 +141,7 @@ const NUMBER_SPELLING = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
  */
 export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArgs {
   const flags = allFlags(spec);
-  const values = new Map<string, string | number | boolean>();
+  const values = new Map<string, FlagValue>();
   const positional: string[] = [];
   let onlyPositional = false;
 
@@ -151,7 +178,7 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
         `${spec.name}: unknown flag "--${name}"; valid flags: ${flagList(spec)}`,
       );
     }
-    if (values.has(name)) {
+    if (values.has(name) && flag.kind !== "strings") {
       throw new CliUsageError(`${spec.name}: flag "--${name}" was given more than once`);
     }
     if (flag.kind === "boolean") {
@@ -194,7 +221,12 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
           `${spec.name}: flag "--${name}" needs a non-empty value (--${name} <${flag.value ?? "value"}>)`,
         );
       }
-      values.set(name, raw);
+      if (flag.kind === "strings") {
+        const previous = values.get(name);
+        values.set(name, [...(Array.isArray(previous) ? previous : []), raw]);
+      } else {
+        values.set(name, raw);
+      }
     }
   }
 
@@ -216,7 +248,33 @@ export function parseArgs(argv: readonly string[], spec: CommandSpec): ParsedArg
 /** Read a string flag, or `undefined` when it was not given. */
 export function stringFlag(args: ParsedArgs, name: string): string | undefined {
   const v = args.flags.get(name);
-  return v === undefined ? undefined : String(v);
+  if (v === undefined) return undefined;
+  if (Array.isArray(v)) {
+    // A repeatable flag read as a single one would stringify its list and
+    // proceed with a value nobody typed. That is a bug in the command, not
+    // in the command line, so it throws rather than becoming a usage error.
+    throw new Error(
+      `stringFlag("${name}"): that flag is declared repeatable (kind "strings"); read it with listFlag`,
+    );
+  }
+  return String(v);
+}
+
+/**
+ * Read a repeatable (`strings`) flag's values in the order given; an empty
+ * list when it was not passed. The mirror of {@link stringFlag}: reading a
+ * single-valued flag through it is the same command-side bug and throws
+ * the same way.
+ */
+export function listFlag(args: ParsedArgs, name: string): readonly string[] {
+  const v = args.flags.get(name);
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) {
+    throw new Error(
+      `listFlag("${name}"): that flag is not declared repeatable (kind "strings"); read it with stringFlag`,
+    );
+  }
+  return v;
 }
 
 /** Read a boolean flag (absent = false). */

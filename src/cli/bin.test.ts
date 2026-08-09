@@ -49,7 +49,7 @@ describe("pcg bin", () => {
 
   it("every command the CLI dispatches is named in the shipped help", () => {
     const names = COMMANDS.map((c) => c.spec.name);
-    expect(names).toEqual(["nodes", "fields", "validate", "cook", "inspect", "render"]);
+    expect(names).toEqual(["nodes", "fields", "validate", "cook", "run", "inspect", "render"]);
     expect(new Set(names).size).toBe(names.length);
   });
 });

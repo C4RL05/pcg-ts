@@ -175,12 +175,95 @@ describe("subgraphNode", () => {
     expect(r.stats.cooked).toBe(1);
   });
 
-  it("memoKey terminates on adversarial cyclic wiring", () => {
+  it("refuses to add a node whose def wraps the graph, and memoKey still terminates if one is forced in", () => {
     const g = new Graph();
     const t = g.add(transformNode(), undefined, "t");
     const def = subgraphNode(g, [], [{ name: "out", node: t, pin: "out" }]);
-    g.add(def, undefined, "ouro"); // the graph wraps itself
+    // Stronger than the guarantee this test used to make: the cycle is now
+    // refused where it is created, so the graph never reaches the state
+    // whose memo key had to be survivable. Cooking it could only hang —
+    // the inner cook re-enters the same graph's exclusive section, and a
+    // re-entrant call is indistinguishable there from a concurrent one.
+    expect(() => g.add(def, undefined, "ouro")).toThrow(GraphValidationError);
+    expect(() => g.add(def, undefined, "ouro")).toThrow(
+      /cannot add subgraph node "ouro": its definition wraps this very graph.*never finish/s,
+    );
+    expect(g._nodes.has("ouro")).toBe(false);
+    // The walk's own termination guard is defence in depth, so it is
+    // exercised past the door that now refuses to build this shape.
+    g._nodes.set("ouro", { id: "ouro", def, params: {}, dirty: true, cache: undefined });
     expect(typeof def.memoKey?.()).toBe("string"); // no infinite recursion
+  });
+
+  it("refuses to close a wrap cycle two levels deep (A -> B -> C -> A)", () => {
+    const a = new Graph();
+    const a1 = a.add(transformNode(), undefined, "a1");
+    const b = new Graph();
+    const b1 = b.add(transformNode(), undefined, "b1");
+    const c = new Graph();
+    const c1 = c.add(transformNode(), undefined, "c1");
+    const defA = subgraphNode(a, [], [{ name: "out", node: a1, pin: "out" }]);
+    b.add(defA, undefined, "subA"); // b wraps a
+    const defB = subgraphNode(b, [], [{ name: "out", node: b1, pin: "out" }]);
+    c.add(defB, undefined, "subB"); // c wraps b
+    const defC = subgraphNode(c, [], [{ name: "out", node: c1, pin: "out" }]);
+    // Closing the loop is legal at every step until this one, so the check
+    // has to follow the whole chain, not just the def's own inner graph.
+    expect(() => a.add(defC, undefined, "subC")).toThrow(
+      /cannot add subgraph node "subC": its definition wraps a graph that reaches back to this one through subgraph nodes "subB" -> "subA"/,
+    );
+  });
+
+  /**
+   * The visited set inside `wrapPathTo` is not merely a termination guard
+   * for a forest corrupted some other way: it is what keeps the walk
+   * LINEAR on a perfectly legitimate acyclic one. A diamond chain — each
+   * level holding TWO instances of the level below — has 2^depth distinct
+   * paths through it and only depth+1 distinct graphs. Without the set the
+   * walk enumerates paths; with it, graphs. Removing either half of it
+   * (`seen.has` or `seen.add`) turns a 0.2 ms `add` into minutes.
+   *
+   * Pinned structurally rather than by wall clock: `wrapPathTo` reads
+   * `from._nodes` exactly once per graph it visits, so an accessor
+   * installed on each level counts visits directly, with no timing
+   * assumption to go flaky on a loaded machine. At depth 20 the bound
+   * below is 160 against 1,048,576 visits without the set.
+   */
+  it("visits each graph once when walking a diamond-nested forest, not each path", () => {
+    const DEPTH = 20;
+    let visits = 0;
+    /** Count every read of `_nodes` — the walk makes exactly one per graph. */
+    const counted = (g: Graph): Graph => {
+      const nodes = g._nodes;
+      Object.defineProperty(g, "_nodes", {
+        configurable: true,
+        get() {
+          visits++;
+          return nodes;
+        },
+      });
+      return g;
+    };
+
+    const base = counted(new Graph());
+    const leaf = base.add(transformNode(), undefined, "t");
+    let def = subgraphNode(base, [], [{ name: "out", node: leaf, pin: "out" }]);
+    for (let level = 0; level < DEPTH; level++) {
+      const g = counted(new Graph());
+      // The same def added twice: 2^DEPTH paths over DEPTH + 1 graphs.
+      g.add(def, undefined, "l");
+      g.add(def, undefined, "r");
+      def = subgraphNode(g, [], []);
+    }
+
+    const outer = counted(new Graph());
+    visits = 0;
+    // Acyclic, so this must succeed — and must not enumerate paths doing it.
+    outer.add(def, undefined, "top");
+    const walkVisits = visits; // read before any assertion touches _nodes
+    expect(outer._nodes.has("top")).toBe(true);
+    expect(walkVisits).toBeGreaterThanOrEqual(DEPTH); // the walk genuinely ran
+    expect(walkVisits).toBeLessThan(DEPTH * 8); // 2^DEPTH without the visited set
   });
 
   it("forwards budgetMs into the inner cook", async () => {

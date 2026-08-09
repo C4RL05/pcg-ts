@@ -6,3 +6,4 @@
  * public API. See node-reference.ts for the full rationale.
  */
 export * from "./node-reference.js";
+export * from "./primitives.js";

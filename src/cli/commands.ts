@@ -6,12 +6,17 @@
 import {
   type CookOptions,
   DOMAINS,
+  type DataItem,
   type Domain,
+  type Graph,
   type NodeDoneInfo,
   type NodeTypeInfo,
   type ParamSchema,
   cook,
+  describeSubgraphParams,
+  deserializeGraph,
   getNodeType,
+  getRegisteredSubgraph,
   listFieldFnInfos,
   listNodeTypes,
 } from "../index.js";
@@ -21,6 +26,7 @@ import {
   type ParsedArgs,
   boolFlag,
   intFlag,
+  listFlag,
   numberFlag,
   stringFlag,
 } from "./args.js";
@@ -28,6 +34,13 @@ import { CliError } from "./errors.js";
 import { fmtMs, fmtStat, plural, table } from "./format.js";
 import { type TargetOptions, cookTarget, loadGraph } from "./graphSource.js";
 import type { CliIo } from "./io.js";
+import {
+  WRAPPER_NODE_ID,
+  buildWrapperGraph,
+  inputNodeId,
+  parseParamAssignments,
+  readInputBindings,
+} from "./primitiveRun.js";
 import { renderSvg } from "./render.js";
 import {
   type AttrStats,
@@ -669,12 +682,188 @@ const renderCommand: Command = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------------
+
+/**
+ * The exposed params of the primitive instance in a synthesized wrapper,
+ * read from the live node the way `pcg inspect --node` reads output pins:
+ * a subgraph node's real interface is per-instance, so the registry entry
+ * for the `subgraph` TYPE declares none and this is the only place it
+ * lives.
+ */
+function exposedParams(graph: Graph): readonly { name: string; schema: ParamSchema }[] {
+  const state = graph._nodes.get(WRAPPER_NODE_ID);
+  // Unreachable: buildWrapperGraph always emits the node under this id,
+  // and deserializeGraph would have thrown otherwise. Narrowing.
+  if (state === undefined) throw new CliError(`internal: wrapper node "${WRAPPER_NODE_ID}" is missing`);
+  return (describeSubgraphParams(state.def) ?? []).map((p) => ({ name: p.name, schema: p.schema }));
+}
+
+const runCommand: Command = {
+  spec: {
+    name: "run",
+    summary:
+      "Cook a registered primitive by name, with no graph file: synthesize a one-node wrapper around it, bind --param values and --in items, cook every exposed output and report what came out.",
+    positionals: [
+      {
+        name: "name",
+        required: true,
+        description: "a registered subgraph name (an unknown one lists what is registered)",
+      },
+    ],
+    flags: {
+      param: {
+        kind: "strings",
+        value: "k=v",
+        description:
+          "set one exposed param; the value is typed by that param's own schema (numbers, true/false, enum members, vec3 as 1,0,2.5 or [1,0,2.5], a field as JSON or @file.json)",
+      },
+      in: {
+        kind: "string",
+        value: "data.json",
+        description:
+          'bind value items to exposed input pins: { "<pin>": [ { "kind": "value", "value": 3.5 } ] } (value items only — geometry has no JSON form)',
+      },
+      seed: SEED_FLAG,
+      budget: BUDGET_FLAG,
+      stats: { kind: "boolean", description: "print per-node cook stats" },
+      out: { kind: "string", value: "file", description: "write the JSON report to a file" },
+    },
+  },
+  /**
+   * Exit codes follow the CLI's documented split. A name that does not
+   * exist — the primitive, or a param on it — is exit 1, the class the
+   * top-level help calls "a named thing does not exist". A `--param` value
+   * of the wrong shape or out of range is exit 2, like every other flag
+   * value the CLI refuses; that includes the ones only the deserializer
+   * can catch (bounds, field specs), which is why the second
+   * `deserializeGraph` re-raises as a usage error. It can do so safely:
+   * the two wrapper graphs differ ONLY in the params object, so a failure
+   * that the first one did not hit is a param failure by construction.
+   */
+  async run(args, io) {
+    const name = args.positional[0];
+    // The registry's own message, verbatim: it lists every registered
+    // name, or explains that none are, and the CLI must not paraphrase it.
+    const entry = getRegisteredSubgraph(name);
+    const exposedInputs = entry.subgraph.inputs.map((p) => p.name);
+    const exposedOutputs = entry.subgraph.outputs.map((p) => p.name);
+
+    const inPath = stringFlag(args, "in");
+    const bindings =
+      inPath === undefined ? [] : readInputBindings(io, inPath, name, exposedInputs);
+    const shape = {
+      name,
+      boundInputs: bindings.map((b) => b.pin),
+      outputs: exposedOutputs,
+      params: {},
+    };
+    // Materialized once to read the schemas, then again only if there are
+    // values to type against them — so the common case pays for one.
+    let graph = deserializeGraph(buildWrapperGraph(shape));
+    const params = parseParamAssignments(io, name, exposedParams(graph), listFlag(args, "param"));
+    const wrapper = buildWrapperGraph({ ...shape, params });
+    if (Object.keys(params).length > 0) {
+      try {
+        graph = deserializeGraph(wrapper);
+      } catch (err) {
+        throw new CliUsageError(
+          `run: a --param value was rejected: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    for (const binding of bindings) {
+      graph.setParam<{ items: readonly DataItem[] }, "items">(
+        { id: inputNodeId(binding.pin) },
+        "items",
+        binding.items,
+      );
+    }
+    const seed = applySeed(args, "run", graph);
+    if (exposedOutputs.length === 0) {
+      throw new CliError(
+        `primitive "${name}" exposes no output pins, so cooking it produces nothing; a primitive is run through its exposed outputs — register it with an "outputs" entry, or inspect the graph that builds it instead`,
+      );
+    }
+
+    const perNode: NodeDoneInfo[] = [];
+    const result = await cook(graph, {
+      ...cookOptions(args, "run"),
+      onNodeDone: (info) => perNode.push(info),
+    });
+
+    const outputs: Record<string, ItemSummary[]> = {};
+    for (const outputName of Object.keys(result.outputs)) {
+      outputs[outputName] = [...result.outputs[outputName]].map(summarizeItem);
+    }
+    const outPath = stringFlag(args, "out");
+    const json = {
+      primitive: name,
+      hash: entry.hash,
+      seed: graph.seed,
+      // The wrapper's params exactly as they went into the JSON, so the
+      // report says what cooked rather than what was typed.
+      params: wrapper.nodes[0].params,
+      inputs: bindings.map((b) => ({ pin: b.pin, items: b.items.length })),
+      out: outPath ?? null,
+      stats: {
+        cooked: result.stats.cooked,
+        cached: result.stats.cached,
+        elapsedMs: result.stats.elapsedMs,
+      },
+      nodes: perNode.map((n) => ({
+        id: n.id,
+        type: n.type,
+        cached: n.cached,
+        elapsedMs: n.elapsedMs,
+      })),
+      outputs,
+    };
+
+    const lines = [
+      `ran "${name}" #${entry.hash}${seed !== undefined ? ` (seed override ${graph.seed})` : ` (seed ${graph.seed})`}`,
+      `${result.stats.cooked} cooked, ${result.stats.cached} cached, ${fmtMs(result.stats.elapsedMs)}`,
+    ];
+    const paramNames = Object.keys(json.params);
+    if (paramNames.length > 0) {
+      lines.push("", "params:");
+      lines.push(...table(paramNames.map((k) => [k, JSON.stringify(json.params[k])])));
+    }
+    if (bindings.length > 0) {
+      lines.push("", "inputs:");
+      lines.push(...table(bindings.map((b) => [b.pin, plural(b.items.length, "value item")])));
+    }
+    lines.push("", "outputs:");
+    for (const outputName of Object.keys(outputs)) {
+      lines.push(`  ${outputName} (${plural(outputs[outputName].length, "item")})`);
+      outputs[outputName].forEach((item, i) => lines.push(`    [${i}] ${itemLine(item)}`));
+    }
+    if (boolFlag(args, "stats")) {
+      lines.push("", "per-node:");
+      lines.push(
+        ...table([
+          ["id", "type", "state", "elapsed"],
+          ...perNode.map((n) => [n.id, n.type, n.cached ? "cached" : "cooked", fmtMs(n.elapsedMs)]),
+        ]),
+      );
+    }
+    if (outPath !== undefined) {
+      io.writeFile(outPath, JSON.stringify(json, null, 2) + "\n");
+      lines.push("", `wrote ${outPath}`);
+    }
+    return { text: lines.join("\n") + "\n", json };
+  },
+};
+
 /** Every subcommand, in help order. */
 export const COMMANDS: readonly Command[] = [
   nodesCommand,
   fieldsCommand,
   validateCommand,
   cookCommand,
+  runCommand,
   inspectCommand,
   renderCommand,
 ];

@@ -777,7 +777,7 @@
   },
   {
     "type": "subgraph",
-    "description": "Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in \"params\" and its inner graph plus the exposed pin and param DECLARATIONS in a nested payload under \"subgraph\" ({ graph, inputs, outputs, params }), recursively in the same versioned format.",
+    "description": "Composite node wrapping an inner graph as a single node. Pins and params are per-instance, derived from the exposed inner pins and the exposed inner params, so this registry entry declares none — create instances with subgraphNode(innerGraph, exposedInputs, exposedOutputs, exposedParams) and read an instance's real interface with describeSubgraphPins(def) and describeSubgraphParams(def). A serialized subgraph node carries its exposed-param VALUES in \"params\" and its inner graph plus the exposed pin and param DECLARATIONS either inline under \"subgraph\" ({ graph, inputs, outputs, params }), recursively in the same versioned format, or by reference under \"ref\" ({ name, hash? }) to a subgraph registered with registerSubgraph. \"subgraph\" and \"ref\" are mutually exclusive; a ref's \"hash\" is optional, and pins the reference to that exact content (a mismatch is an error, never a warning).",
     "category": "composite",
     "inputs": [],
     "outputs": [],
