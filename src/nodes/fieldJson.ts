@@ -9,6 +9,9 @@
  * - `{ fn: "constant", value: 1 | [1, 2, 3] }`
  * - `{ fn: "attribute", name: "density", tupleSize?: 1 }`
  * - `{ fn: "position" }` / `{ fn: "index" }`
+ * - `{ fn: "fraction" }` — normalized index, `index / (count - 1)`:
+ *   exactly 0 on the first element and exactly 1 on the last (a lone
+ *   element gives 0)
  * - `{ fn: "randomField", key?: 0 | "salt" }`
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
  *   lt, le, gt, ge, eq, ne, dot, atan2 (2 args); abs, floor, length,
@@ -42,6 +45,7 @@ import {
   eq,
   evaluateField,
   floor,
+  fraction,
   ge,
   gt,
   index,
@@ -264,6 +268,9 @@ function detachedLeaf<N extends number>(shared: Field<N>, spec: FieldSpec): Fiel
 
 register("position", [], `{ fn: "position" }`, () => detachedLeaf(position(), { fn: "position" }));
 register("index", [], `{ fn: "index" }`, () => detachedLeaf(index(), { fn: "index" }));
+register("fraction", [], `{ fn: "fraction" }`, () =>
+  detachedLeaf(fraction(), { fn: "fraction" }),
+);
 
 register("randomField", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
   const key = spec.key;

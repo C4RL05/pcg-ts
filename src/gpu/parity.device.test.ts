@@ -167,6 +167,53 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     }
   });
 
+  it("fraction agrees with the CPU across counts, bit-exactly at the degenerate ones", () => {
+    // Every other family is a function of per-lane inputs, so one count
+    // measures it. `fraction` is a function of the COUNT itself, so its
+    // parity has to be SWEPT across counts — and the counts that matter
+    // most are the ones a whole-cloud sweep never reaches: 1 (the
+    // divide-by-zero guard, where CPU `n > 1 ? n - 1 : 1` and WGSL
+    // `max(count, 2u) - 1u` must land on the same divisor) and 2 (the
+    // first count that actually divides).
+    const geo = makeCorpusGeometry(10_000);
+    const spec: FieldSpecArg = { fn: "fraction" };
+    const kernel = compileFieldSpec(spec, CORPUS_LAYOUT);
+    const counts = [1, 2, 3, 5, 63, 64, 65, 1000, 10_000];
+    const results = runDeviceTasks(
+      counts.map((c) => dispatchTask(`c${c}`, kernel, geo, c, PARITY_SEED)),
+    );
+    const lines: string[] = [];
+    for (let i = 0; i < counts.length; i++) {
+      const count = counts[i];
+      expect(results[i].errors, `count ${count}`).toEqual([]);
+      const gpu = decodeRun(kernel, results[i].runs![0]);
+      const cpu = cpuColumn(spec, count, PARITY_SEED);
+      // The advertised range, asserted on BOTH sides: exactly 0 at the
+      // first element and exactly 1 at the last (0 when there is only
+      // one). No lane may be NaN at any count.
+      for (const [label, col] of [["cpu", cpu], ["gpu", gpu]] as const) {
+        expect(col.data.length, `count ${count}: ${label} length`).toBe(count);
+        expect(col.data[0], `count ${count}: ${label} first lane`).toBe(0);
+        expect(col.data[count - 1], `count ${count}: ${label} last lane`).toBe(count === 1 ? 0 : 1);
+        for (let k = 0; k < count; k++) {
+          if (Number.isNaN(col.data[k])) throw new Error(`count ${count}: ${label} NaN at lane ${k}`);
+        }
+      }
+      const m = measureParity(cpu, gpu);
+      lines.push(`count ${count}: rangeUlp=${m.rangeUlp.toFixed(2)} maxUlp=${m.maxUlp}`);
+      // Counts 1 and 2 divide by 1, which is exact on any conforming
+      // implementation — so they are held to byte identity, not to the
+      // division family's budget. That is the guard's actual proof.
+      if (count <= 2) {
+        expectBytesEqual(cpu, gpu, `fraction count ${count}`);
+      } else {
+        // Everything else is one f32 division: the `div` family budget.
+        expect(m.rangeUlp, `count ${count}: rangeUlp`).toBeLessThanOrEqual(1);
+      }
+    }
+    console.log(`[fraction counts ${testDevice!.label}]\n${lines.join("\n")}`);
+  });
+
   it("count 0 has nothing to compare (dispatch is skipped upstream)", () => {
     // The evaluator returns an empty column without dispatching; covered
     // in resolver.test.ts and integration.device.test.ts. Recorded here

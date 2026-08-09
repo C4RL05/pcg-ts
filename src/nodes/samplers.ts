@@ -9,8 +9,8 @@ import { standardNode } from "./registry.js";
 import {
   type FieldParam,
   gatherPoints,
-  geometryItems,
   locateOnArcLength,
+  optionalGeometry,
   polylineArcTables,
   requireGeometry,
   requireTuple,
@@ -349,10 +349,14 @@ export const volumeSample = standardNode<VolumeSampleParams>({
     }
     let [minX, minY, minZ] = params.boundsMin;
     let [maxX, maxY, maxZ] = params.boundsMax;
-    const source = geometryItems(inputs.in)[0];
+    // Optional: the connected geometry supplies the bounds, and nothing
+    // connected falls back to the params. Several connected is an error,
+    // not a first-item pick — the bounds of ONE of four groups is a
+    // silently wrong volume, and unioning them would be a different node.
+    const source = optionalGeometry(inputs, "in", "volumeSample");
     if (source) {
-      const P = source.geo.attrs.point.get("P");
-      if (!P || P.type !== "f32" || P.tupleSize < 3 || source.geo.pointCount === 0) {
+      const P = source.attrs.point.get("P");
+      if (!P || P.type !== "f32" || P.tupleSize < 3 || source.pointCount === 0) {
         throw new Error(
           'volumeSample: connected input needs points with a "P" attribute (f32, tupleSize >= 3); disconnect it to use the bounds params',
         );
@@ -361,7 +365,7 @@ export const volumeSample = standardNode<VolumeSampleParams>({
       maxX = maxY = maxZ = -Infinity;
       const pd = P.data;
       const ps = P.tupleSize;
-      for (let i = 0; i < source.geo.pointCount; i++) {
+      for (let i = 0; i < source.pointCount; i++) {
         const x = pd[i * ps];
         const y = pd[i * ps + 1];
         const z = pd[i * ps + 2];

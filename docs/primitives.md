@@ -344,7 +344,7 @@ Run it: `pcg run filter/thin-by-density`
 
 Casts a ray from every point onto a mesh, reads the surface `normal` where it lands, and turns the point so its chosen local axis stands along that normal — props lying on slopes instead of standing upright through them. PRECONDITION: the `surface` must carry a `normal` point attribute (f32, tuple 3); a mesh built by `meshPrimitive` carries uv and topology but no normal, so stamp one on it first. A point whose ray misses keeps the previous normal it had, and a zero-length one keeps its existing rotation. Fully deterministic. Writes `rot` and `normal`; `P` is not moved — pair it with `place/drop-to-surface` for that.
 
-**Content hash:** `00b616e8d41bce55`
+**Content hash:** `8e97e3270e054aaa`
 
 **Tags:** `place`, `surface`, `raycast`, `instancing`
 
@@ -393,9 +393,9 @@ Run it: `pcg run place/along-curve`
 
 **Drop points onto a mesh and discard the misses**
 
-Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. Two rays are cast, not one, and the second is the content: a miss keeps its prior value rather than reporting itself, so points that hit nothing would otherwise stay floating with no per-point way to find them. A marker stamped on the surface before the transfer comes back as 1 on a hit and 0 on a miss, which is what makes the discard possible at all. Fully deterministic. Reads and writes `P`; the marker column is removed again.
+Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. ONE ray is cast: the transfer moves `P` to the hit and reports per point whether it found anything, so the discard reads the outcome of the very ray that did the moving. A miss keeps its prior position and is filtered out. Fully deterministic. Reads and writes `P`; the internal `__onSurface` flag column is removed again.
 
-**Content hash:** `ddc00f2881334737`
+**Content hash:** `8240be26af3cc83a`
 
 **Tags:** `place`, `surface`, `raycast`, `terrain`
 
@@ -407,8 +407,8 @@ Casts a ray from every point along a direction, moves each one to where it hits 
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `direction` | vec3 | `[0,-1,0]` |  |  |  | hit.direction, snap.direction | Which way the rays travel. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss. |
-| `maxDistance` | f32 | `0` | >= 0 |  |  | hit.maxDistance, snap.maxDistance | Longest drop that still counts as a landing, in world units. 0 means unlimited. |
+| `direction` | vec3 | `[0,-1,0]` |  |  |  | snap.direction | Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss. |
+| `maxDistance` | f32 | `0` | >= 0 |  |  | snap.maxDistance | Longest drop that still counts as a landing, in world units. 0 means unlimited. |
 
 Run it: `pcg run place/drop-to-surface`
 

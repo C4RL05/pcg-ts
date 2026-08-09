@@ -411,6 +411,42 @@ describe("resident run detection (recording resolver)", () => {
     expect((cpuErr as Error).message).toContain('input pin "in" has no geometry connected');
   });
 
+  it("several geometries on the head input skip fusion and raise the CPU error", async () => {
+    // Fusion reads the head's first item and drops the rest before any
+    // member execute runs, so without the decline this cook would throw
+    // on the CPU and silently truncate to one group on the GPU.
+    const build = (): Graph => {
+      const g = new Graph(7);
+      const din = g.add(dataInput);
+      g.setParam(
+        din,
+        "items",
+        [0, 1, 2, 3].map(() => makeGeometryItem(makeCorpusGeometry(4))),
+      );
+      const sa = g.add(setAttribute, { name: "d", value: fieldFromJson({ fn: "randomField", key: "k" }) });
+      const jit = g.add(jitterPoints, { amount: [0.1, 0.1, 0.1] });
+      g.connect(din, "out", sa, "in");
+      g.connect(sa, "out", jit, "in");
+      g.output(jit, "out", "out");
+      return g;
+    };
+    const cpuErr = await cook(build()).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    const rec = cpuRunResolver("fake|A");
+    const gpuErr = await cook(build(), { gpu: rec }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(cpuErr).toBeInstanceOf(NodeExecutionError);
+    expect(gpuErr).toBeInstanceOf(NodeExecutionError);
+    // No divergence: same error, and fusion was never planned.
+    expect((gpuErr as Error).message).toBe((cpuErr as Error).message);
+    expect((cpuErr as Error).message).toContain("received 4 geometries");
+    expect(rec.planned).toEqual([]);
+  });
+
   it("a v0.5-style resolver without run methods degrades to per-node behavior", async () => {
     const { g } = buildChain(makeCorpusGeometry(30));
     const cpu = await cook(buildChain(makeCorpusGeometry(30)).g);

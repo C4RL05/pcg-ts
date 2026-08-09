@@ -3,7 +3,7 @@ import { createPointCloud } from "../data/index.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { capture } from "./capture.js";
 import { add, mul } from "./combinators.js";
-import { attribute, constant, index, position, randomField, resolveField } from "./inputs.js";
+import { attribute, constant, fraction, index, position, randomField, resolveField } from "./inputs.js";
 import {
   type Column,
   type EvalContext,
@@ -43,6 +43,50 @@ describe("inputs", () => {
     const col = evaluateField(index(), pointCtx(5));
     expect(col.data).toBeInstanceOf(Uint32Array);
     expect(Array.from(col.data)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("fraction spans [0, 1] inclusive: index / (count - 1)", () => {
+    // The CLOSED convention, matching `pointLine`'s default
+    // `includeEnd: true`: both endpoints are hit exactly, so a ramp with
+    // stops at 0 and 1 reaches both ends of the cloud.
+    const col = evaluateField(fraction(), pointCtx(5));
+    expect(col.data).toBeInstanceOf(Float32Array);
+    expect(Array.from(col.data)).toEqual([0, 0.25, 0.5, 0.75, 1]);
+    // Exactly 0 and exactly 1 at the ends, at a count whose steps are not
+    // representable in binary.
+    const odd = evaluateField(fraction(), pointCtx(7));
+    expect(odd.data[0]).toBe(0);
+    expect(odd.data[6]).toBe(1);
+  });
+
+  it("fraction handles the degenerate counts without dividing by zero", () => {
+    // count 1: no span to normalize over, so the lone element takes the
+    // START of the span — the same answer `pointLine` gives at count 1,
+    // and the reason the divisor is `max(n - 1, 1)` rather than `n - 1`.
+    const one = evaluateField(fraction(), pointCtx(1));
+    expect(Array.from(one.data)).toEqual([0]);
+    expect(Number.isNaN(one.data[0])).toBe(false);
+    // count 0: an empty column of the same type, never a NaN lane.
+    const none = evaluateField(fraction(), pointCtx(0));
+    expect(none.data).toBeInstanceOf(Float32Array);
+    expect(none.data.length).toBe(0);
+    expect(none.tupleSize).toBe(1);
+    // The detail domain is always exactly one element, so it takes the
+    // count-1 branch too rather than reading a point-domain count.
+    const detail: EvalContext = { geo: createPointCloud(9), domain: "detail", seed: 0 };
+    expect(Array.from(evaluateField(fraction(), detail).data)).toEqual([0]);
+  });
+
+  it("fraction is index / (count - 1) lane for lane", () => {
+    // The identity the name promises, at a count with no exact binary
+    // steps: the field must be reproducible from `index` and the count
+    // alone, so an agent can predict it without cooking.
+    const ctx = pointCtx(1000);
+    const frac = evaluateField(fraction(), ctx);
+    const idx = evaluateField(index(), ctx);
+    for (let i = 0; i < 1000; i++) {
+      expect(frac.data[i]).toBe(Math.fround(idx.data[i] / 999));
+    }
   });
 
   it("attribute validates tuple size and rejects strings", () => {

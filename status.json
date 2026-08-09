@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 12:25",
-  "currentPhase": 39,
+  "updated": "2026-08-09 12:44",
+  "currentPhase": 40,
   "phases": [
     {
       "id": "plan",
@@ -211,7 +211,7 @@
     {
       "id": 40,
       "title": "Staged pipeline, skills v2, docs, v0.11.0",
-      "state": "pending"
+      "state": "active"
     },
     {
       "id": 41,

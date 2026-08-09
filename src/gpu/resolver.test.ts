@@ -215,6 +215,16 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     expect(u32.data.length).toBe(0);
     const vec = await ev.resolveField(fieldFromJson({ fn: "position" }), ctx, stats)!;
     expect(vec.tupleSize).toBe(3);
+    // `fraction` is the one input whose VALUE depends on the count, so
+    // the empty count is the case where it could plausibly divide by
+    // zero. It never dispatches, and matches the CPU's empty column.
+    const frac = await ev.resolveField(fieldFromJson({ fn: "fraction" }), ctx, stats)!;
+    expect(frac.data).toBeInstanceOf(Float32Array);
+    expect(frac.data.length).toBe(0);
+    expect(frac.tupleSize).toBe(1);
+    expect(Array.from(frac.data)).toEqual(
+      Array.from(evaluateField(fieldFromJson({ fn: "fraction" }), ctx).data),
+    );
     expect(stats).toEqual({ dispatches: 0, pipelinesCompiled: 0, pipelineCacheHits: 0, residentRuns: 0, fusedNodes: 0, readbacksSaved: 0, fallbacks: {} });
     expect(ev.pipelineCacheSize).toBe(0);
   });

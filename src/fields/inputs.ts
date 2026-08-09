@@ -119,6 +119,36 @@ export function index(): Field<1> {
   return INDEX;
 }
 
+const FRACTION: Field<1> = makeField("fraction", 1, (ctx) => {
+  const n = elementCount(ctx);
+  const data = new Float32Array(n);
+  // Divide by the number of GAPS (n - 1), so the last element lands
+  // exactly on 1 — the closed convention, matching `pointLine`'s default
+  // `includeEnd: true`. A lone element has no gap to divide by; it takes
+  // the start of the span (0), which is the same degenerate answer
+  // `pointLine` gives at count 1, and is why the divisor is never 0. An
+  // empty domain produces an empty column and never enters the loop.
+  const gaps = n > 1 ? n - 1 : 1;
+  for (let i = 0; i < n; i++) data[i] = i / gaps;
+  return { data, tupleSize: 1 };
+});
+attachSpec(FRACTION, { fn: "fraction" }, 1);
+
+/**
+ * Normalized element index: `index / (count - 1)`, spanning **[0, 1]
+ * inclusive** — the first element is exactly 0 and the last exactly 1.
+ * The span is CLOSED, not half-open: with 5 elements the values are 0,
+ * 0.25, 0.5, 0.75, 1. A periodic function of it therefore repeats its
+ * start value at the last element; scale by `(count - 1) / count` if a
+ * seam-free loop is wanted.
+ *
+ * Degenerate counts: a single element yields 0 (there is no span to
+ * normalize over), and an empty domain yields an empty column.
+ */
+export function fraction(): Field<1> {
+  return FRACTION;
+}
+
 /**
  * Per-element deterministic random in [0, 1), derived from
  * `hashCombine(ctx.seed, key, elementIndex)`. Same seed and key always

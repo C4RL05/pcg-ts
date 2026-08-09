@@ -558,8 +558,8 @@ describe("fieldFromJson never changes a live field's provenance", () => {
     // inside a larger expression composes exactly as the singleton
     // would"). That line is DEFENCE IN DEPTH, not a pinned behavior, and
     // this test says so rather than pretending otherwise: `fieldFromJson`
-    // stamps the authored spec on the TOP-LEVEL field only, and the only
-    // two callers of `detachedLeaf` are leaf registry entries, so a copy
+    // stamps the authored spec on the TOP-LEVEL field only, and every
+    // caller of `detachedLeaf` is a leaf registry entry, so a copy
     // can never leave a `fieldFromJson` call carrying that derived spec —
     // deleting the line changes nothing observable (audit mutation X4).
     //
@@ -575,8 +575,8 @@ describe("fieldFromJson never changes a live field's provenance", () => {
     expect([...source.matchAll(/function detachedLeaf</g)].length).toBe(1);
     expect(
       [...source.matchAll(/detachedLeaf\(/g)].length,
-      "callers of detachedLeaf (position, index)",
-    ).toBe(2);
+      "callers of detachedLeaf (position, index, fraction)",
+    ).toBe(3);
     expect([...source.matchAll(/attachAuthoredSpec\(/g)].length, "authored stamping sites").toBe(1);
   });
 });

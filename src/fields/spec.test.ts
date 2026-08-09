@@ -49,7 +49,7 @@ import {
   tan,
   vec,
 } from "./combinators.js";
-import { attribute, constant, index, position, randomField } from "./inputs.js";
+import { attribute, constant, fraction, index, position, randomField } from "./inputs.js";
 import {
   type FieldSpec,
   deviceSpec,
@@ -207,6 +207,7 @@ const CASES: Case[] = [
   { name: "attribute u32 storage", make: () => attribute("tag") },
   { name: "position", make: () => position() },
   { name: "index", make: () => index() },
+  { name: "fraction", make: () => fraction() },
   { name: "randomField default key", make: () => randomField() },
   { name: "randomField numeric key", make: () => randomField(7) },
   { name: "randomField negative key", make: () => randomField(-3) },
@@ -620,10 +621,12 @@ describe("spec provenance", () => {
     });
   });
 
-  it("stamps the position and index singletons once", () => {
+  it("stamps the position, index and fraction singletons once", () => {
     expect(peekFieldSpec(position())).toBe(peekFieldSpec(position()));
     expect(getFieldSpec(position())).toEqual({ fn: "position" });
     expect(getFieldSpec(index())).toEqual({ fn: "index" });
+    expect(peekFieldSpec(fraction())).toBe(peekFieldSpec(fraction()));
+    expect(getFieldSpec(fraction())).toEqual({ fn: "fraction" });
   });
 
   it("never returns a field whose provenance another caller can see", () => {
@@ -669,6 +672,16 @@ describe("spec provenance", () => {
       evaluateField(parsedIndex, fixture(1)),
       evaluateField(index(), fixture(1)),
       "index copy",
+    );
+
+    const parsedFraction = fieldFromJson({ fn: "fraction" });
+    expect(authoredSpec(fraction())).toBeUndefined();
+    expect(authoredSpec(parsedFraction)).toEqual({ fn: "fraction" });
+    expect(parsedFraction).not.toBe(fraction());
+    expectSameColumn(
+      evaluateField(parsedFraction, fixture(1)),
+      evaluateField(fraction(), fixture(1)),
+      "fraction copy",
     );
   });
 

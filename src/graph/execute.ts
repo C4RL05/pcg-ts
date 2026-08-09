@@ -940,14 +940,20 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     // synchronous and device-free. No geometry connected or an empty
     // cloud skips fusion: the per-node path is trivially cheap there
     // and surfaces the identical CPU error for missing inputs.
-    let inputItem: GeometryItem | undefined;
-    for (const item of inputs[first.def.inputs[0].name]) {
-      if (item.kind === "geometry") {
-        inputItem = item;
-        break;
-      }
-    }
-    if (inputItem === undefined || inputItem.geo.attrs.point.count === 0) return false;
+    //
+    // SEVERAL geometries connected skips fusion for the same reason.
+    // Fusing would read the head's first item and drop the rest before
+    // any member `execute` runs, so the multi-item diagnostic the nodes
+    // now raise would be unreachable exactly when a GPU resolver is
+    // present — a cook that throws on the CPU and silently truncates on
+    // the GPU. Declining here keeps fusion an optimization and never a
+    // change in meaning.
+    const inputItems = inputs[first.def.inputs[0].name].filter(
+      (item): item is GeometryItem => item.kind === "geometry",
+    );
+    if (inputItems.length !== 1) return false;
+    const inputItem = inputItems[0];
+    if (inputItem.geo.attrs.point.count === 0) return false;
     const geo = inputItem.geo;
     const attributes: Record<string, ResidentAttrDesc> = {};
     for (const attr of geo.attrs.point) {

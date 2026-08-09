@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createPointCloud, createTriangleMesh, transferNearest, type Geometry } from "../data/index.js";
 import { Graph, cook, makeGeometryItem, type NodeHandle } from "../graph/index.js";
 import { dataInput, type DataInputParams } from "../runtime/dataInput.js";
-import { deserializeGraph, getNodeType, serializeGraph, transferAttribute } from "./index.js";
+import {
+  deserializeGraph,
+  getNodeType,
+  serializeGraph,
+  transferAttribute,
+  type TransferAttributeParams,
+} from "./index.js";
 import { firstGeo, runNode, snapshotGeometry } from "./testSupport.js";
 
 /** Ground quad on y=0 spanning [0,10]^2 in xz; uv = xz/10; val, id attrs. */
@@ -36,6 +42,7 @@ describe("transferAttribute registry metadata", () => {
       "attrDomain",
       "direction",
       "directionAttr",
+      "hitAttr",
       "mapping",
       "maxDistance",
       "missCountAttr",
@@ -53,6 +60,13 @@ describe("transferAttribute registry metadata", () => {
     expect(info.params.maxDistance.default).toBe(0);
     expect(info.params.maxDistance.min).toBe(0);
     expect(info.params.missCountAttr.default).toBe("");
+    expect(info.params.hitAttr.default).toBe("");
+    // A silently inverted boolean is the bug this param is most likely to
+    // grow, so the schema has to state its polarity in words an agent can
+    // read: which value means found, which means missed.
+    expect(info.params.hitAttr.description).toMatch(/1 means this point found a source/);
+    expect(info.params.hitAttr.description).toMatch(/0 means it missed/);
+    expect(info.params.hitAttr.description).toMatch(/bool/);
     // Param descriptions carry the policies (tie rules, misses, types).
     for (const [name, schema] of Object.entries(info.params)) {
       expect(schema.description.trim().length, `${name} description`).toBeGreaterThan(20);
@@ -187,6 +201,185 @@ describe("transferAttribute nearest mapping (unchanged)", () => {
   });
 });
 
+describe("transferAttribute hitAttr (per-point miss flag)", () => {
+  /** Run the node over `dst` against the ground quad and return the output. */
+  async function run(
+    dst: Geometry,
+    params: Partial<TransferAttributeParams>,
+    src: Geometry = quadSource(),
+  ): Promise<Geometry> {
+    return firstGeo(
+      (
+        await runNode(transferAttribute, params, {
+          in: [makeGeometryItem(dst)],
+          source: [makeGeometryItem(src)],
+        })
+      ).out,
+    );
+  }
+
+  /** The flag column as a plain array, so failures print readably. */
+  function flags(geo: Geometry, name = "__hit"): number[] {
+    const attr = geo.attrs.point.require(name);
+    return Array.from({ length: geo.pointCount }, (_, i) => attr.get(i));
+  }
+
+  it("is off by default: an unset hitAttr writes no column at all", async () => {
+    const dst = dstCloud([
+      { p: [0, 0, 0], uv: [0.5, 0.5] },
+      { p: [1, 0, 0], uv: [3, 3] },
+    ]);
+    const before = dst.attrs.point.names();
+    const out = await run(dst, { name: "val", mapping: "uv" });
+    // The default must stay inert — every graph authored before this param
+    // existed has to keep cooking exactly what it always did, so the only
+    // new column is the transferred one.
+    expect(out.attrs.point.names()).toEqual([...before, "val"]);
+    expect(out.attrs.point.has("__hit")).toBe(false);
+  });
+
+  it("uv: flags the hits 1 and the misses 0, agreeing with missCountAttr", async () => {
+    const out = await run(
+      dstCloud([
+        { p: [0, 0, 0], uv: [0.5, 0.5] }, // inside triangle 0
+        { p: [1, 0, 0], uv: [3, 3] }, // outside every triangle
+        { p: [2, 0, 0], uv: [0.9, 0.1] }, // inside triangle 0
+        { p: [3, 0, 0], uv: [Number.NaN, 0.5] }, // non-finite uv: a miss
+      ]),
+      { name: "val", mapping: "uv", hitAttr: "__hit", missCountAttr: "missed" },
+    );
+    const flag = out.attrs.point.require("__hit");
+    expect(flag.type).toBe("bool");
+    expect(flag.tupleSize).toBe(1);
+    expect(flags(out)).toEqual([1, 0, 1, 0]);
+    // The two channels are the same fact at two granularities: the total
+    // has to be exactly the number of zeros, or one of them is lying.
+    expect(out.attrs.detail.require("missed").get(0)).toBe(
+      flags(out).filter((v) => v === 0).length,
+    );
+  });
+
+  it("raycast: flags exactly the points whose ray landed, cap included", async () => {
+    const dst = dstCloud([
+      { p: [5, 7, 2.5], uv: [0, 0] }, // hits at t = 7
+      { p: [50, 7, 50], uv: [0, 0] }, // off the mesh entirely
+      { p: [5, 2, 2.5], uv: [0, 0] }, // hits at t = 2
+    ]);
+    const unlimited = await run(dst, { name: "val", mapping: "raycast", hitAttr: "__hit" });
+    expect(flags(unlimited)).toEqual([1, 0, 1]);
+    // A distance cap turns a hit into a miss, and the flag has to follow
+    // the same decision the transferred value did.
+    const capped = await run(dst, {
+      name: "val",
+      mapping: "raycast",
+      maxDistance: 5,
+      hitAttr: "__hit",
+    });
+    expect(flags(capped)).toEqual([0, 0, 1]);
+  });
+
+  it("raycast: a per-point direction pointing away is a miss, and says so", async () => {
+    const dst = dstCloud([
+      { p: [5, 7, 2.5], uv: [0, 0] },
+      { p: [5, 7, 2.5], uv: [0, 0] },
+      { p: [5, 7, 2.5], uv: [0, 0] },
+    ]);
+    dst.attrs.point.add("rayDir", "f32", 3).data.set([0, -1, 0, 0, 1, 0, 0, 0, 0]);
+    const out = await run(dst, {
+      name: "val",
+      mapping: "raycast",
+      directionAttr: "rayDir",
+      hitAttr: "__hit",
+    });
+    // Down hits; up is forward-only away from the quad; zero-length misses.
+    expect(flags(out)).toEqual([1, 0, 0]);
+  });
+
+  it("nearest: every point is assigned, so every flag is 1", async () => {
+    const src = createPointCloud(3);
+    (src.attrs.point.require("P").data as Float32Array).set([0, 0, 0, 5, 0, 0, 0, 5, 0]);
+    src.attrs.point.require("density").data.set([0.1, 0.2, 0.3]);
+    const dst = createPointCloud(2);
+    (dst.attrs.point.require("P").data as Float32Array).set([4, 0, 0, 0, 4, 0]);
+    const out = await run(dst, { name: "density", hitAttr: "__hit", missCountAttr: "missed" }, src);
+    expect(flags(out)).toEqual([1, 1]);
+    expect(out.attrs.detail.require("missed").get(0)).toBe(0);
+  });
+
+  it("nothing to search: a source of only degenerate triangles flags every point 0", async () => {
+    // The source has a 3-vertex poly primitive, so it is not the "no
+    // triangles" error — it has zero usable AREA, which is the case where
+    // the transfer runs and finds nothing. Hit polarity makes that read
+    // correctly: nothing was found, so nothing is flagged. Under a miss
+    // flag the same column would have to be filled with 1s to say the same
+    // thing, and a freshly created column's default 0 would claim success.
+    const src = createTriangleMesh([0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 1, 2]);
+    src.attrs.point.add("uv", "f32", 2).data.set([0, 0, 0, 0, 0, 0]);
+    src.attrs.point.add("val", "f32", 1).data.set([10, 20, 30]);
+    const dst = dstCloud([
+      { p: [0, 5, 0], uv: [0.5, 0.5] },
+      { p: [1, 5, 0], uv: [0.25, 0.25] },
+    ]);
+    const rayOut = await run(dst, { name: "val", mapping: "raycast", hitAttr: "__hit" }, src);
+    expect(flags(rayOut)).toEqual([0, 0]);
+    const uvOut = await run(dst, { name: "val", mapping: "uv", hitAttr: "__hit" }, src);
+    expect(flags(uvOut)).toEqual([0, 0]);
+  });
+
+  it("never inherits a prior value: the flag describes THIS transfer only", async () => {
+    // The hazard the flag exists to remove. An internal marker that keeps
+    // its previous value on a miss lets a point that hit nothing claim it
+    // landed — which is precisely how the old two-ray drop-to-surface
+    // recipe could be broken by a name collision on the destination.
+    const dst = dstCloud([
+      { p: [5, 7, 2.5], uv: [0, 0] }, // hits
+      { p: [50, 7, 50], uv: [0, 0] }, // misses
+    ]);
+    dst.attrs.point.add("__hit", "bool", 1).data.set([1, 1]);
+    const sameType = await run(dst, { name: "val", mapping: "raycast", hitAttr: "__hit" });
+    expect(flags(sameType)).toEqual([1, 0]);
+
+    const wrongType = dstCloud([
+      { p: [5, 7, 2.5], uv: [0, 0] },
+      { p: [50, 7, 50], uv: [0, 0] },
+    ]);
+    wrongType.attrs.point.add("__hit", "f32", 3).data.set([9, 9, 9, 9, 9, 9]);
+    const replaced = await run(wrongType, { name: "val", mapping: "raycast", hitAttr: "__hit" });
+    expect(replaced.attrs.point.require("__hit").type).toBe("bool");
+    expect(replaced.attrs.point.require("__hit").tupleSize).toBe(1);
+    expect(flags(replaced)).toEqual([1, 0]);
+  });
+
+  it("rejects a hitAttr that would overwrite the transferred attribute", async () => {
+    await expect(
+      run(dstCloud([{ p: [0, 0, 0], uv: [0.5, 0.5] }]), {
+        name: "val",
+        mapping: "uv",
+        hitAttr: "val",
+      }),
+    ).rejects.toThrow(
+      /transferAttribute: hitAttr "val" is the same as name .* give hitAttr a distinct name/s,
+    );
+  });
+
+  it("is per-point, so reordering the destination permutes the flags exactly", async () => {
+    // The determinism claim in concrete form: each flag is decided by that
+    // point's own query and nothing else, so it cannot depend on how the
+    // work is ordered, split or partitioned.
+    const rows = [
+      { p: [5, 7, 2.5], uv: [0, 0] },
+      { p: [50, 7, 50], uv: [0, 0] },
+      { p: [1, 7, 1], uv: [0, 0] },
+      { p: [-9, 7, 4], uv: [0, 0] },
+    ];
+    const params = { name: "val", mapping: "raycast", hitAttr: "__hit" };
+    const forward = flags(await run(dstCloud(rows), params));
+    const reversed = flags(await run(dstCloud([...rows].reverse()), params));
+    expect(reversed).toEqual([...forward].reverse());
+    expect(forward).toEqual([1, 0, 1, 0]);
+  });
+});
+
 describe("transferAttribute errors", () => {
   const geoms = (): Record<string, ReturnType<typeof makeGeometryItem>[]> => ({
     in: [makeGeometryItem(dstCloud([{ p: [0, 0, 0], uv: [0.5, 0.5] }]))],
@@ -279,6 +472,7 @@ describe("transferAttribute serialization", () => {
       directionAttr: "",
       maxDistance: 0,
       missCountAttr: "uvMissed",
+      hitAttr: "",
     });
     const rayNode = json.nodes.find((n) => n.id === "ray");
     expect(rayNode?.params.mapping).toBe("raycast");

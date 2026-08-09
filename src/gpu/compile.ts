@@ -316,6 +316,15 @@ HANDLERS.set("position", (_spec, path, ctx) => {
 
 HANDLERS.set("index", (_spec, _path, ctx) => ctx.emit("f32(i)", 1));
 
+// Normalized index: i / (count - 1), the closed [0, 1] span. `max(count,
+// 2u) - 1u` is the CPU's `n > 1 ? n - 1 : 1` written without a branch —
+// at count 1 the lone lane divides by 1 and reads 0, exactly as the CPU
+// does, and the divisor can never be 0. (Count 0 dispatches nothing on
+// either side.)
+HANDLERS.set("fraction", (_spec, _path, ctx) =>
+  ctx.emit("f32(i) / f32(max(params.count, 2u) - 1u)", 1),
+);
+
 HANDLERS.set("randomField", (spec, _path, ctx) => {
   const key = spec.key;
   const keyHash = typeof key === "string" ? hashString(key) : ((key as number | undefined) ?? 0) >>> 0;

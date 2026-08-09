@@ -34,7 +34,11 @@
  * - **Misses keep the prior value.** When the destination already has the
  *   attribute with the same type and tuple size, missed elements keep their
  *   existing values; otherwise the attribute is created and missed elements
- *   hold the source attribute's default. The miss count is returned.
+ *   hold the source attribute's default. Both the miss count and the
+ *   per-point hit flags are returned, so a caller can tell WHICH points
+ *   missed and not merely how many — the total alone cannot be recovered
+ *   into a per-point answer, and a caller that needs one otherwise has to
+ *   query the source a second time.
  * - **Determinism.** Results are independent of the internal grid cell size
  *   (exposed as a hint for testing): the grids can only skip triangles whose
  *   padded box excludes the query, which the containment policy also
@@ -91,6 +95,20 @@ export interface TransferMappingResult {
   attribute: Attribute;
   /** Destination points with no containing triangle / no ray hit. */
   missCount: number;
+  /**
+   * Per-destination-point outcome, one byte each, in destination point
+   * order: 1 where the point found a source triangle and received a
+   * transferred value, 0 where it missed and kept its prior value. Length
+   * is the destination point count, and `missCount` is exactly the number
+   * of zeros — the same fact per point instead of in total. Polarity is
+   * the HIT, so a source with nothing to search (every triangle
+   * degenerate) leaves the array all zeros.
+   *
+   * Each entry is decided only by that point's own query against the
+   * source, so it is independent of iteration order, partitioning and
+   * grid cell size for the same reasons the transferred values are.
+   */
+  hit: Uint8Array;
 }
 
 /** Options for {@link transferUv}. */
@@ -247,7 +265,8 @@ function checkCellSize(cell: number, fn: string): void {
  * holds the three source element indices (point or vertex, per attrDomain)
  * and `weights` the normalized barycentric weights of each hit; `hit[j]`
  * is 0 for misses. Applies the documented per-type interpolation and
- * miss policies.
+ * miss policies, and hands `hit` straight back on the result so the
+ * per-point outcome survives instead of collapsing into the total.
  */
 function writeMapped(
   dst: Geometry,
@@ -298,7 +317,7 @@ function writeMapped(
         outData[dofs + k] = w0 * readData[e0 + k] + w1 * readData[e1 + k] + w2 * readData[e2 + k];
       }
     }
-    return { attribute: out, missCount };
+    return { attribute: out, missCount, hit };
   }
   // i32/u32/bool/string cannot interpolate: dominant corner (largest
   // barycentric weight; equal weights resolve to the first such corner in
@@ -322,7 +341,7 @@ function writeMapped(
       for (let k = 0; k < ts; k++) outData[dofs + k] = readData[so + k];
     }
   }
-  return { attribute: out, missCount };
+  return { attribute: out, missCount, hit };
 }
 
 /**
@@ -345,7 +364,7 @@ function writeMapped(
  * the bucketing use one predicate).
  *
  * Creates or overwrites the attribute on `dst`'s point domain and returns
- * it with the miss count.
+ * it with the miss count and the per-point hit flags.
  */
 export function transferUv(
   dst: Geometry,
@@ -564,7 +583,7 @@ export function transferUv(
  * box the triangle is bucketed by).
  *
  * Creates or overwrites the attribute on `dst`'s point domain and returns
- * it with the miss count.
+ * it with the miss count and the per-point hit flags.
  */
 export function transferRaycast(
   dst: Geometry,

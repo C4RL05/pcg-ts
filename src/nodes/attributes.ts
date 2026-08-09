@@ -22,6 +22,7 @@ import {
   gatherPoints,
   geometryItems,
   requireGeometry,
+  requireGeometryItem,
   resolveOn,
   tryResolveOnGpu,
 } from "./util.js";
@@ -268,6 +269,7 @@ export interface TransferAttributeParams {
   directionAttr: string;
   maxDistance: number;
   missCountAttr: string;
+  hitAttr: string;
 }
 
 /** Transfer an attribute from a source geometry (nearest / uv / raycast). */
@@ -275,7 +277,7 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
   type: "transferAttribute",
   category: "attribute",
   description:
-    "Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.",
+    "Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed, and hitAttr to record WHICH ones did not (a per-point bool, 1 = found a source, 0 = missed). A miss cannot report itself through the transferred value, so hitAttr is the only per-point way to find one: filter on it to discard the misses rather than casting a second query to re-learn what this one already knew. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.",
   inputs: [
     { name: "in", kind: "geometry" },
     { name: "source", kind: "geometry" },
@@ -331,14 +333,30 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       type: "string",
       default: "",
       description:
-        "When non-empty, writes the number of missed destination points into a u32 detail attribute of this name on the output (mapping 'nearest' always writes 0 — every point is assigned). Empty = don't record.",
+        "When non-empty, writes the number of missed destination points into a u32 detail attribute of this name on the output (mapping 'nearest' always writes 0 — every point is assigned). Empty = don't record. For which points those were, see hitAttr.",
+    },
+    hitAttr: {
+      type: "string",
+      default: "",
+      description:
+        "When non-empty, writes a per-point flag of this name onto the OUTPUT'S POINT DOMAIN (bool, tuple 1). The polarity is the HIT, not the miss — the inverse of missCountAttr, which counts the zeros: 1 means this point found a source and received a transferred value, 0 means it missed and kept its prior value (the attribute default when it had none). Every point is written, so the column never carries a stale value: mapping 'nearest' leaves it all 1 (every point is assigned), and a source with nothing to search — every triangle degenerate — leaves it all 0, since nothing was found. Feed it to filterByAttribute (comparison 'eq', value 1) to keep only the points that landed, then removeAttribute to clean it up. Must differ from `name`, which the flag would otherwise overwrite. Empty = don't record.",
     },
   },
   execute({ inputs, params }) {
     const dst = cloneGeometry(requireGeometry(inputs, "in", "transferAttribute"));
     const src = requireGeometry(inputs, "source", "transferAttribute");
     const attrDomain = params.attrDomain as TransferAttrDomain;
+    if (params.hitAttr !== "" && params.hitAttr === params.name) {
+      throw new Error(
+        `transferAttribute: hitAttr "${params.hitAttr}" is the same as name — the hit flag would overwrite the attribute just transferred; give hitAttr a distinct name (a "__" prefix marks it internal, e.g. "__hit") or leave it empty to skip the flag`,
+      );
+    }
     let missCount = 0;
+    // Per-point outcome of the SAME query that wrote the values, kept only
+    // when hitAttr asks for it. Sizing it here (rather than after the
+    // branch) keeps the nearest case honest: transferNearest assigns every
+    // point, so its flags are all 1 by construction.
+    let hit: Uint8Array | null = null;
     if (params.mapping === "nearest") {
       if (attrDomain !== "point") {
         throw new Error(
@@ -346,16 +364,21 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
         );
       }
       transferNearest(dst, src, params.name);
+      if (params.hitAttr !== "") hit = new Uint8Array(dst.attrs.point.count).fill(1);
     } else if (params.mapping === "uv") {
-      missCount = transferUv(dst, src, params.name, {
+      const res = transferUv(dst, src, params.name, {
         uvAttr: params.uvAttr,
         attrDomain,
-      }).missCount;
+      });
+      missCount = res.missCount;
+      hit = res.hit;
     } else if (params.mapping === "raycast") {
       const opts: TransferRaycastOptions = { direction: params.direction, attrDomain };
       if (params.directionAttr !== "") opts.directionAttr = params.directionAttr;
       if (params.maxDistance > 0) opts.maxDistance = params.maxDistance;
-      missCount = transferRaycast(dst, src, params.name, opts).missCount;
+      const res = transferRaycast(dst, src, params.name, opts);
+      missCount = res.missCount;
+      hit = res.hit;
     } else {
       throw new Error(
         `transferAttribute: unknown mapping "${params.mapping}"; valid mappings: nearest, uv, raycast`,
@@ -363,6 +386,15 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
     }
     if (params.missCountAttr !== "") {
       dst.attrs.detail.replace(params.missCountAttr, "u32", 1).set(0, missCount);
+    }
+    if (params.hitAttr !== "" && hit !== null) {
+      // `replace` resets every element to the default 0 before the fill, so
+      // a destination that already carried this name contributes nothing:
+      // the flag describes THIS transfer only. That is the whole point of
+      // it — an internal marker that inherits a prior value is how a miss
+      // gets to claim it landed.
+      const flag = dst.attrs.point.replace(params.hitAttr, "bool", 1);
+      flag.data.set(hit.subarray(0, dst.attrs.point.count));
     }
     return { out: [makeGeometryItem(dst)] };
   },
@@ -699,11 +731,11 @@ export const partitionByAttribute = standardNode<PartitionByAttributeParams>({
     },
   },
   execute({ inputs, params }) {
-    const items = geometryItems(inputs.in);
-    if (items.length === 0) {
-      throw new Error('partitionByAttribute: input pin "in" has no geometry connected');
-    }
-    const item = items[0];
+    // Partitioning a partition (or a subgraph forwarding several
+    // geometries) used to silently keep only the first group. This node
+    // SPLITS a collection, so being handed one is the case most likely to
+    // look deliberate and be wrong.
+    const item = requireGeometryItem(inputs, "in", "partitionByAttribute");
     const geo = item.geo;
     const attr = geo.attrs.point.get(params.name);
     if (!attr) {

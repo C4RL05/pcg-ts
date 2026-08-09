@@ -1089,7 +1089,7 @@
   },
   {
     "name": "place/align-to-surface",
-    "hash": "00b616e8d41bce55",
+    "hash": "8e97e3270e054aaa",
     "title": "Stand each point up along the surface under it",
     "description": "Casts a ray from every point onto a mesh, reads the surface `normal` where it lands, and turns the point so its chosen local axis stands along that normal — props lying on slopes instead of standing upright through them. PRECONDITION: the `surface` must carry a `normal` point attribute (f32, tuple 3); a mesh built by `meshPrimitive` carries uv and topology but no normal, so stamp one on it first. A point whose ray misses keeps the previous normal it had, and a zero-length one keeps its existing rotation. Fully deterministic. Writes `rot` and `normal`; `P` is not moved — pair it with `place/drop-to-surface` for that.",
     "tags": [
@@ -1308,16 +1308,16 @@
   },
   {
     "name": "place/drop-to-surface",
-    "hash": "ddc00f2881334737",
+    "hash": "8240be26af3cc83a",
     "title": "Drop points onto a mesh and discard the misses",
-    "description": "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. Two rays are cast, not one, and the second is the content: a miss keeps its prior value rather than reporting itself, so points that hit nothing would otherwise stay floating with no per-point way to find them. A marker stamped on the surface before the transfer comes back as 1 on a hit and 0 on a miss, which is what makes the discard possible at all. Fully deterministic. Reads and writes `P`; the marker column is removed again.",
+    "description": "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. ONE ray is cast: the transfer moves `P` to the hit and reports per point whether it found anything, so the discard reads the outcome of the very ray that did the moving. A miss keeps its prior position and is filtered out. Fully deterministic. Reads and writes `P`; the internal `__onSurface` flag column is removed again.",
     "tags": [
       "place",
       "surface",
       "raycast",
       "terrain"
     ],
-    "nodes": 5,
+    "nodes": 3,
     "inputs": [
       {
         "name": "points",
@@ -1344,13 +1344,9 @@
             -1,
             0
           ],
-          "description": "Which way the rays travel. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss."
+          "description": "Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss."
         },
         "targets": [
-          {
-            "node": "hit",
-            "param": "direction"
-          },
           {
             "node": "snap",
             "param": "direction"
@@ -1366,10 +1362,6 @@
           "min": 0
         },
         "targets": [
-          {
-            "node": "hit",
-            "param": "maxDistance"
-          },
           {
             "node": "snap",
             "param": "maxDistance"

@@ -71,7 +71,9 @@ for (const [module, name, exported] of [
 const corpus = docs.loadCorpus(root);
 if (corpus.length === 0) {
   console.error(
-    `gen-examples: no ${docs.CORPUS_PREFIX}*.json files under ${docs.CORPUS_DIR} — nothing to index.`,
+    `gen-examples: no ${docs.CORPUS_PREFIXES.map((p) => `${p}*.json`).join(" / ")} files under ${
+      docs.CORPUS_DIR
+    } — nothing to index.`,
   );
   process.exit(1);
 }

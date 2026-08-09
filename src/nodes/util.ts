@@ -21,18 +21,83 @@ export function geometryItems(collection: DataCollection): GeometryItem[] {
 }
 
 /**
- * The first geometry connected to a pin; throws an actionable error
- * naming the node type and pin when none is connected.
+ * The message for a single-geometry node handed a whole collection.
+ *
+ * This case used to be silent: the node took item[0] and discarded the
+ * rest, so a four-group partition cooked "successfully" into one group.
+ * That is the worst failure mode available — plausible output — and it
+ * violates both the determinism and the introspectability pillars, so it
+ * is now an error. The text has to leave an agent knowing its next move
+ * without reading source, hence the named alternatives.
+ */
+function multiGeometryMessage(nodeType: string, pin: string, count: number): string {
+  return (
+    `${nodeType}: input pin "${pin}" received ${count} geometries, but ${nodeType} processes ` +
+    `exactly ONE. Using the first and discarding the other ${count - 1} would look like a ` +
+    "successful cook, so it is an error instead. A pin carries a COLLECTION, and a SINGLE " +
+    "connection can put many geometries on it: partitionByAttribute emits one per distinct " +
+    "value, and a subgraph or dataInput forwards however many it holds. Fixes: (1) insert " +
+    `mergePoints between the source and ${nodeType} to concatenate the ${count} back into one ` +
+    "cloud — mergePoints is points-only, so rebuild any path after it with pointsToPath; (2) " +
+    `move ${nodeType} UPSTREAM of the split, so it runs once on the whole cloud before it is ` +
+    "partitioned; (3) to process each geometry separately, note there is no for-each node and " +
+    "no in-graph node that selects one item of a collection — drive it from TypeScript, where " +
+    'collection.filter((item) => item.kind === "geometry") gives you all of them and ' +
+    'filterByTag(collection, "<attr>=<value>") picks one by the tag partitionByAttribute wrote.'
+  );
+}
+
+/**
+ * The one geometry connected to a pin. Throws an actionable error naming
+ * the node type and pin when none is connected, and refuses a collection
+ * of several ({@link multiGeometryMessage}) rather than silently
+ * processing the first.
+ *
+ * Non-geometry items sharing the pin are ignored, not counted — a value
+ * item riding alongside one geometry is still one geometry.
  */
 export function requireGeometry(
   inputs: Record<string, DataCollection>,
   pin: string,
   nodeType: string,
 ): Geometry {
-  for (const item of inputs[pin] ?? []) {
-    if (item.kind === "geometry") return item.geo;
+  return requireGeometryItem(inputs, pin, nodeType).geo;
+}
+
+/**
+ * As {@link requireGeometry}, but yields the whole item — for nodes that
+ * also need its tags or pass the item through to keep its rev (and so
+ * downstream caches) intact.
+ */
+export function requireGeometryItem(
+  inputs: Record<string, DataCollection>,
+  pin: string,
+  nodeType: string,
+): GeometryItem {
+  const items = geometryItems(inputs[pin] ?? []);
+  if (items.length === 0) {
+    throw new Error(`${nodeType}: input pin "${pin}" has no geometry connected`);
   }
-  throw new Error(`${nodeType}: input pin "${pin}" has no geometry connected`);
+  if (items.length > 1) throw new Error(multiGeometryMessage(nodeType, pin, items.length));
+  return items[0];
+}
+
+/**
+ * The geometry connected to an OPTIONAL pin: `undefined` when nothing is
+ * connected (the caller falls back to params), the geometry when exactly
+ * one is, and the same loud error as {@link requireGeometry} when several
+ * are. Optional does not mean lenient — a node that cannot say what four
+ * inputs mean must not pick one.
+ */
+export function optionalGeometry(
+  inputs: Record<string, DataCollection>,
+  pin: string,
+  nodeType: string,
+): Geometry | undefined {
+  const items = geometryItems(inputs[pin] ?? []);
+  if (items.length === 0) return undefined;
+  if (items.length > 1) throw new Error(multiGeometryMessage(nodeType, pin, items.length));
+  return items[0].geo;
 }
 
 /** A param value that may be a plain value or a Field. */

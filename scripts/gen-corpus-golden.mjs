@@ -68,7 +68,9 @@ for (const name of ["loadCorpus", "cookCorpusGraph", "corpusStats", "renderCorpu
 const corpus = docs.loadCorpus(root);
 if (corpus.length === 0) {
   console.error(
-    `gen-corpus-golden: no ${docs.CORPUS_PREFIX}*.json files under ${docs.CORPUS_DIR} — nothing to record.`,
+    `gen-corpus-golden: no ${docs.CORPUS_PREFIXES.map((p) => `${p}*.json`).join(" / ")} files under ${
+      docs.CORPUS_DIR
+    } — nothing to record.`,
   );
   process.exit(1);
 }

@@ -182,6 +182,7 @@ describe("grammar coverage", () => {
     attribute: { fn: "attribute", name: "density" },
     position: { fn: "position" },
     index: { fn: "index" },
+    fraction: { fn: "fraction" },
     randomField: { fn: "randomField" },
     add: { fn: "add", args: [1, 2] },
     sub: { fn: "sub", args: [1, 2] },
@@ -377,6 +378,22 @@ describe("codegen structure", () => {
     const expr = compileFieldSpec({ fn: "mul", args: [{ fn: "index" }, 2] }, LAYOUT);
     expect(expr.outType).toBe("f32");
     expect(expr.wgsl).toContain("let v0 = f32(i);");
+  });
+
+  it("fraction divides by max(count, 2) - 1, so no lane can divide by zero", () => {
+    // The guard IS the CPU's `n > 1 ? n - 1 : 1`, branch-free: at count 1
+    // the lone lane computes 0/1 = 0, the same value the CPU produces,
+    // and the divisor is never 0 at any count. A regression here would
+    // show up as NaN on one-element domains only — the case a
+    // whole-cloud parity sweep is least likely to sample.
+    const k = compileFieldSpec({ fn: "fraction" }, LAYOUT);
+    expect(k.outType).toBe("f32");
+    expect(k.outTupleSize).toBe(1);
+    expect(k.wgsl).toContain("let v0 = f32(i) / f32(max(params.count, 2u) - 1u);");
+    expect(k.wgsl).toContain("outBuf[i] = v0;");
+    // Unlike `index`, it is NOT a u32 root special case: the CPU column
+    // is f32, so the device column must be too.
+    expect(k.wgsl).toContain("var<storage, read_write> outBuf: array<f32>;");
   });
 
   it("broadcasts scalars against vectors by splatting", () => {

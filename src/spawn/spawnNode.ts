@@ -3,8 +3,9 @@
  * Turns a point cloud into instance batches a renderer adapter (e.g.
  * `pcg-ts/three`'s `toInstancedMeshes`) can draw directly.
  */
-import { type GeometryItem, makeInstancesItem } from "../graph/index.js";
+import { makeInstancesItem } from "../graph/index.js";
 import { standardNode } from "../nodes/registry.js";
+import { requireGeometryItem } from "../nodes/util.js";
 import { buildInstanceBatches } from "./instances.js";
 
 /** Params of {@link spawnInstances}. */
@@ -77,16 +78,11 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
     terminal: true,
   },
   execute({ inputs, params }) {
-    let item: GeometryItem | undefined;
-    for (const it of inputs.in ?? []) {
-      if (it.kind === "geometry") {
-        item = it;
-        break;
-      }
-    }
-    if (!item) {
-      throw new Error('spawnInstances: input pin "in" has no geometry connected');
-    }
+    // A spawner is a terminal: whatever it drops here never reaches a
+    // renderer and nothing downstream can notice. It shares the standard
+    // library's single-geometry contract so several connected geometries
+    // raise the same diagnostic instead of spawning only the first.
+    const item = requireGeometryItem(inputs, "in", "spawnInstances");
     const batches = buildInstanceBatches(item.geo, {
       defaultAssetId: params.assetId,
       ...(params.assetAttr !== "" ? { assetAttr: params.assetAttr } : {}),

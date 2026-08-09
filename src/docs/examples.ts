@@ -1,6 +1,6 @@
 /**
- * The example corpus: enumerating `examples/graphs/basics-*.json` and
- * rendering the generated index (`docs/examples.md` + `docs/examples.json`).
+ * The example corpus: enumerating `examples/graphs/{basics,pipeline}-*.json`
+ * and rendering the generated index (`docs/examples.md` + `docs/examples.json`).
  *
  * WHY IT LIVES UNDER `src/` AND NOT IN `scripts/` — the same reason
  * node-reference.ts does, and its comment carries the full argument. Two
@@ -27,8 +27,21 @@ import { join } from "node:path";
 /** Corpus location, relative to the repository root. */
 export const CORPUS_DIR = "examples/graphs";
 
-/** Prefix every corpus file carries. Anything else in the directory is ignored. */
-export const CORPUS_PREFIX = "basics-";
+/**
+ * The prefixes a corpus file may carry. Anything else in the directory is
+ * ignored.
+ *
+ * A LIST rather than one string, because the corpus now holds two kinds of
+ * example and they are read differently. A `basics-` file teaches ONE thing
+ * and stands alone; a `pipeline-` file is one step of a staged chain, and
+ * only means anything beside its neighbours — each is the previous file plus
+ * new nodes, connections and outputs, sharing a seed so every earlier stage
+ * reproduces bit-identically inside every later one. Both kinds must be
+ * indexed, cooked and pinned by the golden, so both enumerate here: adding a
+ * prefix is the one edit that admits a family, and there is still no
+ * hand-maintained list of files anywhere.
+ */
+export const CORPUS_PREFIXES: readonly string[] = ["basics-", "pipeline-"];
 
 /** One rendered index: the bytes of each generated file. */
 export interface ExampleIndex {
@@ -63,7 +76,7 @@ export interface CorpusFile {
 export function loadCorpus(root: string): CorpusFile[] {
   const dir = join(root, CORPUS_DIR);
   const names = readdirSync(dir)
-    .filter((name) => name.startsWith(CORPUS_PREFIX) && name.endsWith(".json"))
+    .filter((name) => CORPUS_PREFIXES.some((p) => name.startsWith(p)) && name.endsWith(".json"))
     .sort();
   return names.map((file) => {
     const absolutePath = join(dir, file);

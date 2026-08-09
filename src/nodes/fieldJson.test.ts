@@ -8,6 +8,7 @@ import {
   constant,
   cos,
   evaluateField,
+  fraction,
   makeField,
   mul,
   position,
@@ -71,12 +72,26 @@ describe("fieldFromJson", () => {
       { fn: "ramp", args: [{ fn: "index" }], stops: [[0, 0], [7, 1]] },
       { fn: "vec", args: [{ fn: "index" }, 0, { fn: "randomField" }] },
       { fn: "select", args: [{ fn: "gt", args: [{ fn: "index" }, 3] }, 1, 0] },
+      { fn: "fraction" },
     ];
     for (const spec of specs) {
       const field = fieldFromJson(spec);
       const col = evaluateField(field, ctx);
       expect(col.data.length).toBe(8 * col.tupleSize);
     }
+  });
+
+  it("fraction round-trips and spans [0, 1] inclusive through the grammar", () => {
+    const spec: FieldSpec = { fn: "fraction" };
+    const field = fieldFromJson(spec);
+    expect(fieldToJson(field)).toEqual(spec);
+    expect(field.key).toBe(fraction().key);
+    const col = evaluateField(field, testCloud(5));
+    expect(Array.from(col.data)).toEqual([0, 0.25, 0.5, 0.75, 1]);
+    // It takes no keys, so a stray one is refused by name.
+    expect(() => fieldFromJson({ fn: "fraction", args: [1] } as unknown as FieldSpec)).toThrow(
+      /unknown key "args" for fn "fraction"/,
+    );
   });
 
   it("round-trips: fieldToJson returns the original spec, and rebuilding evaluates identically", () => {
@@ -226,6 +241,7 @@ describe("fieldFromJson", () => {
       "attribute",
       "position",
       "index",
+      "fraction",
       "randomField",
       "add",
       "sub",

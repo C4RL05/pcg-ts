@@ -112,28 +112,21 @@ export function registerPlacePrimitives(): void {
   definePrimitive("place/drop-to-surface", {
     title: "Drop points onto a mesh and discard the misses",
     description:
-      "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. Two rays are cast, not one, and the second is the content: a miss keeps its prior value rather than reporting itself, so points that hit nothing would otherwise stay floating with no per-point way to find them. A marker stamped on the surface before the transfer comes back as 1 on a hit and 0 on a miss, which is what makes the discard possible at all. Fully deterministic. Reads and writes `P`; the marker column is removed again.",
+      "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. ONE ray is cast: the transfer moves `P` to the hit and reports per point whether it found anything, so the discard reads the outcome of the very ray that did the moving. A miss keeps its prior position and is filtered out. Fully deterministic. Reads and writes `P`; the internal `__onSurface` flag column is removed again.",
     tags: ["surface", "raycast", "terrain"],
+    // THREE nodes, and the count is load-bearing. This used to stamp a
+    // marker on the surface and cast a SECOND ray purely to recover which
+    // points the first one hit — the per-point answer existed inside the
+    // transfer and was thrown away, so it was queried again. Phase 37's
+    // mutation testing found a real bug living in exactly that gap: swap
+    // the two passes and every test still passed until the surface was
+    // TILTED, at which point snapping first left the second, forward-only
+    // ray starting a hair below the plane and discarding points that had
+    // genuinely landed. `transferAttribute.hitAttr` deletes the second ray
+    // and the bug's entire surface area with it. Do not reintroduce a
+    // second raycast here; if a hit flag is needed, it comes off the
+    // transfer that moved the point.
     nodes: [
-      {
-        id: "mark",
-        type: "setAttribute",
-        params: { name: "__onSurface", domain: "point", type: "f32", tupleSize: 1, value: 1 },
-      },
-      {
-        id: "hit",
-        type: "transferAttribute",
-        params: {
-          name: "__onSurface",
-          mapping: "raycast",
-          attrDomain: "point",
-          uvAttr: "uv",
-          direction: [0, -1, 0],
-          directionAttr: "",
-          maxDistance: 0,
-          missCountAttr: "",
-        },
-      },
       {
         id: "snap",
         type: "transferAttribute",
@@ -146,6 +139,7 @@ export function registerPlacePrimitives(): void {
           directionAttr: "",
           maxDistance: 0,
           missCountAttr: "",
+          hitAttr: "__onSurface",
         },
       },
       {
@@ -160,33 +154,24 @@ export function registerPlacePrimitives(): void {
       },
     ],
     connections: [
-      { from: ["mark", "out"], to: ["hit", "source"] },
-      { from: ["mark", "out"], to: ["snap", "source"] },
-      { from: ["hit", "out"], to: ["snap", "in"] },
       { from: ["snap", "out"], to: ["keep", "in"] },
       { from: ["keep", "out"], to: ["cleanup", "in"] },
     ],
     inputs: [
-      { name: "points", node: "hit", pin: "in" },
-      { name: "surface", node: "mark", pin: "in" },
+      { name: "points", node: "snap", pin: "in" },
+      { name: "surface", node: "snap", pin: "source" },
     ],
     outputs: [{ name: "out", node: "cleanup", pin: "out" }],
     params: [
       {
         name: "direction",
-        targets: [
-          { node: "hit", param: "direction" },
-          { node: "snap", param: "direction" },
-        ],
+        targets: [{ node: "snap", param: "direction" }],
         description:
-          "Which way the rays travel. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss.",
+          "Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss.",
       },
       {
         name: "maxDistance",
-        targets: [
-          { node: "hit", param: "maxDistance" },
-          { node: "snap", param: "maxDistance" },
-        ],
+        targets: [{ node: "snap", param: "maxDistance" }],
         description: "Longest drop that still counts as a landing, in world units. 0 means unlimited.",
         min: 0,
       },
@@ -264,6 +249,7 @@ export function registerPlacePrimitives(): void {
           directionAttr: "",
           maxDistance: 0,
           missCountAttr: "",
+          hitAttr: "",
         },
       },
       {

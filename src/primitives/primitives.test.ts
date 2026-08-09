@@ -752,6 +752,66 @@ describe("filter/", () => {
   });
 });
 
+/**
+ * A scatter dropped onto a TILTED plane through `place/drop-to-surface`.
+ * `span` is the xz extent the points are scattered over (the plane reaches
+ * about ±20 after the tilt, so a wider span produces genuine misses), and
+ * `poison` stamps the primitive's internal flag name onto the input points
+ * before they reach it.
+ */
+function tiltedDrop(
+  span: readonly [number, number],
+  count: number,
+  poison = false,
+): SerializedGraph {
+  const nodes: SerializedNode[] = [
+    {
+      id: "mesh",
+      type: "meshPrimitive",
+      params: {
+        shape: "plane",
+        size: [40, 0, 40],
+        center: [0, 0, 0],
+        orientation: "xz",
+        subdivisions: [9, 1, 9],
+        flip: false,
+      },
+    },
+    {
+      id: "tilt",
+      type: "transformPoints",
+      params: { scale: [1, 1, 1], rotateEuler: [17, 23, 11], translate: [0, 0, 0] },
+    },
+    {
+      id: "pts",
+      type: "pointScatterInBounds",
+      params: {
+        count,
+        boundsMin: [span[0], 30, span[0]],
+        boundsMax: [span[1], 30, span[1]],
+        seed: 4,
+      },
+    },
+    { id: "drop", type: "subgraph", params: {}, ref: { name: "place/drop-to-surface" } },
+  ];
+  const connections: SerializedConnection[] = [
+    { from: ["mesh", "out"], to: ["tilt", "in"] },
+    { from: ["tilt", "out"], to: ["drop", "surface"] },
+  ];
+  if (poison) {
+    nodes.push({
+      id: "stamp",
+      type: "setAttribute",
+      params: { name: "__onSurface", domain: "point", type: "f32", tupleSize: 1, value: 1 },
+    });
+    connections.push({ from: ["pts", "out"], to: ["stamp", "in"] });
+    connections.push({ from: ["stamp", "out"], to: ["drop", "points"] });
+  } else {
+    connections.push({ from: ["pts", "out"], to: ["drop", "points"] });
+  }
+  return { formatVersion: 1, seed: 5, nodes, connections, outputs: [{ id: "drop", pin: "out", name: "main_out" }] };
+}
+
 describe("place/", () => {
   it("on-surface stamps height and slope on a flat plane", async () => {
     const g = geo(await cookOne("place/on-surface", { count: 200 }));
@@ -783,52 +843,105 @@ describe("place/", () => {
     expect(up.pointCount).toBe(0);
   });
 
+  it("drop-to-surface casts exactly ONE ray, and the count is the assertion", () => {
+    // This used to be five nodes: a marker stamped on the surface, a
+    // transfer to bring it back as a hit flag, a SECOND raycast to move
+    // the points, a filter and a cleanup. The second ray existed only to
+    // recover what the first one already knew, and phase 37's mutation
+    // testing found a real bug living in exactly that gap — reorder the
+    // two passes and every test still passed until the surface was
+    // TILTED, at which point snapping first left the forward-only second
+    // ray starting a hair below the plane and discarding points that had
+    // genuinely landed. `transferAttribute.hitAttr` reports the outcome of
+    // the ray that did the moving, so there is nothing left to reorder.
+    // A reintroduced second raycast fails here.
+    const recipe = getRegisteredSubgraph("place/drop-to-surface").subgraph.graph;
+    expect(recipe.nodes.map((n) => n.type)).toEqual([
+      "transferAttribute",
+      "filterByAttribute",
+      "removeAttribute",
+    ]);
+    const rays = recipe.nodes.filter((n) => n.params.mapping === "raycast");
+    expect(rays).toHaveLength(1);
+    expect(rays[0]?.params.name).toBe("P");
+    expect(rays[0]?.params.hitAttr).toBe("__onSurface");
+  });
+
   it("drop-to-surface keeps the hits on a TILTED surface too", async () => {
-    // The flat fixture above cannot see this: a plane at y = 0 gives hit
-    // positions that are exactly on it, so a second ray cast from the
-    // snapped position still hits at t = 0 whatever order the two
-    // transfers run in. Tilt the plane and the hit position lands a hair
-    // below it, the second ray (forward-only) finds nothing, and every
-    // point that really did hit is discarded. Measured: half of them.
-    // So the order — mark the hits BEFORE moving anything — is load-
-    // bearing, and this is the fixture that says so.
-    const graph: SerializedGraph = {
-      formatVersion: 1,
-      seed: 5,
-      nodes: [
-        {
-          id: "mesh",
-          type: "meshPrimitive",
-          params: {
-            shape: "plane",
-            size: [40, 0, 40],
-            center: [0, 0, 0],
-            orientation: "xz",
-            subdivisions: [9, 1, 9],
-            flip: false,
-          },
-        },
-        {
-          id: "tilt",
-          type: "transformPoints",
-          params: { scale: [1, 1, 1], rotateEuler: [17, 23, 11], translate: [0, 0, 0] },
-        },
-        {
-          id: "pts",
-          type: "pointScatterInBounds",
-          params: { count: 1500, boundsMin: [-8, 30, -8], boundsMax: [8, 30, 8], seed: 4 },
-        },
-        { id: "drop", type: "subgraph", params: {}, ref: { name: "place/drop-to-surface" } },
-      ],
-      connections: [
-        { from: ["mesh", "out"], to: ["tilt", "in"] },
-        { from: ["tilt", "out"], to: ["drop", "surface"] },
-        { from: ["pts", "out"], to: ["drop", "points"] },
-      ],
-      outputs: [{ id: "drop", pin: "out", name: "main_out" }],
-    };
-    const g = geo(await cookGraph(graph));
+    // The flat fixture above cannot see the failure this guards: a plane
+    // at y = 0 gives hit positions exactly on it, so anything asked a
+    // second time still hits at t = 0. Tilt the plane and a hit position
+    // lands a hair BELOW it, where a forward-only ray finds nothing —
+    // which is how the old two-pass recipe could discard points that had
+    // genuinely landed (measured then: half of them). One ray cannot have
+    // that failure, and this fixture is what says so: every point aimed
+    // at the tilted plane must survive.
+    const g = geo(await cookGraph(tiltedDrop([-8, 8], 1500)));
     expect(g.pointCount).toBe(1500);
+  });
+
+  it("drop-to-surface flags hit and miss correctly on a TILTED surface", async () => {
+    // The all-hit fixture above cannot distinguish a correct flag from one
+    // stuck at 1. Scatter wider than the tilted plane reaches so some rays
+    // genuinely miss, then check the two halves separately: the survivors
+    // must all lie on ONE plane (the tilted one), and some points must
+    // have been discarded.
+    const g = geo(await cookGraph(tiltedDrop([-40, 40], 2000)));
+    expect(g.pointCount).toBeGreaterThan(100);
+    expect(g.pointCount).toBeLessThan(2000);
+
+    // Fit the plane from the survivors rather than re-deriving the euler
+    // convention: three of them define it, and every other one must lie on
+    // it. A point that never landed is still up at y = 30 and fails by a
+    // mile.
+    const P = g.attrs.point.require("P");
+    const at = (i: number): number[] => P.getTuple(i);
+    const [ax, ay, az] = at(0);
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    for (let i = 1; i < g.pointCount - 1 && nx === 0 && ny === 0 && nz === 0; i++) {
+      const [bx, by, bz] = at(i);
+      const [cx, cy, cz] = at(i + 1);
+      const ux = bx - ax;
+      const uy = by - ay;
+      const uz = bz - az;
+      const vx = cx - ax;
+      const vy = cy - ay;
+      const vz = cz - az;
+      const px = uy * vz - uz * vy;
+      const py = uz * vx - ux * vz;
+      const pz = ux * vy - uy * vx;
+      const len = Math.sqrt(px * px + py * py + pz * pz);
+      if (len > 1e-3) {
+        nx = px / len;
+        ny = py / len;
+        nz = pz / len;
+      }
+    }
+    expect(Math.abs(nx) + Math.abs(ny) + Math.abs(nz)).toBeGreaterThan(0.5);
+    // A tilt, not the flat plane the other fixture uses.
+    expect(Math.abs(ny)).toBeLessThan(0.999);
+    for (let i = 0; i < g.pointCount; i++) {
+      const [x, y, z] = at(i);
+      const d = nx * (x - ax) + ny * (y - ay) + nz * (z - az);
+      expect(Math.abs(d), `survivor ${i} is off the tilted plane`).toBeLessThan(1e-2);
+    }
+  });
+
+  it("drop-to-surface's internal flag cannot be poisoned by the input's attributes", async () => {
+    // The flag is an INTERNAL name, and an internal name is only internal
+    // until an input happens to carry it. The old recipe transferred a
+    // marker onto the points, so a destination already holding that name
+    // with a matching type kept its own value on a miss — and a point that
+    // hit nothing got to claim it had landed, staying in the output,
+    // floating. `hitAttr` writes every point unconditionally, so stamping
+    // the name on the input changes NOTHING: same count, same points.
+    const clean = geo(await cookGraph(tiltedDrop([-40, 40], 2000)));
+    const poisoned = geo(await cookGraph(tiltedDrop([-40, 40], 2000, true)));
+    expect(poisoned.pointCount).toBe(clean.pointCount);
+    expect(snapshotGeometry(poisoned)).toEqual(snapshotGeometry(clean));
+    expect(poisoned.attrs.point.names()).not.toContain("__onSurface");
   });
 
   it("align-to-surface writes rot from the transferred normal", async () => {

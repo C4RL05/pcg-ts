@@ -29,6 +29,7 @@ import {
   div,
   dot,
   floor,
+  fraction,
   ge,
   length,
   lerp,
@@ -73,6 +74,7 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   attribute: { fn: "attribute", name: "density" },
   position: { fn: "position" },
   index: { fn: "index" },
+  fraction: { fn: "fraction" },
   randomField: { fn: "randomField" },
   add: { fn: "add", args: [1, 2] },
   sub: { fn: "sub", args: [1, 2] },
@@ -192,6 +194,18 @@ export const EXTENDED_SPECS: Record<string, FieldSpecArg> = {
     ],
     index: 2,
   },
+  // `fraction` as a CHILD, not a root: the minimal spec only covers the
+  // root store path, and this is the idiom it exists for — a ramp read
+  // along a cloud, which needs both endpoints of [0, 1] to be reached.
+  fractionRamp: {
+    fn: "ramp",
+    args: [{ fn: "fraction" }],
+    stops: [
+      [0, 0],
+      [0.5, 1],
+      [1, 0],
+    ],
+  },
   rampMultiStop: {
     fn: "ramp",
     args: [{ fn: "length", args: [{ fn: "position" }] }],
@@ -304,6 +318,12 @@ export const PARITY_CASES: ParityCase[] = [
   { name: "arith add/sub/mul", spec: EXTENDED_SPECS.arithChain, exact: true, budget: 0 },
   // measured 0.76, 2 — f32 division within the 2.5-ULP WGSL bound.
   { name: "div", spec: EXTENDED_SPECS.divChain, budget: 1 },
+  // measured 0.50, 1 — one f32 division of two exact integers, so it
+  // sits in the `div` family and takes its budget rather than claiming
+  // bit-exactness (the CPU divides in f64 and rounds once; WGSL promises
+  // only 2.5 ULP). The count sweep — including the degenerate counts,
+  // which ARE bit-exact — is pinned separately in parity.device.test.ts.
+  { name: "fraction", spec: { fn: "fraction" }, budget: 1 },
   // measured 0.50, 3529 — CPU-formula lerp; maxUlp spike at zero crossings.
   { name: "lerp", spec: { fn: "lerp", args: [PX, PY, { fn: "attribute", name: "density" }] }, budget: 1 },
   // measured 0, 0.
@@ -395,6 +415,7 @@ const density = (): Field => attribute("density");
 export const DERIVED_FIELDS: Record<string, () => Field> = {
   "arith add/sub/mul": () => sub(mul(add(px(), 1.5), py()), density()),
   div: () => div(px(), add(abs(pz()), 3)),
+  fraction: () => fraction(),
   lerp: () => lerp(px(), py(), density()),
   "clamp/min/max": () => clamp(px(), min(py(), 0), max(abs(py()), 1)),
   floor: () => floor(px()),
