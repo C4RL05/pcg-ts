@@ -29,9 +29,9 @@
  * Without WebGPU the page runs CPU-only with a visible notice.
  */
 import {
+  Geometry,
   Graph,
   cook,
-  createPointCloud,
   evaluateField,
   fieldFromJson,
   firstGeometry,
@@ -40,7 +40,6 @@ import {
   setAttribute,
   transformPoints,
   type Field,
-  type Geometry,
   type GpuFieldResolver,
 } from "pcg-ts";
 import {
@@ -331,21 +330,54 @@ function hashColumns(tint: Float32Array, psize: Float32Array): string {
 // -- deviation readout (live parity vs the CPU reference) ------------------
 
 /**
+ * The first `w` points of `geo` as a standalone geometry, carrying
+ * **every** point attribute — not a hand-picked subset.
+ *
+ * This is load-bearing, not tidiness. Per-point randomness is keyed on
+ * point IDENTITY: `hashCombine(bits(Px), bits(Py), bits(Pz), seed)` over
+ * the position bits *and* the standard `seed` column. A window that
+ * copied only `P` would leave `seed` at its all-zero default, so the
+ * same point would have a different identity on the two sides and
+ * `randomField` would draw an unrelated stream rather than a nearly
+ * equal one. The readout would then be comparing two different worlds
+ * and faithfully reporting that they differ enormously — a probe
+ * artifact indistinguishable, at a glance, from a parity failure.
+ *
+ * Copying the whole domain (rather than `P` + `seed`) keeps that true
+ * for any field the spec grows later: `{ fn: "attribute", … }` reads
+ * whatever column it names, and a window missing it would fail the same
+ * way. Detail attributes come along for the same reason — a field
+ * evaluated on the point domain can read them.
+ */
+function pointWindow(geo: Geometry, w: number): Geometry {
+  const sub = new Geometry();
+  sub.attrs.point.resize(w);
+  for (const src of geo.attrs.point) {
+    sub.attrs.point
+      .add(src.name, src.type, src.tupleSize, src.defaultValue)
+      .copyFrom(src, 0, 0, w);
+  }
+  for (const src of geo.attrs.detail) {
+    sub.attrs.detail
+      .add(src.name, src.type, src.tupleSize, src.defaultValue)
+      .copyFrom(src, 0, 0, 1);
+  }
+  return sub;
+}
+
+/**
  * Re-evaluate the tint field on the CPU over the first `DEVIATION_WINDOW`
  * points of the cooked result (same positions the device kernel saw —
- * post-jitter, post-transform — and the same evaluation seed the
- * setAttribute node used) and compare against the cooked bytes.
- * Reported both as max |cpu − gpu| and in range-ULP units — the
- * phase-measured metric: error / (2^-23 · max|cpu|), i.e. ULPs at the
- * top of the output range.
+ * post-jitter, post-transform — the same per-point seeds, and the same
+ * evaluation seed the setAttribute node used) and compare against the
+ * cooked bytes. Reported both as max |cpu − gpu| and in range-ULP units
+ * — the phase-measured metric: error / (2^-23 · max|cpu|), i.e. ULPs at
+ * the top of the output range.
  */
 function measureDeviation(geo: Geometry, tintGpu: Float32Array, p: CookPath): PanelView["deviation"] {
   const w = Math.min(DEVIATION_WINDOW, geo.pointCount);
   if (w === 0) return undefined;
-  const sub = createPointCloud(w);
-  const dstP = sub.attrs.point.require("P").data as Float32Array;
-  const srcP = geo.attrs.point.require("P").data as Float32Array;
-  dstP.set(srcP.subarray(0, w * 3));
+  const sub = pointWindow(geo, w);
   // setAttribute with seed param 0 (the default) evaluates its field
   // with the node's derived seed — read it off the structural snapshot.
   const desc = rig.graph.describe().nodes.find((node) => node.id === rig.tintNode.id);

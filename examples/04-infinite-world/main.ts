@@ -1,11 +1,30 @@
 /**
  * 04 — infinite world: a two-level hierarchical World streamed around a
  * flying camera. The coarse level is unbounded (one global cook) and
- * scatters sparse mega-rocks; the fine level (cellSize 20) scatters small
- * rocks per cell, with density read from one shared world-space noise
- * field so cell borders are seamless. Each level's bind wires the cell
- * bounds and ctx.seed into the graph per the LevelDef determinism
- * contract; WorldThreeBinding maps cell lifecycles onto the scene.
+ * scatters sparse mega-rocks; the fine level streams small rocks from
+ * `pointScatterInWorld`, the world-ANCHORED source, thinned by a
+ * world-space density field and SIZED by how crowded each rock's
+ * neighbourhood is — a measurement taken over a halo (the cell grown on
+ * every side) before the halo is clipped away. WorldThreeBinding maps
+ * cell lifecycles onto the scene.
+ *
+ * Anchoring is invisible while it works, so the page makes it falsifiable
+ * instead of asserting it:
+ *
+ * - the "cell grid" overlay draws the streaming partition on the ground,
+ *   so the borders content is supposed to ignore are actually visible;
+ * - the "cell size" slider re-partitions the world live. Anchored, the
+ *   world does not change at all — not a position, not a size — because
+ *   a point is a function of its world position, and the measurement
+ *   over it is a function of a halo each cell derives for itself;
+ * - "halo" off narrows every query to exactly its cell. Neighbour counts
+ *   near a border are then measured against a world that stops there, and
+ *   the partition prints itself into the content as a lattice of
+ *   undersized rocks;
+ * - "world-anchored" off swaps the source for the pre-anchoring
+ *   `pointScatterInBounds` over the identical window. Its positions are a
+ *   function OF the window, so every rock re-rolls whenever the partition
+ *   changes and the halo — a wider query — reproduces nothing.
  *
  * This page also carries a GPU field evaluator, toggled live. Every
  * field in `levels.ts` is written with the combinator API — `remap`,
@@ -26,10 +45,18 @@
 import { CookCancelledError, World, type CellOutputs, type GpuCookStats } from "pcg-ts";
 import type { GpuFieldEvaluator } from "pcg-ts/gpu";
 import { WorldThreeBinding, type AssetMap } from "pcg-ts/three";
-import { FINE_CELL, makeLandmarkLevel, makeRockLevel } from "./levels.js";
+import {
+  DEFAULT_FINE_CELL,
+  HALO,
+  NEIGHBOR_RADIUS,
+  SCATTER_CELL,
+  makeLandmarkLevel,
+  makeRockLevel,
+} from "./levels.js";
 import { CookStatsTap, createEvaluators, fmtFallbacks, requestGpuDevice } from "./gpu.js";
 import {
   DodecahedronGeometry,
+  GridHelper,
   Group,
   IcosahedronGeometry,
   Mesh,
@@ -48,6 +75,14 @@ let speed = 18;
 let radius = 140;
 let mode: PathMode = "gpu";
 let acceptDerived = true;
+/** Fine-level cell edge: the STREAMING partition, retunable live. */
+let fineCell = DEFAULT_FINE_CELL;
+/** Source the fine level scatters from; see RockLevelOptions.anchored. */
+let anchored = true;
+/** Query the cell grown by the halo, or exactly the cell. */
+let halo = true;
+/** Draw the cell borders the content is supposed to ignore. */
+let showGrid = true;
 
 /**
  * Per-update cook budget, and a hard cap on cells per update. Both are
@@ -82,6 +117,40 @@ const ground = new Mesh(
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.03;
 scene.add(ground);
+
+/**
+ * The streaming partition, drawn. Cell borders sit at multiples of the
+ * fine level's cellSize, and a GridHelper with an even division count
+ * puts its lines at multiples of its step relative to its own center — so
+ * snapping the center to a multiple of the cell size lands every line
+ * exactly on a cell border. Rebuilt when the cell size changes, and
+ * followed to the camera each frame so it never runs out.
+ */
+const GRID_SPAN = 40;
+let gridHelper: GridHelper | undefined;
+
+function rebuildGrid(): void {
+  if (gridHelper) {
+    scene.remove(gridHelper);
+    gridHelper.geometry.dispose();
+    gridHelper.material.dispose();
+  }
+  const grid = new GridHelper(fineCell * GRID_SPAN, GRID_SPAN, 0x3f74c0, 0x2c4f80);
+  const mat = grid.material;
+  mat.transparent = true;
+  mat.opacity = 0.45;
+  mat.depthWrite = false;
+  grid.position.y = 0.02;
+  grid.visible = showGrid;
+  scene.add(grid);
+  gridHelper = grid;
+}
+
+function followGrid(): void {
+  if (!gridHelper || !gridHelper.visible) return;
+  gridHelper.position.x = Math.round(camera.position.x / fineCell) * fineCell;
+  gridHelper.position.z = Math.round(camera.position.z / fineCell) * fineCell;
+}
 
 const rockMat = new MeshStandardMaterial({ color: 0x7a8290, roughness: 0.95, flatShading: true });
 const megaMat = new MeshStandardMaterial({ color: 0x5d6675, roughness: 1, flatShading: true });
@@ -196,8 +265,13 @@ function buildWorld(): void {
   };
   next.world = new World({
     seed,
-    levels: [makeLandmarkLevel(), makeRockLevel(seed, radius)],
-    maxCellsPerLevel: cellCap(radius, FINE_CELL),
+    // The world seed reaches the fine level through ctx.worldSeed, not
+    // through this page: the level factory takes no seed at all.
+    levels: [
+      makeLandmarkLevel(),
+      makeRockLevel({ cellSize: fineCell, generationRadius: radius, anchored, halo }),
+    ],
+    maxCellsPerLevel: cellCap(radius, fineCell),
     ...(next.tap !== undefined ? { gpu: next.tap } : {}),
     onCellReady: (level, coord, outputs) => {
       if (next.disposed) return;
@@ -297,7 +371,7 @@ document.addEventListener("visibilitychange", () => {
 
 const overlay = createOverlay({
   title: "04 · infinite world",
-  info: "Unbounded landmark level + streamed 20u rock cells around a flying camera. Steer with A/D or arrow keys.",
+  info: "Unbounded landmark level + world-anchored rock cells streamed around a flying camera. Steer with A/D or arrow keys.",
 });
 
 const style = document.createElement("style");
@@ -342,6 +416,35 @@ overlay.addSlider(
     buildWorld();
   },
 );
+// The partition knob. Dragging it re-cells the world from scratch: with
+// the anchored source the rocks stay exactly where they were and only
+// the grid changes, which is the whole claim in one gesture.
+overlay.addSlider(
+  "cell size",
+  { min: 20, max: 80, step: 20, value: fineCell, format: (v) => `${v} u` },
+  (v) => {
+    fineCell = v;
+    rebuildGrid();
+    buildWorld();
+  },
+);
+overlay.addCheckbox("world-anchored", anchored, (on) => {
+  anchored = on;
+  paintSource();
+  buildWorld();
+});
+// Each rock's size is a measurement of its neighbourhood. Off, the
+// measurement stops at the cell border and every border grows a lattice
+// of undersized rocks — the halo made visible by its absence.
+overlay.addCheckbox(`halo (${HALO} u)`, halo, (on) => {
+  halo = on;
+  buildWorld();
+});
+overlay.addCheckbox("cell grid", showGrid, (on) => {
+  showGrid = on;
+  if (gridHelper) gridHelper.visible = on;
+  followGrid();
+});
 
 // -- path toggle (buttons + keyboard, prepended above the sliders) ---------
 
@@ -405,6 +508,7 @@ function paintMode(): void {
 
 const statAdapter = overlay.addStat("adapter");
 const statFps = overlay.addStat("fps");
+const statSource = overlay.addStat("rock source");
 const statCells = overlay.addStat("rock cells");
 const statCooked = overlay.addStat("cooked / evicted");
 const statPending = overlay.addStat("pending");
@@ -418,6 +522,11 @@ const statStatus = overlay.addStat("status");
 
 function setStatus(text: string): void {
   statStatus(text);
+}
+
+/** Name the node the fine level is actually sourcing from. */
+function paintSource(): void {
+  statSource(anchored ? "pointScatterInWorld" : "pointScatterInBounds");
 }
 
 function deviceLostStatus(): string {
@@ -452,8 +561,61 @@ function paintGpuStats(): void {
 }
 
 overlay.addNote(
-  "Cell content is a pure function of (seed, level, cell coord) — fly away and back, or change the radius: the same rocks return.",
+  "Drag “cell size”: the blue grid re-cells the world and the rocks do not move or resize. Untick “halo” to watch every border grow a band of undersized rocks, and “world-anchored” to watch the same drag re-roll the world from scratch.",
 );
+
+const anchoring = overlay.addCollapsible("anchoring · what the fine level actually does");
+anchoring.textContent = `pointScatterInWorld scatters over an INFINITE lattice fixed to
+world coordinates and returns the points inside the query
+window. Position and per-point seed are a pure function of the
+node seed, the seed param, the lattice mode, the lattice cellSize
+and the point's own lattice cell and index — never of the window.
+Three consequences, and this page leans on all three:
+
+  1  the window only SELECTS. Re-cell the world (the cell size
+     slider) and the same rocks come back, because nothing in
+     their derivation ever saw a cell.
+  2  a halo is just a wider query. Each rock's SIZE comes from
+     pointNeighborhood counting the rocks within ${NEIGHBOR_RADIUS} u of it,
+     which does not stop at a border — so each cell queries
+     itself grown by ${HALO} u, measures over that, and only then
+     clips back with filterByBounds. Both cells sharing a border
+     derive the same points in the overlap and count the same
+     neighbours, so a rock is the same size either way.
+     A counted neighbourhood has a FINITE halo width, exactly
+     the radius; a greedy op like selfPrune, whose verdict for
+     one point depends on verdicts for others, has none, which
+     is why size here is measured rather than competed for.
+  3  a cell never asks a sibling for anything. It derives the
+     halo from world coordinates, so cook order, eviction and
+     which neighbours happen to be resident change nothing.
+
+The lattice cellSize is ${SCATTER_CELL} u here — the content's own scale,
+deliberately NOT the World cell size. Tying the two would make
+the world a function of the runtime's partitioning, which is
+exactly what the cell size slider is there to disprove.
+
+Downstream ops stay anchored because their randomness and their
+orderings key on point IDENTITY (stored position bits plus the
+per-point seed attribute), not on array index: filterByDensity's
+probabilistic draw, pointNeighborhood's tie-break and summation
+order, and randomField inside the scale field all decide the
+same way for the same rock in whichever cell derived it, however
+many points were filtered out of the array first.
+
+bind therefore seeds those nodes from ctx.worldSeed, which is
+cell-INVARIANT, and passes only the window per cell. It never
+calls graph.setSeed: a per-cell whole-graph reseed reaches the
+source's node seed too and quietly turns it back into a per-cell
+scatter — still deterministic, no longer anchored.
+
+Unticking "world-anchored" swaps in pointScatterInBounds over
+the identical window, at the same expected population. Its
+positions are a function OF the window, so the halo reproduces
+nothing: every rock re-rolls when the partition changes, and
+each cell measures its seams against neighbours the cell next
+door has never heard of. Deterministic, still — and useless for
+anything that has to see past its own bounds.`;
 
 const diagnostics = overlay.addCollapsible("diagnostics · why nothing fuses here");
 diagnostics.textContent = `resident runs / fused members reads 0 / 0 on BOTH paths, and
@@ -461,23 +623,27 @@ that is a property of these graphs, not of the device.
 
 A device-resident run needs two or more ADJACENT fusable nodes.
 Of the node types used here, only setAttribute declares a CHAIN
-resident descriptor. pointScatterInBounds and filterByDensity
-declare none at all, and spawnInstances declares a TERMINAL one,
-which joins a run only when the resolver advertises that kind in
-residentTerminals — this page deliberately does not (see 09).
+resident descriptor. The scatter sources, the two filters and
+pointNeighborhood declare none, and spawnInstances declares a
+TERMINAL one, which joins a run only when the resolver advertises
+that kind in residentTerminals — this page does not (see 09).
 
   landmarks   scatter -> setAttribute -> spawnInstances
                          ^ lone fusable node: a run of one, so no run
 
   rocks       scatter -> setAttribute -> filterByDensity
+                      -> pointNeighborhood -> filterByBounds
                       -> setAttribute -> spawnInstances
-                         ^ two fusable nodes, held apart by
-                           filterByDensity: two runs of one, so no run
+                         ^ two fusable nodes, three non-members
+                           between them: two runs of one
 
-filterByDensity changes the point count, and every member of a run
-must be element-count preserving on one geometry in/out, so it can
-never be a member. It is exactly what breaks the only chain here
-that could have fused: delete it and the two setAttribute nodes
+Every member of a run must be element-count preserving on one
+geometry in/out, which rules out filterByDensity and
+filterByBounds outright. pointNeighborhood does preserve the
+count, but it declares no resident descriptor — a spatial query
+is not a per-element kernel — so it cannot be a member either.
+The three of them are exactly what breaks the only chain here
+that could have fused: delete them and the two setAttribute nodes
 become a single 2-member run.
 
 What acceptDerivedSpecs buys on this page is the PER-NODE path.
@@ -561,7 +727,9 @@ const fps = createFpsMeter((v) => statFps(v));
 statAdapter(adapterLabel);
 setStatus("requesting WebGPU adapter…");
 paintMode();
+paintSource();
 paintGpuStats();
+rebuildGrid();
 // Build and start rendering before the device is asked for, so a browser
 // with no WebGPU (or a slow adapter request) still shows the world at
 // once — the GPU path swaps in later if it arrives.
@@ -580,6 +748,7 @@ start((dt) => {
     5,
     camera.position.z + Math.cos(heading) * 60,
   );
+  followGrid();
 
   const r = rig;
   if (r && !updating) {

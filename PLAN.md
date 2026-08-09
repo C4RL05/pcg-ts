@@ -1453,6 +1453,40 @@ inherits this, not just edges.
 - Exit: a world-anchored source cooking in the corpus; the three test
   kinds green over it; a documented halo contract; docs idempotent.
 
+### Carried out of phase 42 — the identity/fusion invariant
+
+Recorded because it is the one permanent cost of keying randomness on
+identity, and because someone will eventually try to "optimize" the
+guard away and silently reintroduce a divergent world.
+
+**A device-resident run may rewrite `P`, or key on identity, but not in
+that order.** Position bits became a KEY, so a one-ulp difference in `P`
+is no longer a small error but an unrelated random number — measured at
+up to 2.08e-1 on 99.5% of components. The guard lives at
+`src/gpu/run.ts` (`identity after P write`).
+
+Three narrowings were investigated during phase 42 and ALL THREE closed
+off by measurement, not argument. Do not reopen them without new
+evidence:
+- *"Decline only when the identity-keyed member actually reads the
+  written `P`"* — a provable no-op. A compiled `randomField` takes
+  `[P, seed]` as kernel inputs in every grammar position tested, and
+  there is no dead-code elimination, so no admitted spec keys on
+  identity without reading `P`.
+- *"Allow it when the `P` write is bit-exact"* — cannot be a param-only
+  predicate. Whether `v*s + t` is exact depends on each point's
+  exponent, which is the DATA, not the params the planner can see. The
+  maximal safe window would also need signed-zero behavior and
+  operation order pinned across two implementations, and would lapse
+  silently if either were refactored.
+- *"Allow it when the member's output is not position-dependent"* —
+  refuted directly: `randomField` is by construction a discontinuous
+  function of position bits.
+
+What is NOT true, and was my own first conclusion before the
+measurement came back: identity-keyed chains are not barred from being
+device-resident. `[tint, psize]` plans fine. Only the ORDER is barred.
+
 ### Phase 43 — Topology, shipped with its consumer
 
 Schedulable only once phase 42 lands AND a pipeline stage 5 — a road

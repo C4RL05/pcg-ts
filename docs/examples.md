@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-34 examples, alphabetical by file:
+35 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -28,6 +28,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
 - [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
+- [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
 - [basics-spawn-by-species.json](#basics-spawn-by-speciesjson) — spawn a different asset per point
 - [basics-spawn-instances.json](#basics-spawn-instancesjson) — turn points into instance batches
 - [basics-subgraph-exposed-params.json](#basics-subgraph-exposed-paramsjson) — wrap a graph as one node with its own knobs
@@ -436,6 +437,24 @@ The smallest complete graph: one source node fills an axis-aligned box with a fi
 **Outputs:** `points` (from `scatter`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-scatter-in-bounds.json --stats`
+
+## basics-scatter-in-world.json
+
+**scatter points anchored to the world, not to the box**
+
+The same shape of graph as 'scatter points in a box', with the one difference that makes a region streamable: `pointScatterInWorld` computes each point from its own lattice cell and index, so the box only says which points to RETURN. Widen it, move it, or ask for it in four pieces and every point that was already there stays exactly where it was, with the same per-point seed — `pointScatterInBounds` derives positions FROM the bounds and moves all 500 of them when the box moves an inch. Population is `density * area`: at 0.05 points per square unit over an 80x80 window that is 320 points, predictable without cooking, with `cellSize` deciding only how evenly they clump. The clip is half-open, so abutting windows tile the world with no gap and no duplicate — which is why a cell can derive its own halo by simply asking for a wider box.
+
+**Tags:** `basics`, `scatter`, `source`, `streaming`
+
+**Seed:** 1029
+
+**Node types:** `pointScatterInWorld`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `scatter`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-scatter-in-world.json --stats`
 
 ## basics-spawn-by-species.json
 

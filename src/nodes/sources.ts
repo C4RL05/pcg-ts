@@ -212,6 +212,39 @@ function latticeHi(v: number, size: number): number {
 }
 
 /**
+ * How far a coordinate can move on its way into the f32 column the cloud
+ * stores it in, anywhere in a window spanning `lo`..`hi`.
+ *
+ * The clip below compares the value it is about to STORE, so the stored
+ * position is always inside the window — but that same rounding can carry
+ * a point OUT of the lattice slab it was generated in. A point whose
+ * unrounded X sits a hair below a cell boundary can store as the boundary
+ * itself, which belongs to the next cell along; the window that owns it
+ * would never have visited the cell that generates it, and the point would
+ * vanish from every window in the world. So the cell range is widened by
+ * this margin and the per-point clip, which is exact, does the deciding.
+ *
+ * `ulp(v) <= |v| * 2^-23` for every normal f32, so one ulp at the larger
+ * endpoint bounds the whole window. That is twice the half-ulp a round-to-
+ * nearest can actually move a value, and the slack also absorbs the f64
+ * rounding in computing the position itself.
+ *
+ * What it costs: nothing at all when a face lands strictly inside a
+ * lattice cell, because floor/ceil of a value moved by a whisker is the
+ * same cell — and one extra cell on that face when the window is aligned
+ * to the lattice, which round numbers often are. That is a boundary cost,
+ * so it fades as the window grows (a 24x24-cell window pays ~17%, a
+ * 100x100 one ~4%), and almost every point it generates is discarded by
+ * one comparison. Near the origin the margin is a whisker and buys
+ * nothing measurable; a few million units out, where the f32 spacing
+ * approaches the lattice spacing, it is the difference between a
+ * partition and a leak.
+ */
+function f32ClipMargin(lo: number, hi: number): number {
+  return Math.max(Math.abs(lo), Math.abs(hi)) * 2 ** -23;
+}
+
+/**
  * Points as a pure function of world position, queried through a window:
  * the world-anchored counterpart of {@link pointScatterInBounds}.
  */
@@ -219,7 +252,7 @@ export const pointScatterInWorld = standardNode<PointScatterInWorldParams>({
   type: "pointScatterInWorld",
   category: "source",
   description:
-    "Scatters points over an INFINITE lattice anchored to world coordinates, then returns the ones inside the query window [boundsMin, boundsMax). A point's position and per-point seed are a pure function of (node seed, seed, latticeMode, cellSize) and its own lattice cell and index — never of the window, and density only decides how many points a cell holds — so the same world position always yields the same point under ANY query. That is what makes a halo just a wider query, lets a region cooked whole and the same region cooked in pieces agree byte for byte, and lets two cells on a boundary agree on what is there; pointScatterInBounds computes positions from the bounds and can promise none of it. Expected population is exactly `density * area` of the window in \"xz\" mode and `density * volume` in \"xyz\" mode, so an author can predict the count without cooking. Points are ordered by lattice cell (Z outer, then Y, then X) and by index within a cell, so any two windows list their shared points in the same relative order. Windows need not align to the lattice: partial cells are generated whole and clipped per point. The clip is half-open — a point on the min face belongs to this window, a point on the max face belongs to the next one — so abutting windows partition the world with no gap and no duplicate. Emits a standard point cloud.",
+    "Scatters points over an INFINITE lattice anchored to world coordinates, then returns the ones inside the query window [boundsMin, boundsMax). A point's position and per-point seed are a pure function of (seed, latticeMode, cellSize) and its own lattice cell and index — never of the window, and density only decides how many points a cell holds — so the same world position always yields the same point under ANY query. Note what is NOT in that list: the graph seed. Alone among the nodes here, this one ignores it (see the `seed` param), because a lattice that moved with the graph seed could be de-anchored silently by an author reseeding a level graph per cell. That is what makes a halo just a wider query, lets a region cooked whole and the same region cooked in pieces agree byte for byte, and lets two cells on a boundary agree on what is there; pointScatterInBounds computes positions from the bounds and can promise none of it. Expected population is exactly `density * area` of the window in \"xz\" mode and `density * volume` in \"xyz\" mode, so an author can predict the count without cooking. Points are ordered by lattice cell (Z outer, then Y, then X) and by index within a cell, so any two windows list their shared points in the same relative order. Windows need not align to the lattice: partial cells are generated whole and clipped per point. The clip is half-open — a point on the min face belongs to this window, a point on the max face belongs to the next one — so abutting windows partition the world with no gap and no duplicate. The coordinate the clip tests is the f32 the point cloud STORES, not the wider intermediate it was computed from, so \"inside the window\" is a statement about the position you can actually read back: far from the origin, where the f32 spacing grows toward the lattice spacing, the two differ, and testing the intermediate would emit points whose stored position lies outside the window and have two abutting windows both disown the same point. Emits a standard point cloud.",
   inputs: [],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -266,10 +299,10 @@ export const pointScatterInWorld = standardNode<PointScatterInWorldParams>({
       type: "u32",
       default: 0,
       description:
-        "Extra seed folded into the node seed; change it to re-roll the whole world. It must be the SAME for every query that has to agree — in a World, bind it from the cell-invariant `ctx.worldSeed` or `ctx.levelSeed`, never from the per-cell `ctx.seed`, and do not reseed the level graph per cell: that would make each cell an unrelated world and the anchoring guarantee empty.",
+        "THE seed of the world this node lays down, and its ONLY source of randomness: the graph seed does not reach it, which is unlike every other node in this library and is the point. Change THIS to re-roll the world; changing the graph seed, calling graph.setSeed inside a level's bind, passing a CLI seed override, or renaming the node all leave the lattice byte-identical, so anchoring cannot be lost by accident. It must be the SAME for every query that has to agree — in a World, bind it from the cell-INVARIANT `ctx.worldSeed` or `ctx.levelSeed`, never from the per-cell `ctx.seed`, which would make each cell an unrelated world and the guarantee empty. The cost of all this, which you have to plan for: two nodes of this type with identical params scatter IDENTICAL points, exactly as two noise fields with one spec are one field — so give each layer its own value here (e.g. hashCombine(ctx.worldSeed, 1) for trees and hashCombine(ctx.worldSeed, 2) for rocks) rather than relying on the node id to separate them.",
     },
   },
-  execute({ params, seed: nodeSeed, checkCancelled }) {
+  execute({ params, checkCancelled }) {
     const mode = params.latticeMode;
     if (mode !== "xz" && mode !== "xyz") {
       throw new Error(
@@ -324,15 +357,21 @@ export const pointScatterInWorld = standardNode<PointScatterInWorldParams>({
       }
     }
 
-    const c0x = latticeLo(minX, cellSize);
-    const c1x = latticeHi(maxX, cellSize);
-    const c0z = latticeLo(minZ, cellSize);
-    const c1z = latticeHi(maxZ, cellSize);
+    // Widened by the f32 rounding margin on each face: a cell just outside
+    // the window can still hold a point that STORES inside it, and the
+    // per-point clip below discards whatever does not. See f32ClipMargin.
+    const mx = f32ClipMargin(minX, maxX);
+    const mz = f32ClipMargin(minZ, maxZ);
+    const c0x = latticeLo(minX - mx, cellSize);
+    const c1x = latticeHi(maxX + mx, cellSize);
+    const c0z = latticeLo(minZ - mz, cellSize);
+    const c1z = latticeHi(maxZ + mz, cellSize);
     // The 2D lattice still hashes a Y coordinate, pinned to 0, so the two
     // modes share one hashing scheme; `dims` in the seed keeps their point
     // sets independent anyway.
-    const c0y = mode === "xyz" ? latticeLo(minY, cellSize) : 0;
-    const c1y = mode === "xyz" ? latticeHi(maxY, cellSize) : 0;
+    const my = mode === "xyz" ? f32ClipMargin(minY, maxY) : 0;
+    const c0y = mode === "xyz" ? latticeLo(minY - my, cellSize) : 0;
+    const c1y = mode === "xyz" ? latticeHi(maxY + my, cellSize) : 0;
     const nx = c1x - c0x + 1;
     const ny = c1y - c0y + 1;
     const nz = c1z - c0z + 1;
@@ -344,11 +383,24 @@ export const pointScatterInWorld = standardNode<PointScatterInWorldParams>({
       );
     }
 
+    // The node seed is DELIBERATELY not an input here, and this is the
+    // only node in the library that ignores it. A node seed is
+    // hashCombine(graphSeed, nodeId), so anything that moves the graph
+    // seed — `graph.setSeed` inside a level's bind (a sanctioned per-cell
+    // variation pattern), a CLI --seed override, renaming the node —
+    // would re-roll the lattice. Every window would still be internally
+    // consistent and still deterministic; it would simply be a DIFFERENT
+    // world from the one the neighbouring cell derived, so halos and
+    // seams stop agreeing while the cook succeeds and the output still
+    // looks plausible. Making the lattice a function of this node's own
+    // params is what turns that from documented into impossible. The
+    // lattice is a field, and fields carry their seeds in their specs.
+    //
     // Lattice cell coordinates are always integers here (Math.floor /
     // Math.ceil of a finite quotient), which hashCombine requires — it
     // truncates floats toward zero, which would alias neighbouring cells.
     // `dims` decorrelates the two lattice modes.
-    const seed = hashCombine(nodeSeed, params.seed, dims);
+    const seed = hashCombine(params.seed, dims);
 
     // Pass one counts the points the visited cells hold before clipping,
     // so the cloud is allocated once. It repeats the per-cell hash in pass
@@ -390,12 +442,19 @@ export const pointScatterInWorld = standardNode<PointScatterInWorldParams>({
           const h = hashCombine(seed, cx, cy, cz);
           const k = kBase + (hashFloat(hashCombine(h, 0)) < kFrac ? 1 : 0);
           for (let j = 0; j < k; j++) {
-            const x = (cx + hashFloat(hashCombine(h, j, 0))) * cellSize;
-            const z = (cz + hashFloat(hashCombine(h, j, 2))) * cellSize;
+            // Rounded to f32 BEFORE the clip, so the value tested is the
+            // value stored — clip the bytes you keep. Testing the f64 and
+            // storing its rounding lets the two straddle a face: far from
+            // the origin (where the f32 spacing grows to lattice scale)
+            // that emitted points whose STORED position was outside the
+            // window they were asked for, and abutting windows both
+            // disowned the same point.
+            const x = Math.fround((cx + hashFloat(hashCombine(h, j, 0))) * cellSize);
+            const z = Math.fround((cz + hashFloat(hashCombine(h, j, 2))) * cellSize);
             if (x < minX || x >= maxX || z < minZ || z >= maxZ) continue;
-            let y = params.height;
+            let y = Math.fround(params.height);
             if (mode === "xyz") {
-              y = (cy + hashFloat(hashCombine(h, j, 1))) * cellSize;
+              y = Math.fround((cy + hashFloat(hashCombine(h, j, 1))) * cellSize);
               if (y < minY || y >= maxY) continue;
             }
             px[n * 3] = x;

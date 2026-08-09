@@ -18,7 +18,7 @@
   .sub { color:var(--muted); margin:4px 0 24px; }
   .bar { height:8px; border-radius:4px; background:var(--line);
     overflow:hidden; margin-bottom:28px; }
-  .bar > div { height:100%; background:var(--done); width:96%; }
+  .bar > div { height:100%; background:var(--done); width:98%; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--muted); margin:28px 0 10px; }
   ul.phases { list-style:none; }
@@ -45,8 +45,8 @@
 </head>
 <body>
   <h1>pcg-ts</h1>
-  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-09 16:11</p>
-  <div class="bar"><div style="width:96%"></div></div>
+  <p class="sub">Procedural content generation for TypeScript &middot; updated 2026-08-09 19:40</p>
+  <div class="bar"><div style="width:98%"></div></div>
 
   <h2>Phases</h2>
   <ul class="phases">
@@ -93,15 +93,15 @@
     <li class="done"><span class="chip">done</span>39 · Path authoring, vocabulary v2</li>
     <li class="done"><span class="chip">done</span>40 · Staged pipeline, skills v2, docs, v0.11.0</li>
     <li class="done"><span class="chip">done</span>41 · Priority pruning, carried fixes, v0.12.0</li>
-    <li class="active"><span class="chip">active</span>42 · World-anchored sources, cross-partition foundations</li>
+    <li class="done"><span class="chip">done</span>42 · World-anchored sources, cross-partition foundations</li>
     <li class="pending"><span class="chip">pending</span>43 · Topology, shipped with its consumer</li>
   </ul>
 
   <h2>Tests</h2>
   <div class="stats">
-    <div><b>2484</b><span>passed</span></div>
+    <div><b>2558</b><span>passed</span></div>
     <div><b>0</b><span>failed</span></div>
-    <div><b>2026-08-09 15:45</b><span>last run</span></div>
+    <div><b>2026-08-09 19:40</b><span>last run</span></div>
   </div>
 
   <h2>Log</h2>
@@ -171,6 +171,7 @@
     <li><time>2026-08-09 12:25</time>Phase 39 complete: path authoring. pointsToPath closes the polyline half of the geometry gap sighted five times — the library had a polyline consumer, type, render branch and inspect branch, and no in-graph producer, so no path could exist in a serialized graph. Nodes 32 to 35 (pointsToPath, pathResample, writeTangents), primitives 29 to 34 (including place/along-curve, which phase 37 cut for exactly this missing source), corpus 23 to 28, field fns 40 to 41. pathResample forced splineSample arc-length table into a shared helper; behavior preservation proven by a frozen pre-extraction copy compared byte-exact over 49 cases, and the frozen copy was itself checked against git so the proof is not circular. Two independent audits: 17 of 21 mutations killed with the four survivors clustered in writeTangents fallback (untested, one branch unreachable while the other was sign-sensitive), and a phase-level verifier that confirmed all four exit criteria and found the topology rule stated backwards in 11 shipped strings. A catalog-wide measurement pass rewrote 22 param descriptions to state their measured laws and found fill/scatter-clustered spread.y inert, fixed with the default preserving byte-identical output. Recorded as NOT to schedule: rescaling the shared noise convention, because utilization is not constant and a constant factor turns reliable undershoot into overshoot, while a per-cook fit would break determinism under partitioned cooking.</li>
     <li><time>2026-08-09 14:07</time>Phase 40 complete: the staged pipeline, v0.11.0. Six pipeline graphs (boundary, districts, lots, detail, plus lots/detail edit variants) staged as flat supersets — each stage is the previous file byte-for-byte plus additions, which works because a node seed is hashCombine(graphSeed, hashString(nodeId)), node-local and DAG-position independent. The subgraph route was measured NOT to work (201 vs 205 points) because the wrapper re-derives the inner seed. transferAttribute gained hitAttr (hit polarity, so an unwritten column defaults to the safe reading) and place/drop-to-surface went from five nodes to three; proving that reddened exposed a latent bug where the old marker transfer inherited a pre-existing __onSurface. A fraction field input over [0,1], consistent with pointLine includeEnd. The performance-and-budgets skill, which corrected three of its own briefed claims by measurement: the warm/cold gap is JIT and not caching, and the partition-safety check it documents did not exist as a test — it does now, over all 34 corpus graphs at float-exact fidelity, proven to redden under an injected order dependency. Silent truncation became a diagnostic: requireGeometry took item[0] and discarded the rest, and the GPU resident-run fusion path made the same graph throw on CPU and cook on GPU. A class of silent clobber closed on six reporting-slot params, with three more recorded in PLAN. CI added (Node 20 and 22) including a generated-artifact idempotence check, since the repo had no CI at all while several phases claimed cooks-in-CI as an exit criterion.</li>
     <li><time>2026-08-09 15:45</time>Phase 41 re-surveyed and SPLIT into three. Three surveys (encoding, determinism, demand) agreed the topology phase as written could not be built in one pass. Demand: three of the four proposed nodes had no caller, and the one with real shipped demand (pruneByPriority) was not a topology node at all — it was selfPrune with more inputs. Encoding: side-car CSR wins over an edge domain because a derived index cannot go stale (cloneGeometry returns a new object, so it is simply absent and recomputed) whereas an edge array on the geometry rides that clone into every topology-destroying node and fails silently. Determinism: no existing source is halo-derivable, because pointScatterInBounds computes positions as a function of the bounds, so widening for a halo moves every point — a hole in the runtime pillar that blocks every cross-partition op, not just edges. Also recorded: phase 40 partition test cannot catch data-partitioning bugs, since the executor yields after cookNode returns and node bodies are atomic under a budget. Phase 41 shipped as priority pruning: selfPrune gains a field-capable minDistance (per-point radius, max(rA,rB) symmetry — the backlog most-wanted filter since before phase 37) and a priority param (higher wins, default 0 so no golden moved). The pipeline edits variant was rewired onto it, which exposed that the shipped corpus BY CONSTRUCTION lesson was vacuous: clear 8-unit exclusion exceeded the prune 7-unit minDistance, so no authored/procedural pair ever contested and neither the merge-order trick nor a naive priority ever fired. Tightened so the contest is real and guarded by a mutation-checked test. The three carried reporting-slot clobber sites closed and the guard de-duplicated into nodes/util.ts without growing the public surface. Phases 42 (world-anchored sources) and 43 (topology with its consumer) added; single-partition-only topology rejected because a shipped exemption is permanent where a breaking change is not.</li>
+    <li><time>2026-08-09 19:40</time>Phase 42 complete: world-anchored sources and cross-partition foundations. pointScatterInWorld reads bounds ONLY to pick lattice cells and clip, so the same point is byte-identical under any query and a halo is just a wider query. Source-only anchoring would have died one node downstream, so per-point randomness now keys on point IDENTITY (position bits + seed attribute) rather than array index across filterByDensity, jitterPoints, randomField, selfPrune and pointNeighborhood; surfaceSample deliberately stays index-keyed because it manufactures its own candidates. Three test kinds that did not exist: permutation equivariance, split-with-halo equals whole, two-cell seam agreement — all mutation-proven, 7 of 7 relevant mutants killed. An independent verifier found a real bug the repo could never have caught, since every fixture lived within plus or minus 100 of the origin: the clip ran on the f64 while the store kept the f32, so far from the origin a window emitted points whose stored position was outside it — six abutting tiles at base 1e7 lost 26 of 2400 points silently. Fixed by clipping the bytes actually kept and widening the visited lattice range by the rounding margin; chasing the residual found a second mechanism where rounding lifts a point onto a face into a cell no window visits. selfPrune gained a localMaximum mode that IS halo-exact (238/238 reproduced at four cell sizes where greedy disagrees with itself and leaves pairs at 1.41 where 3 was enforced). filterByBounds gained a half-open default so it can express ownership. A CPU/GPU parity alarm turned out to be a bug in a demo probe that rebuilt its comparison cloud without the seed attribute; real deviation is 6.26e-7, tighter than before the phase. Fusion lost to the new identity guard was recovered by a suffix retry (0/0 to 1 run/2 fused nodes), suffix and never prefix, because fusing the prefix moves the hazard rather than removing it. Demo screenshots are now reproducible via npm run capture with puppeteer as a devDependency and the Chromium download skipped in CI.</li>
   </ol>
 </body>
 </html>

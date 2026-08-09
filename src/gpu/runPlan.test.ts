@@ -101,6 +101,22 @@ const applyOf = (p: PlanShape, i: number): StepShape => {
  * The demo rig's fused chain (examples/08-gpu-fields): setAttribute →
  * jitterPoints → transformPoints(three constants) → setAttribute →
  * setAttribute, over a scattered point cloud.
+ *
+ * A STAND-IN, and knowingly so: the real demo's `tint` and `psize` carry
+ * a `randomField` term, and this fixture uses plain perlin instead. The
+ * difference is not cosmetic — the real chain DOES NOT PLAN AS ONE RUN
+ * (the planner declines the identity-keyed `tint` because jitterPoints
+ * and transformPoints have already rewritten P; see `specKeysOnIdentity`
+ * in run.ts), while this one plans all five members. The executor
+ * recovers the real chain's TAIL by re-planning suffixes — it fuses
+ * [tint, psize], two members of five, measured in
+ * resident.device.test.ts — but this file never sees that, because it
+ * calls the planner directly. Everything below therefore measures the
+ * byte and dispatch accounting of a five-member chain, which is what it
+ * is for, and NOTHING below is evidence about what the shipped demo
+ * does. Do not "restore fidelity" by adding randomField here without
+ * moving these budgets — and if you do, the numbers stop describing a
+ * fusable chain at all.
  */
 function demoChain(): ResidentMemberDesc[] {
   const band = (seed: number): object => ({

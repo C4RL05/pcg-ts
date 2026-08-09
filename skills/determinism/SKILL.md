@@ -1,6 +1,6 @@
 ---
 name: determinism
-description: "Doctrine for keeping pcg-ts output reproducible. Use when adding randomness or noise to a graph, when choosing a seed or a per-instance variation knob, when output changes between runs or between machines, when writing a World level's per-cell bind, when touching subgraph or GPU code paths, or before claiming any change is deterministic. Covers the seed chain, what a seed re-rolls and what it provably cannot, why noise varies through position instead, the GPU approximation boundary, and how to verify reproducibility rather than assume it."
+description: "Doctrine for keeping pcg-ts output reproducible. Use when adding randomness or noise to a graph, when choosing a seed or a per-instance variation knob, when output changes between runs or between machines, when writing a World level's per-cell bind, when content must look the same from either side of a cell boundary or a halo, when touching subgraph or GPU code paths, or before claiming any change is deterministic. Covers the seed chain and its one exception, what a seed re-rolls and what it provably cannot, why noise varies through position instead, world-anchoring and identity-keyed randomness, the GPU approximation boundary, and how to verify reproducibility rather than assume it."
 ---
 
 # Keeping pcg-ts output reproducible
@@ -22,24 +22,24 @@ graph seed  (the JSON "seed" field)
   -> per element = hashFloat(hashCombine(seed, index, axis))
 ```
 
-Three consequences that decide real design questions:
+Four consequences that decide real design questions:
 
-- **Randomness is keyed by index, not by draw order.** Nothing consumes a
-  sequential stream, so cook order, partition boundaries, a time budget, a
-  cancelled and resumed pass, and the streaming path cannot move a byte.
+- **Randomness is keyed, never drawn.** Nothing consumes a sequential
+  stream, so cook order, partition boundaries, a time budget, a cancelled
+  and resumed pass, and the streaming path cannot move a byte.
 - **A node id is part of its seed.** Renaming a node re-rolls its randomness.
   Renames in a graph you care about reproducing are not free edits.
 - **An index shift propagates.** Any change to the surviving *count* upstream
-  renumbers everything downstream, so every per-point value, per-point seed
-  and cache key downstream changes too. A filter is the loudest version of
-  this.
+  renumbers everything downstream, so every index-keyed per-point value and
+  cache key downstream changes too. A filter is the loudest version of
+  this — and it is the reason the nodes that must survive repartitioning
+  key on point *identity* instead (next section).
 - **Ordering is a determinism surface too, and it uses the same tiebreak.**
   Anywhere the library has to order elements — a path's vertex order in
   `pointsToPath`, a capped neighbour set, a shared-edge transfer hit — ties
   break to the *lower index*, never to arrival order, sort stability or
   partition completion. Hold to that rule in anything you add; it is what
   makes an order reproducible without being a random draw.
-
 A subgraph's inner seed derives from the wrapping node's seed, so two
 instances of the same primitive in one graph get different randomness, and
 the same instance reproduces exactly. The inner graph's own serialized `seed`
@@ -80,6 +80,69 @@ unrelated; the same value always reproduces.
 
 If you are reaching for a seed to make two instances of a noise-driven
 primitive look different, you want `variant`.
+
+## Anchoring: the same point under any window
+
+Reproducibility has a second half that "same seed, same bytes" does not
+cover. A partitioned world asks the *same question at different sizes* —
+one cell, that cell grown by a halo, the whole region cooked at once — and
+every one of those answers has to agree about the points they share.
+A graph can be perfectly deterministic and still fail this, deterministically
+and silently, at every seam.
+
+**The distinction to hold.** A cook budget partitions *time*, and nothing in
+this section applies to it: node bodies are atomic under a budget, so every
+node still sees its whole dataset. A `World` cell partitions *data*. Only
+data-partitioning needs anchoring, and it needs it in the chain, not in one
+node.
+
+**A source is anchored when its output is a function of world coordinates
+rather than of the query.** This is not a new discipline — it is what noise
+has always done, which is why moving the sample position is the only way to
+vary a noise field. `pointScatterInWorld` applies it to a source: positions
+come from the lattice cell and index, and the bounds only choose which cells
+to visit and clip. `pointScatterInBounds` computes positions *from* the
+bounds, so widening it to build a halo moves every point and reproduces
+nothing. Every neighbourhood-style op inherits that, not just the ones near
+an edge.
+
+**Downstream stays anchored by keying on identity, not index.** An index is
+a fact about *this array* — a filter one node earlier renumbers it. Identity
+is the point's stored position bits plus its `seed` attribute, so a point
+decides the same way whichever window derived it and however many neighbours
+were dropped upstream. Which nodes key which way, and which still fold in a
+node seed you must therefore anchor yourself, is tabulated in
+`docs/authoring.md`, "Content that must NOT vary per cell". Read the table
+before assuming a chain is safe: identity keying makes a node indifferent to
+the *window*, never to its own seed, so a per-cell `ctx.seed` wired one node
+downstream de-anchors the chain just as thoroughly as de-anchoring the
+source did.
+
+**One node sits outside the seed chain, on purpose.** `pointScatterInWorld`
+derives its lattice from its own `seed` param alone; the graph seed does not
+reach it. Do not "fix" that. A `graph.setSeed` inside a level's `bind`, a
+CLI `--seed`, or a rename would otherwise de-anchor a world silently — the
+failure this exception makes impossible rather than merely documented. The
+price is the lost node-id decorrelation: two such nodes with equal params
+scatter *identical* points, exactly as two `perlinNoise` fields with one
+spec are one field. Separate layers with `hashCombine(ctx.worldSeed, n)`.
+
+**Verify it with the three questions a single-graph test cannot ask.**
+Byte-comparing one cook against itself proves nothing here; each of these
+compares two *different* partitionings of the same world.
+
+1. **Permutation equivariance** — shuffle the input order, expect the same
+   output (modulo the same permutation). Catches anything that leaked an
+   array index into a value.
+2. **Split-with-halo equals whole** — cook a region in one pass, then cook
+   it as cells with halos and concatenate the owned points. Any difference
+   is a seam you would otherwise find by eye, later.
+3. **Two-cell seam agreement** — cook both sides of one boundary and assert
+   that every point is claimed exactly once and measured identically in both.
+
+`filterByBounds` at its default `halfOpen` boundary is the ownership rule
+that makes question 3 answerable; `inclusive` has both cells emit the shared
+face, which is invisible until two cells disagree.
 
 ## The GPU boundary
 
@@ -169,9 +232,17 @@ in `src/nodes/integration.test.ts` (its `snapshotGeometry` helper lives in
   determinism regression test reddens by disabling the fix before you trust
   it, and reproduce the bug against a clean oracle before you fix it.
 - **Per-cell variation has sanctioned routes.** In a `World`, the level's
-  `bind` callback and `ctx.seed` are the only channel; wire `ctx.seed` into
-  each stochastic node's `seed` param, varying per node with `hashCombine`.
-  See `docs/authoring.md`, "Per-cell seeding". Do not reach for wall-clock
-  time, a counter, or cell arrival order — there is no `Math.random` anywhere
-  in this library and adding an ambient source of variation breaks the
-  pillar.
+  `bind` callback is the only channel. Wire `ctx.seed` into each stochastic
+  node's `seed` param, varying per node with `hashCombine` — *except* for
+  anything that must agree across a cell boundary, which takes the
+  cell-invariant `ctx.worldSeed` or `ctx.levelSeed` instead. See
+  `docs/authoring.md`, "Per-cell seeding" and "Content that must NOT vary
+  per cell". Do not reach for wall-clock time, a counter, or cell arrival
+  order — there is no `Math.random` anywhere in this library and adding an
+  ambient source of variation breaks the pillar.
+- **A whole-graph reseed in `bind` reaches further than it looks.**
+  `graph.setSeed` inside a level's `bind` is supported and re-rolls *every*
+  node, so it is exactly wrong in a level carrying anchored content: it
+  de-anchors every seeded node downstream of the source in one line. Prefer
+  per-node `seed` params there, which state which nodes vary per cell and
+  which do not.

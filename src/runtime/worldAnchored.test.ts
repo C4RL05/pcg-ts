@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import type { Geometry } from "../data/index.js";
 import { Graph, cook } from "../graph/index.js";
 import { pointScatterInWorld } from "../nodes/sources.js";
+import { hashCombine } from "../random/index.js";
 import type { CellContext, CellOutputs, LevelDef } from "./types.js";
 import { World } from "./world.js";
 
@@ -69,6 +70,8 @@ function anchoredLevel(opts: {
   generationRadius: number;
   mode: SeedMode;
   haloWidth?: number;
+  /** Reseed the whole level graph per cell, as `Per-cell seeding` allows. */
+  reseedPerCell?: boolean;
 }): LevelDef {
   const graph = new Graph(1);
   const scatter = graph.add(pointScatterInWorld, {
@@ -97,6 +100,7 @@ function anchoredLevel(opts: {
             ? ctx.levelSeed
             : ctx.seed,
       );
+      if (opts.reseedPerCell) g.setSeed(hashCombine(ctx.seed, 7));
     },
   };
 }
@@ -242,6 +246,57 @@ describe("world-anchored level", () => {
     // And the cell's own content is unaffected by having asked for a halo.
     const bare = await wholeRegion(WORLD_SEED, [0, 0], [CELL_SIZE, CELL_SIZE]);
     expect(withHalo.filter(interior)).toEqual(bare);
+  });
+
+  it("survives a per-cell whole-graph reseed, which cannot reach the lattice", async () => {
+    // `Per-cell seeding` sanctions graph.setSeed(...) inside bind, and an
+    // author will reach for it in a level that also carries an anchored
+    // source. Every node seed is hashCombine(graphSeed, nodeId), so a
+    // lattice folding in its node seed would re-roll in every cell: the
+    // cook still succeeds, the points still look plausible, and the halo
+    // quietly stops matching the neighbour. Nothing here can go wrong,
+    // because the lattice reads only its own `seed` param.
+    const halo = LATTICE * 2;
+    const build = (reseedPerCell: boolean): World =>
+      new World({
+        seed: WORLD_SEED,
+        levels: [
+          anchoredLevel({
+            name: "ground",
+            cellSize: CELL_SIZE,
+            generationRadius: 30,
+            mode: "worldSeed",
+            haloWidth: halo,
+            reseedPerCell,
+          }),
+        ],
+      });
+    const gather = (w: World): Map<string, string[]> =>
+      new Map(
+        w.cells("ground").map((c) => [c.coord.join(","), sortedKeys(pointsIn(c.outputs, "points"))]),
+      );
+    const plain = build(false);
+    const reseeded = build(true);
+    await plain.update([0, 0, 0]);
+    await reseeded.update([0, 0, 0]);
+    const before = gather(plain);
+    const after = gather(reseeded);
+    expect(before.size).toBeGreaterThan(8);
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [key, pts] of before) expect(after.get(key), key).toEqual(pts);
+
+    // And the property that actually matters, checked on the reseeded
+    // world alone: one cell's halo still holds exactly the points its
+    // neighbour owns.
+    const byCoord = new Map(
+      reseeded.cells("ground").map((c) => [c.coord.join(","), pointsIn(c.outputs, "points")]),
+    );
+    const own = byCoord.get("1,0") ?? [];
+    const neighbour = byCoord.get("0,0") ?? [];
+    const strip = (p: Pt): boolean => p.x >= CELL_SIZE - halo && p.x < CELL_SIZE;
+    const fromHalo = sortedKeys(own.filter(strip));
+    expect(fromHalo.length).toBeGreaterThan(0);
+    expect(fromHalo).toEqual(sortedKeys(neighbour.filter(strip)));
   });
 
   it("keeps cell content identical across cook order, eviction, and recook", async () => {

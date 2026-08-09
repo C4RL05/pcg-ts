@@ -936,6 +936,46 @@
         ]
       }
     },
+    "basics-scatter-in-world.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 320,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -39.9466,
+                0,
+                -39.886
+              ],
+              "max": [
+                39.6613,
+                0,
+                39.7267
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-spawn-by-species.json": {
       "outputs": {
         "instances": [

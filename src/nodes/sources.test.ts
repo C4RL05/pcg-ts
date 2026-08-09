@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cook } from "../graph/index.js";
+import { Graph, cook } from "../graph/index.js";
 import {
   deserializeGraph,
   pointGrid,
@@ -425,15 +425,61 @@ describe("pointScatterInWorld", () => {
     expect(wider.filter(inBox)).toEqual(pts);
   });
 
-  it("re-rolls the world on the seed param and on the node seed", async () => {
+  it("re-rolls on its OWN seed param, and on nothing else — not the node seed", async () => {
+    // The one node in the library whose randomness does not descend from
+    // the graph seed, and the reason is the anchoring guarantee: a node
+    // seed is hashCombine(graphSeed, nodeId), so anything that moves the
+    // graph seed — an author reseeding a level graph per cell, a CLI
+    // --seed override, a rename — would silently re-roll the lattice and
+    // leave every window still self-consistent, still deterministic, and
+    // no longer agreeing with its neighbours. It cannot, because the node
+    // seed is not an input.
     const win = { ...WORLD, boundsMin: [0, 0, 0], boundsMax: [24, 0, 24] };
     const a = await scatterWorld(win, 5);
     const again = await scatterWorld(win, 5);
     const otherNodeSeed = await scatterWorld(win, 6);
+    const farNodeSeed = await scatterWorld(win, 0xdeadbeef);
     const otherParamSeed = await scatterWorld({ ...win, seed: 12 }, 5);
+    expect(a.length).toBeGreaterThan(10);
     expect(again).toEqual(a);
-    expect(otherNodeSeed).not.toEqual(a);
+    expect(otherNodeSeed).toEqual(a);
+    expect(farNodeSeed).toEqual(a);
     expect(otherParamSeed).not.toEqual(a);
+  });
+
+  it("gives two nodes in ONE graph the same world when their params match", async () => {
+    // The surprising half, pinned so it reads as a decision and not a
+    // bug: this node is a FIELD in source clothing. Two perlinNoise
+    // fields with one spec are one field, and two anchored scatters with
+    // one spec are one scatter — which is exactly what lets two graphs,
+    // two levels or two cells agree on a world. Two real nodes in one
+    // graph, so the node id (which used to separate them through the seed
+    // chain) is genuinely different here.
+    const graph = new Graph(77);
+    const win = {
+      density: WORLD.density,
+      cellSize: WORLD.cellSize,
+      latticeMode: WORLD.latticeMode,
+      height: WORLD.height,
+      boundsMin: [0, 0, 0],
+      boundsMax: [24, 0, 24],
+      seed: WORLD.seed,
+    };
+    graph.output(graph.add(pointScatterInWorld, win, "trees"), "out", "trees");
+    graph.output(graph.add(pointScatterInWorld, win, "rocks"), "out", "rocks");
+    // A third layer that says so, which is how two layers are separated
+    // now that the id cannot do it.
+    graph.output(
+      graph.add(pointScatterInWorld, { ...win, seed: WORLD.seed + 1 }, "grass"),
+      "out",
+      "grass",
+    );
+    const result = await cook(graph);
+    const readBack = (name: string): unknown =>
+      snapshotGeometry(firstGeo(result.outputs[name]));
+    expect(firstGeo(result.outputs.trees).pointCount).toBeGreaterThan(10);
+    expect(readBack("rocks")).toEqual(readBack("trees"));
+    expect(readBack("grass")).not.toEqual(readBack("trees"));
   });
 
   it("names the offending param and the fix on invalid input", async () => {

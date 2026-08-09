@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # puppeteer is a devDependency only because `npm run capture` regenerates the
+  # committed demo screenshots, and that is a deliberate local step: two of the
+  # demos are WebGPU and need a real device with a headed browser, which no
+  # runner here has. Nothing in this workflow opens a browser, so skip the
+  # ~150 MB Chrome download on every `npm ci`. (puppeteer 25 reads
+  # PUPPETEER_SKIP_DOWNLOAD; the pre-15 name was PUPPETEER_SKIP_CHROMIUM_DOWNLOAD.)
+  PUPPETEER_SKIP_DOWNLOAD: "true"
+
 jobs:
   test:
     runs-on: ubuntu-latest

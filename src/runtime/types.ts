@@ -227,19 +227,26 @@ export interface LevelDef {
    * `pointScatterInWorld`) is seamless across cells only while its seed is
    * the SAME in every cell, so bind passes it `ctx.worldSeed` or
    * `ctx.levelSeed` and varies only its query window (`boundsMin` /
-   * `boundsMax` from `ctx.min` / `ctx.max`). Per-cell `ctx.seed` — and the
-   * whole-graph reseed below, which reaches every node — silently turns
-   * such a node back into a per-cell scatter: content stays deterministic,
-   * but a widened query no longer reproduces a neighbour's points, so
-   * halos and seams stop agreeing. A level mixing both kinds should seed
-   * per-cell nodes explicitly rather than reseed the graph.
+   * `boundsMax` from `ctx.min` / `ctx.max`). Binding the per-cell
+   * `ctx.seed` there turns such a node back into a per-cell scatter:
+   * content stays deterministic, but a widened query no longer reproduces
+   * a neighbour's points, so halos and seams stop agreeing.
    *
    * Reseeding the whole graph per cell is also sanctioned:
    * `graph.setSeed(hashCombine(ctx.seed, salt))` inside bind
    * deterministically re-derives every node's seed (memo keys include the
    * seed, so caching stays correct), and the runtime counts bind-time
    * writes — `setSeed` and `setParam` alike — as its own, never as user
-   * edits, so no phantom staleness results.
+   * edits, so no phantom staleness results. It cannot de-anchor
+   * `pointScatterInWorld`, whose lattice is a function of its own `seed`
+   * param and never of the graph seed. It CAN move anything downstream
+   * that draws on its node seed — a probabilistic `filterByDensity`,
+   * `jitterPoints`, any field param resolving `randomField` — and that
+   * lands one node later exactly where de-anchoring the source used to:
+   * the halo and the neighbour disagree, deterministically and silently.
+   * A level whose anchored content feeds such a node should seed its
+   * nodes explicitly (cell-invariantly where the result must agree across
+   * a seam) rather than reseed the graph.
    *
    * Aliasing contract: arrays bound into params (e.g. a `dataInput`
    * node's `items`) are captured by reference and end up aliased by the

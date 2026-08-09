@@ -18,6 +18,7 @@ import {
   type GpuCookStats,
   type GpuFieldResolver,
   type ResidentMemberDesc,
+  type ResidentRunContext,
 } from "../fields/index.js";
 import {
   CookCancelledError,
@@ -49,6 +50,7 @@ import { makeCorpusGeometry } from "./testGeometry.js";
 // advertises, read through the production predicate, so a fake can never
 // resolve a field the executor did not salt.
 import { cpuResolveField } from "./testHelpers.js";
+import { planResidentRun } from "./run.js";
 
 function countFallback(stats: GpuCookStats | undefined, reason: string): null {
   if (stats !== undefined) stats.fallbacks[reason] = (stats.fallbacks[reason] ?? 0) + 1;
@@ -58,6 +60,13 @@ function countFallback(stats: GpuCookStats | undefined, reason: string): null {
 interface FakeResolver extends GpuFieldResolver {
   /** Member id lists planRun received, in call order. */
   planned: string[][];
+  /**
+   * Member id lists executeRun actually ran, in call order. Distinct from
+   * `planned` since the suffix retry: planning a member list no longer
+   * implies running it, and "which members really fused" is the question
+   * the identity-after-P-write hazard turns on.
+   */
+  executed: string[][];
   executeRuns: number;
 }
 
@@ -66,6 +75,7 @@ function recordingResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } 
   const accept = acceptsDerivedSpecs(opts);
   const fake: FakeResolver = {
     planned: [],
+    executed: [],
     executeRuns: 0,
     cacheSalt: salt,
     acceptDerivedSpecs: accept,
@@ -87,21 +97,37 @@ function recordingResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } 
  * output bytes are the per-node CPU bytes by construction and cache
  * semantics are observable without a device.
  */
-function cpuRunResolver(salt: string, opts: { acceptDerivedSpecs?: boolean } = {}): FakeResolver {
+function cpuRunResolver(
+  salt: string,
+  opts: {
+    acceptDerivedSpecs?: boolean;
+    /**
+     * Planning verdict for a candidate member list: a fallback reason to
+     * reject with, or null to accept. Absent means "accept everything",
+     * which is what every test written before the suffix retry existed
+     * wants. {@link plannerReject} plugs the REAL planner in here.
+     */
+    reject?: (members: readonly ResidentMemberDesc[], ctx: ResidentRunContext) => string | null;
+  } = {},
+): FakeResolver {
   const accept = acceptsDerivedSpecs(opts);
   const fake: FakeResolver = {
     planned: [],
+    executed: [],
     executeRuns: 0,
     cacheSalt: salt,
     acceptDerivedSpecs: accept,
     resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats, accept),
-    planRun(members, _ctx, _stats) {
+    planRun(members, ctx, stats) {
       fake.planned.push(members.map((m) => m.id));
+      const reason = opts.reject?.(members, ctx) ?? null;
+      if (reason !== null) return countFallback(stats, reason);
       return { members: [...members] };
     },
     async executeRun(plan, input, stats) {
       fake.executeRuns++;
       const members = (plan as { members: readonly ResidentMemberDesc[] }).members;
+      fake.executed.push(members.map((m) => m.id));
       let item: DataItem = makeGeometryItem(input.geo);
       for (const m of members) {
         if (input.signal?.aborted) throw new CookCancelledError();
@@ -177,7 +203,17 @@ describe("resident run detection (recording resolver)", () => {
     const cpu = await cook(buildChain(makeCorpusGeometry(40)).g);
     const rec = recordingResolver("fake|A");
     const r = await cook(g, { gpu: rec });
-    expect(rec.planned).toEqual([[ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id]]);
+    // The maximal chain first, then the suffix retry narrowing it one
+    // member at a time — this resolver rejects every plan, so the search
+    // runs to its end. It stops at [tr, or]: the next suffix would be the
+    // lone chain node `or`, which is not a run.
+    expect(rec.planned).toEqual([
+      [ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id],
+      [ids.jit.id, ids.tr.id, ids.or.id],
+      [ids.tr.id, ids.or.id],
+    ]);
+    // ...and the three rejections are ONE fallback: the counter says
+    // "this chain fused nothing", which is what it has always said.
     expect(r.stats.gpu!.fallbacks).toEqual({ "run-plan-failed": 1 });
     expect(r.stats.gpu!.residentRuns).toBe(0);
     expect(r.stats.cooked).toBe(5); // per-node fallback cooks every node
@@ -188,7 +224,7 @@ describe("resident run detection (recording resolver)", () => {
     // terminal holds a per-node key, not a run key) and then serves
     // every member from its per-node cache.
     const r2 = await cook(g, { gpu: rec });
-    expect(rec.planned.length).toBe(2);
+    expect(rec.planned.length).toBe(6);
     expect(r2.stats.cooked).toBe(0);
     expect(r2.stats.cached).toBe(5);
   });
@@ -283,7 +319,9 @@ describe("resident run detection (recording resolver)", () => {
     g.setParam(ids.jit, "amount", randomField("authored"));
     const rec = recordingResolver("fake|A", { acceptDerivedSpecs: true });
     const r = await cook(g, { gpu: rec });
-    expect(rec.planned).toEqual([[ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id]]);
+    // The detected run is the first attempt; the rest is this resolver's
+    // blanket rejection walking the suffix retry down (see above).
+    expect(rec.planned[0]).toEqual([ids.sa.id, ids.jit.id, ids.tr.id, ids.or.id]);
     expect(r.stats.gpu!.fallbacks["derived-spec"]).toBeUndefined();
   });
 
@@ -701,5 +739,227 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
     expect(fake.executeRuns).toBeGreaterThan(0);
     expect(dev.bytes.length).toBe(cpu.bytes.length);
     expect(dev.bytes).toEqual(cpu.bytes);
+  });
+});
+
+/**
+ * The REAL planner's accept/reject verdict, so the suffix-retry tests
+ * exercise the production rule — "a run may rewrite P, or key on
+ * identity, but not in that order" — instead of a hand-written stand-in
+ * that could drift from it. Execution still happens on the CPU through
+ * the members' own `execute`, which is what makes the byte comparisons
+ * below a DIFFERENTIAL (fused vs per-node, same machine, same math)
+ * rather than a device measurement; the device half lives in
+ * resident.device.test.ts.
+ */
+const plannerReject =
+  (maxBytes = Number.MAX_SAFE_INTEGER) =>
+  (members: readonly ResidentMemberDesc[], ctx: ResidentRunContext): string | null => {
+    const outcome = planResidentRun(members, ctx, maxBytes, false);
+    return "plan" in outcome ? null : outcome.reason;
+  };
+
+const NOISE = (seed: number): object => ({
+  fn: "perlinNoise",
+  opts: { seed, frequency: 0.35, normalized: true },
+});
+const VEC3 = (s: object): object => ({ fn: "vec", args: [s, s, s] });
+
+/**
+ * The shipped 08-gpu-fields chain in its authored order: setAttribute
+ * ("wobble", noise) → jitterPoints(amount = attribute("wobble")) →
+ * transformPoints(constants) → setAttribute("tint", identity-keyed) →
+ * setAttribute("psize", identity-keyed). Two members rewrite P and the
+ * two behind them hash it, which is the exact shape the planner declines.
+ */
+function buildDemoChain(geo: Geometry, reordered = false) {
+  const g = new Graph(9);
+  const din = g.add(dataInput);
+  g.setParam(din, "items", [makeGeometryItem(geo)]);
+  const wobble = g.add(setAttribute, {
+    name: "wobble",
+    type: "f32",
+    tupleSize: 3,
+    value: fieldFromJson(VEC3(NOISE(1)) as never),
+  });
+  const jit = g.add(jitterPoints, { amount: fieldFromJson({ fn: "attribute", name: "wobble" }), seed: 7 });
+  const xform = g.add(transformPoints, {
+    translate: [0, 0, 0],
+    rotateEuler: [0, 14, 0],
+    scale: [1, 0.92, 1],
+  });
+  const tint = g.add(setAttribute, {
+    name: "tint",
+    type: "f32",
+    tupleSize: 3,
+    value: fieldFromJson(VEC3({ fn: "randomField", key: "t" }) as never),
+  });
+  const psize = g.add(setAttribute, {
+    name: "psize",
+    type: "f32",
+    tupleSize: 1,
+    value: fieldFromJson({ fn: "randomField", key: "s" }),
+  });
+  // The authoring fix the planner may never apply on the author's behalf:
+  // identity-keyed members AHEAD of the P writers, which plans in full.
+  const order = reordered ? [wobble, tint, psize, jit, xform] : [wobble, jit, xform, tint, psize];
+  g.connect(din, "out", order[0], "in");
+  for (let i = 1; i < order.length; i++) g.connect(order[i - 1], "out", order[i], "in");
+  g.output(order[order.length - 1], "out", "out");
+  return { g, ids: { din, wobble, jit, xform, tint, psize }, order: order.map((n) => n.id) };
+}
+
+describe("suffix retry: a rejected member costs its prefix, not the whole run", () => {
+  it("recovers the 08-gpu-fields tail instead of fusing nothing", async () => {
+    const cpu = await cook(buildDemoChain(makeCorpusGeometry(40)).g);
+    const { g, ids } = buildDemoChain(makeCorpusGeometry(40));
+    const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
+    const r = await cook(g, { gpu: fake });
+
+    // Narrowed three times: [jitter..] and [xform..] each still write P
+    // ahead of the identity-keyed tint, which is why ONE jump to the
+    // rejecting member would not have found this.
+    expect(fake.planned).toEqual([
+      [ids.wobble.id, ids.jit.id, ids.xform.id, ids.tint.id, ids.psize.id],
+      [ids.jit.id, ids.xform.id, ids.tint.id, ids.psize.id],
+      [ids.xform.id, ids.tint.id, ids.psize.id],
+      [ids.tint.id, ids.psize.id],
+    ]);
+    // THE HAZARD CHECK: the members that actually ran on the "device" are
+    // exactly the two that write no P. A retry that fused a prefix would
+    // show jitterPoints or transformPoints here.
+    expect(fake.executed).toEqual([[ids.tint.id, ids.psize.id]]);
+    expect(r.stats.gpu!.residentRuns).toBe(1);
+    expect(r.stats.gpu!.fusedNodes).toBe(2);
+    expect(r.stats.gpu!.readbacksSaved).toBe(1);
+    // One reason, and not the one that means "nothing fused".
+    expect(r.stats.gpu!.fallbacks).toEqual({ "run-partially-fused": 1 });
+    expect(r.stats.cooked).toBe(6); // dataInput + 3 per-node + 2 fused
+
+    // The differential: partial fusion moved no output byte.
+    for (const attr of ["P", "wobble", "tint", "psize"]) {
+      expect(outBytes(r, attr)).toEqual(outBytes(cpu, attr));
+    }
+    // Terminal-only caching still holds for a narrowed run.
+    expect(nodeCache(g, ids.psize)?.key).toMatch(/^run1\|gpu:fake\|R\|/);
+    expect(nodeCache(g, ids.tint)).toBeUndefined();
+    expect(nodeCache(g, ids.xform)?.key).toMatch(/^transformPoints\|/);
+  });
+
+  it("counts one partial fusion per cook, warm as well as cold", async () => {
+    const { g } = buildDemoChain(makeCorpusGeometry(24));
+    const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
+    await cook(g, { gpu: fake });
+    const warm = await cook(g, { gpu: fake });
+    // The narrowed run is served from the terminal's entry and every
+    // per-node member from its own; nothing re-executes.
+    expect(warm.stats.cooked).toBe(0);
+    expect(warm.stats.cached).toBe(6);
+    expect(fake.executeRuns).toBe(1);
+    // The counter describes the GRAPH, so it reads the same warm as cold.
+    expect(warm.stats.gpu!.fallbacks).toEqual({ "run-partially-fused": 1 });
+  });
+
+  it("declines rather than fuse a P writer with an identity-keyed member", async () => {
+    // Two members only: the suffix is the lone `tint`, and a lone chain
+    // node is not a run — so the retry gives up and NOTHING fuses. The
+    // P arithmetic stays on the CPU, which is the point of the rule.
+    const geo = makeCorpusGeometry(20);
+    const g = new Graph(9);
+    const din = g.add(dataInput);
+    g.setParam(din, "items", [makeGeometryItem(geo)]);
+    const xform = g.add(transformPoints, { translate: [1, 0, 0] });
+    const tint = g.add(setAttribute, { name: "t", value: fieldFromJson({ fn: "randomField", key: "t" }) });
+    g.connect(din, "out", xform, "in");
+    g.connect(xform, "out", tint, "in");
+    g.output(tint, "out", "out");
+    const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
+    const r = await cook(g, { gpu: fake });
+    expect(fake.planned).toEqual([[xform.id, tint.id]]);
+    expect(fake.executed).toEqual([]);
+    expect(r.stats.gpu!.residentRuns).toBe(0);
+    expect(r.stats.gpu!.fallbacks).toEqual({ "run-plan-failed": 1 });
+  });
+
+  it("does NOT narrow a run the resolver merely could not fit", async () => {
+    // A resolver whose memory bound happens to fit two members and not
+    // four. A size rejection is not a modelling failure: narrowing from
+    // the front would pick an arbitrary suffix, and `maxResidentBytes`
+    // promises the per-node path serves an over-budget run whole. So the
+    // chain is planned exactly once and nothing fuses.
+    const geo = makeCorpusGeometry(20);
+    const g = new Graph(9);
+    const din = g.add(dataInput);
+    g.setParam(din, "items", [makeGeometryItem(geo)]);
+    const ids = ["a", "b", "c", "d"].map((name) => g.add(setAttribute, { name, value: 1 }));
+    g.connect(din, "out", ids[0], "in");
+    for (let i = 1; i < ids.length; i++) g.connect(ids[i - 1], "out", ids[i], "in");
+    g.output(ids[ids.length - 1], "out", "out");
+    const fake = cpuRunResolver("fake|R", {
+      reject: (members) => (members.length > 2 ? "run-too-large" : null),
+    });
+    const r = await cook(g, { gpu: fake });
+    expect(fake.planned.map((p) => p.length)).toEqual([4]);
+    expect(fake.executed).toEqual([]);
+    expect(r.stats.gpu!.residentRuns).toBe(0);
+    expect(r.stats.gpu!.fallbacks).toEqual({ "run-too-large": 1 });
+  });
+
+  it("narrows for a reason it has never heard of", async () => {
+    // The rule is "not a size rejection", not a list of known reasons: a
+    // resolver reporting its own vocabulary still gets the retry.
+    const geo = makeCorpusGeometry(20);
+    const g = new Graph(9);
+    const din = g.add(dataInput);
+    g.setParam(din, "items", [makeGeometryItem(geo)]);
+    const ids = ["a", "b", "c", "d"].map((name) => g.add(setAttribute, { name, value: 1 }));
+    g.connect(din, "out", ids[0], "in");
+    for (let i = 1; i < ids.length; i++) g.connect(ids[i - 1], "out", ids[i], "in");
+    g.output(ids[ids.length - 1], "out", "out");
+    const fake = cpuRunResolver("fake|R", {
+      reject: (members) => (members.length > 2 ? "vendor-quirk" : null),
+    });
+    const r = await cook(g, { gpu: fake });
+    expect(fake.planned.map((p) => p.length)).toEqual([4, 3, 2]);
+    expect(fake.executed).toEqual([[ids[2].id, ids[3].id]]);
+    expect(r.stats.gpu!.fusedNodes).toBe(2);
+    expect(r.stats.gpu!.fallbacks).toEqual({ "run-partially-fused": 1 });
+  });
+
+  it("reports a subgraph's partial fusion in the OUTERMOST sink", async () => {
+    // A nested cook's own sink is discarded — the resolver view drops it
+    // and keeps counting into the outer one — so the retry's bookkeeping
+    // has to repair the sink the counts really reach. Repair the wrong
+    // one and the outer stats show a `run-plan-failed` per rejected
+    // probe while `fusedNodes` says the tail fused: the exact lie the
+    // accounting exists to prevent, one subgraph deep.
+    const inner = buildDemoChain(makeCorpusGeometry(25)).g;
+    const innerNodes = [...inner._nodes.keys()];
+    const sub = subgraphNode(
+      inner,
+      [],
+      [{ name: "out", node: { id: innerNodes[innerNodes.length - 1] }, pin: "out" }],
+    );
+    const outer = new Graph(11);
+    outer.output(outer.add(sub), "out", "out");
+    const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
+    const r = await cook(outer, { gpu: fake });
+    expect(fake.executed).toEqual([[innerNodes[4], innerNodes[5]]]); // tint, psize
+    expect(r.stats.gpu!.residentRuns).toBe(1);
+    expect(r.stats.gpu!.fusedNodes).toBe(2);
+    expect(r.stats.gpu!.fallbacks).toEqual({ "run-partially-fused": 1 });
+  });
+
+  it("leaves a chain that plans in full exactly as it was", async () => {
+    // The reordered demo chain — the authoring fix — plans on the first
+    // attempt, so the retry never runs and no fallback is reported.
+    const { g, order } = buildDemoChain(makeCorpusGeometry(24), true);
+    const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
+    const r = await cook(g, { gpu: fake });
+    expect(fake.planned).toEqual([order]);
+    expect(fake.executed).toEqual([order]);
+    expect(r.stats.gpu!.residentRuns).toBe(1);
+    expect(r.stats.gpu!.fusedNodes).toBe(5);
+    expect(r.stats.gpu!.fallbacks).toEqual({});
   });
 });

@@ -331,7 +331,7 @@ spawn, io, composite.
 - copyToPoints — copy a source cloud onto every target point, composing transforms and seeds
 - dataInput — emit externally injected DataItems (`items` set via graph.setParam; serializes as `items: []`, re-bind live data after deserializing)
 - filterByAttribute — keep points where a scalar/string attribute passes a comparison
-- filterByBounds — keep points inside/outside an axis-aligned box
+- filterByBounds — keep points inside/outside an axis-aligned box. `boundary` decides what happens ON a face, and it is the difference between a selection and an OWNERSHIP RULE: `halfOpen` (the default) keeps min <= p < max per axis, so two boxes meeting at a face — one's max is the other's min, the same number — tile space with no gap and no duplicate, which is what makes this the ownership node of a partitioned cook; `inclusive` keeps min <= p <= max and emits a point on a shared face from BOTH boxes. `mode: "outside"` is the exact complement under whichever boundary is active, so inside ∪ outside is always a partition of the input. Infinite bounds are legal, so the unbounded Y of an `"xz"` World column needs no extra param; a NaN coordinate is never inside and lands in `outside`. Bind the box from the UNWIDENED cell (`ctx.min`/`ctx.max`) and the exactness comes from the shared endpoint VALUE — never recover the cell index as `floor(p / cellSize)`, which can name the neighbour when the size is not exactly representable
 - filterByDensity — keep points by `density` (threshold or probabilistic)
 - filterByExpression — keep points where a field-capable boolean `predicate` is positive; NaN never survives (`v>0||v<0`, not `!==0`), and a tuple>1 predicate is refused rather than broadcast
 - jitterPoints — deterministic random offset per point (field-capable amount)
@@ -343,7 +343,8 @@ spawn, io, composite.
 - pointGrid — regular grid of points
 - pointLine — evenly spaced points on a segment; `includeEnd` (default true) samples the closed range [start, end], false samples the half-open [start, end) so a sweep that wraps has no duplicate seam
 - pointNeighborhood — per-point neighbour statistics from the shared uniform grid: a count within `radius`, and optionally the average of another attribute over those neighbours; `maxCount` keeps the NEAREST N (ties to lower index) and accumulation is always in ascending point index, so a capped average is bit-stable; a point with no neighbours averages to its OWN value, so differences like `P - nbrP` are exactly zero for isolates
-- pointScatterInBounds — uniform random points in a box
+- pointScatterInBounds — uniform random points in a box. Positions are computed as a function OF `boundsMin`/`boundsMax`, so widening the box to form a halo MOVES EVERY POINT and reproduces nothing a neighbour saw; reach for pointScatterInWorld whenever a region has to survive being queried twice at two sizes
+- pointScatterInWorld — world-ANCHORED source, and the only one. Points live on an INFINITE lattice; a point's position and per-point `seed` are a pure function of (`seed`, `latticeMode`, `cellSize`) plus its own lattice cell and index, and NEVER of the window — `boundsMin`/`boundsMax` only choose which lattice cells to visit and clip the result, half-open, so abutting windows partition the world. Three consequences that no other source can offer: a halo is just a WIDER QUERY (nothing is fetched from a sibling cell, which need never have cooked), a region cooked whole and the same region cooked in pieces agree byte for byte, and two cells on a boundary agree about what is there. Expected population is exactly `density * area` in `latticeMode: "xz"` (a 2D XZ lattice, every point at `height`, Y bounds ignored) or `density * volume` in `"xyz"`, so a count is predictable without cooking; raising `density` only ADDS points. `cellSize` is THIS NODE'S OWN lattice — the patch the count is quantized over, controlling clumping and not population — and must be set from the content's scale, never from a World level's `cellSize` (tying them makes the world a function of the runtime's partitioning). Emission order is by lattice cell (Z outer, then Y, then X) then index, so two windows list their shared points in the same relative order. **It ignores the graph seed** — the one exception to the seed chain; see "Key invariants and contracts"
 - pointsToPath — the only node that turns a point cloud INTO a path, so the only way to start one in a serialized graph: builds `polyline` primitives over the SAME points, so every point attribute survives; `closed` appends the structural trailing vertex, `groupAttr` splits the cloud into one path per id, `orderAttr` orders each path (ties to the lower point index)
 - projectToPlane — orthogonal projection of points onto a plane
 - promoteAttribute — move an attribute between domains (first/average/sum/min/max)
@@ -481,6 +482,34 @@ Three rules an agent needs before choosing one:
   platforms, cook orders, and streaming paths. Seed chain: graph seed ->
   node seed = hashCombine(graphSeed, hashString(nodeId)) -> per-point
   hashCombine(seed, index, axis). No Math.random anywhere.
+- The ONE exception to that chain: `pointScatterInWorld`'s lattice is a
+  function of its own `seed` param alone — the graph seed is not an input
+  at all, exactly as a noise field carries its seed inside its own spec.
+  It is deliberate: `graph.setSeed` inside a level's `bind`, a CLI
+  `--seed` override or a rename would otherwise silently DE-ANCHOR it, and
+  a de-anchored world source fails only at seams. The cost you must plan
+  for is the lost node-id decorrelation — two such nodes with identical
+  params scatter IDENTICAL points, so give each layer its own value
+  (`hashCombine(ctx.worldSeed, 1)` for trees, `...2` for rocks).
+- Per-point randomness keys on point IDENTITY, not array index, wherever
+  a point must decide the same way under any window: `filterByDensity`
+  (probabilistic), `jitterPoints`, `randomField` on the POINT domain, and
+  the tiebreaks in `selfPrune` and `pointNeighborhood`. Identity is the
+  stored position bits plus the point's `seed` attribute, so an upstream
+  filter that renumbers everything cannot move a survivor's draw, and two
+  points sharing a position AND a seed are one point to that draw. The
+  exclusions are principled, not oversights: on vertex/primitive/detail
+  domains `randomField` still keys on index, because those elements have
+  no position and the index is the only name they have; and
+  `surfaceSample` still keys on index because it manufactures its own
+  candidates rather than receiving them.
+- Identity keying makes those nodes indifferent to the WINDOW, not to
+  their own seed. `filterByDensity`, `jitterPoints` and any field param
+  resolving `randomField` still fold in the node seed, so wiring a
+  per-cell `ctx.seed` into one of them de-anchors a chain one node after
+  the source. Seed them from the cell-invariant `ctx.worldSeed` /
+  `ctx.levelSeed`, or leave them at their defaults. See docs/authoring.md,
+  "Content that must NOT vary per cell", for the full table.
 - Purity: node execute treats inputs as immutable and uses only its
   derived seed. The executor memoizes on exactly (type, params, seed,
   input revs); params hash structurally (Fields by their stable key,
@@ -530,21 +559,64 @@ coarse to fine (optionally one leading unbounded level); each is a
 Before each cell cook, `bind(graph, ctx)` wires the `CellContext` into
 the graph — the only channel for cell data. `ctx` is a discriminated
 union on `cellMode`: `{ cellMode, coord, min, max, levelIndex,
-levelName, seed, parent? }` with 2D coord/min/max for `"xz"` (and
-unbounded) levels, 3D for `"xyz"`. Contract: derive params only from
-ctx, and wire `ctx.seed` (= hashCombine(worldSeed, levelIndex,
-...coord) — every cell coordinate is hashed) into every stochastic
-node. Sanctioned seeding: set seed params per node (vary with
-hashCombine(ctx.seed, n); setAttribute's `seed` param folds in as
-hashCombine(nodeSeed, seed), 0 = unchanged), or reseed the whole graph
-via `graph.setSeed(...)` inside bind — memo keys include seeds and
-bind-time writes never count as user edits, so neither causes phantom
-recooks. Parent-cell outputs arrive as `ctx.parent.outputs`; inject
-them via a dataInput node. `await world.update([x, y, z], { budgetMs?,
-signal?, maxCooksPerUpdate? })` cooks nearest-first, evicts by
-retainRadius + LRU, and reports { cooked, evicted, pending }.
-`world.invalidate(level?, coord?)` forces recooks; parent recooks
-cascade staleness to children automatically.
+levelName, worldSeed, levelSeed, seed, parent? }` with 2D coord/min/max
+for `"xz"` (and unbounded) levels, 3D for `"xyz"`. Three seeds, and
+picking the wrong one is the classic streaming bug:
+
+- `seed` — PER CELL, = hashCombine(worldSeed, levelIndex, ...coord)
+  (every cell coordinate is hashed). Wire it into every stochastic node
+  whose content is MEANT to differ per cell.
+- `worldSeed` — the `World`'s own `seed`, identical in every cell of
+  every level. The coarsest cell-INVARIANT anchor.
+- `levelSeed` — = hashCombine(worldSeed, levelIndex), identical within a
+  level. Use it where `worldSeed` would work but two levels running the
+  same graph should get unrelated worlds rather than the same one. On an
+  unbounded level `levelSeed` and `seed` are the same number.
+
+Contract: derive params only from ctx. Sanctioned seeding: set seed
+params per node (vary with hashCombine(ctx.seed, n); setAttribute's
+`seed` param folds in as hashCombine(nodeSeed, seed), 0 = unchanged), or
+reseed the whole graph via `graph.setSeed(...)` inside bind — memo keys
+include seeds and bind-time writes never count as user edits, so neither
+causes phantom recooks. Parent-cell outputs arrive as
+`ctx.parent.outputs`; inject them via a dataInput node. `await
+world.update([x, y, z], { budgetMs?, signal?, maxCooksPerUpdate? })`
+cooks nearest-first, evicts by retainRadius + LRU, and reports {
+cooked, evicted, pending }. `world.invalidate(level?, coord?)` forces
+recooks; parent recooks cascade staleness to children automatically.
+
+### Cross-cell content: halos and ownership
+
+A cell never fetches from a sibling — `World` exposes no sibling
+accessor and neighbours are LRU-evictable, so anything that must look
+past a cell edge DERIVES it from world coordinates instead. The pattern,
+in three moves:
+
+1. **Source it anchored.** `pointScatterInWorld`, seeded from
+   `ctx.worldSeed` / `ctx.levelSeed` (never `ctx.seed`, which would make
+   every cell an unrelated world and the guarantee empty).
+2. **Ask for the halo.** Widen the query: `boundsMin = ctx.min - halo`,
+   `boundsMax = ctx.max + halo`. The extra ring is byte-identical to what
+   the neighbour owns whether or not it has ever cooked. Run the
+   measurement that needs it (`pointNeighborhood`, `sampleNearestPoint`,
+   `transferAttribute`) over the WIDE cloud.
+3. **Clip to ownership.** `filterByBounds` at the default `halfOpen`
+   boundary, bound to the UNWIDENED `ctx.min`/`ctx.max`, so two abutting
+   cells claim a shared-face point exactly once between them.
+
+The finite-halo restriction is real, and stricter than "local": an op is
+halo-exact only when its REACH IS BOUNDED. `pointNeighborhood` is bounded
+by `radius`, so a halo of `radius` reproduces the whole-region answer. A
+greedy prune is NOT — a point survives because its neighbour did not,
+because ITS neighbour did, a chain no halo width covers — which is why
+`selfPrune` carries a `mode`: check its entry in docs/nodes.md for which
+rule is halo-exact and what halo width it needs. A global rank, a
+population total or a shortest path has no reach bound at all and cannot be
+made cell-safe this way. Worked example with code: docs/authoring.md,
+"Content that must NOT vary per cell".
+Runnable: `examples/04-infinite-world` (its "halo" and "world-anchored"
+toggles reproduce each failure live) and
+`examples/graphs/basics-scatter-in-world.json`.
 
 ## GPU field evaluation (pcg-ts/gpu)
 
@@ -1082,25 +1154,29 @@ stale and a stale skill is worse than none.
   how to discover what exists, exposing knobs instead of hardcoding
   them, and the validate → cook → inspect → render loop.
 - `skills/determinism/SKILL.md` — load when adding randomness or noise,
-  choosing a seed or a per-instance variation knob, when output changes
-  between runs or machines, or before claiming a change is
-  deterministic. The seed chain, what a seed re-rolls and what it
-  provably cannot, why noise varies through position rather than seed,
-  the GPU approximation boundary, and how to VERIFY reproducibility
-  instead of assuming it.
+  choosing a seed or a per-instance variation knob, when content must
+  look the same from either side of a cell boundary or a halo, when
+  output changes between runs or machines, or before claiming a change is
+  deterministic. The seed chain and its ONE exception, what a seed
+  re-rolls and what it provably cannot, why noise varies through position
+  rather than seed, world-anchoring and identity-keyed randomness (with
+  the three cross-partition tests that a single-graph test cannot
+  replace), the GPU approximation boundary, and how to VERIFY
+  reproducibility instead of assuming it.
 - `skills/performance-and-budgets/SKILL.md` — load when a cook is slower
   than expected, when reading `pcg cook --stats`, when choosing a budget
   for a frame loop or a World update, when sizing candidate counts or
   placing a filter, or before optimizing anything inside the library.
   The two unrelated budgets (a cook's yield budget vs. a World update's
-  stop budget), what each stats number means, the cost asymmetry you
-  control, the SoA rules for hot loops, and the optimization determinism
-  forbids.
+  stop budget), what each stats number means, why a budget partitions
+  TIME while a World cell partitions DATA (and only the second needs
+  halos), the cost asymmetry you control, the SoA rules for hot loops,
+  and the optimization determinism forbids.
 
 ## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
 
-34 graphs under `examples/graphs/`, each named by what it teaches and
-carrying its own `meta` block: 28 single-concept `basics-*.json`, plus
+35 graphs under `examples/graphs/`, each named by what it teaches and
+carrying its own `meta` block: 29 single-concept `basics-*.json`, plus
 the 6-file staged pipeline `pipeline-*.json` below. Every one cooks from
 JSON alone — no `dataInput`, whose items never survive serialization —
 so any of them can be copied, run and modified with nothing but the CLI.

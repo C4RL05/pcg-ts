@@ -163,32 +163,232 @@ describe("filterByBounds", () => {
   const positions = [
     [0.5, 0.5, 0.5],
     [2, 0.5, 0.5],
-    [1, 1, 1], // on the boundary: inclusive
+    [1, 1, 1], // exactly on the max face
+    [0, 0.5, 0.5], // exactly on the min face
   ];
 
-  it("inside keeps points within the box (inclusive)", async () => {
-    const geo = firstGeo(
-      (
-        await runNode(filterByBounds, { boundsMin: [0, 0, 0], boundsMax: [1, 1, 1], mode: "inside" }, {
-          in: [makeGeometryItem(cloudAt(positions))],
-        })
-      ).out,
-    );
-    expect(positionsOf(geo)).toEqual([
+  /** Run the node over a cloud and read back the survivors' positions. */
+  const boxed = async (
+    cloud: ReturnType<typeof createPointCloud>,
+    params: Record<string, unknown>,
+  ): Promise<number[][]> =>
+    positionsOf(firstGeo((await runNode(filterByBounds, params, { in: [makeGeometryItem(cloud)] })).out));
+
+  it("defaults to half-open: the min face is in, the max face is out", async () => {
+    // The default decides ownership, so it is asserted as a default and
+    // not merely as behavior: half-open is what `floor(p / cellSize)`
+    // means, and it is the rule pointScatterInWorld's window and a World
+    // cell rectangle already use.
+    expect(filterByBounds.defaultParams.boundary).toBe("halfOpen");
+    const kept = await boxed(cloudAt(positions), {
+      boundsMin: [0, 0, 0],
+      boundsMax: [1, 1, 1],
+      mode: "inside",
+    });
+    expect(kept).toEqual([
       [0.5, 0.5, 0.5],
-      [1, 1, 1],
+      [0, 0.5, 0.5],
     ]);
   });
 
-  it("outside keeps the complement", async () => {
-    const geo = firstGeo(
-      (
-        await runNode(filterByBounds, { boundsMin: [0, 0, 0], boundsMax: [1, 1, 1], mode: "outside" }, {
-          in: [makeGeometryItem(cloudAt(positions))],
-        })
-      ).out,
-    );
-    expect(positionsOf(geo)).toEqual([[2, 0.5, 0.5]]);
+  it("gives a point on a shared face to exactly one of two abutting boxes", async () => {
+    // The ownership case. Two boxes meeting at x = 1, and a point sitting
+    // exactly on the seam: under the inclusive rule both boxes emit it,
+    // which is what makes an inclusive test unusable as an ownership rule
+    // for partitioned generation.
+    const cloud = cloudAt(positions);
+    const left = await boxed(cloud, { boundsMin: [0, 0, 0], boundsMax: [1, 2, 2] });
+    const right = await boxed(cloud, { boundsMin: [1, 0, 0], boundsMax: [2, 2, 2] });
+    const seam = (pts: number[][]): number[][] => pts.filter((p) => p[0] === 1);
+    expect(seam(left)).toEqual([]);
+    expect(seam(right)).toEqual([[1, 1, 1]]);
+    // And the two together hold every point of the union box, once each.
+    const union = await boxed(cloud, { boundsMin: [0, 0, 0], boundsMax: [2, 2, 2] });
+    expect([...left, ...right].map(String).sort()).toEqual(union.map(String).sort());
+  });
+
+  it("keeps inside and outside an exact partition under BOTH boundary rules", async () => {
+    // The property most likely to rot: whichever rule is active, `outside`
+    // is its exact complement — no point lost, no point emitted twice.
+    // Face-exact points are included deliberately, since they are the only
+    // ones the two rules disagree about.
+    const cloud = cloudAt([
+      ...scatter(120, 17),
+      [2, 4, 4], // on the min face
+      [6, 4, 4], // on the max face
+      [4, 2, 6],
+      [4, 6, 2],
+      [NaN, 4, 4], // never inside, and never lost either
+    ]);
+    const all = pointRecords(cloud).sort();
+    const insideCounts: number[] = [];
+    for (const boundary of ["halfOpen", "inclusive"]) {
+      const box = { boundsMin: [2, 2, 2], boundsMax: [6, 6, 6], boundary };
+      const inside = firstGeo(
+        (
+          await runNode(
+            filterByBounds,
+            { ...box, mode: "inside" },
+            { in: [makeGeometryItem(cloud)] },
+          )
+        ).out,
+      );
+      const outside = firstGeo(
+        (
+          await runNode(
+            filterByBounds,
+            { ...box, mode: "outside" },
+            { in: [makeGeometryItem(cloud)] },
+          )
+        ).out,
+      );
+      // Both halves are non-trivial, or the partition proves nothing.
+      expect(inside.pointCount).toBeGreaterThan(5);
+      expect(outside.pointCount).toBeGreaterThan(5);
+      expect(inside.pointCount + outside.pointCount).toBe(cloud.pointCount);
+      expect([...pointRecords(inside), ...pointRecords(outside)].sort()).toEqual(all);
+      // A NaN coordinate is not inside under either rule, and the
+      // complement is where it has to turn up — a `!(x < min || x > max)`
+      // spelling of `outside` would drop it from both halves.
+      expect(positionsOf(inside).some((p) => Number.isNaN(p[0]))).toBe(false);
+      expect(positionsOf(outside).some((p) => Number.isNaN(p[0]))).toBe(true);
+      insideCounts.push(inside.pointCount);
+    }
+    // The loop really ran two different rules: the max-face points are in
+    // one and not the other.
+    expect(insideCounts[1]).toBeGreaterThan(insideCounts[0]);
+  });
+
+  it("tiles space into cells that claim every point exactly once", async () => {
+    // Ownership over a whole grid rather than one seam, at a cell size
+    // that is NOT exactly representable — 0.1, where `floor(p / size)`
+    // and the box `[c*size, (c+1)*size)` disagree about points near a
+    // boundary. The tiling is exact anyway, and this is why: two abutting
+    // boxes are built from the same endpoint VALUE, so whatever that
+    // value rounds to, one box's `< max` and the next's `>= min` are the
+    // same comparison against the same number.
+    const size = 0.1;
+    const edge = (c: number): number => c * size;
+    const cloud = cloudAt([
+      ...scatter(200, 41, 1),
+      // Points sitting exactly ON an internal boundary, which is where a
+      // rule can double-count. 0.5 is used because it is the one interior
+      // edge of this grid that survives the f32 store unchanged: it is
+      // exact in both formats, so the stored coordinate really does equal
+      // the box endpoint rather than landing a ulp off it.
+      [0.5, 0.5, 0.5],
+      [0.5, 0.25, 0.75],
+      [0.75, 0.5, 0.25],
+    ]);
+    const claimed: string[] = [];
+    for (let cx = 0; cx < 10; cx++) {
+      for (let cy = 0; cy < 10; cy++) {
+        for (let cz = 0; cz < 10; cz++) {
+          const kept = await boxed(cloud, {
+            boundsMin: [edge(cx), edge(cy), edge(cz)],
+            boundsMax: [edge(cx + 1), edge(cy + 1), edge(cz + 1)],
+          });
+          claimed.push(...kept.map(String));
+        }
+      }
+    }
+    const covered = positionsOf(cloud).filter((p) => p.every((v) => v >= 0 && v < 1));
+    expect(covered.length).toBeGreaterThan(150);
+    expect(claimed.sort()).toEqual(covered.map(String).sort());
+  });
+
+  it("agrees with floor(p / cellSize) at an exactly representable cell size", async () => {
+    // The arithmetic form of the same rule, which holds when `c * size`
+    // is exact (integers, powers of two) — stated with that condition
+    // because it is NOT a general identity: floor(67.8 / 0.1) is 677
+    // while 678 * 0.1 is exactly 67.8, so an ownership test written as a
+    // recomputed index can disagree with the box it is meant to match.
+    const size = 2;
+    const pts = [
+      ...scatter(150, 29, 12).map(([x, y, z]) => [x - 6, y - 6, z - 6]),
+      [0, 0, 0],
+      [2, -2, 4],
+      [-2, 0, -4],
+      [-4, 2, 2],
+    ];
+    const cloud = cloudAt(pts);
+    const cellOf = (p: number[]): string => p.map((v) => Math.floor(v / size)).join(",");
+    const seen: string[] = [];
+    for (let cx = -3; cx < 3; cx++) {
+      for (let cy = -3; cy < 3; cy++) {
+        for (let cz = -3; cz < 3; cz++) {
+          const kept = await boxed(cloud, {
+            boundsMin: [cx * size, cy * size, cz * size],
+            boundsMax: [(cx + 1) * size, (cy + 1) * size, (cz + 1) * size],
+          });
+          for (const p of kept) expect(cellOf(p)).toBe(`${cx},${cy},${cz}`);
+          seen.push(...kept.map(String));
+        }
+      }
+    }
+    // Every point of the covered region was claimed exactly once. The
+    // comparison runs over STORED positions, since P is f32 and the cells
+    // are decided on what was stored, not on the float64 input.
+    const covered = positionsOf(cloud).filter((p) => p.every((v) => v >= -6 && v < 6));
+    expect(covered.length).toBeGreaterThan(100);
+    expect(seen.sort()).toEqual(covered.map(String).sort());
+  });
+
+  it("keeps working with infinite bounds, so an xz column needs no extra param", async () => {
+    // `y < +Infinity` holds for every finite y, so the half-open rule
+    // spells an unbounded axis with the same two params a World's "xz"
+    // cell already binds.
+    // Powers of two, so the f32 store is exact and the Y values compared
+    // below are the ones written.
+    const far = 2 ** 30;
+    const cloud = cloudAt([
+      [0.5, -far, 0.5],
+      [0.5, far, 0.5],
+      [1, 0, 0.5], // on the max X face: still owned by the next column
+      [-0.5, 0, 0.5],
+    ]);
+    const kept = await boxed(cloud, {
+      boundsMin: [0, -Infinity, 0],
+      boundsMax: [1, Infinity, 1],
+    });
+    expect(kept).toEqual([
+      [0.5, -far, 0.5],
+      [0.5, far, 0.5],
+    ]);
+  });
+
+  it("inclusive keeps both faces, and really is a different rule", async () => {
+    // The opt-in rule, for selecting a box whose faces carry points on
+    // purpose (a pointGrid's last row, an authored extent). Asserted
+    // against the default run over the same cloud, so the two names
+    // cannot quietly become one behavior.
+    const box = { boundsMin: [0, 0, 0], boundsMax: [1, 1, 1] };
+    const kept = await boxed(cloudAt(positions), { ...box, boundary: "inclusive" });
+    expect(kept).toEqual([
+      [0.5, 0.5, 0.5],
+      [1, 1, 1],
+      [0, 0.5, 0.5],
+    ]);
+    expect(kept).not.toEqual(await boxed(cloudAt(positions), box));
+  });
+
+  it("names the param and the valid values on an unknown mode or boundary", async () => {
+    const cloud = cloudAt(positions);
+    await expect(
+      runNode(filterByBounds, { boundary: "closed" }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/boundary must be "halfOpen" or "inclusive", got "closed"/);
+    await expect(
+      runNode(filterByBounds, { mode: "Inside" }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/mode must be "inside" or "outside", got "Inside"/);
+    // A 2D bound is the mistake a World "xz" level invites, and every
+    // comparison against the missing component would be false — so the
+    // box would silently hold nothing instead of saying what is wrong.
+    await expect(
+      runNode(filterByBounds, { boundsMin: [0, 0] }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/boundsMin needs three components \[x, y, z\], got 2;.*ctx\.min/s);
+    await expect(
+      runNode(filterByBounds, { boundsMax: [1, 1] }, { in: [makeGeometryItem(cloud)] }),
+    ).rejects.toThrow(/boundsMax needs three components/);
   });
 });
 
@@ -680,6 +880,362 @@ describe("selfPrune", () => {
           in: [makeGeometryItem(geo)],
         }),
       ).rejects.toThrow(/selfPrune: param "priority" must evaluate to ONE number per point/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // mode: the greedy packs, the local maximum partitions.
+  //
+  // The gap this suite exists for was found by MEASUREMENT, migrating
+  // examples/04-infinite-world: cooked in cells of 20 and of 40, a greedy
+  // selfPrune produced different survivor sets and left a seam pair closer
+  // than minDistance. It is structural rather than a tuning problem — a
+  // greedy point survives because its neighbour did not, which happened
+  // because ITS neighbour did, and that chain has no bounded length, so no
+  // halo width reproduces it. So these tests re-run the measurement in both
+  // directions: the new rule must agree with a whole-region cook at any cell
+  // size, and the old one must be SEEN to disagree, or the contrast is
+  // asserted rather than demonstrated.
+  describe("mode", () => {
+    /** One world point: a position and the seed that travels with it. */
+    interface WorldPoint {
+      readonly p: readonly number[];
+      readonly seed: number;
+    }
+
+    /**
+     * A flat world whose points each carry their own seed, so any WINDOW
+     * over it names exactly the points the whole world does — the only way
+     * a split-versus-whole comparison can mean anything. (`seededCloudAt`
+     * derives its seeds from the ARRAY index, which would rename every
+     * point of a subset and make identity order a function of the cell.)
+     */
+    function flatWorld(count: number, seed: number, extent: number): WorldPoint[] {
+      return Array.from({ length: count }, (_, i) => ({
+        p: [
+          hashFloat(hashCombine(seed, i, 0)) * extent,
+          0,
+          hashFloat(hashCombine(seed, i, 1)) * extent,
+        ],
+        seed: hashCombine(seed, i, 2),
+      }));
+    }
+
+    /** Those points as a cloud, seeds included. */
+    function worldCloud(points: readonly WorldPoint[]): ReturnType<typeof createPointCloud> {
+      const geo = cloudAt(points.map((w) => [...w.p]));
+      const seed = geo.attrs.point.require("seed");
+      points.forEach((w, i) => seed.set(i, w.seed));
+      return geo;
+    }
+
+    /** Survivor positions of one cook over exactly these points. */
+    async function survivorsOf(
+      points: readonly WorldPoint[],
+      params: Record<string, unknown>,
+    ): Promise<number[][]> {
+      return positionsOf(
+        firstGeo(
+          (
+            await runNode(selfPrune, params as never, {
+              in: [makeGeometryItem(worldCloud(points))],
+            }, 9)
+          ).out,
+        ),
+      );
+    }
+
+    /** Sortable key for a survivor, so two cooks compare as sets. */
+    const key = (p: number[]): string => `${p[0]},${p[2]}`;
+    const keys = (pts: number[][]): string[] => pts.map(key).sort();
+
+    /**
+     * The world cooked in square cells of `size`, each cell deriving a
+     * `halo`-wide margin of extra points and then keeping only the
+     * survivors it OWNS — half-open on both axes, the ownership rule
+     * `filterByBounds` defaults to and a World cell follows. This is the
+     * partitioned cook, assembled.
+     */
+    async function survivorsInCells(
+      points: readonly WorldPoint[],
+      extent: number,
+      size: number,
+      halo: number,
+      params: Record<string, unknown>,
+    ): Promise<number[][]> {
+      const out: number[][] = [];
+      for (let cx = 0; cx * size < extent; cx++) {
+        for (let cz = 0; cz * size < extent; cz++) {
+          const x0 = cx * size;
+          const z0 = cz * size;
+          const x1 = x0 + size;
+          const z1 = z0 + size;
+          const window = points.filter(
+            (w) =>
+              w.p[0] >= x0 - halo &&
+              w.p[0] < x1 + halo &&
+              w.p[2] >= z0 - halo &&
+              w.p[2] < z1 + halo,
+          );
+          for (const p of await survivorsOf(window, params)) {
+            if (p[0] >= x0 && p[0] < x1 && p[2] >= z0 && p[2] < z1) out.push(p);
+          }
+        }
+      }
+      return out;
+    }
+
+    /** Closest pair among survivors, by brute force. */
+    function closestPair(pts: number[][]): number {
+      let best = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const d = Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1], pts[i][2] - pts[j][2]);
+          if (d < best) best = d;
+        }
+      }
+      return best;
+    }
+
+    // 2000 points over 60x60 at minDistance 3: dense enough that pruning
+    // does real work (about a tenth survives) and small enough for the
+    // O(n^2) checks above.
+    const EXTENT = 60;
+    const D = 3;
+    const WORLD = flatWorld(2000, 4242, EXTENT);
+
+    it("localMaximum reproduces the whole world from cells; greedy provably cannot", async () => {
+      for (const mode of ["greedy", "localMaximum"]) {
+        const whole = await survivorsOf(WORLD, { mode, minDistance: D });
+        // Whole-region, both rules honour the distance they enforce.
+        expect(closestPair(whole)).toBeGreaterThanOrEqual(D);
+        const wholeKeys = keys(whole);
+        const splits: { size: number; split: number[][] }[] = [];
+        for (const size of [10, 15, 20, 30]) {
+          const split = await survivorsInCells(WORLD, EXTENT, size, D, { mode, minDistance: D });
+          // Ownership is exact either way: every survivor is claimed once.
+          expect(new Set(keys(split)).size).toBe(split.length);
+          splits.push({ size, split });
+        }
+        if (mode === "localMaximum") {
+          // The halo is exactly minDistance, and it is exactly enough — at
+          // every cell size, point for point, with no pair closer than the
+          // distance anywhere including across the seams.
+          for (const { split } of splits) {
+            expect(keys(split)).toEqual(wholeKeys);
+            expect(closestPair(split)).toBeGreaterThanOrEqual(D);
+          }
+        } else {
+          // The same measurement against the rule it fails on. Of 238
+          // whole-region survivors, the cells KEEP points the whole cook
+          // pruned (4, 4, 2, 1 of them at cell size 10, 15, 20, 30) and
+          // DROP points it kept (7, 5, 2, 3) — every cell size wrong in a
+          // different way, and no two agreeing with each other. Three of
+          // the four leave a surviving pair closer than the 3 the node was
+          // asked to enforce (1.41, 2.18, 1.41), the worst of them under
+          // half of it: a seam that is invisible until something renders
+          // it, which is how this was found in the first place.
+          const extra = splits.map(
+            ({ split }) => keys(split).filter((k) => !wholeKeys.includes(k)).length,
+          );
+          const dropped = splits.map(
+            ({ split }) => wholeKeys.filter((k) => !keys(split).includes(k)).length,
+          );
+          expect(wholeKeys.length).toBe(238);
+          expect(extra).toEqual([4, 4, 2, 1]);
+          expect(dropped).toEqual([7, 5, 2, 3]);
+          for (let i = 1; i < splits.length; i++) {
+            expect(keys(splits[i].split)).not.toEqual(keys(splits[i - 1].split));
+          }
+          // Pinned per cell size, not as an aggregate: the prose quotes
+          // each of these, and a minimum alone would let the other three
+          // drift unseen.
+          const closest = splits.map(({ split }) => closestPair(split));
+          expect(closest.map((d) => d < D)).toEqual([true, true, true, false]);
+          expect(closest.map((d) => Number(d.toFixed(2)))).toEqual([1.41, 2.18, 1.41, 3]);
+          expect(Math.min(...closest)).toBeLessThan(D / 2);
+        }
+      }
+    });
+
+    it("keeps a strict subset of the greedy's survivors — the price of the halo", async () => {
+      const greedyKeys = keys(await survivorsOf(WORLD, { minDistance: D }));
+      const localKeys = keys(await survivorsOf(WORLD, { mode: "localMaximum", minDistance: D }));
+      // Provable, and worth pinning: a point that outranks every neighbour
+      // is reached by the greedy before any of them, so it is kept there
+      // too. The converse fails, which is exactly the density that is lost.
+      for (const k of localKeys) expect(greedyKeys).toContain(k);
+      expect(localKeys.length).toBeLessThan(greedyKeys.length);
+      // The trade-off as a number the docs can quote: 122 against 238, so
+      // roughly half the density, on a world that is one dense scatter.
+      expect([localKeys.length, greedyKeys.length]).toEqual([122, 238]);
+      expect(localKeys.length / greedyKeys.length).toBeCloseTo(0.51, 2);
+    });
+
+    /**
+     * The published local-maximum contract, restated against its own
+     * definition so the uniform grid is pinned as an accelerator and
+     * nothing else: a point survives when NO point it conflicts with
+     * outranks it, whether or not that neighbour itself survives. Optional
+     * per-point radii use the same max(rA, rB) rule as the greedy.
+     */
+    function localMaximum(pts: number[][], minDistance: number, radii?: number[]): number[][] {
+      const ident = pointIdentities(cloudAt(pts), "test");
+      const claim = (i: number): number => {
+        const r = radii === undefined ? minDistance : radii[i];
+        return r > 0 ? r : 0;
+      };
+      const out: number[][] = [];
+      for (let i = 0; i < pts.length; i++) {
+        let survives = true;
+        for (let j = 0; j < pts.length && survives; j++) {
+          if (j === i) continue;
+          const limit = Math.max(claim(i), claim(j));
+          const dx = pts[j][0] - pts[i][0];
+          const dy = pts[j][1] - pts[i][1];
+          const dz = pts[j][2] - pts[i][2];
+          if (!(dx * dx + dy * dy + dz * dz < limit * limit)) continue;
+          // Outranked by a conflicting neighbour: identity ascending, the
+          // index only between points nothing else separates.
+          if (ident[j] !== ident[i] ? ident[j] < ident[i] : j < i) survives = false;
+        }
+        if (survives) out.push(pts[i]);
+      }
+      return out;
+    }
+
+    it("equals the O(n^2) local maximum on lattices, clusters, duplicates and NaN", async () => {
+      let state = 999;
+      const rand = (): number => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return Math.fround(state / 4294967296);
+      };
+      const lattice: number[][] = [];
+      for (let x = 0; x < 6; x++) for (let z = 0; z < 6; z++) lattice.push([x, 0, z]);
+      const cluster: number[][] = [];
+      for (let i = 0; i < 400; i++) cluster.push([rand() * 4, rand() * 4, rand() * 4]);
+      const duplicates = Array.from({ length: 20 }, (_, i) => [i % 2, 0, 0]);
+      const nonFinite = [
+        [0, 0, 0],
+        [NaN, 1, 2],
+        [Infinity, -Infinity, NaN],
+        [0.5, 0.5, 0.5],
+        [-Infinity, 0, 0],
+        [2, 2, 2],
+      ];
+      for (const pts of [lattice, cluster, duplicates, nonFinite]) {
+        for (const minDistance of [0.25, 1, 1.5, 3]) {
+          const geo = cloudAt(pts);
+          const out = firstGeo(
+            (
+              await runNode(selfPrune, { mode: "localMaximum", minDistance } as never, {
+                in: [makeGeometryItem(geo)],
+              })
+            ).out,
+          );
+          expect(positionsOf(out)).toEqual(localMaximum(pts, minDistance));
+        }
+      }
+    });
+
+    it("honours per-point radii by the same max(rA, rB) rule", async () => {
+      const pts = [
+        [0, 0, 0],
+        [2, 0, 0],
+        [8, 0, 0],
+        [8.25, 0, 0],
+      ];
+      const crown = [3, 0.5, -1, 0];
+      const geo = cloudWith(pts, { crown });
+      const out = firstGeo(
+        (
+          await runNode(
+            selfPrune,
+            { mode: "localMaximum", minDistance: attribute("crown") } as never,
+            { in: [makeGeometryItem(geo)] },
+          )
+        ).out,
+      );
+      // The big claim at 0 reaches 2 (the small point cannot reach back),
+      // and 8/8.25 claim nothing at all, so both of those survive.
+      expect(positionsOf(out)).toEqual(localMaximum(pts, 0, crown));
+      expect(positionsOf(out)).toHaveLength(3);
+    });
+
+    it("lets priority beat identity, exactly as the greedy does", async () => {
+      // Half a minDistance apart: one of the two survives, and the pair is
+      // small enough that both rules must name the same winner.
+      const pair = [
+        [0, 0, 0],
+        [0.5, 0, 0],
+      ];
+      const won = (rank: number[]) =>
+        survivors(cloudWith(pair, { rank }), {
+          mode: "localMaximum",
+          minDistance: 1,
+          priority: attribute("rank"),
+        });
+      expect(await won([0, 1])).toEqual([[0.5, 0, 0]]);
+      expect(await won([1, 0])).toEqual([[0, 0, 0]]);
+      expect(await won([0, 0])).toEqual([firstVisited(pair)]);
+      expect(await won([NaN, 0])).toEqual([[0.5, 0, 0]]);
+    });
+
+    it("is permutation-equivariant, uniform and per-point alike", async () => {
+      const cloud = seededCloudAt(scatter(300, 77, 6));
+      const order = shuffledOrder(300, 21);
+      for (const params of [
+        { mode: "localMaximum", minDistance: 1 },
+        { mode: "localMaximum", minDistance: constant(1.2), priority: randomField("thin") },
+      ]) {
+        const run = (geo: ReturnType<typeof createPointCloud>) =>
+          runNode(selfPrune, params as never, { in: [makeGeometryItem(geo)] }, 3);
+        const straight = firstGeo((await run(cloud)).out);
+        const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+        expect(straight.pointCount).toBeGreaterThan(10);
+        expect(straight.pointCount).toBeLessThan(300);
+        expect(pointRecords(shuffled).sort()).toEqual(pointRecords(straight).sort());
+      }
+    });
+
+    it("leaves the greedy default exactly where it was", async () => {
+      // Naming the default must be a no-op: the goldens rest on it.
+      const grid = firstGeo((await runNode(pointGrid, { countX: 10, countY: 1, countZ: 10 })).out);
+      const item = makeGeometryItem(grid);
+      for (const minDistance of [1.5, 2]) {
+        const implicit = firstGeo((await runNode(selfPrune, { minDistance }, { in: [item] })).out);
+        const explicit = firstGeo(
+          (await runNode(selfPrune, { mode: "greedy", minDistance } as never, { in: [item] })).out,
+        );
+        expect(snapshotGeometry(explicit)).toEqual(snapshotGeometry(implicit));
+      }
+    });
+
+    it("passes points through at minDistance 0 whichever rule is named", async () => {
+      const grid = firstGeo((await runNode(pointGrid, { countX: 3, countY: 1, countZ: 1 })).out);
+      const geo = firstGeo(
+        (
+          await runNode(selfPrune, { mode: "localMaximum", minDistance: 0 } as never, {
+            in: [makeGeometryItem(grid)],
+          })
+        ).out,
+      );
+      expect(geo.pointCount).toBe(3);
+    });
+
+    it("refuses an unknown mode, naming both rules and what separates them", async () => {
+      const geo = cloudAt([[0, 0, 0]]);
+      await expect(
+        runNode(selfPrune, { mode: "poisson", minDistance: 1 } as never, {
+          in: [makeGeometryItem(geo)],
+        }),
+      ).rejects.toThrow(/mode must be "greedy" or "localMaximum", got "poisson"/);
+      // Even where nothing would have been pruned: a typo is a typo.
+      await expect(
+        runNode(selfPrune, { mode: "poisson", minDistance: 0 } as never, {
+          in: [makeGeometryItem(geo)],
+        }),
+      ).rejects.toThrow(/halo of minDistance exactly sufficient/);
     });
   });
 });

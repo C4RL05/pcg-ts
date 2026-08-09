@@ -454,7 +454,11 @@ describe("resident fusion shape rule (boundaries in both directions)", () => {
     const { g, ids } = shapeGraph(flaggedTerminal, "out", false);
     const gpu = deviceInstanceResolver(["flagged"]);
     await cook(g, { gpu });
-    expect(gpu.planned).toEqual([[ids.sa.id, ids.mid.id]]);
+    // Detected as [sa, mid]; this resolver rejects, and the suffix retry
+    // then offers the terminal ALONE — the one length-1 run the detector
+    // itself would have formed, because a terminal-only node's fused form
+    // is the only way to produce device-resident outputs.
+    expect(gpu.planned).toEqual([[ids.sa.id, ids.mid.id], [ids.mid.id]]);
   });
 
   it("REFUSES the same pins without `terminal` (the pre-existing rule)", async () => {
@@ -497,7 +501,8 @@ describe("resident fusion shape rule (boundaries in both directions)", () => {
     const on = shapeGraph(flaggedSingleOut, "out", false);
     const gpuOn = deviceInstanceResolver(["flaggedSingle"]);
     await cook(on.g, { gpu: gpuOn });
-    expect(gpuOn.planned).toEqual([[on.ids.sa.id, on.ids.mid.id]]);
+    // Plus the narrowed lone-terminal retry (see the ADMITS case above).
+    expect(gpuOn.planned).toEqual([[on.ids.sa.id, on.ids.mid.id], [on.ids.mid.id]]);
   });
 
   it("never continues a chain THROUGH a terminal-only node", async () => {
@@ -505,8 +510,10 @@ describe("resident fusion shape rule (boundaries in both directions)", () => {
     const gpu = deviceInstanceResolver(["flagged"]);
     await cook(g, { gpu });
     // The run stops at the terminal; the downstream setAttribute is a
-    // lone fusable node and therefore not a run of its own.
-    expect(gpu.planned).toEqual([[ids.sa.id, ids.mid.id]]);
+    // lone fusable node and therefore not a run of its own. (The second
+    // entry is the narrowed lone-terminal retry, not a continuation —
+    // `sa2` never appears in any planned member list.)
+    expect(gpu.planned).toEqual([[ids.sa.id, ids.mid.id], [ids.mid.id]]);
   });
 });
 

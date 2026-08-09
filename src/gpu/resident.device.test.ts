@@ -175,6 +175,33 @@ interface ScenarioOutput {
     editMatchesFresh: boolean;
     upEditMatchesFresh: boolean;
   };
+  suffixRetry: {
+    cases: Array<{
+      name: string;
+      count: number;
+      members: number;
+      expectedFused: number;
+      bitExact: boolean;
+      stats: GpuStats;
+      perNodeStats: GpuStats;
+      namesCpu: string[];
+      namesPerNode: string[];
+      namesFused: string[];
+      equalsPerNode: boolean;
+      equalsCpu: boolean;
+      repeatable: boolean;
+      repeatStats: GpuStats;
+      attrs: AttrCompare[];
+    }>;
+    timing: {
+      name: string;
+      count: number;
+      runs: number;
+      fusedMs: number[];
+      perNodeMs: number[];
+      stats: GpuStats;
+    };
+  };
 }
 
 /**
@@ -601,5 +628,70 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device-resident runs"), ()
     expect(c.upEditChangedRot, "the edited up hint must change the output").toBe(true);
     expect(c.editMatchesFresh, "edited run bytes vs a fresh build of the same params").toBe(true);
     expect(c.upEditMatchesFresh, "up-edited run bytes vs a fresh build").toBe(true);
+  });
+
+  it("a chain that fuses only its TAIL produces the per-node bytes exactly", () => {
+    // The differential the suffix retry exists to survive. The head cooks
+    // per-node in both legs and the recovered tail is `setAttribute`
+    // only, so there is no float slack anywhere between the two paths:
+    // one moved byte is a failure, not a tolerance.
+    for (const c of scenario.suffixRetry.cases) {
+      expect(c.equalsPerNode, `${c.name}: fused-tail bytes vs the per-node GPU cook`).toBe(true);
+      expect(c.namesFused, `${c.name}: attribute order vs per-node GPU`).toEqual(c.namesPerNode);
+      expect(c.namesFused, `${c.name}: attribute order vs CPU`).toEqual(c.namesCpu);
+      // ...and the same suffix every time: narrowing is a planner
+      // decision, not a race with whatever the device happened to do.
+      expect(c.repeatable, `${c.name}: a second cook produces the same bytes`).toBe(true);
+      expect(c.repeatStats.fusedNodes, `${c.name}: same suffix on the second cook`).toBe(
+        c.stats.fusedNodes,
+      );
+      if (c.bitExact) {
+        expect(c.equalsCpu, `${c.name}: fused-tail bytes vs the CPU cook`).toBe(true);
+      }
+      for (const a of c.attrs) {
+        expect(a.equalPerNode, `${c.name}.${a.name} (${a.type}x${a.tupleSize}) vs per-node`).toBe(true);
+      }
+    }
+  });
+
+  it("recovers the tail of a chain phase 42 left fusing nothing", () => {
+    const byName = new Map(scenario.suffixRetry.cases.map((c) => [c.name, c]));
+    expect([...byName.keys()].sort()).toEqual(["demoOrder5", "exactTail3"]);
+    for (const c of scenario.suffixRetry.cases) {
+      // One run over exactly the members behind the rejecting one.
+      expect(c.stats.residentRuns, `${c.name}: residentRuns`).toBe(1);
+      expect(c.stats.fusedNodes, `${c.name}: fusedNodes`).toBe(c.expectedFused);
+      expect(c.stats.readbacksSaved, `${c.name}: readbacksSaved`).toBe(c.expectedFused - 1);
+      // The counter that used to say "nothing fused" no longer does, and
+      // the one that says so is not raised.
+      expect(c.stats.fallbacks, `${c.name}: fallbacks`).toEqual({ "run-partially-fused": 1 });
+      // Every member is still visited: the head per-node, the tail fused,
+      // plus the dataInput the chain hangs off.
+      expect(c.stats.cooked, `${c.name}: cooked`).toBe(c.members + 1);
+      // The per-node leg is unchanged by any of this.
+      expect(c.perNodeStats.residentRuns, `${c.name}: per-node leg must not fuse`).toBe(0);
+      expect(c.perNodeStats.fallbacks["run-plan-failed"], `${c.name}: per-node leg`).toBe(1);
+    }
+    // The shipped 08-gpu-fields chain specifically: 1 run / 2 fused nodes
+    // / 1 readback saved, where phase 42 left 0 / 0 / 0.
+    const demo = byName.get("demoOrder5")!;
+    expect(demo.members).toBe(5);
+    expect([demo.stats.residentRuns, demo.stats.fusedNodes, demo.stats.readbacksSaved]).toEqual([
+      1, 2, 1,
+    ]);
+  });
+
+  it("reports what the recovered fusion costs, with its spread", () => {
+    const t = scenario.suffixRetry.timing;
+    expect(t.fusedMs).toHaveLength(t.runs);
+    expect(t.perNodeMs).toHaveLength(t.runs);
+    expect(t.stats.residentRuns, "the timed cook really fused").toBe(1);
+    const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[xs.length >> 1];
+    const span = (xs: number[]): string => `${Math.min(...xs).toFixed(1)}-${Math.max(...xs).toFixed(1)}`;
+    console.log(
+      `[suffix retry ${testDevice!.label}] ${t.name} @${t.count} points, ${t.runs} cold cooks\n` +
+        `  fused tail: median ${median(t.fusedMs).toFixed(1)}ms (${span(t.fusedMs)})\n` +
+        `  per-node:   median ${median(t.perNodeMs).toFixed(1)}ms (${span(t.perNodeMs)})`,
+    );
   });
 });

@@ -47,6 +47,18 @@ import type { Column, EvalContext, Field } from "./types.js";
  *   resident attribute strides + field temporaries + readback) exceeds
  *   the evaluator's resident memory bound.
  *
+ * One per-run reason is NOT a fallback, and is counted separately
+ * because it reports a partial success rather than a lost run:
+ *
+ * - `"run-partially-fused"` — a member was rejected, so the planner
+ *   retried the SUFFIX after it and fused what remained. Counted once
+ *   per chain per cook, and the dropped members cooked per-node. Note
+ *   the asymmetry: only a suffix is ever retried, never a prefix.
+ *   Fusing the prefix would compute `P` on the device and hand the
+ *   drifted bits to the identity-keyed member one node later — the
+ *   same hazard the rejection exists to prevent, with the boundary
+ *   moved rather than removed.
+ *
  * Node-level opt-out reasons (a node that declares `resident` but whose
  * `eligible` predicate returned a reason string — see `ResidentDesc`;
  * counted once per cook per such node, whether or not a run formed

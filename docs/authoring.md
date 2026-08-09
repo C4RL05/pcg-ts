@@ -1030,11 +1030,86 @@ bind(g, ctx) {
 }
 ```
 
+Read that reach literally: it re-rolls **every** node, including any
+whose content is supposed to be the same from either side of a cell
+boundary. In a level that carries world-anchored content, prefer the
+per-node form above — see the next section for what is protected
+structurally and what is not.
+
 Either way, cell content stays a pure function of (world seed, level,
 coord, graph, parent content) — independent of cook order, viewpoint
 path, and eviction history. `ctx.seed` hashes every cell coordinate:
 `hashCombine(worldSeed, levelIndex, cx, cz)` for a 2D cell,
 `hashCombine(worldSeed, levelIndex, cx, cy, cz)` for a 3D one.
+
+### Content that must NOT vary per cell
+
+`ctx.seed` is per-cell by construction, so both patterns above are
+exactly wrong for anything that has to look the same from either side of
+a boundary: a world-anchored source, and the ops that read its points.
+That content is seeded from a cell-INVARIANT anchor instead —
+`ctx.worldSeed` (the `World`'s own seed, identical in every cell of every
+level) or `ctx.levelSeed` (`hashCombine(worldSeed, levelIndex)`,
+identical within a level, so two levels running the same graph get
+unrelated worlds rather than the same one).
+
+`pointScatterInWorld` takes its half of that out of the author's hands.
+Its lattice is a function of its own `seed` param, `latticeMode` and
+`cellSize` — **the graph seed is not an input at all**: alone among the
+library's nodes, and for the same reason a noise field carries its seed
+inside its own spec. A per-cell `setSeed`, a CLI seed override and a rename
+therefore all leave it byte-identical, so the failure they used to cause
+is not a documented hazard but an impossible one. It cost the node the
+usual node-id decorrelation, and you will meet that: two such nodes with
+identical params scatter *identical* points, exactly as two `perlinNoise`
+fields with one spec are one field. Give each layer its own seed.
+
+```ts
+bind(g, ctx) {
+  g.setParam(trees, "boundsMin", [ctx.min[0] - halo, 0, ctx.min[1] - halo]);
+  g.setParam(trees, "boundsMax", [ctx.max[0] + halo, 0, ctx.max[1] + halo]);
+  g.setParam(trees, "seed", hashCombine(ctx.worldSeed, 1)); // not ctx.seed
+  g.setParam(rocks, "seed", hashCombine(ctx.worldSeed, 2)); // a second world
+  g.setParam(scatterInThisCell, "seed", ctx.seed);          // this one may vary
+}
+```
+
+**Anchoring is a property of a chain, not of one node.** Keying on point
+identity — `filterByDensity` (probabilistic), `jitterPoints`,
+`randomField`, and the tiebreaks in `selfPrune` and `pointNeighborhood` —
+is what makes those nodes indifferent to which WINDOW produced a point.
+It does not make the seeded ones indifferent to their own seed, and they
+still derive it from the graph seed:
+
+| Node | Reseeding per cell moves it? |
+| --- | --- |
+| `filterByDensity` (probabilistic), `jitterPoints` | yes — `hashCombine(nodeSeed, seed)` decides each draw |
+| any field param resolving `randomField` (including `selfPrune`'s `minDistance` / `priority` and `filterByExpression`'s `predicate`) | yes — the node seed is the evaluation seed |
+| `selfPrune` with plain numbers, `pointNeighborhood` | no — their order is pure identity, with no seed in it |
+
+So a per-cell `ctx.seed` (or a whole-graph reseed) wired into one of the
+first two rows lands one node later exactly where de-anchoring the source
+used to: the halo and the neighbour disagree, deterministically and
+silently. Seed those from `ctx.worldSeed` / `ctx.levelSeed`, or leave
+them at their defaults.
+
+A halo, finally, is nothing but a wider query. Widen `boundsMin` /
+`boundsMax` by the width you need and the extra ring is byte-identical to
+what the neighbouring cell owns — whether or not that neighbour has ever
+cooked, which is the point: nothing is fetched from a sibling. To decide
+who OWNS a point once the halo has done its work, filter with
+`filterByBounds` at its default half-open `boundary`: `min <= p < max`,
+the same rule a cell rectangle and `pointScatterInWorld`'s window
+already use, so two abutting cells claim a point on their shared face
+exactly once between them. Bind the box from `ctx.min` / `ctx.max` — the
+unwidened cell — and the exactness comes from the two cells sharing an
+endpoint *value*, so it holds at any cell size. (Recovering the index
+arithmetically instead, as `floor(p / cellSize)`, can name the
+neighbouring cell when `cellSize` is not exactly representable:
+`floor(67.8 / 0.1)` is 677 while `678 * 0.1` is exactly 67.8. Compare
+against the box, not against a recomputed index.) The `inclusive`
+boundary is for selecting a box whose faces carry points on purpose, and
+would have both cells emit that point.
 
 ## 3D cells (cellMode)
 

@@ -359,6 +359,51 @@ cell's outputs via `ctx.parent` (typically injected through a
 `dataInput` node), and a parent recook automatically marks its children
 stale.
 
+### Content that crosses a cell boundary
+
+`ctx.seed` is per-cell by construction, so it is exactly wrong for
+anything that has to look the same from either side of a boundary. `ctx`
+also carries two cell-**invariant** seeds for that case: `ctx.worldSeed`
+(the `World`'s own seed, identical everywhere) and `ctx.levelSeed`
+(`hashCombine(worldSeed, levelIndex)`, identical within a level, so two
+levels running the same graph get unrelated worlds rather than the same
+one).
+
+The source that uses them is `pointScatterInWorld`. It scatters over an
+infinite lattice anchored to world coordinates: a point's position and
+per-point seed come from its own lattice cell and index, and the query
+box only chooses which cells to visit and clips the result half-open. So
+**a halo is just a wider query** — nothing is fetched from a sibling
+cell, which need never have cooked — and a region cooked whole is
+byte-identical to the same region cooked in pieces.
+`pointScatterInBounds` computes positions *from* its bounds, so widening
+it moves every point and reproduces nothing.
+
+```ts
+bind(graph, ctx) {
+  const halo = 6; // >= the radius of the widest measurement below
+  graph.setParam(rocks, "boundsMin", [ctx.min[0] - halo, 0, ctx.min[1] - halo]);
+  graph.setParam(rocks, "boundsMax", [ctx.max[0] + halo, 0, ctx.max[1] + halo]);
+  graph.setParam(rocks, "seed", hashCombine(ctx.worldSeed, 1)); // not ctx.seed
+  // ... pointNeighborhood runs over the WIDE cloud (exact when halo >= radius) ...
+  graph.setParam(clip, "boundsMin", [ctx.min[0], -Infinity, ctx.min[1]]);
+  graph.setParam(clip, "boundsMax", [ctx.max[0], Infinity, ctx.max[1]]);
+}
+```
+
+That last node is `filterByBounds` at its default `halfOpen` boundary
+(`min <= p < max`), which is the ownership rule of a partitioned cook:
+two abutting cells claim a point on their shared face exactly once
+between them. Downstream ops stay anchored on their own —
+`filterByDensity`, `jitterPoints`, `randomField` and the tiebreaks in
+`selfPrune` and `pointNeighborhood` key their randomness on each point's
+*identity* (its position bits plus its `seed` attribute) rather than on
+an array index, so an upstream filter that renumbers everything cannot
+move a survivor's draw. The seeded ones still need a cell-invariant seed;
+[docs/authoring.md](./docs/authoring.md) ("Content that must NOT vary per
+cell") has the full table, and `examples/04-infinite-world` reproduces
+each failure live with a toggle.
+
 Levels use square XZ-plane cells by default; `cellMode: "xyz"` switches
 a level to cube cells addressed `[cx, cy, cz]`, with radii measured in
 full XYZ distance and all three coordinates hashed into the cell seed
@@ -934,6 +979,21 @@ What the library promises:
   (seed, index, axis), per-cell seeds from (world seed, level, coords).
   Cook order, streaming order, cancellation, eviction, and recooks never
   change the bytes produced.
+- **Window independence, where it is promised.** The nodes that have to
+  survive being asked twice at two sizes key on point *identity* — the
+  stored position bits plus the point's `seed` attribute — instead of on
+  an array index: `filterByDensity` (probabilistic), `jitterPoints`,
+  `randomField` on the point domain, and the tiebreaks in `selfPrune` and
+  `pointNeighborhood`. Paired with a world-anchored source, that is what
+  makes a halo reproduce a neighbour exactly. (Other domains have no
+  position, so `randomField` still keys on index there; `surfaceSample`
+  does too, because it manufactures its own candidates.)
+- **One deliberate exception to the seed chain.** `pointScatterInWorld`
+  derives its lattice from its own `seed` param alone — the graph seed
+  never reaches it — so a `graph.setSeed` inside a level's `bind`, a CLI
+  `--seed` override or a node rename cannot silently de-anchor a world.
+  The trade is that two such nodes with identical params scatter
+  identical points; give each layer its own seed value.
 - **Introspectable execution.** Cook stats, cache hit/miss counts, and
   per-node progress callbacks expose what actually ran.
 

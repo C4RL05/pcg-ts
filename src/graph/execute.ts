@@ -264,6 +264,22 @@ function paramsHaveSpecField(v: unknown, acceptDerived: boolean): boolean {
 }
 
 /**
+ * The sink a resolver view's counts REALLY land in, which is not always
+ * the one it was constructed with: wrapping a view drops the new sink
+ * (see {@link gpuStatsView}), so an inner cook's counts go to the
+ * outermost cook's stats.
+ *
+ * The executor has to know which one, because since the suffix retry it
+ * both writes counters ({@link PARTIAL_FUSION}) and un-writes them (a
+ * rejection that a narrowed run supersedes). Reading or repairing the
+ * inner cook's discarded sink would leave the real one saying a chain
+ * fused nothing while `fusedNodes` said otherwise — the exact lie the
+ * retry's accounting exists to avoid, hidden one subgraph deep where no
+ * top-level test would see it.
+ */
+const viewSinks = new WeakMap<GpuFieldResolver, GpuCookStats>();
+
+/**
  * Per-cook view of a resolver: same salt and resolution, but counters
  * land in this cook's sink. The view deliberately ignores sinks passed
  * by its own callers — a nested cook (subgraph) wraps this view with its
@@ -274,6 +290,7 @@ function paramsHaveSpecField(v: unknown, acceptDerived: boolean): boolean {
  * their counters land in the outermost sink.
  */
 function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResolver {
+  const effective = viewSinks.get(base) ?? sink;
   const view: Omit<{ -readonly [K in keyof GpuFieldResolver]: GpuFieldResolver[K] }, "acceptDerivedSpecs"> = {
     cacheSalt: base.cacheSalt,
     resolveField: (field, ctx) => base.resolveField(field, ctx, sink),
@@ -292,7 +309,9 @@ function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResol
   // dropping it would leave the executor salting memo keys for the
   // authored set while the resolver resolved the wider one — GPU bytes
   // under a CPU key.
-  return resolverView(base, view);
+  const made = resolverView(base, view);
+  viewSinks.set(made, effective);
+  return made;
 }
 
 /**
@@ -302,6 +321,65 @@ function gpuStatsView(base: GpuFieldResolver, sink: GpuCookStats): GpuFieldResol
  * the resolver's own `cacheSalt`).
  */
 const RUN_KEY_VERSION = "run1";
+
+/**
+ * Fallback reason for a chain that fused only its TAIL: the resolver
+ * rejected the whole chain, {@link narrowRun} found a suffix that plans,
+ * and the members ahead of it cooked per-node.
+ *
+ * It is a reason of its own rather than a `"run-plan-failed"` because
+ * that reason's documented meaning is "every member of this run then
+ * cooks on the per-node path" (see `GpuCookStats`), which is exactly what
+ * stops being true when a suffix fuses. Counting a partial fusion there
+ * would make the one counter that reports lost fusion overstate it, and
+ * silently: the cook would look identical to a total fallback while
+ * `residentRuns` and `fusedNodes` said otherwise. Counted once per chain
+ * per cook, cold or warm, so it stays a property of the GRAPH rather than
+ * of the cache state. `fusedNodes` then says how much of the chain the
+ * retry recovered — but only on the cook that executed it: a warm cook
+ * reports this reason with `fusedNodes: 0`, because the run was served
+ * from its terminal's memo entry and did no device work, exactly as
+ * `residentRuns` documents. Read the two together, never one as a
+ * restatement of the other.
+ */
+const PARTIAL_FUSION = "run-partially-fused";
+
+/**
+ * The one rejection reason {@link narrowRun} is NOT offered for: the run
+ * was well-formed and merely did not fit the resolver's resident memory
+ * bound.
+ *
+ * Two reasons, and both are about not moving bytes nobody asked to move.
+ * Narrowing from the front does not target whatever made the run large —
+ * it just makes it shorter — so the suffix that happens to fit is
+ * arbitrary rather than chosen. And `maxResidentBytes` documents an
+ * over-budget run as one the per-node path serves WHOLE: cooks that lower
+ * it to force the fallback (the graceful-degradation path, and the way a
+ * fused chain is bisected when it misbehaves) get per-node bytes back
+ * today, and a partial fusion would quietly withdraw that — a memory knob
+ * would start deciding output bits. A modelling rejection carries no such
+ * promise, and narrowing from the front is exactly the right search for
+ * it: the members it drops are the ones that made the tail unplannable.
+ */
+const RESOURCE_REJECTION = "run-too-large";
+
+/**
+ * Reasons a `planRun` call just counted, as a delta against the snapshot
+ * taken immediately before it. Reading the sink is how the executor
+ * learns WHY a plan was rejected: the resolver contract returns a bare
+ * `null` and the reason travels only through this counter. A resolver
+ * that counts nothing reports no reason, which is not a size complaint.
+ */
+function countedSince(
+  before: Readonly<Record<string, number>>,
+  after: Readonly<Record<string, number>>,
+): string[] {
+  const names: string[] = [];
+  for (const [name, n] of Object.entries(after)) {
+    if (n > (before[name] ?? 0)) names.push(name);
+  }
+  return names;
+}
 
 /**
  * Are all Fields in the param tree ones the resolver would accept
@@ -435,6 +513,12 @@ function fusability(
 interface ResidentRun {
   readonly members: readonly string[];
   readonly terminal: string;
+  /**
+   * True when this run is a SUFFIX of a longer detected chain whose plan
+   * the resolver rejected — the members ahead of it cook per-node. Read
+   * only for accounting: see {@link PARTIAL_FUSION}.
+   */
+  readonly narrowed?: boolean;
 }
 
 /** What {@link detectResidentRuns} found: runs plus per-node opt-out reasons. */
@@ -514,6 +598,58 @@ function detectResidentRuns(
     }
   }
   return { runs: byFirst, optOuts };
+}
+
+/**
+ * The run to try after this one's plan was rejected: the same chain
+ * minus its first member, or null when no suffix is worth fusing. The
+ * caller registers it under that member's id, so it is attempted at that
+ * member's own loop position — where the members ahead of it have cooked
+ * per-node and the suffix's input geometry therefore EXISTS. A suffix
+ * cannot be planned ahead of time: planning needs the real attribute
+ * layout and point count entering its first member.
+ *
+ * SUFFIX, NEVER PREFIX, and the direction is the whole safety argument
+ * rather than an implementation convenience. A rejected plan always
+ * leaves a fusable prefix available too (the members before the
+ * rejecting one), and fusing that is the tempting half. It is also the
+ * unsafe half, and precisely the one `specKeysOnIdentity` (src/gpu/run.ts)
+ * exists to prevent: the rejection that costs the most fusion in practice
+ * is an identity-keyed member behind a P write, and fusing the prefix
+ * would put exactly the P arithmetic on the device, hand the drifted bits
+ * to the identity-keyed node one node later instead of one kernel later,
+ * and reproduce the divergence with only the boundary moved. Dropping
+ * members from the FRONT pushes the P arithmetic back onto the CPU —
+ * which is what that rule is for — and leaves a tail that planned against
+ * a CPU-exact P free to fuse.
+ *
+ * ONE MEMBER AT A TIME, REPEATEDLY, rather than one jump to the rejecting
+ * member. The executor sees `planRun`'s `null` and not the index it
+ * failed at (the resolver contract carries no index), but the repeated
+ * form is not merely what the seam allows — it is strictly more capable.
+ * Jumping to the rejecting member k answers "does [k..] plan?" once, and
+ * on the shipped 08-gpu-fields chain the answer is no twice over: wobble
+ * → jitter → xform → tint → psize narrows three times ([jitter..] and
+ * [xform..] each still write P ahead of the identity-keyed tint) before
+ * [tint, psize] plans. Scanning from the longest suffix down stops at the
+ * FIRST suffix that plans, which is the maximal fusable one by
+ * construction, and costs at most one extra plan attempt per member —
+ * planning is synchronous, device-free and allocates nothing on the
+ * device.
+ *
+ * The suffix inherits every structural property {@link detectResidentRuns}
+ * established, so nothing is re-detected: an interior member of a suffix
+ * is an interior member of the original (one consumer, no declared
+ * output), the terminal is unchanged, and the suffix's first member's
+ * sole geometry input is the member now cooking per-node ahead of it. The
+ * detector's "a lone chain node is not a run" rule is the one thing that
+ * must be re-applied, which is the length check below.
+ */
+function narrowRun(graph: Graph, run: ResidentRun): ResidentRun | null {
+  const members = run.members.slice(1);
+  if (members.length === 0) return null;
+  if (members.length === 1 && !isTerminalShape(graph.require(run.terminal).def)) return null;
+  return { members, terminal: run.terminal, narrowed: true };
 }
 
 /**
@@ -686,6 +822,9 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   const gpuStats = opts.gpu !== undefined ? createGpuCookStats() : undefined;
   const gpu =
     opts.gpu !== undefined && gpuStats !== undefined ? gpuStatsView(opts.gpu, gpuStats) : undefined;
+  // The sink this cook's GPU counters ACTUALLY reach: `gpuStats` at the
+  // top level, the outermost cook's sink inside a subgraph (see viewSinks).
+  const countSink = gpu === undefined ? undefined : (viewSinks.get(gpu) ?? gpuStats);
   // Read ONCE per cook, from the view the nodes will actually be handed,
   // and passed to every eligibility question below. A second read (or a
   // second interpretation of "absent means false") is how the memo-key
@@ -727,10 +866,13 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   const runsByFirst = detection?.runs;
   // Author-actionable opt-outs (a resident node whose `eligible`
   // returned a reason) count once per cook, whether or not a run formed
-  // around the node — the reason is about the node, not the run.
-  if (detection !== undefined && gpuStats !== undefined) {
+  // around the node — the reason is about the node, not the run. Into
+  // `countSink` like every other fallback: a nested cook's own sink is
+  // discarded, so counting these there dropped a subgraph's opt-out
+  // reasons on the floor while its run reasons reached the caller.
+  if (detection !== undefined && countSink !== undefined) {
     for (const reason of detection.optOuts.values()) {
-      gpuStats.fallbacks[reason] = (gpuStats.fallbacks[reason] ?? 0) + 1;
+      countSink.fallbacks[reason] = (countSink.fallbacks[reason] ?? 0) + 1;
     }
   }
   const handled = runsByFirst !== undefined && runsByFirst.size > 0 ? new Set<string>() : undefined;
@@ -857,10 +999,13 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
    * Cook a detected run fused: memoize on the composite run key (which
    * caches ONLY the terminal's output — interior members get no cache
    * entries while fused, so any interior change recooks the whole run),
-   * else plan + execute on the device. Returns false when fusion cannot
+   * else plan + execute on the device. Returns false when this run cannot
    * proceed this cook (plan rejected, no/empty input geometry) — the
-   * caller then cooks every member on the per-node path, which surfaces
-   * identical bytes and identical errors.
+   * caller then cooks THIS member on the per-node path, which surfaces
+   * identical bytes and identical errors. A rejected plan does not
+   * condemn the rest of the chain: a shorter run over the members behind
+   * it is registered for its own loop position (see {@link narrowRun}),
+   * so the tail still fuses when only the head was the problem.
    *
    * Stats/progress semantics (pinned by tests): every member counts in
    * `stats.cooked` when the run executes and in `stats.cached` when the
@@ -875,6 +1020,16 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
    * above, so the next cook re-executes and produces fresh handles. See
    * `NodeCache.volatile` for why owning one would be wrong.
    */
+  /**
+   * Count a chain that fused only its tail, once, at the moment the
+   * narrowed run is served (executed or memo-hit). See
+   * {@link PARTIAL_FUSION}.
+   */
+  const countPartialFusion = (run: ResidentRun): void => {
+    if (run.narrowed !== true || countSink === undefined) return;
+    countSink.fallbacks[PARTIAL_FUSION] = (countSink.fallbacks[PARTIAL_FUSION] ?? 0) + 1;
+  };
+
   const cookResidentRun = async (run: ResidentRun): Promise<boolean> => {
     const first = graph.require(run.members[0]);
     const terminal = graph.require(run.terminal);
@@ -915,6 +1070,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     const key = `${RUN_KEY_VERSION}|gpu:${gpuSalt}|i${inputSig.join(";")}|m${memberKeys.join("")}`;
 
     if (terminal.cache !== undefined && terminal.cache.key === key && terminal.cache.volatile !== true) {
+      countPartialFusion(run);
       const elapsed = performance.now() - runStart;
       for (const id of run.members) {
         const node = graph.require(id);
@@ -948,6 +1104,15 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     // present — a cook that throws on the CPU and silently truncates on
     // the GPU. Declining here keeps fusion an optimization and never a
     // change in meaning.
+    //
+    // Neither guard counts a fallback, and for a NARROWED run that rests
+    // on an invariant worth naming: a resident member neither changes the
+    // point count nor the item count, so a suffix sees the same one
+    // non-empty cloud its full chain saw when it reached planning. Break
+    // that — a future resident kind that filters points, or emits two
+    // items — and a narrowed run could bail out here after its chain's
+    // rejection was already rolled back, leaving a cook that fused
+    // nothing and reported no reason at all.
     const inputItems = inputs[first.def.inputs[0].name].filter(
       (item): item is GeometryItem => item.kind === "geometry",
     );
@@ -959,12 +1124,49 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     for (const attr of geo.attrs.point) {
       attributes[attr.name] = { type: attr.type, tupleSize: attr.tupleSize };
     }
+    // The resolver counts its rejection reason on the spot, and that
+    // count asserts the whole run fell back. Snapshot first: when a
+    // narrowed run follows, the chain has NOT fallen back yet and the
+    // count would be a lie until the last attempt settles it.
+    const fallbacksBefore = countSink === undefined ? undefined : { ...countSink.fallbacks };
     const plan = gpu!.planRun!(memberDescs, {
       attributes,
       count: geo.attrs.point.count,
       needsGeometry,
     });
-    if (plan === null) return false;
+    if (plan === null) {
+      // A run that merely did not FIT is not narrowed; see
+      // RESOURCE_REJECTION. Its reason stands, and the whole chain cooks
+      // per-node exactly as it did before.
+      const counted =
+        fallbacksBefore === undefined || countSink === undefined
+          ? []
+          : countedSince(fallbacksBefore, countSink.fallbacks);
+      if (counted.length === 1 && counted[0] === RESOURCE_REJECTION) return false;
+      const next = narrowRun(graph, run);
+      // Nothing left to narrow to: this chain fuses nothing, so the
+      // reason the resolver just counted stands, meaning exactly what it
+      // has always meant.
+      if (next === null) return false;
+      // Try the tail as its own, shorter run when the cook reaches its
+      // first member. This member cooks per-node below, as it would have
+      // under a total fallback.
+      runsByFirst!.set(next.members[0], next);
+      // Roll the reason back. Exactly one attempt per chain ever reports:
+      // the last one, which either rejects with no suffix left (the
+      // reason above) or fuses and reports PARTIAL_FUSION. `planRun` is
+      // synchronous, so nothing else can have touched the sink in
+      // between, and restoring by value (rather than decrementing a name
+      // this code guessed) keeps that true for any resolver — including
+      // one that counts nothing.
+      if (countSink !== undefined && fallbacksBefore !== undefined) {
+        for (const name of Object.keys(countSink.fallbacks)) {
+          if (!(name in fallbacksBefore)) delete countSink.fallbacks[name];
+        }
+        for (const [name, n] of Object.entries(fallbacksBefore)) countSink.fallbacks[name] = n;
+      }
+      return false;
+    }
 
     let result: ResidentRunResult;
     try {
@@ -1005,6 +1207,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     }
     terminal.cache =
       result.deviceBatches !== undefined ? { key, outputs, volatile: true } : { key, outputs };
+    countPartialFusion(run);
     const elapsed = performance.now() - runStart;
     for (const id of run.members) {
       const node = graph.require(id);
@@ -1034,8 +1237,11 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
         if (fused) {
           for (const m of run.members) handled!.add(m);
         }
-        // Not fused: fall through — this member (and, at their own loop
-        // positions, the rest of the chain) cooks on the per-node path.
+        // Not fused: fall through — this member cooks on the per-node
+        // path. The rest of the chain does the same at its own loop
+        // positions, except that a narrowed run may have been registered
+        // for one of them (see narrowRun), in which case the tail fuses
+        // there instead.
       }
       if (!fused) await cookNode(id);
 

@@ -1973,6 +1973,183 @@ async function statsSemantics(
 }
 
 // ---------------------------------------------------------------------------
+// 13. Suffix retry: chains that fuse only their tail
+
+/**
+ * A chain the planner declines as a whole and fuses from some member on,
+ * because the members ahead of that one rewrite P and the ones behind it
+ * hash P (see `specKeysOnIdentity` in run.ts). The executor cooks the
+ * head per-node and offers the tail as a shorter run.
+ *
+ * The differential this has to survive is the one every fused run
+ * claims — fused bytes identical to the per-node GPU cook — and here it
+ * is claimable for EVERY attribute, including the ones the fallback
+ * produced: the head runs the same CPU code in both legs, and the fused
+ * tail is `setAttribute` only, whose apply kernel stores a column rather
+ * than computing with it. So partial fusion moving a single byte is a
+ * failure, not a tolerance.
+ */
+interface RetryCase {
+  readonly name: string;
+  readonly count: number;
+  readonly geo: (count: number) => Geometry;
+  readonly steps: readonly ChainStep[];
+  /** Members the retry is expected to recover (step indices). */
+  readonly fused: readonly number[];
+  /** Is the whole cook bit-exact against the CPU reference too? */
+  readonly bitExact: boolean;
+}
+
+function retryCases(): RetryCase[] {
+  const tinted = (seed: number, key: string): object => ({
+    fn: "add",
+    args: [NOISE(seed), { fn: "randomField", key }],
+  });
+  return [
+    {
+      // The minimal shape of the rule: one P writer, then two members
+      // that key on point identity. Nothing here carries float slack —
+      // the transform is an identity rotation with a power-of-two scale
+      // and runs on the CPU in all three legs anyway — so this case is
+      // pinned at byte equality against the CPU as well.
+      name: "exactTail3",
+      count: 1024,
+      bitExact: true,
+      geo: makeTransformGeometry,
+      fused: [1, 2],
+      steps: [
+        {
+          def: anyDef(transformPoints),
+          params: { translate: [1, 2, 3], rotateEuler: [0, 0, 0], scale: [2, 0.5, 4] },
+        },
+        {
+          def: anyDef(setAttribute),
+          params: { name: "r", type: "f32", tupleSize: 1, value: spec({ fn: "randomField", key: "k" }) },
+        },
+        {
+          def: anyDef(setAttribute),
+          params: { name: "s", type: "f32", tupleSize: 1, value: spec({ fn: "attribute", name: "r" }) },
+        },
+      ],
+    },
+    {
+      // The shipped 08-gpu-fields chain, in its authored order, which is
+      // the chain phase 42 stopped fusing entirely. Three narrowings are
+      // needed before a suffix plans, so this is also the case that
+      // proves one jump would not have been enough.
+      name: "demoOrder5",
+      count: 4096,
+      bitExact: false,
+      geo: makeCorpusGeometry,
+      fused: [3, 4],
+      steps: [
+        {
+          def: anyDef(setAttribute),
+          params: {
+            name: "wobble",
+            type: "f32",
+            tupleSize: 3,
+            value: spec({ fn: "vec", args: [NOISE(1), NOISE(2), NOISE(3)] }),
+          },
+        },
+        {
+          def: anyDef(jitterPoints),
+          params: { amount: spec({ fn: "attribute", name: "wobble" }), seed: 7 },
+        },
+        {
+          def: anyDef(transformPoints),
+          params: { translate: [0, 0, 0], rotateEuler: [0, 14, 0], scale: [1, 0.92, 1] },
+        },
+        {
+          def: anyDef(setAttribute),
+          params: {
+            name: "tint",
+            type: "f32",
+            tupleSize: 3,
+            value: spec({ fn: "vec", args: [tinted(4, "t0"), tinted(5, "t1"), tinted(6, "t2")] }),
+          },
+        },
+        {
+          def: anyDef(setAttribute),
+          params: { name: "psize", type: "f32", tupleSize: 1, value: spec(tinted(7, "s")) },
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * Cost of the recovered fusion against the path it replaces. Cold caches
+ * every time (a fresh graph per measurement — see the perf skill: warm is
+ * not cached), the two legs interleaved so a thermal or driver drift
+ * lands on both, and reported as raw per-run milliseconds rather than a
+ * mean, because a single number hides exactly the variance this exists to
+ * show. Two untimed passes first, so pipeline compilation is not in the
+ * numbers.
+ */
+async function retryTiming(
+  ev: GpuFieldEvaluator,
+  perNode: GpuFieldResolver,
+): Promise<Record<string, unknown>> {
+  const c = retryCases()[1];
+  const count = 150_000;
+  const runs = 7;
+  const fusedMs: number[] = [];
+  const perNodeMs: number[] = [];
+  await cook(chainGraph(c.geo(count), c.steps).g, { gpu: ev });
+  await cook(chainGraph(c.geo(count), c.steps).g, { gpu: perNode });
+  let stats: Record<string, unknown> = {};
+  for (let i = 0; i < runs; i++) {
+    const fusedGraph = chainGraph(c.geo(count), c.steps).g;
+    const t0 = performance.now();
+    const fu = await cook(fusedGraph, { gpu: ev });
+    fusedMs.push(Number((performance.now() - t0).toFixed(2)));
+    stats = statsOf(fu);
+    const pnGraph = chainGraph(c.geo(count), c.steps).g;
+    const t1 = performance.now();
+    await cook(pnGraph, { gpu: perNode });
+    perNodeMs.push(Number((performance.now() - t1).toFixed(2)));
+  }
+  return { name: c.name, count, runs, fusedMs, perNodeMs, stats };
+}
+
+async function suffixRetry(
+  ev: GpuFieldEvaluator,
+  perNode: GpuFieldResolver,
+): Promise<Record<string, unknown>> {
+  const cases: Array<Record<string, unknown>> = [];
+  for (const c of retryCases()) {
+    const cpu = await cook(chainGraph(c.geo(c.count), c.steps).g);
+    const pn = await cook(chainGraph(c.geo(c.count), c.steps).g, { gpu: perNode });
+    const fu = await cook(chainGraph(c.geo(c.count), c.steps).g, { gpu: ev });
+    // A second fused cook over a fresh graph: which suffix the retry
+    // settles on is a planner decision, so it must reproduce exactly.
+    const again = await cook(chainGraph(c.geo(c.count), c.steps).g, { gpu: ev });
+    const cpuSnap = snapshot(cpu);
+    const pnSnap = snapshot(pn);
+    const fuSnap = snapshot(fu);
+    cases.push({
+      name: c.name,
+      count: c.count,
+      members: c.steps.length,
+      expectedFused: c.fused.length,
+      bitExact: c.bitExact,
+      stats: statsOf(fu),
+      perNodeStats: statsOf(pn),
+      namesCpu: [...cpuSnap.keys()],
+      namesPerNode: [...pnSnap.keys()],
+      namesFused: [...fuSnap.keys()],
+      equalsPerNode: allAttrsEqual(pnSnap, fuSnap),
+      equalsCpu: allAttrsEqual(cpuSnap, fuSnap),
+      repeatable: allAttrsEqual(fuSnap, snapshot(again)),
+      repeatStats: statsOf(again),
+      attrs: compareAttrs(cpuSnap, pnSnap, fuSnap),
+    });
+  }
+  return { cases, timing: await retryTiming(ev, perNode) };
+}
+
+// ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   const gpu = create([]);
@@ -2011,6 +2188,7 @@ async function main(): Promise<void> {
   out.stats = await statsSemantics(structural, adapter.info);
   out.constantEdits = await constantEdits(structural, adapter.info);
   out.constantEdges = await constantEdges(evaluator);
+  out.suffixRetry = await suffixRetry(evaluator, perNode);
 
   process.stdout.write(JSON.stringify(out));
 }

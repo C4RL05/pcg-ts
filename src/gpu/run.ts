@@ -335,6 +335,89 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  * acceptable where it perturbs a magnitude and never where it decides a
  * key, so an identity-keyed step after a device P write declines the run
  * rather than spend the tolerance it cannot honour.
+ *
+ * The amplification is measured, not feared. Nudging every P component of
+ * a scattered cloud by exactly ONE ulp and re-evaluating the 08-gpu-fields
+ * tint field moves it by up to 2.1e-1 (mean 2.7e-2), on 99.5% of
+ * components — about 2.2e6 range-ULP. Zero the one `randomField` term in
+ * that same field and the identical nudge moves it by 7.8e-7, or 8.2
+ * range-ULP, inside the 24-ULP noise budget. That six-order-of-magnitude
+ * gap between "reads position" and "keys on position" is the whole reason
+ * this predicate exists.
+ *
+ * Stated as an invariant, because "identity-keyed chains cannot be
+ * device-resident" is the wrong lesson and the tempting one: a run may
+ * REWRITE P, or it may KEY ON IDENTITY, but not in that order within one
+ * run. Identity-keyed members are perfectly fusable — `[tint, psize]` of
+ * the 08-gpu-fields chain plans as a two-member run on its own — and a
+ * chain that hits this rule usually fuses in full once the identity-keyed
+ * members are ordered AHEAD of the P writers (measured: the demo's
+ * wobble → tint → psize → jitter → xform ordering plans all five). That
+ * reordering changes what the graph MEANS, so it is an authoring choice,
+ * never something the planner may do on the author's behalf.
+ *
+ * Two properties of this rule are load-bearing. Both cost real fusion —
+ * the 08-gpu-fields chain (setAttribute → jitterPoints → transformPoints
+ * → setAttribute(tint) → setAttribute(psize), where tint and psize carry
+ * `randomField`) fused as one five-member run before identity keying and
+ * plans as NO run at all after it (the executor recovers its last two
+ * members; see the note on the executor's suffix retry below) — so both
+ * will look like something to optimize. They are not.
+ *
+ * WHY THE WHOLE RUN, NOT JUST THE MEMBER. `PlanFail` rejects the entire
+ * run (see the catch at the end of `planResidentRun`); the planner never
+ * truncates in front of the offending member and never hands back a
+ * fusable PREFIX. Declining only this member — or truncating the run in
+ * front of it — would leave the P-WRITING members fused. The device would
+ * still compute P (`transformPoints` builds its quaternion from euler
+ * degrees with WGSL `sin`/`cos`, a tolerance-bounded op family and not a
+ * bit-exact one), materialize the drifted bits, and the identity-keyed
+ * member would hash them one node later instead of one kernel later: the
+ * same unrelated random number, the same divergence from the CPU
+ * reference, with only the boundary moved. Rejecting the run is what
+ * pushes the P ARITHMETIC back onto the CPU, and that is the whole
+ * benefit — a prefix-truncating planner would keep none of it.
+ *
+ * What the EXECUTOR does with the rejection is the mirror image, and it
+ * is safe for the same reason this one is not: it re-offers the chain
+ * minus its FIRST member (`narrowRun` in src/graph/execute.ts), repeating
+ * until a suffix plans. Dropping from the front is what returns the P
+ * arithmetic to the CPU; every surviving suffix is planned here from
+ * scratch, against the layout and the CPU-produced bytes entering its own
+ * first member, so this rule decides it exactly as it decides any other
+ * run. The 08-gpu-fields chain narrows three times and fuses [tint,
+ * psize]. A run that merely did not FIT is not narrowed — see
+ * RESOURCE_REJECTION there for why a memory bound must not decide bits.
+ *
+ * WHY IT IS NOT NARROWER. "Decline only when the member actually reads
+ * the P the run rewrote" is this same rule: `randomField` always reads P
+ * (`collectAttrNames` in compile.ts lists P and `seed` for it
+ * unconditionally), so no admitted spec keys on identity without reading
+ * the resident P. "Decline only when the rewrite was not provably
+ * bit-exact" would need a proof, per member and per constant value, that
+ * the device's f32 expression rounds identically to the CPU node's f64
+ * arithmetic stored once to f32. That proof does not exist for euler
+ * rotation at all, and for the exact cases (identity rotation,
+ * power-of-two scale) it would lapse silently the first time either side
+ * reorders its arithmetic. Narrowing needs that proof mechanized against
+ * both implementations, not asserted at the call site.
+ *
+ * Scope, so it is not mistaken for a guarantee it does not give. This
+ * guards the P half of the identity WITHIN one run, and nothing wider.
+ * Three holes are known and open:
+ *   - the `seed` half is not checked at all (a fused `setAttribute`
+ *     writing the `seed` attribute is admitted today);
+ *   - a run BOUNDARY — a tap, a declared output — still hands a
+ *     device-written P to an identity-keyed node cooking behind it;
+ *   - the PER-FIELD path reaches P too. `jitterPoints` moves P by an
+ *     `amount` that may itself have been resolved on the device, and
+ *     measured on this adapter the 08-gpu-fields `wobble` field
+ *     (perlin + remap) is NOT bit-exact — 17.8 range-ULP — so a
+ *     CPU-applied jitter over a device-resolved amount already lands P on
+ *     different bits than a pure-CPU cook, with the amplification above.
+ * So this rule shrinks the CPU/GPU divergence on identity-keyed values;
+ * it does not close it. Closing it needs a rule one level up, about which
+ * values are allowed to reach a P write, not about run membership.
  */
 function specKeysOnIdentity(v: unknown): boolean {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;

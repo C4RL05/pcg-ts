@@ -96,16 +96,30 @@ const b = await cook(deserializeGraph(json), { budgetMs: 0 });
 // compare the outputs byte-for-byte; any difference is a bug
 ```
 
-Run across all 34 corpus graphs at phase 40: zero differed. The corpus
-suite itself cooks every example under `CORPUS_BUDGET_MS = 8`
+Run across the whole corpus at phase 40 (34 graphs then): zero differed.
+The corpus suite itself cooks every example under `CORPUS_BUDGET_MS = 8`
 (`src/docs/corpus.ts`) for the same reason — exercising the partitioned
 path on real graphs is free and would otherwise go untested.
 
-Know its limit. A cook budget partitions **time**; every node still sees
-the whole dataset. What partitions the **data** is a `World` cell: each
-cell cooks over its own slice and can see no other cell. A graph that
-passes this check can still seam badly in a World — which is the next
-section.
+**Know its limit, because it is narrower than it looks.** There are two
+partitionings and this check covers only one of them.
+
+- **A cook budget partitions *time*.** The yield happens *between* nodes,
+  so every node body is atomic under it and still sees its whole dataset.
+  Nothing can seam, because nothing was cut. That is why this check is
+  cheap and why passing it proves so little about a World.
+- **A `World` cell partitions *data*.** Each cell cooks over its own slice
+  and can see no other cell — there is no sibling accessor, and neighbours
+  are LRU-evictable, so there is nothing to ask even if you wanted to.
+
+Only the second needs halos and identity-keyed randomness, and only the
+second can produce a discontinuity that no test of a single graph will
+show you. The mechanism — anchor the source, query a wider box, clip to
+ownership with `filterByBounds` — is in `docs/authoring.md`, "Content that
+must NOT vary per cell", and the doctrine for verifying it is the
+`determinism` skill's "Anchoring" section. What follows is the cost side
+of the same story: the shortcuts that look like optimizations and are
+really cell-local measurements.
 
 ## The optimization determinism forbids
 
@@ -132,10 +146,30 @@ that bite:
   distance holds within a cell and not across a boundary, and a point near
   an edge sees a truncated neighbourhood.
 
-Index-keyed randomness is *safe* — `randomField`, `filterByDensity` mode
-`"probabilistic"`, the per-point `seed` — because it hashes an index
-instead of measuring a population. The `determinism` skill covers why that
-distinction is the whole design.
+That last pair is the one worth understanding properly, because a halo
+fixes it only when the operation's **reach is bounded**, and "bounded" is a
+stronger condition than "local". `pointNeighborhood` is bounded: it reads
+everything within `radius`, so a halo of `radius` reproduces the
+whole-region answer exactly. A *greedy* prune is not: this point survives
+because that neighbour did not, which happened because ITS neighbour did,
+and the chain has no bound — no halo width covers it, and the failure shows
+up as seam pairs closer than the distance the node exists to enforce.
+`selfPrune` therefore carries a `mode`; the local-maximum rule decides each
+point from its immediate neighbours alone and is the halo-exact one, at the
+cost of keeping strictly fewer points. `docs/nodes.md` has the rule, the
+required halo width, and the measured seam numbers.
+
+The three cases above it are worse still: they measure the whole population,
+so no reach bound exists to widen to.
+
+Hashed randomness is *safe* — `randomField`, `filterByDensity` mode
+`"probabilistic"`, `jitterPoints`, the per-point `seed` — because it hashes
+a key instead of measuring a population. On the point domain that key is
+the point's **identity** (its position bits plus its `seed` attribute), not
+its array index, which is what lets a point survive being renumbered by an
+upstream filter or derived from a different window. It costs nothing extra
+at runtime and it is the whole reason a halo reproduces anything. The
+`determinism` skill covers why that distinction is the design.
 
 When you genuinely need a global quantity: compute it once on the coarse or
 unbounded level and push it down. A level's `bind` can feed the parent's
