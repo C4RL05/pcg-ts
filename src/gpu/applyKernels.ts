@@ -511,31 +511,43 @@ export function makeTransformPointsApply(
 }
 
 // ---------------------------------------------------------------------------
-// jitterPoints: P[i][k] += (hashFloat(hashCombine(seed, i, k)) * 2 - 1)
-// * amount[i][k]. Roles: "amount" (when a column), "P". The seed is the
-// node's jitter-combined seed; CPU `hashCombine(seed, i, k)` is exactly
-// the library's `pcg_hash3` (both chain hashSeed(3) through the same
-// murmur rounds) — bit-exact, pinned by the device parity suite.
+// jitterPoints: P[i][k] += (hashFloat(hashCombine(seed, identity, k)) * 2
+// - 1) * amount[i][k]. Roles: "amount" (when a column), "seed" (when the
+// cloud carries the attribute), "P". The seed is the node's
+// jitter-combined seed; CPU `hashCombine(seed, ident, k)` is exactly the
+// library's `pcg_hash3` (both chain hashSeed(3) through the same murmur
+// rounds) — bit-exact, pinned by the device parity suite.
+//
+// The identity is `pcg_hash4` over the f32 bit patterns of the INCOMING
+// P.xyz and the `seed` attribute, matching `src/data/identity.ts`. Both
+// halves are read into locals before the first store, because the kernel
+// then overwrites the very positions the identity is built from.
 
-export function makeJitterPointsApply(amount: ApplyParamRef): ApplyKernel {
+export function makeJitterPointsApply(amount: ApplyParamRef, hasSeedAttr: boolean): ApplyKernel {
   const bindings = new BindingList();
   const aVar =
     amount.kind === "column"
       ? bindings.add("amount", "read", amount.type, `amount column ${paramKey(amount)}`)
       : "";
+  const sVar = hasSeedAttr
+    ? bindings.add("seed", "read", "u32", "attribute seed: u32 tupleSize 1")
+    : "";
   const pVar = bindings.add("P", "read_write", "f32", "attribute P: f32 tupleSize 3");
   const lines: string[] = [];
+  lines.push(
+    `  let ident = pcg_hash4(bitcast<u32>(${pVar}[i * 3u]), bitcast<u32>(${pVar}[i * 3u + 1u]), bitcast<u32>(${pVar}[i * 3u + 2u]), ${hasSeedAttr ? `${sVar}[i]` : "0u"});`,
+  );
   for (let k = 0; k < 3; k++) {
     const idx = k === 0 ? "i * 3u" : `i * 3u + ${k}u`;
     lines.push(
-      `  ${pVar}[${idx}] = ${pVar}[${idx}] + (pcg_hash_float(pcg_hash3(params.seed, i, ${k}u)) * 2f - 1f) * ${paramReadF32(aVar, amount, k)};`,
+      `  ${pVar}[${idx}] = ${pVar}[${idx}] + (pcg_hash_float(pcg_hash3(params.seed, ident, ${k}u)) * 2f - 1f) * ${paramReadF32(aVar, amount, k)};`,
     );
   }
   return assemble(
-    `jitterPoints|a=${paramKey(amount)}`,
+    `jitterPoints|a=${paramKey(amount)}|s=${hasSeedAttr ? 1 : 0}`,
     constSlotsOf([amount]),
     bindings.items,
-    libClosure(["pcg_hash3", "pcg_hash_float"]),
+    libClosure(["pcg_hash3", "pcg_hash4", "pcg_hash_float"]),
     lines.join("\n"),
   );
 }

@@ -4,6 +4,7 @@
  * caches inputs by reference).
  */
 import { Geometry, type AttrDefault, createPointCloud } from "../data/index.js";
+import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
@@ -121,7 +122,7 @@ export const jitterPoints = standardNode<JitterPointsParams>({
   type: "jitterPoints",
   category: "point op",
   description:
-    "Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible. amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).",
+    "Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point IDENTITY, axis). Identity is the point's incoming position bits together with its `seed` point attribute, not its array index, so the offset belongs to the point: reorder the cloud, drop points upstream, or derive the same region inside another cell's halo, and every point still moves exactly as far. Two points that share a position AND a seed move identically and stay coincident (the `seed` attribute defaults to 0, so a cloud with no per-point seeds jitters on position alone). amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -142,8 +143,10 @@ export const jitterPoints = standardNode<JitterPointsParams>({
   // moves — exactly the CPU path's context.
   gpu: "fields",
   // Fusable into device-resident runs; the apply kernel reproduces the
-  // hashFloat(hashCombine(seed, i, k)) offset chain bit-for-bit (the
-  // hash is exact in f32), with the final multiply-add in f32.
+  // hashFloat(hashCombine(seed, identity, k)) offset chain bit-for-bit
+  // (the hash is exact in f32, and the identity is a u32 hash of the
+  // incoming position bits and the seed attribute), with the final
+  // multiply-add in f32.
   resident: { kind: "jitterPoints" },
   async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "jitterPoints"));
@@ -153,9 +156,15 @@ export const jitterPoints = standardNode<JitterPointsParams>({
     const pd = P.data;
     const ps = P.tupleSize;
     const n = geo.pointCount;
+    // Identities come from the INCOMING positions, before anything moves —
+    // the same context `amount` was resolved in. Keying on `i` instead
+    // would tie the offset to the slot rather than to the point, so a
+    // reordered cloud would land somewhere else entirely.
+    const ident = pointIdentities(geo, "jitterPoints");
     for (let i = 0; i < n; i++) {
       for (let k = 0; k < 3; k++) {
-        pd[i * ps + k] += (hashFloat(hashCombine(seed, i, k)) * 2 - 1) * readComp(amount, i, k);
+        pd[i * ps + k] +=
+          (hashFloat(hashCombine(seed, ident[i], k)) * 2 - 1) * readComp(amount, i, k);
       }
     }
     return { out: [makeGeometryItem(geo)] };

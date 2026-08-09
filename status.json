@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 15:45",
-  "currentPhase": 41,
+  "updated": "2026-08-09 16:11",
+  "currentPhase": 42,
   "phases": [
     {
       "id": "plan",
@@ -221,7 +221,7 @@
     {
       "id": 42,
       "title": "World-anchored sources, cross-partition foundations",
-      "state": "pending"
+      "state": "active"
     },
     {
       "id": 43,

@@ -660,6 +660,11 @@ export class World {
   ): Promise<void> {
     const def = level.def;
     const idx = level.index;
+    // Cell-invariant anchors, handed to bind alongside the per-cell seed:
+    // the world seed as configured, and the level seed the per-cell seed
+    // is itself derived from. See CellContextBase.worldSeed.
+    const worldSeed = this.worldSeed;
+    const levelSeed = hashCombine(worldSeed, idx);
     let ctx: CellContext;
     if (def.cellSize === "unbounded") {
       ctx = {
@@ -669,7 +674,11 @@ export class World {
         coord: [0, 0],
         min: [-Infinity, -Infinity],
         max: [Infinity, Infinity],
-        seed: hashCombine(this.worldSeed, idx),
+        worldSeed,
+        levelSeed,
+        // One global cell has no coordinates to fold: the per-cell seed IS
+        // the level seed, and the two are documented as equal here.
+        seed: levelSeed,
         ...(parent !== undefined ? { parent } : {}),
       };
     } else if (level.mode === "xyz") {
@@ -682,7 +691,9 @@ export class World {
         coord: c,
         min: [c[0] * s, c[1] * s, c[2] * s],
         max: [(c[0] + 1) * s, (c[1] + 1) * s, (c[2] + 1) * s],
-        seed: hashCombine(this.worldSeed, idx, c[0], c[1], c[2]),
+        worldSeed,
+        levelSeed,
+        seed: hashCombine(worldSeed, idx, c[0], c[1], c[2]),
         ...(parent !== undefined ? { parent } : {}),
       };
     } else {
@@ -694,7 +705,9 @@ export class World {
         coord: [coord[0], coord[1]],
         min: [coord[0] * s, coord[1] * s],
         max: [(coord[0] + 1) * s, (coord[1] + 1) * s],
-        seed: hashCombine(this.worldSeed, idx, coord[0], coord[1]),
+        worldSeed,
+        levelSeed,
+        seed: hashCombine(worldSeed, idx, coord[0], coord[1]),
         ...(parent !== undefined ? { parent } : {}),
       };
     }

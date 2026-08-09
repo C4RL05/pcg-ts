@@ -367,8 +367,14 @@ function allApplyKernels(): ApplyKernel[] {
     }
   }
 
-  // jitterPoints: one kernel per amount shape.
-  for (const shape of shapes) kernels.push(makeJitterPointsApply(assignSlots([shape])[0]));
+  // jitterPoints: one kernel per amount shape, times the two identity
+  // layouts (a cloud that carries the standard `seed` attribute, and one
+  // that does not and keys on position alone).
+  for (const shape of shapes) {
+    for (const hasSeedAttr of [false, true]) {
+      kernels.push(makeJitterPointsApply(assignSlots([shape])[0], hasSeedAttr));
+    }
+  }
 
   // orientAlongVector: every axis x every direction shape. The up hint
   // rides a uniform slot (after the direction's, when that is constant
@@ -601,6 +607,9 @@ function chainCases(): ChainCase[] {
       steps: [randomD, { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 3 } }],
     },
     {
+      // Four hash-exact members. Only ONE of them may be a jitter: the
+      // offset is keyed on the point's position BITS, so a second jitter
+      // would key on a P the device rewrote and the planner declines it.
       name: "hash4",
       bitExact: true,
       count: 1500,
@@ -613,8 +622,8 @@ function chainCases(): ChainCase[] {
           params: { name: "n", type: "u32", tupleSize: 1, value: spec({ fn: "index" }) },
         },
         {
-          def: anyDef(jitterPoints),
-          params: { amount: [0.0625, 0.03125, 0.015625], seed: 11 },
+          def: anyDef(setAttribute),
+          params: { name: "m", type: "f32", tupleSize: 1, value: spec({ fn: "attribute", name: "n" }) },
         },
       ],
     },
@@ -643,8 +652,14 @@ function chainCases(): ChainCase[] {
       bitExact: false,
       count: 3000,
       geo: makeTransformGeometry,
+      // jitterPoints leads the float members: it keys on the position
+      // BITS, so it may only read a P the device has not rewritten.
       steps: [
         { def: anyDef(setAttribute), params: { name: "d", value: spec(NOISE(3)) } },
+        {
+          def: anyDef(jitterPoints),
+          params: { amount: spec({ fn: "attribute", name: "d" }), seed: 5 },
+        },
         { def: anyDef(orientAlongVector), params: { direction: spec({ fn: "position" }) } },
         {
           def: anyDef(transformPoints),
@@ -653,10 +668,6 @@ function chainCases(): ChainCase[] {
             rotateEuler: [15, 25, 35],
             scale: [1.25, 0.75, 1.5],
           },
-        },
-        {
-          def: anyDef(jitterPoints),
-          params: { amount: spec({ fn: "attribute", name: "d" }), seed: 5 },
         },
       ],
     },
@@ -791,12 +802,14 @@ function chainCases(): ChainCase[] {
       bitExact: true,
       count: 800,
       geo: (n) => makeXformGeometry(n, { rot: "quat" }),
+      // jitter first: it keys on the position bits, so it may not follow
+      // the transform that rewrites them.
       steps: [
+        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125] } },
         {
           def: anyDef(transformPoints),
           params: { translate: [0.5, 0.25, 0.125], rotateEuler: [0, 0, 0], scale: [1, 1, 1] },
         },
-        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125] } },
       ],
     },
     {
@@ -806,11 +819,11 @@ function chainCases(): ChainCase[] {
       count: 800,
       geo: (n) => makeXformGeometry(n, { scale: true }),
       steps: [
+        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125] } },
         {
           def: anyDef(transformPoints),
           params: { translate: [0.5, 0.25, 0.125], rotateEuler: [0, 0, 0], scale: [2, 0.5, 4] },
         },
-        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125] } },
       ],
     },
     {
@@ -842,7 +855,13 @@ function chainCases(): ChainCase[] {
           def: anyDef(setAttribute),
           params: { name: "P", type: "f32", tupleSize: 3, value: spec({ fn: "position" }) },
         },
-        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 9 } },
+        // Reads the new epoch of P and writes it back. Not a jitter: an
+        // identity-keyed member declines a P a fused member rewrote, and
+        // scale-by-2 with an identity rotation is exact in f32 anyway.
+        {
+          def: anyDef(transformPoints),
+          params: { translate: [0, 0, 0], rotateEuler: [0, 0, 0], scale: [2, 2, 2] },
+        },
       ],
     },
     {
@@ -869,7 +888,13 @@ function chainCases(): ChainCase[] {
             value: spec({ fn: "attribute", name: "density" }),
           },
         },
-        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 9 } },
+        // Reads and writes P again, so a slot the planner failed to
+        // rebind after freshSlot() shows up in these bytes. Not a jitter:
+        // identity-keyed members decline a rewritten P.
+        {
+          def: anyDef(transformPoints),
+          params: { translate: [0, 0, 0], rotateEuler: [0, 0, 0], scale: [2, 2, 2] },
+        },
       ],
     },
     {
@@ -950,19 +975,26 @@ function chainCases(): ChainCase[] {
       bitExact: true,
       count: 640,
       geo: makeCorpusGeometry,
-      steps: Array.from({ length: 8 }, (_, i) =>
-        i % 2 === 0
-          ? {
-              def: anyDef(setAttribute),
-              params: {
-                name: `s${i}`,
-                type: "f32",
-                tupleSize: 1,
-                value: spec({ fn: "randomField", key: `k${i}` }),
-              },
-            }
-          : { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: i } },
-      ),
+      // Exactly ONE identity-keyed member, and it leads. jitterPoints and
+      // randomField both hash the position BITS, so neither may follow a
+      // fused member that rewrote P — which the jitter here does. The
+      // seven stores that follow scale density by a power of two, exact
+      // in f32 on both sides.
+      steps: [
+        { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 1 } },
+        ...Array.from({ length: 7 }, (_, i) => ({
+          def: anyDef(setAttribute),
+          params: {
+            name: `s${i}`,
+            type: "f32",
+            tupleSize: 1,
+            value: spec({
+              fn: "mul",
+              args: [{ fn: "attribute", name: "density" }, 2 ** -(i + 1)],
+            }),
+          },
+        })),
+      ],
     },
     {
       // orientAlongVector CREATES rot mid-run; the transformPoints that
@@ -1297,15 +1329,20 @@ async function jitterSemantics(ev: GpuFieldEvaluator): Promise<Record<string, un
   const f = snapshot(fused).get("P")!;
 
   // Recompute the documented chain independently: the jitter member's
-  // seed is hashCombine(deriveNodeSeed(graphSeed, id), params.seed) and
-  // each axis draws hashFloat(hashCombine(seed, i, k)).
+  // seed is hashCombine(deriveNodeSeed(graphSeed, id), params.seed), each
+  // point's IDENTITY is hashCombine over the u32 bit patterns of its
+  // incoming P.xyz plus its `seed` attribute (absent on this fixture, so
+  // 0), and each axis draws hashFloat(hashCombine(seed, identity, k)).
   const jitterSeed = hashCombine(deriveNodeSeed(built.g.seed, built.ids[1]), extraSeed);
   const expected = new Float32Array(count * 3);
-  const src = input.attrs.point.require("P").data;
+  const src = input.attrs.point.require("P").data as Float32Array;
+  const bits = new Uint32Array(src.buffer, src.byteOffset, src.length);
   for (let i = 0; i < count; i++) {
+    const ident = hashCombine(bits[i * 3], bits[i * 3 + 1], bits[i * 3 + 2], 0);
     for (let k = 0; k < 3; k++) {
-      expected[i * 3 + k] =
-        Math.fround(src[i * 3 + k] + (hashFloat(hashCombine(jitterSeed, i, k)) * 2 - 1) * amount[k]);
+      expected[i * 3 + k] = Math.fround(
+        src[i * 3 + k] + (hashFloat(hashCombine(jitterSeed, ident, k)) * 2 - 1) * amount[k],
+      );
     }
   }
   let mismatches = 0;
@@ -1324,8 +1361,11 @@ async function jitterSemantics(ev: GpuFieldEvaluator): Promise<Record<string, un
 
 /** A mixed chain touching all four fusable kinds, over a rot/scale cloud. */
 function mixedChain(): ChainStep[] {
+  // jitterPoints is second, not third: it keys on the position BITS, so
+  // it may only read a P no fused member has rewritten yet.
   return [
     { def: anyDef(setAttribute), params: { name: "d", value: spec(NOISE(9)) } },
+    { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 7 } },
     {
       def: anyDef(transformPoints),
       params: {
@@ -1334,7 +1374,6 @@ function mixedChain(): ChainStep[] {
         scale: [1.25, 0.75, 1.5],
       },
     },
-    { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 7 } },
     { def: anyDef(orientAlongVector), params: { direction: spec({ fn: "position" }), axis: "+z" } },
   ];
 }
@@ -1803,21 +1842,24 @@ async function constantEdits(
     const g = new Graph(7);
     const din = g.add(dataInput, { items: [makeGeometryItem(makeCorpusGeometry(1024))] }, "din");
     const sa = g.add(setAttribute, { name: "d", value: spec({ fn: "randomField", key: "c" }) }, "sa");
+    // jitterPoints precedes transformPoints: both write P, and the jitter
+    // keys on the position BITS, so it may only read a P no fused member
+    // has rewritten.
+    const jit = g.add(jitterPoints, { amount: [0.25, 0.5, 0.125], seed: 3 }, "jit");
     const tr = g.add(
       transformPoints,
       { translate: [...translate], rotateEuler: [0, 90, 0], scale: [2, 2, 2] },
       "tr",
     );
-    const jit = g.add(jitterPoints, { amount: [0.25, 0.5, 0.125], seed: 3 }, "jit");
     const or = g.add(
       orientAlongVector,
       { direction: spec({ fn: "position" }), axis: "+z", up: [...up] },
       "or",
     );
     g.connect(din, "out", sa, "in");
-    g.connect(sa, "out", tr, "in");
-    g.connect(tr, "out", jit, "in");
-    g.connect(jit, "out", or, "in");
+    g.connect(sa, "out", jit, "in");
+    g.connect(jit, "out", tr, "in");
+    g.connect(tr, "out", or, "in");
     g.output(or, "out", "out");
     return { g, tr, or };
   };

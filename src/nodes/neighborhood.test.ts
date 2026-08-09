@@ -16,7 +16,13 @@ import {
   type PointNeighborhoodParams,
   type SampleNearestPointParams,
 } from "./index.js";
-import { firstGeo, runNode, snapshotGeometry } from "./testSupport.js";
+import {
+  firstGeo,
+  permutePoints,
+  runNode,
+  shuffledOrder,
+  snapshotGeometry,
+} from "./testSupport.js";
 
 function cloudAt(positions: readonly (readonly number[])[]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);
@@ -244,6 +250,52 @@ describe("pointNeighborhood", () => {
       averageOutAttr: "nbrP",
     });
     expect(snapshotGeometry(capped)).toEqual(snapshotGeometry(uncapped));
+  });
+
+  describe("permutation equivariance", () => {
+    /** A cloud with distinct positions AND distinct per-point seeds. */
+    function seededCloud(count: number, seed: number, extent = 4): ReturnType<typeof cloudAt> {
+      const geo = cloudAt(randomPositions(count, seed, extent));
+      const seeds = geo.attrs.point.require("seed");
+      for (let i = 0; i < count; i++) seeds.set(i, hashCombine(0x5eed, i));
+      return geo;
+    }
+
+    it("the capped neighbor SET does not depend on point order", async () => {
+      // A lattice is nothing but distance ties, so the cap's tiebreak
+      // decides every answer; keyed on index it moves under a shuffle.
+      const lattice: number[][] = [];
+      for (let x = 0; x < 7; x++) for (let z = 0; z < 7; z++) lattice.push([x, 0, z]);
+      const cloud = cloudAt(lattice);
+      const order = shuffledOrder(lattice.length, 5);
+      const run = (geo: ReturnType<typeof cloudAt>) =>
+        runNode(
+          pointNeighborhood,
+          { radius: 2.5, maxCount: 3, averageAttr: "P", averageOutAttr: "nbrP" },
+          { in: [makeGeometryItem(geo)] },
+        );
+      const straight = firstGeo((await run(cloud)).out);
+      const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+      expect(snapshotGeometry(shuffled)).toEqual(snapshotGeometry(permutePoints(straight, order)));
+    });
+
+    it("the average does not depend on point order, even when addition is not associative", async () => {
+      // Values chosen so summation order is observable: 1e16 and -1e16
+      // cancel only if they meet before the small terms are lost.
+      const cloud = seededCloud(80, 44);
+      const v = cloud.attrs.point.add("v", "f32", 1, 0);
+      for (let i = 0; i < 80; i++) v.set(i, i % 3 === 0 ? 1e16 : i % 3 === 1 ? -1e16 : 1);
+      const order = shuffledOrder(80, 17);
+      const run = (geo: ReturnType<typeof cloudAt>) =>
+        runNode(
+          pointNeighborhood,
+          { radius: 2, averageAttr: "v", averageOutAttr: "vAvg" },
+          { in: [makeGeometryItem(geo)] },
+        );
+      const straight = firstGeo((await run(cloud)).out);
+      const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+      expect(snapshotGeometry(shuffled)).toEqual(snapshotGeometry(permutePoints(straight, order)));
+    });
   });
 
   it("radius 0 gives every point an empty neighborhood", async () => {

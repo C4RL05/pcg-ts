@@ -16,12 +16,28 @@ import {
   transformPoints,
 } from "./index.js";
 import { rotateVec } from "./util.js";
-import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+import {
+  firstGeo,
+  permutePoints,
+  positionsOf,
+  runNode,
+  shuffledOrder,
+  snapshotGeometry,
+} from "./testSupport.js";
+import { hashCombine, hashFloat } from "../random/index.js";
 
 function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);
   const P = geo.attrs.point.require("P");
   positions.forEach((p, i) => P.setTuple(i, p));
+  return geo;
+}
+
+/** `cloudAt` plus a genuine per-point `seed` — half of a point's identity. */
+function seededCloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
+  const geo = cloudAt(positions);
+  const seed = geo.attrs.point.require("seed");
+  for (let i = 0; i < positions.length; i++) seed.set(i, hashCombine(0x5eed, i));
   return geo;
 }
 
@@ -126,6 +142,38 @@ describe("jitterPoints", () => {
       expect(moved[i][1]).toBe(base[i][1]);
       expect(Math.abs(moved[i][2] - base[i][2])).toBeLessThanOrEqual(0.4);
     }
+  });
+
+  it("is permutation-equivariant: the offset travels with the point", async () => {
+    // The offset is keyed on the point's IDENTITY (its pre-jitter position
+    // bits plus its seed), so reordering the input reorders the output and
+    // moves nothing. Against index keying every point lands somewhere else.
+    const cloud = seededCloudAt(
+      Array.from({ length: 120 }, (_, i) => [
+        hashFloat(hashCombine(31, i, 0)) * 8,
+        hashFloat(hashCombine(31, i, 1)) * 8,
+        hashFloat(hashCombine(31, i, 2)) * 8,
+      ]),
+    );
+    const order = shuffledOrder(120, 6);
+    const run = (geo: ReturnType<typeof createPointCloud>) =>
+      runNode(jitterPoints, { amount: [0.4, 0.4, 0.4] }, { in: [makeGeometryItem(geo)] }, 2);
+    const straight = firstGeo((await run(cloud)).out);
+    const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+    // Jitter actually moved things — an amount of 0 would pass trivially.
+    expect(positionsOf(straight)).not.toEqual(positionsOf(cloud));
+    expect(snapshotGeometry(shuffled)).toEqual(snapshotGeometry(permutePoints(straight, order)));
+  });
+
+  it("re-rolls when only the seed attribute changes", async () => {
+    // Position bits are not the whole identity: two clouds at the same
+    // places with different per-point seeds jitter differently.
+    const positions = Array.from({ length: 32 }, (_, i) => [i * 0.5, 0, 0]);
+    const run = (geo: ReturnType<typeof createPointCloud>) =>
+      runNode(jitterPoints, { amount: [0.4, 0.4, 0.4] }, { in: [makeGeometryItem(geo)] }, 2);
+    const seeded = firstGeo((await run(seededCloudAt(positions))).out);
+    const unseeded = firstGeo((await run(cloudAt(positions))).out);
+    expect(positionsOf(seeded)).not.toEqual(positionsOf(unseeded));
   });
 });
 

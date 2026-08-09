@@ -1697,7 +1697,7 @@ describe("the magnitudes the descriptions promise", () => {
           boundsMax: [50, 0, 50],
         })
       ).pointCount;
-    const quoted = [373, 414, 435, 442];
+    const quoted = [374, 416, 436, 444];
     expect([await n(4000), await n(16000), await n(64000), await n(200000)]).toEqual(quoted);
     // The ceiling: ~0.7 * area / minDistance^2 = ~437 here, and the
     // default `count` reaches 85% of it.

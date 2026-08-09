@@ -8,20 +8,23 @@
  * indices, `nearest` breaks distance ties toward the lowest index, and a
  * point with a non-finite coordinate can never satisfy a distance
  * predicate (so it is nobody's neighbor and has no neighbors itself).
- * Accumulation here always runs in ascending point index order for the
- * same reason: float addition is order-dependent, so the byte-exact
- * result must not depend on which internal path a query took.
+ *
+ * Where those contracts hand back a POINT INDEX to order by,
+ * `pointNeighborhood` orders by point IDENTITY instead (position bits
+ * plus the `seed` attribute — see `src/data/identity.ts`). Float addition
+ * is order-dependent and a cap has to break distance ties somehow, so
+ * both are determinism surfaces; keyed on index they are also surfaces
+ * that move when the cloud is merely reordered, which nothing upstream is
+ * supposed to be able to do. `sampleNearestPoint` still leans on the
+ * grid's own lowest-index tie rule: the tie there is between points of a
+ * SECOND cloud and lives in `src/spatial`, not here.
  */
 import type { AttrDefault, Attribute, Geometry } from "../data/index.js";
+import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid, type PositionView } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
 import { requireGeometry, requireReportSlot } from "./util.js";
-
-/** Numeric ascending comparator (Array#sort is lexicographic by default). */
-function ascending(a: number, b: number): number {
-  return a - b;
-}
 
 /**
  * The `P` attribute as a {@link PositionView}, with the two failures a
@@ -107,7 +110,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
   type: "pointNeighborhood",
   category: "attribute",
   description:
-    "Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging \"P\" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed — countAttr and averageOutAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it (a same-shape column is reused and reset).",
+    "Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging \"P\" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Both places where this node has to pick an order — which neighbors a maxCount cap keeps, and the order their values are summed — are keyed on point IDENTITY (position bits plus the `seed` point attribute), never on the array index, so reordering the input cannot move a count, a kept set, or a single bit of an average. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed — countAttr and averageOutAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it (a same-shape column is reused and reset).",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -123,7 +126,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       default: 0,
       min: 0,
       description:
-        "Cap on how many neighbors each point keeps: the nearest maxCount of them, ties resolved toward the lower point index. 0 (the default) keeps every neighbor within the radius. Use it to bound the cost in dense clouds.",
+        "Cap on how many neighbors each point keeps: the nearest maxCount of them, distance ties resolved toward the lower point IDENTITY (a hash of the neighbor's position bits and its `seed` attribute) so the kept set is a property of the points and not of the order they arrived in. 0 (the default) keeps every neighbor within the radius. Use it to bound the cost in dense clouds.",
     },
     includeSelf: {
       type: "bool",
@@ -235,6 +238,17 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       // Scratch reused across every point: the hot loop allocates nothing.
       const nbr: number[] = [];
       const d2 = maxCount > 0 ? new Float64Array(n) : undefined;
+      // Point IDENTITY (position bits + the `seed` attribute) replaces the
+      // point index in BOTH orderings below — which neighbours a cap keeps,
+      // and the order their values are added up. Index is a name the array
+      // gives a point, not a name the point has: reorder the cloud and a
+      // cap keeps a different set and a sum lands on different bits. Only
+      // built when one of those orderings actually runs; a count-only cook
+      // does not care what order it counted in.
+      const ident =
+        maxCount > 0 || means !== undefined ? pointIdentities(geo, "pointNeighborhood") : undefined;
+      const byIdentity =
+        ident === undefined ? undefined : (a: number, b: number) => ident[a] - ident[b] || a - b;
       for (let i = 0; i < n; i++) {
         if ((i & 1023) === 0) checkCancelled();
         const o = i * ps;
@@ -250,7 +264,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
           }
           nbr.length = w;
         }
-        if (d2 !== undefined && nbr.length > maxCount) {
+        if (d2 !== undefined && ident !== undefined && nbr.length > maxCount) {
           for (let r = 0; r < nbr.length; r++) {
             const j = nbr[r];
             const oj = j * ps;
@@ -259,13 +273,15 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
             const dz = pd[oj + 2] - z;
             d2[j] = dx * dx + dy * dy + dz * dz;
           }
-          nbr.sort((a, b) => d2[a] - d2[b] || a - b);
+          nbr.sort((a, b) => d2[a] - d2[b] || ident[a] - ident[b] || a - b);
           nbr.length = maxCount;
-          // Back to ascending index before accumulating: float addition is
-          // order-dependent, so the average must not depend on whether the
-          // cap bound.
-          nbr.sort(ascending);
         }
+        // Accumulate in identity order, capped or not. Float addition is
+        // order-dependent, so the average has to be summed in an order the
+        // POINTS fix — otherwise the same neighbourhood lands on different
+        // bits depending on which slots its members happen to occupy, and
+        // whether the cap bound.
+        if (byIdentity !== undefined && means !== undefined) nbr.sort(byIdentity);
         const k = nbr.length;
         if (counts) counts[i] = k;
         if (means && src) {

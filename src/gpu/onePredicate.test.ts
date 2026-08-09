@@ -365,10 +365,16 @@ describe("the fusion gate and the run planner agree, for every resident kind", (
       for (const accept of [false, true]) {
         it(`${res.type} / ${pop.name} field / acceptDerivedSpecs=${accept}`, async () => {
           // A lone node is never a run, so the fixture is a two-member
-          // chain: a plain-param transform, then the node under test.
+          // chain: a plain-param head, then the node under test. The head
+          // is a setAttribute rather than a transformPoints because it
+          // must not write P — an identity-keyed member (jitterPoints, or
+          // any param carrying randomField) declines a P the device has
+          // already rewritten, and that rule is about run POSITION, not
+          // about spec eligibility, which is what this matrix cross-checks
+          // (it has its own pin in runPlan.test.ts).
           const g = new Graph(7);
           const din = cloudInput(g);
-          const head = g.add(transformPoints, { translate: [1, 0, 0] });
+          const head = g.add(setAttribute, { name: "hd", type: "f32", tupleSize: 1, value: 0.5 });
           const params: Record<string, unknown> = { [res.param]: pop.make() };
           if (res.type === "setAttribute") params.name = "d";
           const tail = g.add(res.def, params as never);
@@ -385,9 +391,9 @@ describe("the fusion gate and the run planner agree, for every resident kind", (
           const members: ResidentMemberDesc[] = [
             {
               id: head.id,
-              type: "transformPoints",
-              kind: "transformPoints",
-              params: { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] },
+              type: "setAttribute",
+              kind: "setAttribute",
+              params: g.require(head.id).params,
               seed: 1,
             },
             {

@@ -1,3 +1,4 @@
+import { pointIdentities } from "../data/identity.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { attachSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
@@ -150,9 +151,24 @@ export function fraction(): Field<1> {
 }
 
 /**
- * Per-element deterministic random in [0, 1), derived from
- * `hashCombine(ctx.seed, key, elementIndex)`. Same seed and key always
+ * Per-element deterministic random in [0, 1). Same seed and key always
  * reproduce the same values; distinct keys give independent streams.
+ *
+ * On the POINT domain the draw is keyed on each point's IDENTITY —
+ * `hashCombine(ctx.seed, key, identity)`, where identity hashes the bit
+ * patterns of the point's stored position with its `seed` attribute — so
+ * the value belongs to the POINT and not to the slot it happens to
+ * occupy. Reordering, filtering upstream, or re-deriving a point inside
+ * a neighbouring cell's halo hands it the same number. Two consequences
+ * an author has to know: a cloud whose points share a position AND a
+ * seed gets one value repeated (a fresh `createPointCloud` is exactly
+ * that — every P at the origin, every seed 0, so this is constant over
+ * it), and moving points changes their randomness, so draw before you
+ * jitter if you want the value to survive the move.
+ *
+ * On the vertex, primitive and detail domains there is no position and
+ * no seed to key on, so the element index is used — it is the only name
+ * those elements have.
  */
 export function randomField(key: number | string = 0): Field<1> {
   const keyHash = typeof key === "string" ? hashString(key) : key >>> 0;
@@ -160,7 +176,12 @@ export function randomField(key: number | string = 0): Field<1> {
     const n = elementCount(ctx);
     const seed = ctx.seed;
     const data = new Float32Array(n);
-    for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, i));
+    if (ctx.domain === "point") {
+      const ident = pointIdentities(ctx.geo, `randomField(${JSON.stringify(key)})`);
+      for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, ident[i]));
+    } else {
+      for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, i));
+    }
     return { data, tupleSize: 1 };
   });
   // The spec carries the ORIGINAL key, not the hash. Emitting `keyHash`

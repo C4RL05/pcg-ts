@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
+import { pointIdentities } from "../data/identity.js";
 import { attribute, constant, position, randomField } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
+import { hashCombine, hashFloat } from "../random/index.js";
 import {
   filterByAttribute,
   filterByBounds,
@@ -10,13 +12,42 @@ import {
   projectToPlane,
   selfPrune,
 } from "./index.js";
-import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+import {
+  firstGeo,
+  permutePoints,
+  pointRecords,
+  positionsOf,
+  runNode,
+  shuffledOrder,
+  snapshotGeometry,
+} from "./testSupport.js";
 
 function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);
   const P = geo.attrs.point.require("P");
   positions.forEach((p, i) => P.setTuple(i, p));
   return geo;
+}
+
+/**
+ * `cloudAt` plus a genuine per-point `seed`, which is half of a point's
+ * identity: a cloud straight out of createPointCloud has every seed at 0
+ * and rests its identity on position alone.
+ */
+function seededCloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
+  const geo = cloudAt(positions);
+  const seed = geo.attrs.point.require("seed");
+  for (let i = 0; i < positions.length; i++) seed.set(i, hashCombine(0x5eed, i));
+  return geo;
+}
+
+/** A deterministic scatter that owes nothing to the library's own sources. */
+function scatter(count: number, seed: number, extent = 8): number[][] {
+  return Array.from({ length: count }, (_, i) => [
+    hashFloat(hashCombine(seed, i, 0)) * extent,
+    hashFloat(hashCombine(seed, i, 1)) * extent,
+    hashFloat(hashCombine(seed, i, 2)) * extent,
+  ]);
 }
 
 /** A cloud plus one scalar f32 point attribute per named value list. */
@@ -71,6 +102,52 @@ describe("filterByDensity", () => {
     expect(firstGeo((await run()).out).pointCount).toBe(0);
     cloud.attrs.point.require("density").fill(1, 0, 1000);
     expect(firstGeo((await run()).out).pointCount).toBe(1000);
+  });
+
+  it("probabilistic mode is permutation-equivariant", async () => {
+    // The acceptance draw is keyed on each point's IDENTITY, so shuffling
+    // the input can only shuffle the output: the same points survive.
+    const cloud = seededCloudAt(scatter(400, 21));
+    cloud.attrs.point.require("density").fill(0.4, 0, 400);
+    const order = shuffledOrder(400, 9);
+    const run = (geo: ReturnType<typeof createPointCloud>) =>
+      runNode(filterByDensity, { mode: "probabilistic" }, { in: [makeGeometryItem(geo)] }, 5);
+    const straight = firstGeo((await run(cloud)).out);
+    const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+    // The filter really filtered — an all-survive run proves nothing.
+    expect(straight.pointCount).toBeGreaterThan(100);
+    expect(straight.pointCount).toBeLessThan(300);
+    expect(pointRecords(shuffled).sort()).toEqual(pointRecords(straight).sort());
+  });
+
+  it("probabilistic mode reads BOTH halves of a point's identity", async () => {
+    // Neither half can be dropped: seeds alone default to 0 on hand-built
+    // clouds, and positions alone collide on coincident points. Each half
+    // is shown to matter by moving ONLY it and watching the survivor set
+    // change — which is also what makes this fail against index keying,
+    // where neither half is read at all.
+    const positions = scatter(200, 3);
+    const ordered = (geo: ReturnType<typeof createPointCloud>) => {
+      const ord = geo.attrs.point.add("ord", "f32", 1, 0);
+      for (let i = 0; i < geo.pointCount; i++) ord.set(i, i);
+      geo.attrs.point.require("density").fill(0.5, 0, geo.pointCount);
+      return geo;
+    };
+    const survivors = async (geo: ReturnType<typeof createPointCloud>): Promise<number[]> => {
+      const out = firstGeo(
+        (await runNode(filterByDensity, { mode: "probabilistic" }, { in: [makeGeometryItem(geo)] }, 5)).out,
+      );
+      const ord = out.attrs.point.require("ord");
+      return Array.from({ length: out.pointCount }, (_, i) => ord.get(i, 0));
+    };
+    const seeded = await survivors(ordered(seededCloudAt(positions)));
+    const unseeded = await survivors(ordered(cloudAt(positions)));
+    const moved = await survivors(
+      ordered(seededCloudAt(positions.map(([x, y, z]) => [x + 0.5, y, z]))),
+    );
+    expect(seeded.length).toBeGreaterThan(50);
+    expect(seeded).not.toEqual(unseeded); // the seed attribute is read
+    expect(seeded).not.toEqual(moved); // the position bits are read
   });
 
   it("errors actionably when density is missing", async () => {
@@ -179,15 +256,13 @@ describe("filterByAttribute", () => {
 });
 
 describe("selfPrune", () => {
-  it("keeps points pairwise >= minDistance, greedily by index", async () => {
+  it("keeps points pairwise >= minDistance", async () => {
     const grid = firstGeo((await runNode(pointGrid, { countX: 10, countY: 1, countZ: 10 })).out);
     const geo = firstGeo(
       (await runNode(selfPrune, { minDistance: 1.5 }, { in: [makeGeometryItem(grid)] })).out,
     );
     expect(geo.pointCount).toBeGreaterThan(0);
     expect(geo.pointCount).toBeLessThan(100);
-    // The first point always survives (greedy in index order).
-    expect(positionsOf(geo)[0]).toEqual(positionsOf(grid)[0]);
     const kept = positionsOf(geo);
     for (let i = 0; i < kept.length; i++) {
       for (let j = i + 1; j < kept.length; j++) {
@@ -213,18 +288,85 @@ describe("selfPrune", () => {
     expect(geo.pointCount).toBe(3);
   });
 
+  describe("permutation equivariance", () => {
+    // The visit order is priority DESCENDING then IDENTITY ascending, so
+    // reordering the input can only reorder the output. Against the old
+    // index-greedy every one of these picks a different survivor set.
+    const cloud = seededCloudAt(scatter(300, 77, 6));
+
+    it("holds at a uniform minDistance", async () => {
+      const order = shuffledOrder(300, 4);
+      const run = (geo: ReturnType<typeof createPointCloud>) =>
+        runNode(selfPrune, { minDistance: 1 }, { in: [makeGeometryItem(geo)] }, 3);
+      const straight = firstGeo((await run(cloud)).out);
+      const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+      expect(straight.pointCount).toBeGreaterThan(10);
+      expect(straight.pointCount).toBeLessThan(300); // it really pruned
+      expect(pointRecords(shuffled).sort()).toEqual(pointRecords(straight).sort());
+    });
+
+    it("holds with per-point radii and a random priority", async () => {
+      const order = shuffledOrder(300, 12);
+      const run = (geo: ReturnType<typeof createPointCloud>) =>
+        runNode(
+          selfPrune,
+          { minDistance: constant(1.2), priority: randomField("thin") } as never,
+          { in: [makeGeometryItem(geo)] },
+          3,
+        );
+      const straight = firstGeo((await run(cloud)).out);
+      const shuffled = firstGeo((await run(permutePoints(cloud, order))).out);
+      expect(straight.pointCount).toBeGreaterThan(10);
+      expect(straight.pointCount).toBeLessThan(300);
+      expect(pointRecords(shuffled).sort()).toEqual(pointRecords(straight).sort());
+    });
+
+    it("still emits survivors in ascending INPUT index order", async () => {
+      // Identity decides WHO survives; it never decides the output order.
+      const geo = firstGeo(
+        (await runNode(selfPrune, { minDistance: 1 }, { in: [makeGeometryItem(cloud)] }, 3)).out,
+      );
+      const seen = positionsOf(cloud).map((p) => p.join(","));
+      const kept = positionsOf(geo).map((p) => seen.indexOf(p.join(",")));
+      expect(kept).toEqual([...kept].sort((a, b) => a - b));
+    });
+  });
+
+  /**
+   * The visit order the node uses when every point ties on priority:
+   * identity ascending, indistinguishable points (same position AND same
+   * seed) falling back to the index. Stated here so the reference greedy
+   * below can restate the CONTRACT — priority, then identity — without
+   * restating the implementation.
+   */
+  function visitOrder(pts: number[][]): number[] {
+    const ident = pointIdentities(cloudAt(pts), "test");
+    return Array.from({ length: pts.length }, (_, i) => i).sort(
+      (a, b) => ident[a] - ident[b] || a - b,
+    );
+  }
+
+  /** The single point of `pts` an identity-ordered greedy considers first. */
+  function firstVisited(pts: number[][]): number[] {
+    return pts[visitOrder(pts)[0]];
+  }
+
   /**
    * The published contract, pinned against its own definition: the grid is
    * an accelerator, so its answers must equal the O(n^2) greedy exactly —
    * including where distances are NaN. Positions are f32-rounded up front so
-   * the reference sees the same numbers the geometry stores.
+   * the reference sees the same numbers the geometry stores. Points are
+   * CONSIDERED in identity order and RETURNED in input order, which is the
+   * node's split between who survives and what order they come out in.
    */
   function greedy(pts: number[][], minDistance: number): number[][] {
     const limit = minDistance * minDistance;
-    const kept: number[][] = [];
-    for (const p of pts) {
+    const kept: number[] = [];
+    for (const i of visitOrder(pts)) {
+      const p = pts[i];
       let ok = true;
-      for (const q of kept) {
+      for (const j of kept) {
+        const q = pts[j];
         const dx = q[0] - p[0];
         const dy = q[1] - p[1];
         const dz = q[2] - p[2];
@@ -233,9 +375,9 @@ describe("selfPrune", () => {
           break;
         }
       }
-      if (ok) kept.push(p);
+      if (ok) kept.push(i);
     }
-    return kept;
+    return kept.sort((a, b) => a - b).map((i) => pts[i]);
   }
 
   async function prune(pts: number[][], minDistance: number): Promise<number[][]> {
@@ -267,18 +409,21 @@ describe("selfPrune", () => {
   it("keeps the exact survivors of a 6x6 lattice at minDistance 1.5", async () => {
     const lattice: number[][] = [];
     for (let x = 0; x < 6; x++) for (let z = 0; z < 6; z++) lattice.push([x, 0, z]);
-    // Every other lattice site on both axes: 1.5 rejects the spacing-1 and
-    // the diagonal spacing-sqrt(2) neighbours, and accepts spacing 2.
+    // 1.5 rejects the spacing-1 and the diagonal spacing-sqrt(2)
+    // neighbours and accepts spacing 2, so 9 of the 36 sites survive. WHICH
+    // nine is decided by identity order, not by array order: the answer is
+    // a scattered maximal set rather than the every-other-site pattern an
+    // index-greedy produces by always starting at the array's front corner.
     expect(await prune(lattice, 1.5)).toEqual([
-      [0, 0, 0],
-      [0, 0, 2],
-      [0, 0, 4],
+      [0, 0, 1],
+      [0, 0, 3],
+      [0, 0, 5],
       [2, 0, 0],
-      [2, 0, 2],
-      [2, 0, 4],
-      [4, 0, 0],
-      [4, 0, 2],
-      [4, 0, 4],
+      [2, 0, 5],
+      [3, 0, 3],
+      [4, 0, 1],
+      [4, 0, 5],
+      [5, 0, 3],
     ]);
   });
 
@@ -341,9 +486,12 @@ describe("selfPrune", () => {
       expect(await won([0, 1])).toEqual([[0.5, 0, 0]]);
       // Polarity, stated the other way round: a LOWER value never wins.
       expect(await won([1, 0])).toEqual([[0, 0, 0]]);
-      // Equal priority falls back to the shipped rule: the lower index.
-      expect(await won([0, 0])).toEqual([[0, 0, 0]]);
-      expect(await won([4, 4])).toEqual([[0, 0, 0]]);
+      // Equal priority falls back to the tiebreak, which is IDENTITY —
+      // and for this pair identity does NOT agree with the index, so the
+      // two rules are separated rather than assumed apart.
+      expect(firstVisited(pair)).not.toEqual(pair[0]);
+      expect(await won([0, 0])).toEqual([firstVisited(pair)]);
+      expect(await won([4, 4])).toEqual([firstVisited(pair)]);
     });
 
     it("ranks NaN lowest", async () => {
@@ -351,11 +499,11 @@ describe("selfPrune", () => {
         survivors(cloudWith(pair, { rank }), { minDistance: 1, priority: attribute("rank") });
       expect(await won([NaN, 0])).toEqual([[0.5, 0, 0]]);
       expect(await won([0, NaN])).toEqual([[0, 0, 0]]);
-      // Two unrankable points still break their tie by index.
-      expect(await won([NaN, NaN])).toEqual([[0, 0, 0]]);
+      // Two unrankable points still break their tie by identity.
+      expect(await won([NaN, NaN])).toEqual([firstVisited(pair)]);
     });
 
-    it("reproduces the shipped greedy exactly when every point ties", async () => {
+    it("is the same as no priority at all when every point ties", async () => {
       const grid = firstGeo((await runNode(pointGrid, { countX: 10, countY: 1, countZ: 10 })).out);
       const item = makeGeometryItem(grid);
       const base = firstGeo(
@@ -422,20 +570,21 @@ describe("selfPrune", () => {
 
     it("conflicts a pair on the LARGER of the two radii", async () => {
       // 2 apart: inside the big claim of 3, outside the small claim of 0.5.
-      // A rule reading only the candidate's own radius would keep both.
+      // A rule reading only the candidate's own radius would keep both, so
+      // what is under test is that exactly ONE comes back. Which one is the
+      // tiebreak's business, and the tiebreak is identity — the same point
+      // wins whichever slot each occupies, which the swapped case pins.
+      const pts = [
+        [0, 0, 0],
+        [2, 0, 0],
+      ];
       expect(
-        await survivors(
-          cloudWith(
-            [
-              [0, 0, 0],
-              [2, 0, 0],
-            ],
-            { crown: [3, 0.5] },
-          ),
-          { minDistance: attribute("crown") },
-        ),
-      ).toEqual([[0, 0, 0]]);
-      // Symmetric: swapping the two swaps the survivor, and never keeps both.
+        await survivors(cloudWith(pts, { crown: [3, 0.5] }), {
+          minDistance: attribute("crown"),
+        }),
+      ).toEqual([firstVisited(pts)]);
+      // Swapped slots, swapped radii: the same POSITION survives, because
+      // identity does not know where in the array a point sits.
       expect(
         await survivors(
           cloudWith(
@@ -447,7 +596,7 @@ describe("selfPrune", () => {
           ),
           { minDistance: attribute("crown") },
         ),
-      ).toEqual([[2, 0, 0]]);
+      ).toEqual([firstVisited(pts)]);
     });
 
     it("does not add the two radii up", async () => {
@@ -471,24 +620,23 @@ describe("selfPrune", () => {
     });
 
     it("treats 0, negative and NaN radii as claiming nothing, but still prunes them", async () => {
-      expect(
-        await survivors(
-          cloudWith(
-            [
-              [0, 0, 0],
-              [2, 0, 0],
-              [8, 0, 0],
-              [8.25, 0, 0],
-            ],
-            { crown: [3, NaN, -1, 0] },
-          ),
-          { minDistance: attribute("crown") },
-        ),
-      ).toEqual([
+      const pts = [
         [0, 0, 0],
+        [2, 0, 0],
         [8, 0, 0],
         [8.25, 0, 0],
-      ]);
+      ];
+      // 8 and 8.25 claim nothing and are a quarter apart, so neither can
+      // prune the other and BOTH survive — that is the "claiming nothing"
+      // half. The 0/2 pair is inside the claim of 3, so exactly one of
+      // them comes back, whichever identity considers first — that is the
+      // "still prunes them" half.
+      const contested = visitOrder(pts).find((i) => i === 0 || i === 1) as number;
+      expect(
+        await survivors(cloudWith(pts, { crown: [3, NaN, -1, 0] }), {
+          minDistance: attribute("crown"),
+        }),
+      ).toEqual([pts[contested], [8, 0, 0], [8.25, 0, 0]]);
     });
 
     it("lets priority beat radius", async () => {

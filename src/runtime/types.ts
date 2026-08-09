@@ -47,6 +47,34 @@ export interface CellContextBase {
   /** Name of the level. */
   readonly levelName: string;
   /**
+   * The World's own seed (u32, `WorldOptions.seed`) — identical for every
+   * cell of every level, and the coarsest cell-INVARIANT anchor a bind can
+   * hand a node.
+   *
+   * {@link CellContextBase.seed} is per-cell by construction, so a node
+   * whose content must not move when the query window moves (a
+   * world-anchored source such as `pointScatterInWorld`, or anything
+   * deriving a halo from world coordinates) cannot be seeded from it: the
+   * same world position would hash differently depending on which cell
+   * asked. Bind such a node's seed param from `worldSeed` or
+   * {@link CellContextBase.levelSeed} and pass only the query WINDOW per
+   * cell.
+   */
+  readonly worldSeed: number;
+  /**
+   * Per-level seed (u32): `hashCombine(worldSeed, levelIndex)` — identical
+   * for every cell of this level, and the value
+   * {@link CellContextBase.seed} is derived from before the coordinates
+   * are folded in.
+   *
+   * Use it where {@link CellContextBase.worldSeed} would work but two
+   * levels should not agree: two levels running the same world-anchored
+   * graph get unrelated content from `levelSeed` and identical content
+   * from `worldSeed`. For an unbounded level (one global cell) `levelSeed`
+   * and `seed` are the same number — there are no coordinates to fold.
+   */
+  readonly levelSeed: number;
+  /**
    * Per-cell seed (u32), hash-combined from the world seed, the level
    * index, and every cell coordinate:
    * `hashCombine(worldSeed, levelIndex, cx, cz)` for an `"xz"` cell,
@@ -54,6 +82,11 @@ export interface CellContextBase {
    * cell, and `hashCombine(worldSeed, levelIndex)` for an unbounded
    * level. Bind must wire it into every stochastic node (e.g. its `seed`
    * param) so different cells produce different, reproducible content.
+   *
+   * The exception is a world-anchored node, whose whole point is that its
+   * content does NOT vary with the cell asking — seed those from
+   * {@link CellContextBase.worldSeed} or
+   * {@link CellContextBase.levelSeed} instead.
    */
   readonly seed: number;
   /**
@@ -188,6 +221,18 @@ export interface LevelDef {
    * then depends only on (world seed, level index, coord, graph
    * structure+params, parent cell content) — never on cook order,
    * viewpoint path, or eviction history.
+   *
+   * World-anchored nodes invert that rule and bind must respect it: a
+   * source whose positions are a function of world coordinates (see
+   * `pointScatterInWorld`) is seamless across cells only while its seed is
+   * the SAME in every cell, so bind passes it `ctx.worldSeed` or
+   * `ctx.levelSeed` and varies only its query window (`boundsMin` /
+   * `boundsMax` from `ctx.min` / `ctx.max`). Per-cell `ctx.seed` — and the
+   * whole-graph reseed below, which reaches every node — silently turns
+   * such a node back into a per-cell scatter: content stays deterministic,
+   * but a widened query no longer reproduces a neighbour's points, so
+   * halos and seams stop agreeing. A level mixing both kinds should seed
+   * per-cell nodes explicitly rather than reseed the graph.
    *
    * Reseeding the whole graph per cell is also sanctioned:
    * `graph.setSeed(hashCombine(ctx.seed, salt))` inside bind

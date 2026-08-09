@@ -18,7 +18,19 @@ export interface PinDef {
 /** What execute returns: one collection per declared output pin. */
 export type NodeOutputs = Record<string, DataCollection>;
 
-/** Arguments passed to a node's execute. */
+/**
+ * Arguments passed to a node's execute.
+ *
+ * There is deliberately no runtime context here — no cell coordinate, no
+ * level, no world. A node's outputs must be a pure function of
+ * `(params, seed, inputs)`, which is exactly what the executor memoizes
+ * on; a node that could read which cell was asking would produce
+ * different bytes for the same key, and a world-anchored source would
+ * become unreproducible across query windows. Runtime facts reach a node
+ * only as params, written by `LevelDef.bind` from the cell context —
+ * including the cell-invariant anchors (`ctx.worldSeed`, `ctx.levelSeed`)
+ * a world-anchored node needs.
+ */
 export interface NodeExecuteArgs<P> {
   /**
    * One collection per input pin (empty when unconnected; multi pins

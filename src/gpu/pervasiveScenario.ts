@@ -101,12 +101,23 @@ function unitSquare(): Geometry {
   return createTriangleMesh([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], [0, 1, 2, 0, 2, 3]);
 }
 
-/** Points-only geometry with one dense f32 `density` column. */
+/**
+ * Points-only geometry with a dense f32 `density` column and the `P` the
+ * workhorse spec needs: `randomField` keys on point IDENTITY, which is
+ * the position bits hashed with the `seed` attribute, so a cloud with no
+ * positions has no identity to key on. `seed` is deliberately left out —
+ * a missing seed column contributes 0 on both the CPU and the device, so
+ * this fixture also covers that half of the identity path.
+ */
 function leanDensityGeometry(count: number): Geometry {
   const geo = new Geometry();
+  const P = geo.attrs.point.add("P", "f32", 3);
   const density = geo.attrs.point.add("density", "f32", 1);
   geo.attrs.point.resize(count);
-  for (let i = 0; i < count; i++) density.data[i] = hashFloat(hashCombine(909, i));
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 3; k++) P.data[i * 3 + k] = (hashFloat(hashCombine(808, i, k)) - 0.5) * 16;
+    density.data[i] = hashFloat(hashCombine(909, i));
+  }
   return geo;
 }
 

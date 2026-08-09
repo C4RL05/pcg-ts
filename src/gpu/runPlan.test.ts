@@ -361,17 +361,72 @@ describe("resident run planning: only AUTHORED specs are fusable", () => {
   it("rejects the whole run, not just the member, when one member's field is derived", () => {
     // A run is planned or it is not: a derived-spec param anywhere in the
     // chain must not leave a partially fused plan behind.
+    // jitterPoints leads, because it keys on point identity and so may
+    // only read a P the device has not rewritten yet (see below).
     const members = [
-      member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
       member("jitterPoints", { amount: mul(position(), 0.25), seed: 3 }, "jit"),
+      member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
     ];
     expect(rejection(members, 32)).toBe("run-plan-failed");
     // Authored, the same two members plan together.
     const ok = [
-      members[0],
       member("jitterPoints", { amount: field({ fn: "mul", args: [{ fn: "position" }, 0.25] }), seed: 3 }, "jit"),
+      members[1],
     ];
     expect(plan(ok, 32).members).toHaveLength(2);
+  });
+
+  it("declines an identity-keyed member once the device has rewritten P", () => {
+    // jitterPoints and randomField hash the stored BIT PATTERN of P, so a
+    // device-resident P that fused float math already moved is a different
+    // KEY, not a value an ulp off. The tolerance the resident path spends
+    // on magnitudes cannot be spent here, so the run is declined instead.
+    const xform = member(
+      "transformPoints",
+      { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] },
+      "xf",
+    );
+    expect(rejection([xform, member("jitterPoints", { amount: [1, 1, 1], seed: 3 }, "jit")], 32)).toBe(
+      "run-plan-failed",
+    );
+    // Two jitters in a row: the first writes P, so the second declines.
+    expect(
+      rejection(
+        [
+          member("jitterPoints", { amount: [1, 1, 1], seed: 0 }, "j"),
+          member("jitterPoints", { amount: [2, 2, 2], seed: 1 }, "j2"),
+        ],
+        32,
+      ),
+    ).toBe("run-plan-failed");
+    // A randomField PARAM after a P write declines for the same reason,
+    // while the same chain the other way round plans.
+    expect(
+      rejection(
+        [
+          xform,
+          member(
+            "setAttribute",
+            { name: "r", type: "f32", tupleSize: 1, value: field({ fn: "randomField", key: "k" }) },
+            "sa",
+          ),
+        ],
+        32,
+      ),
+    ).toBe("run-plan-failed");
+    expect(
+      plan(
+        [
+          member(
+            "setAttribute",
+            { name: "r", type: "f32", tupleSize: 1, value: field({ fn: "randomField", key: "k" }) },
+            "sa",
+          ),
+          xform,
+        ],
+        32,
+      ).members,
+    ).toHaveLength(2);
   });
 });
 
@@ -493,10 +548,12 @@ describe("resident run planning: spawnInstances terminal", () => {
   it("a run with nothing else to produce always materializes", () => {
     // needsGeometry false but no instances output: the plan must still
     // read back, so ordinary plans are untouched by the new flag.
+    // jitterPoints then transformPoints, not two jitters: an
+    // identity-keyed member declines once the device has rewritten P.
     const p = plan(
       [
         member("jitterPoints", { amount: [1, 1, 1], seed: 0 }, "j"),
-        member("jitterPoints", { amount: [2, 2, 2], seed: 1 }, "j2"),
+        member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
       ],
       64,
       POINT_LAYOUT,

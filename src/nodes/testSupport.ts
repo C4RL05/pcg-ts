@@ -4,6 +4,7 @@
  */
 import { DOMAINS, type Geometry } from "../data/index.js";
 import type { DataCollection, NodeDef } from "../graph/index.js";
+import { gatherPoints } from "./util.js";
 
 /** Run a node def directly with merged defaults and stubbed cook plumbing. */
 export async function runNode<P>(
@@ -75,6 +76,64 @@ export function positionsOf(geo: Geometry): number[][] {
   const out: number[][] = [];
   for (let i = 0; i < geo.pointCount; i++) {
     out.push([P.get(i, 0), P.get(i, 1), P.get(i, 2)]);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Permutation equivariance
+//
+// A node keyed on point IDENTITY must not care what order its points
+// arrive in: reordering the input reorders the output and changes nothing
+// else. These three helpers are what the permutation suites are written
+// against — a shuffle, the permuted cloud, and a per-point record that
+// makes "the same points came back" a multiset comparison rather than a
+// count comparison.
+
+/**
+ * A deterministic shuffle of `0..n-1` (Fisher-Yates driven by an LCG —
+ * there is no `Math.random` anywhere in this library, tests included).
+ */
+export function shuffledOrder(n: number, seed = 1): Uint32Array {
+  const order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  let state = (seed >>> 0) || 1;
+  for (let i = n - 1; i > 0; i--) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const j = state % (i + 1);
+    const t = order[i];
+    order[i] = order[j];
+    order[j] = t;
+  }
+  return order;
+}
+
+/** `geo`'s points gathered in `order` — the same cloud, reordered. */
+export function permutePoints(geo: Geometry, order: ArrayLike<number>): Geometry {
+  return gatherPoints(geo, order);
+}
+
+/**
+ * One string per point holding every point attribute's value, so two
+ * clouds hold the same points exactly when these arrays are equal as
+ * multisets (sort both before comparing). Topology is not included:
+ * every node these suites cover emits a point cloud.
+ */
+export function pointRecords(geo: Geometry): string[] {
+  const set = geo.attrs.point;
+  const names = set.names().sort();
+  const out: string[] = [];
+  for (let i = 0; i < set.count; i++) {
+    const parts: string[] = [];
+    for (const name of names) {
+      const attr = set.require(name);
+      const vals: (number | string)[] = [];
+      for (let k = 0; k < attr.tupleSize; k++) {
+        vals.push(attr.type === "string" ? attr.getString(i, k) : attr.get(i, k));
+      }
+      parts.push(`${name}=${vals.join(",")}`);
+    }
+    out.push(parts.join("|"));
   }
   return out;
 }

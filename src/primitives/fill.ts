@@ -35,7 +35,7 @@ export function registerFillPrimitives(): void {
         name: "count",
         targets: [{ node: "scatter", param: "count" }],
         description:
-          "Candidates scattered before pruning. Over-scatter, and expect to over-scatter HARD: the survivor count climbs slowly toward saturation instead of reaching it, so this knob still moves the result long after it looks like it should not. Saturation is about 0.7 * area / minDistance^2 — roughly 440 points in the default 50x50 box at minDistance 2 — and it takes on the order of 150 candidates per surviving point to get within a few percent of it. Measured in that box at minDistance 2: 4000 candidates give 373 (85% of saturation), 16000 give 414, 64000 give 435, 200000 give 442. Each 4x costs the next ~5%. Nothing here ever produces MORE than saturation, so a target count above it is unreachable at any `count`.",
+          "Candidates scattered before pruning. Over-scatter, and expect to over-scatter HARD: the survivor count climbs slowly toward saturation instead of reaching it, so this knob still moves the result long after it looks like it should not. Saturation is about 0.7 * area / minDistance^2 — roughly 440 points in the default 50x50 box at minDistance 2 — and it takes on the order of 150 candidates per surviving point to get within a few percent of it. Measured in that box at minDistance 2: 4000 candidates give 374 (84% of saturation), 16000 give 416, 64000 give 436, 200000 give 444. Each 4x costs the next ~5%. Nothing here ever produces MORE than saturation, so a target count above it is unreachable at any `count`.",
         min: 0,
       },
       {

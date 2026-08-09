@@ -326,6 +326,31 @@ const REJECT: PlanRejection = { reason: "run-plan-failed" };
 const ORIENT_AXES = ["+x", "-x", "+y", "-y", "+z", "-z"] as const;
 type OrientAxis = (typeof ORIENT_AXES)[number];
 
+/**
+ * Does this spec key on POINT IDENTITY? `randomField` hashes the stored
+ * BIT PATTERN of P (see `src/data/identity.ts`), so once a resident run
+ * has rewritten P with device float math, an ulp of drift from the CPU's
+ * f64 is no longer a small error in the answer — it is a different key
+ * and an unrelated random number. The doctrine is explicit: an ulp is
+ * acceptable where it perturbs a magnitude and never where it decides a
+ * key, so an identity-keyed step after a device P write declines the run
+ * rather than spend the tolerance it cannot honour.
+ */
+function specKeysOnIdentity(v: unknown): boolean {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  const spec = v as Record<string, unknown>;
+  if (spec.fn === "randomField") return true;
+  const args = spec.args;
+  if (Array.isArray(args)) {
+    for (const a of args) if (specKeysOnIdentity(a)) return true;
+  }
+  const opts = spec.opts;
+  if (typeof opts === "object" && opts !== null) {
+    if (specKeysOnIdentity((opts as Record<string, unknown>).position)) return true;
+  }
+  return false;
+}
+
 function isVec3(v: unknown): v is readonly [number, number, number] {
   return Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === "number" && Number.isFinite(x));
 }
@@ -438,6 +463,9 @@ export function planResidentRun(
       // would decline, and never declines what it would accept.
       const s = deviceSpec(value, acceptDerivedSpecs);
       if (s === undefined) throw new PlanFail("no spec");
+      // See specKeysOnIdentity: a resident P that device math has already
+      // rewritten is not the P the CPU would hash.
+      if (written.has("P") && specKeysOnIdentity(s)) throw new PlanFail("identity after P write");
       spec = s;
     } else if (typeof value === "number" || (Array.isArray(value) && value.every((x) => typeof x === "number"))) {
       // Same acceptance as the constant column this replaces: tuple 1-4
@@ -588,14 +616,30 @@ export function planResidentRun(
         }
         case "jitterPoints": {
           expectAttr("P", "f32", 3);
+          // The offset is keyed on the incoming position BITS, so this
+          // may only run on a P the device has not rewritten yet — the
+          // uploaded one is bit-identical to the CPU's; one that a fused
+          // transformPoints or an earlier jitter has moved is not. See
+          // specKeysOnIdentity.
+          if (written.has("P")) throw new PlanFail("identity after P write");
           const extraSeed = typeof p.seed === "number" ? p.seed : Number.NaN;
           const seed = hashCombine(m.seed, extraSeed);
           const a = compileParam(p.amount, seed, steps, [1, 3], consts, m.kind);
+          // The offset is keyed on point identity, so the `seed` attribute
+          // is an input here. Absent, it contributes 0 exactly as the CPU
+          // substitutes; present in any other shape than the standard u32
+          // scalar, the run declines rather than guess at the bits.
+          const seedAttr = layout.get("seed");
+          const hasSeedAttr = seedAttr !== undefined;
+          if (hasSeedAttr && (seedAttr.type !== "u32" || seedAttr.tupleSize !== 1)) {
+            throw new PlanFail("seed attribute shape");
+          }
           const pSlot = slotFor("P");
           written.set("P", pSlot);
           const refs: Record<string, BufRef> = { P: { kind: "slot", index: pSlot } };
           if (a.ref !== null) refs.amount = a.ref;
-          steps.push(applyStep(makeJitterPointsApply(a.param), seed, refs, consts));
+          if (hasSeedAttr) refs.seed = { kind: "slot", index: slotFor("seed") };
+          steps.push(applyStep(makeJitterPointsApply(a.param, hasSeedAttr), seed, refs, consts));
           break;
         }
         case "orientAlongVector": {

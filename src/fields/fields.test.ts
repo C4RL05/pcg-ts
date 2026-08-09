@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
+import { pointIdentities } from "../data/identity.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { capture } from "./capture.js";
 import { add, mul } from "./combinators.js";
@@ -16,6 +17,40 @@ import {
 
 function pointCtx(count: number, seed = 0): EvalContext {
   return { geo: createPointCloud(count), domain: "point", seed };
+}
+
+/**
+ * A point cloud whose points are actually DISTINCT — distinct positions
+ * and distinct per-point seeds. `createPointCloud` alone gives every
+ * point the origin and seed 0, which is one point repeated as far as
+ * identity is concerned, and identity-keyed randomness over it is
+ * constant by construction.
+ */
+function identityCtx(count: number, seed = 0): EvalContext {
+  const geo = createPointCloud(count);
+  const P = geo.attrs.point.require("P");
+  const seeds = geo.attrs.point.require("seed");
+  for (let i = 0; i < count; i++) {
+    P.setTuple(i, [
+      hashFloat(hashCombine(13, i, 0)) * 8,
+      hashFloat(hashCombine(13, i, 1)) * 8,
+      hashFloat(hashCombine(13, i, 2)) * 8,
+    ]);
+    seeds.set(i, hashCombine(0x5eed, i));
+  }
+  return { geo, domain: "point", seed };
+}
+
+/** The same cloud with its points reordered, and the order used. */
+function permutedCtx(ctx: EvalContext, order: number[]): EvalContext {
+  const src = ctx.geo.attrs.point;
+  const geo = createPointCloud(order.length);
+  const dst = geo.attrs.point;
+  for (const attr of src) {
+    const target = dst.require(attr.name);
+    order.forEach((from, to) => target.copyFrom(attr, from, to, 1));
+  }
+  return { geo, domain: ctx.domain, seed: ctx.seed };
 }
 
 describe("inputs", () => {
@@ -125,16 +160,18 @@ describe("inputs", () => {
 
 describe("randomField", () => {
   it("is deterministic and matches the documented hash", () => {
-    const a = evaluateField(randomField(5), pointCtx(64, 42));
-    const b = evaluateField(randomField(5), pointCtx(64, 42));
+    const ctx = identityCtx(64, 42);
+    const a = evaluateField(randomField(5), ctx);
+    const b = evaluateField(randomField(5), identityCtx(64, 42));
     expect(a.data).toEqual(b.data);
+    const ident = pointIdentities(ctx.geo, "test");
     for (let i = 0; i < 64; i++) {
-      expect(a.data[i]).toBe(hashFloat(hashCombine(42, 5, i)));
+      expect(a.data[i]).toBe(hashFloat(hashCombine(42, 5, ident[i])));
     }
   });
 
   it("stays in [0, 1)", () => {
-    const col = evaluateField(randomField(), pointCtx(5000, 1));
+    const col = evaluateField(randomField(), identityCtx(5000, 1));
     for (let i = 0; i < 5000; i++) {
       expect(col.data[i]).toBeGreaterThanOrEqual(0);
       expect(col.data[i]).toBeLessThan(1);
@@ -142,15 +179,52 @@ describe("randomField", () => {
   });
 
   it("varies with context seed and key", () => {
-    const base = evaluateField(randomField(0), pointCtx(32, 1));
-    expect(evaluateField(randomField(0), pointCtx(32, 2)).data).not.toEqual(base.data);
-    expect(evaluateField(randomField(1), pointCtx(32, 1)).data).not.toEqual(base.data);
+    const base = evaluateField(randomField(0), identityCtx(32, 1));
+    expect(evaluateField(randomField(0), identityCtx(32, 2)).data).not.toEqual(base.data);
+    expect(evaluateField(randomField(1), identityCtx(32, 1)).data).not.toEqual(base.data);
   });
 
   it("hashes string keys", () => {
-    const byString = evaluateField(randomField("wind"), pointCtx(8, 3));
-    const byHash = evaluateField(randomField(hashString("wind")), pointCtx(8, 3));
+    const byString = evaluateField(randomField("wind"), identityCtx(8, 3));
+    const byHash = evaluateField(randomField(hashString("wind")), identityCtx(8, 3));
     expect(byString.data).toEqual(byHash.data);
+  });
+
+  it("travels with the point when the cloud is reordered", () => {
+    // On the point domain the draw is keyed on IDENTITY — position bits
+    // plus the seed attribute — so a shuffle permutes the values and
+    // changes none of them. Keyed on element index, every point would get
+    // whatever the point now sitting at its slot used to get.
+    const ctx = identityCtx(64, 7);
+    const order = Array.from({ length: 64 }, (_, i) => (i * 37 + 11) % 64);
+    const straight = evaluateField(randomField("wind"), ctx);
+    const shuffled = evaluateField(randomField("wind"), permutedCtx(ctx, order));
+    expect(Array.from(shuffled.data)).toEqual(order.map((from) => straight.data[from]));
+    // Not a constant column, which would satisfy the above trivially.
+    expect(new Set(Array.from(straight.data)).size).toBeGreaterThan(50);
+  });
+
+  it("reads BOTH halves of the identity", () => {
+    const base = identityCtx(48, 2);
+    const moved = permutedCtx(base, Array.from({ length: 48 }, (_, i) => i));
+    const movedP = moved.geo.attrs.point.require("P");
+    for (let i = 0; i < 48; i++) movedP.set(i, movedP.get(i, 0) + 0.25, 0);
+    const reseeded = permutedCtx(base, Array.from({ length: 48 }, (_, i) => i));
+    reseeded.geo.attrs.point.require("seed").fill(0, 0, 48);
+    const straight = Array.from(evaluateField(randomField(1), base).data);
+    expect(Array.from(evaluateField(randomField(1), moved).data)).not.toEqual(straight);
+    expect(Array.from(evaluateField(randomField(1), reseeded).data)).not.toEqual(straight);
+  });
+
+  it("falls back to the element index off the point domain", () => {
+    // Vertices, primitives and detail carry no position and no seed, so
+    // there is no identity to key on and the index is the only name an
+    // element has.
+    const geo = createPointCloud(0);
+    geo.attrs.primitive.add("dummy", "f32", 1, 0);
+    geo.attrs.primitive.resize(16);
+    const col = evaluateField(randomField(4), { geo, domain: "primitive", seed: 6 });
+    for (let i = 0; i < 16; i++) expect(col.data[i]).toBe(hashFloat(hashCombine(6, 4, i)));
   });
 });
 

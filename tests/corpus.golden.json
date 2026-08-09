@@ -95,11 +95,11 @@
             "kind": "instances",
             "tags": [],
             "residency": "cpu",
-            "instances": 524,
+            "instances": 523,
             "batches": [
               {
                 "assetId": "pine",
-                "count": 524
+                "count": 523
               }
             ]
           }
@@ -113,7 +113,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 244,
+              "point": 248,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -134,12 +134,12 @@
               "min": [
                 -29.9798,
                 0,
-                -29.957
+                -29.9315
               ],
               "max": [
-                29.9191,
+                29.9305,
                 0,
-                29.8549
+                29.9142
               ]
             }
           }
@@ -194,7 +194,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 789,
+              "point": 777,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -213,7 +213,7 @@
             },
             "bounds": {
               "min": [
-                -39.8566,
+                -39.7197,
                 0,
                 -39.95
               ],
@@ -293,14 +293,14 @@
             },
             "bounds": {
               "min": [
-                -23.5545,
+                -23.6596,
                 0,
-                -23.6173
+                -23.6758
               ],
               "max": [
-                23.4744,
+                23.2839,
                 0,
-                23.6995
+                23.5581
               ]
             }
           }
@@ -519,7 +519,7 @@
               "species=pine"
             ],
             "counts": {
-              "point": 109,
+              "point": 106,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -539,9 +539,9 @@
             },
             "bounds": {
               "min": [
-                -19.4372,
+                -19.4217,
                 0,
-                -19.6423
+                -19.6863
               ],
               "max": [
                 19.9549,
@@ -553,47 +553,10 @@
           {
             "kind": "geometry",
             "tags": [
-              "species=birch"
-            ],
-            "counts": {
-              "point": 108,
-              "vertex": 0,
-              "primitive": 0,
-              "detail": 1
-            },
-            "attrs": {
-              "point": [
-                "P:f32x3",
-                "rot:f32x4",
-                "scale:f32x3",
-                "density:f32",
-                "boundsMin:f32x3",
-                "boundsMax:f32x3",
-                "color:f32x4",
-                "seed:u32",
-                "species:string"
-              ]
-            },
-            "bounds": {
-              "min": [
-                -19.2714,
-                0,
-                -19.6863
-              ],
-              "max": [
-                19.7294,
-                0,
-                19.8604
-              ]
-            }
-          },
-          {
-            "kind": "geometry",
-            "tags": [
               "species=boulder"
             ],
             "counts": {
-              "point": 83,
+              "point": 96,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -615,10 +578,47 @@
               "min": [
                 -19.8675,
                 0,
+                -18.6214
+              ],
+              "max": [
+                19.7294,
+                0,
+                18.5645
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "species=birch"
+            ],
+            "counts": {
+              "point": 98,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "species:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.4345,
+                0,
                 -19.9025
               ],
               "max": [
-                19.6483,
+                19.8019,
                 0,
                 19.803
               ]
@@ -806,7 +806,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 412,
+              "point": 409,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -825,12 +825,12 @@
             },
             "bounds": {
               "min": [
-                -39.9804,
+                -39.9982,
                 0,
-                -39.9754
+                -39.9855
               ],
               "max": [
-                39.811,
+                39.8993,
                 0,
                 39.9939
               ]
@@ -947,15 +947,15 @@
             "batches": [
               {
                 "assetId": "pine",
-                "count": 204
-              },
-              {
-                "assetId": "birch",
-                "count": 101
+                "count": 220
               },
               {
                 "assetId": "boulder",
-                "count": 95
+                "count": 81
+              },
+              {
+                "assetId": "birch",
+                "count": 99
               }
             ]
           }
@@ -987,7 +987,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 129,
+              "point": 134,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -1006,14 +1006,14 @@
             },
             "bounds": {
               "min": [
-                -24.518,
+                -24.9855,
                 0,
-                -24.9927
+                -24.7894
               ],
               "max": [
-                24.9241,
+                24.6582,
                 0,
-                24.9155
+                24.8804
               ]
             }
           }
@@ -1424,9 +1424,9 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 276,
-              "vertex": 345,
-              "primitive": 69,
+              "point": 256,
+              "vertex": 320,
+              "primitive": 64,
               "detail": 1
             },
             "attrs": {
@@ -1447,14 +1447,14 @@
             },
             "bounds": {
               "min": [
-                -60.3268,
-                -2.6659,
-                -54.0704
+                -60.244,
+                -2.1446,
+                -60.9022
               ],
               "max": [
-                61.2089,
-                6.3685,
-                60.6096
+                49.059,
+                6.1016,
+                60.0485
               ]
             }
           }
@@ -1464,7 +1464,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 69,
+              "point": 64,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -1490,12 +1490,12 @@
             "bounds": {
               "min": [
                 -57,
-                -1.6205,
-                -51
+                -1.5674,
+                -57
               ],
               "max": [
-                57,
-                4.2197,
+                45,
+                4.5827,
                 57
               ]
             }
@@ -1622,9 +1622,9 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 256,
-              "vertex": 320,
-              "primitive": 64,
+              "point": 220,
+              "vertex": 275,
+              "primitive": 55,
               "detail": 1
             },
             "attrs": {
@@ -1645,14 +1645,14 @@
             },
             "bounds": {
               "min": [
-                -60.3268,
-                -2.6659,
-                -54.0704
+                -60.244,
+                -2.1446,
+                -53.6407
               ],
               "max": [
-                61.2089,
-                5.3892,
-                60.6096
+                49.059,
+                6.0485,
+                60.0485
               ]
             }
           }
@@ -1662,7 +1662,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 64,
+              "point": 55,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -1688,12 +1688,12 @@
             "bounds": {
               "min": [
                 -57,
-                -1.6205,
+                -1.5674,
                 -51
               ],
               "max": [
-                57,
-                4.179,
+                45,
+                4.021,
                 57
               ]
             }
@@ -1781,275 +1781,19 @@
             "kind": "instances",
             "tags": [],
             "residency": "cpu",
-            "instances": 69,
+            "instances": 64,
             "batches": [
-              {
-                "assetId": "house",
-                "count": 37
-              },
               {
                 "assetId": "hall",
                 "count": 17
               },
               {
                 "assetId": "barn",
-                "count": 15
-              }
-            ]
-          }
-        ],
-        "districts": [
-          {
-            "kind": "geometry",
-            "tags": [],
-            "counts": {
-              "point": 332,
-              "vertex": 0,
-              "primitive": 0,
-              "detail": 1
-            },
-            "attrs": {
-              "point": [
-                "P:f32x3",
-                "rot:f32x4",
-                "scale:f32x3",
-                "density:f32",
-                "boundsMin:f32x3",
-                "boundsMax:f32x3",
-                "color:f32x4",
-                "seed:u32",
-                "districtDist:f32",
-                "district:i32",
-                "districtKind:string"
-              ]
-            },
-            "bounds": {
-              "min": [
-                -57,
-                -2.1719,
-                -57
-              ],
-              "max": [
-                57,
-                4.5827,
-                57
-              ]
-            }
-          }
-        ],
-        "footprints": [
-          {
-            "kind": "geometry",
-            "tags": [],
-            "counts": {
-              "point": 276,
-              "vertex": 345,
-              "primitive": 69,
-              "detail": 1
-            },
-            "attrs": {
-              "point": [
-                "P:f32x3",
-                "rot:f32x4",
-                "scale:f32x3",
-                "density:f32",
-                "boundsMin:f32x3",
-                "boundsMax:f32x3",
-                "color:f32x4",
-                "seed:u32",
-                "lotId:i32"
-              ],
-              "primitive": [
-                "primtype:string"
-              ]
-            },
-            "bounds": {
-              "min": [
-                -60.3268,
-                -2.6659,
-                -54.0704
-              ],
-              "max": [
-                61.2089,
-                6.3685,
-                60.6096
-              ]
-            }
-          }
-        ],
-        "lots": [
-          {
-            "kind": "geometry",
-            "tags": [],
-            "counts": {
-              "point": 69,
-              "vertex": 0,
-              "primitive": 0,
-              "detail": 1
-            },
-            "attrs": {
-              "point": [
-                "P:f32x3",
-                "rot:f32x4",
-                "scale:f32x3",
-                "density:f32",
-                "boundsMin:f32x3",
-                "boundsMax:f32x3",
-                "color:f32x4",
-                "seed:u32",
-                "districtDist:f32",
-                "district:i32",
-                "districtKind:string",
-                "streetP:f32x3",
-                "locked:i32",
-                "origin:string"
-              ]
-            },
-            "bounds": {
-              "min": [
-                -57,
-                -1.6205,
-                -51
-              ],
-              "max": [
-                57,
-                4.2197,
-                57
-              ]
-            }
-          }
-        ],
-        "props": [
-          {
-            "kind": "instances",
-            "tags": [],
-            "residency": "cpu",
-            "instances": 82,
-            "batches": [
-              {
-                "assetId": "post",
-                "count": 82
-              }
-            ]
-          }
-        ],
-        "terrain": [
-          {
-            "kind": "geometry",
-            "tags": [],
-            "counts": {
-              "point": 625,
-              "vertex": 3456,
-              "primitive": 1152,
-              "detail": 1
-            },
-            "attrs": {
-              "point": [
-                "P:f32x3",
-                "uv:f32x2"
-              ],
-              "primitive": [
-                "primtype:string"
-              ]
-            },
-            "bounds": {
-              "min": [
-                -130,
-                -6.3984,
-                -130
-              ],
-              "max": [
-                130,
-                6.8607,
-                130
-              ]
-            }
-          }
-        ],
-        "vegetation": [
-          {
-            "kind": "instances",
-            "tags": [],
-            "residency": "cpu",
-            "instances": 585,
-            "batches": [
-              {
-                "assetId": "birch",
-                "count": 146
+                "count": 20
               },
-              {
-                "assetId": "bush",
-                "count": 151
-              },
-              {
-                "assetId": "pine",
-                "count": 288
-              }
-            ]
-          }
-        ]
-      }
-    },
-    "pipeline-4-detail.json": {
-      "outputs": {
-        "boundary": [
-          {
-            "kind": "geometry",
-            "tags": [],
-            "counts": {
-              "point": 64,
-              "vertex": 65,
-              "primitive": 1,
-              "detail": 1
-            },
-            "attrs": {
-              "point": [
-                "P:f32x3",
-                "rot:f32x4",
-                "scale:f32x3",
-                "density:f32",
-                "boundsMin:f32x3",
-                "boundsMax:f32x3",
-                "color:f32x4",
-                "seed:u32",
-                "tangent:f32x3"
-              ],
-              "primitive": [
-                "primtype:string"
-              ]
-            },
-            "bounds": {
-              "min": [
-                -76.678,
-                0,
-                -77.6641
-              ],
-              "max": [
-                76.643,
-                0,
-                79.7573
-              ]
-            }
-          }
-        ],
-        "buildings": [
-          {
-            "kind": "instances",
-            "tags": [],
-            "residency": "cpu",
-            "instances": 64,
-            "batches": [
               {
                 "assetId": "house",
-                "count": 35
-              },
-              {
-                "assetId": "hall",
-                "count": 15
-              },
-              {
-                "assetId": "barn",
-                "count": 14
+                "count": 27
               }
             ]
           }
@@ -2121,14 +1865,14 @@
             },
             "bounds": {
               "min": [
-                -60.3268,
-                -2.6659,
-                -54.0704
+                -60.244,
+                -2.1446,
+                -60.9022
               ],
               "max": [
-                61.2089,
-                5.3892,
-                60.6096
+                49.059,
+                6.1016,
+                60.0485
               ]
             }
           }
@@ -2164,12 +1908,12 @@
             "bounds": {
               "min": [
                 -57,
-                -1.6205,
-                -51
+                -1.5674,
+                -57
               ],
               "max": [
-                57,
-                4.179,
+                45,
+                4.5827,
                 57
               ]
             }
@@ -2231,15 +1975,271 @@
             "batches": [
               {
                 "assetId": "birch",
-                "count": 146
-              },
-              {
-                "assetId": "bush",
-                "count": 151
+                "count": 169
               },
               {
                 "assetId": "pine",
-                "count": 288
+                "count": 290
+              },
+              {
+                "assetId": "bush",
+                "count": 126
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "pipeline-4-detail.json": {
+      "outputs": {
+        "boundary": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 64,
+              "vertex": 65,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -76.678,
+                0,
+                -77.6641
+              ],
+              "max": [
+                76.643,
+                0,
+                79.7573
+              ]
+            }
+          }
+        ],
+        "buildings": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 55,
+            "batches": [
+              {
+                "assetId": "house",
+                "count": 27
+              },
+              {
+                "assetId": "hall",
+                "count": 15
+              },
+              {
+                "assetId": "barn",
+                "count": 13
+              }
+            ]
+          }
+        ],
+        "districts": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 332,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "districtDist:f32",
+                "district:i32",
+                "districtKind:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -57,
+                -2.1719,
+                -57
+              ],
+              "max": [
+                57,
+                4.5827,
+                57
+              ]
+            }
+          }
+        ],
+        "footprints": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 220,
+              "vertex": 275,
+              "primitive": 55,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "lotId:i32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -60.244,
+                -2.1446,
+                -53.6407
+              ],
+              "max": [
+                49.059,
+                6.0485,
+                60.0485
+              ]
+            }
+          }
+        ],
+        "lots": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 55,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "districtDist:f32",
+                "district:i32",
+                "districtKind:string",
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -57,
+                -1.5674,
+                -51
+              ],
+              "max": [
+                45,
+                4.021,
+                57
+              ]
+            }
+          }
+        ],
+        "props": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 82,
+            "batches": [
+              {
+                "assetId": "post",
+                "count": 82
+              }
+            ]
+          }
+        ],
+        "terrain": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 625,
+              "vertex": 3456,
+              "primitive": 1152,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -130,
+                -6.3984,
+                -130
+              ],
+              "max": [
+                130,
+                6.8607,
+                130
+              ]
+            }
+          }
+        ],
+        "vegetation": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 585,
+            "batches": [
+              {
+                "assetId": "birch",
+                "count": 169
+              },
+              {
+                "assetId": "pine",
+                "count": 290
+              },
+              {
+                "assetId": "bush",
+                "count": 126
               }
             ]
           }

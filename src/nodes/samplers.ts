@@ -150,6 +150,20 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
     }
 
     // Accept candidates by density (evaluated once over the candidate cloud).
+    //
+    // Deliberately keyed on the candidate INDEX, not on point identity,
+    // and it is the one site in this file where index is the right key.
+    // Everywhere else index is a name the ARRAY gives a point, so it moves
+    // when the array is reordered; here the candidates do not exist until
+    // this node manufactures them, and `i` is the name it assigns. Nothing
+    // upstream can permute them, growing `count` appends rather than
+    // renumbers (candidate i draws from (seed, i, ...) alone), and an
+    // identity key would be a strictly weaker version of the same thing —
+    // the identity of candidate i is itself a function of (seed, i), since
+    // both its position and its seed are. Note what this does NOT buy:
+    // surfaceSample is not permutation-equivariant in its INPUT, because
+    // the area CDF is built in primitive order, and no keying of the
+    // acceptance draw could make it so.
     const density = requireTuple(
       await resolveOnMaybeGpu(gpu, candidates, "point", params.densityField, seed),
       [1],

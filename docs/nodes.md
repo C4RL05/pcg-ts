@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-35 node types, grouped by `category` (node sections below are alphabetical):
+36 node types, grouped by `category` (node sections below are alphabetical):
 
 **attribute**
 
@@ -37,7 +37,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 **point op**
 
 - [copyToPoints](#copytopoints) — Copies the source point cloud onto every target point (output count = source points * target points, grouped by target).
-- [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible.
+- [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point IDENTITY, axis).
 - [mergePoints](#mergepoints) — Concatenates the points of every connected geometry, in connection order, into one point cloud.
 - [orientAlongVector](#orientalongvector) — Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll.
 - [pointsToPath](#pointstopath) — Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph.
@@ -57,6 +57,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [pointGrid](#pointgrid) — Creates a regular grid of points: countX * countY * countZ points starting at origin, stepped by spacing per axis.
 - [pointLine](#pointline) — Creates `count` evenly spaced points on the straight segment from start to end.
 - [pointScatterInBounds](#pointscatterinbounds) — Scatters `count` points uniformly inside the axis-aligned box [boundsMin, boundsMax].
+- [pointScatterInWorld](#pointscatterinworld) — Scatters points over an INFINITE lattice anchored to world coordinates, then returns the ones inside the query window [boundsMin, boundsMax).
 
 **spawn**
 
@@ -176,7 +177,7 @@ Keeps points by position against the axis-aligned box [boundsMin, boundsMax] (bo
 
 ## filterByDensity
 
-Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). Output is a point cloud of the survivors with all attributes carried.
+Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). The probabilistic draw is keyed on each point's IDENTITY — its stored position bits together with its `seed` point attribute — not on its array index, so the same point survives or does not whatever order it arrives in and whichever cell derived it. Two points that share a position AND a seed are one point as far as that draw is concerned and always decide the same way, so a cloud with no per-point seeds (the attribute defaults to 0) decides purely on position. Output is a point cloud of the survivors with all attributes carried.
 
 **Category:** filter
 
@@ -211,7 +212,7 @@ Keeps points where a field-capable `predicate` evaluates to a non-zero number. T
 
 ## jitterPoints
 
-Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point index, axis) — order-independent and reproducible. amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).
+Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point IDENTITY, axis). Identity is the point's incoming position bits together with its `seed` point attribute, not its array index, so the offset belongs to the point: reorder the cloud, drop points upstream, or derive the same region inside another cell's halo, and every point still moves exactly as far. Two points that share a position AND a seed move identically and stay coincident (the `seed` attribute defaults to 0, so a cloud with no per-point seeds jitters on position alone). amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).
 
 **Category:** point op
 
@@ -352,7 +353,7 @@ Creates `count` evenly spaced points on the straight segment from start to end. 
 
 ## pointNeighborhood
 
-Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging "P" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed — countAttr and averageOutAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it (a same-shape column is reused and reset).
+Measures each point's neighborhood inside the same cloud and writes the result as point attributes: countAttr receives how many other points lie within radius (u32), and averageAttr/averageOutAttr average a numeric point attribute over those neighbors (f32, same tuple size — averaging "P" gives each point the centroid of its neighbors, which is one Lloyd relaxation step away from even spacing). Distances are 3D over P and boundary-inclusive. A point with no neighbors gets count 0 and keeps its OWN value as the average, so a displacement built from the average is zero for isolated points instead of undefined. Points with a non-finite coordinate are nobody's neighbor and have none themselves. Both places where this node has to pick an order — which neighbors a maxCount cap keeps, and the order their values are summed — are keyed on point IDENTITY (position bits plus the `seed` point attribute), never on the array index, so reordering the input cannot move a count, a kept set, or a single bit of an average. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is the input with the new attributes added; nothing is moved or removed — countAttr and averageOutAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it (a same-shape column is reused and reset).
 
 **Category:** attribute
 
@@ -365,7 +366,7 @@ Measures each point's neighborhood inside the same cloud and writes the result a
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `radius` | f32 | `1` | >= 0 |  |  | Neighborhood radius in world units, boundary included. 0 searches nothing: every count is 0 and every average falls back to the point's own value. |
-| `maxCount` | i32 | `0` | >= 0 |  |  | Cap on how many neighbors each point keeps: the nearest maxCount of them, ties resolved toward the lower point index. 0 (the default) keeps every neighbor within the radius. Use it to bound the cost in dense clouds. |
+| `maxCount` | i32 | `0` | >= 0 |  |  | Cap on how many neighbors each point keeps: the nearest maxCount of them, distance ties resolved toward the lower point IDENTITY (a hash of the neighbor's position bits and its `seed` attribute) so the kept set is a property of the points and not of the order they arrived in. 0 (the default) keeps every neighbor within the radius. Use it to bound the cost in dense clouds. |
 | `includeSelf` | bool | `false` |  |  |  | Count the point itself as one of its neighbors (and include its own value in the average). False (the default) measures the OTHER points, so an isolated point counts 0. |
 | `countAttr` | string | `"nbrCount"` |  |  |  | Name of the u32 point attribute receiving the neighbor count. Empty writes no count (then averageAttr must be set). The shape is this node's to pick (u32, tuple 1), so a name the input already holds under a DIFFERENT shape is REFUSED, not overwritten: writing it would delete that column outright and the cook would still look fine (countAttr "P" would leave a point cloud with no positions). An existing u32 tuple-1 column of the same name IS reused and reset, so re-running this node over its own output is fine. To write over something of another shape, removeAttribute it first, or pick another name. |
 | `averageAttr` | string | `""` |  |  |  | Numeric point attribute (tuple 1..4) to average over each point's neighbors, for example "P". Empty (the default) computes no average. |
@@ -389,6 +390,28 @@ Scatters `count` points uniformly inside the axis-aligned box [boundsMin, bounds
 | `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner of the box, in world units. |
 | `boundsMax` | vec3 | `[1,1,1]` |  |  |  | Maximum corner of the box, in world units. Should be >= boundsMin per component. |
 | `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the scatter. |
+
+## pointScatterInWorld
+
+Scatters points over an INFINITE lattice anchored to world coordinates, then returns the ones inside the query window [boundsMin, boundsMax). A point's position and per-point seed are a pure function of (node seed, seed, latticeMode, cellSize) and its own lattice cell and index — never of the window, and density only decides how many points a cell holds — so the same world position always yields the same point under ANY query. That is what makes a halo just a wider query, lets a region cooked whole and the same region cooked in pieces agree byte for byte, and lets two cells on a boundary agree on what is there; pointScatterInBounds computes positions from the bounds and can promise none of it. Expected population is exactly `density * area` of the window in "xz" mode and `density * volume` in "xyz" mode, so an author can predict the count without cooking. Points are ordered by lattice cell (Z outer, then Y, then X) and by index within a cell, so any two windows list their shared points in the same relative order. Windows need not align to the lattice: partial cells are generated whole and clipped per point. The clip is half-open — a point on the min face belongs to this window, a point on the max face belongs to the next one — so abutting windows partition the world with no gap and no duplicate. Emits a standard point cloud.
+
+**Category:** source
+
+**Inputs:** *(none)*
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `density` | f32 | `0.01` | >= 0 |  |  | Points per square world unit in "xz" mode, per cubic world unit in "xyz" mode. The expected number of points in a window is exactly density * area (or density * volume), for any window: a cell holds floor(lambda) points plus one more with probability frac(lambda), where lambda = density * cellSize^2 (or ^3). Raising density only ADDS points — the ones already there keep their positions and their per-point seeds — so it is safe to tune against a fixed layout. 0 emits nothing. |
+| `cellSize` | f32 | `10` | >= 0 |  |  | Edge length, in world units, of this node's own lattice cell — the patch over which the point count is quantized. It controls clumping, not population: population is set by density alone, while cellSize decides how evenly the points are spread (small cells spread them out, large cells let counts vary more). Must be > 0. Set it from the content's scale and NEVER from a World level's cellSize: tying the two would make the generated content a function of the runtime's partitioning, so re-tuning a level's streaming, or cooking the same region at two levels, would change the world. |
+| `latticeMode` | enum | `"xz"` |  | `xz`, `xyz` |  | "xz" (default): a 2D lattice on the XZ plane, every point at Y = height, with the Y components of boundsMin/boundsMax IGNORED (they may be infinite, matching an "xz" World cell, which is unbounded in Y). "xyz": a 3D lattice, with Y coming from the lattice and the full box clipped. The two modes are independent point sets, not slices of one — switching modes re-rolls the layout. |
+| `height` | f32 | `0` |  |  |  | World Y of every point in "xz" mode. Ignored in "xyz" mode. The 2D lattice is deliberately flat rather than spread over the query's Y range: deriving Y from the window is exactly what makes a source non-anchored. To put points on a surface, displace Y afterwards from a position-anchored field (e.g. setAttribute on P with a noise field) — that stays a function of world position, so it survives any query window. |
+| `boundsMin` | vec3 | `[0,0,0]` |  |  |  | Minimum corner of the query window, in world units — INCLUSIVE. Read only to choose which lattice cells to visit and to clip; it never moves a point. In "xz" mode the Y component is ignored. |
+| `boundsMax` | vec3 | `[100,100,100]` |  |  |  | Maximum corner of the query window, in world units — EXCLUSIVE, so abutting windows neither drop nor duplicate a point on their shared face. Read only to choose which lattice cells to visit and to clip. In "xz" mode the Y component is ignored. A window with max <= min on a read axis emits nothing. |
+| `seed` | u32 | `0` |  |  |  | Extra seed folded into the node seed; change it to re-roll the whole world. It must be the SAME for every query that has to agree — in a World, bind it from the cell-invariant `ctx.worldSeed` or `ctx.levelSeed`, never from the per-cell `ctx.seed`, and do not reseed the level graph per cell: that would make each cell an unrelated world and the anchoring guarantee empty. |
 
 ## pointsToPath
 
@@ -485,7 +508,7 @@ For every point of `in`, finds the nearest point of the `source` cloud in 3D (po
 
 ## selfPrune
 
-Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away. The order decides who wins, and it is `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point index — so with priority left alone, every point ties and this is exactly the index-greedy prune it has always been. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.
+Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away. The order decides who wins, and it is `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point IDENTITY — a hash of the point's stored position bits and its `seed` point attribute, NOT its array index. That is what makes the survivors a property of the points rather than of the order they arrived in: shuffle the input, filter something upstream, or derive the same region inside another cell's halo, and the same points survive. With priority left alone every point ties, so identity alone decides, and the result is a spatially unbiased thinning rather than the front-of-the-array-wins prune an index order gives. Points that are indistinguishable — same position AND same seed — fall back to the lower index, since nothing else separates them. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.
 
 **Category:** filter
 
@@ -498,7 +521,7 @@ Enforces a minimum distance between points: considers points one at a time and k
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `minDistance` | f32 | `1` | >= 0 |  | yes | Minimum allowed distance between two kept points, in world units. As a FIELD it is a per-point radius, evaluated on the input's points, and two points conflict when they are closer than the LARGER of their two radii (never the smaller, which would let a big point be crowded by a small one, and never the sum, which would double the spacing of an evenly-sized cloud and so disagree with the same number passed plainly). A per-point radius that is 0, negative or NaN claims no room of its own, but such a point can still be pruned by a bigger neighbour. A PLAIN 0 (or less) turns the node off: every point survives, topology included, and `priority` is not evaluated. A field never takes that shortcut — it always outputs a point cloud, so what the output IS never depends on the numbers that come back. |
-| `priority` | f32 | `0` |  |  | yes | Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them has the lower index — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute("locked") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField("key") thins without the spatial bias of index order, re-rolling when the key changes. Equal priorities break to the LOWER point index, and NaN ranks lowest. The default 0 ties every point, which reproduces the index-greedy prune exactly. This decides WHO survives, never the output order. |
+| `priority` | f32 | `0` |  |  | yes | Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them the tiebreak would have preferred — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute("locked") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField("key") re-rolls the thinning when the key changes. Equal priorities break to the LOWER point IDENTITY (position bits plus the `seed` attribute), and NaN ranks lowest. The default 0 ties every point, so identity alone picks the survivors — which is already unbiased, so a random priority is for re-rolling, not for undoing an ordering bias. This decides WHO survives, never the output order. |
 
 ## setAttribute
 

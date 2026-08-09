@@ -325,13 +325,51 @@ HANDLERS.set("fraction", (_spec, _path, ctx) =>
   ctx.emit("f32(i) / f32(max(params.count, 2u) - 1u)", 1),
 );
 
-HANDLERS.set("randomField", (spec, _path, ctx) => {
+// randomField is keyed on POINT IDENTITY on the CPU (see
+// `src/data/identity.ts`): the f32 bit patterns of P.xyz hashed with the
+// `seed` attribute, then folded into (params.seed, key). A layout carries
+// no domain, so a spec compiled against one without P — vertex, primitive
+// or detail, where the CPU falls back to the element index — throws here
+// and resolves on the CPU instead of inventing a key the CPU never used.
+HANDLERS.set("randomField", (spec, path, ctx) => {
   const key = spec.key;
   const keyHash = typeof key === "string" ? hashString(key) : ((key as number | undefined) ?? 0) >>> 0;
   ctx.usesSeed = true;
   ctx.libRoots.add("pcg_hash3");
+  ctx.libRoots.add("pcg_hash4");
   ctx.libRoots.add("pcg_hash_float");
-  return ctx.emit(`pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, i))`, 1);
+  const origin = "randomField's per-point identity reads ";
+  const P = resolveLayoutAttr(ctx, path, "P", undefined, origin);
+  if (P.tupleSize < 3) {
+    throw new GpuCompileError(
+      `${path}: ${origin}attribute "P" with x, y and z (tupleSize 3), got tupleSize ${P.tupleSize}`,
+    );
+  }
+  const pVar = ctx.binding("P").varName;
+  // Bits, never the value: hashCombine truncates a float toward zero, so
+  // every position inside the unit cube would key identically.
+  const bits = (k: number): string => {
+    const e = `${pVar}[${flatIndex(P.tupleSize, k)}]`;
+    return P.type === "f32" ? `bitcast<u32>(${e})` : `bitcast<u32>(f32(${e}))`;
+  };
+  // A missing `seed` column contributes 0, exactly as a column of
+  // defaults would — the CPU makes the same substitution.
+  let seedExpr = "0u";
+  const seedAttr = Object.hasOwn(ctx.layout.attributes, "seed")
+    ? ctx.layout.attributes.seed
+    : undefined;
+  if (seedAttr !== undefined) {
+    if (seedAttr.tupleSize !== 1 || (seedAttr.type !== "u32" && seedAttr.type !== "i32")) {
+      throw new GpuCompileError(
+        `${path}: ${origin}the standard point attribute "seed" as a u32 or i32 scalar, but the ` +
+          `layout has it as ${seedAttr.type}x${seedAttr.tupleSize}; this field resolves on the CPU instead`,
+      );
+    }
+    const sVar = ctx.binding("seed").varName;
+    seedExpr = seedAttr.type === "u32" ? `${sVar}[i]` : `bitcast<u32>(${sVar}[i])`;
+  }
+  const ident = `pcg_hash4(${bits(0)}, ${bits(1)}, ${bits(2)}, ${seedExpr})`;
+  return ctx.emit(`pcg_hash_float(pcg_hash3(params.seed, ${wgslHexU32(keyHash)}, ${ident}))`, 1);
 });
 
 // -- elementwise combinators ------------------------------------------------
@@ -687,6 +725,13 @@ function collectAttrNames(v: unknown, out: Set<string>): void {
   }
   if (fn === "position") {
     out.add("P");
+    return;
+  }
+  // randomField keys on point identity, so it reads P and `seed` even
+  // though neither appears in its spec.
+  if (fn === "randomField") {
+    out.add("P");
+    out.add("seed");
     return;
   }
   if (typeof fn === "string" && NOISE_LIKE.has(fn)) {

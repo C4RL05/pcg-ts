@@ -5,6 +5,7 @@
  */
 import type { Geometry } from "../data/index.js";
 import type { Column } from "../fields/index.js";
+import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { UniformGrid } from "../spatial/index.js";
@@ -23,7 +24,7 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
   type: "filterByDensity",
   category: "filter",
   description:
-    "Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). Output is a point cloud of the survivors with all attributes carried.",
+    "Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). The probabilistic draw is keyed on each point's IDENTITY — its stored position bits together with its `seed` point attribute — not on its array index, so the same point survives or does not whatever order it arrives in and whichever cell derived it. Two points that share a position AND a seed are one point as far as that draw is concerned and always decide the same way, so a cloud with no per-point seeds (the attribute defaults to 0) decides purely on position. Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -61,8 +62,13 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
         if (density.data[i] >= params.threshold) keep.push(i);
       }
     } else {
+      // Keyed on identity, not on `i`: the same world point gets a
+      // different index depending on which query produced it, so an
+      // index-keyed acceptance would re-roll under a shuffle, an upstream
+      // filter, or a halo. Identity is the point's own name.
+      const ident = pointIdentities(geo, "filterByDensity");
       for (let i = 0; i < n; i++) {
-        if (hashFloat(hashCombine(seed, i)) < density.data[i]) keep.push(i);
+        if (hashFloat(hashCombine(seed, ident[i])) < density.data[i]) keep.push(i);
       }
     }
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
@@ -295,7 +301,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
   type: "selfPrune",
   category: "filter",
   description:
-    "Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away. The order decides who wins, and it is `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point index — so with priority left alone, every point ties and this is exactly the index-greedy prune it has always been. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.",
+    "Enforces a minimum distance between points: considers points one at a time and keeps a point only when every already-kept point is at least minDistance away. The order decides who wins, and it is `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point IDENTITY — a hash of the point's stored position bits and its `seed` point attribute, NOT its array index. That is what makes the survivors a property of the points rather than of the order they arrived in: shuffle the input, filter something upstream, or derive the same region inside another cell's halo, and the same points survive. With priority left alone every point ties, so identity alone decides, and the result is a spatially unbiased thinning rather than the front-of-the-array-wins prune an index order gives. Points that are indistinguishable — same position AND same seed — fall back to the lower index, since nothing else separates them. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -312,7 +318,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
       default: 0,
       acceptsField: true,
       description:
-        "Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them has the lower index — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute(\"locked\") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField(\"key\") thins without the spatial bias of index order, re-rolling when the key changes. Equal priorities break to the LOWER point index, and NaN ranks lowest. The default 0 ties every point, which reproduces the index-greedy prune exactly. This decides WHO survives, never the output order.",
+        "Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them the tiebreak would have preferred — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute(\"locked\") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField(\"key\") re-rolls the thinning when the key changes. Equal priorities break to the LOWER point IDENTITY (position bits plus the `seed` attribute), and NaN ranks lowest. The default 0 ties every point, so identity alone picks the survivors — which is already unbiased, so a random priority is for re-rolling, not for undoing an ordering bias. This decides WHO survives, never the output order.",
     },
   },
   execute({ inputs, params, seed: nodeSeed }) {
@@ -350,25 +356,33 @@ export const selfPrune = standardNode<SelfPruneParams>({
       typeof params.priority === "number"
         ? undefined
         : selfPruneScalar(geo, "priority", params.priority, nodeSeed, "a rank");
-    // Visit order: priority descending, ties to the lower index. The
-    // tiebreak is the point INDEX deliberately, not a hashed identity:
-    // it is what makes a constant priority (the default) reduce to the
-    // shipped greedy exactly, and this node is single-partition — index
-    // is a stable name for a point here, which it is not in the
-    // cross-partition ops that need identity hashing.
-    let order: Uint32Array | undefined;
-    if (ranks !== undefined) {
+    // Visit order: priority descending, ties to the lower IDENTITY. Who
+    // wins a greedy is decided entirely by who is considered first, so an
+    // index tiebreak made the survivors a function of array order — the
+    // same two points would swap winners after a shuffle, an upstream
+    // filter, or a cook that derived them in a different cell. Identity
+    // is the point's own name, so both sides of a seam agree on it.
+    // Points that are indistinguishable (same position AND same seed)
+    // still fall through to the index, which keeps the order total.
+    //
+    // The order is built even at a constant priority, where the loop used
+    // to walk 0..n-1: index order IS the visit order there, so leaving it
+    // alone would have left the default path the only index-keyed one.
+    const ident = pointIdentities(geo, "selfPrune");
+    const order = new Uint32Array(n);
+    for (let i = 0; i < n; i++) order[i] = i;
+    if (ranks === undefined) {
+      order.sort((a, b) => ident[a] - ident[b] || a - b);
+    } else {
       const rank = new Float64Array(n);
       for (let i = 0; i < n; i++) {
         const v = ranks.data[i];
         // NaN ranks lowest rather than poisoning the comparator.
         rank[i] = v === v ? v : Number.NEGATIVE_INFINITY;
       }
-      order = new Uint32Array(n);
-      for (let i = 0; i < n; i++) order[i] = i;
       // A difference of two infinities is NaN, which is falsy, so equal
-      // infinite ranks fall through to the index like any other tie.
-      order.sort((a, b) => rank[b] - rank[a] || a - b);
+      // infinite ranks fall through to the identity like any other tie.
+      order.sort((a, b) => rank[b] - rank[a] || ident[a] - ident[b] || a - b);
     }
     const kept = new Uint8Array(n);
     const view = { data: pd, stride: ps, count: n };
@@ -379,7 +393,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
       // its cell.
       const grid = new UniformGrid(view, minDist);
       for (let k = 0; k < n; k++) {
-        const i = order === undefined ? k : order[k];
+        const i = order[k];
         const o = i * ps;
         if (grid.hasPointCloserThan(pd[o], pd[o + 1], pd[o + 2], minDist)) continue;
         kept[i] = 1;
@@ -410,7 +424,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
       // the candidate even when the candidate's cannot reach back.
       let widest = 0;
       for (let k = 0; k < n; k++) {
-        const i = order === undefined ? k : order[k];
+        const i = order[k];
         const o = i * ps;
         const x = pd[o];
         const y = pd[o + 1];

@@ -375,6 +375,7 @@ describe("category metadata", () => {
       pointGrid: "source",
       pointLine: "source",
       pointScatterInBounds: "source",
+      pointScatterInWorld: "source",
       meshPrimitive: "source",
       surfaceSample: "sampler",
       splineSample: "sampler",

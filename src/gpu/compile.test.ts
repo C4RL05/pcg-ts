@@ -69,8 +69,9 @@ struct PcgParams {
 }
 
 @group(0) @binding(0) var<uniform> params: PcgParams;
-@group(0) @binding(1) var<storage, read> in0: array<f32>; // attribute "density": f32 tupleSize 1
-@group(0) @binding(2) var<storage, read_write> outBuf: array<f32>;
+@group(0) @binding(1) var<storage, read> in0: array<f32>; // attribute "P": f32 tupleSize 3
+@group(0) @binding(2) var<storage, read> in1: array<f32>; // attribute "density": f32 tupleSize 1
+@group(0) @binding(3) var<storage, read_write> outBuf: array<f32>;
 
 fn pcg_hash_mix(h_in: u32, value: u32) -> u32 {
   var k = value * 0xcc9e2d51u;
@@ -95,6 +96,10 @@ fn pcg_hash3(a: u32, b: u32, c: u32) -> u32 {
   return pcg_hash_finalize(pcg_hash_mix(pcg_hash_mix(pcg_hash_mix(0x0ff426f8u, a), b), c));
 }
 
+fn pcg_hash4(a: u32, b: u32, c: u32, d: u32) -> u32 {
+  return pcg_hash_finalize(pcg_hash_mix(pcg_hash_mix(pcg_hash_mix(pcg_hash_mix(0x89985015u, a), b), c), d));
+}
+
 fn pcg_hash_float(h: u32) -> f32 {
   return f32(h >> 8u) * 5.960464477539063e-8f;
 }
@@ -105,15 +110,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= params.count) {
     return;
   }
-  let v0 = in0[i];
-  let v1 = pcg_hash_float(pcg_hash3(params.seed, 0x02049853u, i));
+  let v0 = in1[i];
+  let v1 = pcg_hash_float(pcg_hash3(params.seed, 0x02049853u, pcg_hash4(bitcast<u32>(in0[i * 3u]), bitcast<u32>(in0[i * 3u + 1u]), bitcast<u32>(in0[i * 3u + 2u]), 0u)));
   let v2 = v0 * v1;
   outBuf[i] = v2;
 }
 `);
     expect(k.usesSeed).toBe(true);
-    expect(k.inputs).toEqual([{ name: "density", type: "f32", tupleSize: 1, binding: 1 }]);
-    expect(k.bindings).toEqual({ uniforms: 0, output: 2 });
+    // P rides along even though the spec never names it: randomField keys
+    // on point identity, so it reads the position bits (and the `seed`
+    // attribute, which this layout does not carry, so it folds in 0u).
+    expect(k.inputs).toEqual([
+      { name: "P", type: "f32", tupleSize: 3, binding: 1 },
+      { name: "density", type: "f32", tupleSize: 1, binding: 2 },
+    ]);
+    expect(k.bindings).toEqual({ uniforms: 0, output: 3 });
   });
 
   it("ramp over length(position) kernel (per-instance helper)", () => {

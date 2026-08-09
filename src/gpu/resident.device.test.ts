@@ -188,12 +188,12 @@ interface ScenarioOutput {
  */
 const CHAIN_SHAPE: Record<string, { members: number; dispatches: number }> = {
   hash2: { members: 2, dispatches: 3 },
-  hash4: { members: 4, dispatches: 6 },
+  hash4: { members: 4, dispatches: 7 },
   retype3: { members: 3, dispatches: 5 },
   float4: { members: 4, dispatches: 8 },
   types5: { members: 6, dispatches: 12 },
   selfRetype5: { members: 5, dispatches: 10 },
-  long8: { members: 8, dispatches: 12 },
+  long8: { members: 8, dispatches: 15 },
   seeds3: { members: 3, dispatches: 6 },
   orientSeed2: { members: 2, dispatches: 4 },
   exactTransform3: { members: 3, dispatches: 6 },
