@@ -51,7 +51,7 @@ describe("transferAttribute registry metadata", () => {
     ]);
     expect(info.params.mapping.enum).toEqual(["nearest", "uv", "raycast"]);
     expect(info.params.mapping.default).toBe("nearest");
-    expect(info.params.attrDomain.enum).toEqual(["point", "vertex"]);
+    expect(info.params.attrDomain.enum).toEqual(["point", "vertex", "primitive"]);
     expect(info.params.attrDomain.default).toBe("point");
     expect(info.params.uvAttr.default).toBe("uv");
     expect(info.params.direction.type).toBe("vec3");
@@ -117,6 +117,37 @@ describe("transferAttribute uv mapping", () => {
     );
     // Triangle 0 wins on the diagonal: w = (0.5, 0, 0.5) over 1,2,3.
     expect(out.attrs.point.require("cv").get(0)).toBe(2);
+  });
+
+  it("reads primitive-domain attributes when attrDomain is 'primitive'", async () => {
+    const src = quadSource();
+    src.attrs.primitive.add("roadWidth", "f32", 1).data.set([7, 9]);
+    // uv (0.75, 0.25) is inside triangle 0, (0.25, 0.75) inside triangle 1.
+    const dst = dstCloud([
+      { p: [0, 0, 0], uv: [0.75, 0.25] },
+      { p: [0, 0, 0], uv: [0.25, 0.75] },
+      { p: [0, 0, 0], uv: [2, 2] },
+    ]);
+    const out = firstGeo(
+      (
+        await runNode(
+          transferAttribute,
+          {
+            name: "roadWidth",
+            mapping: "uv",
+            attrDomain: "primitive",
+            missCountAttr: "missed",
+            hitAttr: "__hit",
+          },
+          { in: [makeGeometryItem(dst)], source: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    const got = out.attrs.point.require("roadWidth");
+    expect([got.get(0), got.get(1), got.get(2)]).toEqual([7, 9, 0]);
+    expect(out.attrs.detail.require("missed").get(0)).toBe(1);
+    const hit = out.attrs.point.require("__hit");
+    expect([hit.get(0), hit.get(1), hit.get(2)]).toEqual([1, 1, 0]);
   });
 });
 
@@ -450,6 +481,14 @@ describe("transferAttribute errors", () => {
     await expect(
       runNode(transferAttribute, { name: "val", attrDomain: "vertex" }, geoms()),
     ).rejects.toThrow(/attrDomain "vertex" is only valid for the "uv" and "raycast" mappings/);
+  });
+
+  it("rejects attrDomain 'primitive' with mapping 'nearest' and names the route", async () => {
+    await expect(
+      runNode(transferAttribute, { name: "val", attrDomain: "primitive" }, geoms()),
+    ).rejects.toThrow(
+      /attrDomain "primitive" is only valid for the "uv" and "raycast" mappings[\s\S]*promoteAttribute[\s\S]*3-vertex "poly" triangles/,
+    );
   });
 
   it("rejects unknown mappings actionably", async () => {

@@ -310,6 +310,12 @@ function copyRangeError(name: string): Error {
  * `undefined` means the identity, which is one bulk copy per column rather
  * than one call per element.
  *
+ * `from` is an `AttributeSet` at nearly every call site, and is typed as
+ * an iterable only so a caller can hand over a FILTERED SUBSET of one
+ * without copying any data — {@link carryPrimitiveAttributes} passes the
+ * primitive columns minus `primtype`. It is iterated twice (create, then
+ * fill), so a one-shot generator is not a valid argument; pass an array.
+ *
  * `to` is resized only when it is not already the right size — the vertex
  * and primitive sets are sized by `setTopology`, and resizing them again
  * would be a no-op at best.
@@ -328,7 +334,7 @@ function copyRangeError(name: string): Error {
  * attribute owns.
  */
 export function copyElements(
-  from: AttributeSet,
+  from: Iterable<Attribute>,
   to: AttributeSet,
   indices: ArrayLike<number> | undefined,
   count: number,
@@ -365,6 +371,91 @@ export function copyElements(
       for (let k = 0; k < ts; k++) out[dof + k] = src[so + k];
     }
   }
+}
+
+/** A name a carried primitive column could take instead, offered as the fix. */
+function carrySuggestion(name: string): string {
+  return `prim${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+}
+
+/**
+ * Carry a SOURCE PRIMITIVE's attributes onto elements a sampler just
+ * produced: `srcPrim[j]` names the primitive destination element `j` came
+ * from, and every primitive column except `primtype` is gathered through
+ * it. This is the road's `roadWidth` reaching the lamps standing on it.
+ *
+ * Every node that samples a primitive down onto points builds a FRESH
+ * cloud and reads nothing from `attrs.primitive`, so before this helper a
+ * per-edge value died at the sampler and no manual workaround existed
+ * either. The carry is AUTOMATIC and has no opt-out param on purpose: the
+ * author who wrote `roadWidth` must get it without knowing a knob exists,
+ * and `place/along-curve` would otherwise have to re-expose one.
+ *
+ * Deliberately NO index column rides along with the values. Primitive
+ * numbering is per-partition, so a shipped `sourcePrimitive` would differ
+ * between one cell and the whole region and redden split-equals-whole,
+ * which compares every point attribute float-exact. Values carry; identity
+ * does not.
+ *
+ * `primtype` is excluded because it is a type TAG rather than a value —
+ * `"polyline"` says nothing about a point, and the library already
+ * special-cases the name where a node writes the primitive domain.
+ *
+ * COLLISIONS ARE REFUSED, never merged, renamed or silently dropped. A
+ * sampler carries no input POINT attributes, so the only name a carried
+ * column can hit is one the node itself just wrote (`P`, `tangent`,
+ * `curveU`, `seed`, ...), and landing on it would DELETE what the node
+ * wrote and still return a plausible cook — the failure
+ * {@link requireReportSlot} exists to refuse. `AttributeSet.add` would
+ * raise `attribute "P" already exists`, which names neither the node nor
+ * the fix, so the refusal is made here instead.
+ *
+ * The accepted cost, recorded so nobody rediscovers it as a bug: every
+ * upstream primitive attribute is now part of a sampler's output
+ * contract, so an unrelated `connectPoints` `lengthAttr` widens the
+ * samples too. The widening is bounded — only `connectPoints` and
+ * `promoteAttribute` produce primitive columns — and losing the value
+ * silently is worse.
+ */
+export function carryPrimitiveAttributes(
+  from: AttributeSet,
+  to: AttributeSet,
+  srcPrim: ArrayLike<number>,
+  nodeType: string,
+  toDomain: "point" | "primitive",
+): void {
+  // The destination is sized by its own node (a fresh cloud, or
+  // setTopology). A mismatch here would make copyElements RESIZE it,
+  // which on the primitive domain would silently desync it from the
+  // topology — exactly the plausible-looking cook this library refuses.
+  if (to.count !== srcPrim.length) {
+    throw new Error(
+      `${nodeType}: internal — carrying primitive attributes onto ${srcPrim.length} ${toDomain} elements, but that domain holds ${to.count}`,
+    );
+  }
+  const carried: Attribute[] = [];
+  for (const attr of from) {
+    if (attr.name === PRIMTYPE_ATTR) continue;
+    const existing = to.get(attr.name);
+    if (existing !== undefined) {
+      throw new Error(
+        `${nodeType}: the input's primitive attribute "${attr.name}" ` +
+          `(${shapeLabel(attr.type, attr.tupleSize)}) is carried onto this node's samples, but ` +
+          `"${attr.name}" is already the ${shapeLabel(existing.type, existing.tupleSize)} ` +
+          `${toDomain} attribute this node writes itself — carrying it would DELETE that column ` +
+          `and the cook would look fine afterwards. Primitive attributes come along ` +
+          `automatically and there is no opt-out, so give this one a name of its own where it ` +
+          `is written (the "name" param of the setAttribute or promoteAttribute that produced ` +
+          `it, e.g. "${carrySuggestion(attr.name)}"), or drop it upstream with removeAttribute ` +
+          `(domain "primitive", names ["${attr.name}"]) if it is dead. The names this node owns ` +
+          `on its ${toDomain} domain are: ${to.names().join(", ")}. "${PRIMTYPE_ATTR}" is the ` +
+          `one primitive attribute never carried — it is a type tag, not a value.`,
+      );
+    }
+    carried.push(attr);
+  }
+  if (carried.length === 0) return;
+  copyElements(carried, to, srcPrim, srcPrim.length);
 }
 
 /**

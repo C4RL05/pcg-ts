@@ -303,7 +303,11 @@ is genuinely one point of degree 3, carrying everything it carried
 before. There is **no edge domain and none is needed**: an edge is a
 `primitive`, so a per-edge value is `promoteAttribute` point→primitive,
 a `setAttribute` on `domain: "primitive"`, and `promoteAttribute`
-primitive→point for the return trip to the junction. Stage 5 of the
+primitive→point for the return trip to the junction. Nor does the value
+stop at the edge: every sampler that reads a polyline carries the source
+primitive's attributes onto the points it emits, so a lamp placed along a
+road arrives already knowing that road's width — a sample inherits the
+primitive it was taken from, with no param to enable it. Stage 5 of the
 shipped example pipeline is exactly that, end to end.
 
 Two contracts are worth knowing before the first path graph. **Closure

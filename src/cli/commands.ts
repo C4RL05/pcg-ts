@@ -41,7 +41,7 @@ import {
   parseParamAssignments,
   readInputBindings,
 } from "./primitiveRun.js";
-import { renderSvg } from "./render.js";
+import { type ColorDomain, renderSvg } from "./render.js";
 import {
   type AttrStats,
   type ItemSummary,
@@ -579,6 +579,17 @@ const inspectCommand: Command = {
 // render
 // ---------------------------------------------------------------------------
 
+/** The domains `render --attr` can take color from, and their marks. */
+const COLOR_DOMAINS: readonly ColorDomain[] = ["point", "primitive"];
+
+/** Where a render's colors came from, named by domain and by mark. */
+function colorSourceText(domains: readonly ColorDomain[]): string {
+  const parts = domains.map((d) =>
+    d === "point" ? "point values on the circles" : "primitive values on the paths",
+  );
+  return parts.length === 0 ? "nothing colored" : parts.join(", ");
+}
+
 const renderCommand: Command = {
   spec: {
     name: "render",
@@ -594,7 +605,13 @@ const renderCommand: Command = {
       attr: {
         kind: "string",
         value: "name",
-        description: "point attribute to color by: scalar ramp, vec3+ as RGB, strings categorical",
+        description:
+          "attribute to color by: scalar ramp, vec3+ as RGB, strings categorical. Point attributes color the circles, primitive attributes color the paths; a name on both colors both",
+      },
+      "attr-domain": {
+        kind: "string",
+        value: "point|primitive",
+        description: "read --attr from one domain only, instead of from both",
       },
       radius: { kind: "number", value: "px", description: "point radius in pixels (default 1.5)" },
       "max-points": {
@@ -625,6 +642,17 @@ const renderCommand: Command = {
     );
     const width = intFlag(args, "width", "render", { min: 1 });
     const attr = stringFlag(args, "attr");
+    const attrDomainName = stringFlag(args, "attr-domain");
+    if (attrDomainName !== undefined && !(COLOR_DOMAINS as readonly string[]).includes(attrDomainName)) {
+      throw new CliUsageError(
+        `render: flag "--attr-domain" got "${attrDomainName}"; valid domains: ${COLOR_DOMAINS.join(", ")} — circles are colored from the point domain and paths from the primitive domain, so vertex and detail have no mark to color`,
+      );
+    }
+    if (attrDomainName !== undefined && attr === undefined) {
+      throw new CliUsageError(
+        'render: --attr-domain narrows which domain --attr is read from, so it needs --attr <name>; drop it to color from both domains',
+      );
+    }
     const radius = numberFlag(args, "radius");
     if (radius !== undefined && !(radius > 0)) {
       throw new CliUsageError(
@@ -636,6 +664,7 @@ const renderCommand: Command = {
     const result = renderSvg(target.collection, {
       ...(width !== undefined ? { width } : {}),
       ...(attr !== undefined ? { attr } : {}),
+      ...(attrDomainName !== undefined ? { attrDomain: attrDomainName as ColorDomain } : {}),
       ...(radius !== undefined ? { radius } : {}),
       ...(maxPoints !== undefined ? { maxPoints } : {}),
       ...(maxPrimitives !== undefined ? { maxPrimitives } : {}),
@@ -654,7 +683,9 @@ const renderCommand: Command = {
       instancesTotal: result.instancesTotal,
       deviceInstances: result.deviceInstances,
       skipped: result.skipped,
-      ...(result.colorAttr !== undefined ? { colorAttr: result.colorAttr } : {}),
+      ...(result.colorAttr !== undefined
+        ? { colorAttr: result.colorAttr, colorDomains: result.colorDomains ?? [] }
+        : {}),
       ...(result.bounds !== undefined ? { bounds: result.bounds } : {}),
     };
     if (outPath === undefined) return { text: result.svg, json };
@@ -677,7 +708,12 @@ const renderCommand: Command = {
             `${plural(result.deviceInstances, "instance")} not drawn: device-resident (transforms live in GPU buffers, never composed on the CPU)`,
           ]
         : []),
-      ...(result.colorAttr !== undefined ? [`colored by "${result.colorAttr}"`] : []),
+      // Never just `colored by "x"`: the same name can live on the points,
+      // on the primitives or on both, and a reader who is not told which
+      // one this picture came from cannot know what it means.
+      ...(result.colorAttr !== undefined
+        ? [`colored by "${result.colorAttr}" — ${colorSourceText(result.colorDomains ?? [])}`]
+        : []),
       ...(result.bounds !== undefined
         ? [
             `bounds (world) x ${fmtStat(result.bounds.min[0])}..${fmtStat(result.bounds.max[0])}  z ${fmtStat(result.bounds.min[1])}..${fmtStat(result.bounds.max[1])}`,

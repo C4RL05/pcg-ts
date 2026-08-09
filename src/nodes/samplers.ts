@@ -8,6 +8,7 @@ import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import {
   type FieldParam,
+  carryPrimitiveAttributes,
   gatherPoints,
   locateOnArcLength,
   optionalGeometry,
@@ -32,7 +33,7 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
   type: "surfaceSample",
   category: "sampler",
   description:
-    "Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement). densityField (0..1) is then evaluated once over the candidate cloud and each candidate is accepted when a per-candidate hashed random < density — so the output count is at most `count` and exactly `count` when density is 1. Output points carry P, a flat per-triangle `normal` (f32 tuple 3), density 1, and a hashed per-point seed.",
+    "Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement). densityField (0..1) is then evaluated once over the candidate cloud and each candidate is accepted when a per-candidate hashed random < density — so the output count is at most `count` and exactly `count` when density is 1. Output points carry P, a flat per-triangle `normal` (f32 tuple 3), density 1, and a hashed per-point seed. They ALSO carry every attribute of the triangle's own PRIMITIVE, gathered onto each sample — a per-face value written upstream survives the sampling instead of dying at it. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes is refused with an error naming the attribute and the fix.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -80,7 +81,13 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
     const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
 
     // Collect triangles (3-vertex "poly" primitives) and their areas.
+    // `tris` holds each triangle's START VERTEX, which is what the
+    // placement loop reads; `triPrim` holds the PRIMITIVE it came from,
+    // which is what its attributes are keyed by. The two are not the same
+    // number and neither derives from the other once non-triangles are
+    // skipped.
     const tris: number[] = [];
+    const triPrim: number[] = [];
     const cumArea: number[] = [];
     const normals: number[] = [];
     let total = 0;
@@ -103,6 +110,7 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
       const twiceArea = Math.sqrt(nx * nx + ny * ny + nz * nz);
       if (twiceArea <= 0) continue;
       tris.push(v);
+      triPrim.push(p);
       total += twiceArea / 2;
       cumArea.push(total);
       const inv = 1 / twiceArea;
@@ -120,6 +128,9 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
     const cp = candidates.attrs.point.require("P").data;
     const cn = candidates.attrs.point.add("normal", "f32", 3, [0, 1, 0]).data;
     const cs = candidates.attrs.point.require("seed").data;
+    // Which triangle's PRIMITIVE each candidate landed on, so the mesh's
+    // per-primitive values can be gathered onto the samples below.
+    const candPrim = new Uint32Array(n);
     for (let i = 0; i < n; i++) {
       const r = hashFloat(hashCombine(seed, i, 0)) * total;
       // First triangle whose cumulative area exceeds r.
@@ -147,6 +158,7 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
       cn[i * 3 + 1] = normals[lo * 3 + 1];
       cn[i * 3 + 2] = normals[lo * 3 + 2];
       cs[i] = hashCombine(seed, i, 3);
+      candPrim[i] = triPrim[lo];
     }
 
     // Accept candidates by density (evaluated once over the candidate cloud).
@@ -174,6 +186,26 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
     for (let i = 0; i < n; i++) {
       if (hashFloat(hashCombine(seed, i, 4)) < density.data[i]) accepted.push(i);
     }
+    // The mesh's per-primitive values, onto the candidates — `gatherPoints`
+    // then carries the new columns to the survivors for free.
+    //
+    // AFTER the density resolve, not before, and that ordering is
+    // load-bearing rather than incidental: the GPU resolver keys its
+    // kernel cache on the domain's whole ATTRIBUTE LAYOUT and compiles
+    // against it, so widening the candidate cloud first would change
+    // eligibility and could bounce a mesh carrying a string primitive
+    // attribute off the device entirely. `densityField` therefore sees
+    // exactly the layout it saw before this phase, on both paths. Adding
+    // columns here cannot disturb the resolved `density` either: the
+    // candidate count is unchanged, so nothing is resized and no existing
+    // column moves.
+    carryPrimitiveAttributes(
+      geo.attrs.primitive,
+      candidates.attrs.point,
+      candPrim,
+      "surfaceSample",
+      "point",
+    );
     return { out: [makeGeometryItem(gatherPoints(candidates, accepted))] };
   },
 });
@@ -190,7 +222,7 @@ export const splineSample = standardNode<SplineSampleParams>({
   type: "splineSample",
   category: "sampler",
   description:
-    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: any node that can REMOVE points drops it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path and this node will report that it found no polylines. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve. mode 'count' places exactly `count` samples (endpoints included on open curves; when every polyline is closed the samples divide the total length without duplicating the start). mode 'spacing' places samples every `spacing` world units from the start. Output points carry P, the unit segment `tangent` (f32 tuple 3), and `curveU` (f32) — the normalized arc-length position in [0, 1]. Each sample ALSO carries every attribute of the polyline PRIMITIVE it landed on, even though the polylines are measured as one concatenated curve, so a per-edge value survives the sampling; a sample landing exactly on a join between two polylines takes the LATER one's values. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes is refused with an error naming the attribute and the fix. Input polylines come from pointsToPath, pathResample, or createPolyline in TypeScript; the output is a plain point CLOUD with no topology, so it is no longer a path. Topology is fragile upstream too: any node that can REMOVE points drops it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path and this node will report that it found no polylines. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -229,6 +261,10 @@ export const splineSample = standardNode<SplineSampleParams>({
     const segAx = new Float64Array(nSeg * 3);
     const segDir = new Float64Array(nSeg * 3); // per-segment direction (unnormalized)
     const cum = new Float64Array(nSeg + 1); // cumulative length; cum[j] = length before segment j
+    // Which polyline PRIMITIVE each concatenated segment came from — the
+    // one thing the concatenation used to throw away, and the only thing
+    // a sample needs in order to keep its own curve's values.
+    const segPrim = new Uint32Array(nSeg);
     let closedCount = 0;
     let j = 0;
     for (const table of tables) {
@@ -239,6 +275,7 @@ export const splineSample = standardNode<SplineSampleParams>({
           segDir[j * 3 + c] = table.segDir[k * 3 + c];
         }
         cum[j + 1] = cum[j] + table.segLen[k];
+        segPrim[j] = table.prim;
         j++;
       }
     }
@@ -269,6 +306,7 @@ export const splineSample = standardNode<SplineSampleParams>({
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
     const seeds = out.attrs.point.require("seed").data;
+    const samplePrim = new Uint32Array(n);
     const at = [0, 0]; // scratch [segment, t] reused by every sample
     for (let i = 0; i < n; i++) {
       const s = positions[i];
@@ -289,7 +327,19 @@ export const splineSample = standardNode<SplineSampleParams>({
       }
       curveU[i] = L > 0 ? s / L : 0;
       seeds[i] = hashCombine(seed, i);
+      samplePrim[i] = segPrim[lo];
     }
+    // Each sample keeps its OWN polyline's values, even though the node
+    // measured every polyline as one concatenated curve. A sample landing
+    // exactly on a join takes the LATER polyline, which is the segment
+    // `locateOnArcLength` already put it on — one rule, not two.
+    carryPrimitiveAttributes(
+      geo.attrs.primitive,
+      out.attrs.point,
+      samplePrim,
+      "splineSample",
+      "point",
+    );
     return { out: [makeGeometryItem(out)] };
   },
 });

@@ -278,7 +278,7 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
   type: "transferAttribute",
   category: "attribute",
   description:
-    "Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order); destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed, and hitAttr to record WHICH ones did not (a per-point bool, 1 = found a source, 0 = missed). A miss cannot report itself through the transferred value, so hitAttr is the only per-point way to find one: filter on it to discard the misses rather than casting a second query to re-learn what this one already knew. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.",
+    "Transfers an attribute from the `source` geometry onto the main input's points, creating or overwriting it on the output's point domain. Mapping 'nearest' copies from the nearest source point in 3D (positions from P; distance ties resolve to the lowest source index; every point is assigned). Mapping 'uv' locates each destination point's UV (see uvAttr) in the source triangulation's UV space and interpolates inside the containing triangle; a UV on an edge shared by two triangles deterministically picks the lowest source primitive index. Mapping 'raycast' casts a normalized ray from each destination point along `direction` (or per-point directionAttr) against the source triangle mesh and interpolates at the nearest forward hit (smallest t >= 0, optionally capped by maxDistance; exactly-equal distances pick the lowest source primitive index). For uv/raycast the source must have 3-vertex 'poly' primitives (createTriangleMesh); zero-area (degenerate) triangles are skipped; f32 attributes interpolate barycentrically while i32/u32/bool/string take the triangle corner with the largest barycentric weight (ties to the first corner in vertex order). A PRIMITIVE source (attrDomain 'primitive') is never interpolated, whatever its type: a per-face value is constant across its triangle, so it arrives bit-exact instead of blended, and a per-triangle id, material tag or width survives the transfer intact. That reads a per-face value off a triangle MESH only — an edge or polyline network (a road from connectPoints/pointsToPath) has no 3-vertex 'poly' primitives, so neither uv nor raycast can ever reach one; to move a value off an edge network, promoteAttribute it from 'primitive' to 'point' on the source and transfer with mapping 'nearest'. Back to the shared policy: destination points with no containing triangle or no hit are misses that keep their prior value (the attribute default when the attribute did not exist) — set missCountAttr to record how many missed, and hitAttr to record WHICH ones did not (a per-point bool, 1 = found a source, 0 = missed). A miss cannot report itself through the transferred value, so hitAttr is the only per-point way to find one: filter on it to discard the misses rather than casting a second query to re-learn what this one already knew. All mappings are accelerated with deterministic uniform grids, so large inputs are fine.",
   inputs: [
     { name: "in", kind: "geometry" },
     { name: "source", kind: "geometry" },
@@ -289,7 +289,7 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       type: "string",
       default: "density",
       description:
-        "Name of the attribute to transfer. Must exist on the source domain selected by attrDomain (always the point domain for mapping 'nearest').",
+        "Name of the attribute to transfer. Must exist on the source domain selected by attrDomain — point, vertex or primitive for mappings 'uv' and 'raycast', always the point domain for mapping 'nearest'.",
     },
     mapping: {
       type: "enum",
@@ -301,9 +301,9 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
     attrDomain: {
       type: "enum",
       default: "point",
-      enum: ["point", "vertex"],
+      enum: ["point", "vertex", "primitive"],
       description:
-        "Source domain the transferred attribute is read from (uv/raycast only): 'point' reads triangle corners through the topology, 'vertex' reads per-corner values (seam-accurate). Mapping 'nearest' supports only 'point'. The result always lands on the destination's point domain.",
+        "Source domain the transferred attribute is read from (uv/raycast only): 'point' reads triangle corners through the topology, 'vertex' reads per-corner values (seam-accurate), 'primitive' reads one value for the whole triangle. Mapping 'nearest' supports only 'point'. The result always lands on the destination's point domain. What 'primitive' reaches, and what it does not: it reads a per-face value off a TRIANGLE MESH — the source still needs 3-vertex 'poly' primitives, so an edge or polyline network (a road built with connectPoints or pointsToPath, carrying a width promoted onto its edges) has no triangles for either mapping to find and is refused, naming the fix. To move a value off an edge network, promoteAttribute it from 'primitive' to 'point' on the source and transfer with mapping 'nearest'.",
     },
     uvAttr: {
       type: "string",
@@ -387,8 +387,16 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
     let hit: Uint8Array | null = null;
     if (params.mapping === "nearest") {
       if (attrDomain !== "point") {
+        // The primitive case gets its own route rather than the generic
+        // "switch mapping": switching is exactly what does NOT work for the
+        // geometry that produces primitive attributes in the first place, an
+        // edge network, since uv and raycast need triangles it has none of.
+        const fix =
+          attrDomain === "primitive"
+            ? `mapping "nearest" searches source POINTS, and a per-primitive value sits on no point. Promote it first: promoteAttribute on the source from "primitive" to "point" (mode "max" or "first"), then transfer with attrDomain "point". Mappings "uv" and "raycast" do read a primitive source directly, but only from 3-vertex "poly" triangles — an edge or polyline network has none, so switching mapping is not the fix there`
+            : `mapping "nearest" transfers point-domain attributes; set attrDomain to "point" or switch mapping`;
         throw new Error(
-          `transferAttribute: attrDomain "${params.attrDomain}" is only valid for the "uv" and "raycast" mappings — mapping "nearest" transfers point-domain attributes; set attrDomain to "point" or switch mapping`,
+          `transferAttribute: attrDomain "${params.attrDomain}" is only valid for the "uv" and "raycast" mappings — ${fix}`,
         );
       }
       transferNearest(dst, src, params.name);

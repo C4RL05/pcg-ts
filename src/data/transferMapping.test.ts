@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Attribute } from "./attribute.js";
-import { Geometry, createTriangleMesh, PRIMTYPE_ATTR } from "./geometry.js";
+import { Geometry, createPolyline, createTriangleMesh, PRIMTYPE_ATTR } from "./geometry.js";
 import { createPointCloud } from "./points.js";
 import {
   TRANSFER_AREA_EPS,
@@ -622,8 +622,10 @@ describe("transferUv", () => {
     expect(() => transferUv(dst, src, "ghost")).toThrow(
       /attribute "ghost" not found on source point domain/,
     );
+    // No triangles is reported before the source's missing UVs: adding UVs
+    // to a triangle-less source could not make the lookup work.
     expect(() => transferUv(dst, createPointCloud(3), "density")).toThrow(
-      /destination point-domain UV|source UV attribute/,
+      /source has no triangles/,
     );
     const cloudSrc = createPointCloud(3);
     cloudSrc.attrs.point.add("uv", "f32", 2);
@@ -639,9 +641,9 @@ describe("transferUv", () => {
     expect(() => transferUv(dst, src, "val", { cellSize: 0 })).toThrow(
       /cellSize must be a positive finite number/,
     );
-    expect(() =>
-      transferUv(dst, src, "val", { attrDomain: "primitive" as never }),
-    ).toThrow(/attrDomain must be "point" or "vertex"/);
+    expect(() => transferUv(dst, src, "val", { attrDomain: "detail" as never })).toThrow(
+      /attrDomain must be "point", "vertex", or "primitive"/,
+    );
     expect(() => transferUv(dst, src, "val", { uvDomain: "detail" as never })).toThrow(
       /uvDomain must be "auto", "vertex", or "point"/,
     );
@@ -891,5 +893,154 @@ describe("transferRaycast", () => {
     expect(() => transferRaycast(noP, src, "val")).toThrow(
       /destination position attribute "P" not found/,
     );
+  });
+});
+
+describe("primitive-domain source attributes", () => {
+  /** Unit quad (2 triangles) carrying per-primitive f32 / i32 / string. */
+  function quadWithPrimAttrs(): Geometry {
+    const geo = unitQuad();
+    geo.attrs.primitive.add("pval", "f32", 1).data.set([7, 9]);
+    geo.attrs.primitive.add("pid", "i32", 1).data.set([70, 90]);
+    const tag = geo.attrs.primitive.add("ptag", "string", 1);
+    tag.setString(0, "lower");
+    tag.setString(1, "upper");
+    return geo;
+  }
+
+  /** Ground quad (2 triangles, y=0, xz in [0,10]) with per-primitive f32. */
+  function groundWithPrimAttr(): Geometry {
+    const geo = groundQuad();
+    geo.attrs.primitive.add("pval", "f32", 1).data.set([7, 9]);
+    return geo;
+  }
+
+  it("transferUv reads the containing triangle's own primitive value", () => {
+    const src = quadWithPrimAttrs();
+    // (0.75, 0.25) is strictly inside triangle 0 (uv 00-10-11);
+    // (0.25, 0.75) strictly inside triangle 1 (uv 00-11-01); (2, 2) misses.
+    const dst = cloudWithUv([
+      [0.75, 0.25],
+      [0.25, 0.75],
+      [2, 2],
+    ]);
+    const f32 = transferUv(dst, src, "pval", { attrDomain: "primitive" });
+    expect(f32.missCount).toBe(1);
+    expect(Array.from(f32.hit)).toEqual([1, 1, 0]);
+    expect(attrValues(f32.attribute, 3)).toEqual([7, 9, 0]);
+
+    const i32 = transferUv(cloudWithUv([[0.75, 0.25]]), src, "pid", {
+      attrDomain: "primitive",
+    });
+    expect(attrValues(i32.attribute, 1)).toEqual([70]);
+
+    const str = transferUv(
+      cloudWithUv([
+        [0.75, 0.25],
+        [0.25, 0.75],
+      ]),
+      src,
+      "ptag",
+      { attrDomain: "primitive" },
+    );
+    expect(str.attribute.getString(0)).toBe("lower");
+    expect(str.attribute.getString(1)).toBe("upper");
+  });
+
+  it("transferRaycast reads the hit triangle's own primitive value", () => {
+    const src = groundWithPrimAttr();
+    // z < x lands on triangle 0, z > x on triangle 1, off-mesh misses.
+    const dst = cloudAt([
+      [7.5, 4, 2.5],
+      [2.5, 4, 7.5],
+      [50, 4, 50],
+    ]);
+    const res = transferRaycast(dst, src, "pval", { attrDomain: "primitive" });
+    expect(res.missCount).toBe(1);
+    expect(Array.from(res.hit)).toEqual([1, 1, 0]);
+    expect(attrValues(res.attribute, 3)).toEqual([7, 9, 0]);
+  });
+
+  // A primitive value is constant across its triangle, so the mapped result
+  // must be the value ITSELF, never a barycentric blend of three copies of
+  // it. Under this module's float64 accumulator that blend is bit-identical
+  // for every FINITE f32 value, so the witness is the one case where the
+  // arithmetic still shows: a weight that lands exactly on 0 (a query on a
+  // triangle edge) turns 0 * Infinity into NaN. The point-domain transfer of
+  // the same value over the same triangle is the control — it is the
+  // interpolated answer, and it is NOT the value.
+  it("never interpolates a primitive value (exactness witness)", () => {
+    const src = quadWithPrimAttrs();
+    src.attrs.primitive.add("inf", "f32", 1).data.set([Infinity, Infinity]);
+    src.attrs.point.add("inf", "f32", 1).data.set([Infinity, Infinity, Infinity, Infinity]);
+    // uv (0.5, 0) sits on triangle 0's edge uv(0,0)-uv(1,0): w = (0.5, 0.5, 0).
+    const edgeQuery = (): Geometry => cloudWithUv([[0.5, 0]]);
+    const interpolated = transferUv(edgeQuery(), src, "inf", { attrDomain: "point" });
+    expect(interpolated.missCount).toBe(0);
+    expect(attrValues(interpolated.attribute, 1)[0]).toBeNaN();
+    const exact = transferUv(edgeQuery(), src, "inf", { attrDomain: "primitive" });
+    expect(exact.missCount).toBe(0);
+    expect(attrValues(exact.attribute, 1)).toEqual([Infinity]);
+
+    // Same witness through raycast: a ray down onto (5, 0, 0) lies on
+    // triangle 0's edge A-B, giving w = (0.5, 0.5, 0) exactly.
+    const rsrc = groundWithPrimAttr();
+    rsrc.attrs.primitive.add("inf", "f32", 1).data.set([Infinity, Infinity]);
+    rsrc.attrs.point.add("inf", "f32", 1).data.set([Infinity, Infinity, Infinity, Infinity]);
+    const rayQuery = (): Geometry => cloudAt([[5, 10, 0]]);
+    const rInterp = transferRaycast(rayQuery(), rsrc, "inf", { attrDomain: "point" });
+    expect(rInterp.missCount).toBe(0);
+    expect(attrValues(rInterp.attribute, 1)[0]).toBeNaN();
+    const rExact = transferRaycast(rayQuery(), rsrc, "inf", { attrDomain: "primitive" });
+    expect(rExact.missCount).toBe(0);
+    expect(attrValues(rExact.attribute, 1)).toEqual([Infinity]);
+  });
+
+  it("is independent of query order and of the grid cell size", () => {
+    const src = quadWithPrimAttrs();
+    const queries = [
+      [0.9, 0.1],
+      [0.1, 0.9],
+      [0.6, 0.4],
+      [0.4, 0.6],
+      [0.5, 0.5],
+    ];
+    let baseline: number[] | null = null;
+    for (const cellSize of [0.05, 0.37, 4]) {
+      const got = attrValues(
+        transferUv(cloudWithUv(queries), src, "pval", {
+          attrDomain: "primitive",
+          cellSize,
+        }).attribute,
+        queries.length,
+      );
+      if (baseline === null) baseline = got;
+      else expect(got, `cellSize ${cellSize}`).toEqual(baseline);
+    }
+    const reversed = attrValues(
+      transferUv(cloudWithUv([...queries].reverse()), src, "pval", {
+        attrDomain: "primitive",
+      }).attribute,
+      queries.length,
+    );
+    expect(reversed).toEqual([...(baseline as number[])].reverse());
+  });
+
+  it("names the fix when the primitive attribute is missing or the source is a polyline", () => {
+    const src = quadWithPrimAttrs();
+    const dst = cloudWithUv([[0.5, 0.5]]);
+    expect(() => transferUv(dst, src, "ghost", { attrDomain: "primitive" })).toThrow(
+      /attribute "ghost" not found on source primitive domain/,
+    );
+    // A polyline network has no triangles at all, whatever domain the
+    // attribute is on: uv and raycast can never reach one.
+    const road = createPolyline([0, 0, 0, 1, 0, 0, 2, 0, 0]);
+    road.attrs.primitive.add("width", "f32", 1).data.set([3]);
+    expect(() => transferUv(dst, road, "width", { attrDomain: "primitive" })).toThrow(
+      /polyline\/edge network has none/,
+    );
+    expect(() =>
+      transferRaycast(cloudAt([[0.5, 1, 0]]), road, "width", { attrDomain: "primitive" }),
+    ).toThrow(/polyline\/edge network has none/);
   });
 });

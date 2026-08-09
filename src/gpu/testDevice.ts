@@ -49,3 +49,22 @@ export function deviceSuiteName(base: string): string {
     ? `${base} [SKIPPED: no WebGPU adapter available]`
     : `${base} [${testDevice.label}]`;
 }
+
+/**
+ * Hook budget for a device suite that builds a whole scenario in
+ * `beforeAll`.
+ *
+ * Vitest's 10s default is not a budget these can respect: one scenario
+ * acquires an adapter, compiles every pipeline variant it exercises and
+ * cooks the graph, and the largest already measured 10.46s on an RTX
+ * 5090 — so it failed on hook timeout while every assertion in it
+ * passed. A gate that trips on the difference between 9.9 and 10.5
+ * seconds of shader compilation is reporting machine speed, not
+ * correctness.
+ *
+ * This is generous on purpose. It is a ceiling for a hung device, not a
+ * performance assertion: nothing here should be read as "40s is fine".
+ * These suites skip entirely where no adapter exists (CI included), so
+ * the number only ever applies on a developer machine with a GPU.
+ */
+export const DEVICE_HOOK_TIMEOUT_MS = 40_000;

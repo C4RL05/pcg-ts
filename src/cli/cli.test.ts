@@ -537,14 +537,44 @@ describe("pcg cli — render", () => {
       EXIT_OK,
     );
     expect(JSON.parse(ok.stdout()).colorAttr).toBe("height");
+    // Which domain the colors came from is part of the report, because
+    // the same name can live on the points, on the primitives or on both.
+    expect(JSON.parse(ok.stdout()).colorDomains).toEqual(["point"]);
 
     const bad = withGraph();
     expect(await runCli(["render", GRAPH, "--attr", "nope", "--out", "/n.svg"], bad.io)).toBe(
       EXIT_FAILURE,
     );
     expect(bad.stderr()).toContain(
-      'item 0 has no point attribute "nope" to color by; item 0 point attributes: ',
+      'item 0 has no attribute "nope" to color by on the point or the primitive domain; item 0 point attributes: ',
     );
+    expect(bad.stderr()).toContain("primitive attributes: (none)");
+  });
+
+  it("--attr-domain narrows the lookup, and is refused where it would color nothing", async () => {
+    const narrowed = withGraph();
+    expect(
+      await runCli(
+        ["render", GRAPH, "--attr", "height", "--attr-domain", "point", "--out", "/h.svg", "--json"],
+        narrowed.io,
+      ),
+    ).toBe(EXIT_OK);
+    expect(JSON.parse(narrowed.stdout()).colorDomains).toEqual(["point"]);
+
+    const alone = withGraph();
+    expect(
+      await runCli(["render", GRAPH, "--attr-domain", "point", "--out", "/a.svg"], alone.io),
+    ).toBe(EXIT_USAGE);
+    expect(alone.stderr()).toContain("--attr-domain narrows which domain --attr is read from");
+
+    const unknown = withGraph();
+    expect(
+      await runCli(
+        ["render", GRAPH, "--attr", "height", "--attr-domain", "vertex", "--out", "/v.svg"],
+        unknown.io,
+      ),
+    ).toBe(EXIT_USAGE);
+    expect(unknown.stderr()).toContain('flag "--attr-domain" got "vertex"; valid domains: point, primitive');
   });
 
   it("--json without --out is a misuse, not a failure", async () => {

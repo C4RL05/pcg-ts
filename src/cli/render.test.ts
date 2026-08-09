@@ -19,6 +19,7 @@ import {
   makeDeviceInstancesItem,
   makeGeometryItem,
   makeInstancesItem,
+  setPolylineTopology,
 } from "../index.js";
 import { renderSvg } from "./render.js";
 
@@ -41,6 +42,24 @@ function circles(svg: string): string[] {
 /** The `<g fill="...">` colors, in the order the document lists them. */
 function fillOrder(svg: string): string[] {
   return [...svg.matchAll(/<g fill="([^"]+)">/g)].map((m) => m[1]);
+}
+
+/** The path groups' stroke colors, in the order the document lists them. */
+function strokeOrder(svg: string): string[] {
+  return [...svg.matchAll(/<g fill="none" stroke="([^"]+)"/g)].map((m) => m[1]);
+}
+
+/** Path `d` -> the stroke color of the group it was emitted in. */
+function strokeOf(svg: string): Map<string, string> {
+  const byPath = new Map<string, string>();
+  let color = "";
+  for (const line of svg.split("\n")) {
+    const group = /^<g fill="none" stroke="([^"]+)"/.exec(line);
+    if (group !== null) color = group[1];
+    const path = /^<path d="([^"]+)"\/>$/.exec(line);
+    if (path !== null) byPath.set(path[1], color);
+  }
+  return byPath;
 }
 
 describe("renderSvg", () => {
@@ -268,7 +287,140 @@ describe("renderSvg", () => {
     expect(() =>
       renderSvg([makeGeometryItem(withAttr), makeGeometryItem(without)], { attr: "d" }),
     ).toThrow(
-      'item 1 has no point attribute "d" to color by; item 1 point attributes: P, rot, scale, density, boundsMin, boundsMax, color, seed, other',
+      'item 1 has no attribute "d" to color by on the point or the primitive domain; item 1 point attributes: P, rot, scale, density, boundsMin, boundsMax, color, seed, other; primitive attributes: (none)',
+    );
+  });
+
+  // -- primitive-domain coloring -------------------------------------------
+
+  /**
+   * A road-shaped network: two polyline primitives over three points,
+   * meeting at the middle one — the topology `pointsToPath` cannot
+   * express and the reason a per-edge value needs a domain of its own.
+   */
+  function network(): Geometry {
+    const geo = cloudGeo([[0, 0], [1, 1], [2, 0]]);
+    // Primitive columns are added after the topology, which drops them.
+    setPolylineTopology(geo, [0, 1, 1, 2], [0, 2], [2, 2]);
+    return geo;
+  }
+
+  it("colors polyline paths from a primitive attribute, one group per color", () => {
+    const geo = network();
+    const width = geo.attrs.primitive.add("roadWidth", "f32", 1);
+    width.set(0, 0);
+    width.set(1, 1);
+    const result = renderSvg([makeGeometryItem(geo)], { attr: "roadWidth", width: 216 });
+    expect(result.primitives).toBe(2);
+    expect(result.colorAttr).toBe("roadWidth");
+    expect(result.colorDomains).toEqual(["primitive"]);
+    // Two edges, two ends of the ramp, two stroke groups — the per-edge
+    // value that phase 43 could compute and nothing could show.
+    expect(strokeOrder(result.svg)).toEqual(["#440154", "#fde725"]);
+    expect(result.svg).toContain('<path d="M8 8L108 108"/>');
+    expect(result.svg).toContain('<path d="M108 108L208 8"/>');
+    // The points of a geometry whose only copy is on the primitives keep
+    // the flat default: a junction of three roads has three candidate
+    // values and inventing one would draw something not in the data.
+    expect(fillOrder(result.svg)).toEqual(["#1f2937"]);
+  });
+
+  it("colors both marks when one name lives on both domains, over one shared ramp", () => {
+    const geo = network();
+    const primWidth = geo.attrs.primitive.add("w", "f32", 1);
+    primWidth.set(0, 0);
+    primWidth.set(1, 4);
+    const pointWidth = geo.attrs.point.add("w", "f32", 1);
+    pointWidth.set(0, 0);
+    pointWidth.set(1, 8);
+    pointWidth.set(2, 4);
+    const result = renderSvg([makeGeometryItem(geo)], { attr: "w" });
+    expect(result.colorDomains).toEqual(["point", "primitive"]);
+    // One ramp over 0..8: the primitive at 4 and the point at 4 are the
+    // same color, which is what "one picture, one legend" has to mean
+    // once two domains are in it.
+    expect(strokeOrder(result.svg)).toEqual(["#440154", "#1fa187"].sort());
+    expect(fillOrder(result.svg)).toEqual(["#1fa187", "#440154", "#fde725"]);
+
+    // ...and the narrowed render is exactly the point-only picture.
+    const pointsOnly = renderSvg([makeGeometryItem(geo)], { attr: "w", attrDomain: "point" });
+    expect(pointsOnly.colorDomains).toEqual(["point"]);
+    expect(strokeOrder(pointsOnly.svg)).toEqual(["#2563eb"]);
+  });
+
+  it("renders a string primitive attribute categorically, by a hash of the value", () => {
+    const geo = network();
+    const kind = geo.attrs.primitive.add("roadKind", "string", 1);
+    kind.setString(0, "avenue");
+    kind.setString(1, "street");
+    // Same two categories, opposite interning order.
+    const flipped = network();
+    const flippedKind = flipped.attrs.primitive.add("roadKind", "string", 1);
+    flippedKind.setString(0, "street");
+    flippedKind.setString(1, "avenue");
+
+    const a = renderSvg([makeGeometryItem(geo)], { attr: "roadKind", width: 216 });
+    const b = renderSvg([makeGeometryItem(flipped)], { attr: "roadKind", width: 216 });
+    expect(a.colorDomains).toEqual(["primitive"]);
+    expect(strokeOrder(a.svg)).toHaveLength(2);
+    expect(strokeOrder(b.svg)).toEqual(strokeOrder(a.svg));
+    // "avenue" keeps its color whichever edge interned it first: it is
+    // the first edge in `a` and the second in `b`.
+    expect(strokeOf(a.svg).get("M8 8L108 108")).toBe(strokeOf(b.svg).get("M108 108L208 8"));
+    expect(strokeOf(a.svg).get("M108 108L208 8")).toBe(strokeOf(b.svg).get("M8 8L108 108"));
+  });
+
+  it("colors closed primitives too, and keeps closed and open groups apart", () => {
+    const mesh = createTriangleMesh(
+      Float32Array.of(0, 0, 0, 1, 0, 1, 2, 0, 0, 3, 0, 3),
+      Uint32Array.of(0, 1, 2, 1, 2, 3),
+    );
+    const shade = mesh.attrs.primitive.add("shade", "f32", 1);
+    shade.set(0, 0);
+    shade.set(1, 1);
+    const result = renderSvg([makeGeometryItem(mesh)], { attr: "shade" });
+    expect(result.colorDomains).toEqual(["primitive"]);
+    expect(strokeOrder(result.svg)).toEqual(["#440154", "#fde725"]);
+    expect(result.svg).not.toContain("stroke-linecap");
+  });
+
+  it("normalizes the primitive ramp over the whole collection", () => {
+    const low = network();
+    const lowW = low.attrs.primitive.add("w", "f32", 1);
+    lowW.set(0, 0);
+    lowW.set(1, 1);
+    const high = network();
+    const highW = high.attrs.primitive.add("w", "f32", 1);
+    highW.set(0, 100);
+    highW.set(1, 200);
+    const result = renderSvg([makeGeometryItem(low), makeGeometryItem(high)], { attr: "w" });
+    // Range 0..200 across both items, exactly as for points.
+    expect(strokeOrder(result.svg)).toEqual(["#1fa187", "#440154", "#fde725"].sort());
+  });
+
+  it("names the domain a narrowed lookup missed, and the domain that has it", () => {
+    const geo = network();
+    geo.attrs.primitive.add("roadWidth", "f32", 1);
+    expect(() =>
+      renderSvg([makeGeometryItem(geo)], { attr: "roadWidth", attrDomain: "point" }),
+    ).toThrow(
+      'item 0 has no point attribute "roadWidth" to color by, but item 0 carries it on the primitive domain — pass attrDomain "primitive", or drop attrDomain to color from both',
+    );
+    expect(() =>
+      renderSvg([makeGeometryItem(geo)], { attr: "elevation", attrDomain: "primitive" }),
+    ).toThrow(
+      'item 0 has no primitive attribute "elevation" to color by; item 0 primitive attributes: primtype, roadWidth',
+    );
+  });
+
+  it("refuses a domain that colors nothing, and a domain with no attribute to read", () => {
+    const geo = network();
+    expect(() =>
+      // @ts-expect-error — the flag's whole job is to name a colorable domain.
+      renderSvg([makeGeometryItem(geo)], { attr: "density", attrDomain: "vertex" }),
+    ).toThrow('renderSvg: option "attrDomain" must be "point" or "primitive"');
+    expect(() => renderSvg([makeGeometryItem(geo)], { attrDomain: "primitive" })).toThrow(
+      'renderSvg: option "attrDomain" narrows which domain "attr" is read from',
     );
   });
 

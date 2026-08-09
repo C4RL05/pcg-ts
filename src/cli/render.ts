@@ -52,6 +52,17 @@ const POLYLINE_COLOR = "#2563eb";
 const POLY_COLOR = "#9ca3af";
 const BACKGROUND = "#ffffff";
 
+/**
+ * The domains a picture can take color from, and the marks each one
+ * colors. Vertex and detail are not here: a vertex is drawn as part of
+ * its primitive's path rather than on its own, and a detail attribute has
+ * one value for the whole geometry, which is a caption and not a color.
+ */
+export type ColorDomain = "point" | "primitive";
+
+/** Canonical order, so reports and lookups never depend on a Set's order. */
+const COLOR_DOMAINS = ["point", "primitive"] as const;
+
 /** Stroke width for primitive paths, in pixels. */
 const STROKE_WIDTH = "1.2";
 
@@ -60,17 +71,35 @@ export interface RenderOptions {
   /** Image width in pixels, >= 1 (height follows the data's aspect ratio). */
   readonly width?: number;
   /**
-   * Point attribute to color by: scalars through a sequential ramp,
+   * Attribute to color by: scalars through a sequential ramp,
    * tuple-3-or-wider as RGB in [0, 1], strings categorically. Omitted,
-   * every point draws in one color — deliberately, because the standard
-   * `color` attribute defaults to white and auto-adopting it would draw
-   * an invisible picture for every graph that never set it.
+   * everything draws in its default color — deliberately, because the
+   * standard `color` attribute defaults to white and auto-adopting it
+   * would draw an invisible picture for every graph that never set it.
    *
-   * The scalar ramp is normalized over every geometry in the collection
-   * that carries the attribute, so one picture has one legend. A geometry
-   * that does not carry it is an error naming that item.
+   * The name is looked up on BOTH colorable domains, and they never
+   * compete for one mark: the POINT column colors the circles, the
+   * PRIMITIVE column colors the paths. So a road network that carries
+   * `width` on its roads and on its junctions colors both, and a value
+   * that lives only on the primitives — the only place a per-edge value
+   * can live — is visible instead of unreachable. Points of a geometry
+   * whose only copy is on the primitive domain keep the flat default
+   * color: a point shared by three roads has three candidate values and
+   * inventing one of them would be a picture of nothing in the data.
+   * {@link attrDomain} narrows the lookup to one domain.
+   *
+   * The scalar ramp is normalized over every geometry and every domain
+   * read, so one picture has one legend. A geometry that carries the name
+   * on neither domain is an error naming that item.
    */
   readonly attr?: string;
+  /**
+   * Read {@link attr} from this domain only, instead of from both. Worth
+   * reaching for when one name means different things on points and
+   * primitives, since the shared ramp would otherwise span both ranges.
+   * Ignored — and refused — without `attr`.
+   */
+  readonly attrDomain?: ColorDomain;
   /** Point radius in pixels, > 0. */
   readonly radius?: number;
   /**
@@ -112,6 +141,13 @@ export interface RenderResult {
   readonly skipped: number;
   /** Attribute the colors came from, when any. */
   readonly colorAttr?: string;
+  /**
+   * Which domains {@link colorAttr} was actually found on, in canonical
+   * order. Reported rather than assumed: the same name can live on the
+   * points, on the primitives, or on both, and a reader who is not told
+   * which one a picture came from cannot know what it means.
+   */
+  readonly colorDomains?: readonly ColorDomain[];
   /** Drawn extent in WORLD units, as [x, z] pairs. Covers drawn content only. */
   readonly bounds?: { readonly min: readonly [number, number]; readonly max: readonly [number, number] };
 }
@@ -147,52 +183,103 @@ function checkOptions(opts: RenderOptions): void {
       bad(name, 'an integer >= 1 (0 is a cap of zero, not "no cap"; omit the option for the default)', value);
     }
   }
+  if (opts.attrDomain !== undefined) {
+    if (!(COLOR_DOMAINS as readonly string[]).includes(opts.attrDomain)) {
+      bad(
+        "attrDomain",
+        '"point" or "primitive" (circles are colored from the point domain, paths from the primitive domain; vertex and detail draw no mark of their own)',
+        opts.attrDomain,
+      );
+    }
+    if (opts.attr === undefined) {
+      throw new CliError(
+        'renderSvg: option "attrDomain" narrows which domain "attr" is read from, so on its own it colors nothing — pass "attr" as well, or drop "attrDomain"',
+      );
+    }
+  }
 }
 
 /**
  * Lowest and highest finite value of component 0 of `attrName` over every
- * geometry in the collection that carries it as a scalar. One ramp over
- * the whole collection means one color means one value in the picture.
+ * geometry in the collection that carries it as a scalar, on every domain
+ * being read. One ramp over the whole collection means one color means
+ * one value in the picture — including across the two domains, so a road
+ * and the junction it ends at are comparable by eye.
  */
 function scalarRange(
   collection: DataCollection,
   attrName: string,
+  domains: readonly ColorDomain[],
 ): { readonly lo: number; readonly hi: number } | undefined {
   let lo = Number.POSITIVE_INFINITY;
   let hi = Number.NEGATIVE_INFINITY;
   for (const item of collection) {
     if (item.kind !== "geometry") continue;
-    const attr = item.geo.attrs.point.get(attrName);
-    if (attr === undefined || attr.type === "string" || attr.tupleSize >= 3) continue;
-    const stats = attributeStats(attr, item.geo.attrs.point.count);
-    const min = stats.min?.[0];
-    const max = stats.max?.[0];
-    if (min !== undefined && Number.isFinite(min) && min < lo) lo = min;
-    if (max !== undefined && Number.isFinite(max) && max > hi) hi = max;
+    for (const domain of domains) {
+      const set = item.geo.attrs[domain];
+      const attr = set.get(attrName);
+      if (attr === undefined || attr.type === "string" || attr.tupleSize >= 3) continue;
+      const stats = attributeStats(attr, set.count);
+      const min = stats.min?.[0];
+      const max = stats.max?.[0];
+      if (min !== undefined && Number.isFinite(min) && min < lo) lo = min;
+      if (max !== undefined && Number.isFinite(max) && max > hi) hi = max;
+    }
   }
   return lo <= hi ? { lo, hi } : undefined;
 }
 
-/** Per-point color for one geometry, from the chosen attribute. */
-function colorizer(
-  geo: Geometry,
-  attrName: string | undefined,
-  itemIndex: number,
-  range: { readonly lo: number; readonly hi: number } | undefined,
-): { color: (i: number) => string; used?: string } {
-  let attr: Attribute | undefined;
-  if (attrName !== undefined) {
-    attr = geo.attrs.point.get(attrName);
-    if (attr === undefined) {
-      const names = [...geo.attrs.point].map((a) => a.name);
-      throw new CliError(
-        `item ${itemIndex} has no point attribute "${attrName}" to color by; item ${itemIndex} point attributes: ${names.length === 0 ? "(none)" : names.join(", ")}`,
-      );
-    }
-  }
-  if (attr === undefined) return { color: () => POINT_COLOR };
+/** Comma-listed attribute names of one domain, for a diagnostic. */
+function attrNames(geo: Geometry, domain: ColorDomain): string {
+  const names = [...geo.attrs[domain]].map((a) => a.name);
+  return names.length === 0 ? "(none)" : names.join(", ");
+}
 
-  const column = attr;
+/**
+ * The columns one geometry contributes to the coloring, by domain. Both
+ * are consulted unless `want` narrows it, because they color different
+ * marks; carrying the name on neither is the error, and it names the item
+ * and both domains' attributes so the caller can see what it could have
+ * asked for instead.
+ */
+function resolveColorColumns(
+  geo: Geometry,
+  attrName: string,
+  itemIndex: number,
+  want: ColorDomain | undefined,
+): { point?: Attribute; primitive?: Attribute } {
+  const found: { point?: Attribute; primitive?: Attribute } = {};
+  for (const domain of COLOR_DOMAINS) {
+    if (want !== undefined && want !== domain) continue;
+    const attr = geo.attrs[domain].get(attrName);
+    if (attr !== undefined) found[domain] = attr;
+  }
+  if (found.point !== undefined || found.primitive !== undefined) return found;
+  if (want === undefined) {
+    throw new CliError(
+      `item ${itemIndex} has no attribute "${attrName}" to color by on the point or the primitive domain; item ${itemIndex} point attributes: ${attrNames(geo, "point")}; primitive attributes: ${attrNames(geo, "primitive")}`,
+    );
+  }
+  const other: ColorDomain = want === "point" ? "primitive" : "point";
+  const elsewhere = geo.attrs[other].get(attrName) !== undefined;
+  throw new CliError(
+    `item ${itemIndex} has no ${want} attribute "${attrName}" to color by${
+      elsewhere
+        ? `, but item ${itemIndex} carries it on the ${other} domain — pass attrDomain "${other}", or drop attrDomain to color from both`
+        : ""
+    }; item ${itemIndex} ${want} attributes: ${attrNames(geo, want)}`,
+  );
+}
+
+/**
+ * Color for element `i` of one column: scalars through the ramp, tuple-3
+ * and wider as RGB, strings categorically. Domain-agnostic — the index is
+ * a point index or a primitive index depending on where the column lives.
+ */
+function columnColorizer(
+  column: Attribute,
+  range: { readonly lo: number; readonly hi: number } | undefined,
+): (i: number) => string {
   const ts = column.tupleSize;
   if (column.type === "string") {
     // The color comes from a hash of the string VALUE, never from its
@@ -200,29 +287,20 @@ function colorizer(
     // keying on it recolors every category the moment one value first
     // appears somewhere else.
     const byIndex = column.stringTable.map((s) => PALETTE[hashString(s) % PALETTE.length]);
-    return {
-      color: (i) => byIndex[column.data[i * ts]] ?? PALETTE[0],
-      used: column.name,
-    };
+    return (i) => byIndex[column.data[i * ts]] ?? PALETTE[0];
   }
   if (ts >= 3) {
-    return {
-      color: (i) =>
-        `#${hex2(column.data[i * ts])}${hex2(column.data[i * ts + 1])}${hex2(column.data[i * ts + 2])}`,
-      used: column.name,
-    };
+    return (i) =>
+      `#${hex2(column.data[i * ts])}${hex2(column.data[i * ts + 1])}${hex2(column.data[i * ts + 2])}`;
   }
   const lo = range?.lo ?? 0;
   const hi = range?.hi ?? 0;
   const span = hi - lo;
-  return {
-    color: (i) => {
-      const v = column.data[i * ts];
-      if (!Number.isFinite(v) || span <= 0) return RAMP[0];
-      const bucket = Math.floor(((v - lo) / span) * RAMP.length);
-      return RAMP[bucket < 0 ? 0 : bucket >= RAMP.length ? RAMP.length - 1 : bucket];
-    },
-    used: column.name,
+  return (i) => {
+    const v = column.data[i * ts];
+    if (!Number.isFinite(v) || span <= 0) return RAMP[0];
+    const bucket = Math.floor(((v - lo) / span) * RAMP.length);
+    return RAMP[bucket < 0 ? 0 : bucket >= RAMP.length ? RAMP.length - 1 : bucket];
   };
 }
 
@@ -241,6 +319,10 @@ type Subpaths = readonly (readonly number[])[];
  * per batch. Non-finite positions are skipped and counted rather than
  * poisoning the bounds, and a non-finite vertex breaks its primitive into
  * separate subpaths rather than splicing a segment that is in no input.
+ *
+ * {@link RenderOptions.attr} colors the circles from the point domain and
+ * the paths from the primitive domain, so a per-edge value has a mark of
+ * its own to land on.
  */
 export function renderSvg(collection: DataCollection, opts: RenderOptions = {}): RenderResult {
   checkOptions(opts);
@@ -273,12 +355,15 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
   }
   const circleStride = strideFor(pointsTotal + instancesTotal, maxPoints);
   const primStride = strideFor(primitivesTotal, maxPrimitives);
-  const range = opts.attr === undefined ? undefined : scalarRange(collection, opts.attr);
+  const rangeDomains = opts.attrDomain === undefined ? COLOR_DOMAINS : [opts.attrDomain];
+  const range =
+    opts.attr === undefined ? undefined : scalarRange(collection, opts.attr, rangeDomains);
 
   /** color -> flat world [x, y, x, y, ...] */
   const dots = new Map<string, number[]>();
-  const openPaths: Subpaths[] = [];
-  const closedPaths: Subpaths[] = [];
+  /** color -> the paths drawn in it, in collection order. */
+  const openPaths = new Map<string, Subpaths[]>();
+  const closedPaths = new Map<string, Subpaths[]>();
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
@@ -288,6 +373,7 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
   let instances = 0;
   let skipped = 0;
   let colorAttr: string | undefined;
+  const colorDomains = new Set<ColorDomain>();
   // Element counters run across the whole collection, so the stride is a
   // budget rather than a per-geometry allowance.
   let circleIndex = 0;
@@ -304,6 +390,11 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
     if (flat === undefined) dots.set(color, (flat = []));
     flat.push(x, y);
     track(x, y);
+  };
+  const addPath = (into: Map<string, Subpaths[]>, color: string, sub: Subpaths): void => {
+    let group = into.get(color);
+    if (group === undefined) into.set(color, (group = []));
+    group.push(sub);
   };
 
   // Pass 2 — draw.
@@ -339,6 +430,25 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
     const px = (i: number): number => P.data[i * ts];
     const py = (i: number): number => P.data[i * ts + yc];
 
+    // Resolved before anything is drawn, and only for a geometry that
+    // survived the `P` check above — an item with no usable positions
+    // draws nothing, so it is not asked to carry the color attribute.
+    let pointColor: (i: number) => string = () => POINT_COLOR;
+    let primColor: ((p: number) => string) | undefined;
+    if (opts.attr !== undefined) {
+      const found = resolveColorColumns(geo, opts.attr, index, opts.attrDomain);
+      if (found.point !== undefined) {
+        pointColor = columnColorizer(found.point, range);
+        colorAttr = found.point.name;
+        colorDomains.add("point");
+      }
+      if (found.primitive !== undefined) {
+        primColor = columnColorizer(found.primitive, range);
+        colorAttr = found.primitive.name;
+        colorDomains.add("primitive");
+      }
+    }
+
     // Primitives first, so points draw on top of the shapes they belong to.
     if (geo.primitiveCount > 0) {
       const primType = geo.attrs.primitive.get("primtype");
@@ -373,13 +483,14 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
         const isPolyline = primType !== undefined && primType.type === "string"
           ? primType.getString(p) === "polyline"
           : false;
-        (isPolyline ? openPaths : closedPaths).push(subpaths);
+        // Without a primitive column the stroke is the kind's default, so
+        // an uncolored render is byte-for-byte the one it always was.
+        const stroke = primColor?.(p) ?? (isPolyline ? POLYLINE_COLOR : POLY_COLOR);
+        addPath(isPolyline ? openPaths : closedPaths, stroke, subpaths);
         primitives++;
       }
     }
 
-    const { color, used } = colorizer(geo, opts.attr, index, range);
-    if (used !== undefined) colorAttr = used;
     for (let i = 0; i < geo.pointCount; i++) {
       if (circleIndex++ % circleStride !== 0) continue;
       const x = px(i);
@@ -388,7 +499,7 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
         skipped++;
         continue;
       }
-      addDot(color(i), x, y);
+      addDot(pointColor(i), x, y);
       points++;
     }
   }
@@ -445,16 +556,23 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
     }; x right, z down (top-down view) -->`,
   );
   lines.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="${BACKGROUND}"/>`);
-  if (closedPaths.length > 0) {
-    lines.push(`<g fill="none" stroke="${POLY_COLOR}" stroke-width="${STROKE_WIDTH}">`);
-    for (const sub of closedPaths) lines.push(`<path d="${pathData(sub, true)}"/>`);
+  // Path groups are sorted by color for the same reason the dot groups
+  // are: the document must depend on the colors present, never on which
+  // primitive happened to be drawn first.
+  for (const color of [...closedPaths.keys()].sort()) {
+    lines.push(`<g fill="none" stroke="${color}" stroke-width="${STROKE_WIDTH}">`);
+    for (const sub of closedPaths.get(color) as Subpaths[]) {
+      lines.push(`<path d="${pathData(sub, true)}"/>`);
+    }
     lines.push("</g>");
   }
-  if (openPaths.length > 0) {
+  for (const color of [...openPaths.keys()].sort()) {
     lines.push(
-      `<g fill="none" stroke="${POLYLINE_COLOR}" stroke-width="${STROKE_WIDTH}" stroke-linecap="round" stroke-linejoin="round">`,
+      `<g fill="none" stroke="${color}" stroke-width="${STROKE_WIDTH}" stroke-linecap="round" stroke-linejoin="round">`,
     );
-    for (const sub of openPaths) lines.push(`<path d="${pathData(sub, false)}"/>`);
+    for (const sub of openPaths.get(color) as Subpaths[]) {
+      lines.push(`<path d="${pathData(sub, false)}"/>`);
+    }
     lines.push("</g>");
   }
   // Sorted so the group order depends only on the colors present, never
@@ -481,7 +599,9 @@ export function renderSvg(collection: DataCollection, opts: RenderOptions = {}):
     instancesTotal,
     deviceInstances,
     skipped,
-    ...(colorAttr !== undefined ? { colorAttr } : {}),
+    ...(colorAttr !== undefined
+      ? { colorAttr, colorDomains: COLOR_DOMAINS.filter((d) => colorDomains.has(d)) }
+      : {}),
     ...(bounds !== undefined ? { bounds } : {}),
   };
 }

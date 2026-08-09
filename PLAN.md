@@ -1605,6 +1605,75 @@ batch. Replaced above with criteria that can actually fail.
 
 </details>
 
+## Phase 44 — Primitive attributes stop being terminal
+
+**Added 2026-08-09, after phase 43 created the demand and did not close
+it.** The first phase written after PLAN's original 45 were complete.
+
+Phase 43 made per-edge values a headline capability: a road carries a
+`width` promoted from its endpoints (`min`) and a `kind` (`first`), and
+`docs/authoring.md` teaches that as the answer to "how do I put a value
+on an edge". But every node that samples a primitive down onto points
+drops those values on the floor:
+
+- `splineSample`, `pathResample` and `place/along-curve` emit new point
+  clouds and carry no primitive attribute onto the samples. So in the
+  shipped pipeline, **the lamps placed along a road cannot see the width
+  of the road they are standing on** — the phase-43 stage computes a
+  value the phase-39 vocabulary cannot consume.
+- `transferAttribute` cannot read a PRIMITIVE source attribute at all,
+  so the manual workaround (transfer it across) does not exist either.
+- `pcg render --attr` is point-only, so a per-edge value cannot even be
+  inspected visually.
+
+**Designed 2026-08-09. Mechanism: AUTOMATIC carry, minus `primtype`,
+through one shared helper the samplers call** — the way the arc-length
+table became shared in phase 39. All four primitive-consuming samplers
+build a fresh cloud and never read `attrs.primitive` at all; the source
+primitive is already in hand at each site (`PolylineArcTable.prim`), and
+the copy itself is one existing call to `copyElements`.
+
+- `primtype` is excluded: it is a type tag, not a value, and the code
+  already special-cases it elsewhere.
+- **A second half of the bug, found during design:** `pathResample`'s
+  own OUTPUT primitives lose their attributes too, because
+  `setPolylineTopology` deletes vertex and primitive columns — so a
+  resampled road stops being a road. It must also carry
+  primitive→primitive, which is a structural 1:1.
+- **Opt-in was rejected** because `place/along-curve` would have to
+  re-expose the param, and phase 43's demand is precisely that an author
+  who set `roadWidth` gets it without knowing a knob exists.
+- **Emitting a `sourcePrimitive` index for `promoteAttribute` to consume
+  was rejected outright, and this was my suggestion**: primitive
+  numbering is per-partition, so a shipped index column is a determinism
+  violation — the cross-partition comparator checks every point
+  attribute float-exact, and split-equals-whole would redden. Requiring
+  a follow-up `removeAttribute` to hide it would be a shipped
+  restriction. It also needs a new node regardless, since
+  `promoteAttribute` walks topology rather than an index column.
+- **Collisions are not a precedence question.** Samplers carry no input
+  point attributes, so the only possible clash is with a name the node
+  itself owns (`P`, `tangent`, `curveU`, `seed`, ...). Refuse, naming
+  node, attribute and fix — matching `requireReportSlot`'s stance. The
+  bare `attribute "P" already exists` from the attribute set is not an
+  acceptable diagnostic.
+- Accepted cost, stated so nobody rediscovers it as a bug: automatic
+  carry makes every upstream primitive attribute part of a sampler's
+  output contract, so an unrelated `lengthAttr` widens the samples. The
+  widening is bounded — only `connectPoints` and `promoteAttribute`
+  produce primitive columns — and losing the value silently is worse.
+- `transferAttribute` reading a primitive source COMPLEMENTS this rather
+  than subsuming it: its uv and raycast mappings need 3-vertex `poly`
+  triangles, so it can never reach a polyline network. The blocker is
+  validation plus small plumbing, not architecture — but note the f32
+  path must use the dominant-corner branch for primitives, since
+  `w0·v + w1·v + w2·v != v` in floating point.
+
+- Exit: a value set on a primitive survives to points through the
+  sampler family; the pipeline's lamps demonstrably read their road's
+  width; `transferAttribute` can read a primitive source; the corpus
+  proves it from serialized JSON; docs idempotent.
+
 ## Stretch — surveyed and NOT scheduled
 
 - **Rescaling the shared noise convention so an amplitude knob reaches

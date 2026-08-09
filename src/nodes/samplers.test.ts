@@ -20,6 +20,58 @@ function unitSquare() {
   );
 }
 
+/**
+ * Two unit right triangles in ONE mesh, one in the z = 0 plane and one in
+ * z = 1, so a sample's own z says which primitive it came from without
+ * any index column having to say it.
+ */
+function twoPlanes() {
+  return createTriangleMesh(
+    [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1],
+    [0, 1, 2, 3, 4, 5],
+  );
+}
+
+/**
+ * Two straight roads in ONE geometry, each 10 long: (0,0,0)->(10,0,0) and
+ * (0,10,0)->(10,10,0). The shape a road network has, and the only shape a
+ * PER-EDGE value means anything on.
+ */
+function twoRoads(): Geometry {
+  const geo = createPointCloud(4);
+  const P = geo.attrs.point.require("P");
+  P.setTuple(0, [0, 0, 0]);
+  P.setTuple(1, [10, 0, 0]);
+  P.setTuple(2, [0, 10, 0]);
+  P.setTuple(3, [10, 10, 0]);
+  setPolylineTopology(geo, [0, 1, 2, 3], [0, 2], [2, 2]);
+  return geo;
+}
+
+/** Write one scalar f32 value per primitive (the phase-43 per-edge value). */
+function withPrimValue(geo: Geometry, name: string, values: readonly number[]): Geometry {
+  const attr = geo.attrs.primitive.add(name, "f32", 1, 0);
+  for (let p = 0; p < values.length; p++) attr.set(p, values[p]);
+  return geo;
+}
+
+/** Write one string value per primitive (a `kind` tag, promoted with `first`). */
+function withPrimString(geo: Geometry, name: string, values: readonly string[]): Geometry {
+  const attr = geo.attrs.primitive.add(name, "string", 1, "");
+  for (let p = 0; p < values.length; p++) attr.setString(p, values[p]);
+  return geo;
+}
+
+/** The message a node run rejects with (fails when it does not reject). */
+async function rejection(run: Promise<unknown>): Promise<string> {
+  const err: unknown = await run.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  if (!(err instanceof Error)) throw new Error("expected the node to throw an Error");
+  return err.message;
+}
+
 describe("surfaceSample", () => {
   it("places exactly count points on the mesh with density 1", async () => {
     const mesh = unitSquare();
@@ -116,6 +168,42 @@ describe("surfaceSample", () => {
     ).rejects.toThrow(/no triangles/);
     await expect(runNode(surfaceSample, {}, {})).rejects.toThrow(/input pin "in"/);
   });
+
+  it("carries the sampled triangle's primitive attributes onto its points", async () => {
+    const mesh = withPrimString(withPrimValue(twoPlanes(), "material", [10, 20]), "surfaceKind", [
+      "stone",
+      "grass",
+    ]);
+    const geo = firstGeo(
+      (await runNode(surfaceSample, { count: 300 }, { in: [makeGeometryItem(mesh)] })).out,
+    );
+    expect(geo.pointCount).toBe(300);
+    const material = geo.attrs.point.require("material");
+    const kind = geo.attrs.point.require("surfaceKind");
+    const seen = new Set<number>();
+    for (let i = 0; i < geo.pointCount; i++) {
+      const z = geo.attrs.point.require("P").get(i, 2);
+      const onFirst = Math.abs(z) < 1e-6;
+      expect(material.get(i)).toBe(onFirst ? 10 : 20);
+      expect(kind.getString(i)).toBe(onFirst ? "stone" : "grass");
+      seen.add(material.get(i));
+    }
+    // Both triangles were actually hit, so the equality above is not
+    // passing because everything landed on one of them.
+    expect(seen).toEqual(new Set([10, 20]));
+    // The type tag is not a value and does not ride along.
+    expect(geo.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+  });
+
+  it("refuses a primitive attribute that would clobber one it writes itself", async () => {
+    const mesh = withPrimValue(twoPlanes(), "density", [1, 1]);
+    const msg = await rejection(runNode(surfaceSample, {}, { in: [makeGeometryItem(mesh)] }));
+    expect(msg).toContain("surfaceSample");
+    expect(msg).toContain('"density"');
+    expect(msg).toContain("removeAttribute");
+    // NOT the bare AttributeSet message, which names neither node nor fix.
+    expect(msg).not.toBe('attribute "density" already exists');
+  });
 });
 
 describe("splineSample", () => {
@@ -183,6 +271,48 @@ describe("splineSample", () => {
     await expect(
       runNode(splineSample, {}, { in: [makeGeometryItem(unitSquare())] }),
     ).rejects.toThrow(/no polyline primitives/);
+  });
+
+  it("carries each sample's own polyline's primitive attributes", async () => {
+    const roads = withPrimString(withPrimValue(twoRoads(), "roadWidth", [2, 7]), "roadKind", [
+      "avenue",
+      "lane",
+    ]);
+    // Total length 20, so spacing 4 lands 3 samples on each road and none
+    // on the join (where the tie goes to the LATER polyline).
+    const geo = firstGeo(
+      (await runNode(splineSample, { mode: "spacing", spacing: 4 }, { in: [makeGeometryItem(roads)] }))
+        .out,
+    );
+    expect(positionsOf(geo)).toEqual([
+      [0, 0, 0],
+      [4, 0, 0],
+      [8, 0, 0],
+      [2, 10, 0],
+      [6, 10, 0],
+      [10, 10, 0],
+    ]);
+    const width = geo.attrs.point.require("roadWidth");
+    const kind = geo.attrs.point.require("roadKind");
+    expect([0, 1, 2, 3, 4, 5].map((i) => width.get(i))).toEqual([2, 2, 2, 7, 7, 7]);
+    expect([0, 1, 2, 3, 4, 5].map((i) => kind.getString(i))).toEqual([
+      "avenue",
+      "avenue",
+      "avenue",
+      "lane",
+      "lane",
+      "lane",
+    ]);
+    expect(geo.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+  });
+
+  it("refuses a primitive attribute that would clobber one it writes itself", async () => {
+    const roads = withPrimValue(twoRoads(), "curveU", [0, 0]);
+    const msg = await rejection(runNode(splineSample, {}, { in: [makeGeometryItem(roads)] }));
+    expect(msg).toContain("splineSample");
+    expect(msg).toContain('"curveU"');
+    expect(msg).toContain("removeAttribute");
+    expect(msg).not.toBe('attribute "curveU" already exists');
   });
 });
 

@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 21:36",
-  "currentPhase": 43,
+  "updated": "2026-08-10 00:30",
+  "currentPhase": 44,
   "phases": [
     {
       "id": "plan",
@@ -227,16 +227,25 @@
       "id": 43,
       "title": "Topology, shipped with its consumer",
       "state": "done"
+    },
+    {
+      "id": 44,
+      "title": "Primitive attributes stop being terminal",
+      "state": "done"
     }
   ],
   "tests": {
-    "passed": 2648,
+    "passed": 2675,
     "failed": 0,
-    "total": 2648,
-    "lastRun": "2026-08-09 21:36"
+    "total": 2675,
+    "lastRun": "2026-08-10 00:30"
   },
   "blockers": [],
   "log": [
+    {
+      "time": "2026-08-10 00:30",
+      "message": "Phase 44 complete: primitive attributes stop being terminal. Phase 43 made per-edge values a headline capability and every sampler dropped them, so the lamps placed along a road could not see its width. Samplers now carry the source primitive attributes automatically through one shared helper — splineSample, pathResample, surfaceSample, and place/along-curve by inheritance — with primtype excluded and collisions refused rather than overwritten. pathResample also keeps its OWN output primitive attributes, which setPolylineTopology had been deleting, so a resampled road stopped being a road. transferAttribute reads a primitive source in uv and raycast; nearest refuses it and names the route, since that mode searches source points and a per-face value sits on none. pcg render --attr reaches the primitive domain, and the two domains do not compete because they colour different marks: point values colour the circles, primitive values colour the paths. Three of my own suggestions were rejected on evidence: a sourcePrimitive index column would be a determinism violation since primitive numbering is per-partition; opt-in would mean an author who set a value has to know a knob exists; and both lookup rules I proposed for render would have left the roads uniformly blue, because roadWidth lives on BOTH domains. The design claim that w0v+w1v+w2v != v turned out to be masked for every finite f32 by a float64 accumulator — 4M probes, zero differences — but the dominant-corner branch is still right and the surviving witness is Infinity, where a zero weight makes 0 times Infinity NaN. Also fixed: the GPU device suites rode vitest 10s default hook budget while one took 10.46s, and a timed-out hook does not fail its tests, it SKIPS them — 24 device assertions had stopped running."
+    },
     {
       "time": "2026-08-09 21:36",
       "message": "Phase 43 complete: topology, shipped with its consumer, v0.13.0. Two independent design passes agreed on the finding that shrank the phase — the primitive domain ALREADY IS the edge domain, because a 2-vertex polyline over shared points is an edge and setPolylineTopology already lets one point sit in many primitives. So no edge Domain, no widened union, no ~20 files, and no edges-to-polylines sink node (my own PLAN note that the original plan omitted one was wrong; none was needed). connectPoints emits polyline primitives directly over the same points, and per-edge values are ordinary primitive attributes via promoteAttribute point-to-primitive. MST was CUT by both designs independently: membership is global, which is findPath defect verbatim; replaced by a relativeNeighborhood lune test that is local, halo-exact, and CONTAINS the MST so the network stays connected while keeping cycles. Pipeline stage 5 is the consumer that earns it: 10 segments over 9 district centres, degrees 1:1 2:5 3:3, one component, two cycles — a network that genuinely branches, where stage 3 angular tour could not. Verification could not falsify a single correctness claim under attacks the implementers had not run (base 1e7 where phase 42 bug lived, brute-force relative-neighbourhood against Prim, cell-size sweeps, seam-straddling fixtures), but found two real gaps: lengthAttr value was pinned only by a fixture of edges exactly 1 long, a fixed point of squaring, so emitting the squared distance survived the whole suite; and the documented partitioning recipe had a step NO node could perform, since nothing filtered primitives and every filter dropped topology, making a partitioned network cook expressible only in host TypeScript. Both closed — the second by filterPrimitivesByBounds, with the recipe now cooked end to end from serialized JSON. Also corrected: PLAN two f32 claims, one about a knife-edge seam loss that brute force showed does not reproduce because the two half-open rules cancel, and a docs claim that only a node which clones preserves topology, which was outright false."

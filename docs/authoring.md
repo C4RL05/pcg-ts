@@ -717,11 +717,11 @@ all three:
 `source` input) onto the main input's points. The `mapping` param picks
 how each destination point finds its source value:
 
-| mapping | Source needs | Use when | A point misses when |
-| --- | --- | --- | --- |
-| `nearest` (default) | any points | Both sides live in the same 3D space; closest source point (ties → lowest index) is the right answer | never |
-| `uv` | triangle mesh + UVs | The geometries share a UV parameterization but not a position — transfer between differently tessellated meshes, or read texture-space data | its UV lies in no source triangle |
-| `raycast` | triangle mesh | The value should come from a surface along a spatial direction — drape scattered points onto the terrain below, probe walls sideways | its ray hits nothing (or nothing within `maxDistance`) |
+| mapping | Source needs | Source domains (`attrDomain`) | Use when | A point misses when |
+| --- | --- | --- | --- | --- |
+| `nearest` (default) | any points | `point` only | Both sides live in the same 3D space; closest source point (ties → lowest index) is the right answer | never |
+| `uv` | triangle mesh + UVs | `point`, `vertex`, `primitive` | The geometries share a UV parameterization but not a position — transfer between differently tessellated meshes, or read texture-space data | its UV lies in no source triangle |
+| `raycast` | triangle mesh | `point`, `vertex`, `primitive` | The value should come from a surface along a spatial direction — drape scattered points onto the terrain below, probe walls sideways | its ray hits nothing (or nothing within `maxDistance`) |
 
 For `uv`, destination UVs are read from the point-domain `uvAttr` (f32,
 tupleSize ≥ 2); source UVs come from the vertex domain when present
@@ -740,6 +740,27 @@ The policies both mesh mappings share:
   "vertex"` reads per-corner source values (seam-accurate) instead of
   point values; the result always lands on the destination's point
   domain.
+- **A `primitive` source is read whole, never blended.** `attrDomain:
+  "primitive"` takes one value for the entire triangle, whatever its
+  type — a per-face id, a material tag, a width — so it arrives
+  bit-exact rather than smeared across the face. That is not a
+  convenience: `w0·v + w1·v + w2·v` is not `v` in floating point, so
+  interpolating a constant would return a value nobody wrote.
+- **Neither mesh mapping can reach a road.** This is the expectation to
+  correct before you spend an afternoon on it. `uv` and `raycast` both
+  need 3-vertex `poly` triangles, and an edge or polyline network from
+  `connectPoints` or `pointsToPath` has none — so `attrDomain:
+  "primitive"` reads a per-face value off a **triangle mesh only**, and
+  a road network is refused, naming the fix. `mapping: "nearest"`
+  refuses `attrDomain: "primitive"` outright for a different reason: it
+  searches source *points*, and a per-primitive value sits on none of
+  them. Its error names the route — `promoteAttribute` the value from
+  `"primitive"` to `"point"` on the source (`mode: "max"` or `"first"`),
+  then transfer with `attrDomain: "point"`. Switching mapping is not the
+  fix there, and the message says so. If the destination points are
+  being *sampled off* that network in the first place, you need none of
+  this: the carry described under "Sampling a path, and keeping one"
+  has already put the value on them.
 - **The miss contract.** A missed point keeps the value it already had
   (the attribute default if the attribute is newly created) — it is
   never invented. Name a `missCountAttr` and the node writes the miss
@@ -927,20 +948,53 @@ the points that survive.
 
 Two nodes read a path and they do different things with it:
 
-| | Treats each path | Emits | Point attributes |
-| --- | --- | --- | --- |
-| `splineSample` | all polylines as one concatenated curve | a point **cloud** — topology ends here | new points; `tangent` and `curveU` |
-| `pathResample` | each on its own arc length, kept separate | a **path**, closed if the input was | new points; `tangent` and `curveU` |
+| | Treats each path | Emits | The input's POINT attributes | The input's PRIMITIVE attributes |
+| --- | --- | --- | --- | --- |
+| `splineSample` | all polylines as one concatenated curve | a point **cloud** — topology ends here | lost; new points carrying `tangent` and `curveU` | **carried onto every sample** |
+| `pathResample` | each on its own arc length, kept separate | a **path**, closed if the input was | lost; new points carrying `tangent` and `curveU` | **carried both ways**: onto every sample, and onto the output polyline that replaced each input one |
 
-Both create new points, so nothing the original points carried survives
-either one. When the points already mean something — a species, a scale,
-an index other geometry refers to — do not resample: `writeTangents`
-writes a `tangent` onto a path's own points and hands back the same
-points, attributes and topology, which is what `orientAlongVector` needs
-to read, and what `write/orient-along-path` packages as one step. A path
-built by hand with `pointsToPath` has no `tangent` at all until
-something writes one, because only a sampler emits it and only for the
-points it created.
+The two columns on the right pull in opposite directions and both matter.
+
+**Point attributes are lost, because the points are new.** When the
+points already mean something — a species, a scale, an index other
+geometry refers to — do not resample: `writeTangents` writes a `tangent`
+onto a path's own points and hands back the same points, attributes and
+topology, which is what `orientAlongVector` needs to read, and what
+`write/orient-along-path` packages as one step. A path built by hand
+with `pointsToPath` has no `tangent` at all until something writes one,
+because only a sampler emits it and only for the points it created.
+
+**Primitive attributes survive, automatically.** A sample inherits the
+primitive it was taken from, so a `roadWidth` on a road lands on every
+lamp placed along it — see "The five moves" below, and note that
+`surfaceSample` does the same for the triangle each of its candidates
+landed on. There is no opt-out param, deliberately: an author who wrote
+the value should get it without knowing a knob exists, and
+`place/along-curve` would otherwise have to re-expose one. Three
+consequences worth reading before you rely on it:
+
+- **`primtype` is the one exception.** It is a type tag, not a value —
+  `"polyline"` says nothing about a point.
+- **No index column rides along.** There is no `sourcePrimitive` to
+  group by afterwards, and there will not be: primitive numbering is
+  per-partition, so shipping one would make a cell's output differ from
+  the whole region's and break the determinism invariant. Values carry;
+  identity does not.
+- **A collision is refused, not resolved.** These nodes carry no input
+  *point* attributes, so the only name a carried column can hit is one
+  the node writes itself (`P`, `tangent`, `curveU`, `seed`, …). Rather
+  than delete that column and return a plausible-looking cook, the node
+  errors, naming itself, the attribute, both shapes and the two fixes:
+  rename it where it was written (the `name` param of the `setAttribute`
+  or `promoteAttribute` that produced it), or `removeAttribute` it
+  upstream on `domain: "primitive"` if it is dead.
+
+The accepted cost, stated so nobody files it as a bug: every upstream
+primitive attribute is now part of a sampler's output contract, so an
+unrelated `connectPoints` `lengthAttr` widens the samples too. The
+widening is bounded — only `connectPoints` and `promoteAttribute`
+produce primitive columns — and it is the better trade, because the
+alternative is losing a value the author asked for in silence.
 
 ## Networks: the primitive domain is the edge domain
 
@@ -986,7 +1040,7 @@ which endpoint asked. The test is strict — `d < radius`, so a pair at
 exactly `radius` is not connected — which is what makes a partitioned
 cook exact.
 
-### The four moves
+### The five moves
 
 Every per-edge and per-junction value comes from nodes that already
 shipped. This is the whole vocabulary:
@@ -1008,6 +1062,20 @@ shipped. This is the whole vocabulary:
    does the same for per-edge length (f32, primitive). Both refuse a name
    the geometry already holds under a *different* shape, rather than
    deleting that column silently.
+5. **edge → the points sampled off it.** Nothing to author: every node
+   that samples a polyline down onto points carries the source
+   primitive's attributes onto each sample automatically —
+   `splineSample`, `pathResample`, `place/along-curve`, and
+   `surfaceSample` for the triangle case. A lamp placed along a road
+   arrives already knowing that road's `roadWidth` and its `districtKind`,
+   because a sample inherits the primitive it was taken from. Move 3
+   answers *what does this junction know*; this one answers *what does
+   the thing standing on this edge know*, and the two are different
+   questions — move 3 aggregates with `max` across every edge at a point,
+   while this one is exact, since a sample sits on exactly one primitive.
+   `primtype` is the one attribute never carried; the full contract,
+   including why a name clash is refused rather than resolved, is under
+   "Sampling a path, and keeping one" above.
 
 ```json
 {
@@ -1051,13 +1119,32 @@ it does not: it lists **point** attributes, so `trailLength` is invisible
 there. `pcg inspect --node junction --pin out` prints every domain, which
 is how you confirm an edge attribute actually landed.
 
+`pcg render --attr` reads both colorable domains, so a per-edge value is
+visible as well as inspectable, and the two never compete for one mark:
+the **point** column colors the circles and the **primitive** column
+colors the paths. `pcg render trails.json --attr trailWidth --out
+trails.svg` therefore draws each trail in the color of its own width.
+Points of a geometry that carries the name only on its primitives keep
+the flat default color rather than borrowing one — a junction where three
+trails meet has three candidate values, and picking one would be a
+picture of something that is not in the data. When a name lives on *both*
+domains, as `trailWidth` does the moment move 3 promotes it back to the
+points, `--attr-domain point` or `--attr-domain primitive` narrows the
+lookup; that matters because the scalar ramp is normalized over every
+domain read, so one legend spans both ranges unless you say otherwise.
+Every render report names the domain the color came from, so a picture is
+never ambiguous about what it is showing. `vertex` and `detail` are
+refused: neither draws a mark of its own.
+
 Two more facts that bite if they are not stated. `connectPoints`
 **replaces** any topology on its input, dropping that topology's vertex
 and primitive attributes with it — so promote *after* connecting, never
 before. And `place/along-curve` (and every other polyline consumer) reads
 the whole net at once, measuring each edge on its own length, which is
 how stage 5 of the shipped pipeline spawns lamps along a road network
-with one node.
+with one node — and how each of those lamps arrives carrying the width,
+the length and the district of the road it stands on, without a transfer
+node anywhere in the graph.
 
 ### A point-removing op destroys a network
 

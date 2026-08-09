@@ -26,11 +26,29 @@
  *   rounding at large query magnitudes). The box guard rejects those, and it
  *   makes grid pruning and the documented predicate coincide — so the grid
  *   cell size is result-neutral by construction.
+ * - **Source domain.** The transferred attribute is read from the source's
+ *   `point` domain (triangle corners through the topology), `vertex` domain
+ *   (per-corner values, seam-accurate), or `primitive` domain (one value for
+ *   the whole triangle). Whichever it is, the result lands on the
+ *   destination's POINT domain. A `primitive` source is reachable only
+ *   through a triangle mesh: an edge/polyline network has no 3-vertex
+ *   `"poly"` primitives at all, so neither mapping can see one (promote the
+ *   value to the source's point domain and use `transferNearest` instead).
  * - **Interpolation by type.** `f32` attributes interpolate barycentrically
  *   (componentwise, accumulated in float64, stored as f32). `i32`, `u32`,
  *   `bool`, and `string` cannot interpolate: they take the value at the
  *   triangle corner with the largest barycentric weight; equal weights
  *   resolve to the first such corner in the triangle's vertex order.
+ * - **A primitive source is never interpolated, of any type.** Its value is
+ *   constant across the triangle, so there is nothing to blend and the
+ *   mapped result is the stored value itself, bit for bit — the same
+ *   dominant-corner path the non-interpolating types take (all three corner
+ *   elements are the one primitive, so which corner wins cannot matter).
+ *   This is exactness by construction rather than by luck: `w0·v + w1·v +
+ *   w2·v` is only bit-identical to `v` because this module happens to
+ *   accumulate in float64 and store f32, and it is not even that when `v` is
+ *   ±Infinity (a weight of exactly 0, which any query on a triangle edge
+ *   produces, makes `0 · Infinity` a NaN).
  * - **Misses keep the prior value.** When the destination already has the
  *   attribute with the same type and tuple size, missed elements keep their
  *   existing values; otherwise the attribute is created and missed elements
@@ -86,8 +104,12 @@ export const TRANSFER_BOX_PAD_REL = 1e-6;
 /** Grid resolution cap per axis; keeps linear cell keys exact in float64. */
 const MAX_DIM = 2048;
 
-/** Domain the transferred source attribute is read from. */
-export type TransferAttrDomain = "point" | "vertex";
+/**
+ * Domain the transferred source attribute is read from. `"primitive"` reads
+ * one value for the whole triangle and is never interpolated (see the module
+ * policy); the result always lands on the destination's point domain.
+ */
+export type TransferAttrDomain = "point" | "vertex" | "primitive";
 
 /** Result of {@link transferUv} / {@link transferRaycast}. */
 export interface TransferMappingResult {
@@ -129,9 +151,10 @@ export interface TransferUvOptions {
   uvDomain?: "auto" | "vertex" | "point";
   /**
    * Domain the transferred attribute is read from on the source: "point"
-   * (default; triangle corners read through vertexToPoint) or "vertex"
-   * (per-corner values). The result always lands on the destination's
-   * point domain.
+   * (default; triangle corners read through vertexToPoint), "vertex"
+   * (per-corner values), or "primitive" (one value for the whole triangle,
+   * copied verbatim rather than interpolated). The result always lands on
+   * the destination's point domain.
    */
   attrDomain?: TransferAttrDomain;
   /**
@@ -201,9 +224,9 @@ function requireSourceAttr(
   attrDomain: TransferAttrDomain,
   fn: string,
 ): Attribute {
-  if (attrDomain !== "point" && attrDomain !== "vertex") {
+  if (attrDomain !== "point" && attrDomain !== "vertex" && attrDomain !== "primitive") {
     throw new Error(
-      `${fn}: attrDomain must be "point" or "vertex", got ${JSON.stringify(attrDomain)}`,
+      `${fn}: attrDomain must be "point", "vertex", or "primitive", got ${JSON.stringify(attrDomain)}`,
     );
   }
   const set = src.attrs[attrDomain];
@@ -216,27 +239,42 @@ function requireSourceAttr(
   return attr;
 }
 
+/** Usable triangles of a source, in the order all tie rules refer to. */
+interface SourceTriangles {
+  /** Start-vertex of each triangle, in ascending source primitive order. */
+  start: Uint32Array;
+  /**
+   * Source PRIMITIVE index of each triangle, same order — the element a
+   * `primitive` attrDomain reads. Kept alongside `start` because the
+   * primitive index is not recoverable from the start vertex once
+   * non-triangle primitives have been skipped.
+   */
+  prim: Uint32Array;
+}
+
 /**
- * Start-vertex of every usable triangle (3-vertex "poly" primitives), in
- * ascending primitive order — the "triangle index" order all tie rules
- * refer to. Throws when the source has none.
+ * Every usable triangle (3-vertex "poly" primitives), in ascending
+ * primitive order — the "triangle index" order all tie rules refer to.
+ * Throws when the source has none.
  */
-function collectTriangles(src: Geometry, fn: string): Uint32Array {
+function collectTriangles(src: Geometry, fn: string): SourceTriangles {
   const counts = src.primVertexCount;
   const starts = src.primVertexStart;
   const primType = src.attrs.primitive.get(PRIMTYPE_ATTR);
-  const out: number[] = [];
+  const outStart: number[] = [];
+  const outPrim: number[] = [];
   for (let p = 0; p < src.primitiveCount; p++) {
     if (counts[p] !== 3) continue;
     if (primType && primType.getString(p) !== "poly") continue;
-    out.push(starts[p]);
+    outStart.push(starts[p]);
+    outPrim.push(p);
   }
-  if (out.length === 0) {
+  if (outStart.length === 0) {
     throw new Error(
-      `${fn}: source has no triangles (needs 3-vertex "poly" primitives; build meshes with createTriangleMesh, or triangulate before transferring)`,
+      `${fn}: source has no triangles (needs 3-vertex "poly" primitives; build meshes with createTriangleMesh, or triangulate before transferring). A polyline/edge network has none by construction, whatever domain the attribute lives on — this mapping can never reach one; promote the value to the source's point domain and use transferNearest instead`,
     );
   }
-  return Uint32Array.from(out);
+  return { start: Uint32Array.from(outStart), prim: Uint32Array.from(outPrim) };
 }
 
 /** Pick a cell size targeting a few triangles per occupied cell. */
@@ -262,11 +300,17 @@ function checkCellSize(cell: number, fn: string): void {
 
 /**
  * Write the mapped values onto the destination point domain. `cornerElem`
- * holds the three source element indices (point or vertex, per attrDomain)
- * and `weights` the normalized barycentric weights of each hit; `hit[j]`
- * is 0 for misses. Applies the documented per-type interpolation and
- * miss policies, and hands `hit` straight back on the result so the
+ * holds the three source element indices (point, vertex or primitive, per
+ * attrDomain) and `weights` the normalized barycentric weights of each hit;
+ * `hit[j]` is 0 for misses. Applies the documented per-type interpolation
+ * and miss policies, and hands `hit` straight back on the result so the
  * per-point outcome survives instead of collapsing into the total.
+ *
+ * `constantPerTriangle` (a `primitive` source) routes f32 through the
+ * corner-copy path as well: all three corner elements are the one
+ * primitive, so there is nothing to blend, and blending it anyway would
+ * make the answer depend on the accumulator's precision instead of on the
+ * stored value (see the module policy).
  */
 function writeMapped(
   dst: Geometry,
@@ -275,6 +319,7 @@ function writeMapped(
   cornerElem: Uint32Array,
   weights: Float64Array,
   hit: Uint8Array,
+  constantPerTriangle: boolean,
 ): TransferMappingResult {
   const dstSet = dst.attrs.point;
   const nd = dstSet.count;
@@ -298,7 +343,7 @@ function writeMapped(
       : dstSet.replace(attrName, srcAttr.type, ts, srcAttr.defaultValue as AttrDefault);
 
   let missCount = 0;
-  if (srcAttr.type === "f32") {
+  if (srcAttr.type === "f32" && !constantPerTriangle) {
     const outData = out.data;
     for (let j = 0; j < nd; j++) {
       if (hit[j] === 0) {
@@ -319,9 +364,11 @@ function writeMapped(
     }
     return { attribute: out, missCount, hit };
   }
-  // i32/u32/bool/string cannot interpolate: dominant corner (largest
-  // barycentric weight; equal weights resolve to the first such corner in
-  // the triangle's vertex order).
+  // i32/u32/bool/string cannot interpolate, and a primitive source of ANY
+  // type must not: dominant corner (largest barycentric weight; equal
+  // weights resolve to the first such corner in the triangle's vertex
+  // order). For a primitive source all three corner elements are the same
+  // primitive, so the choice is a formality and the value arrives verbatim.
   const isString = srcAttr.type === "string";
   const outData = out.data;
   for (let j = 0; j < nd; j++) {
@@ -348,7 +395,9 @@ function writeMapped(
  * Transfer an attribute from `src` to `dst` by UV lookup: each destination
  * point's UV (from the destination point-domain `uvAttr`) is located in the
  * source triangulation's UV space, and the source attribute is
- * barycentrically interpolated inside the containing triangle.
+ * barycentrically interpolated inside the containing triangle — or, for an
+ * `attrDomain` of `"primitive"`, taken verbatim from that triangle, since a
+ * per-primitive value has nothing to interpolate against.
  *
  * Containment requires both (a) the UV to lie within the triangle's padded
  * UV bounding box (see {@link TRANSFER_BOX_PAD_REL} and the module policy —
@@ -377,6 +426,10 @@ export function transferUv(
   const attrDomain = options.attrDomain ?? "point";
   const srcAttr = requireSourceAttr(src, attrName, attrDomain, fn);
   const dstUv = requireF32(dst.attrs.point, uvName, 2, fn, "destination point-domain UV");
+  // Before the source's UV specifics: whether the source has triangles at
+  // all is the more fundamental fact, and reporting it first is what stops
+  // "add UVs to your polyline" — advice that cannot make the lookup work.
+  const { start: triStart, prim: triPrim } = collectTriangles(src, fn);
 
   const uvDomainOpt = options.uvDomain ?? "auto";
   let srcUvDomain: "vertex" | "point";
@@ -397,7 +450,7 @@ export function transferUv(
   }
   const srcUv = requireF32(src.attrs[srcUvDomain], uvName, 2, fn, `source ${srcUvDomain}-domain UV`);
 
-  const triStart = collectTriangles(src, fn);
+  const perPrim = attrDomain === "primitive";
   const v2p = src.vertexToPoint;
   const us = srcUv.tupleSize;
   const ud = srcUv.data;
@@ -433,9 +486,17 @@ export function transferUv(
     triUv[o6 + 5] = v2;
     triInv[nt] = 1 / area2;
     const o3 = nt * 3;
-    triCorner[o3] = attrDomain === "vertex" ? v : v2p[v];
-    triCorner[o3 + 1] = attrDomain === "vertex" ? v + 1 : v2p[v + 1];
-    triCorner[o3 + 2] = attrDomain === "vertex" ? v + 2 : v2p[v + 2];
+    if (perPrim) {
+      // One element for all three corners: the triangle's own primitive.
+      const p = triPrim[t];
+      triCorner[o3] = p;
+      triCorner[o3 + 1] = p;
+      triCorner[o3 + 2] = p;
+    } else {
+      triCorner[o3] = attrDomain === "vertex" ? v : v2p[v];
+      triCorner[o3 + 1] = attrDomain === "vertex" ? v + 1 : v2p[v + 1];
+      triCorner[o3 + 2] = attrDomain === "vertex" ? v + 2 : v2p[v + 2];
+    }
     const bu0 = Math.min(u0, u1, u2);
     const bu1 = Math.max(u0, u1, u2);
     const bv0 = Math.min(v0, v1, v2);
@@ -555,7 +616,7 @@ export function transferUv(
     }
   }
 
-  return writeMapped(dst, srcAttr, attrName, cornerElem, weights, hit);
+  return writeMapped(dst, srcAttr, attrName, cornerElem, weights, hit, perPrim);
 }
 
 /**
@@ -563,7 +624,9 @@ export function transferUv(
  * destination point a ray is cast along `direction` (or the per-point
  * `directionAttr`), normalized so hit distances are world-space, against
  * the source triangle mesh (positions from the point domain via topology).
- * The source attribute is barycentrically interpolated at the nearest hit.
+ * The source attribute is barycentrically interpolated at the nearest hit —
+ * or, for an `attrDomain` of `"primitive"`, taken verbatim from the hit
+ * triangle, since a per-primitive value has nothing to interpolate against.
  *
  * Intersection is Möller–Trumbore in float64 with |det| <
  * {@link TRANSFER_DET_EPS} rejected (parallel/degenerate) and barycentric
@@ -640,7 +703,8 @@ export function transferRaycast(
     );
   }
 
-  const triStart = collectTriangles(src, fn);
+  const { start: triStart, prim: triPrim } = collectTriangles(src, fn);
+  const perPrim = attrDomain === "primitive";
   const v2p = src.vertexToPoint;
   const ps = srcP.tupleSize;
   const pd = srcP.data;
@@ -683,9 +747,17 @@ export function transferRaycast(
     triGeo[o9 + 7] = e2y;
     triGeo[o9 + 8] = e2z;
     const o3 = nt * 3;
-    triCorner[o3] = attrDomain === "vertex" ? v : v2p[v];
-    triCorner[o3 + 1] = attrDomain === "vertex" ? v + 1 : v2p[v + 1];
-    triCorner[o3 + 2] = attrDomain === "vertex" ? v + 2 : v2p[v + 2];
+    if (perPrim) {
+      // One element for all three corners: the triangle's own primitive.
+      const p = triPrim[t];
+      triCorner[o3] = p;
+      triCorner[o3 + 1] = p;
+      triCorner[o3 + 2] = p;
+    } else {
+      triCorner[o3] = attrDomain === "vertex" ? v : v2p[v];
+      triCorner[o3 + 1] = attrDomain === "vertex" ? v + 1 : v2p[v + 1];
+      triCorner[o3 + 2] = attrDomain === "vertex" ? v + 2 : v2p[v + 2];
+    }
     const bx0 = Math.min(ax, ax + e1x, ax + e2x);
     const by0 = Math.min(ay, ay + e1y, ay + e2y);
     const bz0 = Math.min(az, az + e1z, az + e2z);
@@ -942,5 +1014,5 @@ export function transferRaycast(
     }
   }
 
-  return writeMapped(dst, srcAttr, attrName, cornerElem, weights, hit);
+  return writeMapped(dst, srcAttr, attrName, cornerElem, weights, hit, perPrim);
 }

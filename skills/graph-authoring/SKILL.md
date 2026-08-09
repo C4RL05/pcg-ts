@@ -125,7 +125,13 @@ pcg render g.json --out g.svg                # the picture
 - **render** draws a deterministic top-down SVG. `--attr <name>` colors by an
   attribute — a scalar ramp, a vec3+ as RGB, strings categorically — which is
   how you see whether a written attribute actually varies across space
-  instead of trusting its mean.
+  instead of trusting its mean. It reads **both** colorable domains and they
+  color different marks, so there is no precedence question: a point column
+  colors the circles, a primitive column colors the paths, and a per-edge
+  value is therefore visible rather than unreachable. `--attr-domain
+  point|primitive` narrows the lookup when one name lives on both — worth
+  reaching for, since the ramp normalizes across every domain read. Every
+  report says which domain the color came from.
 
 Exit codes are scriptable: `0` did what was asked, `1` a named thing does not
 exist or the run failed, `2` the command line itself was wrong.
@@ -188,9 +194,39 @@ Params per entry in `docs/nodes.md`; the runnable JSON is in
 `first`), `setAttribute` on `domain: "primitive"`, and `promoteAttribute`
 primitive→point (`max`) to bring a value back to the junction —
 `connectPoints`' `degreeAttr` and `lengthAttr` cover degree and length
-without any of that. The four moves and a runnable graph are in
+without any of that. The five moves and a runnable graph are in
 `docs/authoring.md` ("Networks"); `examples/graphs/pipeline-5-roads.json`
 runs them end to end.
+
+**Expecting the value to die at the sampler.** It does not, and planning
+around a loss that no longer happens costs a transfer node and a wrong
+answer. Every sampler that reads a primitive carries that primitive's
+attributes onto the points it emits — `splineSample`, `pathResample`,
+`place/along-curve`, and `surfaceSample` for triangles — automatically,
+with no param to enable. A lamp placed along a road arrives holding that
+road's `roadWidth`. Do **not** reach for `transferAttribute` to recover
+it, and in particular do not reach for `mapping: "nearest"`, which
+refuses a primitive source outright (it searches source *points*), or for
+`uv`/`raycast`, which read a primitive source but only off 3-vertex
+`poly` triangles and so can never touch a polyline network at all. The
+*point* attributes of the input are still lost, because the points are
+new; `writeTangents` and `write/orient-along-path` are the ops that keep
+them. Two consequences to plan for: there is deliberately no
+`sourcePrimitive` index column to group by afterwards (primitive
+numbering is per-partition, so shipping one would break determinism), and
+every upstream primitive attribute is now part of a sampler's output
+contract, so an unrelated `lengthAttr` widens the samples too — that is
+accepted, not a bug.
+
+**A carried primitive attribute colliding with one the sampler writes.**
+The samplers carry no input *point* attributes, so the only name a
+carried column can hit is one the node owns (`P`, `tangent`, `curveU`,
+`seed`, …), and the node refuses rather than overwriting it — the error
+names the node, the attribute, both shapes and the fix. There is no
+opt-out to reach for: rename the attribute where it was written (the
+`name` param of the `setAttribute` or `promoteAttribute` that produced
+it), or `removeAttribute` it upstream on `domain: "primitive"` if it is
+dead.
 
 **Assuming a graph is correct because it cooked.** A cook that errors on
 nothing is not evidence. A graph whose filter keeps zero points reports

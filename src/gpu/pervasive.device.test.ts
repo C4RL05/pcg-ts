@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-import { deviceSuiteName, testDevice } from "./testDevice.js";
+import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./testDevice.js";
 
 interface BitExact {
   dispatches: number;
@@ -121,7 +121,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("pervasive adoption + chunk
   let scenario: ScenarioOutput;
   beforeAll(() => {
     scenario = runScenario();
-  });
+  }, DEVICE_HOOK_TIMEOUT_MS);
 
   it("scenario ran to completion", () => {
     expect(scenario.error, scenario.error).toBeUndefined();

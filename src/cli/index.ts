@@ -34,7 +34,7 @@ export { type CliIo } from "./io.js";
 export { makeNodeIo } from "./nodeIo.js";
 export { CliUsageError } from "./args.js";
 export { CliError } from "./errors.js";
-export { renderSvg, type RenderOptions, type RenderResult } from "./render.js";
+export { renderSvg, type ColorDomain, type RenderOptions, type RenderResult } from "./render.js";
 export {
   type AttrStats,
   type GeometrySummary,

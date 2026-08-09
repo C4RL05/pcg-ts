@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { Geometry, createPointCloud, createPolyline, setPolylineTopology } from "../data/index.js";
+import {
+  Geometry,
+  PRIMTYPE_ATTR,
+  createPointCloud,
+  createPolyline,
+  setPolylineTopology,
+} from "../data/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import {
   deserializeGraph,
@@ -18,6 +24,9 @@ import {
   writeTangents,
 } from "./index.js";
 import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+// Registers the shipped primitives, so `place/along-curve` can be reached
+// by name from a serialized graph — the way the pipeline actually wires it.
+import "../primitives/index.js";
 
 /** A point cloud of `n` points at (i, 0, 0), with no topology. */
 function row(n: number): Geometry {
@@ -53,6 +62,30 @@ function twoPaths(): Geometry {
   P.setTuple(3, [14, 0, 0]);
   setPolylineTopology(geo, [0, 1, 2, 3], [0, 2], [2, 2]);
   return geo;
+}
+
+/** Write one scalar f32 value per primitive (the phase-43 per-edge value). */
+function withPrimValue(geo: Geometry, name: string, values: readonly number[]): Geometry {
+  const attr = geo.attrs.primitive.add(name, "f32", 1, 0);
+  for (let p = 0; p < values.length; p++) attr.set(p, values[p]);
+  return geo;
+}
+
+/** Write one string value per primitive (a `kind` tag, promoted with `first`). */
+function withPrimString(geo: Geometry, name: string, values: readonly string[]): Geometry {
+  const attr = geo.attrs.primitive.add(name, "string", 1, "");
+  for (let p = 0; p < values.length; p++) attr.setString(p, values[p]);
+  return geo;
+}
+
+/** The message a node run rejects with (fails when it does not reject). */
+async function rejection(run: Promise<unknown>): Promise<string> {
+  const err: unknown = await run.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  if (!(err instanceof Error)) throw new Error("expected the node to throw an Error");
+  return err.message;
 }
 
 describe("pointsToPath", () => {
@@ -477,6 +510,57 @@ describe("pathResample", () => {
       [10, 0, 0],
     ]);
   });
+
+  it("carries each path's primitive attributes onto its own resampled points", async () => {
+    const roads = withPrimString(withPrimValue(twoPaths(), "roadWidth", [2, 7]), "roadKind", [
+      "avenue",
+      "lane",
+    ]);
+    const geo = firstGeo(
+      (await runNode(pathResample, { mode: "count", count: 3 }, { in: [makeGeometryItem(roads)] })).out,
+    );
+    expect(geo.pointCount).toBe(6);
+    const width = geo.attrs.point.require("roadWidth");
+    const kind = geo.attrs.point.require("roadKind");
+    expect([0, 1, 2, 3, 4, 5].map((i) => width.get(i))).toEqual([2, 2, 2, 7, 7, 7]);
+    expect([0, 1, 2, 3, 4, 5].map((i) => kind.getString(i))).toEqual([
+      "avenue",
+      "avenue",
+      "avenue",
+      "lane",
+      "lane",
+      "lane",
+    ]);
+    // The type tag is not a value and does not ride onto the points.
+    expect(geo.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+  });
+
+  it("keeps its own output primitives' attributes: a resampled road is still a road", async () => {
+    const roads = withPrimString(withPrimValue(twoPaths(), "roadWidth", [2, 7]), "roadKind", [
+      "avenue",
+      "lane",
+    ]);
+    const geo = firstGeo(
+      (await runNode(pathResample, { mode: "count", count: 4 }, { in: [makeGeometryItem(roads)] })).out,
+    );
+    expect(geo.primitiveCount).toBe(2);
+    const width = geo.attrs.primitive.require("roadWidth");
+    expect([width.get(0), width.get(1)]).toEqual([2, 7]);
+    const kind = geo.attrs.primitive.require("roadKind");
+    expect([kind.getString(0), kind.getString(1)]).toEqual(["avenue", "lane"]);
+    // And it is still typed as a polyline.
+    const primType = geo.attrs.primitive.require(PRIMTYPE_ATTR);
+    expect([primType.getString(0), primType.getString(1)]).toEqual(["polyline", "polyline"]);
+  });
+
+  it("refuses a primitive attribute that would clobber one it writes itself", async () => {
+    const roads = withPrimValue(twoPaths(), "tangent", [0, 0]);
+    const msg = await rejection(runNode(pathResample, {}, { in: [makeGeometryItem(roads)] }));
+    expect(msg).toContain("pathResample");
+    expect(msg).toContain('"tangent"');
+    expect(msg).toContain("removeAttribute");
+    expect(msg).not.toBe('attribute "tangent" already exists');
+  });
 });
 
 describe("writeTangents", () => {
@@ -788,5 +872,95 @@ describe("what drops topology, and what does not", () => {
     const out = firstGeo((await cook(g)).outputs.result);
     expect(out.primitiveCount).toBe(1);
     expect(out.pointCount).toBe(6);
+  });
+});
+
+/**
+ * The phase's end-to-end case, from a graph a file could carry: a road
+ * NETWORK whose roads each hold their own `roadWidth` on the PRIMITIVE
+ * domain, walked by the shipped `place/along-curve` primitive. Before
+ * phase 44 the lamps it spawned could not see the width of the road they
+ * were standing on — the per-edge value phase 43 made a headline
+ * capability died at the sampler. Driven through the primitive by name,
+ * not through pathResample directly, because the primitive is what the
+ * pipeline actually wires.
+ */
+describe("a road's width reaches the lamps standing on it", () => {
+  /** Two straight roads at z = 0 and z = 10, of widths 2 and 7. */
+  function roadNetworkGraph(): unknown {
+    const line = (id: string, z: number) => ({
+      id,
+      type: "pointLine",
+      params: { count: 5, start: [0, 0, z], end: [40, 0, z], includeEnd: true },
+    });
+    const group = (id: string, value: number) => ({
+      id,
+      type: "setAttribute",
+      params: { name: "grp", domain: "point", type: "i32", tupleSize: 1, value },
+    });
+    return {
+      formatVersion: 1,
+      seed: 40100,
+      nodes: [
+        line("lineA", 0),
+        group("grpA", 0),
+        line("lineB", 10),
+        group("grpB", 1),
+        { id: "roads", type: "mergePoints", params: {} },
+        {
+          id: "net",
+          type: "pointsToPath",
+          params: { closed: false, groupAttr: "grp", orderAttr: "" },
+        },
+        {
+          id: "roadWidth",
+          type: "setAttribute",
+          params: {
+            name: "roadWidth",
+            domain: "primitive",
+            type: "f32",
+            tupleSize: 1,
+            // 2 on the first road, 7 on the second.
+            value: { fn: "remap", args: [{ fn: "index" }, 0, 1, 2, 7] },
+          },
+        },
+        {
+          id: "lamps",
+          type: "subgraph",
+          params: { mode: "count", count: 6 },
+          ref: { name: "place/along-curve" },
+        },
+      ],
+      connections: [
+        { from: ["lineA", "out"], to: ["grpA", "in"] },
+        { from: ["lineB", "out"], to: ["grpB", "in"] },
+        { from: ["grpA", "out"], to: ["roads", "in"] },
+        { from: ["grpB", "out"], to: ["roads", "in"] },
+        { from: ["roads", "out"], to: ["net", "in"] },
+        { from: ["net", "out"], to: ["roadWidth", "in"] },
+        { from: ["roadWidth", "out"], to: ["lamps", "curve"] },
+      ],
+      outputs: [{ id: "lamps", pin: "out", name: "lamps" }],
+    };
+  }
+
+  it("gives every lamp the width of the road it stands on", async () => {
+    const lamps = firstGeo((await cook(deserializeGraph(roadNetworkGraph()))).outputs.lamps);
+    expect(lamps.pointCount).toBe(12);
+    const P = lamps.attrs.point.require("P");
+    const width = lamps.attrs.point.require("roadWidth");
+    const widths = new Set<number>();
+    for (let i = 0; i < lamps.pointCount; i++) {
+      // z says which road this lamp is on; roadWidth has to agree.
+      expect(width.get(i)).toBe(P.get(i, 2) < 5 ? 2 : 7);
+      widths.add(width.get(i));
+    }
+    expect(widths).toEqual(new Set([2, 7]));
+    // The lamps are still a path, and each road is still a road.
+    expect(lamps.primitiveCount).toBe(2);
+    const primWidth = lamps.attrs.primitive.require("roadWidth");
+    expect([primWidth.get(0), primWidth.get(1)]).toEqual([2, 7]);
+    // `primtype` is a type tag, not a value: it stays off the points.
+    expect(lamps.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import {
+  carryPrimitiveAttributes,
   locateOnArcLength,
   polylineArcTables,
   requireGeometry,
@@ -218,7 +219,7 @@ export const pathResample = standardNode<PathResampleParams>({
   type: "pathResample",
   category: "sampler",
   description:
-    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -320,12 +321,19 @@ export const pathResample = standardNode<PathResampleParams>({
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
     const seeds = out.attrs.point.require("seed").data;
+    // Which input polyline each sample came from, and which input polyline
+    // each OUTPUT polyline replaces. The second is a structural 1:1 —
+    // output primitive `ti` is a resampling of `tables[ti].prim` and of
+    // nothing else — which is what lets a resampled road stay a road.
+    const samplePrim = new Uint32Array(total);
+    const outPrimSrc = new Uint32Array(tables.length);
     const at = [0, 0]; // scratch [segment, t] reused by every sample
     let w = 0;
     for (let ti = 0; ti < tables.length; ti++) {
       const table = tables[ti];
       const positions = perPath[ti];
       const L = table.length;
+      outPrimSrc[ti] = table.prim;
       for (let i = 0; i < positions.length; i++) {
         if ((w & 1023) === 0) checkCancelled();
         const s = positions[i];
@@ -346,9 +354,17 @@ export const pathResample = standardNode<PathResampleParams>({
         }
         curveU[w] = s / L;
         seeds[w] = hashCombine(seed, w);
+        samplePrim[w] = table.prim;
         w++;
       }
     }
+    carryPrimitiveAttributes(
+      geo.attrs.primitive,
+      out.attrs.point,
+      samplePrim,
+      "pathResample",
+      "point",
+    );
 
     // Rebuild the topology the samples came from: one polyline per input
     // polyline, closed when the input was.
@@ -365,6 +381,19 @@ export const pathResample = standardNode<PathResampleParams>({
       base += n;
     }
     setPolylineTopology(out, pointIndices, primVertexStart, primVertexCount);
+    // The other half of the same bug: setPolylineTopology DELETES the
+    // vertex and primitive columns, so without this a resampled road came
+    // back a nameless polyline — the node destroyed on its own output the
+    // values it had just carried onto the points. Restored as a structural
+    // 1:1, so it is exact rather than a nearest-match: output primitive
+    // `ti` is a resampling of `tables[ti].prim`.
+    carryPrimitiveAttributes(
+      geo.attrs.primitive,
+      out.attrs.primitive,
+      outPrimSrc,
+      "pathResample",
+      "primitive",
+    );
     return { out: [makeGeometryItem(out)] };
   },
 });
