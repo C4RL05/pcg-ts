@@ -1,12 +1,11 @@
 /**
  * Internal helpers shared by the standard node library: input plumbing,
- * field resolution, point gathering/compaction, and quaternion math.
- * Not part of the public API.
+ * position views, field resolution, element copying, point and primitive
+ * gathering, and quaternion math. Not part of the public API.
  */
 import {
   Geometry,
   PRIMTYPE_ATTR,
-  type AttrDefault,
   type AttrType,
   type Attribute,
   type AttributeSet,
@@ -21,6 +20,7 @@ import {
   resolveField,
 } from "../fields/index.js";
 import type { DataCollection, GeometryItem } from "../graph/index.js";
+import type { PositionView } from "../spatial/index.js";
 
 /** All geometry items on a pin, in connection order. */
 export function geometryItems(collection: DataCollection): GeometryItem[] {
@@ -105,6 +105,37 @@ export function optionalGeometry(
   if (items.length === 0) return undefined;
   if (items.length > 1) throw new Error(multiGeometryMessage(nodeType, pin, items.length));
   return items[0].geo;
+}
+
+/**
+ * The `P` attribute as a {@link PositionView}, with the three failures a
+ * spatial query would otherwise hit deep inside the index reported here
+ * instead, naming the node the author has to fix and the pin the geometry
+ * arrived on.
+ *
+ * Defined once for every node that runs a distance query, because these
+ * messages ARE the agent API: a second copy is a second wording to drift,
+ * and an author reading two different answers to "what does P have to be"
+ * has to guess which node meant which.
+ */
+export function positionView(geo: Geometry, nodeType: string, pin: string): PositionView {
+  const P = geo.attrs.point.get("P");
+  if (!P) {
+    throw new Error(
+      `${nodeType}: input "${pin}" has no point attribute "P"; every point cloud in this library carries one — available: ${geo.attrs.point.names().join(", ") || "(none)"}`,
+    );
+  }
+  if (P.type === "string") {
+    throw new Error(
+      `${nodeType}: input "${pin}" has a string attribute "P"; positions must be numeric (f32, tupleSize 3)`,
+    );
+  }
+  if (P.tupleSize < 3) {
+    throw new Error(
+      `${nodeType}: input "${pin}" has point attribute "P" with tupleSize ${P.tupleSize}, but distances need x, y and z (tupleSize 3); something upstream overwrote P with a narrower attribute`,
+    );
+  }
+  return { data: P.data, stride: P.tupleSize, count: geo.pointCount };
 }
 
 /** A param value that may be a plain value or a Field. */
@@ -267,6 +298,75 @@ export function requireReportSlot(slot: ReportSlot): void {
   );
 }
 
+/** The message {@link Attribute.copyFrom} raises for an index it cannot read. */
+function copyRangeError(name: string): Error {
+  return new Error(`attribute "${name}": copyFrom range out of bounds`);
+}
+
+/**
+ * Copy `count` elements of every attribute in `from` into `to`, creating
+ * the columns (types, tuple sizes, defaults and string tables) as it goes.
+ * `indices` selects which source element lands at each destination slot;
+ * `undefined` means the identity, which is one bulk copy per column rather
+ * than one call per element.
+ *
+ * `to` is resized only when it is not already the right size — the vertex
+ * and primitive sets are sized by `setTopology`, and resizing them again
+ * would be a no-op at best.
+ *
+ * The gather reads and writes the raw storage rather than calling
+ * `Attribute.copyFrom` once per element. That call re-checks the pair's
+ * shape and allocates a `subarray` VIEW for every element of every column,
+ * which is precisely the per-element allocation the SoA rule exists to
+ * forbid: half a million points cost half a million transient objects. The
+ * shape is checked once here instead — each destination column was just
+ * created from its source's own type and tuple size, so the two always
+ * match — leaving only the source index, which is still checked per element
+ * and raises exactly what `copyFrom` would have. String columns keep the
+ * `copyFrom` path: their values are indices into a per-attribute table and
+ * have to be re-interned into the destination's, which is knowledge the
+ * attribute owns.
+ */
+export function copyElements(
+  from: AttributeSet,
+  to: AttributeSet,
+  indices: ArrayLike<number> | undefined,
+  count: number,
+): void {
+  for (const attr of from) to.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue);
+  if (to.count !== count) to.resize(count);
+  for (const attr of from) {
+    const dst = to.require(attr.name);
+    if (indices === undefined) {
+      dst.copyFrom(attr, 0, 0, count);
+      continue;
+    }
+    if (attr.type === "string") {
+      for (let j = 0; j < count; j++) dst.copyFrom(attr, indices[j], j, 1);
+      continue;
+    }
+    const src = attr.data;
+    const out = dst.data;
+    const ts = attr.tupleSize;
+    const cap = attr.capacity;
+    if (ts === 1) {
+      for (let j = 0; j < count; j++) {
+        const s = indices[j];
+        if (s < 0 || s >= cap) throw copyRangeError(dst.name);
+        out[j] = src[s];
+      }
+      continue;
+    }
+    for (let j = 0; j < count; j++) {
+      const s = indices[j];
+      if (s < 0 || s >= cap) throw copyRangeError(dst.name);
+      const so = s * ts;
+      const dof = j * ts;
+      for (let k = 0; k < ts; k++) out[dof + k] = src[so + k];
+    }
+  }
+}
+
 /**
  * Build a points-only geometry holding the selected point indices of
  * `src`, carrying every point attribute (types, tuple sizes, defaults,
@@ -274,17 +374,83 @@ export function requireReportSlot(slot: ReportSlot): void {
  */
 export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometry {
   const out = new Geometry();
-  const srcSet = src.attrs.point;
-  const dstSet = out.attrs.point;
-  for (const attr of srcSet) {
-    dstSet.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue as AttrDefault);
+  copyElements(src.attrs.point, out.attrs.point, indices, indices.length);
+  return out;
+}
+
+/**
+ * Build a geometry holding the selected PRIMITIVES of `src`, with their
+ * topology intact: the chosen primitives in the given order, each keeping
+ * its own vertices in their own order, plus every vertex, primitive and
+ * detail attribute carried across.
+ *
+ * The counterpart of {@link gatherPoints}, and deliberately the only one of
+ * the pair that preserves topology — which is the whole reason
+ * `filterPrimitivesByBounds` exists.
+ *
+ * With `dropUnreferenced` the point domain is compacted to the points some
+ * surviving primitive still references, in ascending source order (the
+ * same convention {@link gatherPoints} callers produce), and the topology is
+ * renumbered onto it. Otherwise the point domain is copied whole and the
+ * topology keeps the indices it arrived with.
+ */
+export function gatherPrimitives(
+  src: Geometry,
+  prims: ArrayLike<number>,
+  dropUnreferenced: boolean,
+): Geometry {
+  const starts = src.primVertexStart;
+  const counts = src.primVertexCount;
+  const v2p = src.vertexToPoint;
+  const nPrim = prims.length;
+  let nv = 0;
+  for (let k = 0; k < nPrim; k++) nv += counts[prims[k]];
+  // Source vertex index of each surviving vertex, so vertex attributes
+  // travel with the primitive that owns them.
+  const vertexSrc = new Uint32Array(nv);
+  const newStart = new Uint32Array(nPrim);
+  const newCount = new Uint32Array(nPrim);
+  let w = 0;
+  for (let k = 0; k < nPrim; k++) {
+    const p = prims[k];
+    const c = counts[p];
+    const s = starts[p];
+    newStart[k] = w;
+    newCount[k] = c;
+    for (let j = 0; j < c; j++) vertexSrc[w++] = s + j;
   }
-  const n = indices.length;
-  dstSet.resize(n);
-  for (const attr of srcSet) {
-    const dst = dstSet.require(attr.name);
-    for (let j = 0; j < n; j++) dst.copyFrom(attr, indices[j], j, 1);
+
+  const np = src.pointCount;
+  let pointSrc: Uint32Array | undefined;
+  let remap: Uint32Array | undefined;
+  if (dropUnreferenced) {
+    const used = new Uint8Array(np);
+    for (let v = 0; v < nv; v++) used[v2p[vertexSrc[v]]] = 1;
+    remap = new Uint32Array(np);
+    let kept = 0;
+    for (let i = 0; i < np; i++) {
+      if (used[i] === 1) remap[i] = kept++;
+    }
+    pointSrc = new Uint32Array(kept);
+    let k = 0;
+    for (let i = 0; i < np; i++) {
+      if (used[i] === 1) pointSrc[k++] = i;
+    }
   }
+
+  const out = new Geometry();
+  // Points first, so setTopology validates the new vertex references
+  // against the right point count.
+  copyElements(src.attrs.point, out.attrs.point, pointSrc, pointSrc?.length ?? np);
+  const newV2P = new Uint32Array(nv);
+  for (let v = 0; v < nv; v++) {
+    const pt = v2p[vertexSrc[v]];
+    newV2P[v] = remap === undefined ? pt : remap[pt];
+  }
+  out.setTopology(newV2P, newStart, newCount);
+  copyElements(src.attrs.vertex, out.attrs.vertex, vertexSrc, nv);
+  copyElements(src.attrs.primitive, out.attrs.primitive, prims, nPrim);
+  copyElements(src.attrs.detail, out.attrs.detail, undefined, src.attrs.detail.count);
   return out;
 }
 

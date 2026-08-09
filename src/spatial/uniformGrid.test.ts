@@ -358,6 +358,60 @@ describe("UniformGrid.queryRadius", () => {
   });
 });
 
+describe("UniformGrid.queryRadiusUnordered", () => {
+  /** The unordered result, put in the order `queryRadius` promises. */
+  function sorted(grid: UniformGrid, x: number, y: number, z: number, r: number): number[] {
+    return [...grid.queryRadiusUnordered(x, y, z, r)].sort((a, b) => a - b);
+  }
+
+  it("returns the same SET as queryRadius, on both scan paths", () => {
+    const v = view([
+      [3, 0, 0],
+      [0, 0, 0],
+      [2, 0, 0],
+      [1, 0, 0],
+      [0.5, 0.5, 0.5],
+    ]);
+    for (const cell of [0.25, 1, 10]) {
+      const grid = UniformGrid.build(v, cell);
+      for (const r of [0, 0.5, 1, 2.5, 100]) {
+        // A wide radius at a small cell size takes the full scan; a tight one
+        // at a matching cell size takes the 3x3x3 block.
+        expect(sorted(grid, 0.75, 0.25, 0, r), `cell ${cell} radius ${r}`).toEqual(
+          grid.queryRadius(0.75, 0.25, 0, r),
+        );
+      }
+    }
+  });
+
+  it("agrees on the degenerate radii and on the block-unsafe fallback", () => {
+    const grid = UniformGrid.build(UNIT_LINE, 1);
+    expect(grid.queryRadiusUnordered(0, 0, 0, -1)).toEqual([]);
+    expect(grid.queryRadiusUnordered(0, 0, 0, Number.NaN)).toEqual([]);
+    expect(grid.queryRadiusUnordered(0, 0, 0, 0)).toEqual([0]);
+    expect(grid.queryRadiusUnordered(Number.NaN, 0, 0, 5)).toEqual([]);
+    // Cell coordinates past 2^53, where the block collapses and the guard
+    // sends both methods down the full scan.
+    const tiny = UniformGrid.build(
+      view([
+        [3, 3, 3],
+        [3, 3, 3],
+      ]),
+      1e-30,
+    );
+    expect(sorted(tiny, 3, 3, 3, 1e-30)).toEqual([0, 1]);
+  });
+
+  it("reuses the output array and clears it first", () => {
+    const grid = UniformGrid.build(UNIT_LINE, 1);
+    const out: number[] = [99, 98];
+    expect(grid.queryRadiusUnordered(0, 0, 0, 0.5, out)).toBe(out);
+    expect(out).toEqual([0]);
+    grid.queryRadiusUnordered(100, 0, 0, 0.5, out);
+    expect(out).toEqual([]);
+  });
+});
+
 describe("UniformGrid.nearest", () => {
   it("finds the nearest point and breaks ties toward the lowest index", () => {
     const grid = UniformGrid.build(
@@ -617,6 +671,10 @@ describe("UniformGrid agrees with brute force", () => {
           const z = onPoint ? v.data[o + 2] : -5 + q() * 10;
           for (const radius of [0, 0.2, 0.9, 2.5]) {
             expect(grid.queryRadius(x, y, z, radius)).toEqual(refRadius(v, x, y, z, radius));
+            // Same membership without the order: what `buildAdjacency` reads.
+            expect([...grid.queryRadiusUnordered(x, y, z, radius)].sort((a, b) => a - b)).toEqual(
+              refRadius(v, x, y, z, radius),
+            );
             expect(grid.hasPointCloserThan(x, y, z, radius)).toBe(refCloser(v, x, y, z, radius));
           }
           expect(grid.nearest(x, y, z)).toBe(refNearest(v, x, y, z));

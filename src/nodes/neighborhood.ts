@@ -19,37 +19,12 @@
  * grid's own lowest-index tie rule: the tie there is between points of a
  * SECOND cloud and lives in `src/spatial`, not here.
  */
-import type { AttrDefault, Attribute, Geometry } from "../data/index.js";
+import type { AttrDefault, Attribute } from "../data/index.js";
 import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid, type PositionView } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { requireGeometry, requireReportSlot } from "./util.js";
-
-/**
- * The `P` attribute as a {@link PositionView}, with the two failures a
- * spatial query would otherwise hit deep inside the index reported here
- * instead, naming the node the author has to fix.
- */
-function positionView(geo: Geometry, nodeType: string, pin: string): PositionView {
-  const P = geo.attrs.point.get("P");
-  if (!P) {
-    throw new Error(
-      `${nodeType}: input "${pin}" has no point attribute "P"; every point cloud in this library carries one — available: ${geo.attrs.point.names().join(", ") || "(none)"}`,
-    );
-  }
-  if (P.type === "string") {
-    throw new Error(
-      `${nodeType}: input "${pin}" has a string attribute "P"; positions must be numeric (f32, tupleSize 3)`,
-    );
-  }
-  if (P.tupleSize < 3) {
-    throw new Error(
-      `${nodeType}: input "${pin}" has point attribute "P" with tupleSize ${P.tupleSize}, but distances need x, y and z (tupleSize 3); something upstream overwrote P with a narrower attribute`,
-    );
-  }
-  return { data: P.data, stride: P.tupleSize, count: geo.pointCount };
-}
+import { positionView, requireGeometry, requireReportSlot } from "./util.js";
 
 /**
  * Cell size for a grid over `view`: roughly two mean point spacings over

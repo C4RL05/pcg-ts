@@ -8,14 +8,20 @@
  * exception in the library, and it earns it by filtering the PRIMITIVE
  * domain instead — see its description.
  */
-import { AttributeSet, Geometry } from "../data/index.js";
+import type { Geometry } from "../data/index.js";
 import type { Column } from "../fields/index.js";
 import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { type PositionView, UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { type FieldParam, gatherPoints, requireGeometry, resolveOn } from "./util.js";
+import {
+  type FieldParam,
+  gatherPoints,
+  gatherPrimitives,
+  requireGeometry,
+  resolveOn,
+} from "./util.js";
 
 /** Params of {@link filterByDensity}. */
 export interface FilterByDensityParams {
@@ -135,6 +141,51 @@ function requireBounds3(
   }
 }
 
+/**
+ * THE box test, built once per cook and shared by both bounds filters:
+ * given a point index, is it inside `[boundsMin, boundsMax]` under the
+ * active `boundary` rule?
+ *
+ * One boolean, which each caller negates for its 'outside' mode, so the
+ * complement is exact by construction under either rule — a second
+ * predicate for the outside case is how a gap or an overlap gets in. And
+ * ONE definition across the two nodes, because which side of a FACE a
+ * coordinate falls on is the single decision they both exist to make, and
+ * the one a partitioned cook is silently wrong about when two boxes answer
+ * it differently. The guards above it were already shared for that reason;
+ * the decision itself is what actually had to be.
+ *
+ * A NaN coordinate satisfies no comparison, so such a point is never
+ * inside and always lands in 'outside'.
+ *
+ * The `inclusive` ternary stays INSIDE the predicate rather than splitting
+ * it into two closures: hoisting it would re-duplicate the face rule, which
+ * is exactly what this exists to prevent, and the branch is uniform across
+ * a whole cook.
+ */
+function insideBoxPredicate(
+  pd: ArrayLike<number>,
+  ps: number,
+  boundsMin: readonly number[],
+  boundsMax: readonly number[],
+  inclusive: boolean,
+): (pt: number) => boolean {
+  const [ax, ay, az] = boundsMin;
+  const [bx, by, bz] = boundsMax;
+  return (pt: number): boolean => {
+    const o = pt * ps;
+    const x = pd[o];
+    const y = pd[o + 1];
+    const z = pd[o + 2];
+    return (
+      x >= ax &&
+      y >= ay &&
+      z >= az &&
+      (inclusive ? x <= bx && y <= by && z <= bz : x < bx && y < by && z < bz)
+    );
+  };
+}
+
 /** Params of {@link filterByBounds}. */
 export interface FilterByBoundsParams {
   boundsMin: readonly number[];
@@ -185,133 +236,22 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
     const inclusive = requireBoundaryRule("filterByBounds", params.boundary);
     requireBounds3("filterByBounds", params.boundsMin, params.boundsMax);
     const P = geo.attrs.point.require("P");
-    const pd = P.data;
-    const ps = P.tupleSize;
-    const [ax, ay, az] = params.boundsMin;
-    const [bx, by, bz] = params.boundsMax;
+    // Built once per cook, never per point — the SoA rule stands.
+    const insidePoint = insideBoxPredicate(
+      P.data,
+      P.tupleSize,
+      params.boundsMin,
+      params.boundsMax,
+      inclusive,
+    );
     const keep: number[] = [];
-    for (let i = 0; i < geo.pointCount; i++) {
-      const x = pd[i * ps];
-      const y = pd[i * ps + 1];
-      const z = pd[i * ps + 2];
-      // One boolean, negated for 'outside', so the complement is exact by
-      // construction under either rule — a second predicate for the
-      // outside case is how a gap or an overlap gets in.
-      const inside =
-        x >= ax &&
-        y >= ay &&
-        z >= az &&
-        (inclusive ? x <= bx && y <= by && z <= bz : x < bx && y < by && z < bz);
-      if (inside === wantInside) keep.push(i);
+    const nPoints = geo.pointCount;
+    for (let i = 0; i < nPoints; i++) {
+      if (insidePoint(i) === wantInside) keep.push(i);
     }
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
   },
 });
-
-/**
- * Copy `count` elements of every attribute in `from` into `to`, creating
- * the columns (types, tuple sizes, defaults and string tables) as it goes.
- * `indices` selects which source element lands at each destination slot;
- * `undefined` means the identity, which is one bulk copy per column rather
- * than one call per element.
- *
- * `to` is resized only when it is not already the right size — the vertex
- * and primitive sets are sized by `setTopology`, and resizing them again
- * would be a no-op at best.
- */
-function copyElements(
-  from: AttributeSet,
-  to: AttributeSet,
-  indices: ArrayLike<number> | undefined,
-  count: number,
-): void {
-  for (const attr of from) to.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue);
-  if (to.count !== count) to.resize(count);
-  for (const attr of from) {
-    const dst = to.require(attr.name);
-    if (indices === undefined) {
-      dst.copyFrom(attr, 0, 0, count);
-      continue;
-    }
-    for (let j = 0; j < count; j++) dst.copyFrom(attr, indices[j], j, 1);
-  }
-}
-
-/**
- * Build a geometry holding the selected PRIMITIVES of `src`, with their
- * topology intact: the chosen primitives in the given order, each keeping
- * its own vertices in their own order, plus every vertex, primitive and
- * detail attribute carried across.
- *
- * The counterpart of `gatherPoints` in `util.ts`, and deliberately the
- * only one of the pair that preserves topology — which is the whole reason
- * {@link filterPrimitivesByBounds} exists.
- *
- * With `dropUnreferenced` the point domain is compacted to the points some
- * surviving primitive still references, in ascending source order (the
- * same convention `gatherPoints` callers produce), and the topology is
- * renumbered onto it. Otherwise the point domain is copied whole and the
- * topology keeps the indices it arrived with.
- */
-function gatherPrimitives(
-  src: Geometry,
-  prims: ArrayLike<number>,
-  dropUnreferenced: boolean,
-): Geometry {
-  const starts = src.primVertexStart;
-  const counts = src.primVertexCount;
-  const v2p = src.vertexToPoint;
-  const nPrim = prims.length;
-  let nv = 0;
-  for (let k = 0; k < nPrim; k++) nv += counts[prims[k]];
-  // Source vertex index of each surviving vertex, so vertex attributes
-  // travel with the primitive that owns them.
-  const vertexSrc = new Uint32Array(nv);
-  const newStart = new Uint32Array(nPrim);
-  const newCount = new Uint32Array(nPrim);
-  let w = 0;
-  for (let k = 0; k < nPrim; k++) {
-    const p = prims[k];
-    const c = counts[p];
-    const s = starts[p];
-    newStart[k] = w;
-    newCount[k] = c;
-    for (let j = 0; j < c; j++) vertexSrc[w++] = s + j;
-  }
-
-  const np = src.pointCount;
-  let pointSrc: Uint32Array | undefined;
-  let remap: Uint32Array | undefined;
-  if (dropUnreferenced) {
-    const used = new Uint8Array(np);
-    for (let v = 0; v < nv; v++) used[v2p[vertexSrc[v]]] = 1;
-    remap = new Uint32Array(np);
-    let kept = 0;
-    for (let i = 0; i < np; i++) {
-      if (used[i] === 1) remap[i] = kept++;
-    }
-    pointSrc = new Uint32Array(kept);
-    let k = 0;
-    for (let i = 0; i < np; i++) {
-      if (used[i] === 1) pointSrc[k++] = i;
-    }
-  }
-
-  const out = new Geometry();
-  // Points first, so setTopology validates the new vertex references
-  // against the right point count.
-  copyElements(src.attrs.point, out.attrs.point, pointSrc, pointSrc?.length ?? np);
-  const newV2P = new Uint32Array(nv);
-  for (let v = 0; v < nv; v++) {
-    const pt = v2p[vertexSrc[v]];
-    newV2P[v] = remap === undefined ? pt : remap[pt];
-  }
-  out.setTopology(newV2P, newStart, newCount);
-  copyElements(src.attrs.vertex, out.attrs.vertex, vertexSrc, nv);
-  copyElements(src.attrs.primitive, out.attrs.primitive, prims, nPrim);
-  copyElements(src.attrs.detail, out.attrs.detail, undefined, src.attrs.detail.count);
-  return out;
-}
 
 /** Params of {@link filterPrimitivesByBounds}. */
 export interface FilterPrimitivesByBoundsParams {
@@ -413,31 +353,21 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
         `${who}: point attribute "P" is ${P.type}${P.tupleSize === 1 ? "" : `x${P.tupleSize}`}, but a box test needs x, y and z (f32, tupleSize 3); something upstream overwrote P`,
       );
     }
-    const pd = P.data;
-    const ps = P.tupleSize;
-    const [ax, ay, az] = params.boundsMin;
-    const [bx, by, bz] = params.boundsMax;
-    // One predicate, negated for 'outside', so the complement is exact by
-    // construction under every combination of the two rules — a second
-    // predicate for the outside case is how a gap or an overlap gets in.
-    // A NaN coordinate is never inside, so such a vertex lands outside.
-    const insidePoint = (pt: number): boolean => {
-      const o = pt * ps;
-      const x = pd[o];
-      const y = pd[o + 1];
-      const z = pd[o + 2];
-      return (
-        x >= ax &&
-        y >= ay &&
-        z >= az &&
-        (inclusive ? x <= bx && y <= by && z <= bz : x < bx && y < by && z < bz)
-      );
-    };
+    // The same box test filterByBounds runs, built once per cook and never
+    // per vertex, so the two nodes cannot disagree about a face.
+    const insidePoint = insideBoxPredicate(
+      P.data,
+      P.tupleSize,
+      params.boundsMin,
+      params.boundsMax,
+      inclusive,
+    );
     const v2p = geo.vertexToPoint;
     const starts = geo.primVertexStart;
     const counts = geo.primVertexCount;
     const keep: number[] = [];
-    for (let p = 0; p < geo.primitiveCount; p++) {
+    const nPrims = geo.primitiveCount;
+    for (let p = 0; p < nPrims; p++) {
       const c = counts[p];
       const s = starts[p];
       let inside: boolean;

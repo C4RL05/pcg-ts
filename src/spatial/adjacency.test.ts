@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjacencyFor, buildAdjacency, adjacencyDegree, type Adjacency } from "./adjacency.js";
+import { adjacencyFor, buildAdjacency, type Adjacency } from "./adjacency.js";
 import type { PositionView } from "./uniformGrid.js";
 
 /** Deterministic PRNG for the property cases (never Math.random). */
@@ -81,7 +81,9 @@ describe("Adjacency CSR shape", () => {
       expect(adj.offsets[i + 1]).toBeGreaterThanOrEqual(adj.offsets[i]);
     }
     expect(adj.offsets[adj.count]).toBe(adj.neighbors.length);
-    expect(adjacencyDegree(adj, 3)).toBe(adj.offsets[4] - adj.offsets[3]);
+    // The neighbour array is exactly the relation, with none of the growth
+    // buffer's slack left reachable behind it.
+    expect(adj.neighbors.buffer.byteLength).toBe(adj.neighbors.length * 4);
   });
 
   it("rows are ascending point indices and never contain the point itself", () => {
@@ -251,6 +253,19 @@ describe("Adjacency cache", () => {
     const again = adjacencyFor(v, 1);
     expect(again).not.toBe(first); // evicted
     expect(rowsOf(again)).toEqual(rowsOf(first)); // and rebuilt identically
+  });
+
+  it("evicts the least recently USED, so a hot radius survives a sweep of cold ones", () => {
+    const v = cloud(40, 19);
+    const hot = adjacencyFor(v, 1);
+    // Read the hot radius between every cold one. Evicting in build order
+    // would drop it on the first cycle; evicting in use order never does.
+    for (let cycle = 0; cycle < 3; cycle++) {
+      for (const cold of [2, 3, 4, 5]) {
+        adjacencyFor(v, cold);
+        expect(adjacencyFor(v, 1), `cycle ${cycle}, after radius ${cold}`).toBe(hot);
+      }
+    }
   });
 });
 

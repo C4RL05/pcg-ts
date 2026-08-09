@@ -12,7 +12,9 @@
  * candidates defines its own total order (`queryRadius` sorts by ascending
  * point index; `nearest` breaks distance ties toward the lowest index). No
  * result depends on hash-map iteration order or on the order points were
- * inserted.
+ * inserted. `queryRadiusUnordered` is the one query that returns a SET and no
+ * order, and it says so in its name: it moves the ordering obligation to a
+ * caller that was going to order the result anyway, and never removes it.
  */
 
 /**
@@ -188,7 +190,13 @@ export class UniformGrid {
     const limit = distance * distance;
     const rings = this.cellRadiusFor(distance);
     const { data, stride } = this.positions;
-    if (this.useFullScan(rings) || this.blockUnsafe(x, y, z, rings)) {
+    // Computed once and handed to the guard: the safety test and the block
+    // scan must reason about the SAME cell coordinates, so there is only one
+    // site that may compute them.
+    const cx = this.cellCoordOf(x);
+    const cy = this.cellCoordOf(y);
+    const cz = this.cellCoordOf(z);
+    if (this.useFullScan(rings) || this.blockUnsafe(cx, cy, cz, rings)) {
       for (const bucket of this.cells.values()) {
         for (const j of bucket) {
           const o = j * stride;
@@ -200,9 +208,6 @@ export class UniformGrid {
       }
       return false;
     }
-    const cx = this.cellCoordOf(x);
-    const cy = this.cellCoordOf(y);
-    const cz = this.cellCoordOf(z);
     for (let ox = -rings; ox <= rings; ox++) {
       for (let oy = -rings; oy <= rings; oy++) {
         for (let oz = -rings; oz <= rings; oz++) {
@@ -231,12 +236,41 @@ export class UniformGrid {
    * and returned.
    */
   queryRadius(x: number, y: number, z: number, radius: number, out: number[] = []): number[] {
+    return this.queryRadiusUnordered(x, y, z, radius, out).sort(ascending);
+  }
+
+  /**
+   * {@link queryRadius}'s SET, without its ORDER: the same membership
+   * (squared distance <= `radius * radius`, each indexed point at most once)
+   * in whatever order the cells happen to be visited.
+   *
+   * For callers that impose their own order downstream and would otherwise
+   * pay for a sort twice — {@link buildAdjacency} sorts each CSR row in a
+   * typed array, which is a different (and cheaper) sort than this one.
+   * **Everyone else wants {@link queryRadius}**: the order here is a function
+   * of the insertion order and of which scan path was taken, so it is not
+   * something a result may depend on. Determinism of a downstream result must
+   * come from that caller's own ordering, never from this one.
+   */
+  queryRadiusUnordered(
+    x: number,
+    y: number,
+    z: number,
+    radius: number,
+    out: number[] = [],
+  ): number[] {
     out.length = 0;
     if (!(radius >= 0) || this.indexed === 0) return out;
     const limit = radius * radius;
     const rings = this.cellRadiusFor(radius);
     const { data, stride } = this.positions;
-    if (this.useFullScan(rings) || this.blockUnsafe(x, y, z, rings)) {
+    // Computed once and handed to the guard: the safety test and the block
+    // scan must reason about the SAME cell coordinates, so there is only one
+    // site that may compute them.
+    const cx = this.cellCoordOf(x);
+    const cy = this.cellCoordOf(y);
+    const cz = this.cellCoordOf(z);
+    if (this.useFullScan(rings) || this.blockUnsafe(cx, cy, cz, rings)) {
       for (const bucket of this.cells.values()) {
         for (const j of bucket) {
           const o = j * stride;
@@ -246,11 +280,8 @@ export class UniformGrid {
           if (dx * dx + dy * dy + dz * dz <= limit) out.push(j);
         }
       }
-      return out.sort(ascending);
+      return out;
     }
-    const cx = this.cellCoordOf(x);
-    const cy = this.cellCoordOf(y);
-    const cz = this.cellCoordOf(z);
     for (let ox = -rings; ox <= rings; ox++) {
       for (let oy = -rings; oy <= rings; oy++) {
         for (let oz = -rings; oz <= rings; oz++) {
@@ -266,7 +297,7 @@ export class UniformGrid {
         }
       }
     }
-    return out.sort(ascending);
+    return out;
   }
 
   /**
@@ -417,8 +448,12 @@ export class UniformGrid {
   }
 
   /**
-   * Whether a block scan around (x, y, z) cannot be trusted, so the caller
-   * must fall back to the full scan.
+   * Whether a block scan around the query cell (`cx`, `cy`, `cz`) cannot be
+   * trusted, so the caller must fall back to the full scan. The caller passes
+   * the cell coordinates it is about to scan from rather than the world
+   * position, so the guard and the scan cannot drift onto different cells —
+   * which is the failure this guard exists to catch, and it would be invisible
+   * if the two sites computed the coordinates separately.
    *
    * Cell coordinates are floats. Once one exceeds 2^53, `c + 1 === c`: the
    * block's offsets collapse onto the query cell, so the scan visits that
@@ -430,11 +465,9 @@ export class UniformGrid {
    * answer. `nearest` needs no such guard: it walks counted loops and keeps
    * a best, so a repeated cell cannot change what it returns.
    */
-  private blockUnsafe(x: number, y: number, z: number, rings: number): boolean {
+  private blockUnsafe(cx: number, cy: number, cz: number, rings: number): boolean {
     return (
-      !safeBlockAxis(this.cellCoordOf(x), rings) ||
-      !safeBlockAxis(this.cellCoordOf(y), rings) ||
-      !safeBlockAxis(this.cellCoordOf(z), rings)
+      !safeBlockAxis(cx, rings) || !safeBlockAxis(cy, rings) || !safeBlockAxis(cz, rings)
     );
   }
 }

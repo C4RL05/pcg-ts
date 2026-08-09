@@ -30,103 +30,12 @@
  * domain instead — it is what turns the partitioning recipe below from a
  * procedure a caller performs in TypeScript into a graph that serializes.
  */
-import {
-  PRIMTYPE_ATTR,
-  setPolylineTopology,
-  type Geometry,
-} from "../data/index.js";
-import { f32Bits, pointIdentities } from "../data/identity.js";
+import { PRIMTYPE_ATTR, setPolylineTopology } from "../data/index.js";
+import { canonicalPointRanks } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
-import { adjacencyFor, type Adjacency, type PositionView } from "../spatial/index.js";
+import { adjacencyFor, type Adjacency } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { requireGeometry, requireReportSlot } from "./util.js";
-
-/**
- * The `P` attribute as a {@link PositionView}, with the failures a spatial
- * query would otherwise hit deep inside the index reported here instead,
- * naming the node the author has to fix.
- *
- * Deliberate near-duplicate of the helper in `neighborhood.ts`: lifting it
- * into `util.ts` is the right home and is a separate, mechanical edit
- * across two node files.
- */
-function positionView(geo: Geometry, nodeType: string, pin: string): PositionView {
-  const P = geo.attrs.point.get("P");
-  if (!P) {
-    throw new Error(
-      `${nodeType}: input "${pin}" has no point attribute "P"; every point cloud in this library carries one — available: ${geo.attrs.point.names().join(", ") || "(none)"}`,
-    );
-  }
-  if (P.type === "string") {
-    throw new Error(
-      `${nodeType}: input "${pin}" has a string attribute "P"; positions must be numeric (f32, tupleSize 3)`,
-    );
-  }
-  if (P.tupleSize < 3) {
-    throw new Error(
-      `${nodeType}: input "${pin}" has point attribute "P" with tupleSize ${P.tupleSize}, but distances need x, y and z (tupleSize 3); something upstream overwrote P with a narrower attribute`,
-    );
-  }
-  return { data: P.data, stride: P.tupleSize, count: geo.pointCount };
-}
-
-/**
- * CANONICAL POINT ORDER: rank `r[i]` is point `i`'s position in an order
- * fixed by the POINTS, not by the array they arrived in. It answers the
- * two questions an edge set cannot leave to arrival order — which endpoint
- * is the edge's `A`, and what order the edges come out in.
- *
- * The key is identity (`hashCombine` of the position bits and the `seed`
- * attribute), then the raw position bits per axis, then `seed`, then — only
- * for two points that agree on ALL of that — the array index.
- *
- * `comparePruneOrder` in `filtering.ts` is deliberately NOT reused. Its
- * fallback to the index is reached on any 32-bit identity COLLISION, and a
- * collision is independent of position: two windows that hold a colliding
- * pair at different array indices would disagree about which of them is
- * `A`, and the edge would be emitted twice or not at all across the seam.
- * Adding the position bits and `seed` after the hash removes that: the
- * order is now total except between points that are byte-identical in
- * position AND seed, which this library already treats as the SAME point
- * (see `src/data/identity.ts`). Such a pair is necessarily coincident, so
- * one window owns both and the index fallback cannot straddle a seam. The
- * only thing it can move is which end of a ZERO-LENGTH edge between two
- * indistinguishable points is written first.
- */
-function canonicalRanks(geo: Geometry, view: PositionView, who: string): Uint32Array {
-  const n = view.count;
-  const ident = pointIdentities(geo, who);
-  const bx = new Uint32Array(n);
-  const by = new Uint32Array(n);
-  const bz = new Uint32Array(n);
-  const pd = view.data;
-  const ps = view.stride;
-  for (let i = 0; i < n; i++) {
-    const o = i * ps;
-    bx[i] = f32Bits(pd[o]);
-    by[i] = f32Bits(pd[o + 1]);
-    bz[i] = f32Bits(pd[o + 2]);
-  }
-  const seedAttr = geo.attrs.point.get("seed");
-  // A missing seed column contributes 0 for every point, exactly as it
-  // does inside pointIdentities: no seeds and all-zero seeds are the same
-  // cloud, and both rest their order on position.
-  const sd = seedAttr && seedAttr.type !== "string" ? seedAttr.data : undefined;
-  const order = new Uint32Array(n);
-  for (let i = 0; i < n; i++) order[i] = i;
-  order.sort(
-    (a, b) =>
-      ident[a] - ident[b] ||
-      bx[a] - bx[b] ||
-      by[a] - by[b] ||
-      bz[a] - bz[b] ||
-      (sd === undefined ? 0 : (sd[a] >>> 0) - (sd[b] >>> 0)) ||
-      a - b,
-  );
-  const rank = new Uint32Array(n);
-  for (let k = 0; k < n; k++) rank[order[k]] = k;
-  return rank;
-}
+import { positionView, requireGeometry, requireReportSlot } from "./util.js";
 
 /**
  * Ceiling on the edges one {@link connectPoints} may build. The radius is
@@ -138,6 +47,15 @@ function canonicalRanks(geo: Geometry, view: PositionView, who: string): Uint32A
  * before it allocates rather than after.
  */
 const MAX_EDGES = 1_048_576;
+
+/**
+ * Stand-ins for the edge buffers on the paths that build no edges (no
+ * points, or radius 0). Never written: the scan replaces them before it
+ * emits anything, and every reader is bounded by the edge count, which is
+ * 0 here.
+ */
+const EMPTY_U32 = new Uint32Array(0);
+const EMPTY_F64 = new Float64Array(0);
 
 /** How to get under {@link MAX_EDGES}, appended to the overflow message. */
 const MAX_EDGES_HINT =
@@ -241,16 +159,27 @@ export const connectPoints = standardNode<ConnectPointsParams>({
     const view = positionView(src, "connectPoints", "in");
     const pd = view.data;
     const ps = view.stride;
+    const wantLength = params.lengthAttr !== "";
 
-    const edgeA: number[] = [];
-    const edgeB: number[] = [];
-    const edgeD2: number[] = [];
     // Built once and used twice: to pick each edge's `A`, and to order the
     // edges. Both must be the SAME order, or the first vertex of an edge
-    // would stop agreeing with the key the edges were sorted by.
-    let ranks: Uint32Array | undefined;
-    if (n > 0 && radius > 0) {
-      const rank = (ranks = canonicalRanks(src, view, "connectPoints"));
+    // would stop agreeing with the key the edges were sorted by. The one
+    // thing the order's index fallback can move is which end of a
+    // ZERO-LENGTH edge between two indistinguishable points is written
+    // first — see `canonicalPointRanks` for why nothing else can.
+    const ranks = n > 0 && radius > 0 ? canonicalPointRanks(src, "connectPoints") : undefined;
+    // Endpoints and squared lengths of the emitted edges, written through a
+    // counter into storage sized up front rather than pushed onto arrays
+    // that grow to as many as MAX_EDGES entries. `neighbors.length >>> 1` is
+    // the EXACT edge count in 'radius' mode — the relation is symmetric, so
+    // each pair occupies two CSR entries and exactly one of the two visits
+    // emits it — and a tight ceiling in 'relativeNeighborhood', which keeps
+    // a subset of the same pairs.
+    let edgeA = EMPTY_U32;
+    let edgeB = EMPTY_U32;
+    let edgeD2 = EMPTY_F64;
+    let count = 0;
+    if (ranks !== undefined) {
       const adj = adjacencyFor(view, radius, {
         who: "connectPoints",
         maxEdges: MAX_EDGES,
@@ -258,6 +187,11 @@ export const connectPoints = standardNode<ConnectPointsParams>({
         checkCancelled,
       });
       const { offsets, neighbors } = adj;
+      const cap = neighbors.length >>> 1;
+      edgeA = new Uint32Array(cap);
+      edgeB = new Uint32Array(cap);
+      // Only lengthAttr reads the distances, and it is not the default.
+      if (wantLength) edgeD2 = new Float64Array(cap);
       for (let i = 0; i < n; i++) {
         // Polled tighter than the usual 1023: one point costs O(degree)
         // pairs here, and O(degree^2) in relativeNeighborhood.
@@ -273,7 +207,7 @@ export const connectPoints = standardNode<ConnectPointsParams>({
           // relation is symmetric); it is emitted once, from the
           // lower-keyed end, which is also the end a partitioned cook
           // assigns ownership by.
-          if (rank[i] > rank[j]) continue;
+          if (ranks[i] > ranks[j]) continue;
           const oj = j * ps;
           const dx = pd[oj] - ax;
           const dy = pd[oj + 1] - ay;
@@ -282,9 +216,10 @@ export const connectPoints = standardNode<ConnectPointsParams>({
           if (mode === "relativeNeighborhood" && hasLuneWitness(adj, pd, ps, i, j, d2)) {
             continue;
           }
-          edgeA.push(i);
-          edgeB.push(j);
-          edgeD2.push(d2);
+          edgeA[count] = i;
+          edgeB[count] = j;
+          if (wantLength) edgeD2[count] = d2;
+          count++;
         }
       }
     }
@@ -293,12 +228,10 @@ export const connectPoints = standardNode<ConnectPointsParams>({
     // scan happened to reach them in. (rank[A], rank[B]) is unique per
     // pair, so this is a strict total order and the primitive index of an
     // edge is a property of the points.
-    const count = edgeA.length;
     const order = new Uint32Array(count);
     for (let e = 0; e < count; e++) order[e] = e;
     if (count > 0 && ranks !== undefined) {
-      const rank = ranks;
-      order.sort((a, b) => rank[edgeA[a]] - rank[edgeA[b]] || rank[edgeB[a]] - rank[edgeB[b]]);
+      order.sort((a, b) => ranks[edgeA[a]] - ranks[edgeA[b]] || ranks[edgeB[a]] - ranks[edgeB[b]]);
     }
 
     // cloneGeometry is the only helper that preserves topology, and it is
@@ -308,8 +241,14 @@ export const connectPoints = standardNode<ConnectPointsParams>({
     const pointIndices = new Uint32Array(count * 2);
     const primVertexStart = new Uint32Array(count);
     const primVertexCount = new Uint32Array(count);
-    const degrees = params.degreeAttr !== "" ? new Uint32Array(n) : undefined;
-    const lengths = params.lengthAttr !== "" ? new Float64Array(count) : undefined;
+    // The degree column IS the tally, so nothing stages it first: `replace`
+    // zero-fills, it lands on the CLONE and never on `src`, and
+    // setPolylineTopology below rebuilds the vertex and primitive domains
+    // while leaving point attributes untouched.
+    const degrees =
+      params.degreeAttr !== ""
+        ? geo.attrs.point.replace(params.degreeAttr, "u32", 1, 0).data
+        : undefined;
     for (let e = 0; e < count; e++) {
       const s = order[e];
       const a = edgeA[s];
@@ -322,11 +261,10 @@ export const connectPoints = standardNode<ConnectPointsParams>({
         degrees[a]++;
         degrees[b]++;
       }
-      if (lengths) lengths[e] = Math.sqrt(edgeD2[s]);
     }
     setPolylineTopology(geo, pointIndices, primVertexStart, primVertexCount);
 
-    if (lengths) {
+    if (wantLength) {
       // The primitive domain exists only now, and holds exactly the
       // primtype column setPolylineTopology just stamped.
       requireReportSlot({
@@ -341,12 +279,10 @@ export const connectPoints = standardNode<ConnectPointsParams>({
       });
       const attr = geo.attrs.primitive.replace(params.lengthAttr, "f32", 1, 0);
       const data = attr.data;
-      for (let e = 0; e < count; e++) data[e] = lengths[e];
-    }
-    if (degrees) {
-      const attr = geo.attrs.point.replace(params.degreeAttr, "u32", 1, 0);
-      const data = attr.data;
-      for (let i = 0; i < n; i++) data[i] = degrees[i];
+      // Straight into the column, in edge order: the same sqrt of the same
+      // d2, rounded to f32 once instead of buffered through an f64 array
+      // first, so every stored value is bit-identical.
+      for (let e = 0; e < count; e++) data[e] = Math.sqrt(edgeD2[order[e]]);
     }
     return { out: [makeGeometryItem(geo)] };
   },

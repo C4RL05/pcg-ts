@@ -326,37 +326,66 @@ async function cookWindows(
   return out;
 }
 
-describe("connectPoints is halo-exact at haloWidth >= radius", () => {
-  const radius = 1;
-  // Cell faces land ON lattice points and the halo faces land on them too,
-  // so the boundary cases the property has to survive are dense here rather
-  // than accidental.
-  const windows: Window[] = [
-    { lo: -3, hi: -1 },
-    { lo: -1, hi: 1 },
-    { lo: 1, hi: 3 },
-    { lo: 3, hi: 5 },
-  ];
+/**
+ * The edges of `whole` that `windows` can actually own — those whose FIRST
+ * vertex lands in one of them — sorted. The cloud is wider than the windows
+ * tile, and an edge outside them is nobody's business.
+ *
+ * This is a COMPUTED filter over the node's own output, not a spelled-out
+ * expectation: it narrows WHICH edges the comparison covers, it never says
+ * what any of them should be. The edges themselves still have to match a
+ * separately produced cook.
+ */
+function ownedEdges(
+  geo: Geometry,
+  whole: readonly string[],
+  windows: readonly Window[],
+): string[] {
+  const P = geo.attrs.point.require("P");
+  const ownedByAny = new Set<string>();
+  for (let i = 0; i < geo.pointCount; i++) {
+    const x = P.get(i, 0);
+    if (windows.some((w) => x >= w.lo && x < w.hi)) {
+      ownedByAny.add(`${P.get(i, 0)},${P.get(i, 1)},${P.get(i, 2)}`);
+    }
+  }
+  return whole.filter((k) => ownedByAny.has(k.split("->")[0])).sort();
+}
 
+// The fixture the two partitioned-cook blocks below SHARE. The second block
+// is meant to be the node-level equivalent of the first — the same recipe
+// expressed as a graph rather than in TypeScript — so it has to run over the
+// same cloud, radius and windows. If the two drifted apart, the equivalence
+// they exist to claim would quietly stop being tested.
+
+const partitionRadius = 1;
+
+/**
+ * Cell faces land ON lattice points and the halo faces land on them too, so
+ * the boundary cases the property has to survive are dense here rather than
+ * accidental.
+ */
+const partitionWindows: readonly Window[] = [
+  { lo: -3, hi: -1 },
+  { lo: -1, hi: 1 },
+  { lo: 1, hi: 3 },
+  { lo: 3, hi: 5 },
+];
+
+/** A fresh cloud per call, as each of these cases built for itself. */
+const partitionCloud = (): Geometry => latticeCloud(120, 77, 0.5, 16);
+
+describe("connectPoints is halo-exact at haloWidth >= radius", () => {
   for (const mode of ["radius", "relativeNeighborhood"]) {
     it(`split with halo equals whole (${mode})`, async () => {
-      const geo = latticeCloud(120, 77, 0.5, 16);
+      const geo = partitionCloud();
+      const radius = partitionRadius;
       const whole = edgeKeys(await connect(geo, { mode, radius }));
       expect(whole.length).toBeGreaterThan(60);
-      // Only the edges the windows can own: the cloud is wider than the
-      // windows tile, and an edge outside them is nobody's business.
-      const P = geo.attrs.point.require("P");
-      const ownedByAny = new Set<string>();
-      for (let i = 0; i < geo.pointCount; i++) {
-        const x = P.get(i, 0);
-        if (windows.some((w) => x >= w.lo && x < w.hi)) {
-          ownedByAny.add(`${P.get(i, 0)},${P.get(i, 1)},${P.get(i, 2)}`);
-        }
-      }
-      const expected = whole.filter((k) => ownedByAny.has(k.split("->")[0])).sort();
+      const expected = ownedEdges(geo, whole, partitionWindows);
       expect(expected.length).toBeGreaterThan(20);
 
-      const split = (await cookWindows(geo, windows, radius, { mode, radius })).sort();
+      const split = (await cookWindows(geo, partitionWindows, radius, { mode, radius })).sort();
       expect(split).toEqual(expected);
       // Every edge exactly once — the seam claims nothing twice.
       expect(new Set(split).size).toBe(split.length);
@@ -367,18 +396,11 @@ describe("connectPoints is halo-exact at haloWidth >= radius", () => {
     // 0.25 is the widest halo this lattice can actually break under: at 0.5
     // the only pairs a narrower window could cut are exactly `radius` apart,
     // and the strict predicate already refuses those.
-    const geo = latticeCloud(120, 77, 0.5, 16);
+    const geo = partitionCloud();
+    const radius = partitionRadius;
     const whole = edgeKeys(await connect(geo, { radius }));
-    const P = geo.attrs.point.require("P");
-    const ownedByAny = new Set<string>();
-    for (let i = 0; i < geo.pointCount; i++) {
-      const x = P.get(i, 0);
-      if (windows.some((w) => x >= w.lo && x < w.hi)) {
-        ownedByAny.add(`${P.get(i, 0)},${P.get(i, 1)},${P.get(i, 2)}`);
-      }
-    }
-    const expected = whole.filter((k) => ownedByAny.has(k.split("->")[0])).sort();
-    const narrow = (await cookWindows(geo, windows, radius * 0.25, { radius })).sort();
+    const expected = ownedEdges(geo, whole, partitionWindows);
+    const narrow = (await cookWindows(geo, partitionWindows, radius * 0.25, { radius })).sort();
     expect(narrow).not.toEqual(expected);
     expect(narrow.length).toBeLessThan(expected.length);
   });
@@ -687,42 +709,26 @@ describe("the partitioned network cook is expressible entirely in nodes", () => 
     return firstGeo((await cook(rebuilt)).outputs.cell);
   }
 
-  const radius = 1;
-  const windows: Window[] = [
-    { lo: -3, hi: -1 },
-    { lo: -1, hi: 1 },
-    { lo: 1, hi: 3 },
-    { lo: 3, hi: 5 },
-  ];
-
   it("tiles the whole-region network exactly, with no host-side clip", async () => {
-    const geo = latticeCloud(120, 77, 0.5, 16);
-    const whole = edgeKeys(await connect(geo, { radius }));
+    const geo = partitionCloud();
+    const whole = edgeKeys(await connect(geo, { radius: partitionRadius }));
     expect(whole.length).toBeGreaterThan(60);
 
-    // The windows tile only part of the cloud, so the edges they can own
-    // are those whose FIRST vertex falls in one of them.
-    const P = geo.attrs.point.require("P");
-    const ownedByAny = new Set<string>();
-    for (let i = 0; i < geo.pointCount; i++) {
-      const x = P.get(i, 0);
-      if (windows.some((w) => x >= w.lo && x < w.hi)) {
-        ownedByAny.add(`${P.get(i, 0)},${P.get(i, 1)},${P.get(i, 2)}`);
-      }
-    }
-    const expected = whole.filter((k) => ownedByAny.has(k.split("->")[0])).sort();
+    const expected = ownedEdges(geo, whole, partitionWindows);
     expect(expected.length).toBeGreaterThan(20);
 
     const split: string[] = [];
-    for (const w of windows) split.push(...edgeKeys(await cookCell(geo, w, radius)));
+    for (const w of partitionWindows) {
+      split.push(...edgeKeys(await cookCell(geo, w, partitionRadius)));
+    }
     expect(split.slice().sort()).toEqual(expected);
     // Every edge exactly once: no seam claims one twice, none drops one.
     expect(new Set(split).size).toBe(split.length);
   });
 
   it("hands each cell a real network, not a cloud", async () => {
-    const geo = latticeCloud(120, 77, 0.5, 16);
-    const cell = await cookCell(geo, windows[1], radius);
+    const geo = partitionCloud();
+    const cell = await cookCell(geo, partitionWindows[1], partitionRadius);
     // The output is still a network — primitives, vertices and the
     // primtype column — which is exactly what every point-domain filter
     // destroys and what this step had to preserve.

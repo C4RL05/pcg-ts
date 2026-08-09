@@ -112,14 +112,64 @@ export function pointIdentities(geo: Geometry, who: string): Uint32Array {
 }
 
 /**
- * Visit order for an identity-keyed greedy: point indices sorted by
- * identity ascending, ties (points that agree on position AND seed, hence
- * indistinguishable) broken by the lower index so the order stays total
- * and reproducible.
+ * CANONICAL POINT ORDER: rank `r[i]` is point `i`'s position in an order
+ * fixed by the POINTS, not by the array they arrived in. It answers the
+ * questions a derived structure cannot leave to arrival order — which of a
+ * pair leads, and what order the results come out in.
+ *
+ * The key is identity ({@link pointIdentities}), then the raw position bits
+ * per axis, then `seed`, then — only for two points that agree on ALL of
+ * that — the array index.
+ *
+ * A weaker order that falls back to the index on any 32-bit identity
+ * COLLISION is not enough, and the difference is why this lives here rather
+ * than in the node that needed it first. A collision is independent of
+ * position, so two windows holding a colliding pair at different array
+ * indices would disagree about which point leads, and whatever is derived
+ * from the pair would be emitted twice or not at all across the seam.
+ * Adding the position bits and `seed` after the hash removes that: the
+ * order is now total except between points that are byte-identical in
+ * position AND seed, which this module already treats as the SAME point.
+ * Such a pair is necessarily coincident, so one window owns both and the
+ * index fallback cannot straddle a seam.
+ *
+ * `who` names the caller in the errors {@link pointIdentities} raises.
  */
-export function identityOrder(ident: Uint32Array): Uint32Array {
-  const order = new Uint32Array(ident.length);
-  for (let i = 0; i < order.length; i++) order[i] = i;
-  order.sort((a, b) => ident[a] - ident[b] || a - b);
-  return order;
+export function canonicalPointRanks(geo: Geometry, who: string): Uint32Array {
+  const set = geo.attrs.point;
+  const n = set.count;
+  const rank = new Uint32Array(n);
+  if (n === 0) return rank;
+  // Validates P and `seed` before either is read below.
+  const ident = pointIdentities(geo, who);
+  const P = set.require("P");
+  const pd = P.data;
+  const ps = P.tupleSize;
+  const bx = new Uint32Array(n);
+  const by = new Uint32Array(n);
+  const bz = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * ps;
+    bx[i] = f32Bits(pd[o]);
+    by[i] = f32Bits(pd[o + 1]);
+    bz[i] = f32Bits(pd[o + 2]);
+  }
+  const seedAttr = set.get("seed");
+  // A missing seed column contributes 0 for every point, exactly as it
+  // does inside pointIdentities: no seeds and all-zero seeds are the same
+  // cloud, and both rest their order on position.
+  const sd = seedAttr && seedAttr.type !== "string" ? seedAttr.data : undefined;
+  const order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  order.sort(
+    (a, b) =>
+      ident[a] - ident[b] ||
+      bx[a] - bx[b] ||
+      by[a] - by[b] ||
+      bz[a] - bz[b] ||
+      (sd === undefined ? 0 : (sd[a] >>> 0) - (sd[b] >>> 0)) ||
+      a - b,
+  );
+  for (let k = 0; k < n; k++) rank[order[k]] = k;
+  return rank;
 }
