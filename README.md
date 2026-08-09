@@ -10,7 +10,12 @@ machine-readable metadata, graphs serialize to a stable JSON format, and
 errors name the offending node, pin, or param. Agent-facing entry points:
 [llms.txt](./llms.txt), [docs/nodes.md](./docs/nodes.md),
 [docs/primitives.md](./docs/primitives.md),
-[docs/authoring.md](./docs/authoring.md).
+[docs/examples.md](./docs/examples.md),
+[docs/authoring.md](./docs/authoring.md), and two doctrine skills in
+[skills/](./skills) — `graph-authoring` (what to read first, primitive
+or nodes, the validate → cook → inspect loop) and `determinism` (the
+seed chain, and how to verify reproducibility rather than assume it).
+All of them ship inside the npm package.
 
 **One-page overview:** <https://c4rl05.github.io/pcg-ts/> — what it is,
 architecture and pipeline diagrams, and the roadmap.

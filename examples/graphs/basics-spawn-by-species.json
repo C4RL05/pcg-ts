@@ -1,0 +1,41 @@
+{
+  "formatVersion": 1,
+  "seed": 1020,
+  "meta": {
+    "title": "spawn a different asset per point",
+    "description": "A string `setAttribute` with a non-empty `values` list turns its field-capable `value` into a per-point selector — floor, then clamp into range, NaN picks 0 — so weighting by repetition works: 'pine' twice in four entries is half the points. Pointing `spawnInstances`' `assetAttr` at that attribute splits the output into one batch per asset id, in first-occurrence order, with no per-point branching anywhere in the graph.",
+    "tags": ["basics", "spawn", "instancing", "strings"]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInBounds",
+      "params": {
+        "count": 400,
+        "boundsMin": [-30, 0, -30],
+        "boundsMax": [30, 0, 30]
+      }
+    },
+    {
+      "id": "species",
+      "type": "setAttribute",
+      "params": {
+        "name": "species",
+        "domain": "point",
+        "type": "string",
+        "values": ["pine", "pine", "birch", "boulder"],
+        "value": { "fn": "mul", "args": [{ "fn": "randomField", "key": "species" }, 4] }
+      }
+    },
+    {
+      "id": "spawn",
+      "type": "spawnInstances",
+      "params": { "assetId": "pine", "assetAttr": "species" }
+    }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["species", "in"] },
+    { "from": ["species", "out"], "to": ["spawn", "in"] }
+  ],
+  "outputs": [{ "id": "spawn", "pin": "instances", "name": "instances" }]
+}

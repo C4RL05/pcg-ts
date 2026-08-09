@@ -1,0 +1,954 @@
+{
+  "formatVersion": 1,
+  "boundsTolerance": {
+    "absolute": 0.001,
+    "relative": 0.001
+  },
+  "examples": {
+    "basics-attribute-from-noise.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 600,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "height:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -29.9848,
+                0,
+                -29.8594
+              ],
+              "max": [
+                29.9832,
+                0,
+                29.9902
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-attribute-remap.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 400,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "score:f32",
+                "scoreFit:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.9684,
+                0,
+                -19.9758
+              ],
+              "max": [
+                19.8646,
+                0,
+                19.9683
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-compose-primitives.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 524,
+            "batches": [
+              {
+                "assetId": "pine",
+                "count": 524
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "basics-even-spacing.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 244,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -29.9798,
+                0,
+                -29.957
+              ],
+              "max": [
+                29.9191,
+                0,
+                29.8549
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-filter-by-attribute.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 284,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "height:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -28.8182,
+                0,
+                -29.2944
+              ],
+              "max": [
+                29.6108,
+                0,
+                29.0452
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-filter-by-density.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 789,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -39.8566,
+                0,
+                -39.95
+              ],
+              "max": [
+                39.8094,
+                0,
+                39.958
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-filter-by-expression.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 171,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.5239,
+                0,
+                -19.7043
+              ],
+              "max": [
+                7.7443,
+                0,
+                18.9495
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-jitter-points.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 256,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -23.5545,
+                0,
+                -23.6173
+              ],
+              "max": [
+                23.4744,
+                0,
+                23.6995
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-merge-points.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 184,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -14,
+                0,
+                -14
+              ],
+              "max": [
+                14,
+                0,
+                14
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-mesh-primitive.json": {
+      "outputs": {
+        "mesh": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 81,
+              "vertex": 384,
+              "primitive": 128,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -20,
+                0,
+                -20
+              ],
+              "max": [
+                20,
+                0,
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-neighborhood-count.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 700,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "nbrCount:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -24.8269,
+                0,
+                -24.8521
+              ],
+              "max": [
+                24.9813,
+                0,
+                24.9546
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-orient-along-vector.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 300,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.9478,
+                0,
+                -19.912
+              ],
+              "max": [
+                19.8651,
+                0,
+                19.9002
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-partition-by-attribute.json": {
+      "outputs": {
+        "groups": [
+          {
+            "kind": "geometry",
+            "tags": [
+              "species=pine"
+            ],
+            "counts": {
+              "point": 109,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "species:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.4372,
+                0,
+                -19.6423
+              ],
+              "max": [
+                19.9549,
+                0,
+                19.9519
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "species=birch"
+            ],
+            "counts": {
+              "point": 108,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "species:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.2714,
+                0,
+                -19.6863
+              ],
+              "max": [
+                19.7294,
+                0,
+                19.8604
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "species=boulder"
+            ],
+            "counts": {
+              "point": 83,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "species:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -19.8675,
+                0,
+                -19.9025
+              ],
+              "max": [
+                19.6483,
+                0,
+                19.803
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-point-grid.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 144,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -22,
+                0,
+                -22
+              ],
+              "max": [
+                22,
+                0,
+                22
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-primitive-ref.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 412,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -39.9804,
+                0,
+                -39.9754
+              ],
+              "max": [
+                39.811,
+                0,
+                39.9939
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-promote-attribute.json": {
+      "outputs": {
+        "mesh": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 49,
+              "vertex": 216,
+              "primitive": 72,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2",
+                "height:f32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "height:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -15,
+                0,
+                -15
+              ],
+              "max": [
+                15,
+                0,
+                15
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-scatter-in-bounds.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 500,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -24.8449,
+                0,
+                -24.884
+              ],
+              "max": [
+                24.9272,
+                0,
+                24.996
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-spawn-by-species.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 400,
+            "batches": [
+              {
+                "assetId": "pine",
+                "count": 204
+              },
+              {
+                "assetId": "birch",
+                "count": 101
+              },
+              {
+                "assetId": "boulder",
+                "count": 95
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "basics-spawn-instances.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 250,
+            "batches": [
+              {
+                "assetId": "boulder",
+                "count": 250
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "basics-subgraph-exposed-params.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 129,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -24.518,
+                0,
+                -24.9927
+              ],
+              "max": [
+                24.9241,
+                0,
+                24.9155
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-surface-sample.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 800,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "normal:f32x3"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -10,
+                0,
+                -10
+              ],
+              "max": [
+                10,
+                10,
+                10
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-transfer-attribute.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 400,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "terrain:f32"
+              ],
+              "detail": [
+                "terrainMisses:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -27.9819,
+                10,
+                -27.9852
+              ],
+              "max": [
+                27.7788,
+                10,
+                27.8322
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-transform-points.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 100,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -30,
+                5,
+                -7.0919
+              ],
+              "max": [
+                8.1838,
+                5,
+                31.0919
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

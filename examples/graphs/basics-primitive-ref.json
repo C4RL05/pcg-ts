@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "seed": 1022,
+  "meta": {
+    "title": "reference a shipped primitive by name",
+    "description": "Instead of embedding a copy of a subgraph, a node can name one from the shipped vocabulary: `ref: { name }` resolves against the registry, which is populated by importing `pcg-ts/primitives` (the `pcg` CLI does it for you). Prefer this over rebuilding the same four nodes by hand — the catalog in docs/primitives.md documents each primitive's real behaviour, including what varies per instance. A `ref` may also carry an optional `hash` to pin the exact content it was authored against; without one it always resolves to the library's current version.",
+    "tags": ["basics", "primitives", "vocabulary", "ref"]
+  },
+  "nodes": [
+    {
+      "id": "trees",
+      "type": "subgraph",
+      "params": {
+        "count": 4000,
+        "minDistance": 3,
+        "boundsMin": [-40, 0, -40],
+        "boundsMax": [40, 0, 40]
+      },
+      "ref": { "name": "fill/scatter-even" }
+    }
+  ],
+  "connections": [],
+  "outputs": [{ "id": "trees", "pin": "out", "name": "points" }]
+}

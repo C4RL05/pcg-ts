@@ -979,9 +979,52 @@ valid pins). Typed classes: GraphValidationError, GraphCycleError,
 NodeExecutionError (has .nodeId), CookCancelledError,
 GraphSerializationError, FieldJsonError, WorldValidationError.
 
+## Skills (doctrine, in the standard Agent Skills format)
+
+Two short skills ship in the package under `skills/`. They carry HOW TO
+WORK, where this file and the generated references carry WHAT EXISTS —
+neither skill lists a node, a primitive or a param, because a pasted
+listing goes stale and a stale skill is worse than none.
+
+- `skills/graph-authoring/SKILL.md` — load before writing or editing
+  graph JSON, when choosing between a shipped primitive and hand-wired
+  nodes, when a graph rejects a param you guessed at, or when it cooks
+  without error and the output still looks wrong. What to read first,
+  how to discover what exists, exposing knobs instead of hardcoding
+  them, and the validate → cook → inspect → render loop.
+- `skills/determinism/SKILL.md` — load when adding randomness or noise,
+  choosing a seed or a per-instance variation knob, when output changes
+  between runs or machines, or before claiming a change is
+  deterministic. The seed chain, what a seed re-rolls and what it
+  provably cannot, why noise varies through position rather than seed,
+  the GPU approximation boundary, and how to VERIFY reproducibility
+  instead of assuming it.
+
+## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
+
+23 single-concept graphs at `examples/graphs/basics-*.json`, each named
+by what it teaches and carrying its own `meta` block. Every one cooks
+from JSON alone — no `dataInput`, whose items never survive
+serialization — so any of them can be copied, run and modified with
+nothing but the CLI. The index is generated from the files' own meta
+plus what each graph structurally contains (node types at any nesting
+depth, primitives referenced by name, declared outputs), and a drift
+test fails if the corpus changes without regenerating it.
+
+Read one close to your goal before authoring: it is faster than
+assembling a graph from the reference, and it is guaranteed to load,
+because the corpus suite deserializes and cooks every file, compares it
+against count-level goldens (element counts, attribute signatures,
+bounds within tolerance — never float dumps, which would fight every
+legitimate change), and cooks each one TWICE to assert byte-identical
+output.
+
 ## Pointers
 
 - README.md — human tour with runnable examples
+- skills/ — the two doctrine skills above (graph-authoring, determinism)
+- docs/examples.md — the example corpus indexed by what each file
+  teaches; docs/examples.json is the same, machine-readable
 - docs/nodes.md — full generated node reference (pins, params, defaults, ranges)
 - docs/nodes.json — the same registry metadata, machine-readable
 - docs/primitives.md — generated catalog of the shipped primitives

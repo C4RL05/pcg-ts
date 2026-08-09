@@ -1,0 +1,604 @@
+[
+  {
+    "file": "basics-attribute-from-noise.json",
+    "path": "examples/graphs/basics-attribute-from-noise.json",
+    "title": "write an attribute from a noise field",
+    "description": "A field-capable param takes a field expression instead of a constant: `setAttribute`'s `value` here is four octaves of Perlin fBm, resolved once per point and stored into a new `height` attribute. `normalized: true` maps the noise's own raw range onto [0, 1], so no remap wrapper is needed. Noise carries its own `seed` inside the spec — the graph seed does not move the pattern, only `opts.seed` or the sample position does.",
+    "tags": [
+      "basics",
+      "fields",
+      "noise",
+      "attributes"
+    ],
+    "seed": 1003,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "pointScatterInBounds",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "height",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-attribute-remap.json",
+    "path": "examples/graphs/basics-attribute-remap.json",
+    "title": "rescale an attribute to a new range",
+    "description": "`attributeRemap` in mode 'fit' measures an attribute's actual minimum and maximum over the domain and stretches them onto [outMin, outMax], which is how a quantity of unknown scale — a raw noise value, a neighbour count, an invented score — becomes something a density or a colour can consume. `outName` writes the result beside the original instead of over it, so both columns survive for inspection.",
+    "tags": [
+      "basics",
+      "attributes",
+      "remap"
+    ],
+    "seed": 1004,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "attributeRemap",
+      "pointScatterInBounds",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "fit",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-compose-primitives.json",
+    "path": "examples/graphs/basics-compose-primitives.json",
+    "title": "compose several primitives into a scatter",
+    "description": "Four primitives and one terminal node build a complete placement pass: scatter with a guaranteed spacing, cut it to noise-defined regions, turn every point a random way, give every point one uniform random size, then spawn. Each step is a name from the catalog rather than a hand-built cluster of nodes, which is what keeps the graph readable and its behaviour documented. Note what varies: the scatter and the two write steps differ per instance, while the noise mask does not — two masks with the same params cut identically unless their `variant` differs.",
+    "tags": [
+      "basics",
+      "primitives",
+      "composition",
+      "spawn"
+    ],
+    "seed": 1023,
+    "nodeCount": 5,
+    "nodeTypes": [
+      "spawnInstances",
+      "subgraph"
+    ],
+    "primitives": [
+      "fill/scatter-even",
+      "filter/mask-by-noise",
+      "write/random-scale",
+      "write/random-yaw"
+    ],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
+      }
+    ]
+  },
+  {
+    "file": "basics-even-spacing.json",
+    "path": "examples/graphs/basics-even-spacing.json",
+    "title": "enforce a minimum distance between points",
+    "description": "`selfPrune` scans points in index order and keeps one only when every already-kept point is at least `minDistance` away, which turns a clumpy uniform scatter into evenly spaced points for anything with physical extent. Over-scatter deliberately: the output count is emergent, capped by the area divided by minDistance squared, so raising `count` past that adds nothing and the real knob is `minDistance`.",
+    "tags": [
+      "basics",
+      "filter",
+      "spacing"
+    ],
+    "seed": 1008,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "pointScatterInBounds",
+      "selfPrune"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "prune",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-filter-by-attribute.json",
+    "path": "examples/graphs/basics-filter-by-attribute.json",
+    "title": "keep points by an attribute comparison",
+    "description": "The first of the three ways to remove points: write a scalar column, then compare it. `filterByAttribute` tests one named point attribute against `value` with one of eq/ne/lt/le/gt/ge and keeps the survivors with every attribute carried. The scratch column stays on the output — `removeAttribute` is what takes it off again — which is the cost this idiom pays and `filterByExpression` avoids.",
+    "tags": [
+      "basics",
+      "filter",
+      "attributes"
+    ],
+    "seed": 1005,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "filterByAttribute",
+      "pointScatterInBounds",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "ridge",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-filter-by-density.json",
+    "path": "examples/graphs/basics-filter-by-density.json",
+    "title": "thin a cloud by the density attribute",
+    "description": "The standard thinning idiom: write the standard `density` attribute from a 0..1 noise field, then let `filterByDensity` in mode 'probabilistic' keep each point with probability equal to its own density. The result is soft-edged — dense regions stay full, sparse ones fade out, with no visible boundary. Mode 'threshold' on the same input gives the hard-edged version instead.",
+    "tags": [
+      "basics",
+      "filter",
+      "density",
+      "noise"
+    ],
+    "seed": 1007,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "filterByDensity",
+      "pointScatterInBounds",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "thin",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-filter-by-expression.json",
+    "path": "examples/graphs/basics-filter-by-expression.json",
+    "title": "keep points with a predicate expression",
+    "description": "`filterByExpression` decides per point from a field expression, so a test that would otherwise need a scratch attribute plus a comparison node becomes one node with no leftover column. The comparison functions emit 1 and 0, `mul` combines them as AND (and `max` as OR): this predicate keeps points inside a radius of 20 AND where a value-noise field rises above 0.4. NaN never passes, so a predicate that fails to compute drops the point.",
+    "tags": [
+      "basics",
+      "filter",
+      "fields",
+      "predicate"
+    ],
+    "seed": 1006,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "filterByExpression",
+      "pointScatterInBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "keep",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-jitter-points.json",
+    "path": "examples/graphs/basics-jitter-points.json",
+    "title": "break up a lattice with deterministic jitter",
+    "description": "`jitterPoints` offsets each point by a random vector drawn per axis from (seed, point index, axis), so the result is reproducible and independent of cook order — the lattice stops reading as a lattice without giving up determinism. `amount` is the maximum offset per axis and is field-capable, so the jitter can itself vary across space; here y is left at 0 to keep the cloud flat.",
+    "tags": [
+      "basics",
+      "jitter",
+      "determinism"
+    ],
+    "seed": 1009,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "jitterPoints",
+      "pointGrid"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "jitter",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-merge-points.json",
+    "path": "examples/graphs/basics-merge-points.json",
+    "title": "concatenate two clouds into one",
+    "description": "`mergePoints` has a multi input: every connected geometry is concatenated in connection order into a single point cloud. The output carries the union of all point attributes — one missing on an input fills with its default over that input's range — and attributes sharing a name must agree on type and tuple size, so a scratch column left on one side can break a merge that used to work. Topology is not carried: the result is points only.",
+    "tags": [
+      "basics",
+      "merge",
+      "compose"
+    ],
+    "seed": 1016,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "mergePoints",
+      "pointGrid",
+      "pointScatterInBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "both",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-mesh-primitive.json",
+    "path": "examples/graphs/basics-mesh-primitive.json",
+    "title": "build a mesh a saved graph can cook",
+    "description": "`meshPrimitive` is the only mesh source that survives serialization — `dataInput`'s items are injected at runtime and a saved graph carries none — so a graph that must cook from JSON alone gets its surface from here. The output carries P and a `uv` point attribute, plus one three-vertex 'poly' primitive per triangle: exactly the topology `surfaceSample`, `promoteAttribute`, and the 'uv' and 'raycast' transfer mappings need.",
+    "tags": [
+      "basics",
+      "mesh",
+      "source",
+      "serialization"
+    ],
+    "seed": 1012,
+    "nodeCount": 1,
+    "nodeTypes": [
+      "meshPrimitive"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "mesh",
+        "node": "ground",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-neighborhood-count.json",
+    "path": "examples/graphs/basics-neighborhood-count.json",
+    "title": "measure how crowded each point is",
+    "description": "`pointNeighborhood` writes how many other points lie within `radius` into a u32 attribute, using a uniform spatial grid so it stays fast well beyond a few thousand points. The count is a measured quantity rather than an authored one, which is what a later filter, colour or scale can react to. A point with no neighbours gets 0 and keeps its own value as the neighbour average, so a displacement built from that average is zero rather than undefined.",
+    "tags": [
+      "basics",
+      "attributes",
+      "neighborhood",
+      "measure"
+    ],
+    "seed": 1018,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "pointNeighborhood",
+      "pointScatterInBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "crowding",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-orient-along-vector.json",
+    "path": "examples/graphs/basics-orient-along-vector.json",
+    "title": "turn each point to face a direction",
+    "description": "`orientAlongVector` writes the standard `rot` quaternion so a chosen local axis points along `direction`, with `up` fixing the roll. `direction` is field-capable and resolved per point, so an expression is what makes each point face somewhere different: here `vec(P.x, 0, P.z)` points every point radially away from the origin. A zero-length direction leaves that point's rotation alone rather than inventing one.",
+    "tags": [
+      "basics",
+      "transform",
+      "rotation",
+      "fields"
+    ],
+    "seed": 1011,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "orientAlongVector",
+      "pointScatterInBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "face",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-partition-by-attribute.json",
+    "path": "examples/graphs/basics-partition-by-attribute.json",
+    "title": "split one cloud into labelled groups",
+    "description": "`partitionByAttribute` splits the input into one point cloud per distinct value of an i32, u32 or string attribute, so a single declared output holds several geometry items rather than one. Groups arrive in order of each value's first occurrence and each is tagged `<name>=<value>`, which is how a downstream node or a host routes them apart. The labels here come from a string `setAttribute` whose `value` acts as a per-point selector into `values`.",
+    "tags": [
+      "basics",
+      "attributes",
+      "partition",
+      "routing"
+    ],
+    "seed": 1017,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "partitionByAttribute",
+      "pointScatterInBounds",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "groups",
+        "node": "groups",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-point-grid.json",
+    "path": "examples/graphs/basics-point-grid.json",
+    "title": "place points on a regular grid",
+    "description": "The deterministic counterpart to scattering: `pointGrid` places countX * countY * countZ points stepped by `spacing` from `origin`, in X-fastest order. There is no randomness at all here — the same params always give the same positions, which makes a grid the right starting cloud when the variation should come from a later node rather than from the source.",
+    "tags": [
+      "basics",
+      "grid",
+      "source"
+    ],
+    "seed": 1002,
+    "nodeCount": 1,
+    "nodeTypes": [
+      "pointGrid"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "grid",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-primitive-ref.json",
+    "path": "examples/graphs/basics-primitive-ref.json",
+    "title": "reference a shipped primitive by name",
+    "description": "Instead of embedding a copy of a subgraph, a node can name one from the shipped vocabulary: `ref: { name }` resolves against the registry, which is populated by importing `pcg-ts/primitives` (the `pcg` CLI does it for you). Prefer this over rebuilding the same four nodes by hand — the catalog in docs/primitives.md documents each primitive's real behaviour, including what varies per instance. A `ref` may also carry an optional `hash` to pin the exact content it was authored against; without one it always resolves to the library's current version.",
+    "tags": [
+      "basics",
+      "primitives",
+      "vocabulary",
+      "ref"
+    ],
+    "seed": 1022,
+    "nodeCount": 1,
+    "nodeTypes": [
+      "subgraph"
+    ],
+    "primitives": [
+      "fill/scatter-even"
+    ],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "trees",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-promote-attribute.json",
+    "path": "examples/graphs/basics-promote-attribute.json",
+    "title": "move an attribute between domains",
+    "description": "Attributes live on domains — point, vertex, primitive, detail — and `promoteAttribute` walks the geometry's topology to move one between them. Here a per-point `height` becomes a per-triangle `height` by averaging the corners, which is what a shader or an exporter that colours faces rather than corners needs. Elements with no contributors keep the attribute default, and string attributes support only mode 'first'.",
+    "tags": [
+      "basics",
+      "attributes",
+      "domains",
+      "promote"
+    ],
+    "seed": 1015,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "meshPrimitive",
+      "promoteAttribute",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "mesh",
+        "node": "perFace",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-scatter-in-bounds.json",
+    "path": "examples/graphs/basics-scatter-in-bounds.json",
+    "title": "scatter points in a box",
+    "description": "The smallest complete graph: one source node fills an axis-aligned box with a fixed count of points. Nothing is connected and nothing is filtered, so the output count is exactly `count`. Every point already carries the standard attributes (P, rot, scale, density, boundsMin, boundsMax, color, seed) whether the graph writes them or not, which is why later examples can filter on `density` without creating it first.",
+    "tags": [
+      "basics",
+      "scatter",
+      "source"
+    ],
+    "seed": 1001,
+    "nodeCount": 1,
+    "nodeTypes": [
+      "pointScatterInBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "scatter",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-spawn-by-species.json",
+    "path": "examples/graphs/basics-spawn-by-species.json",
+    "title": "spawn a different asset per point",
+    "description": "A string `setAttribute` with a non-empty `values` list turns its field-capable `value` into a per-point selector — floor, then clamp into range, NaN picks 0 — so weighting by repetition works: 'pine' twice in four entries is half the points. Pointing `spawnInstances`' `assetAttr` at that attribute splits the output into one batch per asset id, in first-occurrence order, with no per-point branching anywhere in the graph.",
+    "tags": [
+      "basics",
+      "spawn",
+      "instancing",
+      "strings"
+    ],
+    "seed": 1020,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pointScatterInBounds",
+      "setAttribute",
+      "spawnInstances"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
+      }
+    ]
+  },
+  {
+    "file": "basics-spawn-instances.json",
+    "path": "examples/graphs/basics-spawn-instances.json",
+    "title": "turn points into instance batches",
+    "description": "`spawnInstances` is a terminal: it converts a point cloud into render-agnostic instance batches, one 4x4 world matrix per point composed as T(P) * R(rot) * S(scale) from the standard attributes. Points group into one batch per asset id. The node has two output pins — `instances` for the batches and `points`, which passes the input through unchanged for chaining or debug rendering — and this graph declares only the first.",
+    "tags": [
+      "basics",
+      "spawn",
+      "instancing"
+    ],
+    "seed": 1019,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pointScatterInBounds",
+      "setAttribute",
+      "spawnInstances"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
+      }
+    ]
+  },
+  {
+    "file": "basics-subgraph-exposed-params.json",
+    "path": "examples/graphs/basics-subgraph-exposed-params.json",
+    "title": "wrap a graph as one node with its own knobs",
+    "description": "A `subgraph` node carries an inner graph plus the pins and params it exposes, so a reusable piece becomes a single node with a deliberately small interface. Declarations live in the payload and VALUES live in the node's own `params`, exactly as a standard node keeps its schema in the registry and its value on the node. A declaration may not carry `type`, `enum` or `acceptsField` — those are re-derived from the targets' registered schemas, so a payload cannot claim a capability the inner params do not have.",
+    "tags": [
+      "basics",
+      "subgraph",
+      "composition",
+      "params"
+    ],
+    "seed": 1021,
+    "nodeCount": 1,
+    "nodeTypes": [
+      "pointScatterInBounds",
+      "selfPrune",
+      "subgraph"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "grove",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-surface-sample.json",
+    "path": "examples/graphs/basics-surface-sample.json",
+    "title": "scatter points over a mesh surface",
+    "description": "`surfaceSample` picks each candidate's triangle with probability proportional to its area and then a uniform position inside it, so coverage is even in world units rather than per triangle. Output points carry P, the flat per-triangle `normal`, density 1 and a hashed per-point seed. `densityField` is field-capable and applied after placement, so the count is at most `count` and exactly `count` while density stays 1.",
+    "tags": [
+      "basics",
+      "mesh",
+      "sampler",
+      "placement"
+    ],
+    "seed": 1013,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "meshPrimitive",
+      "surfaceSample"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "onSurface",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-transfer-attribute.json",
+    "path": "examples/graphs/basics-transfer-attribute.json",
+    "title": "read a value off a surface below each point",
+    "description": "`transferAttribute` copies an attribute from its `source` geometry onto the main input's points. Mapping 'raycast' casts a ray from each point along `direction` and interpolates the value at the nearest forward hit, which is how a scattered cloud reads the terrain under it. A point whose ray hits nothing keeps the value it already had — never an invented one — and `missCountAttr` records how many missed as a detail attribute so a graph can assert on it.",
+    "tags": [
+      "basics",
+      "transfer",
+      "mesh",
+      "raycast"
+    ],
+    "seed": 1014,
+    "nodeCount": 4,
+    "nodeTypes": [
+      "meshPrimitive",
+      "pointScatterInBounds",
+      "setAttribute",
+      "transferAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "sampleDown",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-transform-points.json",
+    "path": "examples/graphs/basics-transform-points.json",
+    "title": "move, turn and size a whole cloud",
+    "description": "`transformPoints` applies P' = R * (scale * P) + translate about the world origin, with `rotateEuler` in degrees extrinsic XYZ. It composes with the per-point transform attributes rather than replacing them: `rot` becomes R * rot and `scale` multiplies componentwise, so transforming a cloud that already carries orientations keeps them. All three params are field-capable, which is how one node can taper or twist a cloud instead of moving it rigidly.",
+    "tags": [
+      "basics",
+      "transform"
+    ],
+    "seed": 1010,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "pointGrid",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "place",
+        "pin": "out"
+      }
+    ]
+  }
+]

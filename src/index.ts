@@ -1,4 +1,4 @@
-export const VERSION = "0.9.1";
+export const VERSION = "0.10.0";
 
 export * from "./data/index.js";
 export * from "./random/index.js";
