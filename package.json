@@ -35,6 +35,8 @@
     "llms.txt",
     "docs/nodes.md",
     "docs/nodes.json",
+    "docs/primitives.md",
+    "docs/primitives.json",
     "docs/authoring.md"
   ],
   "exports": {
@@ -53,6 +55,10 @@
     "./cli": {
       "types": "./dist/cli/index.d.ts",
       "import": "./dist/cli/index.js"
+    },
+    "./primitives": {
+      "types": "./dist/primitives/index.d.ts",
+      "import": "./dist/primitives/index.js"
     },
     "./package.json": "./package.json"
   },

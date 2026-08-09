@@ -6,14 +6,22 @@
  * one of its targets would reject.
  */
 import { describe, expect, it } from "vitest";
-import { Graph, GraphValidationError, defineNode, subgraphNode } from "../graph/index.js";
+import {
+  Graph,
+  GraphValidationError,
+  type NodeHandle,
+  defineNode,
+  subgraphNode,
+} from "../graph/index.js";
 import { fieldFromJson } from "./fieldJson.js";
 import {
   filterByDensity,
   jitterPoints,
+  meshPrimitive,
   pointGrid,
   pointScatterInBounds,
   setAttribute,
+  surfaceSample,
   transformPoints,
 } from "./index.js";
 import { dataInput } from "../runtime/dataInput.js";
@@ -417,4 +425,72 @@ it("rejects a resolved param whose target list is legal but empty at wrap time",
   expect(() => subgraphNode(other, [], [], [resolved])).toThrow(
     /exposed param "count": unknown inner node "sc"; inner nodes: grid/,
   );
+});
+
+describe("resolveExposedParam — asserting field capability", () => {
+  /**
+   * The exact shape a vocabulary survey measured going wrong: a "density"
+   * knob meant to accept a field, fanned across `surfaceSample.densityField`
+   * (field-capable) and `filterByDensity.threshold` (not). The merge is
+   * right to AND the capability away; its silence is what costs the author
+   * the feature they were building.
+   */
+  function densityFanout(): { inner: Graph; targets: { node: NodeHandle; param: string }[] } {
+    const inner = new Graph(1);
+    const mesh = inner.add(meshPrimitive, {}, "mesh");
+    const scatter = inner.add(surfaceSample, { count: 50 }, "scatter");
+    const thin = inner.add(filterByDensity, {}, "thin");
+    inner.connect(mesh, "out", scatter, "in");
+    inner.connect(scatter, "out", thin, "in");
+    return {
+      inner,
+      targets: [
+        { node: scatter, param: "densityField" },
+        { node: thin, param: "threshold" },
+      ],
+    };
+  }
+
+  it("still ANDs capability away when nothing was asserted", () => {
+    const { inner, targets } = densityFanout();
+    const resolved = resolveExposedParam(inner, {
+      name: "density",
+      targets,
+      description: "How dense the scatter is.",
+    });
+    // The merge is correct — one target would reject a Field — and this is
+    // the behavior that is silent, which is why the assertion below exists.
+    expect(resolved.schema.acceptsField).toBeUndefined();
+  });
+
+  it("names the target that refuses when the author asserts acceptsField", () => {
+    const { inner, targets } = densityFanout();
+    expect(() =>
+      resolveExposedParam(inner, {
+        name: "density",
+        targets,
+        description: "How dense the scatter is.",
+        acceptsField: true,
+      }),
+    ).toThrow(GraphValidationError);
+    expect(() =>
+      resolveExposedParam(inner, {
+        name: "density",
+        targets,
+        description: "How dense the scatter is.",
+        acceptsField: true,
+      }),
+    ).toThrow(/"thin"\.threshold does not accept fields.*"scatter"\.densityField would/s);
+  });
+
+  it("accepts the assertion when every target is field-capable", () => {
+    const { inner, targets } = densityFanout();
+    const resolved = resolveExposedParam(inner, {
+      name: "density",
+      targets: [targets[0]],
+      description: "How dense the scatter is.",
+      acceptsField: true,
+    });
+    expect(resolved.schema.acceptsField).toBe(true);
+  });
 });

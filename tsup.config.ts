@@ -6,6 +6,10 @@ export default defineConfig({
     "src/three/index.ts",
     "src/gpu/index.ts",
     "src/cli/index.ts",
+    // The shipped vocabulary. Its own entry because importing it
+    // REGISTERS every primitive: a corpus that registers on import must
+    // not be unshakeable weight in `import "pcg-ts"`.
+    "src/primitives/index.ts",
     // Build tooling, not public API: `scripts/gen-node-reference.mjs` is
     // plain ESM and needs a built path to import the doc renderers from.
     // Absent from package.json's `exports` map on purpose.

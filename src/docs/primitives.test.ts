@@ -28,6 +28,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
+// Side-effect import: REGISTERS the shipped vocabulary, which is what the
+// committed catalog is a rendering OF. It sits above the value imports
+// because it must have run before `AT_LOAD` is captured — and because the
+// generator imports the same module for the same reason. One of the two
+// readers importing it while the other does not is exactly the drift this
+// file exists to catch.
+import "../primitives/index.js";
 import {
   Graph,
   jitterPoints,

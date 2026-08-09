@@ -62,6 +62,18 @@ export interface ExposedParamDecl {
   readonly min?: number;
   /** Inclusive upper bound; may only NARROW the targets' own bound. */
   readonly max?: number;
+  /**
+   * Assert that the resulting param must accept a `Field`.
+   *
+   * `acceptsField` is ANDed across targets, which is correct — the exposed
+   * schema must never admit a value one target would reject — but silent:
+   * fan a knob across one field-capable param and one plain one and it
+   * registers cleanly having quietly become non-field-capable, which is
+   * usually the entire point of the knob. Set this to `true` and the
+   * resolver names the target that refuses instead. Opt-in, like the
+   * content hash on a subgraph reference: an author who says it means it.
+   */
+  readonly acceptsField?: boolean;
 }
 
 function bad(name: string, message: string): never {
@@ -177,6 +189,19 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
     acceptsField &&= schema.acceptsField === true;
     if (schema.min !== undefined) min = min === undefined ? schema.min : Math.max(min, schema.min);
     if (schema.max !== undefined) max = max === undefined ? schema.max : Math.min(max, schema.max);
+  }
+
+  // An asserted field capability is checked against every target, not
+  // just the merged result, so the message can name WHICH one refuses.
+  if (decl.acceptsField === true && !acceptsField) {
+    const refusing = decl.targets.filter((_, i) => schemas[i].acceptsField !== true);
+    const capable = decl.targets.filter((_, i) => schemas[i].acceptsField === true);
+    bad(
+      name,
+      `declares acceptsField: true, but ${refusing.map(label).join(" and ")} ${refusing.length === 1 ? "does" : "do"} not accept fields${
+        capable.length > 0 ? ` (${capable.map(label).join(" and ")} would)` : ""
+      }; capability is ANDed across targets, so binding a plain param here would silently make the whole knob field-incapable — drop the assertion, drop the plain target, or expose it separately`,
+    );
   }
 
   // The author may only tighten. A wider bound would admit values some

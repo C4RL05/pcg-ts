@@ -47,6 +47,33 @@ describe("pcg bin", () => {
     expect(shim).toContain("EPIPE");
   });
 
+  it("ships the generated references the CLI's own help points at", () => {
+    // Same unpinned-constant class as the bin path: `pcg nodes` and the
+    // primitive catalog tell an agent to read these files, and a package
+    // that does not ship them makes both instructions dead on install.
+    for (const doc of [
+      "docs/nodes.md",
+      "docs/nodes.json",
+      "docs/primitives.md",
+      "docs/primitives.json",
+      "docs/authoring.md",
+    ]) {
+      expect(pkg.files).toContain(doc);
+    }
+  });
+
+  it("declares the primitives subpath the CLI imports to register them", () => {
+    expect(pkg.exports["./primitives"]).toEqual({
+      types: "./dist/primitives/index.d.ts",
+      import: "./dist/primitives/index.js",
+    });
+    expect(read("tsup.config.ts")).toContain('"src/primitives/index.ts"');
+    // Importing it is what fills the registry `pcg run` reads; a CLI that
+    // dropped the import would still build, still pass its own tests, and
+    // report that no subgraphs exist on every install.
+    expect(read("src/cli/index.ts")).toContain('import "../primitives/index.js"');
+  });
+
   it("every command the CLI dispatches is named in the shipped help", () => {
     const names = COMMANDS.map((c) => c.spec.name);
     expect(names).toEqual(["nodes", "fields", "validate", "cook", "run", "inspect", "render"]);

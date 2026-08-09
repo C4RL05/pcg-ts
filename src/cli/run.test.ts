@@ -20,6 +20,7 @@ import {
   Graph,
   type ParamSchema,
   jitterPoints,
+  listSubgraphs,
   pointScatterInBounds,
   projectToPlane,
   registerSubgraph,
@@ -467,7 +468,34 @@ describe("pcg run — reporting and exit codes", () => {
     const r = await run(["run", "test/scater"]);
     expect(r.code).toBe(EXIT_FAILURE);
     expect(r.err).toContain('unknown subgraph "test/scater"');
-    expect(r.err).toContain("registered subgraphs: test/passthrough, test/scatter, test/silent");
+    expect(r.err).toContain("registered subgraphs: ");
+    // The list is sorted, so this file's three sit together in it. It is
+    // no longer the WHOLE list: the CLI entry imports the shipped
+    // vocabulary, so the real primitives are named here too — which is
+    // the point of importing it, and is asserted next.
+    expect(r.err).toContain("test/passthrough, test/scatter, test/silent");
+  });
+
+  it("cooks a REAL shipped primitive end to end", async () => {
+    const r = await run(["run", "shape/disc", "--param", "count=200", "--param", "size=6"]);
+    expect(r.code).toBe(EXIT_OK);
+    expect(r.out).toContain('ran "shape/disc"');
+    expect(r.out).toMatch(/points \d+/);
+    // Rejection to the disc keeps ~78.5% of the candidates, so the count
+    // proves the recipe actually ran rather than passing its input along.
+    const points = Number(/points (\d+)/.exec(r.out)?.[1]);
+    expect(points).toBeGreaterThan(120);
+    expect(points).toBeLessThan(180);
+  });
+
+  it("has the shipped vocabulary registered, because the CLI entry imports it", () => {
+    // Registration happens by importing the module that declares the
+    // primitives. `pcg run <a real primitive>` works only if the CLI does
+    // that import, and nothing else in this suite would notice if it
+    // stopped — the test primitives above are registered by this file.
+    const names = listSubgraphs().map((e) => e.name);
+    expect(names).toContain("fill/scatter-even");
+    expect(names.filter((n) => n.includes("/") && !n.startsWith("test/")).length).toBeGreaterThan(20);
   });
 
   it("exits 1 when the primitive exposes nothing to cook", async () => {

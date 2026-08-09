@@ -16,12 +16,11 @@
  * Going through `listSubgraphs()` (and materializing each entry, which
  * `describePrimitive` does) proves they load.
  *
- * WHEN SHIPPED PRIMITIVES ARRIVE. They will register on import of their own
- * module, and BOTH this script and src/docs/primitives.test.ts must import
- * that module — they are the two readers of the registry, and one of them
- * importing it while the other does not is exactly the drift the test exists
- * to catch. Today nothing registers any, and the catalog is legitimately
- * empty.
+ * THE SHIPPED PRIMITIVES REGISTER ON IMPORT of `dist/primitives/index.js`,
+ * which is why it is imported below purely for its side effect. BOTH this
+ * script and src/docs/primitives.test.ts must import that module — they are
+ * the two readers of the registry, and one of them importing it while the
+ * other does not is exactly the drift the test exists to catch.
  *
  * Reads dist/index.js and dist/docs/index.js (run `npm run build` first).
  * Output is deterministic: primitives sorted by name, canonical key order,
@@ -58,6 +57,8 @@ async function importDist(relative) {
 
 const lib = await importDist("../dist/index.js");
 const docs = await importDist("../dist/docs/index.js");
+// Side effect only: this is what puts anything in the registry to read.
+await importDist("../dist/primitives/index.js");
 
 for (const [module, name, exported] of [
   ["dist/index.js", "listSubgraphs", lib.listSubgraphs],

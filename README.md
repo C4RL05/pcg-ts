@@ -2,12 +2,14 @@
 
 Real-time procedural content generation for TypeScript — deterministic
 by construction, WebGPU accelerated. Runs in the browser and Node, with
-optional three.js interop (`pcg-ts/three`) and optional WebGPU field
-evaluation (`pcg-ts/gpu`). Built
+optional three.js interop (`pcg-ts/three`), optional WebGPU field
+evaluation (`pcg-ts/gpu`) and a shipped primitive vocabulary
+(`pcg-ts/primitives`). Built
 to be driven by AI agents as well as humans: every node type carries
 machine-readable metadata, graphs serialize to a stable JSON format, and
 errors name the offending node, pin, or param. Agent-facing entry points:
 [llms.txt](./llms.txt), [docs/nodes.md](./docs/nodes.md),
+[docs/primitives.md](./docs/primitives.md),
 [docs/authoring.md](./docs/authoring.md).
 
 **One-page overview:** <https://c4rl05.github.io/pcg-ts/> — what it is,
@@ -240,6 +242,39 @@ validation, and `serializeGraph`/`deserializeGraph` — and it edits the
 live graph through the mutation API rather than rebuilding from JSON,
 so deleting or rewiring one branch leaves every untouched branch's
 caches warm.
+
+### The primitive library
+
+The library ships a catalog of named subgraphs — the vocabulary a graph
+is written IN, rather than assembled from nodes every time. They register
+on import of their own subpath, so `import "pcg-ts"` keeps costing
+nothing:
+
+```ts
+import "pcg-ts/primitives";
+```
+
+Names are `<family>/<kebab-case>` over seven families — `shape` `fill`
+`transform` `compose` `filter` `place` `write` — and the family is a
+promise about the pin shape, so they chain without reading inner graphs.
+A graph references one by name:
+
+```json
+{ "id": "trees", "type": "subgraph",
+  "params": { "count": 4000, "minDistance": 3 },
+  "ref": { "name": "fill/scatter-even" } }
+```
+
+Each carries its own agent-facing description, the exposed params with
+derived schemas, and — where it matters — a statement of whether two
+instances of it differ by default, which is the counter-intuitive part:
+scattering varies per instance automatically, noise does not and cannot
+be re-rolled by any seed, so noise-driven primitives expose a `variant`
+that moves where the field is sampled. The generated reference is
+[docs/primitives.md](./docs/primitives.md) (machine-readable:
+[docs/primitives.json](./docs/primitives.json)), and `pcg run
+fill/scatter-even --param minDistance=3` cooks one from the command line
+with no graph file at all.
 
 ## Hierarchical streaming
 

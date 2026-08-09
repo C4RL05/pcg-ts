@@ -161,13 +161,42 @@ embedding a copy of it:
 
 ```json
 { "id": "trees", "type": "subgraph",
-  "params": { "spacing": 4 },
-  "ref": { "name": "scatter/grid" } }
+  "params": { "minDistance": 4 },
+  "ref": { "name": "fill/scatter-even" } }
 ```
 
-Register the recipe first — the name must be registered before any graph
-referencing it is deserialized, the same ordering constraint node types
-have, satisfied the same way (one side-effecting index module):
+### The shipped vocabulary
+
+`fill/scatter-even` above is real: the library ships a catalog of
+primitives, generated reference in
+[primitives.md](./primitives.md) (machine-readable:
+[primitives.json](./primitives.json)). **They register on import of their
+own subpath**, so nothing is available until something imports it:
+
+```ts
+import "pcg-ts/primitives";   // registers the whole catalog
+```
+
+That is a deliberate cost boundary, not an oversight. A corpus that
+registers on import would be unshakeable weight in every bundle, so
+`import "pcg-ts"` keeps costing nothing and the assets sit behind
+`pcg-ts/primitives`. The `pcg` CLI imports it for you, which is why
+`pcg run fill/scatter-even` works on a clean install.
+
+Names are `<family>/<kebab-case>` over a closed set of seven families —
+`shape` `fill` `transform` `compose` `filter` `place` `write` — and the
+family is a promise about the pin shape: `shape` and `fill` produce
+geometry from nothing, `transform` changes `P` and keeps the count,
+`filter` removes points without moving any, `compose` combines two,
+`place` works against a supplied mesh, `write` sets attributes. Node
+types are camelCase with no separator, so a name containing `/` can never
+be mistaken for a `"type"`.
+
+### Registering your own
+
+The name must be registered before any graph referencing it is
+deserialized, the same ordering constraint node types have, satisfied the
+same way (one side-effecting index module):
 
 ```ts
 import { registerSubgraph } from "pcg-ts";
@@ -180,6 +209,18 @@ registerSubgraph("scatter/grid", {
              description: "Grid spacing in metres.", default: 2 }],
 });
 ```
+
+**An exposed param's default is always a PLAIN value**, never a `Field` —
+a field is set as a value on an instance, not as a default. Every cook
+writes each exposed param's current value into its targets, so exposing a
+slot that holds the primitive's characteristic field would overwrite that
+field with a plain number on the very first cook. The shipped primitives
+therefore keep their noise fields on the inner nodes and expose the
+scalars those fields READ BACK, through the parameter-attribute idiom: a
+`setAttribute` whose value is exposed, and a downstream field that reads
+`{ "fn": "attribute", "name": ... }`. It is the only way to make anything
+inside a field spec adjustable, and `removeAttribute` takes the scratch
+column off again before the result leaves.
 
 **What is stored is a recipe, never a live graph.** `subgraphNode`
 mutates what it wraps (it injects a `__in_<name>` portal node per exposed
@@ -221,7 +262,7 @@ refused, naming the node: writing the reference back out would write the
 
 | `hash` | contract | on a change to the primitive |
 | --- | --- | --- |
-| absent (default) | "give me the library's current `scatter/grid`" | resolves, cooks, no friction |
+| absent (default) | "give me the library's current `fill/scatter-even`" | resolves, cooks, no friction |
 | present | "cook exactly what I authored against" | **hard error** naming both hashes |
 
 Neither mode warns. A library warning lands in a CI log or a console the
@@ -489,6 +530,25 @@ time. Fanning one param out to several targets requires them to agree on
 exposed schema never admits a value one target would reject. A `Field`
 set on a param that is not field-capable fails at cook time naming the
 exposed param and the offending inner target.
+
+The ANDing is correct and silent, which is a bad combination: fan a knob
+across one field-capable param and one plain one and it registers
+cleanly, having quietly stopped accepting fields — usually the entire
+point of the knob. So a declaration may ASSERT the capability, and the
+resolver then names the target that refuses instead:
+
+```ts
+resolveExposedParam(inner, {
+  name: "density",
+  targets: [{ node: sample, param: "densityField" },
+            { node: thin, param: "threshold" }],
+  description: "Where planting is allowed.",
+  acceptsField: true,     // -> error: "thin".threshold does not accept fields
+});
+```
+
+It is opt-in, like the content hash on a reference: an author who says it
+means it. Every field-capable param in the shipped catalog asserts it.
 
 Two exposed params may not bind the same inner slot, and one may not list
 a slot twice: both are hard errors naming the params and the slot. A

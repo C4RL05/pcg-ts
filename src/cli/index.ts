@@ -9,6 +9,14 @@
  * Library errors are printed verbatim — naming the offending node, pin or
  * param is the library's job, and the CLI must not paraphrase it.
  */
+// Side-effect import: REGISTERS the shipped vocabulary. Names are
+// resolved inside `deserializeGraph`, which reads a global registry
+// populated by importing the module that declares the primitives — so
+// without this line `pcg run` reports that no subgraphs exist and `pcg
+// validate` rejects every graph referencing one, while the primitives sit
+// unreachable in the same package. It is imported here, at the single CLI
+// entry, rather than per command, so no command can be added that forgets.
+import "../primitives/index.js";
 import { VERSION } from "../index.js";
 import {
   type CommandSpec,

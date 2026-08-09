@@ -1,1 +1,2351 @@
-[]
+[
+  {
+    "name": "compose/merge-tagged",
+    "hash": "8a21d7c3d364ba8b",
+    "title": "Merge two clouds and remember which is which",
+    "description": "Concatenates two point clouds and stamps a string attribute on each side first, so the result remembers where every point came from — then `partitionByAttribute` can route them apart again, or the spawner can read the same attribute and give each source a different asset. ONE knob names the attribute on both sides, which is the point: a hand-written version has the same string typed twice and drifts the first time one is edited. Note that merging unions the attribute sets and FAILS when the two inputs disagree on a name's type, so a scratch column left on one side can break a merge that used to work. Fully deterministic. Writes the kind attribute; carries every other attribute through.",
+    "tags": [
+      "compose",
+      "merge",
+      "routing"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "a",
+        "kind": "geometry"
+      },
+      {
+        "name": "b",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "kindAttr",
+        "schema": {
+          "type": "string",
+          "default": "kind",
+          "description": "Name of the string point attribute stamped on both sides. One knob writes both, so the two labels always land on the same attribute."
+        },
+        "targets": [
+          {
+            "node": "tagA",
+            "param": "name"
+          },
+          {
+            "node": "tagB",
+            "param": "name"
+          }
+        ]
+      },
+      {
+        "name": "nameA",
+        "schema": {
+          "type": "string",
+          "default": "a",
+          "description": "Label written on every point arriving at `a`."
+        },
+        "targets": [
+          {
+            "node": "tagA",
+            "param": "stringValue"
+          }
+        ]
+      },
+      {
+        "name": "nameB",
+        "schema": {
+          "type": "string",
+          "default": "b",
+          "description": "Label written on every point arriving at `b`."
+        },
+        "targets": [
+          {
+            "node": "tagB",
+            "param": "stringValue"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "compose/scatter-copies",
+    "hash": "79e8d25f2addd3bc",
+    "title": "Copy a whole cloud onto every target point",
+    "description": "Copies the entire `source` cloud onto every point of `target`, composing the transforms per copy, then jitters the result so the repeated copies do not read as stamped. COUNT: the output is source x target points — 20 onto 500 is 10,000, and it multiplies fast. The transforms compose rather than overwrite: each copy is placed by the target's position, turned by the target's rotation and sized by the target's scale, so a target cloud carrying `rot` and `scale` lays its copies out already varied. VARIATION: yes — the jitter is context-seeded, so two instances differ, and `seed` re-rolls one explicitly. Reads and writes `P`; carries every source attribute through.",
+    "tags": [
+      "compose",
+      "copy",
+      "clusters"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "source",
+        "kind": "geometry"
+      },
+      {
+        "name": "target",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "jitter",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0.5,
+            0,
+            0.5
+          ],
+          "description": "Maximum random offset per axis, in world units — what makes copied clusters look placed rather than stamped. Set it to [0,0,0] for exact copies.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "jit",
+            "param": "amount"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the jitter. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "jit",
+            "param": "seed"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "fill/scatter-by-density",
+    "hash": "86f00d2d2e3603a6",
+    "title": "Scatter points into noise-driven clumps",
+    "description": "Scatters candidates through a box and keeps each one with a probability read from a noise field, so the points arrive in soft clumps instead of spread evenly — the single most common authoring situation in the library. COUNT: about `count` x 0.5 survive, since the normalized pattern averages 0.5. VARIATION: this is the MIXED case and the one an agent gets wrong. Which candidates survive varies per instance, but the PATTERN does not, so two instances put different points in the SAME clumps unless their `variant` differs. Writes `density`; reads nothing. Built on `filter/thin-by-density`, which is the same thinning applied to a cloud you already have.",
+    "tags": [
+      "fill",
+      "scatter",
+      "noise",
+      "density"
+    ],
+    "nodes": 2,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "boundsMax",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            100,
+            0,
+            100
+          ],
+          "description": "Maximum corner of the box to fill, in world units."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "boundsMax"
+          }
+        ]
+      },
+      {
+        "name": "boundsMin",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Minimum corner of the box to fill, in world units."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "boundsMin"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 4000,
+          "description": "Candidates scattered before thinning. Roughly half survive.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 0.02,
+          "description": "Feature size of the clumps: smaller means broader clumps.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "thin",
+            "param": "frequency"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls both the candidate positions and which of them survive. It does NOT move the clumps; `variant` does that."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "seed"
+          },
+          {
+            "node": "thin",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position — the only way to give two instances different CLUMPS rather than different points in the same clumps.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "thin",
+            "param": "variant"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "fill/scatter-clustered",
+    "hash": "bd7f170c0b451a4e",
+    "title": "Scatter points in groups rather than spread out",
+    "description": "Scatters a few cluster centres through a box, then copies a small local cloud onto each one, so points arrive in groups — villages, groves, boulder fields, star clusters. COUNT: the output is clusters x perCluster, which multiplies fast. VARIATION: yes — both scatters are context-seeded, so two instances differ, and `seed` re-rolls both explicitly. The local cloud's own `scale` is reset before copying, so `spread` sizes the cluster and not the assets in it.",
+    "tags": [
+      "fill",
+      "scatter",
+      "clusters"
+    ],
+    "nodes": 5,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "boundsMax",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            100,
+            0,
+            100
+          ],
+          "description": "Maximum corner of the box the group centres can land in, in world units."
+        },
+        "targets": [
+          {
+            "node": "centres",
+            "param": "boundsMax"
+          }
+        ]
+      },
+      {
+        "name": "boundsMin",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Minimum corner of the box the group centres can land in, in world units."
+        },
+        "targets": [
+          {
+            "node": "centres",
+            "param": "boundsMin"
+          }
+        ]
+      },
+      {
+        "name": "clusters",
+        "schema": {
+          "type": "i32",
+          "default": 24,
+          "description": "How many groups to place.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "centres",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "perCluster",
+        "schema": {
+          "type": "i32",
+          "default": 12,
+          "description": "How many points each group holds. The output count is clusters x this.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "local",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls both the group positions and the shape of the group. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "centres",
+            "param": "seed"
+          },
+          {
+            "node": "local",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "spread",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            4,
+            4,
+            4
+          ],
+          "description": "How far a group reaches from its centre, in world units. A bare number is not accepted: pass [4,4,4], or {\"fn\":\"constant\",\"value\":4} for a round cluster.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "spread",
+            "param": "scale"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "fill/scatter-even",
+    "hash": "f87469cb73593828",
+    "title": "Scatter points with a guaranteed minimum spacing",
+    "description": "Scatters candidates through a box and then removes any that fall closer than a minimum distance, giving evenly spaced points with no visible clumping — for anything with physical extent: trees, rocks, buildings. COUNT: over-scatter deliberately. The output count is EMERGENT, capped by the area divided by minDistance squared, so raising `count` past that point adds nothing and the way to get more points is a smaller `minDistance`. The scan is a deterministic greedy pass in index order, not a Poisson-disc sample, so the count is not controllable and looping to hit a target count will not converge. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly.",
+    "tags": [
+      "fill",
+      "scatter",
+      "spacing"
+    ],
+    "nodes": 2,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "boundsMax",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            50,
+            0,
+            50
+          ],
+          "description": "Maximum corner of the box to fill, in world units."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "boundsMax"
+          }
+        ]
+      },
+      {
+        "name": "boundsMin",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Minimum corner of the box to fill, in world units."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "boundsMin"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 4000,
+          "description": "Candidates scattered before pruning. Over-scatter: the survivors are however many fit at `minDistance`, never more.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "minDistance",
+        "schema": {
+          "type": "f32",
+          "default": 2,
+          "description": "Closest two kept points may be, in world units. This is the real knob.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "prune",
+            "param": "minDistance"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the scatter. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "seed"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "fill/volume-by-noise",
+    "hash": "41deaab7adaf34d8",
+    "title": "Carve connected volumes out of a solid box",
+    "description": "Fills a box with a jittered grid of points and keeps only the cells where a 3D noise field rises above a threshold, carving connected volumes out of solid — caves, clouds, asteroid interiors, floating islands. COUNT: the grid is extent cubed over cellSize cubed, so this is the one primitive here that can blow up; halving `cellSize` costs eight times as many points before the threshold takes any away. Connect the `in` pin and the bounds come from that geometry's own extents instead of the params, which is the library's only 'adapt to whatever arrives' mechanism. VARIATION: the jitter varies per instance but the CARVE PATTERN does not, so two instances hollow out the same shape unless their `variant` differs.",
+    "tags": [
+      "fill",
+      "noise",
+      "volume"
+    ],
+    "nodes": 6,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "boundsMax",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            32,
+            32,
+            32
+          ],
+          "description": "Maximum corner of the box to fill. IGNORED when the `in` pin is connected."
+        },
+        "targets": [
+          {
+            "node": "vol",
+            "param": "boundsMax"
+          }
+        ]
+      },
+      {
+        "name": "boundsMin",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Minimum corner of the box to fill. IGNORED when the `in` pin is connected."
+        },
+        "targets": [
+          {
+            "node": "vol",
+            "param": "boundsMin"
+          }
+        ]
+      },
+      {
+        "name": "cellSize",
+        "schema": {
+          "type": "f32",
+          "default": 2,
+          "description": "Grid resolution in world units. Halving it costs eight times as many candidate points."
+        },
+        "targets": [
+          {
+            "node": "vol",
+            "param": "cellSize"
+          }
+        ]
+      },
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 0.05,
+          "description": "Feature size: smaller means larger, smoother caverns.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "freqAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "jitter",
+        "schema": {
+          "type": "f32",
+          "default": 0.5,
+          "description": "How far each point may wander inside its own cell: 0 is a hard lattice, 1 is fully irregular.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "vol",
+            "param": "jitter"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the per-cell jitter. It does NOT move the carve pattern; `variant` does that."
+        },
+        "targets": [
+          {
+            "node": "vol",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "threshold",
+        "schema": {
+          "type": "f32",
+          "default": 0.5,
+          "description": "Where the cut falls on the 0..1 noise. Higher leaves less material.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "threshAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position — the per-instance re-roll of the carve pattern.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "variantAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filter/by-distance-to",
+    "hash": "988d52b6ceb54ba4",
+    "title": "Keep points by how far they are from another cloud",
+    "description": "Measures each point's distance to the nearest point of a second cloud and keeps or drops it by that distance — 'no trees within 20m of the road', or 'cabins only near the lake'. This is the only way to ask how far anything is from anything: transferring the nearest value copies it but never reveals the distance. A point that finds nothing (an empty `features` cloud) is at distance Infinity, so 'le' drops it and 'ge' keeps it. Fully deterministic. Reads `P` on both inputs; writes nothing (the distance column is removed again).",
+    "tags": [
+      "filter",
+      "spatial",
+      "proximity"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      },
+      {
+        "name": "features",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "comparison",
+        "schema": {
+          "type": "enum",
+          "default": "ge",
+          "description": "'ge' keeps what is far from the features (a clearance), 'le' keeps what is near them (a band).",
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge"
+          ]
+        },
+        "targets": [
+          {
+            "node": "keep",
+            "param": "comparison"
+          }
+        ]
+      },
+      {
+        "name": "distance",
+        "schema": {
+          "type": "f32",
+          "default": 5,
+          "description": "The band edge, in world units.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "keep",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filter/by-neighbor-count",
+    "hash": "ee36765e9ee4552b",
+    "title": "Keep points by how crowded they are",
+    "description": "Counts each point's neighbours within a radius and keeps or drops it by that count — 'ge' removes lonely outliers and finds cluster cores, 'le' thins the dense middle out. Fully deterministic: it measures whatever arrives. Reads `P`; writes nothing (the count column is removed again).",
+    "tags": [
+      "filter",
+      "neighborhood",
+      "spatial"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "comparison",
+        "schema": {
+          "type": "enum",
+          "default": "ge",
+          "description": "'ge' keeps the crowded points (cluster cores), 'le' keeps the isolated ones.",
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge"
+          ]
+        },
+        "targets": [
+          {
+            "node": "keep",
+            "param": "comparison"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "f32",
+          "default": 2,
+          "description": "How many neighbours the comparison is made against. The point itself is not counted.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "keep",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "radius",
+        "schema": {
+          "type": "f32",
+          "default": 5,
+          "description": "How far around each point counts as its neighbourhood, in world units.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "nbr",
+            "param": "radius"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filter/inside-radius",
+    "hash": "3281ccbb09ada442",
+    "title": "Keep the points within a radius of a centre",
+    "description": "Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (both scratch columns are removed again).",
+    "tags": [
+      "filter",
+      "spatial",
+      "mask"
+    ],
+    "nodes": 4,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "World position the distance is measured from. A plain number broadcasts to all three axes, so 0 is the origin; for anywhere else pass a field spec: {\"fn\":\"constant\",\"value\":[x,y,z]}.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "centerAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "comparison",
+        "schema": {
+          "type": "enum",
+          "default": "le",
+          "description": "How the distance is tested: 'le' keeps what is inside the radius, 'ge' keeps what is outside it.",
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge"
+          ]
+        },
+        "targets": [
+          {
+            "node": "keep",
+            "param": "comparison"
+          }
+        ]
+      },
+      {
+        "name": "radius",
+        "schema": {
+          "type": "f32",
+          "default": 10,
+          "description": "The distance the comparison is made against, in world units.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "keep",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filter/mask-by-noise",
+    "hash": "2883baa351726504",
+    "title": "Keep the points where a noise field is above a threshold",
+    "description": "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing (every scratch column is removed again).",
+    "tags": [
+      "filter",
+      "noise",
+      "mask"
+    ],
+    "nodes": 5,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 0.02,
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means larger regions.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "freqAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "threshold",
+        "schema": {
+          "type": "f32",
+          "default": 0.5,
+          "description": "Where the cut falls on the 0..1 noise. 0.5 keeps about half; 1 keeps nothing and 0 keeps everything.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "threshAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "variantAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "filter/thin-by-density",
+    "hash": "f933bd0bccb5b2e2",
+    "title": "Thin a point cloud by a noise density",
+    "description": "Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — noise carries its own seed inside its field spec, where no exposed param can reach, so two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.",
+    "tags": [
+      "filter",
+      "noise",
+      "density"
+    ],
+    "nodes": 5,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 0.02,
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "freqAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls which points survive within the same pattern. It does NOT move the pattern; `variant` does that."
+        },
+        "targets": [
+          {
+            "node": "thin",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "variantAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "place/align-to-surface",
+    "hash": "00b616e8d41bce55",
+    "title": "Stand each point up along the surface under it",
+    "description": "Casts a ray from every point onto a mesh, reads the surface `normal` where it lands, and turns the point so its chosen local axis stands along that normal — props lying on slopes instead of standing upright through them. PRECONDITION: the `surface` must carry a `normal` point attribute (f32, tuple 3); a mesh built by `meshPrimitive` carries uv and topology but no normal, so stamp one on it first. A point whose ray misses keeps the previous normal it had, and a zero-length one keeps its existing rotation. Fully deterministic. Writes `rot` and `normal`; `P` is not moved — pair it with `place/drop-to-surface` for that.",
+    "tags": [
+      "place",
+      "surface",
+      "raycast",
+      "instancing"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "points",
+        "kind": "geometry"
+      },
+      {
+        "name": "surface",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "axis",
+        "schema": {
+          "type": "enum",
+          "default": "+y",
+          "description": "Which local axis of the asset stands along the surface normal. '+y' is upright.",
+          "enum": [
+            "+x",
+            "-x",
+            "+y",
+            "-y",
+            "+z",
+            "-z"
+          ]
+        },
+        "targets": [
+          {
+            "node": "orient",
+            "param": "axis"
+          }
+        ]
+      },
+      {
+        "name": "direction",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            -1,
+            0
+          ],
+          "description": "Which way the ray travels to find the surface. [0,-1,0] looks straight down."
+        },
+        "targets": [
+          {
+            "node": "normal",
+            "param": "direction"
+          }
+        ]
+      },
+      {
+        "name": "maxDistance",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Longest ray that still counts as a find, in world units. 0 means unlimited.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "normal",
+            "param": "maxDistance"
+          }
+        ]
+      },
+      {
+        "name": "up",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            1,
+            0
+          ],
+          "description": "Up hint fixing the roll around the normal."
+        },
+        "targets": [
+          {
+            "node": "orient",
+            "param": "up"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "place/drop-to-surface",
+    "hash": "ddc00f2881334737",
+    "title": "Drop points onto a mesh and discard the misses",
+    "description": "Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. Two rays are cast, not one, and the second is the content: a miss keeps its prior value rather than reporting itself, so points that hit nothing would otherwise stay floating with no per-point way to find them. A marker stamped on the surface before the transfer comes back as 1 on a hit and 0 on a miss, which is what makes the discard possible at all. Fully deterministic. Reads and writes `P`; the marker column is removed again.",
+    "tags": [
+      "place",
+      "surface",
+      "raycast",
+      "terrain"
+    ],
+    "nodes": 5,
+    "inputs": [
+      {
+        "name": "points",
+        "kind": "geometry"
+      },
+      {
+        "name": "surface",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "direction",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            -1,
+            0
+          ],
+          "description": "Which way the rays travel. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss."
+        },
+        "targets": [
+          {
+            "node": "hit",
+            "param": "direction"
+          },
+          {
+            "node": "snap",
+            "param": "direction"
+          }
+        ]
+      },
+      {
+        "name": "maxDistance",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Longest drop that still counts as a landing, in world units. 0 means unlimited.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "hit",
+            "param": "maxDistance"
+          },
+          {
+            "node": "snap",
+            "param": "maxDistance"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "place/on-surface",
+    "hash": "cc714c8bfddb1f4d",
+    "title": "Scatter points across a mesh with height and slope",
+    "description": "Scatters points over a triangle mesh with probability proportional to triangle area, then stamps the two standard terrain quantities — `height` (world Y) and `slope` (1 - normal.y) — so downstream filters have something to test without re-deriving it. The points also carry the flat per-triangle `normal` the sampler writes. COUNT: `count` is the number of CANDIDATES; with the default density of 1 every one is kept, and a lower `density` keeps proportionally fewer. VARIATION: yes — two instances in one graph sample differently, and `seed` re-rolls one explicitly. Writes `height`, `slope`, `normal`, `density`.",
+    "tags": [
+      "place",
+      "surface",
+      "terrain",
+      "scatter"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "surface",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 1000,
+          "description": "Candidates placed on the mesh before density acceptance.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "sample",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "density",
+        "schema": {
+          "type": "f32",
+          "default": 1,
+          "description": "Acceptance probability per candidate, 0..1 — where sampling is allowed at all. Pass a field spec to make it vary across the surface.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "sample",
+            "param": "densityField"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the sampling. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "sample",
+            "param": "seed"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "place/plantable",
+    "hash": "dd94c5b8741967f1",
+    "title": "Scatter points only where vegetation could grow",
+    "description": "Scatters points on a mesh and keeps only the ones on gentle enough ground below a height limit — the standard 'where can vegetation go' test, and the shape every forest in the demo corpus is built from. `maxSlope` is on the 0..1 scale `place/on-surface` writes, where 0 is dead flat: 0.3 is about a 45-degree limit. VARIATION: yes, through the scatter. Built on `place/on-surface`, so the output carries `height`, `slope`, `normal` and `density` too.",
+    "tags": [
+      "place",
+      "surface",
+      "terrain",
+      "vegetation"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "surface",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 1000,
+          "description": "Candidates placed on the mesh before the slope and height tests.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "pts",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "density",
+        "schema": {
+          "type": "f32",
+          "default": 1,
+          "description": "Acceptance probability per candidate, 0..1. Pass a field spec to make it vary across the surface.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "pts",
+            "param": "density"
+          }
+        ]
+      },
+      {
+        "name": "maxHeight",
+        "schema": {
+          "type": "f32",
+          "default": 60,
+          "description": "Highest world Y still plantable — a tree line."
+        },
+        "targets": [
+          {
+            "node": "height",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "maxSlope",
+        "schema": {
+          "type": "f32",
+          "default": 0.3,
+          "description": "Steepest ground still plantable, on the 0..1 slope scale (0 is flat, 1 is a vertical wall)."
+        },
+        "targets": [
+          {
+            "node": "slope",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the sampling. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "pts",
+            "param": "seed"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shape/disc",
+    "hash": "80a61364563e287a",
+    "title": "Points scattered uniformly inside a circle",
+    "description": "Scatters points uniformly inside a disc in the XZ plane by scattering a square and rejecting the corners — the circular counterpart to scattering a box, and the right answer when scattering a square and hoping is wrong. COUNT: `count` is the number of CANDIDATES; the disc keeps about 78.5% of them, so asking for 1000 gives roughly 785 points. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly. Writes `P`; leaves the per-point `scale` attribute at 1.",
+    "tags": [
+      "shape",
+      "scatter",
+      "radial"
+    ],
+    "nodes": 4,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Where the shape sits, in world units.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "translate"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 600,
+          "description": "Candidates scattered before the corners are rejected. About 78.5% survive.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "rotate",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Rotation in degrees per world axis, applied about the origin before the shape is moved into place.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "rotateEuler"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the scatter. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "size",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            8,
+            8,
+            8
+          ],
+          "description": "Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {\"fn\":\"constant\",\"value\":8} for a uniform one. Unequal components give an ellipse or an ellipsoid.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "scale"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shape/ring",
+    "hash": "0358287dfaffb7af",
+    "title": "Points evenly around a circle or an arc",
+    "description": "Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is the number of sample positions across the sweep with both ends included, so a full sweep drops the duplicate seam point and yields count - 1 points, while a partial sweep keeps all of them. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.",
+    "tags": [
+      "shape",
+      "curve",
+      "radial"
+    ],
+    "nodes": 7,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Where the shape sits, in world units.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "translate"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 24,
+          "description": "Sample positions across the sweep, both ends included. A full sweep drops the duplicate seam, so it yields count - 1 points.",
+          "min": 1
+        },
+        "targets": [
+          {
+            "node": "line",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "rotate",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Rotation in degrees per world axis, applied about the origin before the shape is moved into place.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "rotateEuler"
+          }
+        ]
+      },
+      {
+        "name": "size",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            8,
+            8,
+            8
+          ],
+          "description": "Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {\"fn\":\"constant\",\"value\":8} for a uniform one. Unequal components give an ellipse or an ellipsoid.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "scale"
+          }
+        ]
+      },
+      {
+        "name": "sweep",
+        "schema": {
+          "type": "f32",
+          "default": 1,
+          "description": "How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "sweepAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shape/sphere-points",
+    "hash": "bfae98c5249b3ebd",
+    "title": "Points scattered uniformly on a sphere",
+    "description": "Scatters points uniformly over the surface of a sphere, by rejecting a cube scatter down to the ball first and then pushing every survivor out to the surface. The rejection step is the content: normalizing a cube scatter directly piles points up toward the eight corner directions, and the result looks wrong without looking obviously wrong. COUNT: `count` is the number of CANDIDATES; the ball keeps about 52.4% of them. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly. Writes `P`; leaves the per-point `scale` attribute at 1.",
+    "tags": [
+      "shape",
+      "scatter",
+      "radial"
+    ],
+    "nodes": 5,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Where the shape sits, in world units.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "translate"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 800,
+          "description": "Candidates scattered in the cube before rejection to the ball. About 52.4% survive.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "rotate",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Rotation in degrees per world axis, applied about the origin before the shape is moved into place.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "rotateEuler"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls the scatter. Two instances already differ without it."
+        },
+        "targets": [
+          {
+            "node": "scatter",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "size",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            8,
+            8,
+            8
+          ],
+          "description": "Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {\"fn\":\"constant\",\"value\":8} for a uniform one. Unequal components give an ellipse or an ellipsoid.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "scale"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shape/spiral",
+    "hash": "ed8fda6b7134ace1",
+    "title": "Points winding outward over a number of turns",
+    "description": "Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.",
+    "tags": [
+      "shape",
+      "curve",
+      "radial"
+    ],
+    "nodes": 6,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "center",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Where the shape sits, in world units.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "translate"
+          }
+        ]
+      },
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 160,
+          "description": "Points along the spiral, evenly spaced in angle (so they crowd near the centre).",
+          "min": 1
+        },
+        "targets": [
+          {
+            "node": "line",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "rotate",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Rotation in degrees per world axis, applied about the origin before the shape is moved into place.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "rotateEuler"
+          }
+        ]
+      },
+      {
+        "name": "size",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            8,
+            8,
+            8
+          ],
+          "description": "Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {\"fn\":\"constant\",\"value\":8} for a uniform one. Unequal components give an ellipse or an ellipsoid.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "place",
+            "param": "scale"
+          }
+        ]
+      },
+      {
+        "name": "turns",
+        "schema": {
+          "type": "f32",
+          "default": 3,
+          "description": "How many full revolutions the spiral makes between the centre and the outer radius.",
+          "acceptsField": true,
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "turnsAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "transform/displace-by-noise",
+    "hash": "f81df283558901c3",
+    "title": "Push points up and down by a noise field",
+    "description": "Displaces every point along +Y by a noise field centred on zero, so a flat scatter becomes a rolling one. The displacement runs from -amount to +amount, so the average height does not move. LIMITATION: +Y only — the direction lives inside the field structure, not in a param slot, so displacing along another axis means rotating the whole result. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances displace IDENTICALLY unless their `variant` differs, and this is the primitive most likely to be used twice in one graph. Reads and writes `P`; leaves every other attribute alone.",
+    "tags": [
+      "transform",
+      "noise",
+      "terrain"
+    ],
+    "nodes": 5,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "amount",
+        "schema": {
+          "type": "f32",
+          "default": 4,
+          "description": "Peak displacement in world units: points move between -amount and +amount.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "ampAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 0.05,
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "freqAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "variantAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "transform/relax-spacing",
+    "hash": "00d0b320600b2385",
+    "title": "Even out spacing without deleting anything",
+    "description": "Nudges every point away from the centroid of its neighbours, so crowded regions spread out and the spacing evens up while the COUNT stays exactly the same. This is the alternative to `selfPrune`, which enforces spacing by deleting: use this one when the count is fixed (a fleet, a crowd, a fixed budget of props). A strength near 0.5 is one relaxation step; run the primitive twice for a stronger effect rather than pushing the strength past 1, which overshoots and oscillates. Isolated points do not move. Fully deterministic. Reads and writes `P`; leaves every other attribute alone.",
+    "tags": [
+      "transform",
+      "neighborhood",
+      "spacing"
+    ],
+    "nodes": 4,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "radius",
+        "schema": {
+          "type": "f32",
+          "default": 4,
+          "description": "How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "nbr",
+            "param": "radius"
+          }
+        ]
+      },
+      {
+        "name": "strength",
+        "schema": {
+          "type": "f32",
+          "default": 0.5,
+          "description": "How far along the push each point travels: 0 changes nothing, 0.5 is one relaxation step.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "strAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "transform/snap-to-grid",
+    "hash": "399afbaa1ca4eb39",
+    "title": "Move every point to the nearest grid corner",
+    "description": "Snaps every point to the nearest corner of a regular 3D grid of the given pitch, so scattered positions become tile-aligned. Note that snapping can land two points on the SAME corner: follow it with `selfPrune` at a distance just under the pitch if the duplicates matter. Fully deterministic. Reads and writes `P`; leaves every other attribute alone, including `scale`.",
+    "tags": [
+      "transform",
+      "grid",
+      "align"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "cellSize",
+        "schema": {
+          "type": "f32",
+          "default": 4,
+          "description": "Grid pitch in world units, the same on all three axes. Must be greater than 0.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "cellAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/color-from-attribute",
+    "hash": "fc1cc477358f2ace",
+    "title": "Turn a scalar attribute into a colour gradient",
+    "description": "Rescales any numeric point attribute to 0..1 over its OWN observed range, then maps it through a blue-green-yellow-red heat ramp into the standard `color` attribute (f32, tuple 4, alpha 1). Fitting to the observed range is what makes it work on an invented quantity — a neighbour count, a hand-built score — without knowing its scale in advance. Fully deterministic: two instances produce identical output. Writes `color`; reads the attribute named by `source`, which must exist on the point domain.",
+    "tags": [
+      "write",
+      "color",
+      "debug"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "source",
+        "schema": {
+          "type": "string",
+          "default": "density",
+          "description": "Numeric point attribute to colour by. It is fitted to its own minimum and maximum, so any scale works — 'density', 'height', 'slope' or anything you computed yourself."
+        },
+        "targets": [
+          {
+            "node": "fit",
+            "param": "name"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/density-from-noise",
+    "hash": "f6463069f49e3917",
+    "title": "Write the standard density attribute from a noise field",
+    "description": "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field carries its own seed inside its spec, where no exposed param can reach. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
+    "tags": [
+      "write",
+      "noise",
+      "density"
+    ],
+    "nodes": 4,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "frequency",
+        "schema": {
+          "type": "f32",
+          "default": 0.02,
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "freqAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "variant",
+        "schema": {
+          "type": "f32",
+          "default": 0,
+          "description": "Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "variantAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/height-slope",
+    "hash": "06e0b90b4acc0e56",
+    "title": "Stamp height and slope from a surface normal",
+    "description": "Writes the two standard terrain quantities onto points that already carry a surface normal: `height` (f32) is the world Y of each point, and `slope` (f32) is 1 - normal.y, so 0 is dead flat and 1 is a vertical wall. Downstream filters can then test ground suitability without re-deriving either. PRECONDITION: the input must carry a `normal` point attribute (f32, tuple 3) — `surfaceSample` writes one, and `place/align-to-surface` transfers one from a mesh; without it the cook fails naming the missing attribute. Fully deterministic: two instances of this primitive produce identical output.",
+    "tags": [
+      "write",
+      "terrain",
+      "attributes"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": []
+  },
+  {
+    "name": "write/instances-by-species",
+    "hash": "0fad13f078670f88",
+    "title": "Pick one asset per point and emit the instances",
+    "description": "Chooses an asset id per point from a list and emits the instance batches — the multi-asset spawn. The point of the primitive is the string coupling: one param names BOTH the attribute the choice is written to and the attribute the spawner reads it back from, so the two can never drift apart. The built-in selector spreads uniformly over FOUR entries, so pass exactly four assets and repeat one to weight it (['pine','pine','birch','bush'] is 50/25/25). VARIATION: yes — the choice comes from the evaluation context, so two instances differ automatically, and `seed` re-rolls one explicitly. Writes the species attribute; reads `P`, `rot` and `scale` through the spawner.",
+    "tags": [
+      "write",
+      "spawn",
+      "instancing"
+    ],
+    "nodes": 2,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "instances",
+        "kind": "instances"
+      },
+      {
+        "name": "points",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "assetId",
+        "schema": {
+          "type": "string",
+          "default": "pine",
+          "description": "Asset id used for any point whose species entry is empty."
+        },
+        "targets": [
+          {
+            "node": "spawn",
+            "param": "assetId"
+          }
+        ]
+      },
+      {
+        "name": "assets",
+        "schema": {
+          "type": "stringList",
+          "default": [
+            "pine",
+            "pine",
+            "birch",
+            "bush"
+          ],
+          "description": "Asset ids to choose among, as four entries. Repeat an entry to weight it; an empty entry falls back to `assetId`."
+        },
+        "targets": [
+          {
+            "node": "species",
+            "param": "values"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls which point gets which asset. 0 uses the node's own derived seed."
+        },
+        "targets": [
+          {
+            "node": "species",
+            "param": "seed"
+          }
+        ]
+      },
+      {
+        "name": "speciesAttr",
+        "schema": {
+          "type": "string",
+          "default": "species",
+          "description": "Name of the string point attribute holding the per-point asset id. One knob writes it and reads it, so the writer and the spawner cannot disagree."
+        },
+        "targets": [
+          {
+            "node": "species",
+            "param": "name"
+          },
+          {
+            "node": "spawn",
+            "param": "assetAttr"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/local-density",
+    "hash": "783e65a1eff6cea7",
+    "title": "Write how crowded each point is as a density",
+    "description": "Counts each point's neighbours within a radius and rescales the counts to 0..1 over their own observed range, writing the standard `density` attribute — so crowding can drive size, colour, or a proportional thinning through `filter/thin-by-density`. Fully deterministic: two instances produce identical output, since this measures whatever arrives rather than inventing anything. Writes `density`; reads `P`.",
+    "tags": [
+      "write",
+      "neighborhood",
+      "density"
+    ],
+    "nodes": 3,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "radius",
+        "schema": {
+          "type": "f32",
+          "default": 5,
+          "description": "How far around each point counts as its neighbourhood, in world units.",
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "nbr",
+            "param": "radius"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/random-scale",
+    "hash": "fa8ac17842b0c258",
+    "title": "Write one uniform random size per point",
+    "description": "Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per point between min and max, the same value on all three axes. The uniformity is the content: a hand-written version reaches for a separate random per axis and gets an asset stretched differently in x, y and z, which reads as a modelling error rather than as variety. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically, and `seed` re-rolls one of them explicitly. Writes `scale`; reads nothing.",
+    "tags": [
+      "write",
+      "scatter",
+      "instancing"
+    ],
+    "nodes": 4,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "max",
+        "schema": {
+          "type": "f32",
+          "default": 1.4,
+          "description": "Largest size a point can get, as a multiple of the asset's own size.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "maxAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "min",
+        "schema": {
+          "type": "f32",
+          "default": 0.7,
+          "description": "Smallest size a point can get, as a multiple of the asset's own size.",
+          "acceptsField": true
+        },
+        "targets": [
+          {
+            "node": "minAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "seed",
+        "schema": {
+          "type": "u32",
+          "default": 0,
+          "description": "Re-rolls which point gets which size. 0 uses the node's own derived seed."
+        },
+        "targets": [
+          {
+            "node": "scaleAttr",
+            "param": "seed"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/random-yaw",
+    "hash": "c29485b2fe9804fb",
+    "title": "Turn each point to face a random direction",
+    "description": "Writes the standard `rot` attribute so every point faces a uniformly random direction around the vertical axis, so repeated assets do not all point the same way. The field is the content: the direction an author reaches for instead — a noise vector — is SPATIALLY CORRELATED, which reads as a combed field rather than randomness and is a bug that is hard to diagnose from the result. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically. Writes `rot`; reads nothing.",
+    "tags": [
+      "write",
+      "scatter",
+      "instancing"
+    ],
+    "nodes": 1,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "axis",
+        "schema": {
+          "type": "enum",
+          "default": "+z",
+          "description": "Which local axis of the asset turns to face the random direction. '+z' is the forward axis assets face by convention.",
+          "enum": [
+            "+x",
+            "-x",
+            "+y",
+            "-y",
+            "+z",
+            "-z"
+          ]
+        },
+        "targets": [
+          {
+            "node": "yaw",
+            "param": "axis"
+          }
+        ]
+      },
+      {
+        "name": "up",
+        "schema": {
+          "type": "vec3",
+          "default": [
+            0,
+            1,
+            0
+          ],
+          "description": "Up hint fixing the roll; leave it at world up unless the assets stand along another axis."
+        },
+        "targets": [
+          {
+            "node": "yaw",
+            "param": "up"
+          }
+        ]
+      }
+    ]
+  }
+]

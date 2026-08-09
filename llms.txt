@@ -2,7 +2,8 @@
 
 pcg-ts is a deterministic procedural content generation library for
 TypeScript (browser + Node, ESM, package `pcg-ts`, optional three.js
-adapter `pcg-ts/three`, optional WebGPU field evaluation `pcg-ts/gpu`).
+adapter `pcg-ts/three`, optional WebGPU field evaluation `pcg-ts/gpu`,
+shipped primitive vocabulary `pcg-ts/primitives`).
 It combines a domain-based attribute data model
 (SoA typed arrays), deferred field expressions, a memoizing node-graph
 executor, and a hierarchical streaming runtime. It is designed to be
@@ -336,6 +337,60 @@ spawn, io, composite.
 - transformPoints — per-point translate/rotate/scale, composing with rot/scale attrs (field-capable)
 - valueConstant — emit a constant number as a value item
 - volumeSample — jittered grid fill of a box or of the input geometry's bounds
+
+## Primitive library (full catalog: docs/primitives.md, machine-readable: docs/primitives.json)
+
+29 named subgraphs — the vocabulary a graph is written IN. **They
+register on import of their own subpath**, so nothing resolves until
+something imports it; `import "pcg-ts"` deliberately does not:
+
+```ts
+import "pcg-ts/primitives";
+```
+
+The `pcg` CLI imports it, so `pcg run <name>` works with no graph file.
+Reference one from JSON with `{"type":"subgraph","ref":{"name":"..."},
+"params":{...}}`; read `listSubgraphs()` at runtime for the live set.
+
+Names are `<family>/<kebab-case>` over a CLOSED set of seven families,
+and the family is a promise about the pin shape:
+
+- shape (4) — a point set from nothing, built at unit size and placed by
+  a trailing transform: ring, spiral, disc, sphere-points
+- fill (4) — turn a region into a distribution: scatter-even (minimum
+  spacing), scatter-by-density (noise clumps), scatter-clustered,
+  volume-by-noise (carved 3D volumes)
+- transform (3) — change P, keep the count: displace-by-noise,
+  snap-to-grid, relax-spacing
+- compose (2) — combine two clouds: merge-tagged, scatter-copies
+- filter (5) — remove points, never move one, never leave a column
+  behind: thin-by-density, mask-by-noise, inside-radius, by-distance-to,
+  by-neighbor-count
+- place (4) — against a supplied mesh (feed it `meshPrimitive`):
+  on-surface, plantable, drop-to-surface, align-to-surface
+- write (7) — set attributes: height-slope, density-from-noise,
+  random-scale, random-yaw, color-from-attribute, local-density,
+  instances-by-species
+
+Three rules an agent needs before choosing one:
+
+1. **A `threshold` mask and a probabilistic `density` thin are not the
+   same thing.** A threshold gives connected regions with hard edges; a
+   probability gives soft-edged clouds of individual points.
+2. **Per-instance variation is counter-intuitive.** Two instances of one
+   primitive have different node ids, so anything context-seeded
+   (scatter, jitter, randomField) differs automatically — but NOISE does
+   not, and no seed param can change that, because a noise field carries
+   its own seed inside its field spec where no exposed param can reach.
+   Every noise-bearing primitive therefore exposes `variant`, an OFFSET
+   added to the noise sample position, and says so in its description.
+   `frequency` is the matching multiplier on that position.
+3. **An exposed param's default is a plain value, never a `Field`,** and
+   every cook writes it inward — so a primitive's characteristic field
+   lives on its inner node and the scalars that field reads back are what
+   get exposed (a `setAttribute` upstream, `removeAttribute` downstream).
+   Field-capable params are marked in the catalog and accept a field spec
+   as their VALUE.
 
 ## Key invariants and contracts
 
@@ -929,6 +984,9 @@ GraphSerializationError, FieldJsonError, WorldValidationError.
 - README.md — human tour with runnable examples
 - docs/nodes.md — full generated node reference (pins, params, defaults, ranges)
 - docs/nodes.json — the same registry metadata, machine-readable
+- docs/primitives.md — generated catalog of the shipped primitives
+  (pins, exposed params with derived schemas, content hash, a `pcg run`
+  line each); docs/primitives.json is the same, machine-readable
 - docs/authoring.md — graph JSON spec, complete field grammar, recipes,
   GPU eligibility rules
 - examples/ — nine vite demos; 06-graph-editor is an interactive node
