@@ -5,6 +5,7 @@
  */
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
+import { UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
 import { gatherPoints, requireGeometry } from "./util.js";
 
@@ -233,41 +234,24 @@ export const selfPrune = standardNode<SelfPruneParams>({
       // Nothing to prune; pass a cloned input through.
       return { out: [makeGeometryItem(cloneGeometry(geo))] };
     }
-    const min2 = minDist * minDist;
-    const inv = 1 / minDist;
-    const cells = new Map<string, number[]>();
+    // A P narrower than xyz would have the grid read the NEXT point's
+    // coordinates as this one's y and z — silently, before the shared
+    // index made it an error. Caught here so the message names the node
+    // the author has to fix, not the internal that noticed.
+    if (ps < 3) {
+      throw new Error(
+        `selfPrune: point attribute "P" has tupleSize ${ps}, but distances need x, y and z (tupleSize 3); something upstream overwrote P with a narrower attribute`,
+      );
+    }
+    // One cell per minimum distance, so the survivors already kept within
+    // reach of a candidate are exactly the 3x3x3 block around its cell.
+    const grid = new UniformGrid({ data: pd, stride: ps, count: n }, minDist);
     const keep: number[] = [];
     for (let i = 0; i < n; i++) {
-      const x = pd[i * ps];
-      const y = pd[i * ps + 1];
-      const z = pd[i * ps + 2];
-      const cx = Math.floor(x * inv);
-      const cy = Math.floor(y * inv);
-      const cz = Math.floor(z * inv);
-      let ok = true;
-      outer: for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dz = -1; dz <= 1; dz++) {
-            const bucket = cells.get(`${cx + dx},${cy + dy},${cz + dz}`);
-            if (!bucket) continue;
-            for (const j of bucket) {
-              const ddx = pd[j * ps] - x;
-              const ddy = pd[j * ps + 1] - y;
-              const ddz = pd[j * ps + 2] - z;
-              if (ddx * ddx + ddy * ddy + ddz * ddz < min2) {
-                ok = false;
-                break outer;
-              }
-            }
-          }
-        }
-      }
-      if (!ok) continue;
+      const o = i * ps;
+      if (grid.hasPointCloserThan(pd[o], pd[o + 1], pd[o + 2], minDist)) continue;
       keep.push(i);
-      const key = `${cx},${cy},${cz}`;
-      let bucket = cells.get(key);
-      if (!bucket) cells.set(key, (bucket = []));
-      bucket.push(i);
+      grid.insert(i);
     }
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
   },

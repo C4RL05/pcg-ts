@@ -198,6 +198,109 @@ describe("selfPrune", () => {
     );
     expect(geo.pointCount).toBe(3);
   });
+
+  /**
+   * The published contract, pinned against its own definition: the grid is
+   * an accelerator, so its answers must equal the O(n^2) greedy exactly —
+   * including where distances are NaN. Positions are f32-rounded up front so
+   * the reference sees the same numbers the geometry stores.
+   */
+  function greedy(pts: number[][], minDistance: number): number[][] {
+    const limit = minDistance * minDistance;
+    const kept: number[][] = [];
+    for (const p of pts) {
+      let ok = true;
+      for (const q of kept) {
+        const dx = q[0] - p[0];
+        const dy = q[1] - p[1];
+        const dz = q[2] - p[2];
+        if (dx * dx + dy * dy + dz * dz < limit) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) kept.push(p);
+    }
+    return kept;
+  }
+
+  async function prune(pts: number[][], minDistance: number): Promise<number[][]> {
+    const out = firstGeo(
+      (await runNode(selfPrune, { minDistance }, { in: [makeGeometryItem(cloudAt(pts))] })).out,
+    );
+    return positionsOf(out);
+  }
+
+  it("equals the O(n^2) greedy on lattices, clusters, and duplicates", async () => {
+    let state = 12345;
+    const rand = (): number => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return Math.fround(state / 4294967296);
+    };
+    const lattice: number[][] = [];
+    for (let x = 0; x < 6; x++) for (let z = 0; z < 6; z++) lattice.push([x, 0, z]);
+    const scatter: number[][] = [];
+    for (let i = 0; i < 400; i++) scatter.push([rand() * 4, rand() * 4, rand() * 4]);
+    const duplicates = Array.from({ length: 20 }, (_, i) => [i % 2, 0, 0]);
+    for (const pts of [lattice, scatter, duplicates]) {
+      // 1 and 1.5 straddle the lattice spacing, so ties are exercised.
+      for (const minDistance of [0.25, 1, 1.5, 3]) {
+        expect(await prune(pts, minDistance)).toEqual(greedy(pts, minDistance));
+      }
+    }
+  });
+
+  it("keeps the exact survivors of a 6x6 lattice at minDistance 1.5", async () => {
+    const lattice: number[][] = [];
+    for (let x = 0; x < 6; x++) for (let z = 0; z < 6; z++) lattice.push([x, 0, z]);
+    // Every other lattice site on both axes: 1.5 rejects the spacing-1 and
+    // the diagonal spacing-sqrt(2) neighbours, and accepts spacing 2.
+    expect(await prune(lattice, 1.5)).toEqual([
+      [0, 0, 0],
+      [0, 0, 2],
+      [0, 0, 4],
+      [2, 0, 0],
+      [2, 0, 2],
+      [2, 0, 4],
+      [4, 0, 0],
+      [4, 0, 2],
+      [4, 0, 4],
+    ]);
+  });
+
+  it("survives a subnormal minDistance", async () => {
+    // 5e-324 is positive, so pruning runs, but its square underflows to 0
+    // and no pair is ever closer than that: everything survives. The grid is
+    // built at that cell size, which is where a scaled cell size would
+    // underflow to zero and fail.
+    const pts = [
+      [0, 0, 0],
+      [0, 0, 0],
+      [1, 2, 3],
+      [-1, -2, -3],
+    ];
+    expect(await prune(pts, Number.MIN_VALUE)).toEqual(greedy(pts, Number.MIN_VALUE));
+    expect(await prune(pts, Number.MIN_VALUE)).toHaveLength(4);
+  });
+
+  it("never prunes with a non-finite coordinate, and is never pruned by one", async () => {
+    // Every distance involving NaN or an infinity is NaN, which is not less
+    // than minDistance, so those points survive and shield nothing.
+    const pts = [
+      [0, 0, 0],
+      [NaN, 1, 2],
+      [Infinity, -Infinity, NaN],
+      [0.5, 0.5, 0.5], // pruned by point 0
+      [-Infinity, 0, 0],
+      [Infinity, 0, 0],
+      [Infinity, 0, 0], // a duplicate infinity still survives
+      [2, 2, 2],
+    ];
+    const kept = await prune(pts, 1);
+    expect(kept).toEqual(greedy(pts, 1));
+    expect(kept.length).toBe(7);
+    expect(kept[3]).toEqual([-Infinity, 0, 0]);
+  });
 });
 
 describe("projectToPlane", () => {

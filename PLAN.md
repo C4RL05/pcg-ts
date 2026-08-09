@@ -1058,9 +1058,65 @@ recorded with its reason rather than silently rewritten.
 - New nodes, first wave: `pointNeighborhood`, `sampleNearestPoint`,
   `attributeReduce`; second wave: `filterByExpression` (a boolean
   `Field` predicate — the params-accept-fields pillar finally reaching
-  the filter family), `filterGroup`, `attributeRemap`.
+  the filter family), `attributeRemap`.
+- **Added after the vocabulary survey, and load-bearing for this phase's
+  own exit criterion: a mesh SOURCE node.** Nothing in the library can
+  produce mesh or polyline geometry in-graph — `dataInput` is the only
+  door and it carries nothing through serialization, so five of the
+  proposed primitives (the whole `place/` family and
+  `transform/align-to-surface`) cannot cook from JSON at all. That
+  collides directly with "every primitive validates and cooks in CI"
+  here and with phase 38's all-JSON corpus. One cheap node (a
+  subdivided plane, ideally a box too) unblocks all of it. This is the
+  THIRD independent sighting of one gap: phase 35 found `pcg render`'s
+  primitive path unreachable from any graph, phase 39 was already
+  scheduled around `pointsToPath` for the same reason, and now the
+  vocabulary cannot be built without it.
+- **Also added: attribute deletion.** There is no way to remove an
+  attribute, so every workaround leaves a permanent debris column
+  (measured). Cheapest fix in the survey and it touches many primitives.
+- **`filterGroup` is DEFERRED, not built.** The survey found nothing in
+  the vocabulary can use it: the only tag producer
+  (`partitionByAttribute`) emits a collection, and the exposed-pin model
+  has no collection-shaped output. Settle what it filters before
+  building it; a node no primitive can reach is not vocabulary.
 - The first ~30 primitives across shape / fill / transform / compose /
   filter / place / write, built on the node set above; all catalogued.
+  Names are `<family>/<kebab-case>`: node types are camelCase with no
+  separator, so the slash makes the two impossible to confuse, and the
+  prefix is the only place a family can live — a registry record carries
+  no category, so name-sorted `listSubgraphs()` groups by family for
+  free. The rule for what earns a primitive: it must contribute
+  STRUCTURE (two or more wired nodes) or one node plus a non-trivial
+  default field expression encoding real domain knowledge. Never a
+  rename, a re-default, or a hidden param.
+- **What exposed params cannot express** (measured against the shipped
+  mechanism, so the vocabulary must be designed around it): a param is
+  pure fan-out of one identical value, so no arithmetic — a `radius`
+  cannot produce `[-r,0,-r]` and `[r,0,r]`; no cross-type fan-out; and
+  NOTHING INSIDE A FIELD SPEC is reachable, which includes every noise
+  `seed`, `frequency` and `offset`. Two idioms recover most of it and
+  both are proven working: a "parameter attribute" (expose a scalar into
+  a `setAttribute` that a downstream field reads back) and unit-space
+  construction with a trailing `transformPoints`.
+- **Noise variation needs the second idiom, and the docs must say so.**
+  `setAttribute.seed` re-rolls context-seeded randomness (`randomField`
+  — verified) but NOT noise, because a noise field carries its own seed
+  inside its spec (verified: identical output at seed 0 and 99). Since
+  exposed params cannot reach inside a spec, a noise-bearing primitive
+  offers variation by exposing an upstream position offset, not a seed.
+  The `setAttribute.seed` description says "re-rolling field randomness"
+  and must be narrowed to say which randomness, or it reads as a promise
+  it does not keep.
+- **Fix while building the vocabulary, from the same survey:** fanning
+  an exposed param across targets with differing `acceptsField` ANDs the
+  capability away with NO diagnostic — a `density` knob over
+  `surfaceSample.densityField` plus `filterByDensity.threshold`
+  registers clean and silently stops accepting fields, which was the
+  entire point of the knob. The merge itself is right; its silence is
+  not. Let a declaration ASSERT `acceptsField: true` and hard-error
+  naming the target that refuses, the same opt-in strictness the content
+  hash uses.
 - **Wire the assets to the tools.** Phase 36 shipped the registry
   mechanism, the catalog generator and `pcg run`, and all three work —
   but nothing is registered, so the catalog is a (deliberately explicit)
@@ -1072,10 +1128,13 @@ recorded with its reason rather than silently rewritten.
   add `docs/primitives.md`/`.json` to package.json `files` (left out
   while nothing references them) and pin them in the bin test the way
   the node reference is pinned.
-- Exit: node count 25 → 31 with the reference regenerated; every
-  primitive validates and cooks in CI; double-cook determinism over
-  the primitive set; `pcg run <a real primitive>` cooks from a clean
-  install, and the catalog is non-empty. Commit.
+- Exit: the reference regenerated for the new node set (five from the
+  waves above, plus the mesh source and attribute deletion, minus the
+  deferred `filterGroup`); every primitive validates and COOKS FROM JSON
+  in the suite — no primitive may depend on `dataInput` to be
+  exercisable, which is what the mesh source is for; double-cook
+  determinism over the primitive set; `pcg run <a real primitive>` cooks
+  from a clean install, and the catalog is non-empty. Commit.
 
 ### Phase 38 — Example corpus, skills, docs, v0.10.0
 - ~20 single-concept examples (`examples/graphs/basics-*.json`), each
