@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "seed": 40100,
   "meta": {
-    "title": "staged pipeline 4/4, edited — the full settlement with authored plots",
+    "title": "staged pipeline 4/5, edited — the full settlement with authored plots",
     "description": "`pipeline-4-detail.json` verbatim plus the same authored edit layer `pipeline-3-lots-edits.json` adds, so it is a superset of BOTH. It is the whole point of the arrangement: `terrain`, `boundary` and `districts` stay bit-identical to the unedited stage 4, while `lots`, `footprints`, `buildings` and everything downstream of them respond to the hand-placed geometry. An edit reaches exactly as far as the dependency graph says it does, and no further.",
     "tags": [
       "pipeline",

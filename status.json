@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-09 19:40",
-  "currentPhase": 42,
+  "updated": "2026-08-09 21:36",
+  "currentPhase": 43,
   "phases": [
     {
       "id": "plan",
@@ -226,17 +226,21 @@
     {
       "id": 43,
       "title": "Topology, shipped with its consumer",
-      "state": "pending"
+      "state": "done"
     }
   ],
   "tests": {
-    "passed": 2558,
+    "passed": 2648,
     "failed": 0,
-    "total": 2558,
-    "lastRun": "2026-08-09 19:40"
+    "total": 2648,
+    "lastRun": "2026-08-09 21:36"
   },
   "blockers": [],
   "log": [
+    {
+      "time": "2026-08-09 21:36",
+      "message": "Phase 43 complete: topology, shipped with its consumer, v0.13.0. Two independent design passes agreed on the finding that shrank the phase — the primitive domain ALREADY IS the edge domain, because a 2-vertex polyline over shared points is an edge and setPolylineTopology already lets one point sit in many primitives. So no edge Domain, no widened union, no ~20 files, and no edges-to-polylines sink node (my own PLAN note that the original plan omitted one was wrong; none was needed). connectPoints emits polyline primitives directly over the same points, and per-edge values are ordinary primitive attributes via promoteAttribute point-to-primitive. MST was CUT by both designs independently: membership is global, which is findPath defect verbatim; replaced by a relativeNeighborhood lune test that is local, halo-exact, and CONTAINS the MST so the network stays connected while keeping cycles. Pipeline stage 5 is the consumer that earns it: 10 segments over 9 district centres, degrees 1:1 2:5 3:3, one component, two cycles — a network that genuinely branches, where stage 3 angular tour could not. Verification could not falsify a single correctness claim under attacks the implementers had not run (base 1e7 where phase 42 bug lived, brute-force relative-neighbourhood against Prim, cell-size sweeps, seam-straddling fixtures), but found two real gaps: lengthAttr value was pinned only by a fixture of edges exactly 1 long, a fixed point of squaring, so emitting the squared distance survived the whole suite; and the documented partitioning recipe had a step NO node could perform, since nothing filtered primitives and every filter dropped topology, making a partitioned network cook expressible only in host TypeScript. Both closed — the second by filterPrimitivesByBounds, with the recipe now cooked end to end from serialized JSON. Also corrected: PLAN two f32 claims, one about a knife-edge seam loss that brute force showed does not reproduce because the two half-open rules cancel, and a docs claim that only a node which clones preserves topology, which was outright false."
+    },
     {
       "time": "2026-08-09 19:40",
       "message": "Phase 42 complete: world-anchored sources and cross-partition foundations. pointScatterInWorld reads bounds ONLY to pick lattice cells and clip, so the same point is byte-identical under any query and a halo is just a wider query. Source-only anchoring would have died one node downstream, so per-point randomness now keys on point IDENTITY (position bits + seed attribute) rather than array index across filterByDensity, jitterPoints, randomField, selfPrune and pointNeighborhood; surfaceSample deliberately stays index-keyed because it manufactures its own candidates. Three test kinds that did not exist: permutation equivariance, split-with-halo equals whole, two-cell seam agreement — all mutation-proven, 7 of 7 relevant mutants killed. An independent verifier found a real bug the repo could never have caught, since every fixture lived within plus or minus 100 of the origin: the clip ran on the f64 while the store kept the f32, so far from the origin a window emitted points whose stored position was outside it — six abutting tiles at base 1e7 lost 26 of 2400 points silently. Fixed by clipping the bytes actually kept and widening the visited lattice range by the rounding margin; chasing the residual found a second mechanism where rounding lifts a point onto a face into a cell no window visits. selfPrune gained a localMaximum mode that IS halo-exact (238/238 reproduced at four cell sizes where greedy disagrees with itself and leaves pairs at 1.41 where 3 was enforced). filterByBounds gained a half-open default so it can express ownership. A CPU/GPU parity alarm turned out to be a bug in a demo probe that rebuilt its comparison cloud without the seed attribute; real deviation is 6.26e-7, tighter than before the phase. Fusion lost to the new identity guard was recovered by a suffix retry (0/0 to 1 run/2 fused nodes), suffix and never prefix, because fusing the prefix moves the hazard rather than removing it. Demo screenshots are now reproducible via npm run capture with puppeteer as a devDependency and the Chromium download skipped in CI."

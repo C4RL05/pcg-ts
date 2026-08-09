@@ -188,7 +188,7 @@ export class UniformGrid {
     const limit = distance * distance;
     const rings = this.cellRadiusFor(distance);
     const { data, stride } = this.positions;
-    if (this.useFullScan(rings)) {
+    if (this.useFullScan(rings) || this.blockUnsafe(x, y, z, rings)) {
       for (const bucket of this.cells.values()) {
         for (const j of bucket) {
           const o = j * stride;
@@ -226,8 +226,9 @@ export class UniformGrid {
    * included (squared distance <= `radius * radius`).
    *
    * Results are returned in **ascending point index** order, whatever order
-   * the cells were visited or the points inserted in. Pass `out` to reuse an
-   * array; it is emptied first and returned.
+   * the cells were visited or the points inserted in, and each indexed point
+   * appears at most once. Pass `out` to reuse an array; it is emptied first
+   * and returned.
    */
   queryRadius(x: number, y: number, z: number, radius: number, out: number[] = []): number[] {
     out.length = 0;
@@ -235,7 +236,7 @@ export class UniformGrid {
     const limit = radius * radius;
     const rings = this.cellRadiusFor(radius);
     const { data, stride } = this.positions;
-    if (this.useFullScan(rings)) {
+    if (this.useFullScan(rings) || this.blockUnsafe(x, y, z, rings)) {
       for (const bucket of this.cells.values()) {
         for (const j of bucket) {
           const o = j * stride;
@@ -414,6 +415,33 @@ export class UniformGrid {
     const side = 2 * rings + 1;
     return side * side * side > this.cells.size;
   }
+
+  /**
+   * Whether a block scan around (x, y, z) cannot be trusted, so the caller
+   * must fall back to the full scan.
+   *
+   * Cell coordinates are floats. Once one exceeds 2^53, `c + 1 === c`: the
+   * block's offsets collapse onto the query cell, so the scan visits that
+   * one cell many times — returning the same point repeatedly — while the
+   * cells that actually hold its neighbours are never visited at all. It is
+   * reached when a coordinate is enormous relative to the cell size (a
+   * position of 3 at a cell size of 1e-30), and a NaN or infinite query
+   * coordinate lands here too, where the full scan gives the same (empty)
+   * answer. `nearest` needs no such guard: it walks counted loops and keeps
+   * a best, so a repeated cell cannot change what it returns.
+   */
+  private blockUnsafe(x: number, y: number, z: number, rings: number): boolean {
+    return (
+      !safeBlockAxis(this.cellCoordOf(x), rings) ||
+      !safeBlockAxis(this.cellCoordOf(y), rings) ||
+      !safeBlockAxis(this.cellCoordOf(z), rings)
+    );
+  }
+}
+
+/** Whether `c - rings` and `c + rings` are both distinct, exact integers. */
+function safeBlockAxis(c: number, rings: number): boolean {
+  return Number.isSafeInteger(c - rings) && Number.isSafeInteger(c + rings);
 }
 
 /** Numeric ascending comparator (Array#sort is lexicographic by default). */

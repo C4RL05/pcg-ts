@@ -147,20 +147,50 @@ reproducing `fill/scatter-even` are ten nodes nobody tested, with defaults
 nobody tuned. Scan `docs/primitives.md` before wiring — that is what step 1
 is for.
 
-**Filtering a path, then wondering where it went.** A path is topology
-(`polyline` primitives over the points), not an attribute. Every filter node
-that can remove a point rebuilds the point domain from the survivors and drops
-that topology with it, and so do `mergePoints` and `partitionByAttribute`;
-only a node that clones preserves it. Nothing warns where the loss happens.
-What you get instead is a path consumer several nodes later
-reporting that it found no polylines — naming a node that is not the one at
-fault. **Filter first, build the path after.** The same ordering applies to
-every path op and to the `curve` pin of the path-consuming primitives; there
-is no in-place repair, so a path that must lose points is rebuilt with
-`pointsToPath`. The contract, including why closure is structural and how
-vertex order is decided, is in `docs/authoring.md` ("Paths"); which pins
-require polyline topology is stated per entry in `docs/nodes.md` and
-`docs/primitives.md`.
+**Filtering a path or a network, then wondering where it went.** Both are
+topology (`polyline` primitives over the points), not an attribute. Every
+filter node that can remove a point rebuilds the point domain from the
+survivors and drops that topology with it, and so do `mergePoints` and
+`partitionByAttribute`; the exemptions are `projectToPlane`, which clones
+and removes nothing, and `filterPrimitivesByBounds`, which removes whole
+primitives rather than points. Nothing warns where the loss happens. What you get instead is a path consumer several
+nodes later reporting that it found no polylines — naming a node that is not
+the one at fault. **Filter first, build the topology after.** The same
+ordering applies to every path op and to the `curve` pin of the
+path-consuming primitives; there is no in-place repair, so a path that must
+lose points is rebuilt with `pointsToPath`. The contract, including why
+closure is structural and how vertex order is decided, is in
+`docs/authoring.md` ("Paths"); which pins require polyline topology is
+stated per entry in `docs/nodes.md` and `docs/primitives.md`.
+
+A **network** from `connectPoints` is the worse half of this, and it is
+worth its own line because the failure is quieter and there is no rebuild.
+`filterByBounds` placed after `connectPoints` reads like trimming the net to
+a rectangle; it is demolition. The points come out fine, the attributes
+survive, `pcg validate` says `ok`, the cook succeeds — and a road network is
+now a point cloud, with nothing downstream necessarily complaining. Two
+fixes, both in `docs/authoring.md` ("Networks: the primitive domain is the
+edge domain"): clip *before* connecting when the clip is an authoring
+choice, or — when it is a partition boundary — hand the clip to
+`filterPrimitivesByBounds`, the one filter that trims topology instead of
+dropping it, on the unwidened rectangle at `vertex: "first"`. That makes
+the partitioned cook a serializable graph rather than host TypeScript:
+`filterByBounds(widened, halfOpen)` → `connectPoints` →
+`filterPrimitivesByBounds(unwidened, first, halfOpen)`. Only `first` and
+`last` tile — they read one vertex, so exactly one cell owns each edge;
+`all` and `any` are selections and will double-count or drop at the seams.
+Params per entry in `docs/nodes.md`; the runnable JSON is in
+`docs/authoring.md` ("Owning primitives instead of destroying them").
+
+**Looking for the edge domain.** There isn't one, and none is needed: a
+2-vertex polyline over shared points already *is* an edge, so an edge is a
+`primitive`. Per-edge values are `promoteAttribute` point→primitive (`min`,
+`first`), `setAttribute` on `domain: "primitive"`, and `promoteAttribute`
+primitive→point (`max`) to bring a value back to the junction —
+`connectPoints`' `degreeAttr` and `lengthAttr` cover degree and length
+without any of that. The four moves and a runnable graph are in
+`docs/authoring.md` ("Networks"); `examples/graphs/pipeline-5-roads.json`
+runs them end to end.
 
 **Assuming a graph is correct because it cooked.** A cook that errors on
 nothing is not evidence. A graph whose filter keeps zero points reports

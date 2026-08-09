@@ -785,13 +785,20 @@ rather than replacing it. The points keep every attribute they were
 carrying; the path is the added statement that they are visited in an
 order.
 
-`pointsToPath` is the only node that turns a point cloud into a path,
-which makes it the only way to start one from serialized JSON —
+`pointsToPath` is the node that turns a point cloud into a *path*, and
+one of only two ways to start polyline topology from serialized JSON —
 `createPolyline` is a TypeScript function a JSON author cannot call. It
 builds polylines over the *same* points it is handed, so nothing written
 upstream is lost. (`pathResample` also emits polyline topology, but it
 derives it from a path it was already given; it extends a chain rather
 than starting one.)
+
+The other way is `connectPoints`, which starts polyline topology as a
+*network* rather than a path: one 2-vertex primitive per edge, so a
+point may belong to many primitives and a junction is genuinely one
+shared point. Reach for it whenever the thing you are describing
+branches — `pointsToPath` gives each point exactly one group and so can
+never express a vertex of degree greater than two.
 `shape/path-loop` and `shape/path-meander` are the ready-made sources
 built on it, and the generated catalogs
 ([nodes.md](./nodes.md), [primitives.md](./primitives.md)) say which
@@ -826,15 +833,18 @@ group id (whole numbers, typically written with `setAttribute` at type
 This is the one that bites first. Every filter node that can remove
 points routes through `gatherPoints`, which rebuilds the point domain
 from the survivors and drops primitive topology with it. `mergePoints`
-and `partitionByAttribute` drop it the same way. Only a node that clones
-(`cloneGeometry`) preserves it — among the filter-category nodes that is
-`projectToPlane` alone, which moves points without removing any, so
-"filter" is not quite the boundary: **removing or recombining points**
-is. The category decides nothing in either direction: `projectToPlane`
-is categorised `filter` and preserves topology, `partitionByAttribute`
-is categorised `attribute` and drops it. And the test is **can** remove,
-not did — `filterByAttribute` drops topology even when its predicate
-keeps every point, because it routes through `gatherPoints` regardless.
+and `partitionByAttribute` drop it the same way. Two filter-category
+nodes are exempt, for unrelated reasons: `projectToPlane` moves points
+without removing any, and `filterPrimitivesByBounds` removes whole
+*primitives* rather than points — the one node in the library that takes
+topology as its subject instead of its casualty (see "Owning primitives
+instead of destroying them", below). So "filter" is not quite the
+boundary: **removing or recombining points** is. The category decides
+nothing in either direction — `partitionByAttribute` is categorised
+`attribute` and drops topology, while both exemptions above are
+categorised `filter` — and the test is **can** remove, not did:
+`filterByAttribute` drops topology even when its predicate keeps every
+point, because it routes through `gatherPoints` regardless.
 
 Nothing warns at the filter. The loss is silent where it happens and
 surfaces somewhere else entirely, as a path consumer reporting that it
@@ -849,6 +859,16 @@ That covers `pathResample`, `writeTangents` and `splineSample`, and the
 needs to remove points from something that is already a path, remove
 them first and rebuild with `pointsToPath` — there is no in-place
 repair.
+
+**The same rule destroys a network, and there it costs more.** A network
+(next section) is the same polyline topology with branching, and it is
+built by `connectPoints` from a spatial predicate rather than from a
+group id — so there is nothing to rebuild it *from* once the points have
+been renumbered. A `filterByBounds` placed after `connectPoints` reads
+like trimming the net to a rectangle and is actually demolition: the
+edges are gone, the points come out fine, `pcg validate` says `ok`, and
+the cook succeeds with a plain cloud where a road network was. What to
+do instead is at the end of the next section.
 
 ```json
 {
@@ -894,8 +914,13 @@ filterByBounds, filterByAttribute, filterByExpression, selfPrune,
 partitionByAttribute — and mergePoints does the same when it
 concatenates clouds. Category is not the rule: projectToPlane is
 categorised "filter" but preserves topology, and filterByAttribute drops
-it even when its predicate keeps every point. Fix by moving pointsToPath
-after those nodes, so the path is built over the points that survive.
+it even when its predicate keeps every point. filterPrimitivesByBounds
+is never the culprit for a DROPPED topology — it filters the PRIMITIVE
+domain and preserves the topology of everything it keeps — but it can
+empty that domain by rejecting every primitive, so if one is upstream,
+check its boundsMin/boundsMax, vertex and mode before you move anything.
+Fix by moving pointsToPath after those nodes, so the path is built over
+the points that survive.
 ```
 
 ### Sampling a path, and keeping one
@@ -916,6 +941,261 @@ to read, and what `write/orient-along-path` packages as one step. A path
 built by hand with `pointsToPath` has no `tangent` at all until
 something writes one, because only a sampler emits it and only for the
 points it created.
+
+## Networks: the primitive domain is the edge domain
+
+A path visits its points in a line. A **network** lets them branch — a
+crossroads where three roads meet, a trail net between camps, a scaffold
+to displace. The first question everyone asks is *"so where does an edge
+live, and how do I put a value on one?"*, and the answer is worth stating
+plainly because it is not the answer the question expects:
+
+> **There is no edge domain, and none is needed. A 2-vertex `polyline`
+> over shared points already IS an edge — so an edge is a `primitive`,
+> and a per-edge value is an ordinary primitive attribute.**
+
+Nothing was added to the data model for this. The `polyline` topology
+that carries a path has never required one point to belong to one
+primitive; that restriction was only ever `pointsToPath`'s, which gives
+every point exactly one group and therefore at most two neighbours.
+`connectPoints` decides its polylines from a spatial predicate instead,
+over the *same* points it was handed, so a centre where three roads meet
+is genuinely **one point**, of degree 3, shared by all three primitives —
+and everything that point was carrying is still on it.
+
+Two modes, and the choice between them is not a quality knob:
+
+| `mode` | Joins | Use it when |
+| --- | --- | --- |
+| `radius` | every pair closer than `radius` | you want the dense neighbourhood graph — a scaffold, a proximity mesh. Edge count grows with the square of the point count. |
+| `relativeNeighborhood` | such a pair only when no third point is closer to **both** endpoints than they are to each other (the lune test) | you want something road-shaped: sparse, connected, still holding cycles. |
+
+`relativeNeighborhood` is the one to reach for by default. It **contains
+a minimum spanning tree**, so it never disconnects what the radius
+reached, and it keeps cycles, so the result is a network rather than a
+tree — which is what a road layout wants, and a tree is not. (A true MST
+mode was designed and rejected: tree membership is a *global* property —
+an edge is in the tree iff no lighter path connects its ends — so it can
+never be made partition-safe. The lune test is local, and that is the
+whole reason it ships. See "Content that must NOT vary per cell".)
+
+`radius` is a plain number and, alone among the distance params in the
+library, deliberately **not** field-capable. A per-point radius would let
+"A is near B" and "B is near A" disagree, and an edge would then depend on
+which endpoint asked. The test is strict — `d < radius`, so a pair at
+exactly `radius` is not connected — which is what makes a partitioned
+cook exact.
+
+### The four moves
+
+Every per-edge and per-junction value comes from nodes that already
+shipped. This is the whole vocabulary:
+
+1. **point → edge.** `promoteAttribute` `from: "point"`, `to:
+   "primitive"`. `mode: "min"` gives a road the width of its *weaker*
+   end; `"first"` carries a categorical across (it takes the edge's first
+   vertex, which is its lower-keyed endpoint).
+2. **on the edge.** `setAttribute` with `domain: "primitive"`. Its field
+   evaluates on the primitive domain, so `{ "fn": "attribute", … }` reads
+   a promoted per-edge value and `remap` / `ramp` shape it.
+3. **edge → junction.** `promoteAttribute` `from: "primitive"`, `to:
+   "point"`, `mode: "max"` — each point learns the largest value among
+   the edges touching it, which is how a junction gets sized by the
+   widest road that reaches it.
+4. **degree, without arithmetic.** `connectPoints`' own `degreeAttr`
+   writes it (u32, point): a dead end is `degree == 1`, a junction
+   `degree >= 3`, both reachable with `filterByAttribute`. `lengthAttr`
+   does the same for per-edge length (f32, primitive). Both refuse a name
+   the geometry already holds under a *different* shape, rather than
+   deleting that column silently.
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 11,
+  "nodes": [
+    { "id": "camps", "type": "pointScatterInBounds",
+      "params": { "count": 24, "boundsMin": [-40, 0, -40], "boundsMax": [40, 0, 40] } },
+    { "id": "size", "type": "setAttribute",
+      "params": { "name": "campSize", "domain": "point", "type": "f32", "tupleSize": 1,
+                  "value": { "fn": "randomField" } } },
+    { "id": "trails", "type": "connectPoints",
+      "params": { "mode": "relativeNeighborhood", "radius": 30,
+                  "degreeAttr": "degree", "lengthAttr": "trailLength" } },
+    { "id": "weakEnd", "type": "promoteAttribute",
+      "params": { "name": "campSize", "from": "point", "to": "primitive", "mode": "min" } },
+    { "id": "trailWidth", "type": "setAttribute",
+      "params": { "name": "trailWidth", "domain": "primitive", "type": "f32", "tupleSize": 1,
+                  "value": { "fn": "remap",
+                             "args": [{ "fn": "attribute", "name": "campSize", "tupleSize": 1 },
+                                      0, 1, 0.5, 3] } } },
+    { "id": "junction", "type": "promoteAttribute",
+      "params": { "name": "trailWidth", "from": "primitive", "to": "point", "mode": "max" } }
+  ],
+  "connections": [
+    { "from": ["camps", "out"], "to": ["size", "in"] },
+    { "from": ["size", "out"], "to": ["trails", "in"] },
+    { "from": ["trails", "out"], "to": ["weakEnd", "in"] },
+    { "from": ["weakEnd", "out"], "to": ["trailWidth", "in"] },
+    { "from": ["trailWidth", "out"], "to": ["junction", "in"] }
+  ],
+  "outputs": [{ "id": "junction", "pin": "out", "name": "trails" }]
+}
+```
+
+That cooks to 24 points and 28 edges, with `degree` running 1 to 3 on the
+point domain and the primitive domain carrying `primtype`, `trailLength`,
+the promoted `campSize` and `trailWidth`. Note what `pcg cook`'s one-line
+summary shows and what
+it does not: it lists **point** attributes, so `trailLength` is invisible
+there. `pcg inspect --node junction --pin out` prints every domain, which
+is how you confirm an edge attribute actually landed.
+
+Two more facts that bite if they are not stated. `connectPoints`
+**replaces** any topology on its input, dropping that topology's vertex
+and primitive attributes with it — so promote *after* connecting, never
+before. And `place/along-curve` (and every other polyline consumer) reads
+the whole net at once, measuring each edge on its own length, which is
+how stage 5 of the shipped pipeline spawns lamps along a road network
+with one node.
+
+### A point-removing op destroys a network
+
+This is the trap worth budgeting for, because it is the same mechanism as
+the path rule above and it costs more when it fires. Every op that can
+remove points routes through `gatherPoints`, which rebuilds the point
+domain from the survivors and drops primitive topology with it —
+`filterByDensity`, `filterByBounds`, `filterByAttribute`,
+`filterByExpression`, `selfPrune`, `partitionByAttribute`, and
+`mergePoints` when it concatenates. Put any of them after
+`connectPoints` and the network is quietly a point cloud again: the
+points look right, the attributes survive, `pcg validate` says `ok`, and
+the cook succeeds. Nothing warns.
+
+`filterByBounds` is the specific one to watch, because clipping a net to
+a rectangle is a thing you genuinely want to do and it reads like
+trimming. It is not trimming; it is demolition. There are exactly two
+things to do instead:
+
+**1. Clip before connecting.** Move every filter upstream of
+`connectPoints`. This is the same "filter first, build the topology
+after" rule paths carry, and it is the right answer whenever the clip is
+an authoring decision.
+
+**2. When the clip is a partition boundary, own the edge by its
+lower-keyed ENDPOINT.** Under a `World` the clip cannot move upstream —
+the halo is precisely what has to be connected — so the ownership
+decision moves to the *primitive* domain, which is what
+`filterPrimitivesByBounds` does. The next section is that recipe, in
+full.
+
+### Owning primitives instead of destroying them
+
+`filterPrimitivesByBounds` keeps or drops **whole primitives** by testing
+their vertices against an axis-aligned box, and it is the one filter in
+the library that **preserves topology**: the survivors keep their
+vertices, their vertex and primitive attributes, and the points they
+share. A network goes in and a network comes out. Every point filter
+rebuilds the point domain from the survivors and the primitives go with
+it; this one filters the *primitive* domain instead, and that single
+difference is the whole node. It is the exception to the rule the
+previous section states, and the only one.
+
+**`vertex` is the param to get right**, because two of its four values
+are ownership rules and two are selections:
+
+| `vertex` | Keeps a primitive when | Tiles? |
+| --- | --- | --- |
+| `first` (default) | its **first** vertex is in the box | **yes** — reads one vertex, so exactly one box of a tiling claims it |
+| `last` | its **last** vertex is in the box | **yes** — same argument, other end |
+| `all` | **every** vertex is in the box | no — a straddling primitive is claimed by *no* box |
+| `any` | **at least one** vertex is in the box | no — a straddling primitive is claimed by *every* box it reaches |
+
+A partitioned cook needs `first` or `last`, and nothing else will do:
+`any` double-counts at every seam and `all` loses the edges that cross
+one. `all` and `any` are for selections — "keep the roads lying entirely
+inside the park" is `all` + `inside`, "delete every road that touches the
+lake" is `any` + `outside`. A primitive with no vertices is never inside,
+under all four rules.
+
+`boundary` is `filterByBounds`' rule with the same meaning and the same
+reason to prefer `halfOpen` wherever ownership matters: two boxes meeting
+at a face claim a vertex lying on it exactly once between them.
+`inclusive` has both claim it, and with `vertex: "first"` both would emit
+the same edge. `mode: "outside"` is the exact complement of `inside`
+under whichever vertex rule and boundary are active, so running both over
+one input reproduces every primitive exactly once.
+
+`unreferencedPoints` decides the fate of points no surviving primitive
+references. `keep` (the default) leaves the point domain **untouched** —
+same points, same order, so every index, attribute and identity is still
+the input's and anything computed per point upstream still lines up; a
+partition cell keeps its halo points as isolated leftovers beside the
+network it owns. `drop` removes them and renumbers the topology onto what
+remains, in ascending input order, which is how a clean network comes
+out. The cost of `drop` is that point indices move, and that it also
+drops points that never had a primitive at all — so a cloud carrying both
+a road network and unrelated scatter loses the scatter.
+
+The partitioned recipe is now three nodes and a source:
+
+- widen the cell's rectangle by `radius` and clip the cloud to it with
+  `filterByBounds` at the default `halfOpen` boundary, **before**
+  `connectPoints`;
+- run `connectPoints`;
+- run `filterPrimitivesByBounds` on the **unwidened** rectangle with
+  `vertex: "first"` and the same `halfOpen` boundary.
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 11,
+  "nodes": [
+    { "id": "cloud", "type": "pointScatterInBounds",
+      "params": { "count": 400, "boundsMin": [-10, 0, -10], "boundsMax": [30, 0, 30] } },
+    { "id": "halo", "type": "filterByBounds",
+      "params": { "boundsMin": [-4, -1, -4], "boundsMax": [24, 1, 24],
+                  "mode": "inside", "boundary": "halfOpen" } },
+    { "id": "net", "type": "connectPoints",
+      "params": { "mode": "relativeNeighborhood", "radius": 4 } },
+    { "id": "owned", "type": "filterPrimitivesByBounds",
+      "params": { "boundsMin": [0, -1, 0], "boundsMax": [20, 1, 20],
+                  "vertex": "first", "mode": "inside", "boundary": "halfOpen",
+                  "unreferencedPoints": "keep" } }
+  ],
+  "connections": [
+    { "from": ["cloud", "out"], "to": ["halo", "in"] },
+    { "from": ["halo", "out"], "to": ["net", "in"] },
+    { "from": ["net", "out"], "to": ["owned", "in"] }
+  ],
+  "outputs": [{ "id": "owned", "pin": "out", "name": "roads" }]
+}
+```
+
+The cell here is the 20×20 square at the origin and `radius` is 4, so the
+halo box is the cell grown by 4 on each side and the ownership box is the
+cell itself — under a `World` those two come from `ctx.min`/`ctx.max`
+bound with and without the halo, never from a recovered cell index (see
+"Per-cell seeding"). Each edge's first vertex is its lower-keyed endpoint
+— `connectPoints` guarantees that ordering — so with `vertex: "first"`
+the owner a cell computes and the canonical edge order are the same
+choice by construction, exactly one cell claims each edge, and the cells
+tile the network with no duplicate and no gap. **The whole recipe is a
+serializable graph**, which is what it was not before this node shipped.
+
+For a polyline that came from somewhere other than `connectPoints` —
+`pointsToPath`, `pathResample`, `createPolyline` — the first vertex is
+simply the path's START. Every path still has exactly one, so the tiling
+is still exact; the owner is just the cell holding the start rather than
+the cell holding most of the road, and that one cell emits the whole path
+however far it runs. Budget for that: a long path is not split across the
+cells it crosses.
+
+A geometry with no primitives is not an error here but an empty result —
+a cell too sparse to make an edge is a legitimate, silent case in a
+partitioned cook. Why the halo width is exactly `radius` is in "Content
+that must NOT vary per cell" below; `docs/nodes.md`'s `connectPoints`
+entry states the same bound per param.
 
 ## Staged pipelines
 
@@ -950,16 +1230,28 @@ validated against the graph's declared outputs at World construction).
 
 The shipped example of a multi-file pipeline is
 `examples/graphs/pipeline-*.json`: a settlement built as
-`pipeline-1-boundary` → `-2-districts` → `-3-lots` → `-4-detail`, plus
-`-3-lots-edits` and `-4-detail-edits`.
+`pipeline-1-boundary` → `-2-districts` → `-3-lots` → `-4-detail` →
+`-5-roads`, plus `-3-lots-edits`, `-4-detail-edits` and `-5-roads-edits`.
 
 The mechanism is deliberately the dullest one available — **each stage's
 file is the previous stage's file plus new nodes, connections and
 outputs.** Not an include, not a subgraph payload, not a patch format.
 Nothing is removed, no shared node is retuned, no param is edited, and
-all six carry the same graph seed. Every earlier stage therefore
+all eight carry the same graph seed. Every earlier stage therefore
 reproduces bit-identically inside every later one, and you can open any
 stage on its own and cook it.
+
+The last stage is also the clearest illustration of the difference
+between a path and a network, because both are in the same file lineage
+over the same points. Stage 3's `spine` is a `pointsToPath` ring ordered
+by `atan2(z, x)` — an angular tour that *cannot* branch, since that node
+gives every point exactly one group. Stage 5's `roads` runs
+`connectPoints` in `relativeNeighborhood` mode over the district centres
+and comes out as 10 segments over 9 centres, one connected component with
+two cycles and degrees `{1: 1, 2: 5, 3: 3}` — three genuine junctions,
+each of them one point. Stage 3 is deliberately kept rather than
+upgraded, as the contrast. The per-edge values ride the promote round
+trip from "Networks" above, with no edge domain anywhere in it.
 
 That works because of the seed chain and nothing else. A node's seed is
 `hashCombine(graphSeed, hashString(nodeId))` — derived from its **id**,
@@ -987,7 +1279,10 @@ wall and the district pass. Feeding a new branch into a reserved slot
 keeps the file a superset; rewiring an existing edge does not, because
 it changes what the earlier stage cooks. The payoff is that locality is
 provable: `terrain`, `boundary` and `districts` stay bit-identical
-between base and edited, while `lots` changes.
+between base and edited, while `lots` changes. Stage 5's road net is
+built from the district centres, which sit *upstream* of the `edits`
+slot, so `roads` and the `lamps` spawned along them are as untouchable by
+an edit as the terrain is — and the test asserts that too.
 
 `tests/pipeline.test.ts` enforces all of this — one shared seed, no
 dropped node, no retuned param, no dropped connection, no moved output,
@@ -1110,6 +1405,51 @@ neighbouring cell when `cellSize` is not exactly representable:
 against the box, not against a recomputed index.) The `inclusive`
 boundary is for selecting a box whose faces carry points on purpose, and
 would have both cells emit that point.
+
+### How wide a halo, and when no halo works at all
+
+A halo only buys exactness when the operation's **reach is bounded**, and
+"bounded" is a stronger condition than "local". The useful question is
+not whether an op looks local but **how many hops of dependency it takes
+before its answer is settled** — and there are three rungs, which the
+shipped nodes populate all the way down.
+
+**Zero hops — exact, and the cheapest case to reason about.** The answer
+reads only stored values of the elements it names, and consults no third
+element at all. `connectPoints` is the type specimen: whether A and B are
+an edge is a distance between two *stored positions*. So a cell that also
+holds every point within `radius` of its own rectangle decides its edges
+exactly, at `haloWidth >= radius` and no more. `relativeNeighborhood`
+looks like it adds a hop and does not — its disqualifying witness must
+lie inside the pair's own neighbourhood, so it is already in that halo.
+
+**One hop — exact at a stated width.** The answer reads its neighbours'
+*stored values*, but never its neighbours' *answers*.
+`pointNeighborhood` is bounded by its `radius`, so a halo of `radius`
+reproduces the whole-region result. `selfPrune`'s `localMaximum` rule
+decides each point from its immediate neighbours alone, which is exactly
+why that mode is the halo-exact one and the greedy mode is not.
+
+**Unbounded — no halo width works.** The answer depends on another
+element's *answer*, and the chain has no bound. A greedy prune is the
+canonical case: this point survives because that neighbour did not, which
+happened because *its* neighbour did. A minimum spanning tree is the same
+shape one level up — an edge is in the tree iff no lighter *path* connects
+its ends, so a long chain plus one closing edge defeats any halo — and
+that is precisely why `connectPoints` offers `relativeNeighborhood`
+instead of an MST mode, and why no shortest-path node ships. Worse still
+are the ops with no reach bound to widen at all: `attributeRemap` mode
+`"fit"`, `attributeReduce`, an aggregate `promoteAttribute`, and the
+`fraction` and `index` fields all measure the population *present in this
+cook*, which under a `World` means the population *here*.
+
+One wrinkle applies to the ownership step whenever the op emitted
+**topology**. Clipping with `filterByBounds` would drop that topology
+rather than trim it, so ownership becomes a primitive-domain decision:
+`filterPrimitivesByBounds` on the unwidened rectangle at `vertex:
+"first"` and the same `halfOpen` boundary, which keeps the edges whose
+first vertex lies inside it. See "Owning primitives instead of destroying
+them" above for the full recipe.
 
 ## 3D cells (cellMode)
 

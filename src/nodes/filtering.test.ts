@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPointCloud } from "../data/index.js";
+import { createPointCloud, setPolylineTopology, type Geometry } from "../data/index.js";
 import { pointIdentities } from "../data/identity.js";
 import { attribute, constant, position, randomField } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
@@ -8,6 +8,8 @@ import {
   filterByAttribute,
   filterByBounds,
   filterByDensity,
+  filterPrimitivesByBounds,
+  type FilterPrimitivesByBoundsParams,
   pointGrid,
   projectToPlane,
   selfPrune,
@@ -389,6 +391,235 @@ describe("filterByBounds", () => {
     await expect(
       runNode(filterByBounds, { boundsMax: [1, 1] }, { in: [makeGeometryItem(cloud)] }),
     ).rejects.toThrow(/boundsMax needs three components/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// filterPrimitivesByBounds: the one filter that keeps a network a network
+
+/**
+ * A network fixture: a cloud, polyline primitives over it, and one column
+ * on each of the vertex, primitive and detail domains — added AFTER
+ * setPolylineTopology, which drops whatever the geometry carried there.
+ * Every carry assertion below reads them.
+ */
+function networkAt(positions: number[][], prims: number[][]): Geometry {
+  const geo = cloudAt(positions);
+  const flat: number[] = [];
+  const start: number[] = [];
+  const count: number[] = [];
+  for (const pr of prims) {
+    start.push(flat.length);
+    count.push(pr.length);
+    flat.push(...pr);
+  }
+  setPolylineTopology(geo, flat, start, count);
+  const vertexOf = geo.attrs.vertex.add("sourceVertex", "u32", 1, 0);
+  for (let v = 0; v < geo.vertexCount; v++) vertexOf.set(v, v);
+  const kind = geo.attrs.primitive.add("roadKind", "string", 1, "dirt");
+  for (let p = 0; p < geo.primitiveCount; p++) kind.setString(p, `road${p}`);
+  geo.attrs.detail.add("region", "string", 1, "").setString(0, "north");
+  return geo;
+}
+
+/** Run filterPrimitivesByBounds and return the output geometry. */
+async function keptPrims(
+  geo: Geometry,
+  params: Partial<FilterPrimitivesByBoundsParams>,
+): Promise<Geometry> {
+  const out = await runNode(filterPrimitivesByBounds, params, { in: [makeGeometryItem(geo)] });
+  return firstGeo(out.out);
+}
+
+/** Each surviving primitive's `roadKind`, which names the input primitive. */
+function kindsOf(geo: Geometry): string[] {
+  const kind = geo.attrs.primitive.require("roadKind");
+  return Array.from({ length: geo.primitiveCount }, (_, p) => kind.getString(p));
+}
+
+/** Each primitive as the list of its vertices' world x coordinates. */
+function primXs(geo: Geometry): number[][] {
+  const P = geo.attrs.point.require("P");
+  return Array.from({ length: geo.primitiveCount }, (_, p) => {
+    const s = geo.primVertexStart[p];
+    return Array.from({ length: geo.primVertexCount[p] }, (_, j) =>
+      P.get(geo.vertexToPoint[s + j], 0),
+    );
+  });
+}
+
+describe("filterPrimitivesByBounds", () => {
+  // Five points on the X axis and five polylines over them, chosen so that
+  // every vertex rule has a distinct answer: one primitive entirely
+  // outside the box, one entirely inside, and three straddling it in
+  // different ways (in-out, out-in, and a 3-vertex path whose first vertex
+  // is inside and whose last is not).
+  const line = [
+    [-2, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 0],
+    [1, 0, 0],
+    [2, 0, 0],
+  ];
+  const roads = [
+    [0, 1], // road0: both outside
+    [1, 2], // road1: first outside, last inside
+    [2, 3], // road2: both inside
+    [3, 4], // road3: first inside, last outside
+    [2, 4, 0], // road4: first inside, last and middle outside
+  ];
+  /** x in [0, 1.5): points 2 and 3 are inside, 0, 1 and 4 are not. */
+  const box = { boundsMin: [0, -10, -10], boundsMax: [1.5, 10, 10] };
+
+  it("keeps the topology, and every vertex, primitive and detail column with it", async () => {
+    const geo = networkAt(line, roads);
+    const out = await keptPrims(geo, { ...box, vertex: "first" });
+    expect(kindsOf(out)).toEqual(["road2", "road3", "road4"]);
+    expect(out.primitiveCount).toBe(3);
+    expect(out.vertexCount).toBe(7); // 2 + 2 + 3
+    expect(Array.from(out.primVertexStart)).toEqual([0, 2, 4]);
+    expect(Array.from(out.primVertexCount)).toEqual([2, 2, 3]);
+    // The surviving vertices are the input's, in the input's order.
+    const sourceVertex = out.attrs.vertex.require("sourceVertex");
+    expect(Array.from({ length: out.vertexCount }, (_, v) => sourceVertex.get(v))).toEqual([
+      4, 5, 6, 7, 8, 9, 10,
+    ]);
+    // The geometry each primitive describes is unchanged.
+    expect(primXs(out)).toEqual([
+      [0, 1],
+      [1, 2],
+      [0, 2, -2],
+    ]);
+    expect(out.attrs.primitive.require("primtype").getString(0)).toBe("polyline");
+    expect(out.attrs.detail.require("region").getString(0)).toBe("north");
+  });
+
+  it("spans the four quantifiers across `vertex` and `mode`", async () => {
+    const geo = networkAt(line, roads);
+    const answer = async (vertex: string, mode: string) =>
+      kindsOf(await keptPrims(geo, { ...box, vertex, mode }));
+    // One vertex decides: the ownership rules.
+    expect(await answer("first", "inside")).toEqual(["road2", "road3", "road4"]);
+    expect(await answer("last", "inside")).toEqual(["road1", "road2"]);
+    // Every vertex decides: the selections.
+    expect(await answer("all", "inside")).toEqual(["road2"]);
+    expect(await answer("any", "inside")).toEqual(["road1", "road2", "road3", "road4"]);
+    // 'outside' is the exact complement, which is why "entirely outside"
+    // spells as any + outside rather than as all + outside.
+    expect(await answer("any", "outside")).toEqual(["road0"]);
+    expect(await answer("all", "outside")).toEqual(["road0", "road1", "road3", "road4"]);
+    for (const vertex of ["first", "last", "all", "any"]) {
+      const both = [...(await answer(vertex, "inside")), ...(await answer(vertex, "outside"))];
+      expect(both.sort()).toEqual(["road0", "road1", "road2", "road3", "road4"]);
+    }
+  });
+
+  it("tiles: abutting boxes claim every primitive exactly once under halfOpen", async () => {
+    // The property the partitioned network cook rests on. The shared face
+    // is x = 0, where road2 and road4 both START.
+    const geo = networkAt(line, roads);
+    const left = kindsOf(
+      await keptPrims(geo, { boundsMin: [-3, -10, -10], boundsMax: [0, 10, 10] }),
+    );
+    const right = kindsOf(
+      await keptPrims(geo, { boundsMin: [0, -10, -10], boundsMax: [3, 10, 10] }),
+    );
+    expect(left).toEqual(["road0", "road1"]);
+    expect(right).toEqual(["road2", "road3", "road4"]);
+    expect([...left, ...right].sort()).toEqual(["road0", "road1", "road2", "road3", "road4"]);
+
+    // 'inclusive' is the selection rule, and the difference is visible:
+    // the left box now claims the primitives starting on the shared face
+    // as well, so the two boxes overlap.
+    const leftInclusive = kindsOf(
+      await keptPrims(geo, {
+        boundsMin: [-3, -10, -10],
+        boundsMax: [0, 10, 10],
+        boundary: "inclusive",
+      }),
+    );
+    expect(leftInclusive).toEqual(["road0", "road1", "road2", "road4"]);
+  });
+
+  it("leaves the point domain untouched by default", async () => {
+    const geo = networkAt(line, roads);
+    const before = snapshotGeometry(geo);
+    const out = await keptPrims(geo, { ...box, vertex: "first" });
+    expect(positionsOf(out)).toEqual(positionsOf(geo));
+    expect(out.attrs.point.names()).toEqual(geo.attrs.point.names());
+    // Point indices are the input's, so the topology still names them.
+    expect(Array.from(out.vertexToPoint)).toEqual([2, 3, 3, 4, 2, 4, 0]);
+    // And the input itself is untouched — the node reads it, never writes.
+    expect(snapshotGeometry(geo)).toEqual(before);
+  });
+
+  it("drops unreferenced points on request and renumbers the topology onto the rest", async () => {
+    const geo = networkAt(line, roads);
+    const out = await keptPrims(geo, { ...box, vertex: "first", unreferencedPoints: "drop" });
+    // Point 1 (x = -1) is referenced only by road0 and road1, both gone.
+    expect(positionsOf(out)).toEqual([
+      [-2, 0, 0],
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    expect(Array.from(out.vertexToPoint)).toEqual([1, 2, 2, 3, 1, 3, 0]);
+    // Renumbering moved indices without moving geometry.
+    expect(primXs(out)).toEqual([
+      [0, 1],
+      [1, 2],
+      [0, 2, -2],
+    ]);
+    expect(kindsOf(out)).toEqual(["road2", "road3", "road4"]);
+  });
+
+  it("passes a primitive-less input through as an empty result rather than failing", async () => {
+    // A partition cell too sparse to make an edge is a legitimate case, so
+    // this cannot be an error.
+    const cloud = cloudAt(line);
+    const kept = await keptPrims(cloud, box);
+    expect(kept.primitiveCount).toBe(0);
+    expect(kept.pointCount).toBe(5);
+    const dropped = await keptPrims(cloud, { ...box, unreferencedPoints: "drop" });
+    expect(dropped.primitiveCount).toBe(0);
+    expect(dropped.pointCount).toBe(0);
+  });
+
+  it("names the param, the value and the way out on every bad enum", async () => {
+    const geo = networkAt(line, roads);
+    const run = (params: Partial<FilterPrimitivesByBoundsParams>) =>
+      runNode(filterPrimitivesByBounds, params, { in: [makeGeometryItem(geo)] });
+    await expect(run({ vertex: "middle" })).rejects.toThrow(
+      /filterPrimitivesByBounds: vertex must be "first", "last", "all" or "any", got "middle";.*neither tiles/s,
+    );
+    await expect(run({ unreferencedPoints: "maybe" })).rejects.toThrow(
+      /filterPrimitivesByBounds: unreferencedPoints must be "keep" or "drop", got "maybe"/,
+    );
+    await expect(run({ mode: "Inside" })).rejects.toThrow(
+      /filterPrimitivesByBounds: mode must be "inside" or "outside", got "Inside"/,
+    );
+    await expect(run({ boundary: "closed" })).rejects.toThrow(
+      /filterPrimitivesByBounds: boundary must be "halfOpen" or "inclusive", got "closed"/,
+    );
+    await expect(run({ boundsMin: [0, 0] })).rejects.toThrow(
+      /filterPrimitivesByBounds: boundsMin needs three components \[x, y, z\], got 2;.*ctx\.min/s,
+    );
+  });
+
+  it("names itself when P is missing or too narrow to hold a position", async () => {
+    const missing = networkAt(line, roads);
+    missing.attrs.point.remove("P");
+    await expect(
+      runNode(filterPrimitivesByBounds, box, { in: [makeGeometryItem(missing)] }),
+    ).rejects.toThrow(/filterPrimitivesByBounds: input has no point attribute "P"/);
+    const narrow = networkAt(line, roads);
+    narrow.attrs.point.remove("P");
+    narrow.attrs.point.add("P", "f32", 2, 0);
+    await expect(
+      runNode(filterPrimitivesByBounds, box, { in: [makeGeometryItem(narrow)] }),
+    ).rejects.toThrow(
+      /filterPrimitivesByBounds: point attribute "P" is f32x2, but a box test needs/,
+    );
   });
 });
 

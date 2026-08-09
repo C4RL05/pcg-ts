@@ -673,3 +673,48 @@ describe("UniformGrid agrees with brute force", () => {
     }
   });
 });
+
+describe("cell coordinates beyond float integer precision", () => {
+  // A position of 3 at a cell size of 1e-30 lands in cell 3e30, where
+  // `c + 1 === c`: the 3x3x3 block collapses onto one cell. Before the
+  // guard, queryRadius scanned that cell 27 times and returned each of its
+  // points 27 times over — a plausible-looking result that would have
+  // doubled every edge built from it, and would equally have MISSED the
+  // neighbouring cells of a cloud that spanned more than one.
+  const tiny = 1e-30;
+
+  it("returns each point once for a coincident pair at a tiny cell size", () => {
+    const v = view([
+      [3, 3, 3],
+      [3, 3, 3],
+    ]);
+    const grid = UniformGrid.build(v, tiny);
+    expect(grid.queryRadius(3, 3, 3, tiny)).toEqual([0, 1]);
+    expect(grid.hasPointCloserThan(3, 3, 3, tiny)).toBe(true);
+  });
+
+  it("still matches the brute-force reference there", () => {
+    const v = view([
+      [3, 3, 3],
+      [3, 3, 3 + tiny / 4],
+      [3, 3, 3 + tiny * 4],
+      [-5, 0, 0],
+    ]);
+    const grid = UniformGrid.build(v, tiny);
+    for (const q of [
+      [3, 3, 3],
+      [3, 3, 3 + tiny * 4],
+      [-5, 0, 0],
+    ]) {
+      expect(grid.queryRadius(q[0], q[1], q[2], tiny)).toEqual(
+        refRadius(v, q[0], q[1], q[2], tiny),
+      );
+    }
+  });
+
+  it("a non-finite query coordinate still finds nothing", () => {
+    const grid = UniformGrid.build(view([[0, 0, 0]]), 1);
+    expect(grid.queryRadius(NaN, 0, 0, 5)).toEqual([]);
+    expect(grid.hasPointCloserThan(NaN, 0, 0, 5)).toBe(false);
+  });
+});

@@ -2285,6 +2285,642 @@
           }
         ]
       }
+    },
+    "pipeline-5-roads-edits.json": {
+      "outputs": {
+        "boundary": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 64,
+              "vertex": 65,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -76.678,
+                0,
+                -77.6641
+              ],
+              "max": [
+                76.643,
+                0,
+                79.7573
+              ]
+            }
+          }
+        ],
+        "buildings": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 64,
+            "batches": [
+              {
+                "assetId": "hall",
+                "count": 17
+              },
+              {
+                "assetId": "barn",
+                "count": 20
+              },
+              {
+                "assetId": "house",
+                "count": 27
+              }
+            ]
+          }
+        ],
+        "districts": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 332,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "districtDist:f32",
+                "district:i32",
+                "districtKind:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -57,
+                -2.1719,
+                -57
+              ],
+              "max": [
+                57,
+                4.5827,
+                57
+              ]
+            }
+          }
+        ],
+        "footprints": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 256,
+              "vertex": 320,
+              "primitive": 64,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "lotId:i32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -60.244,
+                -2.1446,
+                -60.9022
+              ],
+              "max": [
+                49.059,
+                6.1016,
+                60.0485
+              ]
+            }
+          }
+        ],
+        "lamps": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 42,
+            "batches": [
+              {
+                "assetId": "lamp",
+                "count": 42
+              }
+            ]
+          }
+        ],
+        "lots": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 64,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "districtDist:f32",
+                "district:i32",
+                "districtKind:string",
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -57,
+                -1.5674,
+                -57
+              ],
+              "max": [
+                45,
+                4.5827,
+                57
+              ]
+            }
+          }
+        ],
+        "props": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 82,
+            "batches": [
+              {
+                "assetId": "post",
+                "count": 82
+              }
+            ]
+          }
+        ],
+        "roads": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 9,
+              "vertex": 20,
+              "primitive": 10,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:i32",
+                "districtKind:string",
+                "roadWeight:f32",
+                "degree:u32",
+                "roadWidth:f32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "roadLength:f32",
+                "roadWeight:f32",
+                "districtKind:string",
+                "roadWidth:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -62.9278,
+                0,
+                -55.4802
+              ],
+              "max": [
+                36.416,
+                0,
+                51.0215
+              ]
+            }
+          }
+        ],
+        "terrain": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 625,
+              "vertex": 3456,
+              "primitive": 1152,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -130,
+                -6.3984,
+                -130
+              ],
+              "max": [
+                130,
+                6.8607,
+                130
+              ]
+            }
+          }
+        ],
+        "vegetation": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 585,
+            "batches": [
+              {
+                "assetId": "birch",
+                "count": 169
+              },
+              {
+                "assetId": "pine",
+                "count": 290
+              },
+              {
+                "assetId": "bush",
+                "count": 126
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "pipeline-5-roads.json": {
+      "outputs": {
+        "boundary": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 64,
+              "vertex": 65,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -76.678,
+                0,
+                -77.6641
+              ],
+              "max": [
+                76.643,
+                0,
+                79.7573
+              ]
+            }
+          }
+        ],
+        "buildings": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 55,
+            "batches": [
+              {
+                "assetId": "house",
+                "count": 27
+              },
+              {
+                "assetId": "hall",
+                "count": 15
+              },
+              {
+                "assetId": "barn",
+                "count": 13
+              }
+            ]
+          }
+        ],
+        "districts": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 332,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "districtDist:f32",
+                "district:i32",
+                "districtKind:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -57,
+                -2.1719,
+                -57
+              ],
+              "max": [
+                57,
+                4.5827,
+                57
+              ]
+            }
+          }
+        ],
+        "footprints": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 220,
+              "vertex": 275,
+              "primitive": 55,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "lotId:i32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -60.244,
+                -2.1446,
+                -53.6407
+              ],
+              "max": [
+                49.059,
+                6.0485,
+                60.0485
+              ]
+            }
+          }
+        ],
+        "lamps": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 42,
+            "batches": [
+              {
+                "assetId": "lamp",
+                "count": 42
+              }
+            ]
+          }
+        ],
+        "lots": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 55,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "districtDist:f32",
+                "district:i32",
+                "districtKind:string",
+                "streetP:f32x3",
+                "locked:i32",
+                "origin:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -57,
+                -1.5674,
+                -51
+              ],
+              "max": [
+                45,
+                4.021,
+                57
+              ]
+            }
+          }
+        ],
+        "props": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 82,
+            "batches": [
+              {
+                "assetId": "post",
+                "count": 82
+              }
+            ]
+          }
+        ],
+        "roads": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 9,
+              "vertex": 20,
+              "primitive": 10,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:i32",
+                "districtKind:string",
+                "roadWeight:f32",
+                "degree:u32",
+                "roadWidth:f32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "roadLength:f32",
+                "roadWeight:f32",
+                "districtKind:string",
+                "roadWidth:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -62.9278,
+                0,
+                -55.4802
+              ],
+              "max": [
+                36.416,
+                0,
+                51.0215
+              ]
+            }
+          }
+        ],
+        "terrain": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 625,
+              "vertex": 3456,
+              "primitive": 1152,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -130,
+                -6.3984,
+                -130
+              ],
+              "max": [
+                130,
+                6.8607,
+                130
+              ]
+            }
+          }
+        ],
+        "vegetation": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 585,
+            "batches": [
+              {
+                "assetId": "birch",
+                "count": 169
+              },
+              {
+                "assetId": "pine",
+                "count": 290
+              },
+              {
+                "assetId": "bush",
+                "count": 126
+              }
+            ]
+          }
+        ]
+      }
     }
   }
 }

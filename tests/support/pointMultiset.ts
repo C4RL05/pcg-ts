@@ -39,7 +39,7 @@
  * is `Object.is` equality, expressed as a string so it can go in a Map.
  */
 import { pointIdentities } from "../../src/data/identity.js";
-import type { Geometry } from "../../src/data/index.js";
+import type { AttributeSet, Geometry } from "../../src/data/index.js";
 
 /** A double rendered so that equal renderings mean `Object.is` equality. */
 function exact(n: number): string {
@@ -49,13 +49,13 @@ function exact(n: number): string {
 }
 
 /**
- * One string per point holding every point attribute of that point, in a
- * fixed attribute order. Topology is deliberately absent: everything
- * these suites compare is a point cloud, and a point cloud's primitives
- * have no identity to key on.
+ * One string per element of `set`, holding every attribute of that
+ * element in a fixed (name-sorted) order. Domain-agnostic so the edge
+ * comparator in `edgeMultiset.ts` can render a PRIMITIVE row with the
+ * same float-exact rules — an edge's length has to compare as exactly as
+ * a point's position does.
  */
-export function pointRows(geo: Geometry): string[] {
-  const set = geo.attrs.point;
+export function attributeRows(set: AttributeSet): string[] {
   const names = set.names().sort();
   const attrs = names.map((name) => set.require(name));
   const out: string[] = [];
@@ -72,6 +72,16 @@ export function pointRows(geo: Geometry): string[] {
     out.push(parts.join(" "));
   }
   return out;
+}
+
+/**
+ * One string per point holding every point attribute of that point.
+ * Topology is deliberately absent: a point cloud's primitives have no
+ * identity of their own to key on, which is exactly what
+ * `edgeMultiset.ts` builds ON TOP of this rather than inside it.
+ */
+export function pointRows(geo: Geometry): string[] {
+  return attributeRows(geo.attrs.point);
 }
 
 /**
@@ -102,12 +112,27 @@ export function multisetDiff(
   labelA: string,
   labelB: string,
 ): string | null {
-  const left = multisetOf(pointKeys(a, labelA));
-  const right = multisetOf(pointKeys(b, labelB));
-  if (a.pointCount !== b.pointCount) {
+  return keyMultisetDiff(pointKeys(a, labelA), pointKeys(b, labelB), labelA, labelB, "points");
+}
+
+/**
+ * {@link multisetDiff} over keys already extracted, so the same
+ * comparison serves the point domain and the edge set built over it.
+ * `noun` names what is being counted in the size message.
+ */
+export function keyMultisetDiff(
+  aKeys: readonly string[],
+  bKeys: readonly string[],
+  labelA: string,
+  labelB: string,
+  noun: string,
+): string | null {
+  const left = multisetOf(aKeys);
+  const right = multisetOf(bKeys);
+  if (aKeys.length !== bKeys.length) {
     // Reported first because it is the difference an author can act on
     // without reading a coordinate.
-    return `${labelA} has ${a.pointCount} points, ${labelB} has ${b.pointCount}`;
+    return `${labelA} has ${aKeys.length} ${noun}, ${labelB} has ${bKeys.length}`;
   }
   for (const [key, count] of left) {
     const other = right.get(key) ?? 0;
@@ -155,15 +180,31 @@ export function partitionReport(
   whole: Geometry,
   who: string,
 ): PartitionReport {
+  return keyPartitionReport(
+    parts.map((part) => ({ label: part.label, keys: pointKeys(part.geo, `${who}/${part.label}`) })),
+    pointKeys(whole, `${who}/whole`),
+  );
+}
+
+/**
+ * {@link partitionReport} over keys already extracted. The edge suites
+ * cannot hand a `Geometry` here at all: an edge a window OWNS and an edge
+ * it merely SAW are the same primitive, told apart only by an ownership
+ * rule the caller applies, so what they partition is a list of keys.
+ */
+export function keyPartitionReport(
+  parts: readonly { readonly label: string; readonly keys: readonly string[] }[],
+  whole: readonly string[],
+): PartitionReport {
   const claims = new Map<string, string[]>();
   for (const part of parts) {
-    for (const key of pointKeys(part.geo, `${who}/${part.label}`)) {
+    for (const key of part.keys) {
       const list = claims.get(key);
       if (list === undefined) claims.set(key, [part.label]);
       else list.push(part.label);
     }
   }
-  const target = multisetOf(pointKeys(whole, `${who}/whole`));
+  const target = multisetOf(whole);
   const duplicated: Duplicate[] = [];
   const extra: Duplicate[] = [];
   for (const [key, labels] of claims) {
@@ -179,15 +220,23 @@ export function partitionReport(
   return { duplicated, missing, extra };
 }
 
-/** A partition report as a message, or null when the parts partition the whole. */
-export function formatPartitionReport(report: PartitionReport, headline: string): string | null {
+/**
+ * A partition report as a message, or null when the parts partition the
+ * whole. `noun` names the thing being partitioned, so an edge suite's
+ * failure reads as an edge rather than as a point.
+ */
+export function formatPartitionReport(
+  report: PartitionReport,
+  headline: string,
+  noun = "point",
+): string | null {
   const lines: string[] = [];
   for (const dup of report.duplicated.slice(0, 4)) {
     lines.push(`  claimed by ${dup.parts.join(" and ")}: ${dup.key}`);
   }
   for (const key of report.missing.slice(0, 4)) lines.push(`  claimed by nobody: ${key}`);
   for (const item of report.extra.slice(0, 4)) {
-    lines.push(`  ${item.parts.join(" and ")} emitted a point the whole region does not hold: ${item.key}`);
+    lines.push(`  ${item.parts.join(" and ")} emitted a ${noun} the whole region does not hold: ${item.key}`);
   }
   if (lines.length === 0) return null;
   return [

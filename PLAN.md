@@ -1495,36 +1495,91 @@ vocabulary ships with its caller, the rule `writeTangents` was held to
 in phase 39. Three of the four originally planned nodes had no caller;
 this is what earning one looks like.
 
+**RE-SURVEYED 2026-08-09 by two independent design passes, which agreed
+on the two findings that shrink this phase. The split below replaces the
+one above it.**
+
+- **The encoding trigger does NOT fire, because the primitive domain
+  ALREADY IS the edge domain.** A 2-vertex polyline over shared points
+  is an edge: `setPolylineTopology` already lets one point appear in
+  many primitives, so degree > 1 is expressible today. Only
+  `pointsToPath`'s one-group-per-point rule forbade it, which is a limit
+  of that node, not of the representation. Per-edge values come from
+  shipped nodes — `promoteAttribute` point→primitive (`min` for a road's
+  width, `first` for its kind), `setAttribute domain: "primitive"`, and
+  the return trip primitive→point (`max`) for junction size. So: **no
+  edge `Domain`, no widened union, no ~20 files.**
+- **There is therefore NO edges-to-polylines sink node.** My own earlier
+  note that "the original plan omits one" was wrong. `connectPoints`
+  emits polyline primitives directly over the SAME input points, so no
+  edge payload ever crosses a pin, junctions are genuinely the same
+  point, and the CSR is built and consumed inside one node body exactly
+  as `UniformGrid` is. The staleness argument is satisfied
+  structurally rather than defended.
 - Adjacency as a side-car CSR in `src/spatial/adjacency.ts`, following
-  `uniformGrid`'s precedent, not re-exported from `src/index.ts`.
-- `connectPoints` over the neighbour lists `pointNeighborhood` already
-  computes and discards — **plus an edges-to-polylines node, which the
-  original plan omits.** Nothing can consume edges today: `pointsToPath`
-  lays a path over the SAME points with one group id each, so a vertex
-  of degree > 1 is structurally inexpressible. That is the phase-39 gap
-  in reverse — a source with no sink — and both must ship in one wave.
-- Radius mode only at first. A `k`-nearest mode is a rank over the
-  present population, which is the fit-to-data trap phase 40 recorded;
-  radius mode is halo-exact at `haloWidth >= radius`.
-- `refineCluster`: MST mode ONLY. Six of its seven proposed modes have
-  zero references outside the roadmap, and the name collides with
-  `fill/scatter-clustered`, which already means clumps-with-no-edges.
-- **`findPath` is CUT as specified.** No finite halo suffices for a
-  global shortest path. If it returns, it is restricted to an unbounded
-  or single-partition level with results pushed down through
-  `ctx.parent.outputs` — and that restriction is the design, stated up
-  front, not a footnote discovered later.
-- **Revisit the encoding once, here, and only on this trigger:** the
-  side-car was chosen because a derived index cannot go stale, while an
-  edge array on `Geometry` rides `cloneGeometry` into every
-  topology-destroying node and fails silently. That argument covers a
-  DERIVED index. If edges need user-facing ATTRIBUTES — road width,
-  kind, authored per edge and promoted or transferred like any other —
-  then they are authored data, not a derived index, and a real edge
-  domain becomes the correct answer rather than the expensive one. With
-  zero users the ~20-file cost and the widened `Domain` union are
-  affordable; what must not happen is drifting into a half-domain
-  because the side-car was already there.
+  `uniformGrid`'s precedent. Cache key is `P.data` buffer identity plus
+  count, stride and radius — **`cellSize` must never enter it**, since
+  `queryRadius` returns the same set at any positive cell size. Store no
+  distances (they duplicate positions, the staleness class the side-car
+  exists to avoid) and no identities (identity depends on the `seed`
+  column, which adjacency never reads).
+- `connectPoints`, radius mode. Halo-exact at `haloWidth >= radius`, and
+  the reason is stronger than `selfPrune localMaximum`'s: edge existence
+  reads two stored positions and no third point, so it is ZERO hops, not
+  one. Query `queryRadius` inclusively (a documented superset) and keep
+  STRICT (`d² < r²`) — narrowing the query instead would discard the
+  knife-edge candidate before the predicate could see it.
+  - *Correction, measured during implementation: the design claimed, and
+    I recorded here as fact, that the inclusive form silently loses a
+    knife-edge edge across a seam. It does NOT reproduce under this
+    library's conventions, because the two half-open rules cancel — `A`
+    owned gives `A.x < hi`, and `d <= r` gives `B.x < hi + r`, so `B` is
+    strictly inside the half-open halo. Brute-forced over 4000 seeds
+    with 4072 pairs at exactly `r` and 12956 points on an excluded halo
+    face: zero failures under either predicate. Strict still ships and
+    is still right, but for a narrower reason — it is what keeps the
+    result correct if ownership is ever CLOSED at the max face, which is
+    the configuration where inclusive does lose the pair.*
+- **Canonical edge form and seam ownership.** Do NOT reuse
+  `comparePruneOrder` — its index fallback would let a tie double or
+  drop an edge across a seam. Order by a point key of identity, then
+  position bits, then `seed`: index-free, and total except between
+  coincident same-seed points, which necessarily share a cell so
+  ownership stays unambiguous. `A` is the lower key; a window emits
+  `(A, B)` iff `A` lies in its half-open owned rectangle.
+- A `MAX_EDGES` guard is required, in the shape of `MAX_RESAMPLE_POINTS`.
+- **`filterPrimitivesByBounds`, added after verification found the
+  documented recipe had a step no node could perform.** Its last step —
+  keep the primitives whose first vertex is back inside the unwidened
+  rectangle — had no implementation: none of the 37 node types filtered
+  primitives, and every filter dropped topology, so a partitioned
+  network cook was expressible only in host TypeScript while the docs
+  presented it as the recipe to follow. That is this project's recurring
+  failure, and the fix is the vocabulary rather than the doc. It is a
+  separate node, not a mode on `filterByBounds`, because a node's output
+  SHAPE (cloud vs network) must be a property of its type — as a param
+  it would put a per-param exception into every "filters drop topology"
+  rule, including several shipped error messages. `vertex: first|last`
+  TILES (exactly one owner per primitive); `all|any` are selections and
+  do not. The acceptance test is the recipe cooked end to end from
+  SERIALIZED JSON with no host clip.
+- **`refineCluster` / MST is CUT**, and this is the same verdict
+  `findPath` got, for the same reason: MST membership is GLOBAL — an
+  edge is in the tree iff no lighter path connects its ends — so a chain
+  of N plus a closing edge defeats any halo. Both designs reached this
+  independently. The replacement is a **relative-neighbourhood** mode on
+  `connectPoints`: a local lune test, halo-exact at the same bound
+  because any witness lies inside the pair's own neighbourhood, which
+  CONTAINS the MST (so the network stays connected) while leaving
+  cycles — a network rather than a tree, which is what a road layout
+  wants anyway.
+- **`findPath` remains CUT.** No finite halo suffices for a global
+  shortest path.
+- Recorded, not shipped: a `maxDegree` bounded WITHIN a radius is
+  actually halo-exact (an unbounded k-nearest is the trap, not a bounded
+  rank), and chaining maximal degree-2 runs into longer polylines is NOT
+  partition-invariant at the primitive domain — the edge set and the
+  geometry agree, but the grouping does not.
 
 #### The original exit criterion was unsatisfiable
 

@@ -282,7 +282,7 @@ that moves where the field is sampled. The generated reference is
 fill/scatter-even --param minDistance=3` cooks one from the command line
 with no graph file at all.
 
-### Paths
+### Paths and networks
 
 A path is topology, not a point type and not an attribute: `polyline`
 primitives whose vertices reference point indices, sitting beside the
@@ -294,17 +294,34 @@ made — the only way to start a path from serialized JSON — and the shipped
 there, `pathResample` respaces one, `writeTangents` gives its own points
 a direction, and `splineSample` walks it by arc length.
 
+The same representation, allowed to branch, is a **network**.
+`connectPoints` joins a cloud into one 2-vertex polyline per edge over
+the *same* points — every pair within a `radius`, or the sparser
+`relativeNeighborhood` lune test that keeps a road-shaped net which still
+contains a minimum spanning tree — so a crossroads where three roads meet
+is genuinely one point of degree 3, carrying everything it carried
+before. There is **no edge domain and none is needed**: an edge is a
+`primitive`, so a per-edge value is `promoteAttribute` point→primitive,
+a `setAttribute` on `domain: "primitive"`, and `promoteAttribute`
+primitive→point for the return trip to the junction. Stage 5 of the
+shipped example pipeline is exactly that, end to end.
+
 Two contracts are worth knowing before the first path graph. **Closure
 is structural** — a closed path is one whose last vertex references its
 first point, and there is no `closed` attribute to write or read, so
 nothing can disagree with the geometry. And **a path that passes through
-a filter stops being a path**: every filter that can remove a point
-rebuilds the point domain from the survivors and drops topology with it,
-as do `mergePoints` and `partitionByAttribute`, and only a node that
-clones preserves it. Nothing warns where the loss happens, so build the
-path after the last filter. The full contract, including the ordering
-rules, is in
-[docs/authoring.md](./docs/authoring.md#paths).
+a filter stops being a path** — as does a network: every filter that can
+remove a point rebuilds the point domain from the survivors and drops
+topology with it, as do `mergePoints` and `partitionByAttribute`. Two
+filters are exempt — `projectToPlane`, which removes nothing, and
+`filterPrimitivesByBounds`, which removes whole primitives rather than
+points and so trims a network instead of demolishing it. Nothing warns
+where the loss happens, so build the path or the network after the last
+filter. The full contract is in docs/authoring.md —
+[Paths](./docs/authoring.md#paths) for closure and ordering,
+[Networks](./docs/authoring.md#networks-the-primitive-domain-is-the-edge-domain)
+for per-edge values and for how a partitioned cook owns an edge instead of
+filtering one.
 
 ## Hierarchical streaming
 

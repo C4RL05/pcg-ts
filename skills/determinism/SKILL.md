@@ -1,6 +1,6 @@
 ---
 name: determinism
-description: "Doctrine for keeping pcg-ts output reproducible. Use when adding randomness or noise to a graph, when choosing a seed or a per-instance variation knob, when output changes between runs or between machines, when writing a World level's per-cell bind, when content must look the same from either side of a cell boundary or a halo, when touching subgraph or GPU code paths, or before claiming any change is deterministic. Covers the seed chain and its one exception, what a seed re-rolls and what it provably cannot, why noise varies through position instead, world-anchoring and identity-keyed randomness, the GPU approximation boundary, and how to verify reproducibility rather than assume it."
+description: "Doctrine for keeping pcg-ts output reproducible. Use when adding randomness or noise to a graph, when choosing a seed or a per-instance variation knob, when output changes between runs or between machines, when writing a World level's per-cell bind, when content must look the same from either side of a cell boundary or a halo, when adding or sizing a neighbourhood, prune or topology op, when touching subgraph or GPU code paths, or before claiming any change is deterministic. Covers the seed chain and its one exception, what a seed re-rolls and what it provably cannot, why noise varies through position instead, world-anchoring and identity-keyed randomness, the hop count that decides whether an op can be partitioned at all, the GPU approximation boundary, and how to verify reproducibility rather than assume it."
 ---
 
 # Keeping pcg-ts output reproducible
@@ -126,6 +126,43 @@ failure this exception makes impossible rather than merely documented. The
 price is the lost node-id decorrelation: two such nodes with equal params
 scatter *identical* points, exactly as two `perlinNoise` fields with one
 spec are one field. Separate layers with `hashCombine(ctx.worldSeed, n)`.
+
+**Count the hops before deciding an op can be partitioned at all.** A halo
+is exact only where the operation's reach is *bounded*, and "bounded" is
+stronger than "local" — every step of a greedy chain is local and the chain
+is not. The question that actually decides it is **how many hops of
+dependency it takes before an answer is settled**, and the shipped nodes
+populate all three rungs:
+
+| Hops | The answer reads | Halo | Worked example |
+| --- | --- | --- | --- |
+| **Zero** | only stored values of the elements it names — no third element | exact at the op's own reach | `connectPoints`: whether A and B are an edge is a distance between two *stored positions*, so a cell also holding every point within `radius` of its rectangle is exact at `haloWidth >= radius` |
+| **One** | its neighbours' stored *values*, never their *answers* | exact at the stated width | `pointNeighborhood` within `radius`; `selfPrune` mode `localMaximum`, which decides each point from its immediate neighbours alone |
+| **Unbounded** | another element's *answer* | none, at any width | a greedy prune — this point survives because that neighbour did not, because ITS neighbour did; a minimum spanning tree, where an edge belongs iff no lighter *path* connects its ends; a shortest path |
+
+Two payoffs from stating it this way. The zero-hop rung is where the
+argument is *structural* rather than measured: `connectPoints` needs no
+seam experiment because no third point can enter the decision, and
+`relativeNeighborhood` stays on that rung because its disqualifying witness
+must lie inside the pair's own neighbourhood. And the unbounded rung is a
+design constraint, not a bug to fix later — it is why `connectPoints` ships
+a local lune test that *contains* an MST instead of an MST mode, and why no
+shortest-path node ships at all. Worse than unbounded are the ops with no
+reach to widen: anything that fits parameters to the population present in
+this cook (`attributeRemap` mode `"fit"`, `attributeReduce`, aggregate
+`promoteAttribute`, the `fraction` and `index` fields) measures the
+population *here*. The `performance-and-budgets` skill catalogues those.
+
+One consequence for the ownership step — the clip back to the unwidened
+cell with `filterByBounds` at `halfOpen`. When the op emitted **topology**,
+that clip would DROP the topology rather than trim it, so ownership moves
+to the primitive domain and to `filterPrimitivesByBounds`, which keeps the
+edges whose lower-keyed first vertex lies in the unwidened rectangle. Only
+its `vertex` values `first` and `last` are ownership rules — each reads a
+single vertex, so exactly one cell claims each edge; `all` and `any` are
+selections and tile nothing. See `docs/authoring.md`, "Networks: the
+primitive domain is the edge domain", and the node's entry in
+`docs/nodes.md`.
 
 **Verify it with the three questions a single-graph test cannot ask.**
 Byte-comparing one cook against itself proves nothing here; each of these

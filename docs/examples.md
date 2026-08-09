@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-35 examples, alphabetical by file:
+37 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -35,12 +35,14 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-surface-sample.json](#basics-surface-samplejson) — scatter points over a mesh surface
 - [basics-transfer-attribute.json](#basics-transfer-attributejson) — read a value off a surface below each point
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
-- [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/4 — the ground and the wall
-- [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/4 — district centres and the field they claim
-- [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/4, edited — hand-placed plots that win on priority
-- [pipeline-3-lots.json](#pipeline-3-lotsjson) — staged pipeline 3/4 — a street, its frontage band, and lot footprints
-- [pipeline-4-detail-edits.json](#pipeline-4-detail-editsjson) — staged pipeline 4/4, edited — the full settlement with authored plots
-- [pipeline-4-detail.json](#pipeline-4-detailjson) — staged pipeline 4/4 — buildings, wall posts and forest
+- [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
+- [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
+- [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/5, edited — hand-placed plots that win on priority
+- [pipeline-3-lots.json](#pipeline-3-lotsjson) — staged pipeline 3/5 — a street, its frontage band, and lot footprints
+- [pipeline-4-detail-edits.json](#pipeline-4-detail-editsjson) — staged pipeline 4/5, edited — the full settlement with authored plots
+- [pipeline-4-detail.json](#pipeline-4-detailjson) — staged pipeline 4/5 — buildings, wall posts and forest
+- [pipeline-5-roads-edits.json](#pipeline-5-roads-editsjson) — staged pipeline 5/5, edited — the settlement, its roads and authored plots
+- [pipeline-5-roads.json](#pipeline-5-roadsjson) — staged pipeline 5/5 — a road network between the district centres
 
 ## basics-attribute-from-noise.json
 
@@ -566,7 +568,7 @@ Cook it: `pcg cook examples/graphs/basics-transform-points.json --stats`
 
 ## pipeline-1-boundary.json
 
-**staged pipeline 1/4 — the ground and the wall**
+**staged pipeline 1/5 — the ground and the wall**
 
 First step of a settlement-scale pipeline whose four stages are four files, each the previous file plus new nodes, connections and outputs — nothing removed, no param retuned, one shared seed. This stage ADDS the two things every later stage stands on: a subdivided plane pushed into rolling terrain by a noise field (`terrain`), and a 64-point ring displaced along its own radius and closed into a path with tangents written on it (`boundary`). Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
 
@@ -584,7 +586,7 @@ Cook it: `pcg cook examples/graphs/pipeline-1-boundary.json --stats`
 
 ## pipeline-2-districts.json
 
-**staged pipeline 2/4 — district centres and the field they claim**
+**staged pipeline 2/5 — district centres and the field they claim**
 
 Stage 1 verbatim, plus a district layer. ADDS `districts`: a 34x34 grid masked to a disc and dropped onto the terrain, with every surviving cell told which district owns it. The centres come from a separate scatter thinned by `selfPrune`, numbered with an i32 `district` and given a string `districtKind`; `sampleNearestPoint` then writes the owning index, the distance to it and the kind onto each cell. `terrain` and `boundary` cook bit-identically to stage 1 — nothing upstream was touched. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
 
@@ -602,7 +604,7 @@ Cook it: `pcg cook examples/graphs/pipeline-2-districts.json --stats`
 
 ## pipeline-3-lots-edits.json
 
-**staged pipeline 3/4, edited — hand-placed plots that win on priority**
+**staged pipeline 3/5, edited — hand-placed plots that win on priority**
 
 `pipeline-3-lots.json` verbatim, plus an authored edit layer: a `pointLine` terrace and a `pointGrid` block dropped onto the same terrain, stamped `locked = 1`, and wired into the edit slot the base reserved — ONE connection is the whole edit. It lands twice: as the `features` of a `filter/by-distance-to` that keeps procedural lots 3 units clear of it, and on pin `b` of `compose/merge-tagged`, which appends the authored points AFTER the procedural ones at the HIGHEST indices — the worst place an index-greedy prune could put them. They take every contested spot anyway, because `selfPrune` ranks by `priority: attribute("locked")`: higher wins, ties fall to the lower index, so the 12 authored points are visited first and the procedural ones prune against them. Survival is a value the points carry, not a position in a merge — drop the `priority` param and 8 of the 12 lose their spots to procedural neighbours; move the edit back to pin `a` and the same 12 survive. The point of the variant: `terrain`, `boundary` and `districts` cook bit-identically to the base while `lots` and `footprints` change — the edit is provably local.
 
@@ -620,9 +622,9 @@ Cook it: `pcg cook examples/graphs/pipeline-3-lots-edits.json --stats`
 
 ## pipeline-3-lots.json
 
-**staged pipeline 3/4 — a street, its frontage band, and lot footprints**
+**staged pipeline 3/5 — a street, its frontage band, and lot footprints**
 
-Stages 1-2 verbatim, plus building plots. ADDS `lots` and `footprints`: the district centres are ordered by bearing and closed into a spine street, the district field is cut to a frontage band (within 11 of the street, at least 4 off it), each survivor is turned to face the nearest street sample and given a random size, and `selfPrune` spaces them 7 apart. A 4-corner ring copied onto every lot and grouped by `lotId` becomes one closed quad per plot. Note the reserved EDIT SLOT: `edits` is a `mergePoints` with nothing connected, so it cooks to an empty cloud that clears nothing and merges nothing — see the `-edits` variant, which is this file plus authored geometry and one connection. The slot comes with a RANK as well as a wire: procedural lots are stamped `locked = 0` on their way into the merge and the prune reads `priority: attribute("locked")`, so a point arriving through the slot at 1 outranks every procedural neighbour it contests. Here nothing arrives, every point ties at 0, and the prune is exactly the index-greedy one it has always been — which is what `priority`'s default is for. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
+Stages 1-2 verbatim, plus building plots. ADDS `lots` and `footprints`: the district centres are sorted by their bearing, atan2(z, x), and closed into one ring called `spine`, the district field is cut to a frontage band (within 11 of the street, at least 4 off it), each survivor is turned to face the nearest street sample and given a random size, and `selfPrune` spaces them 7 apart. A 4-corner ring copied onto every lot and grouped by `lotId` becomes one closed quad per plot. Note the reserved EDIT SLOT: `edits` is a `mergePoints` with nothing connected, so it cooks to an empty cloud that clears nothing and merges nothing — see the `-edits` variant, which is this file plus authored geometry and one connection. The slot comes with a RANK as well as a wire: procedural lots are stamped `locked = 0` on their way into the merge and the prune reads `priority: attribute("locked")`, so a point arriving through the slot at 1 outranks every procedural neighbour it contests. Here nothing arrives, every point ties at 0, and the prune is exactly the index-greedy one it has always been — which is what `priority`'s default is for. WHAT `spine` IS, PLAINLY: an angular TOUR of the centres in bearing order, and NOT a road network. It cannot branch and it cannot fork — `pointsToPath` puts every point in exactly one group, so every centre gets exactly two neighbours and the result is always a single closed loop. What it is good for is what it is used for here: one continuous curve to measure frontage against, which `nearSpine`, `frontage` and `street` all read. The actual network is stage 5 (`pipeline-5-roads.json`), where `connectPoints` joins these same centres into 2-vertex polylines that SHARE their endpoints, so a junction can carry three roads or more. This ring stays where it is because the stages are supersets: stages 3 and 4 were measured against it, and retuning it would move them both. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
 
 **Tags:** `pipeline`, `staged`, `path`, `placement`
 
@@ -638,7 +640,7 @@ Cook it: `pcg cook examples/graphs/pipeline-3-lots.json --stats`
 
 ## pipeline-4-detail-edits.json
 
-**staged pipeline 4/4, edited — the full settlement with authored plots**
+**staged pipeline 4/5, edited — the full settlement with authored plots**
 
 `pipeline-4-detail.json` verbatim plus the same authored edit layer `pipeline-3-lots-edits.json` adds, so it is a superset of BOTH. It is the whole point of the arrangement: `terrain`, `boundary` and `districts` stay bit-identical to the unedited stage 4, while `lots`, `footprints`, `buildings` and everything downstream of them respond to the hand-placed geometry. An edit reaches exactly as far as the dependency graph says it does, and no further.
 
@@ -656,7 +658,7 @@ Cook it: `pcg cook examples/graphs/pipeline-4-detail-edits.json --stats`
 
 ## pipeline-4-detail.json
 
-**staged pipeline 4/4 — buildings, wall posts and forest**
+**staged pipeline 4/5 — buildings, wall posts and forest**
 
 Stages 1-3 verbatim, plus everything that gets drawn. ADDS `buildings` (one asset per lot, chosen per point and spawned), `props` (posts spaced every 6 units along the boundary wall and turned to follow it) and `vegetation` (plantable scatter on the terrain, cut to the ground outside the wall, yawed at random and split into species batches). Every earlier output — `terrain`, `boundary`, `districts`, `lots`, `footprints` — is bit-identical to the stage that introduced it. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
 
@@ -671,3 +673,39 @@ Stages 1-3 verbatim, plus everything that gets drawn. ADDS `buildings` (one asse
 **Outputs:** `terrain` (from `terrain`.`out`), `boundary` (from `wall`.`out`), `districts` (from `districts`.`out`), `lots` (from `lots`.`out`), `footprints` (from `footprints`.`out`), `buildings` (from `buildings`.`instances`), `props` (from `postSpawn`.`instances`), `vegetation` (from `trees`.`instances`)
 
 Cook it: `pcg cook examples/graphs/pipeline-4-detail.json --stats`
+
+## pipeline-5-roads-edits.json
+
+**staged pipeline 5/5, edited — the settlement, its roads and authored plots**
+
+`pipeline-5-roads.json` verbatim plus the same authored edit layer `pipeline-3-lots-edits.json` adds, so it is a superset of BOTH. The road net is built from the district centres, upstream of the `edits` slot, so `roads` and `lamps` join `terrain`, `boundary` and `districts` on the list of outputs an edit provably cannot reach — while `lots`, `footprints`, `buildings` and everything downstream of them respond to the hand-placed geometry. An edit reaches exactly as far as the dependency graph says it does, and no further.
+
+**Tags:** `pipeline`, `staged`, `edits`, `network`
+
+**Seed:** 40100
+
+**Node types:** `connectPoints`, `copyToPoints`, `filterByExpression`, `mergePoints`, `meshPrimitive`, `orientAlongVector`, `pointGrid`, `pointLine`, `pointScatterInBounds`, `pointsToPath`, `promoteAttribute`, `sampleNearestPoint`, `selfPrune`, `setAttribute`, `spawnInstances`, `splineSample`, `subgraph`, `transformPoints`, `writeTangents`
+
+**Primitives:** `compose/merge-tagged`, `filter/by-distance-to`, `filter/by-distance-to-curve`, `place/along-curve`, `place/drop-to-surface`, `place/plantable`, `shape/ring`, `transform/displace-by-noise`, `write/instances-by-species`, `write/random-scale`, `write/random-yaw`
+
+**Outputs:** `terrain` (from `terrain`.`out`), `boundary` (from `wall`.`out`), `districts` (from `districts`.`out`), `lots` (from `lots`.`out`), `footprints` (from `footprints`.`out`), `buildings` (from `buildings`.`instances`), `props` (from `postSpawn`.`instances`), `vegetation` (from `trees`.`instances`), `roads` (from `roadJunction`.`out`), `lamps` (from `roadSpawn`.`instances`)
+
+Cook it: `pcg cook examples/graphs/pipeline-5-roads-edits.json --stats`
+
+## pipeline-5-roads.json
+
+**staged pipeline 5/5 — a road network between the district centres**
+
+Stages 1-4 verbatim, plus the roads. ADDS `roads`, a genuine NETWORK rather than a tour: `connectPoints` in `relativeNeighborhood` mode joins the district centres into one 2-vertex `polyline` primitive per edge over the SAME points, so a centre that three roads meet at is one point of degree 3 — which `pointsToPath` cannot express, since it gives every point exactly one group (that is what the stage-3 `spine` is, and why it is a ring and not a net). The lune test is LOCAL — a pair is joined unless some third point is closer to both ends — so unlike a minimum spanning tree it survives partitioning, and it still CONTAINS one, so the net stays connected while keeping the cycles a road layout wants. Per-edge values need no edge domain: `roadWeight` is a centrality written on the centres (1 at the middle, 0 at the 63-unit rim), `roadClass` promotes it point→primitive with `min` so a road is only as wide as its weaker end, `roadKind` carries the district's name across with `first`, `roadWidth` is a field on the PRIMITIVE domain reading the promoted value, and `roadJunction` makes the return trip primitive→point with `max` so every centre learns the width of the widest road that reaches it. `place/along-curve` then walks the whole net at once — each edge is measured on its own length — and spawns `lamps`. Every earlier output — `terrain`, `boundary`, `districts`, `lots`, `footprints`, `buildings`, `props`, `vegetation` — is bit-identical to the stage that introduced it. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.
+
+**Tags:** `pipeline`, `staged`, `network`, `topology`
+
+**Seed:** 40100
+
+**Node types:** `connectPoints`, `copyToPoints`, `filterByExpression`, `mergePoints`, `meshPrimitive`, `orientAlongVector`, `pointGrid`, `pointScatterInBounds`, `pointsToPath`, `promoteAttribute`, `sampleNearestPoint`, `selfPrune`, `setAttribute`, `spawnInstances`, `splineSample`, `subgraph`, `transformPoints`, `writeTangents`
+
+**Primitives:** `compose/merge-tagged`, `filter/by-distance-to`, `filter/by-distance-to-curve`, `place/along-curve`, `place/drop-to-surface`, `place/plantable`, `shape/ring`, `transform/displace-by-noise`, `write/instances-by-species`, `write/random-scale`, `write/random-yaw`
+
+**Outputs:** `terrain` (from `terrain`.`out`), `boundary` (from `wall`.`out`), `districts` (from `districts`.`out`), `lots` (from `lots`.`out`), `footprints` (from `footprints`.`out`), `buildings` (from `buildings`.`instances`), `props` (from `postSpawn`.`instances`), `vegetation` (from `trees`.`instances`), `roads` (from `roadJunction`.`out`), `lamps` (from `roadSpawn`.`instances`)
+
+Cook it: `pcg cook examples/graphs/pipeline-5-roads.json --stats`

@@ -30,6 +30,7 @@ export * from "./sources.js";
 export * from "./meshes.js";
 export * from "./samplers.js";
 export * from "./paths.js";
+export * from "./topology.js";
 export * from "./neighborhood.js";
 export * from "./pointOps.js";
 export * from "./filtering.js";

@@ -1,9 +1,14 @@
 /**
  * Filtering nodes: keep or drop points by density, bounds, attribute
  * comparisons, minimum mutual distance, or project them onto a plane.
- * Filters output points only (topology is not carried).
+ *
+ * Every POINT filter here outputs points only: it rebuilds the point
+ * domain from the survivors, and the topology describing the points that
+ * are gone goes with it. {@link filterPrimitivesByBounds} is the one
+ * exception in the library, and it earns it by filtering the PRIMITIVE
+ * domain instead — see its description.
  */
-import type { Geometry } from "../data/index.js";
+import { AttributeSet, Geometry } from "../data/index.js";
 import type { Column } from "../fields/index.js";
 import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
@@ -75,6 +80,61 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
   },
 });
 
+/**
+ * The three checks every bounds filter makes before it looks at a point,
+ * shared so the two nodes cannot drift apart on the question they exist to
+ * answer — which side of a face something is on. Each names the calling
+ * node, because a message that says only "boundary" leaves an agent
+ * guessing which of two nodes it has to edit.
+ *
+ * Both enums are checked rather than defaulted through an `else`: which
+ * face a point belongs to is a decision no typo should make silently, and
+ * an off-by-one-face is invisible until two boxes disagree about something
+ * they share.
+ */
+function requireInsideOutside(nodeType: string, mode: string): boolean {
+  if (mode !== "inside" && mode !== "outside") {
+    throw new Error(
+      `${nodeType}: mode must be "inside" or "outside", got ${JSON.stringify(mode)}`,
+    );
+  }
+  return mode === "inside";
+}
+
+/** Returns whether the max faces are INCLUSIVE; see {@link requireInsideOutside}. */
+function requireBoundaryRule(nodeType: string, boundary: string): boolean {
+  if (boundary !== "halfOpen" && boundary !== "inclusive") {
+    throw new Error(
+      `${nodeType}: boundary must be "halfOpen" or "inclusive", got ${JSON.stringify(boundary)}; "halfOpen" keeps min <= p < max (the ownership rule: abutting boxes claim a shared face exactly once between them), "inclusive" keeps min <= p <= max (a selection: both boxes claim it)`,
+    );
+  }
+  return boundary === "inclusive";
+}
+
+/**
+ * A two-component bound leaves z undefined, and every comparison against
+ * undefined is false — so the box would quietly hold nothing (and
+ * 'outside' quietly hold everything). The likely source is a World "xz"
+ * cell, whose ctx.min / ctx.max ARE 2D, which is exactly the binding these
+ * nodes are most often used for.
+ */
+function requireBounds3(
+  nodeType: string,
+  boundsMin: readonly number[],
+  boundsMax: readonly number[],
+): void {
+  for (const [name, v] of [
+    ["boundsMin", boundsMin],
+    ["boundsMax", boundsMax],
+  ] as const) {
+    if (v.length < 3) {
+      throw new Error(
+        `${nodeType}: ${name} needs three components [x, y, z], got ${v.length}; a World "xz" cell's ctx.min / ctx.max are 2D [x, z], so spell the box out as [ctx.min[0], -Infinity, ctx.min[1]] and [ctx.max[0], Infinity, ctx.max[1]]`,
+      );
+    }
+  }
+}
+
 /** Params of {@link filterByBounds}. */
 export interface FilterByBoundsParams {
   boundsMin: readonly number[];
@@ -121,42 +181,14 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
   },
   execute({ inputs, params }) {
     const geo = requireGeometry(inputs, "in", "filterByBounds");
-    // Both enums are checked rather than defaulted through an else: which
-    // face a point belongs to is a decision no typo should make silently,
-    // and an off-by-one-face is invisible until two boxes disagree about
-    // a point they share.
-    if (params.mode !== "inside" && params.mode !== "outside") {
-      throw new Error(
-        `filterByBounds: mode must be "inside" or "outside", got ${JSON.stringify(params.mode)}`,
-      );
-    }
-    if (params.boundary !== "halfOpen" && params.boundary !== "inclusive") {
-      throw new Error(
-        `filterByBounds: boundary must be "halfOpen" or "inclusive", got ${JSON.stringify(params.boundary)}; "halfOpen" keeps min <= p < max (the ownership rule: abutting boxes claim a shared face exactly once between them), "inclusive" keeps min <= p <= max (a selection: both boxes claim it)`,
-      );
-    }
-    // A two-component bound leaves z undefined, and every comparison
-    // against undefined is false — so the box would quietly hold nothing
-    // (and 'outside' quietly hold everything). The likely source is a
-    // World "xz" cell, whose ctx.min / ctx.max ARE 2D, which is exactly
-    // the binding this node is most often used for.
-    for (const [name, v] of [
-      ["boundsMin", params.boundsMin],
-      ["boundsMax", params.boundsMax],
-    ] as const) {
-      if (v.length < 3) {
-        throw new Error(
-          `filterByBounds: ${name} needs three components [x, y, z], got ${v.length}; a World "xz" cell's ctx.min / ctx.max are 2D [x, z], so spell the box out as [ctx.min[0], -Infinity, ctx.min[1]] and [ctx.max[0], Infinity, ctx.max[1]]`,
-        );
-      }
-    }
+    const wantInside = requireInsideOutside("filterByBounds", params.mode);
+    const inclusive = requireBoundaryRule("filterByBounds", params.boundary);
+    requireBounds3("filterByBounds", params.boundsMin, params.boundsMax);
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
     const [ax, ay, az] = params.boundsMin;
     const [bx, by, bz] = params.boundsMax;
-    const wantInside = params.mode === "inside";
-    const inclusive = params.boundary === "inclusive";
     const keep: number[] = [];
     for (let i = 0; i < geo.pointCount; i++) {
       const x = pd[i * ps];
@@ -173,6 +205,263 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
       if (inside === wantInside) keep.push(i);
     }
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+  },
+});
+
+/**
+ * Copy `count` elements of every attribute in `from` into `to`, creating
+ * the columns (types, tuple sizes, defaults and string tables) as it goes.
+ * `indices` selects which source element lands at each destination slot;
+ * `undefined` means the identity, which is one bulk copy per column rather
+ * than one call per element.
+ *
+ * `to` is resized only when it is not already the right size — the vertex
+ * and primitive sets are sized by `setTopology`, and resizing them again
+ * would be a no-op at best.
+ */
+function copyElements(
+  from: AttributeSet,
+  to: AttributeSet,
+  indices: ArrayLike<number> | undefined,
+  count: number,
+): void {
+  for (const attr of from) to.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue);
+  if (to.count !== count) to.resize(count);
+  for (const attr of from) {
+    const dst = to.require(attr.name);
+    if (indices === undefined) {
+      dst.copyFrom(attr, 0, 0, count);
+      continue;
+    }
+    for (let j = 0; j < count; j++) dst.copyFrom(attr, indices[j], j, 1);
+  }
+}
+
+/**
+ * Build a geometry holding the selected PRIMITIVES of `src`, with their
+ * topology intact: the chosen primitives in the given order, each keeping
+ * its own vertices in their own order, plus every vertex, primitive and
+ * detail attribute carried across.
+ *
+ * The counterpart of `gatherPoints` in `util.ts`, and deliberately the
+ * only one of the pair that preserves topology — which is the whole reason
+ * {@link filterPrimitivesByBounds} exists.
+ *
+ * With `dropUnreferenced` the point domain is compacted to the points some
+ * surviving primitive still references, in ascending source order (the
+ * same convention `gatherPoints` callers produce), and the topology is
+ * renumbered onto it. Otherwise the point domain is copied whole and the
+ * topology keeps the indices it arrived with.
+ */
+function gatherPrimitives(
+  src: Geometry,
+  prims: ArrayLike<number>,
+  dropUnreferenced: boolean,
+): Geometry {
+  const starts = src.primVertexStart;
+  const counts = src.primVertexCount;
+  const v2p = src.vertexToPoint;
+  const nPrim = prims.length;
+  let nv = 0;
+  for (let k = 0; k < nPrim; k++) nv += counts[prims[k]];
+  // Source vertex index of each surviving vertex, so vertex attributes
+  // travel with the primitive that owns them.
+  const vertexSrc = new Uint32Array(nv);
+  const newStart = new Uint32Array(nPrim);
+  const newCount = new Uint32Array(nPrim);
+  let w = 0;
+  for (let k = 0; k < nPrim; k++) {
+    const p = prims[k];
+    const c = counts[p];
+    const s = starts[p];
+    newStart[k] = w;
+    newCount[k] = c;
+    for (let j = 0; j < c; j++) vertexSrc[w++] = s + j;
+  }
+
+  const np = src.pointCount;
+  let pointSrc: Uint32Array | undefined;
+  let remap: Uint32Array | undefined;
+  if (dropUnreferenced) {
+    const used = new Uint8Array(np);
+    for (let v = 0; v < nv; v++) used[v2p[vertexSrc[v]]] = 1;
+    remap = new Uint32Array(np);
+    let kept = 0;
+    for (let i = 0; i < np; i++) {
+      if (used[i] === 1) remap[i] = kept++;
+    }
+    pointSrc = new Uint32Array(kept);
+    let k = 0;
+    for (let i = 0; i < np; i++) {
+      if (used[i] === 1) pointSrc[k++] = i;
+    }
+  }
+
+  const out = new Geometry();
+  // Points first, so setTopology validates the new vertex references
+  // against the right point count.
+  copyElements(src.attrs.point, out.attrs.point, pointSrc, pointSrc?.length ?? np);
+  const newV2P = new Uint32Array(nv);
+  for (let v = 0; v < nv; v++) {
+    const pt = v2p[vertexSrc[v]];
+    newV2P[v] = remap === undefined ? pt : remap[pt];
+  }
+  out.setTopology(newV2P, newStart, newCount);
+  copyElements(src.attrs.vertex, out.attrs.vertex, vertexSrc, nv);
+  copyElements(src.attrs.primitive, out.attrs.primitive, prims, nPrim);
+  copyElements(src.attrs.detail, out.attrs.detail, undefined, src.attrs.detail.count);
+  return out;
+}
+
+/** Params of {@link filterPrimitivesByBounds}. */
+export interface FilterPrimitivesByBoundsParams {
+  boundsMin: readonly number[];
+  boundsMax: readonly number[];
+  vertex: string;
+  mode: string;
+  boundary: string;
+  unreferencedPoints: string;
+}
+
+/** Keep or drop whole primitives by a bounds test, preserving topology. */
+export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsParams>({
+  type: "filterPrimitivesByBounds",
+  category: "filter",
+  description:
+    "Keeps or drops WHOLE PRIMITIVES by testing their vertices against the axis-aligned box [boundsMin, boundsMax], and it is the ONLY filter in this library that PRESERVES TOPOLOGY: the survivors keep their vertices, their vertex and primitive attributes, and the points they share, so a network that goes in comes out a network. Every point filter — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune — rebuilds the point domain from the survivors and the primitives go with it; this node filters the PRIMITIVE domain instead, which is what makes the difference. It exists to complete the partitioned network cook connectPoints prescribes, whose last step no node could perform: widen the cell's rectangle by `radius` and clip the CLOUD to it with filterByBounds ('halfOpen'), run connectPoints, then run THIS node on the UNWIDENED rectangle with vertex 'first' and the same 'halfOpen' boundary. Each cell then emits exactly the edges it owns, the cells tile the whole-region network with no duplicate and no gap, and the recipe is a serializable graph rather than a TypeScript script. `vertex` decides what 'in the box' means for a primitive: 'first' and 'last' consult ONE vertex, which is what makes them OWNERSHIP rules — every primitive has exactly one first vertex, so exactly one box of a tiling claims it — while 'all' and 'any' are SELECTIONS and do not tile ('any' claims a straddling primitive from every box it reaches, 'all' from none of them). connectPoints emits each edge's lower-keyed endpoint FIRST, so with vertex 'first' this node's owner and that node's canonical edge order are the same choice by construction. For a polyline from any other source — pointsToPath, resamplePath, createPolyline — the first vertex is simply the path's START point: still exactly one owner per path, so the tiling is still exact, but the owner is the cell holding the start rather than the cell holding most of the road, and that one cell emits the whole path however far it runs. `mode` 'outside' is the exact complement of 'inside' under whichever vertex rule and boundary are active, so running both over one input reproduces its primitives exactly once; combined with `vertex` that spans the four quantifiers — 'all'+'inside' keeps primitives lying entirely inside, 'any'+'outside' those lying entirely outside, 'any'+'inside' those touching the box, 'all'+'outside' those not entirely within it. `boundary` is filterByBounds' rule with the same meaning and the same reason to prefer 'halfOpen' wherever ownership matters. POINTS: by default (unreferencedPoints 'keep') the point domain is passed through untouched — same points, same indices, same attributes, same identities — so a partition cell keeps its halo points as isolated leftovers; 'drop' removes every point no surviving primitive references and renumbers the topology onto what is left, which is how a clean network comes out. A geometry with no primitives is not an error but an empty result: a cell too sparse to make an edge is a legitimate, silent case in a partitioned cook. Primitives of any kind are handled, polylines and polys alike — this reads vertices, never `primtype`.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    boundsMin: {
+      type: "vec3",
+      default: [0, 0, 0],
+      description:
+        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+    },
+    boundsMax: {
+      type: "vec3",
+      default: [1, 1, 1],
+      description:
+        "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin.",
+    },
+    vertex: {
+      type: "enum",
+      default: "first",
+      enum: ["first", "last", "all", "any"],
+      description:
+        "Which of a primitive's vertices the box test reads. 'first' (the default) and 'last' read exactly ONE — the primitive's first or last vertex — which is what makes them ownership rules: every primitive has exactly one of each, so abutting boxes under the 'halfOpen' boundary claim it exactly once between them. Use 'first' with connectPoints, whose edges already lead with their lower-keyed endpoint, so the owner a cell computes matches the canonical edge order rather than merely correlating with it. 'all' keeps a primitive only when EVERY vertex is in the box, 'any' when at least one is; both are selections, and neither tiles — 'any' hands a straddling primitive to every box it reaches and 'all' to none of them, so a partitioned cook using either double-counts or loses edges at the seams. A primitive with no vertices is never inside, under all four rules.",
+    },
+    mode: {
+      type: "enum",
+      default: "inside",
+      enum: ["inside", "outside"],
+      description:
+        "'inside' keeps the primitives the `vertex` rule places in the box, 'outside' keeps the rest. They are exact complements under whichever vertex rule and boundary are active, so running both over one input reproduces every primitive exactly once. Read the two params together: 'any' with 'outside' keeps primitives lying ENTIRELY outside the box (no vertex inside), which is the deletion 'all' with 'outside' does NOT perform — that one keeps everything not entirely within it, straddlers included.",
+    },
+    boundary: {
+      type: "enum",
+      default: "halfOpen",
+      enum: ["halfOpen", "inclusive"],
+      description:
+        "Which faces belong to the box, exactly as in filterByBounds. 'halfOpen' (the default) keeps min <= p < max on every axis, so two boxes meeting at a face claim a vertex lying on it exactly once between them — pair it with vertex 'first' and it is an ownership rule a partitioned cook can tile with. 'inclusive' keeps min <= p <= max, so both boxes claim that vertex, and with vertex 'first' both would emit the same edge; choose it for a selection whose faces carry points on purpose, never for a cook that is split into cells.",
+    },
+    unreferencedPoints: {
+      type: "enum",
+      default: "keep",
+      enum: ["keep", "drop"],
+      description:
+        "What happens to points no surviving primitive references. 'keep' (the default) leaves the point domain completely untouched: same points in the same order, so every point index, attribute and identity is still the input's and anything computed per point upstream still lines up — a partition cell keeps its halo points as isolated leftovers beside the network it owns. 'drop' removes them and renumbers the topology onto the points that remain, in ascending input order, which yields a clean network with nothing dangling; the cost is that point indices move, and that a point kept by one cell may also be kept by its neighbour, since an edge crossing a seam needs both of its endpoints wherever it is emitted. Note that 'drop' also drops points that had NO primitive to begin with, so a cloud carrying both a road network and unrelated scatter loses the scatter — filter such a cloud before the network is built, or keep the leftovers.",
+    },
+  },
+  execute({ inputs, params }) {
+    const geo = requireGeometry(inputs, "in", "filterPrimitivesByBounds");
+    const who = "filterPrimitivesByBounds";
+    const wantInside = requireInsideOutside(who, params.mode);
+    const inclusive = requireBoundaryRule(who, params.boundary);
+    requireBounds3(who, params.boundsMin, params.boundsMax);
+    const vertexRule = params.vertex;
+    if (
+      vertexRule !== "first" &&
+      vertexRule !== "last" &&
+      vertexRule !== "all" &&
+      vertexRule !== "any"
+    ) {
+      throw new Error(
+        `${who}: vertex must be "first", "last", "all" or "any", got ${JSON.stringify(vertexRule)}; ` +
+          '"first" and "last" test ONE vertex and are the ownership rules a partitioned cook tiles with (use "first" after connectPoints, whose edges lead with their lower-keyed endpoint); ' +
+          '"all" and "any" test every vertex and are selections — neither tiles, since a primitive straddling a seam is claimed by every cell under "any" and by none under "all"',
+      );
+    }
+    const drop = params.unreferencedPoints;
+    if (drop !== "keep" && drop !== "drop") {
+      throw new Error(
+        `${who}: unreferencedPoints must be "keep" or "drop", got ${JSON.stringify(drop)}; ` +
+          '"keep" leaves the point domain untouched (indices, attributes and identities stay the input\'s, and unreferenced points remain as isolated leftovers), ' +
+          '"drop" removes every point no surviving primitive references and renumbers the topology onto the rest',
+      );
+    }
+    // Named here rather than left to `require("P")`, which would report a
+    // bare attribute name and leave an agent hunting for the node.
+    const P = geo.attrs.point.get("P");
+    if (!P) {
+      throw new Error(
+        `${who}: input has no point attribute "P"; every point cloud in this library carries one — available: ${geo.attrs.point.names().join(", ") || "(none)"}`,
+      );
+    }
+    if (P.type === "string" || P.tupleSize < 3) {
+      throw new Error(
+        `${who}: point attribute "P" is ${P.type}${P.tupleSize === 1 ? "" : `x${P.tupleSize}`}, but a box test needs x, y and z (f32, tupleSize 3); something upstream overwrote P`,
+      );
+    }
+    const pd = P.data;
+    const ps = P.tupleSize;
+    const [ax, ay, az] = params.boundsMin;
+    const [bx, by, bz] = params.boundsMax;
+    // One predicate, negated for 'outside', so the complement is exact by
+    // construction under every combination of the two rules — a second
+    // predicate for the outside case is how a gap or an overlap gets in.
+    // A NaN coordinate is never inside, so such a vertex lands outside.
+    const insidePoint = (pt: number): boolean => {
+      const o = pt * ps;
+      const x = pd[o];
+      const y = pd[o + 1];
+      const z = pd[o + 2];
+      return (
+        x >= ax &&
+        y >= ay &&
+        z >= az &&
+        (inclusive ? x <= bx && y <= by && z <= bz : x < bx && y < by && z < bz)
+      );
+    };
+    const v2p = geo.vertexToPoint;
+    const starts = geo.primVertexStart;
+    const counts = geo.primVertexCount;
+    const keep: number[] = [];
+    for (let p = 0; p < geo.primitiveCount; p++) {
+      const c = counts[p];
+      const s = starts[p];
+      let inside: boolean;
+      if (c === 0) {
+        // Nothing to test: not inside under every rule, including the
+        // vacuous-truth reading of "all", so the four rules agree.
+        inside = false;
+      } else if (vertexRule === "first") {
+        inside = insidePoint(v2p[s]);
+      } else if (vertexRule === "last") {
+        inside = insidePoint(v2p[s + c - 1]);
+      } else {
+        const wantAll = vertexRule === "all";
+        inside = wantAll;
+        for (let j = 0; j < c; j++) {
+          if (insidePoint(v2p[s + j]) !== wantAll) {
+            inside = !wantAll;
+            break;
+          }
+        }
+      }
+      if (inside === wantInside) keep.push(p);
+    }
+    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop === "drop"))] };
   },
 });
 

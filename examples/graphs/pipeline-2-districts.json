@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "seed": 40100,
   "meta": {
-    "title": "staged pipeline 2/4 — district centres and the field they claim",
+    "title": "staged pipeline 2/5 — district centres and the field they claim",
     "description": "Stage 1 verbatim, plus a district layer. ADDS `districts`: a 34x34 grid masked to a disc and dropped onto the terrain, with every surviving cell told which district owns it. The centres come from a separate scatter thinned by `selfPrune`, numbered with an i32 `district` and given a string `districtKind`; `sampleNearestPoint` then writes the owning index, the distance to it and the kind onto each cell. `terrain` and `boundary` cook bit-identically to stage 1 — nothing upstream was touched. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.",
     "tags": [
       "pipeline",

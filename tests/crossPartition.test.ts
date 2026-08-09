@@ -41,6 +41,7 @@ import {
   Pcg32,
   World,
   attribute,
+  connectPoints,
   cook,
   dataInput,
   filterByBounds,
@@ -57,7 +58,14 @@ import {
 import { firstGeo } from "../src/nodes/testSupport.js";
 import { gatherPoints } from "../src/nodes/util.js";
 import {
+  edgeKeys,
+  edgeMultisetDiff,
+  edgeRecords,
+  orientedEdgeKeys,
+} from "./support/edgeMultiset.js";
+import {
   formatPartitionReport,
+  keyPartitionReport,
   multisetDiff,
   partitionReport,
   pointKeys,
@@ -82,6 +90,17 @@ const JITTER = 0.5;
  * correct; anything narrower is the negative control below.
  */
 const HALO = RADIUS + 2 * JITTER * Math.SQRT2;
+/**
+ * Source density for the EDGE suites, and the one constant they do not
+ * share with the point suites. Points scale with density; edges scale
+ * with its SQUARE, because an edge needs two points to land within
+ * `RADIUS` of each other — at `DENSITY` a 48-unit seam has about three
+ * edges crossing it, which is not a population an agreement test can say
+ * anything about. This is chosen so the probabilistic filter still halves
+ * the cloud to roughly `4 * DENSITY` and every seam below carries dozens
+ * of crossings.
+ */
+const EDGE_DENSITY = 8 * DENSITY;
 
 // ---------------------------------------------------------------------------
 // The graph under test
@@ -97,7 +116,23 @@ type Head =
   | { readonly kind: "items"; readonly geo: Geometry }
   | ({ readonly kind: "world" } & Box);
 
+/** How the edge network at the end of the chain is built, when there is one. */
+interface EdgeOptions {
+  /** `connectPoints` mode. Both are halo-exact at `haloWidth >= radius`. */
+  readonly mode?: "radius" | "relativeNeighborhood";
+  /**
+   * Write each point's DEGREE. Legal only where every cook sees the whole
+   * cloud: a point sitting in a cell's HALO has its degree truncated by
+   * the halo's own edge, correctly — it is not that cell's point to
+   * report on — so a partition suite that put degree in an endpoint's key
+   * would be comparing two different questions.
+   */
+  readonly degree?: boolean;
+}
+
 interface ChainOptions {
+  /** The source's density. Defaults to `DENSITY`; the edge suites raise it. */
+  readonly sourceDensity?: number;
   /** Include the probabilistic filter (changes the point COUNT). */
   readonly filter?: boolean;
   /**
@@ -118,6 +153,13 @@ interface ChainOptions {
    * about every point, on the value the cloud actually stores.
    */
   readonly clip?: Box;
+  /**
+   * Append `connectPoints`, turning the cloud into a network. Last in the
+   * chain on purpose: every point-removing node in this library rebuilds
+   * the point domain and drops topology with it, so a `clip` placed after
+   * this would delete exactly what the edge suites are here to compare.
+   */
+  readonly edges?: EdgeOptions;
 }
 
 /** A built graph, with the source handle a `World` level needs to bind. */
@@ -147,7 +189,7 @@ function buildGraph(head: Head, opts: ChainOptions = {}): Built {
   const scatter = g.add(
     pointScatterInWorld,
     {
-      density: DENSITY,
+      density: opts.sourceDensity ?? DENSITY,
       cellSize: LATTICE,
       latticeMode: "xz",
       height: 0,
@@ -210,6 +252,20 @@ function buildGraph(head: Head, opts: ChainOptions = {}): Built {
       ),
     );
   }
+  if (opts.edges !== undefined) {
+    connect(
+      g.add(
+        connectPoints,
+        {
+          mode: opts.edges.mode ?? "radius",
+          radius: RADIUS,
+          degreeAttr: opts.edges.degree === true ? "degree" : "",
+          lengthAttr: "edgeLength",
+        },
+        "edges",
+      ),
+    );
+  }
   g.output(node, "out", "points");
   return { graph: g, source: scatter };
 }
@@ -265,15 +321,27 @@ function tagsOf(geo: Geometry): number[] {
   return Array.from({ length: geo.pointCount }, (_, i) => attr.get(i));
 }
 
-/** Points whose PRE-JITTER position lies in [min, max) on X and Z. */
-function ownedBy(geo: Geometry, { min, max }: Box): Geometry {
+/**
+ * The half-open ownership test for `box`, as a predicate on a point index.
+ * Built once per cloud rather than per point, and shared by the point clip
+ * below and the PRIMITIVE-level edge clip in suite 5 — the two rules have
+ * to agree on the same coordinate or a cell would own a point but not the
+ * edges that point anchors.
+ */
+function ownershipTest(geo: Geometry, { min, max }: Box): (i: number) => boolean {
   const p0 = geo.attrs.point.require("P0");
-  const keep: number[] = [];
-  for (let i = 0; i < geo.pointCount; i++) {
+  return (i: number): boolean => {
     const x = p0.get(i, 0);
     const z = p0.get(i, 2);
-    if (x >= min[0] && x < max[0] && z >= min[1] && z < max[1]) keep.push(i);
-  }
+    return x >= min[0] && x < max[0] && z >= min[1] && z < max[1];
+  };
+}
+
+/** Points whose PRE-JITTER position lies in [min, max) on X and Z. */
+function ownedBy(geo: Geometry, box: Box): Geometry {
+  const owns = ownershipTest(geo, box);
+  const keep: number[] = [];
+  for (let i = 0; i < geo.pointCount; i++) if (owns(i)) keep.push(i);
   return gatherPoints(geo, keep);
 }
 
@@ -816,5 +884,446 @@ describe("far from the origin", () => {
         "a haloed split ten million units out does not reproduce the region cooked whole",
       ),
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Edges: the same three questions, one domain up
+
+/**
+ * Phase 43's `connectPoints` gives a partitioned cook a SECOND thing to
+ * conserve, and the four suites above cannot see it. They compare point
+ * multisets; delete every edge and all four still pass. What has to
+ * survive a partition now is an EDGE SET at the primitive domain, and the
+ * comparator for it is `tests/support/edgeMultiset.ts` — an edge named by
+ * its two endpoints' full point records, because a primitive index and a
+ * point index are both facts about one cook's arrays.
+ *
+ * NOT a duplicate of `src/nodes/topology.test.ts`, which asks the same
+ * three questions of the NODE, over hand-built lattice clouds and a
+ * decimal-position edge name. These ask them of a real graph: a
+ * world-anchored source, an identity-keyed probabilistic filter that
+ * shifts every index, an identity-keyed jitter that moves the very
+ * positions the edge test measures, `cook`, and edge names carrying every
+ * point attribute float-exact. A node can be right and a chain still be
+ * wrong.
+ *
+ * THE OWNERSHIP CLIP IS PRIMITIVE-LEVEL, AND HAS TO BE. The obvious way
+ * to trim a cell's halo — append `filterByBounds` — routes through
+ * `gatherPoints` and rebuilds the point domain, which drops topology
+ * outright: the cell would come back with the right points and NO edges,
+ * and an edge comparison against an empty set is not a test. So the clip
+ * lives here, as the rule the node's own description states: a window
+ * emits an edge iff the edge's FIRST vertex — `connectPoints` writes the
+ * lower-keyed endpoint there — lies in the window's half-open owned
+ * rectangle. One named endpoint decides, so a tiling can neither
+ * double-count nor gap; the negative controls below are exactly the two
+ * ways to get that wrong.
+ */
+
+/** How a window decides which of the edges it can see are ITS edges. */
+type Ownership =
+  /** The rule: the lower-keyed endpoint, which `connectPoints` writes first. */
+  | "first"
+  /** The double-emitting mistake: any endpoint inside the box. */
+  | "either"
+  /** The gapping mistake: every endpoint inside the box. */
+  | "both";
+
+/** The canonical keys of the edges `box` owns out of `geo`, under `rule`. */
+function ownedEdgeKeys(geo: Geometry, box: Box, who: string, rule: Ownership = "first"): string[] {
+  const owns = ownershipTest(geo, box);
+  const keep: string[] = [];
+  for (const e of edgeRecords(geo, who)) {
+    const a = owns(e.firstPoint);
+    const b = owns(e.secondPoint);
+    const mine = rule === "first" ? a : rule === "either" ? a || b : a && b;
+    if (mine) keep.push(e.key);
+  }
+  return keep;
+}
+
+/** Edges of `geo` with one endpoint in `a` and the other in `b`. */
+function crossingEdgeKeys(geo: Geometry, who: string, a: Box, b: Box): string[] {
+  const inA = ownershipTest(geo, a);
+  const inB = ownershipTest(geo, b);
+  return edgeRecords(geo, who)
+    .filter(
+      (e) => (inA(e.firstPoint) && inB(e.secondPoint)) || (inB(e.firstPoint) && inA(e.secondPoint)),
+    )
+    .map((e) => e.key);
+}
+
+/**
+ * Edges `outer` owns that are not wholly inside `a` or wholly inside `b` —
+ * exactly what a "both endpoints" ownership rule over that pair of boxes
+ * would drop. Wider than {@link crossingEdgeKeys} by the edges that reach
+ * out of `outer` altogether, which the network genuinely holds and which
+ * no window would then claim either.
+ */
+function unpairedEdgeKeys(geo: Geometry, who: string, outer: Box, a: Box, b: Box): string[] {
+  const inOuter = ownershipTest(geo, outer);
+  const inA = ownershipTest(geo, a);
+  const inB = ownershipTest(geo, b);
+  return edgeRecords(geo, who)
+    .filter(
+      (e) =>
+        inOuter(e.firstPoint) &&
+        !((inA(e.firstPoint) && inA(e.secondPoint)) || (inB(e.firstPoint) && inB(e.secondPoint))),
+    )
+    .map((e) => e.key);
+}
+
+/** Cook `box` widened by `halo` on every side. */
+const edgeWindow = (box: Box, halo: number, opts: ChainOptions): Promise<Geometry> =>
+  cookWindow([box.min[0] - halo, box.min[1] - halo], [box.max[0] + halo, box.max[1] + halo], opts);
+
+/** The chain the edge suites cook, with and without the jitter. */
+const edgeChain = (mode: "radius" | "relativeNeighborhood", jitter: boolean): ChainOptions => ({
+  sourceDensity: EDGE_DENSITY,
+  filter: true,
+  jitter,
+  edges: { mode },
+});
+
+const EDGE_MODES = ["radius", "relativeNeighborhood"] as const;
+
+// ---------------------------------------------------------------------------
+
+describe("edge permutation equivariance", () => {
+  // Cooked once and permuted by every test. Tagged, so an endpoint's key
+  // carries the point's ORIGINAL slot: an edge that quietly re-attached
+  // itself to a different point would still be an edge of the same length
+  // between the same coordinates, and only the tag would notice.
+  const basePromise = cookWindow([0, 0], [32, 32], { sourceDensity: EDGE_DENSITY }).then(tagged);
+
+  /** The chain plus edges, over a permutation of the base cloud. */
+  const connected = async (geo: Geometry, order?: Uint32Array): Promise<Geometry> =>
+    cookPoints(
+      buildGraph(
+        { kind: "items", geo: order === undefined ? geo : gatherPoints(geo, order) },
+        { filter: true, jitter: true, edges: { degree: true } },
+      ),
+    );
+
+  // One straight cook and one shuffled cook, shared by both tests: the
+  // positive claim and its negative control are two readings of the SAME
+  // pair of outputs, which is also the cheapest way to run them.
+  const pairPromise = (async (): Promise<{ straight: Geometry; shuffled: Geometry }> => {
+    const base = await basePromise;
+    const order = shuffleOrder(base.pointCount, 3607);
+    return { straight: await connected(base), shuffled: await connected(base, order) };
+  })();
+
+  it("emits the same edges in the same SEQUENCE, orientation included", async () => {
+    // The strongest form available, and it is available because
+    // `connectPoints` orders edges by a key made of the POINTS (identity,
+    // then position bits, then seed) rather than by the order its scan
+    // reached them: a shuffle may not merely permute the output, it must
+    // leave it alone. Degrees are in the key too — every cook here sees
+    // the whole cloud, so a truncated degree would be a real error.
+    const { straight, shuffled } = await pairPromise;
+
+    // Non-vacuous: there is a network, and it is not a handful of edges.
+    expect(straight.primitiveCount).toBeGreaterThan(200);
+    expect(shuffled.primitiveCount).toBe(straight.primitiveCount);
+
+    expect(orientedEdgeKeys(shuffled, "shuffled")).toEqual(orientedEdgeKeys(straight, "straight"));
+
+    // ...and the input really was reordered: the stored index pairs moved,
+    // so the sequence above held still across a genuine relabelling.
+    const pairs = (geo: Geometry, who: string): string[] =>
+      edgeRecords(geo, who).map((e) => `${e.firstPoint}-${e.secondPoint}`);
+    expect(pairs(shuffled, "shuffled")).not.toEqual(pairs(straight, "straight"));
+  });
+
+  it("REDDENS when the edge order is keyed on the array index", async () => {
+    // The negative control for the sequence claim above, and the one
+    // mutation a SET comparison provably cannot catch: reordering the
+    // output leaves the edge set untouched. Both halves are asserted.
+    const { straight, shuffled } = await pairPromise;
+
+    // The set survives the mutation — so `edgeMultisetDiff` stays null,
+    // and the strong assertion above is the only thing standing here.
+    expect(edgeMultisetDiff(straight, shuffled, "straight", "shuffled")).toBeNull();
+
+    // The sequence does not. This is the output an index-keyed sort would
+    // have produced: the same edges, ordered by their endpoints' slots in
+    // the array instead of by the points themselves.
+    const byArrayIndex = (geo: Geometry, who: string): string[] =>
+      [...edgeRecords(geo, who)]
+        .sort(
+          (p, q) =>
+            Math.min(p.firstPoint, p.secondPoint) - Math.min(q.firstPoint, q.secondPoint) ||
+            Math.max(p.firstPoint, p.secondPoint) - Math.max(q.firstPoint, q.secondPoint),
+        )
+        .map((e) => e.key);
+    expect(byArrayIndex(shuffled, "shuffled")).not.toEqual(byArrayIndex(straight, "straight"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("edges: split with halo equals whole", () => {
+  const REGION: Box = { min: [0, 0], max: [32, 32] };
+  const SPLIT = 16;
+
+  const cellBoxes = (): (Box & { label: string })[] => {
+    const boxes: (Box & { label: string })[] = [];
+    for (let cz = REGION.min[1]; cz < REGION.max[1]; cz += SPLIT) {
+      for (let cx = REGION.min[0]; cx < REGION.max[0]; cx += SPLIT) {
+        boxes.push({ min: [cx, cz], max: [cx + SPLIT, cz + SPLIT], label: `cell(${cx},${cz})` });
+      }
+    }
+    return boxes;
+  };
+
+  /** Cook `box` with `halo`, keep the edges `box` owns. */
+  const pieceOf = async (
+    box: Box,
+    halo: number,
+    opts: ChainOptions,
+    label: string,
+    rule: Ownership = "first",
+  ): Promise<string[]> => ownedEdgeKeys(await edgeWindow(box, halo, opts), box, label, rule);
+
+  for (const mode of EDGE_MODES) {
+    it(`is exact at haloWidth == radius (${mode})`, async () => {
+      // THE BOUND ITSELF, at equality and not one unit clear of it. With
+      // the jitter out of the chain a point's ownership coordinate IS the
+      // position the distance test reads, so `haloWidth == RADIUS` is
+      // exactly `connectPoints`'s documented contract with no slack hiding
+      // an off-by-one: an owned `A` sits in [min, max), a neighbour is
+      // STRICTLY within RADIUS of it, so it lands strictly inside
+      // [min - RADIUS, max + RADIUS) and the half-open halo cannot cut it.
+      //
+      // `relativeNeighborhood` is here on the same bound and not a wider
+      // one because its lune witness is closer to `A` than `B` is, hence
+      // inside `A`'s own radius neighbourhood — the mode thins the network
+      // without widening what a cell has to see.
+      const opts = edgeChain(mode, false);
+      const whole = await pieceOf(REGION, RADIUS, opts, "whole");
+      expect(whole.length).toBeGreaterThan(100);
+
+      const boxes = cellBoxes();
+      expect(boxes.length).toBe(4);
+      const parts = [];
+      for (const box of boxes) {
+        parts.push({ label: box.label, keys: await pieceOf(box, RADIUS, opts, box.label) });
+      }
+      for (const part of parts) expect(part.keys.length).toBeGreaterThan(20);
+
+      expect(
+        formatPartitionReport(
+          keyPartitionReport(parts, whole),
+          `the cells do not reproduce the ${mode} network cooked whole`,
+          "edge",
+        ),
+      ).toBeNull();
+    });
+
+    it(`stitches back through the jitter, on the suite's halo (${mode})`, async () => {
+      // The same question over the chain the point suites cook, so the two
+      // compose rather than each carrying its own convention. `HALO` is
+      // `RADIUS` plus the widest a pair of jitters can pull two points
+      // together (2 * JITTER * sqrt(2) of distance, and 2 * JITTER on any
+      // one axis), which is what ownership deciding on P0 while the
+      // distance test reads the jittered P costs.
+      const opts = edgeChain(mode, true);
+      const whole = await pieceOf(REGION, HALO, opts, "whole");
+      expect(whole.length).toBeGreaterThan(100);
+
+      const parts = [];
+      for (const box of cellBoxes()) {
+        parts.push({ label: box.label, keys: await pieceOf(box, HALO, opts, box.label) });
+      }
+      for (const part of parts) expect(part.keys.length).toBeGreaterThan(20);
+
+      expect(
+        formatPartitionReport(
+          keyPartitionReport(parts, whole),
+          `a jittered ${mode} split does not reproduce the region cooked whole`,
+          "edge",
+        ),
+      ).toBeNull();
+    });
+
+    it(`REDDENS on a halo narrower than the radius (${mode})`, async () => {
+      // The negative control, and the reason the bound above is a claim
+      // rather than a coincidence. Positions, survival and the jitter are
+      // all pure functions of world coordinates, so a narrow halo leaves
+      // every OWNED POINT exactly where it was — the point suites' own
+      // question stays green — and takes away only the neighbours a cell
+      // needed to see. Edges near a seam simply stop existing, which is
+      // invisible to every comparator this file had before phase 43.
+      //
+      // A THIRD of the radius rather than one unit under it, because the
+      // two modes have very different margins here and the control has to
+      // bite in both. Measured: at `RADIUS - 1` the radius network loses
+      // 13 edges and the relative-neighbourhood one loses 1 — the lune
+      // test throws away exactly the LONG pairs, which are the pairs a
+      // narrow halo can cut, so its surviving edges are short and hard to
+      // reach. One is a real catch and not a flaky one (every fixture
+      // here is seeded), but it is too thin a margin to keep as the
+      // standing guard.
+      const opts = edgeChain(mode, false);
+      const whole = await pieceOf(REGION, RADIUS, opts, "whole");
+      const parts = [];
+      for (const box of cellBoxes()) {
+        parts.push({ label: box.label, keys: await pieceOf(box, RADIUS / 3, opts, box.label) });
+      }
+
+      const report = keyPartitionReport(parts, whole);
+      expect(report.missing.length).toBeGreaterThan(5);
+      expect(report.duplicated).toEqual([]);
+      expect(
+        formatPartitionReport(report, "a narrow halo should not reproduce the whole", "edge"),
+      ).not.toBeNull();
+    });
+  }
+
+  it("holds no pair at exactly the radius, so STRICTNESS is out of this file's reach", async () => {
+    // The mutation these suites CANNOT catch, measured rather than argued,
+    // because "no test here covers that" is a claim that rots silently.
+    //
+    // An inclusive `d <= radius` test differs from the strict one on
+    // exactly one population: pairs at EXACTLY the radius. Over a jittered
+    // f32 cloud that population is empty, so swapping the predicate is a
+    // no-op on every fixture in this file and no partition report here can
+    // redden. It is pinned where the pair can be placed by construction —
+    // `src/nodes/topology.test.ts`, "the STRICT predicate, and what it
+    // buys", which builds the knife-edge pair and the window that cuts it.
+    // (PLAN records the same conclusion from the other direction: under
+    // half-open ownership the two half-open rules cancel, so even a
+    // knife-edge pair does not break a partition. Strict ships because it
+    // survives an ownership rule CLOSED at the max face, which is not a
+    // configuration this file cooks.)
+    const geo = await edgeWindow(REGION, RADIUS, edgeChain("radius", true));
+    const P = geo.attrs.point.require("P");
+    const limit = RADIUS * RADIUS;
+    let near = 0;
+    let onTheKnife = 0;
+    for (let i = 0; i < geo.pointCount; i++) {
+      const x = P.get(i, 0);
+      const y = P.get(i, 1);
+      const z = P.get(i, 2);
+      for (let j = i + 1; j < geo.pointCount; j++) {
+        const dx = P.get(j, 0) - x;
+        const dy = P.get(j, 1) - y;
+        const dz = P.get(j, 2) - z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < 4 * limit) near++;
+        if (d2 === limit) onTheKnife++;
+      }
+    }
+    // Non-vacuous: thousands of pairs were in a position to land on it.
+    expect(near).toBeGreaterThan(1000);
+    expect(onTheKnife).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("edges: two-cell seam agreement", () => {
+  const STRIP: Box = { min: [0, 0], max: [32, 32] };
+  const SEAM = 16;
+  const LEFT: Box = { min: [0, 0], max: [SEAM, 32] };
+  const RIGHT: Box = { min: [SEAM, 0], max: [32, 32] };
+  const CHAIN = edgeChain("radius", true);
+
+  // Three cooks, shared by every test here: the strip whole, and each side
+  // of the seam deriving its own halo from world coordinates.
+  const seamPromise = (async (): Promise<{
+    whole: Geometry;
+    left: Geometry;
+    right: Geometry;
+    crossing: string[];
+    unpaired: string[];
+  }> => {
+    const whole = await edgeWindow(STRIP, HALO, CHAIN);
+    return {
+      whole,
+      left: await edgeWindow(LEFT, HALO, CHAIN),
+      right: await edgeWindow(RIGHT, HALO, CHAIN),
+      crossing: crossingEdgeKeys(whole, "strip", LEFT, RIGHT),
+      unpaired: unpairedEdgeKeys(whole, "strip", STRIP, LEFT, RIGHT),
+    };
+  })();
+
+  it("emits every edge across the boundary exactly once", async () => {
+    const { whole, left, right, crossing } = await seamPromise;
+    const wholeKeys = ownedEdgeKeys(whole, STRIP, "strip");
+    expect(wholeKeys.length).toBeGreaterThan(200);
+
+    // Non-vacuous, and this is the whole point of the suite: dozens of
+    // edges have one end on each side of the seam, so both windows can
+    // SEE them and only the ownership rule decides.
+    expect(crossing.length).toBeGreaterThan(20);
+    expect(new Set(crossing).size).toBe(crossing.length);
+
+    expect(
+      formatPartitionReport(
+        keyPartitionReport(
+          [
+            { label: "left", keys: ownedEdgeKeys(left, LEFT, "left") },
+            { label: "right", keys: ownedEdgeKeys(right, RIGHT, "right") },
+          ],
+          wholeKeys,
+        ),
+        "two abutting windows do not partition the network",
+        "edge",
+      ),
+    ).toBeNull();
+  });
+
+  it("REDDENS on an either-endpoint rule, and on a both-endpoints one", async () => {
+    // The two ways to get a primitive-level clip wrong, and they are
+    // opposite bugs: `either` emits every seam-crossing edge from BOTH
+    // sides, `both` emits it from NEITHER, and a comparison of totals
+    // would pass on the pair of them applied together. That is why the
+    // report separates `duplicated` from `missing`, and why the rule
+    // names ONE endpoint rather than testing the pair.
+    //
+    // Each mistake is identified exactly, not merely detected: the
+    // duplicates ARE the crossing edges, and the gaps are every edge not
+    // wholly inside one side — which is the crossing edges plus the ones
+    // reaching out of the strip, since `both` refuses those too.
+    const { whole, left, right, crossing, unpaired } = await seamPromise;
+    const wholeKeys = ownedEdgeKeys(whole, STRIP, "strip");
+
+    const doubled = keyPartitionReport(
+      [
+        { label: "left", keys: ownedEdgeKeys(left, LEFT, "left", "either") },
+        { label: "right", keys: ownedEdgeKeys(right, RIGHT, "right", "either") },
+      ],
+      wholeKeys,
+    );
+    expect(doubled.duplicated.map((d) => d.key).sort()).toEqual([...crossing].sort());
+    expect(doubled.duplicated[0].parts).toEqual(["left", "right"]);
+    expect(doubled.missing).toEqual([]);
+
+    const gapped = keyPartitionReport(
+      [
+        { label: "left", keys: ownedEdgeKeys(left, LEFT, "left", "both") },
+        { label: "right", keys: ownedEdgeKeys(right, RIGHT, "right", "both") },
+      ],
+      wholeKeys,
+    );
+    expect(new Set(unpaired).size).toBe(unpaired.length);
+    expect(unpaired.length).toBeGreaterThanOrEqual(crossing.length);
+    expect([...gapped.missing].sort()).toEqual([...unpaired].sort());
+    expect(gapped.duplicated).toEqual([]);
+  });
+
+  it("measures the edges the two sides SHARE identically, not merely alike", async () => {
+    // The seam's other half. Agreement about WHICH edges exist is only
+    // part of it: each window's halo reaches RADIUS past the seam, so a
+    // band that wide is built by both, and an edge's key carries its
+    // length and both endpoints' every attribute — a value that moved by
+    // an ulp in one window is a DIFFERENT edge here, not a near miss.
+    const { left, right } = await seamPromise;
+    const shared = new Set(edgeKeys(left, "left"));
+    const both = edgeKeys(right, "right").filter((k) => shared.has(k));
+    expect(both.length).toBeGreaterThan(20);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * The staged pipeline (`examples/graphs/pipeline-*.json`), and the one
- * property that makes it a pipeline rather than six unrelated graphs.
+ * property that makes it a pipeline rather than eight unrelated graphs.
  *
  * THE PROPERTY. Each stage's file is the previous stage's file plus new
  * nodes, connections and outputs. Nothing is removed, no shared node is
@@ -76,17 +76,37 @@ const CHAIN: readonly (readonly [string, string])[] = [
   ["pipeline-1-boundary.json", "pipeline-2-districts.json"],
   ["pipeline-2-districts.json", "pipeline-3-lots.json"],
   ["pipeline-3-lots.json", "pipeline-4-detail.json"],
+  ["pipeline-4-detail.json", "pipeline-5-roads.json"],
   ["pipeline-3-lots-edits.json", "pipeline-4-detail-edits.json"],
+  ["pipeline-4-detail-edits.json", "pipeline-5-roads-edits.json"],
 ];
 
 /** The (base, edited) pairs: same stage, one with an authored edit layer. */
 const EDITED: readonly (readonly [string, string])[] = [
   ["pipeline-3-lots.json", "pipeline-3-lots-edits.json"],
   ["pipeline-4-detail.json", "pipeline-4-detail-edits.json"],
+  ["pipeline-5-roads.json", "pipeline-5-roads-edits.json"],
 ];
 
 /** Outputs an edit must NOT reach: everything upstream of where it enters. */
 const UPSTREAM_OF_EDITS = ["terrain", "boundary", "districts"];
+
+/**
+ * Outputs a PARTICULAR stage adds to that list, keyed by the base file.
+ *
+ * Not folded into `UPSTREAM_OF_EDITS`, because the check below asserts each
+ * name is present: an output stage 5 introduces cannot be demanded of the
+ * stage-3 and stage-4 pairs, and softening the check to "compare it if it
+ * happens to be there" would make a DROPPED output pass silently. So the
+ * extra names are attached to the stage that has them.
+ *
+ * Stage 5's road net is built from the district centres — `centreKind`,
+ * upstream of the `edits` slot — so `roads` and the `lamps` spawned along it
+ * are as untouchable by an edit as the terrain is.
+ */
+const UPSTREAM_BY_STAGE: Readonly<Record<string, readonly string[]>> = {
+  "pipeline-5-roads.json": ["roads", "lamps"],
+};
 
 /** Ceiling on instances across every declared output of one stage. */
 const INSTANCE_BUDGET = 1000;
@@ -170,7 +190,7 @@ function outputsByName(graph: Json): Map<string, string> {
 }
 
 /**
- * One stage's cook, memoized. Six files feed three comparison loops, so
+ * One stage's cook, memoized. Eight files feed three comparison loops, so
  * without this the suite cooks the same graph up to four times.
  */
 const cooks = new Map<string, Promise<Awaited<ReturnType<typeof cookCorpusGraph>>>>();
@@ -234,7 +254,7 @@ describe("staged pipeline", () => {
     // suite green while testing nothing.
     const missing = [...CHAIN, ...EDITED].flat().filter((f) => !stages.has(f));
     expect([...new Set(missing)]).toEqual([]);
-    expect(stages.size).toBe(6);
+    expect(stages.size).toBe(8);
   });
 
   it("compares connections by ORDER, not just by endpoints", () => {
@@ -401,7 +421,7 @@ describe("staged pipeline", () => {
     it(`${ext} changes only what the edit can reach`, async () => {
       const before = await fingerprintOf(base);
       const after = await fingerprintOf(ext);
-      for (const name of UPSTREAM_OF_EDITS) {
+      for (const name of [...UPSTREAM_OF_EDITS, ...(UPSTREAM_BY_STAGE[base] ?? [])]) {
         expect(after[name], `output "${name}" is upstream of the edit slot`).toBeDefined();
         if (JSON.stringify(after[name]) !== JSON.stringify(before[name])) {
           throw new Error(
@@ -475,6 +495,67 @@ describe("staged pipeline", () => {
           "true of this file. Fix the graph, not this test.",
         ].join("\n"),
       );
+    }
+  });
+
+  it("stage 5's roads are a NETWORK, not another tour", async () => {
+    // What stage 5 exists to demonstrate, stated as a property rather than
+    // left to the golden. The golden pins `roads` at 9 points and 10
+    // primitives, and those two numbers survive a graph that came out as a
+    // single closed chain — which is exactly what stage 3's `spine` already
+    // is, and which would make the stage teach nothing new. The claim is
+    // about DEGREE: `connectPoints` builds its polylines over the SAME
+    // points, so a centre where three roads meet is one point of degree 3,
+    // and `pointsToPath` — one group per point, hence two neighbours each —
+    // cannot produce that at all.
+    const { outputs } = await cookOf("pipeline-5-roads.json");
+    const items = outputs.roads ?? [];
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    if (item?.kind !== "geometry") throw new Error('output "roads" is not geometry');
+    const geo = item.geo;
+    const points = geo.attrs.point.count;
+    const segments = geo.attrs.primitive.count;
+
+    // Every primitive is one EDGE: two vertices, two distinct endpoints.
+    const degree = new Uint32Array(points);
+    const parent = new Uint32Array(points).map((_, i) => i);
+    const find = (x: number): number => {
+      let root = x;
+      while (parent[root] !== root) root = parent[root] as number;
+      return root;
+    };
+    for (let p = 0; p < segments; p++) {
+      expect(geo.primVertexCount[p], `primitive ${p} is not a 2-vertex edge`).toBe(2);
+      const start = geo.primVertexStart[p] as number;
+      const a = geo.vertexToPoint[start] as number;
+      const b = geo.vertexToPoint[start + 1] as number;
+      expect(a, `primitive ${p} is a self-loop`).not.toBe(b);
+      degree[a]++;
+      degree[b]++;
+      parent[find(a)] = find(b);
+    }
+
+    const components = new Set([...degree.keys()].map(find)).size;
+    const junctions = [...degree].filter((d) => d >= 3).length;
+    const shape =
+      `${points} centres, ${segments} segments, ${components} component(s), ` +
+      `degrees [${[...degree].join(", ")}]`;
+
+    // It branches: at least one point carries three roads. A cloud where
+    // every degree is 1 or 2 is a chain or a ring however it was built.
+    expect(junctions, `the road net does not branch — ${shape}`).toBeGreaterThan(0);
+    // It is CONNECTED, which is what the relative-neighbourhood graph buys
+    // by containing a minimum spanning tree of everything the radius reached.
+    expect(components, `the road net is disconnected — ${shape}`).toBe(1);
+    // ...and it keeps CYCLES, the other half of the same choice: a tree of
+    // n points has exactly n - 1 edges, so more than that means a loop.
+    expect(segments, `the road net is a tree, not a network — ${shape}`).toBeGreaterThan(points - 1);
+    // Degree is reported on the points, not inferred here.
+    const degreeAttr = [...geo.attrs.point].find((a) => a.name === "degree");
+    expect(degreeAttr, '`roadNet` no longer writes its `degree` attribute').toBeDefined();
+    for (let i = 0; i < points; i++) {
+      expect(degreeAttr?.getTuple(i)[0], `degree of point ${i} — ${shape}`).toBe(degree[i]);
     }
   });
 

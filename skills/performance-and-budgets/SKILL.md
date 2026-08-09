@@ -42,8 +42,9 @@ numbers for one pin, which attributes cost to a branch rather than a graph.
 
 **The trap: warm is not cached.** A second run being faster proves
 nothing about caching — check `cached` before concluding it. Measured on
-the staged pipeline: all six files in a fresh process, 124 ms; the same six
-again in that process, 42 ms, worst stage 12 ms — and every pass reported
+the staged pipeline, which had six files then: all six in a fresh process,
+124 ms; the same six again in that process, 42 ms, worst stage 12 ms — and
+every pass reported
 `cached=0`, because each file was deserialized into a *new* graph with cold
 caches. That 3x is the JIT, not the memoizer. The memo cache looks nothing
 like it: re-cooking one *same* graph object went `39 cooked, 0 cached,
@@ -157,7 +158,10 @@ up as seam pairs closer than the distance the node exists to enforce.
 `selfPrune` therefore carries a `mode`; the local-maximum rule decides each
 point from its immediate neighbours alone and is the halo-exact one, at the
 cost of keeping strictly fewer points. `docs/nodes.md` has the rule, the
-required halo width, and the measured seam numbers.
+required halo width, and the measured seam numbers. The general test —
+count the **hops of dependency** before an answer is settled, zero / one /
+unbounded — is the `determinism` skill's, with the worked examples; use it
+before sizing a halo rather than after measuring a seam.
 
 The three cases above it are worse still: they measure the whole population,
 so no reach bound exists to widen to.
@@ -192,12 +196,25 @@ Cheapest and most selective first, so everything after runs on fewer
 points. A bounds or attribute comparison costs almost nothing; a raycast
 transfer, a neighbourhood query or a noise field costs per point.
 
+**Pair-wise work is priced in `radius`, not in point count.**
+`connectPoints` scans the same radius neighbourhood in both modes, and the
+pair count grows with `radius^2` over a surface and `radius^3` through a
+volume — so it is `radius` that runs away, and a guard at 1,048,576 edges
+fails during the scan rather than after allocating. Switching to
+`relativeNeighborhood` does not help the cost: it keeps far fewer edges but
+selects them from the same neighbourhood. Lower `radius`, thin the cloud
+upstream (`selfPrune`, `filterByDensity`) — upstream, because a filter
+placed *after* it also destroys the network — or cook the region in cells.
+
 **Where the filter sits relative to expensive work.** Filtering *after* the
 expensive node pays for points you are about to discard, so move it
 upstream of the cost — with one hard exception from the `graph-authoring`
-skill: a filter rebuilds the point domain and drops path topology, so a
-graph that needs a path filters first and builds the path after. Order for
-cost, then check you have not broken topology.
+skill: a filter rebuilds the point domain and drops polyline topology, so a
+graph that needs a path or a network filters first and builds the topology
+after. Here cost and correctness point the same way, which is convenient
+until the filter is a cell clip and cannot move; then ownership goes on the
+primitive domain instead, via `filterPrimitivesByBounds`. Order for cost,
+then check you have not broken topology.
 
 **When a stage exceeds its budget, shrink the stage.** The staged pipeline
 holds itself to 1000 instances across a stage's declared outputs
