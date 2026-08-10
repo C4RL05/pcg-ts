@@ -53,6 +53,35 @@
  * images to land on renderer and asset work as often as on generation;
  * what pcg-ts is answerable for is PLACEMENT — density, slope, declutter,
  * species mix, clearings, trails.
+ *
+ * ---------------------------------------------------------------------------
+ * KNOWN LIMITATIONS
+ *
+ * Found by review, left in deliberately. Each is a picture that is
+ * legitimate but answers less than it appears to, so read the sidecar
+ * before concluding anything from the frame alone.
+ *
+ *   - **Several items in one collection are indistinguishable.** Every
+ *     geometry draws in the same colour, so `partitionByAttribute`'s
+ *     three outputs are three identical white clouds and a graph whose
+ *     SUBJECT is the split shows you nothing. The sidecar lists each item
+ *     separately, which is the reliable read. Tinting per item is not the
+ *     fix it looks like: the standard `color` attribute is minted white
+ *     on every cloud, so its presence carries no intent and there is no
+ *     way to tell "default white" from "authored white" — the same
+ *     reasoning that made `spawnInstances`' `colorAttr` opt-in.
+ *
+ *   - **Concurrent runs fight over the foreground window.** Both open a
+ *     headed browser at the same position, and Chrome stops painting the
+ *     one it believes is occluded. There is no lock; the symptom is a
+ *     screenshot that times out after three minutes with a CDP message
+ *     naming nothing in this codebase. Run one at a time.
+ *
+ *   - **Untagged topology is a guess.** `Geometry.setTopology` is public
+ *     and stamps no `primtype`, so the exporters infer the kind from
+ *     vertex count: three or more vertices reads as a triangle. An
+ *     untagged polyline of three points therefore renders as a filled
+ *     face. The sidecar flags it (`untagged: true`) — nothing else will.
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
