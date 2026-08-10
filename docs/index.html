@@ -282,11 +282,12 @@
   /* ---------- module list ---------- */
   .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 4px 28px; margin: 16px 0 8px; padding: 0; list-style: none; }
   /* Two columns, not a flex row: the module names differ in width
-     (src/gpu 55px, src/runtime 86px), so a flex row started every
+     (src/gpu 55px, src/primitives 110px), so a flex row started every
      description at a different x and wrapped lines under it. The fixed
-     first column lands them all on one edge. 88px clears the longest
-     name — widen it if a longer one is ever added. */
-  .modules li { display: grid; grid-template-columns: 88px 1fr; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+     first column lands them all on one edge. At 13px the mono advance is
+     7.8px, so 112px clears the longest name (src/primitives, 14 chars)
+     — widen it if a longer one is ever added. */
+  .modules li { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
   .modules code { font-family: var(--mono); font-size: 13px; color: var(--accent-ink); white-space: nowrap; }
   .modules span { color: var(--muted); }
 
@@ -391,19 +392,19 @@
   <section>
     <p class="eyebrow">What it is</p>
     <h2>A node-graph PCG library, deterministic by construction</h2>
-    <p class="lead">pcg-ts generates content — scattered and filtered points, sampled surfaces and splines, instanced geometry, streamed worlds around a moving camera — from <strong>seeded node graphs</strong> you build in code, in JSON, or in the visual editor.</p>
+    <p class="lead">pcg-ts generates content — scattered and filtered points, sampled surfaces and splines, resampled paths, networks over shared points, instanced geometry, streamed worlds around a moving camera — from <strong>seeded node graphs</strong> you build in code, in JSON, in the visual editor, or from the <code>pcg</code> command line.</p>
     <p>Any parameter can vary across space instead of being a constant: a value can be a function of where it lands, resolved per point.</p>
     <p>Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths.</p>
     <p>The heavy work moves to the GPU: field expressions compile to WGSL, and instance matrices are composed there and handed straight to three.js — without ever touching the CPU.</p>
     <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>1,561</b><span>tests, all green</span></div>
-      <div class="stat"><b>25</b><span>registered node types</span></div>
-      <div class="stat"><b>40</b><span>field-grammar functions</span></div>
-      <div class="stat"><b>5</b><span>noise types, golden-pinned</span></div>
+      <div class="stat"><b>2,675</b><span>tests, all green</span></div>
+      <div class="stat"><b>38</b><span>registered node types</span></div>
+      <div class="stat"><b>34</b><span>named primitives</span></div>
+      <div class="stat"><b>42</b><span>field-grammar functions</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b>v0.9</b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b><!--pcg:version-minor-->v0.14<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -413,7 +414,7 @@
     <div class="cards">
       <div class="card">
         <h3>Attribute data model</h3>
-        <p>Attributes live on four domains — point, vertex, primitive, detail — as SoA typed-array columns, with promote and transfer between them. The standard point carries transform, density, bounds, color, and its own seed.</p>
+        <p>Attributes live on four domains — point, vertex, primitive, detail — as SoA typed-array columns, with promote and transfer between them. The standard point carries transform, density, bounds, color, and its own seed. A 2-vertex polyline over shared points is an edge, so a network needs no fifth domain.</p>
       </div>
       <div class="card">
         <h3>Deferred fields — <code>Field&lt;T&gt;</code></h3>
@@ -452,16 +453,22 @@ flowchart TB
   subgraph L3["execution"]
     direction LR
     GRAPH["src/graph — executor · memo cache · subgraphs"]
-    NODES["src/nodes — 25 types · registry · JSON"]
+    NODES["src/nodes — 38 types · registry · JSON"]
+    SPATIAL["src/spatial — uniform grid · adjacency CSR"]
   end
   subgraph L4["orchestration"]
     direction LR
     RUNTIME["src/runtime — World · streaming"]
     SPAWN["src/spawn — InstanceBatch protocol"]
   end
+  subgraph L5["authoring"]
+    direction LR
+    PRIMS["src/primitives — 34 named recipes"]
+    CLI["src/cli — pcg: validate · cook · inspect · render"]
+  end
   THREE["src/three — optional adapter, the only module importing three"]
   GPU["src/gpu — optional WGSL compiler + WebGPU device runtime"]
-  L1 --> L2 --> L3 --> L4
+  L1 --> L2 --> L3 --> L4 --> L5
   L4 -. render-agnostic boundary .-> THREE
   L2 -. structural resolver boundary .-> GPU
       </pre>
@@ -475,8 +482,11 @@ flowchart TB
       <li><code>src/noise</code><span>five noise fields with published raw ranges + normalized mode</span></li>
       <li><code>src/graph</code><span>nodes, pins, scheduler, caching, subgraph composition</span></li>
       <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
+      <li><code>src/spatial</code><span>uniform grid and adjacency CSR the spatial nodes share</span></li>
       <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
       <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
+      <li><code>src/primitives</code><span>named subgraph recipes referenced from JSON by name</span></li>
+      <li><code>src/cli</code><span>the <code>pcg</code> binary — validate, cook, inspect, render</span></li>
       <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, device-resident runs, parity-budgeted</span></li>
       <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
     </ul>
@@ -531,10 +541,12 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <h2>Runtime introspection and stable serialization</h2>
     <ul class="features">
       <li><b>Self-describing registry</b> — every node type exposes pins, param schemas, defaults, and prose descriptions at runtime; the node reference is generated from it, never hand-written.</li>
+      <li><b>A command line that closes the loop</b> — <code>pcg nodes</code>, <code>fields</code>, <code>validate</code>, <code>cook</code>, <code>inspect</code>, <code>render</code>. <code>--json</code> picks a rendering of the same result rather than a separate code path, exit codes are 0 / 1 (failure) / 2 (misuse), and <code>render</code> writes a deterministic top-down SVG that diffs in git.</li>
+      <li><b>A vocabulary to reference, not rebuild</b> — 34 named primitives ship as <code>pcg-ts/primitives</code>, cited from JSON as <code>ref: { name, hash? }</code>. A name-only ref upgrades freely; a pinned one hard-errors on mismatch. No mode warns, and no mode cooks a near-miss.</li>
       <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
       <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
       <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
-      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>nodes.json</code>, an authoring guide with recipes, and the <a href="./manual.html">user manual</a>, whose second half is written for an agent driving the library programmatically.</li>
+      <li><b>Agent entry points</b> — <code>llms.txt</code> capability map, generated <code>docs/nodes.md</code> / <code>primitives.md</code> / <code>examples.md</code> with their <code>.json</code> twins, three skills that cite every enumerable thing by path rather than inlining it, an authoring guide with recipes, and the <a href="./manual.html">user manual</a>, whose second half is written for an agent driving the library programmatically.</li>
       <li><b>Independently audited</b> — each phase was reviewed by a separate agent before it landed, and the defects it found were fixed with regression tests before release.</li>
     </ul>
   </section>
@@ -543,6 +555,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <p class="eyebrow">Examples</p>
     <h2>Nine demos, live in your browser</h2>
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
+    <p>Behind them sits a corpus of 37 single-concept graphs that are data rather than pages: <code>pcg cook examples/graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Eight of them are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones.</p>
     <div class="examples">
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><img src="./thumbs/01-scatter-basic.jpg" width="640" height="345" loading="lazy" decoding="async" alt="Small points scattered across a dark plane and thinned by a noise field, leaving visible clearings, with a stats panel showing the surviving count and cook time."><span class="meta"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><img src="./thumbs/02-forest.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A hilly dark-brown terrain covered in thousands of bright green conifers, thinning out on steep slopes, beside a panel showing 4,246 pine and 1,666 bush composed on the GPU across 2 resident runs of 4 fused members, with 0 B of matrices uploaded."><span class="meta"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, and multi-asset instancing — both species composed on the GPU, one buffer each, no readback</span></span></a>
@@ -631,10 +644,45 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.10.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>An agent can author, validate and cook a graph without writing TypeScript. A <code>pcg</code> CLI — <code>nodes</code>, <code>fields</code>, <code>validate</code>, <code>cook</code>, <code>inspect</code>, <code>render</code> — where <code>--json</code> selects a rendering of the same result rather than a separate code path, exit codes are 0 / 1 (failure) / 2 (misuse), and <code>render</code> writes a deterministic top-down SVG that diffs in git. Subgraph nodes gain exposed params, and a primitive becomes a registered subgraph cited from JSON as <code>ref: { name, hash? }</code> instead of an embedded payload — a name-only ref upgrades freely, a pinned one hard-errors on mismatch, so no mode warns and no mode cooks a near-miss. 29 named primitives ship as <code>pcg-ts/primitives</code>; node types go 25 → 32; 23 single-concept example graphs and two skills ship inside the package, every example cooking from JSON alone because an example an agent cannot run teaches nothing. The serialization format is now closed — an unknown key is a hard error at every object position, so a typo can no longer cook as something else. One cut names the gap it leaves: <code>place/along-curve</code> was dropped because <code>splineSample</code> needs a polyline and no node produced one. 2217 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.11.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>The polyline gap, closed from the producing side. The library had a polyline consumer, a type, a render branch and an inspect branch — and no in-graph producer, so <b>no path could exist in a serialized graph at all</b>; the gap had been sighted five times from five directions before it was fixed. <code>pointsToPath</code>, <code>pathResample</code> and <code>writeTangents</code> take node types 32 → 35 and restore <code>place/along-curve</code>. Primitives 29 → 34 with the first curve family, field-grammar functions 40 → 42, corpus 23 → 34 — including six staged pipeline graphs whose superset and edit-locality properties are machine-checked rather than asserted in prose. Silent truncation of a multi-geometry collection becomes a diagnostic, and a class of silent attribute clobber is refused across six reporting-slot params: a param naming an attribute the node shapes now refuses a differently-shaped existing column instead of destroying it. Breaking against the unpublished v0.10.0: <code>shape/ring</code>'s <code>count</code> now means exactly <code>count</code>. CI arrives, on Node 20 and 22 — and the first run it ever performed failed both legs with 79 type errors that cannot appear on a developer machine, because <code>examples/**</code> import the library by package name, which resolves through the exports map into <code>dist/</code>, and a clean checkout has none. 2463 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.12.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Scale-aware declutter. <code>selfPrune</code> gains a field-capable <code>minDistance</code>, so the radius is per point rather than per graph — big trees need more room than bushes — under a <code>max(rA, rB)</code> symmetry rule, so no kept point ever has another kept point inside its own radius. A <code>priority</code> attribute settles a contested spot: higher wins, ties fall to the lower index, so an authored plot beats a procedural one because of a value it carries rather than where it sits in a merge. Rewiring the corpus onto it exposed that the lesson it had been teaching never fired — the authored stage's 8-unit exclusion already exceeded the prune's 7-unit radius, so no authored and procedural pair had ever contested anything, and with <code>priority</code> deleted all 12 authored plots still survived. The exclusion is now 3, the contest is real, and a test requires that deleting <code>priority</code> costs authored plots. The topology phase this release replaced was re-surveyed and split in three: no existing source could derive a halo, because <code>pointScatterInBounds</code> computes positions as a function of its bounds, so widening for a halo moves every point and reproduces nothing. 2484 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.13.0 <small>2026-08-09</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>World-anchored sources, and the networks they unblocked. <code>pointScatterInWorld</code> reads its bounds only to pick lattice cells and clip, so a halo is just a wider query — that was the hole in the runtime pillar, and every cross-partition op depended on it. Per-point randomness now keys on point identity rather than array index, so an op behaves the same however the work was split. On top of that, <code>connectPoints</code> emits one 2-vertex <code>polyline</code> primitive per edge over the <b>same points that arrived</b>, and the survey's most useful finding was that this needs no new domain: a 2-vertex polyline over shared points already <em>is</em> an edge, so a junction is genuinely one point shared by every edge meeting there, and no edge payload ever crosses a pin. <code>filterPrimitivesByBounds</code> is the one filter here that preserves topology, which is what makes a partitioned network cook expressible in a serialized graph rather than only in host TypeScript. Cut on measurement rather than taste: <code>findPath</code> and MST, because both are global — an MST edge belongs iff no lighter path connects its ends, so a chain of N plus a closing edge defeats any finite halo. The replacement is a relative-neighbourhood mode, halo-exact at the same bound, which contains the MST but leaves cycles — a network rather than a tree, which is what a road layout wants. Node types 35 → 38; the corpus gains a fifth pipeline stage: 10 segments over 9 district centres, degrees {1:1, 2:5, 3:3}, one component, two cycles. 2648 tests.</p>
+        </div>
+      </li>
+      <li>
+        <div class="rm-ver">v0.14.0 <small>2026-08-10</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>A gap v0.13.0 opened, closed. Per-edge values became a headline capability — a road carries a <code>width</code> promoted from its endpoints and a <code>kind</code> from the first — and every node that sampled a primitive down onto points dropped them on the floor, so <b>the lamps placed along a road could not see the width of the road they stood on</b>. <code>splineSample</code>, <code>pathResample</code>, <code>surfaceSample</code> and <code>place/along-curve</code> now carry the source primitive's attributes onto the samples through one shared helper; <code>pathResample</code> also keeps its own output primitives' attributes, which <code>setPolylineTopology</code> had been deleting, so a resampled road stays a road. The carry is automatic rather than opt-in, because the demand is that an author who set <code>roadWidth</code> gets it back without knowing a knob exists — and the cost is stated here rather than rediscovered as a bug later: every upstream primitive attribute becomes part of a sampler's output contract, so an unrelated <code>lengthAttr</code> widens the samples. A collision with a name the node itself owns is refused, naming node, attribute and fix. <code>transferAttribute</code> reads a primitive source in <code>uv</code> and <code>raycast</code> modes; <code>nearest</code> refuses and names the route instead. <code>pcg render --attr</code> reaches the primitive domain, colouring paths from primitive values. 46 of 46 planned phases; 2675 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
-          <p>A <code>resident</code> descriptor for <code>filterByAttribute</code> — a count-changing run member. This, rather than field specs, is what would actually put the forest's chain on the device: its two filter nodes remain the real chain breaks.</p>
+          <p>All 46 planned phases are done, and the entry that stood here — a <code>resident</code> descriptor for <code>filterByAttribute</code> — was surveyed and declined. It is feasible, and cheaper than the entry assumed, but it does not compose with the zero-round-trip path: at a spawner terminal the surviving count sizes a retained buffer and there is no readback for it to ride, so a run could never hold both a count-changing member and an instances terminal. And the saving it was to buy turned out to be free — moving <code>setAttribute("scale")</code> ahead of the two filters in <code>examples/02-forest</code> bought the same readback for no library work. What is left is small, and recorded in PLAN.md with the reasoning: <code>fieldToJson</code> still refuses with a message enumerating all three causes instead of naming the one that applies, and a <code>maxDegree</code> bounded within a radius is halo-exact but unbuilt.</p>
         </div>
       </li>
     </ul>
@@ -644,7 +692,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.9.0</span>
+    <span>pcg-ts <!--pcg:version-->v0.14.0<!--/pcg:version--></span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>

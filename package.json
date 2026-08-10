@@ -75,10 +75,11 @@
     "examples:pages": "vite build --config examples/vite.config.ts --base=./ --outDir ../docs/examples --emptyOutDir",
     "status": "node scripts/status.mjs",
     "capture": "node scripts/capture-demos.mjs",
-    "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:examples",
+    "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:examples && npm run docs:site",
     "docs:nodes": "node scripts/gen-node-reference.mjs",
     "docs:primitives": "node scripts/gen-primitives.mjs",
     "docs:examples": "node scripts/gen-examples.mjs",
+    "docs:site": "node scripts/gen-site.mjs",
     "corpus:golden": "node scripts/gen-corpus-golden.mjs",
     "prepublishOnly": "npm run check && npm test && npm run build"
   },

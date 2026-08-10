@@ -284,7 +284,7 @@
 
 <header class="top">
   <div class="wrap">
-    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · v0.9.0</p>
+    <p class="kicker"><a href="./index.html">pcg-ts</a> · user manual · <!--pcg:version-->v0.14.0<!--/pcg:version--></p>
     <h1>The pcg<span class="dot">-</span>ts manual</h1>
     <p class="subtitle">How to build worlds with a deterministic node-graph PCG library — by hand, and by machine.</p>
     <div class="metabar">
@@ -875,12 +875,12 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
     <p class="lead">The registry is the truth. Node types are not a list in the documentation that the code happens to match — the documentation is generated from the registry, so anything you can read in <code>docs/nodes.md</code> you can also ask for at runtime.</p>
 
     <h3>listNodeTypes()</h3>
-    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 37 types in the standard library, all categorized.</p>
+    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 38 types in the standard library, all categorized.</p>
 
     <div class="codeblock"><pre><code><span class="k">import</span> { listNodeTypes } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
 <span class="k">const</span> types = <span class="n">listNodeTypes</span>();
-types.length;                                <span class="c">// 37</span>
+types.length;                                <span class="c">// 38</span>
 <span class="k">const</span> jitter = types.<span class="n">find</span>(t => t.type === <span class="s">"jitterPoints"</span>);</code></pre></div>
 
     <p class="code-label">The entry, verbatim</p>
@@ -952,7 +952,7 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
  <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>docs/nodes.json as an offline catalog</h3>
-    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 37 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
+    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 38 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
     <div class="note">
       <span class="tag">Discovery checklist</span>
       <p>Before emitting a graph: confirm the type exists (<code>hasNodeType</code>), confirm each parameter name is in <code>params</code>, confirm enum values against <code>enum</code> and numbers against <code>min</code>/<code>max</code>, confirm a field spec is only used where <code>acceptsField</code> is true, and confirm pin names against <code>inputs</code>/<code>outputs</code>. Every one of those checks the deserializer will also make — but making them first turns a thrown error into a corrected emission.</p>
@@ -1421,7 +1421,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
     <table>
       <thead><tr><th>Document</th><th>What it is</th><th>Best for</th></tr></thead>
       <tbody>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td>Generated node reference: every pin, parameter, default and range for all 37 types.</td><td>Looking up one node exactly.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td>Generated node reference: every pin, parameter, default and range for all 38 types.</td><td>Looking up one node exactly.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>The same registry metadata as a plain JSON array.</td><td>Machine consumption, offline planning, validation.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a></td><td>Graph JSON spec, the full field grammar, recipes, transfer mappings, GPU eligibility rules.</td><td>The precise format, and worked recipes.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a></td><td>Compact agent capability map with the full measured GPU budget tables.</td><td>Context for an LLM; the deviation numbers.</td></tr>
@@ -1439,7 +1439,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts v0.9.0 manual</span>
+    <span>pcg-ts <!--pcg:version-->v0.14.0<!--/pcg:version--> manual</span>
     <span>MIT license</span>
     <a href="./index.html">project overview</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
