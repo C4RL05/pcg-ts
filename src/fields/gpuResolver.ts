@@ -199,6 +199,12 @@ export interface ResidentRunInput {
  * narrows {@link resource} back to a device buffer for a renderer
  * adapter.
  *
+ * The name says "transforms" because that was the first payload; the
+ * contract is about a device BUFFER and its ownership, so a spawner's
+ * per-instance colours ride the same handle type
+ * ({@link DeviceInstanceBatch.colors}). One handle owns one buffer,
+ * whatever is in it.
+ *
  * Ownership. The handle is created the moment the producing buffer's
  * ownership leaves the evaluator's buffer pool, and from then on
  * **whoever receives the handle owns the memory**: nothing in the
@@ -253,6 +259,11 @@ export interface DeviceTransformsHandle {
  * bytes drive a renderer, not a seed chain, so they are a documented
  * tolerance class rather than a bit-exact port. The CPU path remains the
  * reference.
+ *
+ * {@link colors} is the exception to that last sentence, deliberately: a
+ * colour is GATHERED, never computed, so the device buffer must equal the
+ * CPU batch's `colors` bit for bit. There is no tolerance class to spend
+ * on a copy.
  */
 export interface DeviceInstanceBatch {
   /** Marks this batch device-resident; CPU batches carry `"cpu"` or nothing. */
@@ -263,6 +274,29 @@ export interface DeviceInstanceBatch {
   readonly count: number;
   /** Device buffer of `count * 16` f32; see {@link DeviceTransformsHandle} for who frees it. */
   readonly transforms: DeviceTransformsHandle;
+  /**
+   * Per-instance RGB, present exactly when the spawner's `colorAttr`
+   * named an attribute — the device twin of `InstanceBatch.colors`, in
+   * the same instance order as {@link transforms} (one kernel gathers
+   * both from one index, so they cannot drift).
+   *
+   * **The layout differs from the CPU batch's, and it is not a choice.**
+   * The CPU array is tightly packed at 3 floats per instance; this buffer
+   * holds **4** f32 per instance (`count * 16` bytes), instance `k` at
+   * floats `4k..4k+2` with `4k+3` written as 0. WGSL gives
+   * `array<vec3<f32>>` a 16-byte stride, which is how a renderer reads an
+   * instance-colour storage attribute, and why three's own WebGPU backend
+   * pads an itemSize-3 storage attribute to vec4 before uploading one
+   * ("WGSL does not support packed vec3 data in storage buffers"). A
+   * 3-float device buffer would shift every colour by a growing offset
+   * and read like a shader bug rather than a layout one.
+   *
+   * A SECOND handle means a second owner obligation: whoever owns the
+   * batch disposes this as well as {@link transforms}. The device path
+   * has no GC — a dropped handle leaks (visibly, in `poolStats`) and a
+   * double free crashes.
+   */
+  readonly colors?: DeviceTransformsHandle;
 }
 
 /** Result of {@link GpuFieldResolver.executeRun}. */

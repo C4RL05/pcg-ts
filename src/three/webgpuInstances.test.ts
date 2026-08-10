@@ -343,6 +343,54 @@ describe("three source pins (module-private code the adapter relies on)", () => 
     expect(source, fix).toContain(".element( instanceIndex )");
   });
 
+  it("Instance.js still reads instanceColor from a vec3 storage buffer", () => {
+    const source = threeSource("nodes/accessors/Instance.js");
+    const fix =
+      `three ${threeVersion()}: nodes/accessors/Instance.js no longer takes the storage-buffer ` +
+      "branch for instance colours. Every other branch reads `colors.array`, which the adapter " +
+      "deliberately leaves empty, so every instance would draw black. Re-read that file and " +
+      "update src/three/webgpuInstances.ts";
+    expect(source, fix).toMatch(/storage\(\s*colors,\s*'vec3',\s*Math\.max\(\s*colors\.count,\s*1\s*\)\s*\)/);
+    expect(source, fix).toContain("instanceColor.assign( instanceColorNode )");
+    // `instance( instanceMatrix, instanceColor )` is what passes the
+    // mesh's colour attribute in at all.
+    expect(source, fix).toMatch(/instance\(\s*instanceMatrix,\s*instanceColor\s*\)/);
+  });
+
+  it("NodeMaterial still multiplies in instanceColor whenever the mesh has one", () => {
+    const source = threeSource("materials/nodes/NodeMaterial.js");
+    expect(
+      source,
+      `three ${threeVersion()}: NodeMaterial no longer gates instance colour on ` +
+        "`object.instanceColor`; setting the attribute would no longer tint anything",
+    ).toMatch(/if\s*\(\s*object\.instanceColor\s*\)/);
+  });
+
+  it("three's OWN vec3 storage rule is why the device buffer is 4 floats wide", () => {
+    // The stride is not our choice and must not be re-derived from
+    // memory. three repacks an itemSize-3 storage attribute to 4
+    // components before upload — "WGSL does not support packed vec3 data
+    // in storage buffers" — which is the same 16-byte stride the compose
+    // kernel writes at. Pin three's actual condition and its actual
+    // padded size, so a release that changed either fails here rather
+    // than skewing every colour by a growing offset at runtime.
+    const source = threeSource("renderers/webgpu/utils/WebGPUAttributeUtils.js");
+    const fix =
+      `three ${threeVersion()}: WebGPUAttributeUtils no longer pads itemSize-3 storage ` +
+      "attributes to 4 components. That rule is the justification for the evaluator composing " +
+      "16 bytes of colour per instance (INSTANCE_COLOR_COMPONENTS in src/gpu/applyKernels.ts); " +
+      "re-derive the stride before changing anything";
+    expect(source, fix).toMatch(
+      /isStorageInstancedBufferAttribute \) && bufferAttribute\.itemSize === 3/,
+    );
+    expect(source, fix).toMatch(/paddedItemSize = 4;/);
+    expect(source, fix).toContain("pad to vec4");
+    // And the adapter's colour attribute is exactly the itemSize that
+    // rule names, so the two really are talking about the same case.
+    const attr = new StorageInstancedBufferAttribute(new Float32Array(0), 3);
+    expect(attr.itemSize).toBe(3);
+  });
+
   it("NodeMaterial still applies instancing for an InstancedBufferAttribute matrix", () => {
     const source = threeSource("materials/nodes/NodeMaterial.js");
     expect(
@@ -426,12 +474,12 @@ interface StubHandle extends DeviceTransformsHandle {
   disposeCalls: number;
 }
 
-function stubHandle(count: number, backend = "webgpu"): StubHandle {
-  const buffer = { size: Math.max(64, 2 ** Math.ceil(Math.log2(Math.max(1, count * 64)))) };
+function stubHandle(count: number, backend = "webgpu", bytesPer = 64): StubHandle {
+  const buffer = { size: Math.max(64, 2 ** Math.ceil(Math.log2(Math.max(1, count * bytesPer)))) };
   let disposed = false;
   const handle: StubHandle = {
     backend,
-    byteLength: count * 64,
+    byteLength: count * bytesPer,
     disposeCalls: 0,
     get disposed() {
       return disposed;
@@ -454,6 +502,20 @@ function stubBatch(assetId: string, count: number, handle?: StubHandle): DeviceI
     assetId,
     count,
     transforms: handle ?? stubHandle(count),
+  };
+}
+
+/** Instance colour rides 4 f32 per instance — the WGSL vec3 stride. */
+const COLOR_BYTES_PER_INSTANCE = 16;
+
+function colouredBatch(
+  assetId: string,
+  count: number,
+  colors?: StubHandle,
+): DeviceInstanceBatch & { colors: StubHandle } {
+  return {
+    ...stubBatch(assetId, count),
+    colors: colors ?? stubHandle(count, "webgpu", COLOR_BYTES_PER_INSTANCE),
   };
 }
 
@@ -621,13 +683,78 @@ describe("createWebGpuInstanceAdapter", () => {
       renderer: fakeRenderer(sharingBackend),
       assets: { spire: { geometry: new BoxGeometry(), material: new MeshBasicMaterial() } },
     });
-    // The construction-time seam probe used the same record; clear it so
-    // the first real build starts from a fresh one.
+    // The construction-time seam probes used the same record; they clean
+    // up after themselves (which is what lets the adapter run one per
+    // item size), so this is belt and braces.
     delete shared.buffer;
     expect(adapter.build(stubBatch("spire", 4), CTX)).toBeTruthy();
     expect(() => adapter.build(stubBatch("spire", 4), CTX)).toThrow(
       /attribute records are being reused across batches/,
     );
+  });
+
+  it("adopts a colour buffer through the SAME seam and sets instanceColor", async () => {
+    const { adapter, backend } = await makeAdapter();
+    const batch = colouredBatch("spire", 140);
+    const mesh = adapter.build(batch, BOUNDED) as InstancedMesh;
+
+    const attr = mesh.instanceColor as unknown as {
+      array: ArrayLike<number>;
+      count: number;
+      itemSize: number;
+      isStorageInstancedBufferAttribute?: boolean;
+      isInstancedBufferAttribute?: boolean;
+      name: string;
+    };
+    expect(attr, "a coloured batch must set instanceColor").toBeTruthy();
+    // `NodeMaterial.setupDiffuseColor` gates purely on `object.instanceColor`
+    // being non-null, and `Instance.js` takes its storage branch on this
+    // flag — every other branch reads `colors.array`, which is empty.
+    expect(attr.isStorageInstancedBufferAttribute).toBe(true);
+    expect(attr.isInstancedBufferAttribute).toBe(true);
+    expect(attr.array.length, "colours must never exist on the CPU either").toBe(0);
+    expect(attr.count).toBe(140);
+    // itemSize 3 is what three's `storage(colors, 'vec3', count)` expects.
+    // The BUFFER is 4 floats wide; those two numbers differ on purpose,
+    // and the padding branch that would reconcile them never runs because
+    // adoption short-circuits before it.
+    expect(attr.itemSize).toBe(3);
+    expect(attr.name).toBe("pcg:instanceColor:spire");
+    // Identity again: what three binds IS the buffer the kernel gathered
+    // into, and it is NOT the matrix buffer.
+    expect(backend.get(attr as unknown as object).buffer).toBe(batch.colors.resource);
+    expect(backend.get(attr as unknown as object).buffer).not.toBe(batch.transforms.resource);
+    // Two buffers adopted for one batch; neither handle is disposed here.
+    expect(adapter.stats).toEqual({ built: 1, released: 0, adopted: 2, liveInstances: 140 });
+    expect(batch.colors.disposed).toBe(false);
+    adapter.release(mesh);
+    expect(batch.colors.disposeCalls, "handle ownership belongs to WorldThreeBinding").toBe(0);
+  });
+
+  it("leaves instanceColor null when the batch carries none", async () => {
+    // Setting it flips three's program variant (the `vInstanceColor`
+    // varying and a shader recompile), so an uncoloured spawn must leave
+    // it alone rather than bind an all-white buffer.
+    const { adapter } = await makeAdapter();
+    const mesh = adapter.build(stubBatch("spire", 8), CTX) as InstancedMesh;
+    expect(mesh.instanceColor).toBe(null);
+    expect(adapter.stats.adopted).toBe(1);
+  });
+
+  it("refuses a colour handle of the wrong length or the wrong backend", async () => {
+    const { adapter } = await makeAdapter();
+    // 12 bytes per instance — the CPU batch's packing. This is THE
+    // failure that would otherwise render as a colour skew growing with
+    // the instance index rather than as an error.
+    const tight = colouredBatch("spire", 4, stubHandle(4, "webgpu", 12));
+    expect(() => adapter.build(tight, CTX)).toThrow(
+      /instance-colour handle must be 64 bytes \(4 f32 per instance.*16-byte stride.*but it is 48 bytes/s,
+    );
+    const foreign = colouredBatch("spire", 4, stubHandle(4, "webgl", COLOR_BYTES_PER_INSTANCE));
+    expect(() => adapter.build(foreign, CTX)).toThrow(/carries a "webgl" instance-colour handle/);
+    const dead = stubHandle(4, "webgpu", COLOR_BYTES_PER_INSTANCE);
+    dead.dispose();
+    expect(() => adapter.build(colouredBatch("spire", 4, dead), CTX)).toThrow(/was disposed/);
   });
 
   it("every batch gets a fresh attribute, so three never reuses a bind group", async () => {

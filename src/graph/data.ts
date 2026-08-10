@@ -60,6 +60,26 @@ export interface InstanceBatch {
    * standard point attributes.
    */
   readonly transforms: Float32Array;
+  /**
+   * Optional per-instance linear RGB: 3 floats per instance
+   * (`colors.length === count * 3`), instance `k` at offsets `3k..3k+2`,
+   * in the SAME instance order as {@link transforms} — the two are
+   * written in one loop from one index, so slot `k` of each always
+   * describes the same point.
+   *
+   * Three floats and not four: both three adapters take RGB, so the
+   * spawner drops alpha rather than carrying a component no renderer can
+   * use. Packed like {@link transforms} for the same reason — the batch
+   * is a render-agnostic protocol, but the layout it commits to is the
+   * one a renderer can upload without touching it.
+   *
+   * ABSENT is meaningful and is the default: a spawn that was not asked
+   * for colour (`spawnInstances`' `colorAttr`) allocates nothing here,
+   * and a renderer must then leave its instance-colour channel alone —
+   * writing an all-white buffer instead would flip three's shader
+   * variant and recompile a program for zero pixels changed.
+   */
+  readonly colors?: Float32Array;
 }
 
 /** Either residency of a spawner batch; narrow on `residency`. */

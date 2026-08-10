@@ -1,7 +1,7 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-10 00:30",
-  "currentPhase": 44,
+  "updated": "2026-08-10 03:11",
+  "currentPhase": 45,
   "phases": [
     {
       "id": "plan",
@@ -232,16 +232,25 @@
       "id": 44,
       "title": "Primitive attributes stop being terminal",
       "state": "done"
+    },
+    {
+      "id": 45,
+      "title": "Per-instance colour and a spawn budget",
+      "state": "done"
     }
   ],
   "tests": {
-    "passed": 2675,
+    "passed": 2757,
     "failed": 0,
-    "total": 2675,
-    "lastRun": "2026-08-10 00:30"
+    "total": 2757,
+    "lastRun": "2026-08-10 03:11"
   },
   "blockers": [],
   "log": [
+    {
+      "time": "2026-08-10 03:11",
+      "message": "Phase 45 complete: per-instance colour and a spawn budget, ahead of an agent-authored forest demo. spawnInstances gains colorAttr — OPT-IN, reversing phase 44 automatic choice, because color is a standard attribute minted white on every cloud so its presence carries no intent, and because setting instanceColor flips three program variant and forces a shader recompile for zero pixels changed. Sniffing the column to auto-enable was rejected: O(n) per cook and it would make the renderer shader variant data-dependent. Alpha is dropped, stated in the description. Device parity is byte-exact rather than budgeted, and the reason is structural — colour is a gather, not arithmetic, so unlike composeTRS there is no ULP class: 12288 components compared with Object.is on an RTX 5090, zero mismatches, holding for signed zero, out-of-gamut negatives, f32 max and min-normal, and subnormals with no flush. The WGSL layout hazard is real and handled as a separate constant: array of vec3 pads to a 16-byte stride so the device buffer is 4 floats per instance where the CPU packs 3, with the pad written as literal zero. Handle retention made failure-safe (failing on detach 6 of 8 frees exactly 5, zero double-frees) since the device path has no GC. The interim resident eligibility gate the CPU half added was deleted by the device half rather than kept as the safe option, restoring the claim that no standard node declares an opt-out, and coloured spawns now fuse. MAX_INSTANCES 1048576 checked before allocation, per COOK never per world since a ceiling over resident cells would be order-dependent; the device path raises PlanFail and falls back so the CPU node emits the one message, asserted by comparing both strings whole. Also added a Backlog section to PLAN — earned but waiting for a caller — holding strings-as-fields with its string-table-index determinism trap, for-each with the seed-on-value rule, topology-preserving union, and unasserted doc transcripts."
+    },
     {
       "time": "2026-08-10 00:30",
       "message": "Phase 44 complete: primitive attributes stop being terminal. Phase 43 made per-edge values a headline capability and every sampler dropped them, so the lamps placed along a road could not see its width. Samplers now carry the source primitive attributes automatically through one shared helper — splineSample, pathResample, surfaceSample, and place/along-curve by inheritance — with primtype excluded and collisions refused rather than overwritten. pathResample also keeps its OWN output primitive attributes, which setPolylineTopology had been deleting, so a resampled road stopped being a road. transferAttribute reads a primitive source in uv and raycast; nearest refuses it and names the route, since that mode searches source points and a per-face value sits on none. pcg render --attr reaches the primitive domain, and the two domains do not compete because they colour different marks: point values colour the circles, primitive values colour the paths. Three of my own suggestions were rejected on evidence: a sourcePrimitive index column would be a determinism violation since primitive numbering is per-partition; opt-in would mean an author who set a value has to know a knob exists; and both lookup rules I proposed for render would have left the roads uniformly blue, because roadWidth lives on BOTH domains. The design claim that w0v+w1v+w2v != v turned out to be masked for every finite f32 by a float64 accumulator — 4M probes, zero differences — but the dominant-corner branch is still right and the surviving witness is Infinity, where a zero weight makes 0 times Infinity NaN. Also fixed: the GPU device suites rode vitest 10s default hook budget while one took 10.46s, and a timed-out hook does not fail its tests, it SKIPS them — 24 device assertions had stopped running."

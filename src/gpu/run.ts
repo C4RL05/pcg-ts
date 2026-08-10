@@ -74,11 +74,28 @@
  * destination staying `i`). One output buffer and one dispatch per asset;
  * `count * 64` transform bytes in total either way.
  *
+ * Per-instance colour (phase 45): with `colorAttr` set, the SAME compose
+ * kernel gathers components 0-2 of that attribute into a second retained
+ * buffer per batch, from the same source index that placed the matrix.
+ * Sharing the index is the correctness argument and it mirrors the CPU
+ * spawner's single loop; and because a colour is COPIED rather than
+ * computed, the device bytes must equal the CPU batch's exactly — there
+ * is no ULP class here to spend, unlike compose-TRS. The one thing not
+ * shared with the CPU batch is the stride: the device buffer holds
+ * {@link INSTANCE_COLOR_BYTES} per instance where the CPU array packs 12,
+ * because a renderer binds it as `array<vec3<f32>>`.
+ *
+ * The spawner's `MAX_INSTANCES` budget is enforced here too, as a
+ * `PlanFail`: the run is rejected, its members cook per-node, and the CPU
+ * spawner raises the single diagnostic. Same mechanism an unsupported
+ * `assetAttr` already uses, so no new fallback reason exists and the two
+ * paths cannot word the refusal differently.
+ *
  * Pool discipline: every buffer is released in a `finally` (never
  * mapped — the readback unmaps in its own `finally`), on success,
  * failure, and cancellation alike. The one exception is the retained
- * transform buffers, and it is an exception by construction rather than
- * by omission: ownership transfers in the very last loop before the
+ * transform and colour buffers, and it is an exception by construction
+ * rather than by omission: ownership transfers in the very last loop before the
  * result is built, after the final cancellation check, so every earlier
  * failure path still reclaims them — and a failure after (or partway
  * through) the transfer disposes the handles built so far in the
@@ -101,9 +118,11 @@ import { CookCancelledError } from "../graph/errors.js";
 import { deviceSpec, type FieldSpecArg } from "../fields/spec.js";
 import { hashCombine } from "../random/index.js";
 import { groupPointsByAsset } from "../spawn/grouping.js";
+import { MAX_INSTANCES } from "../spawn/instances.js";
 import {
   APPLY_CONST_COMPONENTS,
   APPLY_CONST_OFFSET,
+  INSTANCE_COLOR_COMPONENTS,
   MAX_APPLY_CONST_SLOTS,
   makeComposeInstancesApply,
   makeJitterPointsApply,
@@ -184,6 +203,13 @@ type BufRef =
    */
   | { readonly kind: "out" }
   /**
+   * The retained instance-COLOUR buffer of the batch being dispatched
+   * (spawner terminal with `colorAttr` set). Per batch for exactly the
+   * reasons `out` is: the batch shapes are data, and the renderer seam
+   * binds a whole buffer.
+   */
+  | { readonly kind: "colorOut" }
+  /**
    * The uploaded grouping permutation (attribute-mode spawner only): one
    * u32 source point index per instance slot, batches concatenated.
    */
@@ -247,6 +273,18 @@ type LayoutOp =
 export const INSTANCE_MATRIX_BYTES = 64;
 
 /**
+ * Bytes one instance's device-resident RGB occupies: **16**, not 12.
+ *
+ * The CPU batch packs colour at 3 floats per instance; the device buffer
+ * carries a fourth, zeroed. That is the WGSL `array<vec3<f32>>` stride a
+ * renderer binds this buffer as, not a rounding-up of our own — see
+ * {@link INSTANCE_COLOR_COMPONENTS}. Keeping the two numbers apart in the
+ * source (12 there, 16 here) is the point: a single shared "colour bytes"
+ * constant would be wrong for one of the two paths.
+ */
+export const INSTANCE_COLOR_BYTES = INSTANCE_COLOR_COMPONENTS * 4;
+
+/**
  * The device-resident instance output a spawner terminal produces.
  *
  * This describes the GROUPING, not the batches: how many batches there
@@ -270,15 +308,26 @@ interface InstancesDesc {
    * kernel byte-identical to v0.7's).
    */
   readonly assetAttr: string;
+  /**
+   * f32 point attribute (tupleSize >= 3) whose components 0-2 the compose
+   * kernel gathers as each instance's RGB, or `""` for no colour — in
+   * which case no colour buffer is allocated, no colour binding exists,
+   * and the kernel text is what it always was.
+   */
+  readonly colorAttr: string;
+  /** Tuple size of that attribute (the kernel's stride into it); 0 when uncoloured. */
+  readonly colorTupleSize: number;
   /** Points the terminal composes (always `plan.count`). */
   readonly count: number;
   /** Retained transform bytes across every batch: `count * INSTANCE_MATRIX_BYTES`. */
   readonly bytes: number;
+  /** Retained colour bytes across every batch: `count * INSTANCE_COLOR_BYTES`, or 0. */
+  readonly colorBytes: number;
   /** Permutation upload: `count * 4` in attribute mode, 0 in constant mode. */
   readonly permBytes: number;
 }
 
-const PLAN_FORMAT = "pcg-resident-run/4";
+const PLAN_FORMAT = "pcg-resident-run/5";
 
 /** Opaque (to the executor) compiled run plan. */
 export interface ResidentRunPlan {
@@ -761,6 +810,14 @@ export function planResidentRun(
           const assetId = p.assetId;
           if (typeof assetId !== "string" || assetId === "") throw new PlanFail("assetId");
           expectAttr("P", "f32", 3);
+          // The spawner's per-cook budget, decided on BOTH paths or the
+          // graph throws on one and cooks on the other. It rejects rather
+          // than throws, for the same reason the assetAttr checks below
+          // do: the run falls back per-node and `buildInstanceBatches`
+          // raises THE message — the one naming the count, the ceiling,
+          // the 64 MiB it stands for, and the four ways out. There is no
+          // second wording of it to drift, and no new fallback reason.
+          if (count > MAX_INSTANCES) throw new PlanFail(`${count} instances over MAX_INSTANCES`);
           const rawAttr = p.assetAttr;
           if (rawAttr !== undefined && typeof rawAttr !== "string") throw new PlanFail("assetAttr");
           const assetAttr = rawAttr === undefined ? "" : rawAttr;
@@ -774,6 +831,22 @@ export function planResidentRun(
             const key = layout.get(assetAttr);
             if (key === undefined) throw new PlanFail(`assetAttr "${assetAttr}" not on the point domain`);
             if (key.type !== "string") throw new PlanFail(`assetAttr "${assetAttr}" is ${key.type}, not string`);
+          }
+          const rawColor = p.colorAttr;
+          if (rawColor !== undefined && typeof rawColor !== "string") throw new PlanFail("colorAttr");
+          const colorAttr = rawColor === undefined ? "" : rawColor;
+          let colorTupleSize = 0;
+          if (colorAttr !== "") {
+            // The shape rule of `requireRgbSource`, decided from the
+            // LAYOUT (all this planner sees) and rejecting rather than
+            // throwing — so a mis-shaped colorAttr reaches the CPU
+            // spawner, which explains it and lists what would fit.
+            const col = layout.get(colorAttr);
+            if (col === undefined) throw new PlanFail(`colorAttr "${colorAttr}" not on the point domain`);
+            if (col.type !== "f32" || col.tupleSize < 3) {
+              throw new PlanFail(`colorAttr "${colorAttr}" is ${col.type}x${col.tupleSize}`);
+            }
+            colorTupleSize = col.tupleSize;
           }
           const rotAttr = layout.get("rot");
           const hasRot = rotAttr !== undefined && rotAttr.type === "f32" && rotAttr.tupleSize === 4;
@@ -792,16 +865,32 @@ export function planResidentRun(
           // node can produce one), so there is nothing to sort on device.
           const indexed = assetAttr !== "";
           if (indexed) refs.perm = { kind: "perm" };
+          if (colorTupleSize > 0) {
+            // Read through `slotFor`, so a colour an earlier member WROTE
+            // is read from that member's epoch — the same "latest bytes"
+            // the CPU spawner sees when it reads the chain's output.
+            refs.color = { kind: "slot", index: slotFor(colorAttr) };
+            refs.colors = { kind: "colorOut" };
+          }
           // Reads only: a spawner never writes an attribute, so nothing
           // joins `written` and the geometry is untouched.
           steps.push(
-            applyStep(makeComposeInstancesApply(hasRot, hasScale, indexed), 0, refs, consts, indexed),
+            applyStep(
+              makeComposeInstancesApply(hasRot, hasScale, indexed, colorTupleSize),
+              0,
+              refs,
+              consts,
+              indexed,
+            ),
           );
           instances = {
             assetId,
             assetAttr,
+            colorAttr,
+            colorTupleSize,
             count,
             bytes: count * INSTANCE_MATRIX_BYTES,
+            colorBytes: colorTupleSize > 0 ? count * INSTANCE_COLOR_BYTES : 0,
             permBytes: indexed ? count * 4 : 0,
           };
           break;
@@ -830,7 +919,12 @@ export function planResidentRun(
   // the run must be able to allocate. Their total is grouping-independent
   // (the batches partition the points), so this stays a plan-time number.
   const totalBytes =
-    slotBytes + colBytes + readbackBytes + (instances?.bytes ?? 0) + (instances?.permBytes ?? 0);
+    slotBytes +
+    colBytes +
+    readbackBytes +
+    (instances?.bytes ?? 0) +
+    (instances?.colorBytes ?? 0) +
+    (instances?.permBytes ?? 0);
   if (totalBytes > maxResidentBytes) return { reason: "run-too-large" };
 
   return {
@@ -913,18 +1007,20 @@ export async function executeResidentRun(
   };
   /**
    * Buffers whose ownership has left the pool this run: the retained
-   * instance-transform buffers, one per asset batch. The `finally` below
-   * must not release them — the pool no longer owns them and would
-   * throw — and a failure after the transfer must destroy them through
-   * their handle, so a broken run never leaks device memory.
+   * instance-transform buffers (one per asset batch) and, when the
+   * spawner asked for colour, the instance-colour buffers beside them.
+   * The `finally` below must not release them — the pool no longer owns
+   * them and would throw — and a failure after the transfer must destroy
+   * them through their handle, so a broken run never leaks device memory.
    */
   const retained = new Set<GpuBufferLike>();
   /**
-   * Handles minted this run, in batch order. Every buffer whose
-   * ownership left the pool is either destroyed on the spot (the one
-   * failure window below) or reachable through exactly one entry here,
-   * so the `catch` frees each exactly once — `dispose()` is idempotent,
-   * and no two entries wrap the same `DetachedBuffer`.
+   * Handles minted this run, in batch order (transforms then colours
+   * within a batch). Every buffer whose ownership left the pool is either
+   * destroyed on the spot (the one failure window below) or reachable
+   * through exactly one entry here, so the `catch` frees each exactly
+   * once — `dispose()` is idempotent, and no two entries wrap the same
+   * `DetachedBuffer`.
    */
   const retainedHandles: DeviceTransformsHandle[] = [];
 
@@ -983,21 +1079,32 @@ export async function executeResidentRun(
     // the renderer seam binds a buffer with no offset or size, and
     // identity-keyed handle refcounting stays correct only when each
     // batch carries its own buffer.
+    const RETAINED_USAGE =
+      BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST | BUFFER_USAGE.COPY_SRC | BUFFER_USAGE.VERTEX;
     const outBufs: GpuBufferLike[] =
       grouping === undefined
         ? []
-        : Array.from(grouping.counts, (n) =>
-            acquire(
-              n * INSTANCE_MATRIX_BYTES,
-              BUFFER_USAGE.STORAGE |
-                BUFFER_USAGE.COPY_DST |
-                BUFFER_USAGE.COPY_SRC |
-                BUFFER_USAGE.VERTEX,
-            ),
-          );
+        : Array.from(grouping.counts, (n) => acquire(n * INSTANCE_MATRIX_BYTES, RETAINED_USAGE));
+    // Instance colours: a SECOND retained buffer per batch, allocated
+    // with the same flags because a renderer binds it the same way. 16
+    // bytes per instance, not 12 — see INSTANCE_COLOR_BYTES.
+    const colorOutBufs: GpuBufferLike[] =
+      grouping === undefined || plan.instances === null || plan.instances.colorBytes === 0
+        ? []
+        : Array.from(grouping.counts, (n) => acquire(n * INSTANCE_COLOR_BYTES, RETAINED_USAGE));
     const bufFor = (ref: BufRef, batch: number): GpuBufferLike => {
       if (ref.kind === "slot") return slotBufs[ref.index];
       if (ref.kind === "col") return colBufs[ref.index];
+      if (ref.kind === "colorOut") {
+        const colorOut = colorOutBufs[batch];
+        if (colorOut === undefined) {
+          throw new Error(
+            "resident run: a kernel binds a retained instance-colour buffer but the plan " +
+              "declares no colour output (plan and kernels disagree)",
+          );
+        }
+        return colorOut;
+      }
       if (ref.kind === "perm") {
         if (permBuf === undefined) {
           throw new Error(
@@ -1184,36 +1291,64 @@ export async function executeResidentRun(
     // result.
     let deviceBatches: readonly DeviceInstanceBatch[] | undefined;
     if (plan.instances !== null) {
-      if (grouping === undefined || outBufs.length !== grouping.order.length) {
+      const wantsColor = plan.instances.colorBytes > 0;
+      if (
+        grouping === undefined ||
+        outBufs.length !== grouping.order.length ||
+        colorOutBufs.length !== (wantsColor ? grouping.order.length : 0)
+      ) {
         throw new Error(
           "resident run: the plan declares an instances output but the acquired transform " +
             "buffers do not match the grouping (library bug: plan.instances, the grouping, and " +
             "the acquired buffers must agree)",
         );
       }
+      /**
+       * Detach one retained buffer and wrap it, freeing it on the spot if
+       * the wrap fails — that is the ONE window where neither the pool
+       * nor a handle can reach it. Every handle it returns is pushed to
+       * `retainedHandles` by the caller, so the `catch` frees it exactly
+       * once if a LATER batch (or a later buffer of this batch) throws.
+       */
+      const retain = (buf: GpuBufferLike, bytes: number, label: string): DeviceTransformsHandle => {
+        const detached = pool.detach(buf);
+        // From this instant the pool no longer owns the buffer, so the
+        // `finally` must skip it (releasing a detached buffer throws).
+        retained.add(buf);
+        try {
+          return makeDeviceTransformsHandle(detached, bytes, label);
+        } catch (err) {
+          detached.destroy();
+          throw err;
+        }
+      };
       const batches: DeviceInstanceBatch[] = [];
       for (let j = 0; j < grouping.order.length; j++) {
         const assetId = grouping.order[j];
         const batchCount = grouping.counts[j];
-        const detached = pool.detach(outBufs[j]);
-        // From this instant the pool no longer owns the buffer, so the
-        // `finally` must skip it (releasing a detached buffer throws).
-        retained.add(outBufs[j]);
-        let handle: DeviceTransformsHandle;
-        try {
-          handle = makeDeviceTransformsHandle(
-            detached,
-            batchCount * INSTANCE_MATRIX_BYTES,
-            `${batchCount} instances of "${assetId}"`,
-          );
-        } catch (err) {
-          // Nothing else can reach this buffer now: neither the pool nor
-          // a handle holds it. Free it here or it is stranded for good.
-          detached.destroy();
-          throw err;
-        }
+        const handle = retain(
+          outBufs[j],
+          batchCount * INSTANCE_MATRIX_BYTES,
+          `${batchCount} instances of "${assetId}"`,
+        );
         retainedHandles.push(handle);
-        batches.push({ residency: "device", assetId, count: batchCount, transforms: handle });
+        if (!wantsColor) {
+          batches.push({ residency: "device", assetId, count: batchCount, transforms: handle });
+          continue;
+        }
+        const colors = retain(
+          colorOutBufs[j],
+          batchCount * INSTANCE_COLOR_BYTES,
+          `${batchCount} instance colours of "${assetId}"`,
+        );
+        retainedHandles.push(colors);
+        batches.push({
+          residency: "device",
+          assetId,
+          count: batchCount,
+          transforms: handle,
+          colors,
+        });
       }
       deviceBatches = batches;
     }

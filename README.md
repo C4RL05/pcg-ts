@@ -477,6 +477,39 @@ a spawn can be device-resident too — composed on the GPU and handed to
 the renderer without a CPU round trip — not just a CPU one. See
 `examples/02-forest` and `examples/03-spline-fence`.
 
+**Per-instance colour, and why you have to ask for it.** Splitting into
+more asset ids is not the only variation channel. Point `spawnInstances`'
+`colorAttr` at an f32 point attribute with `tupleSize >= 3` and
+components 0/1/2 ride along as each instance's RGB — reaching
+`InstancedMesh.instanceColor` on the CPU path and an instance-colour
+storage buffer on the WebGPU one — so age, health, season or a hue drift
+vary *within* one asset. Alpha is dropped: both adapters take RGB, and
+the standard `color` attribute is `f32x4`, so its fourth component has
+nowhere to go.
+
+It is opt-in, and deliberately so. Every point cloud in this library
+already carries `color` at `[1,1,1,1]`, so unlike a primitive attribute
+— which exists only because someone made one — its *presence* says
+nothing about intent. The cost of doing it automatically is not the
+wasted floats: setting `instanceColor` flips three's program variant
+(`instanceColor !== null` forces the `vColor` varying and a shader
+recompile) for zero pixels changed. Nor does anything scan the column to
+auto-enable when it is not all white — that would be O(n) every cook
+*and* would make the renderer's shader variant depend on the data.
+Naming the attribute is what states the intent. **The accepted cost:
+write `setAttribute("color", ...)` upstream, never name it here, and you
+get silence rather than a warning.** Any colour-shaped attribute works —
+`color`, or a `tint`/`speciesColor` you wrote yourself.
+
+**A spawn is budgeted.** One cook may spawn at most 1 048 576 instances
+(one per input point — 64 MiB of matrices), checked before anything is
+allocated, so a density typo is a diagnostic naming the count and the
+fix instead of an allocation failure. The ceiling is per **cook**, never
+per world: a global "instances alive" limit would depend on which cells
+happened to be resident, which is order-dependent and so a determinism
+violation. A streamed `World` may legitimately hold many times the
+budget across its live cells.
+
 Also available: `fromCurve` (a `THREE.Curve` becomes a polyline for
 `splineSample`), `toPointsObject` (debug point rendering), and
 `WorldThreeBinding`, which manages one scene-graph group per live
@@ -676,6 +709,14 @@ of it:
   atan/atan2 ≤ 80, asin/acos ≤ 512 (an absolute-error class per the
   WGSL spec); noise families ≤ 6–24 depending on base and mode.
 - On a single device, results are run-to-run **byte-identical**.
+- Per-instance colour is **bit-exact**, and for a structural reason
+  rather than a measured one: colour is a *gather*, not arithmetic —
+  the kernel copies three f32 and does nothing to them — so there is no
+  ULP class for it to land in and none is budgeted. Do not read
+  `composeTRS`' tolerance across to it. Measured anyway on the
+  reference adapter: 12 288 colour components compared with
+  `Object.is` (so signed zero cannot pass as zero), zero mismatches,
+  across out-of-gamut negatives, f32 max, min-normal and subnormals.
 - Branchy ops (select, compares, ramp segments, worley cell walks) may
   flip at knife-edge inputs whose operands differ within tolerance.
 - Fused runs carry composed budgets. Across 17 device chains the worst
@@ -790,7 +831,10 @@ opt-in) the run appends a compose-TRS kernel writing one column-major
 4×4 per point, then transfers the composed buffers out of the
 evaluator's pool — **one buffer per asset**, so a constant-`assetId`
 spawn yields one and an `assetAttr` spawn yields as many as there are
-distinct asset ids on its points. If nothing in the cook reads the
+distinct asset ids on its points. With `colorAttr` set, that same
+kernel also gathers each instance's RGB into a second buffer per asset,
+inside the same loop over the same index, so the two orderings cannot
+drift apart. If nothing in the cook reads the
 terminal's `points` pin, the run performs *no readback at all* — no
 `mapAsync`, no staging buffer, no CPU copy of `P`/`rot`/`scale`. Even a
 lone spawner counts as a run here, because fusion is the only way to
@@ -799,9 +843,15 @@ produce device output.
 The `instances` item that comes back carries `deviceBatches`, not
 `batches` — one entry per asset, in the batch order documented below.
 Each `DeviceInstanceBatch` is `{ residency: "device",
-assetId, count, transforms }`, where `transforms` is an opaque
+assetId, count, transforms, colors? }`, where `transforms` is an opaque
 `DeviceTransformsHandle` (`backend`, `byteLength`, `disposed`,
-`resource`, `dispose()`) — never a typed array. Reading `batches` on
+`resource`, `dispose()`) — never a typed array. `colors` is the same
+handle type and appears only when `colorAttr` is set; it does **not**
+carry the CPU layout, because WGSL's `array<vec3<f32>>` pads to a
+16-byte stride. The device buffer is therefore 4 floats per instance
+(`count * 16` bytes) where the CPU `InstanceBatch.colors` packs 3
+(`count * 12`), and the kernel writes the pad slot as a literal `0f`
+rather than leaving it undefined. Reading `batches` on
 such an item throws on purpose, because a WebGL adapter silently
 drawing nothing is the worse failure:
 
@@ -852,6 +902,14 @@ the string point attributes that *are* present). The run planner
 mirrors those two conditions and *rejects* rather than throwing —
 counting `run-plan-failed` — so the per-node path serves and there is
 exactly one copy of each message.
+
+The instance budget and `colorAttr`'s two errors ride that same
+mechanism, which is why neither adds a fallback reason to the
+vocabulary: a spawn over 1 048 576 instances, or one naming a colour
+attribute that is missing or is not f32 with `tupleSize >= 3`, rejects
+the resident run as `run-plan-failed`, and the CPU node then raises the
+single diagnostic. The device path never words a message of its own, so
+the two paths cannot word it differently.
 
 **The remaining boundary: a string `setAttribute` breaks the chain.**
 `setAttribute` is fusable in numeric point-domain mode only; its
@@ -969,6 +1027,15 @@ every product exact in f32), and basis deviation stays ≤ 1e-6 absolute
 and ≤ 5e-8 of the basis range (measured 1.70e-8) with over 70% of the
 sample still bit-equal. On one device, the same graph composes
 byte-identical transforms twice.
+
+**Colour is not in that tolerance class, and the reason is structural.**
+The compose kernel *gathers* RGB — it copies the three source floats
+and performs no arithmetic on them — so there is nothing for f32 to
+round and the device colours equal the CPU colours bit for bit, not
+approximately. Measured with `Object.is` rather than a tolerance, so
+`-0` does not pass as `0`: 12 288 components, zero mismatches, over a
+sample that pins signed zero, out-of-gamut negatives, f32 max,
+min-normal and subnormals.
 
 What that does **not** weaken: anything outside these matrices. Seeds,
 hash streams, and every CPU golden are untouched, and the CPU spawner's

@@ -188,6 +188,20 @@ the partitioned cook a serializable graph rather than host TypeScript:
 Params per entry in `docs/nodes.md`; the runnable JSON is in
 `docs/authoring.md` ("Owning primitives instead of destroying them").
 
+**Writing a per-instance colour and never naming it.** Colour reaches the
+renderer only when `spawnInstances`' `colorAttr` names the attribute
+carrying it. Write `color` (or a `tint`) upstream, leave `colorAttr` at its
+default `""`, and the cook succeeds, `pcg validate` says `ok`, and every
+instance draws in its asset's own colour — no warning, because there is
+nothing to warn about: every point cloud in this library already carries
+`color` at `[1,1,1,1]`, so presence cannot be read as intent the way a
+primitive attribute's can. Naming the attribute *is* the intent. Nothing
+scans the values, deliberately: an "is it all white?" test would cost O(n)
+per cook and make the renderer's shader variant depend on the data. The
+mistake in the other direction is loud — a `colorAttr` naming something
+missing, or not f32 with `tupleSize >= 3`, errors and lists the point
+attributes that would fit.
+
 **Looking for the edge domain.** There isn't one, and none is needed: a
 2-vertex polyline over shared points already *is* an edge, so an edge is a
 `primitive`. Per-edge values are `promoteAttribute` point→primitive (`min`,

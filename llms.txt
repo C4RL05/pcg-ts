@@ -15,7 +15,8 @@ driven programmatically: node capabilities are enumerable at runtime
 
 - Data flows through graphs as collections of items: geometry items,
   value items (plain numbers/strings/bools), instances items (transform
-  batches for renderers). Items carry tags and a revision id (`rev`).
+  batches for renderers, each optionally carrying per-instance RGB).
+  Items carry tags and a revision id (`rev`).
 - A pin carries a COLLECTION, and one connection can put many geometries
   on it (`partitionByAttribute` emits one per distinct value; a subgraph
   or `dataInput` forwards however many it holds). A node that processes
@@ -355,7 +356,7 @@ spawn, io, composite.
 - selfPrune — greedy minimum-distance thinning (lowest index wins)
 - setAttribute — create/overwrite an attribute from a field-capable value; `type: "string"` picks per element from a `values` list by numeric selector (floor+clamp, total) or writes a constant `stringValue`; optional `seed` param folds into the field evaluation (0 = node seed unchanged)
 - setBounds — stamp boundsMin/boundsMax on every point
-- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`); one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order
+- spawnInstances — terminal: points to render-agnostic instance batches (4x4 column-major transforms, plus optional per-instance RGB); `assetAttr` names a string attribute for per-point asset ids (empty entries fall back to `assetId`); one batch per asset in ascending first-occurrence point order, instances within a batch in ascending point order. `colorAttr` (default `""`) names an f32 point attribute with tupleSize >= 3 whose components 0/1/2 become the instance's RGB — this is how instances of ONE asset id vary in appearance (age, health, season, hue drift) without splitting into more assets. ALPHA IS DROPPED: both three adapters take RGB, so the standard f32x4 `color`'s fourth component has nowhere to go. It is OPT-IN and nothing is sniffed: every cloud in this library already carries `color` at [1,1,1,1], so its presence states no intent, and writing an all-white instance-colour buffer would flip three's program variant (`instanceColor !== null` forces the `vColor` varying and a shader recompile) for zero pixels changed — a value-scan to auto-enable would be O(n) per cook AND make the shader variant data-dependent, which is worse. ACCEPTED COST, stated rather than hidden: an author who writes `setAttribute("color", ...)` and never names it here gets silence, not a warning. Any colour-shaped attribute works (`color`, or a `tint`/`speciesColor` you wrote). A missing attribute, or one that is not f32 with tupleSize >= 3, is an error listing the point attributes that WOULD fit and two fixes. BUDGET: at most 1048576 instances PER COOK (one per input point; 64 MiB of matrices), checked before allocation, so a runaway density is a diagnostic naming the count and the fix instead of an allocation failure. Per COOK, never per world — a global "instances alive" ceiling would depend on which cells happen to be resident and so be order-dependent, which the determinism invariant forbids; a streamed world may legitimately hold many times the budget across its resident cells
 - splineSample — arc-length sampling along polyline primitives, treating every polyline of the input as ONE concatenated curve (emits tangent, curveU); its in-graph source is pointsToPath or pathResample, and its own output is a plain point CLOUD, no longer a path. Each sample ALSO carries every attribute of the polyline PRIMITIVE it landed on, even though the polylines are measured as one concatenated curve — a sample exactly on a join between two polylines takes the LATER one's values. `primtype` is never carried and there is no opt-out; a collision with a name this node writes is REFUSED, naming the fix
 - subgraph — composite node wrapping an inner graph; create with `subgraphNode(inner, inputs, outputs, params)` (pins AND params are per-instance), inspect with `getSubgraphSpec` / `describeSubgraphPins` / `describeSubgraphParams`, serializes recursively as `subgraph` or by name as `ref`
 - surfaceSample — area-weighted scatter on a triangle mesh with density acceptance (emits normal); each sample also carries every attribute of its own triangle's PRIMITIVE, so a per-face value written upstream survives the sampling instead of dying at it (`primtype` excepted, no opt-out, collisions refused)
@@ -860,9 +861,13 @@ Surface:
   - `run-plan-failed` — some member of a resident run cannot be
     compiled into the pipeline (unknown resident kind, field compile
     error, tuple/layout mismatch, missing standard attribute, buffer
-    limit). Counted once per rejected run; every member then cooks
-    per-node, including surfacing the identical CPU error for genuinely
-    invalid params.
+    limit, a spawn over the instance budget or naming a bad
+    `assetAttr`/`colorAttr`). Counted once per rejected run; every
+    member then cooks per-node, including surfacing the identical CPU
+    error for genuinely invalid params. That is deliberate reuse: an
+    over-budget or mis-named spawn adds NO new fallback reason, and
+    since the device path never words the message itself the two paths
+    cannot word it differently.
   - `run-too-large` — a run's resident working set exceeds
     `maxResidentBytes`. Counted once per rejected run.
   - NODE-level opt-outs (`ResidentDesc.eligible` returning a reason
@@ -900,7 +905,8 @@ Surface:
   intended for tests forcing chunk seams — production code leaves it
   unset; default `65535 × workgroupSize` = 4 194 240 at wg 64);
   `deviceInstances?` (default false — opt in to device-resident
-  instance transforms; see "Device-resident instancing" below);
+  instance transforms and their colours; see "Device-resident
+  instancing" below);
   `acceptDerivedSpecs?` (default false — opt in to resolving fields
   whose spec was DERIVED by the combinator API; see "DESCRIBING vs
   RUNNING" above). Both are advertised on the resolver
@@ -1014,7 +1020,9 @@ multi-asset since v0.8.0:
   gate. The run appends a compose-TRS kernel writing one column-major
   4x4 f32 per point (`count * 64` bytes, exactly the `InstanceBatch`
   layout) into ONE BUFFER PER ASSET, each of which it then
-  `BufferPool.detach`es. A LONE spawner IS a run under the opt-in (the
+  `BufferPool.detach`es. With `colorAttr` set, the SAME kernel also
+  gathers RGB into a second buffer per asset — no second traversal
+  exists, so the two cannot fall out of step. A LONE spawner IS a run under the opt-in (the
   single-node exception: fusion is the only way to produce device
   output at all). When `ResidentRunContext.needsGeometry` is false —
   the terminal's geometry pin is neither connected nor a declared
@@ -1024,8 +1032,8 @@ multi-asset since v0.8.0:
   `readbacksSaved === fusedNodes - residentRuns` fails.
 - What the caller receives: the terminal's instances pin carries an
   `InstancesItem` with `deviceBatches?: readonly DeviceInstanceBatch[]`
-  (`{ residency: "device", assetId, count, transforms }`), ONE ENTRY
-  PER ASSET in the batch order specified below, NOT
+  (`{ residency: "device", assetId, count, transforms, colors? }`), ONE
+  ENTRY PER ASSET in the batch order specified below, NOT
   `batches`. Reading `.batches` on it THROWS (naming both fixes) —
   probe with `isDeviceResidentInstances(item)` or
   `item.deviceBatches !== undefined` FIRST. `transforms` is a
@@ -1035,6 +1043,15 @@ multi-asset since v0.8.0:
   (`pcg-ts/gpu`) narrows `resource` to the backend buffer; bind exactly
   `byteLength` bytes from offset 0 (pool buckets to pow2 — the tail is
   uninitialized). Wrong backend or a disposed handle throws.
+- `colors` is present only when `colorAttr` is set, is the same handle
+  type, and DOES NOT HAVE THE CPU LAYOUT. WGSL `array<vec3<f32>>` pads
+  to a 16-byte stride, so the device buffer is 4 f32 per instance
+  (`count * 16` bytes) where the CPU `InstanceBatch.colors` packs 3
+  (`count * 12`); instance k is at
+  `4k..4k+2` and the kernel writes `4k+3` as a literal `0f` rather than
+  leaving it undefined. Anyone extending the device path must respect
+  that stride — it is the one place the two layouts legitimately
+  differ.
 - SHARED DEVICE IS MANDATORY. One `GPUDevice` must back both the
   `GpuFieldEvaluator` and the `THREE.WebGPURenderer`: a `GPUBuffer`
   belongs to the device that created it, two devices cannot share one,
@@ -1191,6 +1208,16 @@ goldens never move:
   with default and string keys, noise lattice hashing), `index`,
   u32/i32 attribute roots, bool→f32 reads, pure hash+compare+select
   trees, and f32 add/sub/mul, clamp/min/max, floor, select/compares.
+- Per-instance COLOUR is bit-exact too, and structurally rather than
+  by measurement: unlike the composed matrix it is a GATHER, not
+  arithmetic — the kernel copies the three source f32 and does nothing
+  to them — so there is no ULP class to diverge and none is budgeted.
+  Measured anyway on the reference adapter (discrete desktop,
+  D3D12/Dawn): 12 288 colour components compared
+  with `Object.is` (not `===`, so signed zero cannot pass), zero
+  mismatches, over out-of-gamut negatives, f32 max, min-normal and
+  subnormals. Do not read across from `composeTRS`'s tolerance class:
+  it does not apply here.
 - On one device, repeated dispatches are run-to-run byte-identical.
 - Branchy ops (select, compares, ramp segments, worley cell walks) may
   flip at knife-edge inputs whose operands differ within tolerance.

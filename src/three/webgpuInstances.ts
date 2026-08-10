@@ -18,6 +18,19 @@
  *    column-major, which is exactly `Matrix4.elements` and exactly what
  *    the compose kernel writes, so no repacking happens anywhere.
  *
+ *    The same branch exists for instance COLOUR — `storage(colors,
+ *    "vec3", count).element(instanceIndex)` — so a device-resident
+ *    colour buffer rides the identical seam rather than a parallel one:
+ *    same attribute class, same `backend.get(attribute).buffer` seeding,
+ *    same usage flags. What differs is the layout, and that difference is
+ *    three's own: WGSL gives `array<vec3<f32>>` a 16-byte stride, and
+ *    three repacks an itemSize-3 storage attribute to 4 components
+ *    before upload for exactly that reason ("WGSL does not support packed
+ *    vec3 data in storage buffers"). The evaluator therefore composes 4
+ *    f32 per instance, and that repack — which would rewrite the array we
+ *    are adopting instead of — never runs, because it lives inside the
+ *    `buffer === undefined` branch adoption short-circuits.
+ *
  * 2. **Not supported.** three has no API for "bind the buffer I already
  *    own". Left alone it would allocate its own buffer and upload the
  *    attribute's (empty) array over the top. {@link ADOPTION_SEAM}
@@ -40,11 +53,12 @@
  *
  * ## Ownership
  *
- * The adapter never disposes a `DeviceTransformsHandle`; `WorldThreeBinding`
- * reference-counts and disposes those. The adapter owns only the
- * `InstancedMesh` and its attribute, and it must never let three call
- * `destroyAttribute` on an adopted attribute (that would `destroy()` a
- * buffer somebody else owns) — see {@link WebGpuInstanceAdapter.release}.
+ * The adapter never disposes a `DeviceTransformsHandle` — matrices or
+ * colours; `WorldThreeBinding` reference-counts and disposes those. The
+ * adapter owns only the `InstancedMesh` and its attributes, and it must
+ * never let three call `destroyAttribute` on an adopted attribute (that
+ * would `destroy()` a buffer somebody else owns) — see
+ * {@link WebGpuInstanceAdapter.release}.
  */
 import { InstancedMesh, Object3D, Sphere, Vector3, type Material } from "three";
 import type { DeviceInstanceBatch } from "../fields/index.js";
@@ -56,6 +70,23 @@ const WEBGPU_BACKEND = "webgpu";
 
 /** Instance-matrix item size in floats (a column-major 4x4). */
 const MATRIX_ITEM_SIZE = 16;
+
+/**
+ * Instance-colour item size in floats, as three's node graph reads it:
+ * `storage(colors, "vec3", count)`.
+ */
+const COLOR_ITEM_SIZE = 3;
+
+/**
+ * f32 the device buffer actually spends per instance — FOUR, against the
+ * `vec3` above. `array<vec3<f32>>` has a 16-byte stride in WGSL, so the
+ * third and fourth numbers on this page disagree on purpose. Mirrors
+ * `INSTANCE_COLOR_COMPONENTS` in `src/gpu/applyKernels.ts`, which is what
+ * the compose kernel writes; kept as a literal here because `src/three`
+ * must not import `src/gpu`, and asserted against the batch's declared
+ * handle length on every build so the two cannot drift silently.
+ */
+const COLOR_DEVICE_COMPONENTS = 4;
 
 /**
  * Structural stand-in for `THREE.WebGPURenderer`.
@@ -92,7 +123,10 @@ export interface WebGpuInstanceAdapterStats {
   readonly built: number;
   /** Objects released. `built - released` is the live object count. */
   readonly released: number;
-  /** Device buffers adopted into three's backend (empty batches adopt none). */
+  /**
+   * Device buffers adopted into three's backend (empty batches adopt
+   * none). Counts BUFFERS, not batches: a coloured batch adopts two.
+   */
   readonly adopted: number;
   /** Instances currently drawn from device buffers. */
   readonly liveInstances: number;
@@ -233,6 +267,13 @@ export function checkAdoptionSeam(
       after === undefined ? "the record was cleared" : "the record holds a different buffer",
     );
   }
+  // Leave the record as it was found. The probe attribute is a throwaway,
+  // so this is mostly hygiene — but it is also what makes the check
+  // REPEATABLE, and the adapter runs it once per item size (a matrix is
+  // itemSize 16, a colour 3, and only the latter has a padding branch to
+  // short-circuit past). A backend that returned one shared record would
+  // otherwise fail its own second probe on the sentinel it just wrote.
+  delete backend.get(probe)[ADOPTION_SEAM.field];
 }
 
 /** Zero-length backing array: the matrices never exist on the CPU. */
@@ -261,16 +302,19 @@ export async function createWebGpuInstanceAdapter(
 ): Promise<WebGpuInstanceAdapter> {
   const { StorageInstancedBufferAttribute } = await import("three/webgpu");
   const backend = requireBackend(opts.renderer);
-  const makeAttribute = (count: number): InstanceType<typeof StorageInstancedBufferAttribute> => {
+  const makeAttribute = (
+    count: number,
+    itemSize: number,
+  ): InstanceType<typeof StorageInstancedBufferAttribute> => {
     // Second (and last) internal: passing a typed array rather than a
-    // count skips three's `new Float32Array(count * 16)` entirely — the
-    // matrices genuinely never exist on the CPU — and `count` is then
-    // written directly. `@types/three` marks `BufferAttribute.count`
-    // readonly, but it is a plain data property at runtime and is what
-    // three reads for the matrix count. If it ever becomes a derived
-    // getter the assignment throws (modules are strict) and the
-    // read-back below catches a silent no-op either way.
-    const attr = new StorageInstancedBufferAttribute(emptyMatrixArray(), MATRIX_ITEM_SIZE);
+    // count skips three's `new Float32Array(count * itemSize)` entirely —
+    // the matrices and colours genuinely never exist on the CPU — and
+    // `count` is then written directly. `@types/three` marks
+    // `BufferAttribute.count` readonly, but it is a plain data property
+    // at runtime and is what three reads for the instance count. If it
+    // ever becomes a derived getter the assignment throws (modules are
+    // strict) and the read-back below catches a silent no-op either way.
+    const attr = new StorageInstancedBufferAttribute(emptyMatrixArray(), itemSize);
     (attr as { count: number }).count = count;
     if (attr.count !== count) {
       throw seamError(
@@ -281,7 +325,12 @@ export async function createWebGpuInstanceAdapter(
     }
     return attr;
   };
-  checkAdoptionSeam(opts.renderer, () => makeAttribute(1));
+  // Probe BOTH item sizes. itemSize 3 is the one three would repack (its
+  // vec3 -> vec4 padding branch), so proving the short-circuit over a
+  // colour-shaped attribute is a different claim from proving it over a
+  // matrix-shaped one, and the colour path depends on the harder claim.
+  checkAdoptionSeam(opts.renderer, () => makeAttribute(1, MATRIX_ITEM_SIZE));
+  checkAdoptionSeam(opts.renderer, () => makeAttribute(1, COLOR_ITEM_SIZE));
 
   let built = 0;
   let released = 0;
@@ -318,6 +367,31 @@ export async function createWebGpuInstanceAdapter(
             `${batch.transforms.byteLength} bytes`,
         );
       }
+      const colors = batch.colors;
+      if (colors !== undefined) {
+        if (colors.backend !== WEBGPU_BACKEND) {
+          throw new Error(
+            `createWebGpuInstanceAdapter: batch "${batch.assetId}" carries a "` +
+              `${colors.backend}" instance-colour handle, not "${WEBGPU_BACKEND}"; only a ` +
+              "GpuFieldEvaluator running on the renderer's own GPUDevice produces bindable buffers",
+          );
+        }
+        // 16 bytes per instance, not 12: this is the length check that
+        // would catch a producer that packed colour tightly, which is
+        // the failure that renders as a growing colour skew rather than
+        // as an error.
+        const expectedColors =
+          batch.count * COLOR_DEVICE_COMPONENTS * Float32Array.BYTES_PER_ELEMENT;
+        if (colors.byteLength !== expectedColors) {
+          throw new Error(
+            `createWebGpuInstanceAdapter: batch "${batch.assetId}" declares ${batch.count} ` +
+              `instances, so its instance-colour handle must be ${expectedColors} bytes ` +
+              `(${COLOR_DEVICE_COMPONENTS} f32 per instance — WGSL gives array<vec3<f32>> a ` +
+              `16-byte stride, so RGB is padded to 4 components), but it is ` +
+              `${colors.byteLength} bytes`,
+          );
+        }
+      }
       built++;
       if (batch.count === 0) {
         // A zero-instance batch has nothing to bind. It must NOT become
@@ -332,10 +406,12 @@ export async function createWebGpuInstanceAdapter(
         return placeholder;
       }
 
-      // `resource` throws for a disposed handle — read it before
-      // anything else is allocated so a stale batch fails cleanly.
+      // `resource` throws for a disposed handle — read BOTH before
+      // anything else is allocated so a stale batch fails cleanly and
+      // leaves no half-built mesh behind.
       const buffer = batch.transforms.resource;
-      const attribute = makeAttribute(batch.count);
+      const colorBuffer = colors?.resource;
+      const attribute = makeAttribute(batch.count, MATRIX_ITEM_SIZE);
       attribute.name = `pcg:instanceMatrix:${batch.assetId}`;
       adoptInto(backend, attribute, buffer);
       adopted++;
@@ -345,6 +421,18 @@ export async function createWebGpuInstanceAdapter(
       // attribute replaces it.
       const mesh = new InstancedMesh(asset.geometry, asset.material as Material, 0);
       mesh.instanceMatrix = attribute;
+      if (colorBuffer !== undefined) {
+        // `NodeMaterial.setupDiffuseColor` multiplies in `instanceColor`
+        // whenever this is non-null, and `Instance.js` takes the storage
+        // branch for it exactly as it does for the matrix. Setting it is
+        // therefore the whole adoption: no material flag, no
+        // `vertexColors`, no second draw path.
+        const colorAttribute = makeAttribute(batch.count, COLOR_ITEM_SIZE);
+        colorAttribute.name = `pcg:instanceColor:${batch.assetId}`;
+        adoptInto(backend, colorAttribute, colorBuffer);
+        adopted++;
+        mesh.instanceColor = colorAttribute;
+      }
       mesh.count = batch.count;
       mesh.name = batch.assetId;
       applyBounds(mesh, ctx, batch.assetId);

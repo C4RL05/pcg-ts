@@ -628,6 +628,83 @@ it ends the chain and the run around the spawner holds only the
 spawner. See
 [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback).
 
+### 5. Per-instance colour: variation inside one asset (pure JSON)
+
+Splitting into more asset ids is not the only variation channel. Write
+a colour-shaped attribute — f32, `tupleSize` 3 or 4 — and name it in
+`spawnInstances`' `colorAttr`; components 0, 1 and 2 become each
+instance's RGB, so age, health, season or a hue drift vary *within* one
+asset:
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 12,
+  "nodes": [
+    { "id": "scatter", "type": "pointScatterInBounds",
+      "params": { "count": 600, "boundsMin": [0, 0, 0], "boundsMax": [60, 0, 60] } },
+    { "id": "tint", "type": "setAttribute",
+      "params": {
+        "name": "tint", "domain": "point", "type": "f32", "tupleSize": 3,
+        "value": { "fn": "remap", "args": [
+          { "fn": "fbm", "base": "perlinNoise",
+            "opts": { "frequency": 0.04, "octaves": 3, "normalized": true } },
+          0, 1, 0.45, 1 ] }
+      } },
+    { "id": "spawn", "type": "spawnInstances",
+      "params": { "assetId": "bush", "colorAttr": "tint" } }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["tint", "in"] },
+    { "from": ["tint", "out"], "to": ["spawn", "in"] }
+  ],
+  "outputs": [ { "id": "spawn", "pin": "instances", "name": "instances" } ]
+}
+```
+
+One scalar broadcast across all three components is a brightness drift;
+a hue drift is the same shape with a field per component. The batch
+comes back with `colors` alongside `transforms` — 3 floats per
+instance, `colors.length === count * 3`, in the same instance order —
+which the three adapter turns into `InstancedMesh.instanceColor`.
+
+**Alpha is dropped**, and that is stated here rather than discovered:
+both three adapters take RGB, so the standard `color` attribute's
+fourth component has nowhere to go. Naming `color` itself works fine —
+it is f32 `tupleSize` 4 — you just get its RGB.
+
+**It is opt-in, and nothing is picked up automatically.** This is the
+one place the reasoning differs from primitive-attribute carrying,
+which *is* automatic: a primitive attribute exists only because an
+author made one, so its presence is the intent. `color` is minted at
+`[1, 1, 1, 1]` on every point cloud in this library, so its presence
+means nothing at all. The cost of enabling it anyway is not the wasted
+floats — setting `instanceColor` flips three's program variant
+(`instanceColor !== null` forces the `vColor` varying and a shader
+recompile) for zero pixels changed. Nor does anything scan the column
+to auto-enable when it is not all white: that is O(n) every cook *and*
+makes the renderer's shader variant depend on the data.
+
+So the accepted cost, which is worth knowing before it bites: **write a
+colour upstream, never name it in `colorAttr`, and you get silence.**
+Nothing warns, and the instances draw in the asset's own colour. The
+error path is the other half — a `colorAttr` naming an attribute that
+is missing, or one that is not f32 with `tupleSize >= 3`, is refused
+with a message listing the point attributes that *would* fit and two
+ways out (write one with `setAttribute`, or leave `colorAttr` empty).
+
+**One cook may spawn at most 1 048 576 instances**, one per input
+point — 64 MiB of transforms — checked before anything is allocated, so
+a density typo is a diagnostic naming the count and the fix rather than
+an allocation failure. Thin the cloud upstream (a lower scatter count,
+`filterByDensity`, `selfPrune`) or cook the region in cells. The
+ceiling is per **cook**, never per world: a limit on instances *alive*
+would depend on which cells happened to be resident, so the same world
+would fail or not depending on the order it streamed in — exactly the
+order-dependence the determinism invariant forbids. A streamed `World`
+may hold many times the budget across its live cells, and that is
+correct.
+
 ## Editing live graphs
 
 JSON is the interchange format, not the only way to change a graph. A
@@ -1744,7 +1821,7 @@ geometry input and one geometry output, plus one *terminal* kind:
 | `transformPoints` | always |
 | `jitterPoints` | always |
 | `orientAlongVector` | always |
-| `spawnInstances` | the resolver advertises the kind — with or without `assetAttr`, since v0.8.0; terminal only, and it declares no `eligible` gate; see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
+| `spawnInstances` | the resolver advertises the kind — with or without `assetAttr` (since v0.8.0) and with or without `colorAttr`; terminal only, and it declares no `eligible` gate; see [Device-resident instancing](#device-resident-instancing-drawing-without-a-readback) |
 
 plus, for every member: every `Field` in its param tree carries a spec
 *this resolver accepts* — authored always, derived only under
@@ -1792,8 +1869,11 @@ That is by design, not a bug; benchmark from cold caches.
 - `run-plan-failed` — a member cannot be compiled into the resident
   pipeline: unknown resident kind, field compile error, tuple-size or
   layout mismatch, a missing standard attribute, over the
-  storage-buffer limit. Genuinely invalid params still surface the
-  identical CPU error from the per-node path.
+  storage-buffer limit, or a `spawnInstances` over the instance budget
+  or naming an `assetAttr`/`colorAttr` it cannot use. Genuinely invalid
+  params still surface the identical CPU error from the per-node path,
+  which is why none of those spawner conditions needed a reason of its
+  own.
 - `run-too-large` — the run's working set exceeds the evaluator's
   `maxResidentBytes` (default 512 MiB). The working set is
   `Σ resident slot bytes over every epoch + Σ field-temporary column
@@ -1928,9 +2008,10 @@ for (const item of outputs.instances) {
       batch.residency;            // "device"
       batch.count;                // instances
       batch.transforms.byteLength; // count * 64
+      batch.colors?.byteLength;   // count * 16 — see the stride note below
     }
   } else {
-    // CPU path: item.batches, Float32Array transforms
+    // CPU path: item.batches, Float32Array transforms (and colors)
   }
 }
 ```
@@ -1938,7 +2019,18 @@ for (const item of outputs.instances) {
 Check residency *first* — the residency probe is safe, the `batches`
 read is not. Each `transforms` is an opaque `DeviceTransformsHandle`
 (`backend`, `byteLength`, `disposed`, `resource`, `dispose()`), never a
-typed array. Writing your own adapter?
+typed array.
+
+`colors` is the same handle type, is present only when `colorAttr` is
+set, and **does not carry the CPU layout**. WGSL's `array<vec3<f32>>`
+pads to a 16-byte stride, so the device buffer holds 4 floats per
+instance (`count * 16` bytes) where the CPU `InstanceBatch.colors`
+packs 3 (`count * 12`). Instance *k* sits at `4k..4k+2` and the kernel
+writes `4k+3` as a literal `0f` rather than leaving it undefined —
+respect that stride if you extend the device path, because it is the
+one place the two layouts legitimately differ.
+
+Writing your own adapter?
 `deviceTransformsBuffer(handle)` from `pcg-ts/gpu` is the one supported
 way to get the buffer back; bind exactly `handle.byteLength` bytes from
 offset 0, since the pool buckets allocations to powers of two and the
@@ -1949,7 +2041,10 @@ writing one column-major 4×4 per point in exactly the `InstanceBatch`
 layout, then transfers the composed buffers out of the evaluator's pool
 — one buffer per asset, so a constant-`assetId` spawn yields one and an
 `assetAttr` spawn yields as many as there are distinct asset ids on its
-points. If
+points. With `colorAttr` set, that same kernel also gathers RGB into a
+second buffer per asset, from inside the same loop over the same index
+expression that writes the matrix — there is no second traversal, so
+the two orderings cannot fall out of step. If
 nothing in the cook reads the terminal's `points` pin — it is neither
 connected nor a declared graph output — the run performs *no readback
 at all*: no `mapAsync`, no staging buffer, no CPU copy of
@@ -1997,6 +2092,14 @@ lists the string point attributes that *are* present. The run planner
 mirrors those two conditions and *rejects* — counting
 `run-plan-failed` — rather than throwing, so the per-node path serves
 and raises it. Exactly one copy of each message exists.
+
+The instance budget and `colorAttr`'s two errors ride the same
+mechanism, which is why neither widened the fallback vocabulary: a
+spawn over 1 048 576 instances, or one naming a colour attribute that
+is missing or is not f32 with `tupleSize >= 3`, rejects the run as
+`run-plan-failed` and the CPU node raises the single diagnostic. The
+device path words no message of its own, so the two paths cannot word
+it differently.
 
 `stats.dispatches` counts the multi-asset compose once per asset: the
 unit is (step, asset), not step. See
@@ -2123,6 +2226,19 @@ renderer rather than a seed chain. Measured against `composeTRS` over
 | basis, full TRS | ≤ 1e-6 absolute, ≤ 5e-8 of the basis range (measured 1.70e-8) |
 | `rot` present, `scale` absent | max \|cpu − gpu\| = 1.19e-7 |
 | repeated cooks, one device | byte-identical |
+
+**Per-instance colour is not in that class, and the reason is
+structural rather than lucky.** Colour is a *gather* — the kernel
+copies the three source f32 into the output buffer and performs no
+arithmetic on them — so unlike the composed matrix there is no
+operation for f32 to round differently, and therefore no ULP class and
+no budget. Measured with `Object.is` rather than a tolerance, so `-0`
+cannot pass as `0` and a NaN would compare equal to itself: 12 288
+colour components, zero mismatches, over a sample that pins signed
+zero, out-of-gamut negatives, f32 max, min-normal and subnormals. The
+pad slot at `4k+3` is asserted zero over that same sample, since a kernel
+that wrote the source's *alpha* there instead of a literal `0f` would
+leak a component the CPU path drops.
 
 What this does **not** weaken: everything else. The determinism suites
 pin the CPU path, the CPU spawner's `composeTRS` goldens are unchanged,
@@ -2298,7 +2414,7 @@ destination; a chunk does not, and its count would move with
 | `maxResidentBytes` | 512 MiB | resident-run working-set bound (`run-too-large` above it) |
 | `maxPooledBytes` | 256 MiB | idle bytes the buffer pool retains; `0` disables retention |
 | `maxElementsPerDispatch` | `65535 × wg` (4 194 240 at wg 64) | chunk-size override; byte-invisible, for tests forcing chunk seams — leave unset in production |
-| `deviceInstances` | `false` | opt in to device-resident instance transforms ([above](#device-resident-instancing-drawing-without-a-readback)) |
+| `deviceInstances` | `false` | opt in to device-resident instance transforms, and their colours ([above](#device-resident-instancing-drawing-without-a-readback)) |
 | `acceptDerivedSpecs` | `false` | opt in to resolving combinator-derived specs on device ([above](#acceptderivedspecs--why-the-wider-set-is-opt-in)) |
 
 `evaluator.dispose()` destroys pooled (idle) buffers only: buffers

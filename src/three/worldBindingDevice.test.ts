@@ -48,12 +48,12 @@ interface FakeHandle extends DeviceTransformsHandle {
 }
 
 /** A handle with the real contract: idempotent dispose, throwing resource. */
-function makeHandle(count: number, label = "h"): FakeHandle {
+function makeHandle(count: number, label = "h", bytesPer = 64): FakeHandle {
   let disposed = false;
   let disposeCalls = 0;
   return {
     backend: "webgpu",
-    byteLength: count * 64,
+    byteLength: count * bytesPer,
     get disposed() {
       return disposed;
     },
@@ -77,6 +77,27 @@ function makeBatch(assetId: string, count: number, handle?: FakeHandle): DeviceI
     assetId,
     count,
     transforms: handle ?? makeHandle(count, assetId),
+  };
+}
+
+/**
+ * A coloured batch: TWO handles, and a colour buffer at 16 bytes per
+ * instance (the WGSL `array<vec3<f32>>` stride) so a mis-accounted one
+ * shows up in `deviceHandleBytes` as a wrong number rather than a wrong
+ * multiple of 64.
+ */
+function makeColouredBatch(
+  assetId: string,
+  count: number,
+  transforms?: FakeHandle,
+  colors?: FakeHandle,
+): DeviceInstanceBatch & { transforms: FakeHandle; colors: FakeHandle } {
+  return {
+    residency: "device",
+    assetId,
+    count,
+    transforms: transforms ?? makeHandle(count, assetId),
+    colors: colors ?? makeHandle(count, `${assetId}-colour`, 16),
   };
 }
 
@@ -188,6 +209,127 @@ describe("device batches: first cook (world.ts cookCell, new record)", () => {
     expect(binding.deviceHandleCount).toBe(1);
     binding.cellEvicted("rocks", [0, 0]);
     expect(empty.disposed).toBe(true);
+  });
+});
+
+// -- phase 45: a coloured batch carries a SECOND handle ---------------------
+
+/**
+ * The device path has no GC. A batch's colour buffer is a separate
+ * allocation behind a separate handle, so every ownership rule the
+ * transforms handle gets — retain up front, refcount by identity,
+ * dispose at zero, release on every failure path — has to apply to it as
+ * well, and a binding that retained only `transforms` would leak exactly
+ * one buffer per coloured batch per cook. Silently: nothing else in the
+ * library will ever free one.
+ */
+describe("device batches: per-instance colour (a second handle per batch)", () => {
+  it("retains both handles, and evicting disposes both exactly once", () => {
+    const adapter = makeAdapter();
+    const { binding } = makeBinding(adapter);
+    const t = makeHandle(4, "t");
+    const c = makeHandle(4, "c", 16);
+    binding.cellReady("rocks", [1, 2], deviceOutputs(makeColouredBatch("x", 4, t, c)));
+
+    // Two distinct handles from ONE batch, both counted.
+    expect(binding.deviceHandleCount).toBe(2);
+    expect(binding.deviceHandleBytes).toBe(4 * 64 + 4 * 16);
+    expect(t.disposed).toBe(false);
+    expect(c.disposed).toBe(false);
+
+    binding.cellEvicted("rocks", [1, 2]);
+    expect(t.disposed).toBe(true);
+    expect(c.disposed).toBe(true);
+    expect(t.disposeCalls).toBe(1);
+    expect(c.disposeCalls).toBe(1);
+    expect(binding.deviceHandleCount).toBe(0);
+    expect(binding.deviceHandleBytes).toBe(0);
+  });
+
+  it("a recook disposes the previous colour buffer too, and does not climb", () => {
+    const adapter = makeAdapter();
+    const { binding } = makeBinding(adapter);
+    const handles: FakeHandle[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t = makeHandle(3, `t${i}`);
+      const c = makeHandle(3, `c${i}`, 16);
+      handles.push(t, c);
+      binding.cellReady("landmarks", [0, 0], deviceOutputs(makeColouredBatch("x", 3, t, c)));
+      // Steady state at two, never four: a leaked colour handle would
+      // make this climb by one per cook.
+      expect(binding.deviceHandleCount, `cook ${i}`).toBe(2);
+      expect(binding.deviceHandleBytes, `cook ${i}`).toBe(3 * 64 + 3 * 16);
+    }
+    expect(handles.slice(0, 38).every((h) => h.disposed)).toBe(true);
+    binding.dispose();
+    expect(handles.every((h) => h.disposed && h.disposeCalls === 1)).toBe(true);
+  });
+
+  it("refcounts the colour handle on its own identity, like the transforms one", () => {
+    // Parent/child aliasing: two live cells hold the same batch object,
+    // so BOTH handles are shared and neither may be freed while either
+    // cell is alive. A colour handle counted per cell instead of per
+    // identity would be destroyed under a live child.
+    const adapter = makeAdapter();
+    const { binding } = makeBinding(adapter);
+    const batch = makeColouredBatch("x", 5);
+    const outputs = deviceOutputs(batch);
+    binding.cellReady("region", [0, 0], outputs);
+    binding.cellReady("detail", [0, 0], outputs);
+    expect(binding.deviceHandleCount).toBe(2); // two handles, two cells each
+
+    binding.cellEvicted("region", [0, 0]);
+    expect(batch.transforms.disposed, "the child still draws from it").toBe(false);
+    expect(batch.colors.disposed, "...and from its colours").toBe(false);
+    expect(binding.deviceHandleCount).toBe(2);
+
+    binding.cellEvicted("detail", [0, 0]);
+    expect(batch.transforms.disposed).toBe(true);
+    expect(batch.colors.disposed).toBe(true);
+    expect(batch.colors.disposeCalls).toBe(1);
+  });
+
+  it("a build that throws mid-cell still releases the colour buffers it retained", () => {
+    // Retention is per CELL and happens before any build, so a later
+    // batch's failure cannot strand an earlier batch's colour buffer —
+    // or its own.
+    const adapter = makeAdapter();
+    const { binding } = makeBinding(adapter);
+    adapter.failBuild = "bad";
+    const good = makeColouredBatch("good", 4);
+    const bad = makeColouredBatch("bad", 4);
+    expect(() =>
+      binding.cellReady("rocks", [0, 0], deviceOutputs(good, bad)),
+    ).toThrow(/adapter build failed for "bad"/);
+    for (const h of [good.transforms, good.colors, bad.transforms, bad.colors]) {
+      expect(h.disposed).toBe(true);
+      expect(h.disposeCalls).toBe(1);
+    }
+    expect(binding.deviceHandleCount).toBe(0);
+  });
+
+  it("frees both even when no adapter is configured to draw them", () => {
+    // An unrenderable buffer is still a buffer. The misconfigured case
+    // throws, and the throw must not be the reason a colour buffer leaks.
+    const root = new Group();
+    const binding = new WorldThreeBinding({ group: root, assets: {} });
+    const batch = makeColouredBatch("x", 4);
+    expect(() => binding.cellReady("rocks", [0, 0], deviceOutputs(batch))).toThrow(
+      /no `deviceInstances` adapter is configured/,
+    );
+    expect(batch.transforms.disposed).toBe(true);
+    expect(batch.colors.disposed).toBe(true);
+    expect(binding.deviceHandleCount).toBe(0);
+  });
+
+  it("an uncoloured batch is unchanged: one handle, and none invented", () => {
+    const adapter = makeAdapter();
+    const { binding } = makeBinding(adapter);
+    const batch = makeBatch("x", 4);
+    binding.cellReady("rocks", [0, 0], deviceOutputs(batch));
+    expect(batch.colors).toBeUndefined();
+    expect(binding.deviceHandleCount).toBe(1);
+    expect(binding.deviceHandleBytes).toBe(4 * 64);
   });
 });
 

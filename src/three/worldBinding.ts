@@ -74,10 +74,11 @@ export interface DeviceInstanceContext {
  * instances straight from the batch's GPU buffer.
  *
  * Ownership split, exactly: the ADAPTER owns the three-side objects it
- * creates (geometry, material, attribute) and frees them in
- * {@link release}; the BINDING owns the batch's
- * `DeviceTransformsHandle` and disposes it when no live cell references
- * it any more. An adapter must never call `handle.dispose()`.
+ * creates (geometry, material, attributes) and frees them in
+ * {@link release}; the BINDING owns EVERY `DeviceTransformsHandle` the
+ * batch carries — its `transforms`, and its `colors` when the spawner was
+ * asked for colour — and disposes each when no live cell references it
+ * any more. An adapter must never call `handle.dispose()`.
  *
  * See `createWebGpuInstanceAdapter` for the WebGPU implementation.
  */
@@ -148,7 +149,9 @@ interface CellEntry {
   readonly device: Object3D[];
   /**
    * One entry per retain this cell took out — repeated if the same
-   * handle appears twice in the cell's outputs, so releases balance.
+   * handle appears twice in the cell's outputs, so releases balance. A
+   * coloured device batch contributes TWO distinct handles (transforms
+   * and colours), each refcounted on its own identity.
    */
   readonly handles: DeviceTransformsHandle[];
 }
@@ -220,17 +223,21 @@ export class WorldThreeBinding {
   }
 
   /**
-   * Total **logical** bytes of the retained device transform buffers —
-   * the sum of `handle.byteLength`, i.e. `instances * 64` per batch.
+   * Total **logical** bytes of the retained device buffers — the sum of
+   * `handle.byteLength` over every distinct handle held: `instances * 64`
+   * of transforms per batch, plus `instances * 16` of colour for a
+   * coloured one (4 f32 per instance, the WGSL `array<vec3<f32>>`
+   * stride).
    *
    * This is a lower bound on device occupancy, and since v0.8 a loose
    * one. The evaluator's buffer pool buckets allocations to powers of
    * two with a 256-byte floor, and a multi-asset spawn takes one buffer
-   * per asset, so a cell with four small batches pays four roundings
-   * instead of one: a 3-instance batch is 192 logical bytes in a 256-byte
-   * bucket, and a 20-instance batch is 1280 in 2048. Use this to check
-   * that retained bytes return to zero and stay bounded — that property
-   * is exact — not to read off how much VRAM is in use.
+   * per asset (two with colour), so a cell with four small batches pays
+   * four roundings instead of one: a 3-instance batch is 192 logical
+   * bytes in a 256-byte bucket, and a 20-instance batch is 1280 in 2048.
+   * Use this to check that retained bytes return to zero and stay
+   * bounded — that property is exact — not to read off how much VRAM is
+   * in use.
    */
   get deviceHandleBytes(): number {
     let bytes = 0;
@@ -368,8 +375,16 @@ export class WorldThreeBinding {
         // design, so this test must precede any other item access.
         if (item.kind !== "instances" || !isDeviceResidentInstances(item)) continue;
         for (const batch of item.deviceBatches ?? []) {
-          entry.handles.push(batch.transforms);
-          this.retainHandle(batch.transforms);
+          // Every handle the batch carries, not just the transforms: the
+          // colour buffer is a separate allocation with a separate
+          // handle, and the device path has no GC behind it. Missing it
+          // here leaks one buffer per coloured batch per cook — silently,
+          // because nothing else in the library will ever free it.
+          for (const handle of [batch.transforms, batch.colors]) {
+            if (handle === undefined) continue;
+            entry.handles.push(handle);
+            this.retainHandle(handle);
+          }
         }
       }
     }

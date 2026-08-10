@@ -3,6 +3,7 @@
  */
 import { BufferAttribute, BufferGeometry, Points, PointsMaterial } from "three";
 import type { Geometry } from "../data/index.js";
+import { readRgb, rgbSourceOf } from "../spawn/color.js";
 
 /** Options for {@link toPointsObject}. */
 export interface ToPointsOptions {
@@ -40,21 +41,14 @@ export function toPointsObject(
     new BufferAttribute((P.data as Float32Array).slice(0, n * 3), 3),
   );
   let vertexColors = false;
-  const colorAttr = points.get("color");
-  if (
-    opts.useColor !== false &&
-    colorAttr &&
-    colorAttr.type === "f32" &&
-    colorAttr.tupleSize >= 3
-  ) {
-    const ts = colorAttr.tupleSize;
-    const cd = colorAttr.data;
+  // Same extraction the spawner uses (`src/spawn/color.ts`): components
+  // 0-2 of an f32 column, alpha dropped. Only the POLICY differs — a
+  // debug view shows whatever colour is there, while the spawner carries
+  // only the attribute a param named.
+  const color = opts.useColor === false ? undefined : rgbSourceOf(points.get("color"));
+  if (color) {
     const rgb = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      rgb[i * 3] = cd[i * ts];
-      rgb[i * 3 + 1] = cd[i * ts + 1];
-      rgb[i * 3 + 2] = cd[i * ts + 2];
-    }
+    for (let i = 0; i < n; i++) readRgb(rgb, i * 3, color, i);
     bufferGeo.setAttribute("color", new BufferAttribute(rgb, 3));
     vertexColors = true;
   }

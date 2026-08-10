@@ -625,8 +625,30 @@ export function makeOrientApply(
 // from the resident P / rot / scale buffers, into a device buffer the run
 // retains instead of reading back. Roles: "P" (read), "rot" and
 // "scaleAttr" (read, only when the attribute exists with the right
-// shape), "transforms" (read_write, the output), and — in indexed mode —
-// "perm" (read, the host-planned grouping permutation).
+// shape), "transforms" (read_write, the output), — in indexed mode —
+// "perm" (read, the host-planned grouping permutation), and — when the
+// spawner asked for colour — "color" (read, the source attribute column)
+// and "colors" (read_write, the second output).
+
+/**
+ * f32 slots one device instance COLOUR occupies: three components and one
+ * of padding, so 16 bytes per instance where the CPU batch packs 12.
+ *
+ * Not a tuning knob and not a choice. A renderer reads an instance-colour
+ * storage attribute as `array<vec3<f32>>`, and WGSL gives that a 16-byte
+ * element stride (vec3 has 16-byte alignment in the storage address
+ * space). three's own WebGPU backend says the same thing in code: an
+ * itemSize-3 storage attribute is repacked to 4 components before upload,
+ * commented "WGSL does not support packed vec3 data in storage buffers,
+ * pad to vec4". Writing 3 floats per instance here would shift every
+ * colour after the first by a growing offset — which looks like a shader
+ * bug and is a layout bug.
+ *
+ * The kernel writes the pad slot as an explicit 0 rather than leaving it:
+ * these buffers come from a reuse pool, and a handed-out buffer whose
+ * every byte is defined is one a test can compare in full.
+ */
+export const INSTANCE_COLOR_COMPONENTS = 4;
 
 /**
  * Compose-TRS kernel: `out[i] = T(P) * R(rot) * S(scale)` written as 16
@@ -658,15 +680,39 @@ export function makeOrientApply(
  * point the host's stable partition put in that slot. No device-side sort
  * is involved, and grouping order comes from the CPU spec verbatim.
  *
- * Non-indexed mode emits byte-identical WGSL to the pre-phase-29 kernel,
- * under the same specialization key, so the constant-`assetId` path
- * neither recompiles nor moves an output byte.
+ * `colorTupleSize` (0 = no colour) adds the second output: components
+ * 0-2 of the named f32 attribute, gathered from the SAME `src` the
+ * matrix reads, into `colors` at {@link INSTANCE_COLOR_COMPONENTS} f32
+ * per instance. Sharing `src` is the whole structural argument — this is
+ * the device mirror of `buildInstanceBatches` reading colour inside its
+ * own per-instance loop from the `i` that places the transform. One
+ * index expression, no second traversal, so an instance's colour cannot
+ * come from a different point than its matrix did, and there is no
+ * ordering left to test into place. Unlike `composeTRS` this is a pure
+ * GATHER — no arithmetic, therefore no ULP class — so the bytes must
+ * equal the CPU's exactly.
+ *
+ * Non-indexed, colourless mode emits byte-identical WGSL to the
+ * pre-phase-29 kernel, under the same specialization key, so the
+ * constant-`assetId` path neither recompiles nor moves an output byte.
+ * That is also why the colour bindings are declared LAST: every
+ * pre-existing variant keeps the exact binding indices — and the exact
+ * text — it had, which is what lets {@link APPLY_VERSION} stay put.
  */
 export function makeComposeInstancesApply(
   hasRot: boolean,
   hasScale: boolean,
   indexed = false,
+  colorTupleSize = 0,
 ): ApplyKernel {
+  const hasColor = colorTupleSize > 0;
+  if (hasColor && colorTupleSize < 3) {
+    throw new Error(
+      `apply codegen: spawnInstances colour source has tupleSize ${colorTupleSize}; components ` +
+        "0-2 are read as RGB, so it must be at least 3 (the planner rejects narrower columns " +
+        "before reaching codegen)",
+    );
+  }
   const bindings = new BindingList();
   const pVar = bindings.add("P", "read", "f32", "attribute P: f32 tupleSize 3");
   const rotVar = hasRot ? bindings.add("rot", "read", "f32", "attribute rot: f32 tupleSize 4") : "";
@@ -678,6 +724,24 @@ export function makeComposeInstancesApply(
   // non-indexed kernel gives them.
   const permVar = indexed
     ? bindings.add("perm", "read", "u32", "grouping permutation: source point index per slot")
+    : "";
+  // And after THAT, so every colourless variant is unchanged too.
+  //
+  // Binding budget: this kernel's widest form binds seven storage
+  // buffers (P, rot, scale, transforms, perm, colour source, colour out)
+  // against the baseline `maxStorageBuffersPerShaderStage` of 8 — the
+  // uniform is not one of them. One free slot is left. Anything added
+  // here after this point needs that limit checked, not assumed.
+  const colVar = hasColor
+    ? bindings.add("color", "read", "f32", `colour source: f32 tupleSize ${colorTupleSize}`)
+    : "";
+  const colOutVar = hasColor
+    ? bindings.add(
+        "colors",
+        "read_write",
+        "f32",
+        `out: ${INSTANCE_COLOR_COMPONENTS} f32 per instance (vec3 storage stride, [3] = 0 pad)`,
+      )
     : "";
   // Source element: the permuted point in indexed mode, the invocation
   // index itself otherwise.
@@ -718,9 +782,21 @@ export function makeComposeInstancesApply(
   ${outVar}[o + 12u] = ${pVar}[${src} * 3u];
   ${outVar}[o + 13u] = ${pVar}[${src} * 3u + 1u];
   ${outVar}[o + 14u] = ${pVar}[${src} * 3u + 2u];
-  ${outVar}[o + 15u] = 1f;`;
+  ${outVar}[o + 15u] = 1f;${
+    hasColor
+      ? `
+  // Same ${src}: this instance's colour is this instance's point's colour.
+  let cs = ${src} * ${colorTupleSize}u;
+  let co = i * ${INSTANCE_COLOR_COMPONENTS}u;
+  ${colOutVar}[co] = ${colVar}[cs];
+  ${colOutVar}[co + 1u] = ${colVar}[cs + 1u];
+  ${colOutVar}[co + 2u] = ${colVar}[cs + 2u];
+  ${colOutVar}[co + 3u] = 0f;`
+      : ""
+  }`;
   return assemble(
-    `spawnInstances|rot=${hasRot ? 1 : 0}|scl=${hasScale ? 1 : 0}${indexed ? "|perm" : ""}`,
+    `spawnInstances|rot=${hasRot ? 1 : 0}|scl=${hasScale ? 1 : 0}${indexed ? "|perm" : ""}` +
+      `${hasColor ? `|color=${colorTupleSize}` : ""}`,
     0,
     bindings.items,
     [],

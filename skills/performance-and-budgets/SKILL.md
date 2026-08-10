@@ -206,6 +206,18 @@ selects them from the same neighbourhood. Lower `radius`, thin the cloud
 upstream (`selfPrune`, `filterByDensity`) — upstream, because a filter
 placed *after* it also destroys the network — or cook the region in cells.
 
+**The spawner is budgeted, and the budget is per cook.** `spawnInstances`
+refuses a cook that would produce more than 1,048,576 instances — one per
+input point, 64 MiB of transforms — before it allocates anything, so a
+density typo is a named diagnostic instead of an allocation failure. The
+fix it names is the funnel above: thin the cloud *upstream*, or cook the
+region in cells with a `World` level. Note what the ceiling is not: it is
+not a limit on instances *alive*. A global one would depend on which cells
+happened to be resident, so the same world would fail or not depending on
+the order it streamed in — the order-dependence the `determinism` skill
+forbids. A streamed world holding many times the budget across its live
+cells is correct, not a leak.
+
 **Where the filter sits relative to expensive work.** Filtering *after* the
 expensive node pays for points you are about to discard, so move it
 upstream of the cost — with one hard exception from the `graph-authoring`

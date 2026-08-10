@@ -160,19 +160,21 @@ function inFlight(s: GpuPoolStats): number {
 // fixtures
 
 /** Point cloud with P/rot/scale and a "species" string column from `ids`. */
-function speciesCloud(ids: readonly string[]): Geometry {
+function speciesCloud(ids: readonly string[], withColour = false): Geometry {
   const geo = new Geometry();
   const set = geo.attrs.point;
   const P = set.add("P", "f32", 3);
   const rot = set.add("rot", "f32", 4);
   const scale = set.add("scale", "f32", 3);
   const species = set.add("species", "string", 1, "");
+  const color = withColour ? set.add("color", "f32", 4) : undefined;
   set.resize(ids.length);
   ids.forEach((id, i) => {
     P.setTuple(i, [i, i * 2, i * 3]);
     rot.setTuple(i, [0, 0, 0, 1]);
     scale.setTuple(i, [1, 1, 1]);
     species.setString(i, id);
+    color?.setTuple(i, [i / 10, 0.25, 0.5, 0.75]);
   });
   return geo;
 }
@@ -181,7 +183,7 @@ const spawnMember = (params: Record<string, unknown>): ResidentMemberDesc => ({
   id: "spawn",
   type: "spawnInstances",
   kind: "spawnInstances",
-  params: { assetId: "tree", assetAttr: "", ...params },
+  params: { assetId: "tree", assetAttr: "", colorAttr: "", ...params },
   seed: 99,
 });
 
@@ -350,6 +352,112 @@ describe("resident run executor: multi-asset spawner", () => {
   });
 });
 
+describe("resident run executor: instance colour", () => {
+  it("acquires a second buffer per batch, sized at 16 bytes per instance", async () => {
+    const geo = speciesCloud(MIXED, true);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const stats = createGpuCookStats();
+    const plan = planFor(geo, { assetAttr: "species", colorAttr: "color" });
+
+    const result = await executeResidentRun(envFor(device, pool), plan, { geo }, stats);
+    const batches = result.deviceBatches as readonly DeviceInstanceBatch[];
+
+    expect(batches.map((b) => [b.assetId, b.count])).toEqual(
+      MIXED_ORDER.map((a, j) => [a, MIXED_COUNTS[j]]),
+    );
+    // 16 per instance, not 12. The handle reports the LOGICAL length, so
+    // this is the producer's claim about the layout, not the pool's
+    // bucket size.
+    expect(batches.map((b) => b.colors?.byteLength)).toEqual(MIXED_COUNTS.map((n) => n * 16));
+    // Distinct buffers, distinct handles: eight in total for four
+    // batches, none aliased.
+    expect(new Set(batches.map((b) => b.colors)).size).toBe(4);
+    expect(new Set([...batches.map((b) => b.transforms), ...batches.map((b) => b.colors)]).size).toBe(8);
+
+    // Still ONE dispatch per asset — colour rides the compose kernel
+    // rather than adding a pass of its own.
+    expect(device.dispatches).toHaveLength(4);
+    expect(stats.dispatches).toBe(4);
+    // Binding order in indexed mode: 1 P, 2 rot, 3 scale, 4 transforms,
+    // 5 perm, then 6 the colour SOURCE (one shared slot buffer) and 7
+    // this batch's colour OUT. Colour is declared last precisely so
+    // every earlier binding index is where it always was.
+    const source = device.dispatches[0].bound.get(6);
+    expect(source).toBeDefined();
+    const colourOuts = device.dispatches.map((d) => d.bound.get(7)!);
+    device.dispatches.forEach((d, j) => {
+      expect(d.bound.get(6), `batch ${j} colour source`).toBe(source);
+      // The colour out must NOT be the transforms out.
+      expect(colourOuts[j], `batch ${j}`).not.toBe(d.bound.get(4));
+    });
+    expect(new Set(colourOuts).size).toBe(4);
+    expect(colourOuts.map((b) => b.size)).toEqual(
+      MIXED_COUNTS.map((n) => Math.max(256, 2 ** Math.ceil(Math.log2(n * 16)))),
+    );
+
+    // Eight buffers left the pool, and eight disposes bring it to zero.
+    expect(pool.stats.detachedBuffers).toBe(8);
+    expect(inFlight(pool.stats)).toBe(0);
+    for (const b of batches) {
+      b.transforms.dispose();
+      b.colors!.dispose();
+    }
+    expect(pool.stats).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+    expect(device.buffers.every((b) => b.destroys <= 1)).toBe(true);
+  });
+
+  it("carries no colour handle at all when colorAttr is empty", async () => {
+    // Absent, not present-and-empty: the renderer then leaves its
+    // instance-colour channel untouched instead of binding a zero buffer.
+    const geo = speciesCloud(MIXED, true);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const result = await executeResidentRun(
+      envFor(device, pool),
+      planFor(geo, { assetAttr: "species" }),
+      { geo },
+      undefined,
+    );
+    const batches = result.deviceBatches!;
+    expect(batches.every((b) => b.colors === undefined)).toBe(true);
+    expect(pool.stats.detachedBuffers).toBe(4); // transforms only
+    // The colour column exists on the geometry and is still never bound:
+    // the indexed kernel stops at binding 5 (perm).
+    expect(device.dispatches.every((d) => !d.bound.has(6))).toBe(true);
+    for (const b of batches) b.transforms.dispose();
+  });
+
+  it("the constant-assetId path carries colour too, with no permutation", async () => {
+    const geo = speciesCloud(MIXED, true);
+    const device = fakeDevice();
+    const pool = new BufferPool(device, 1 << 20);
+    const result = await executeResidentRun(
+      envFor(device, pool),
+      planFor(geo, { colorAttr: "color" }),
+      { geo },
+      undefined,
+    );
+    const batches = result.deviceBatches!;
+    expect(batches.map((b) => [b.assetId, b.count])).toEqual([["tree", 8]]);
+    expect(batches[0].colors?.byteLength).toBe(8 * 16);
+    expect(device.dispatches).toHaveLength(1);
+    // No permutation, so the colour bindings sit one lower than in the
+    // indexed case: 5 is the source and 6 the out, with nothing between.
+    // Same evidence, different offsets — which is why the planner maps
+    // bindings by ROLE and never by position.
+    expect(device.dispatches[0].bound.get(5)).toBeDefined();
+    expect(device.dispatches[0].bound.get(6)).toBeDefined();
+    expect(device.dispatches[0].bound.get(7)).toBeUndefined();
+    expect(device.dispatches[0].bound.get(6)).not.toBe(device.dispatches[0].bound.get(4));
+    expect(device.dispatches[0].uniform.slice(0, 3)).toEqual([8, 0, 0]);
+    expect(pool.stats.detachedBuffers).toBe(2);
+    batches[0].transforms.dispose();
+    batches[0].colors!.dispose();
+    expect(pool.stats.detachedBuffers).toBe(0);
+  });
+});
+
 describe("resident run executor: ownership under failure", () => {
   /** A pool whose `detach` throws on the `failAt`-th call (1-based). */
   class FlakyPool extends BufferPool {
@@ -386,6 +494,30 @@ describe("resident run executor: ownership under failure", () => {
     // Exactly once: a double dispose would show up as destroys === 2.
     expect(device.buffers.map((b) => b.destroys).filter((n) => n > 1)).toEqual([]);
     expect(device.buffers.filter((b) => b.destroys === 1)).toHaveLength(2);
+  });
+
+  it("a colour detach failure mid-batch disposes both kinds, exactly once each", async () => {
+    // With colour the detach order interleaves — T0, C0, T1, C1, T2, ...
+    // — so a failure on the SIXTH call blows up midway through batch 2,
+    // with its transforms handle already built and its colour handle not.
+    // That handle must be freed by the catch like any other; missing it
+    // would leak the one buffer nobody else can reach.
+    const geo = speciesCloud(MIXED, true);
+    const device = fakeDevice();
+    const pool = new FlakyPool(device, 1 << 20, 6);
+    await expect(
+      executeResidentRun(
+        envFor(device, pool),
+        planFor(geo, { assetAttr: "species", colorAttr: "color" }),
+        { geo },
+        undefined,
+      ),
+    ).rejects.toThrow(/simulated detach failure/);
+    expect(pool.stats.buffersDetached).toBe(5);
+    expect(pool.stats).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
+    expect(inFlight(pool.stats)).toBe(0);
+    expect(device.buffers.map((b) => b.destroys).filter((n) => n > 1)).toEqual([]);
+    expect(device.buffers.filter((b) => b.destroys === 1)).toHaveLength(5);
   });
 
   it("failing on the FIRST detach leaves every buffer to the pool", async () => {

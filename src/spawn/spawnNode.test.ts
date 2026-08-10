@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud, type Geometry } from "../data/index.js";
+import { component, ge, position } from "../fields/index.js";
 import {
   Graph,
   cook,
@@ -10,11 +11,12 @@ import {
   makeValueItem,
   type DataItem,
   type GeometryItem,
+  type InstanceBatch,
 } from "../graph/index.js";
-import { fieldFromJson, setAttribute } from "../nodes/index.js";
+import { fieldFromJson, filterByExpression, setAttribute } from "../nodes/index.js";
 import { getNodeType } from "../nodes/registry.js";
 import { snapshotGeometry } from "../nodes/testSupport.js";
-import { spawnInstances } from "./spawnNode.js";
+import { spawnInstances, type SpawnInstancesParams } from "./spawnNode.js";
 
 /** Source emitting one fixed geometry item (stable rev across cooks). */
 function sourceOf(item: GeometryItem) {
@@ -45,6 +47,11 @@ describe("spawnInstances registry metadata", () => {
     expect(info.params.assetId.type).toBe("string");
     expect(info.params.assetAttr.type).toBe("string");
     expect(info.params.assetAttr.default).toBe("");
+    expect(info.params.colorAttr.type).toBe("string");
+    expect(info.params.colorAttr.default).toBe("");
+    // The one behaviour an author cannot discover from the data: alpha
+    // never reaches the renderer. It has to be in the description.
+    expect(info.params.colorAttr.description).toMatch(/alpha is dropped/i);
   });
 });
 
@@ -162,6 +169,89 @@ describe("multi-asset spawn from a graph-written string attribute", () => {
     if (item.kind !== "instances") throw new Error("expected an instances item");
     expect(item.batches.map((b) => b.assetId)).toEqual(["pine", "bush"]);
     expect(item.batches.map((b) => b.count)).toEqual([1, 2]);
+  });
+});
+
+describe("spawnInstances colour", () => {
+  /** Cloud whose point `i` sits at x = i with red = i / 10. */
+  function paintedCloud(n: number): Geometry {
+    const geo = createPointCloud(n);
+    const P = geo.attrs.point.require("P");
+    const color = geo.attrs.point.require("color");
+    for (let i = 0; i < n; i++) {
+      P.setTuple(i, [i, 0, 0]);
+      color.setTuple(i, [i / 10, 0.25, 0.5, 0.75]);
+    }
+    return geo;
+  }
+
+  async function spawnWith(
+    geo: Geometry,
+    params: Partial<SpawnInstancesParams>,
+  ): Promise<readonly InstanceBatch[]> {
+    const graph = new Graph(7);
+    const src = graph.add(sourceOf(makeGeometryItem(geo)));
+    const spawn = graph.add(spawnInstances, params);
+    graph.connect(src, "out", spawn, "in");
+    graph.output(spawn, "instances", "instances");
+    const item = (await cook(graph)).outputs.instances[0];
+    if (item.kind !== "instances") throw new Error("expected an instances item");
+    return item.batches;
+  }
+
+  it("carries rgb per instance when colorAttr names an attribute", async () => {
+    const batches = await spawnWith(paintedCloud(3), { assetId: "a", colorAttr: "color" });
+    const colors = batches[0].colors;
+    if (!colors) throw new Error("expected colours on the batch");
+    expect(Array.from(colors).map((v) => Math.round(v * 100) / 100)).toEqual([
+      0, 0.25, 0.5, 0.1, 0.25, 0.5, 0.2, 0.25, 0.5,
+    ]);
+  });
+
+  it("carries none by default, even though every cloud has a color attribute", async () => {
+    const batches = await spawnWith(paintedCloud(3), { assetId: "a" });
+    expect(batches[0].colors).toBeUndefined();
+  });
+
+  it("survives a filter that renumbers the points: each colour keeps its own point", async () => {
+    // Drop every point with x < 2, so the surviving instances are points
+    // 2..5 of the input under fresh indices 0..3.
+    const graph = new Graph(7);
+    const src = graph.add(sourceOf(makeGeometryItem(paintedCloud(6))));
+    const cut = graph.add(filterByExpression, {
+      predicate: ge(component(position(), 0), 2),
+    });
+    const spawn = graph.add(spawnInstances, { assetId: "a", colorAttr: "color" });
+    graph.connect(src, "out", cut, "in");
+    graph.connect(cut, "out", spawn, "in");
+    graph.output(spawn, "instances", "instances");
+    const item = (await cook(graph)).outputs.instances[0];
+    if (item.kind !== "instances") throw new Error("expected an instances item");
+    const batch = item.batches[0];
+    expect(batch.count).toBe(4);
+    const colors = batch.colors;
+    if (!colors) throw new Error("expected colours on the batch");
+    for (let k = 0; k < batch.count; k++) {
+      // x still encodes the ORIGINAL point index; so must red.
+      expect(colors[k * 3]).toBeCloseTo(batch.transforms[k * 16 + 12] / 10, 6);
+    }
+  });
+
+  it("fuses on the device for every param combination — no eligibility gate at all", () => {
+    // The interim gate that declined a COLOURED spawn ("instance-color")
+    // is gone: the compose kernel gathers colour beside the matrix, so
+    // there is no combination left where fusing would render the graph
+    // differently. A gate reappearing here is a shipped restriction, and
+    // the reason string would show up in `CookStats.gpu.fallbacks`.
+    const resident = getNodeType("spawnInstances").def.resident;
+    expect(resident?.terminal).toBe(true);
+    expect(resident?.eligible).toBeUndefined();
+  });
+
+  it("a bad colorAttr fails the cook with a message naming the param", async () => {
+    await expect(spawnWith(paintedCloud(1), { assetId: "a", colorAttr: "seed" })).rejects.toThrow(
+      /colorAttr "seed"/,
+    );
   });
 });
 

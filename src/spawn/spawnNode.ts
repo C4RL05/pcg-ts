@@ -6,12 +6,13 @@
 import { makeInstancesItem } from "../graph/index.js";
 import { standardNode } from "../nodes/registry.js";
 import { requireGeometryItem } from "../nodes/util.js";
-import { buildInstanceBatches } from "./instances.js";
+import { MAX_INSTANCES, buildInstanceBatches } from "./instances.js";
 
 /** Params of {@link spawnInstances}. */
 export interface SpawnInstancesParams {
   assetId: string;
   assetAttr: string;
+  colorAttr: string;
 }
 
 /** Spawner terminal: points → instance batches (plus point pass-through). */
@@ -24,8 +25,14 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
     "4x4, THREE.Matrix4.elements layout; missing rot/scale attributes are identity). Points are " +
     "grouped into one batch per asset id, in first-occurrence order: assetAttr (when non-empty) " +
     "names a string point attribute holding per-point asset ids — empty per-point values fall " +
-    "back to assetId. The 'instances' pin emits one instances item (input tags carried over); " +
-    "'points' passes the input geometry through unchanged for chaining or debug rendering.",
+    "back to assetId. colorAttr (when non-empty) additionally carries a per-instance RGB read " +
+    "from that point attribute, which is how instances of ONE asset id vary in appearance — " +
+    "age, health, season, a hue drift — without splitting into more assets. The 'instances' pin " +
+    "emits one instances item (input tags carried over); 'points' passes the input geometry " +
+    `through unchanged for chaining or debug rendering. One cook may spawn at most ${MAX_INSTANCES} ` +
+    "instances (one per input point); a runaway density is refused with a diagnostic rather " +
+    "than an allocation failure. That budget is per COOK, not per world, so a streamed world " +
+    "cooking one cell at a time may hold many times it across its resident cells.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [
     { name: "instances", kind: "instances" },
@@ -50,6 +57,24 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
         "host-resident) and the device composes one transform buffer per asset, in the same " +
         "batch order the CPU path produces.",
     },
+    colorAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Optional name of an f32 point attribute (tupleSize 3 or more) whose components 0, 1 " +
+        "and 2 are carried to the renderer as each instance's RGB. ALPHA IS DROPPED — both " +
+        "three adapters take RGB, so a fourth component (the standard `color` attribute is " +
+        "f32x4) has nowhere to go and is not carried. Empty (the default) carries no colour at " +
+        "all, and the renderer then leaves its instance-colour channel untouched. Nothing is " +
+        "picked up automatically and nothing scans the values: every point cloud in this " +
+        "library already carries `color` at [1,1,1,1], so its presence says nothing about " +
+        "intent, and writing an all-white instance-colour buffer would recompile the renderer's " +
+        "shader for zero pixels changed. Naming it is what states the intent — which also means " +
+        "an attribute written upstream and never named here is silently NOT drawn. Any " +
+        "colour-shaped attribute works: `color`, or a `tint`/`speciesColor` written with " +
+        "setAttribute. Errors when the named attribute is missing or is not f32 with tupleSize " +
+        ">= 3, listing the attributes that would fit.",
+    },
   },
   /**
    * Device-resident terminal: a resolver advertising the
@@ -64,14 +89,23 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
    * `deviceInstances`), so the default cook — CPU or GPU — is
    * byte-for-byte what it has always been.
    *
-   * No `eligible` gate: both `assetId` and `assetAttr` spawns are
-   * device-resident. A multi-asset spawn needs no device-side sort — the
-   * asset column is host-resident by construction, so the host plans the
-   * grouping (shared code with the CPU spawner, hence identical batch
-   * order) and the device composes one buffer per asset. The param
-   * failures the CPU spawner throws on (a missing or non-string
-   * `assetAttr`) are rejected by the run planner instead, which puts the
-   * node back on this execute so it raises the identical message.
+   * No `eligible` gate, and none of the three params earns one. Both
+   * `assetId` and `assetAttr` spawns are device-resident: a multi-asset
+   * spawn needs no device-side sort, since the asset column is
+   * host-resident by construction, so the host plans the grouping (shared
+   * code with the CPU spawner, hence identical batch order) and the
+   * device composes one buffer per asset. `colorAttr` is device-resident
+   * too — the compose kernel gathers the RGB alongside the matrix, from
+   * the one source index, into a second retained buffer. A colour is
+   * copied rather than computed, so the device bytes equal the CPU
+   * batch's exactly and there is nothing for a gate to protect.
+   *
+   * The param failures the CPU spawner throws on (a missing or non-string
+   * `assetAttr`; a missing or non-f32x3+ `colorAttr`) and its
+   * `MAX_INSTANCES` budget are rejected by the run planner instead, which
+   * puts the node back on this execute so it raises the identical
+   * message. That is deliberate: a diagnostic worth writing is worth
+   * having exactly one copy of.
    */
   resident: {
     kind: "spawnInstances",
@@ -86,6 +120,7 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
     const batches = buildInstanceBatches(item.geo, {
       defaultAssetId: params.assetId,
       ...(params.assetAttr !== "" ? { assetAttr: params.assetAttr } : {}),
+      ...(params.colorAttr !== "" ? { colorAttr: params.colorAttr } : {}),
     });
     return {
       instances: [makeInstancesItem(batches, item.tags)],

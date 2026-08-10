@@ -1371,7 +1371,7 @@
   },
   {
     "type": "spawnInstances",
-    "description": "Spawner terminal: converts the input point cloud into render-agnostic instance batches. Each point becomes one instance with world matrix T(P) * R(rot) * S(scale) (column-major 4x4, THREE.Matrix4.elements layout; missing rot/scale attributes are identity). Points are grouped into one batch per asset id, in first-occurrence order: assetAttr (when non-empty) names a string point attribute holding per-point asset ids — empty per-point values fall back to assetId. The 'instances' pin emits one instances item (input tags carried over); 'points' passes the input geometry through unchanged for chaining or debug rendering.",
+    "description": "Spawner terminal: converts the input point cloud into render-agnostic instance batches. Each point becomes one instance with world matrix T(P) * R(rot) * S(scale) (column-major 4x4, THREE.Matrix4.elements layout; missing rot/scale attributes are identity). Points are grouped into one batch per asset id, in first-occurrence order: assetAttr (when non-empty) names a string point attribute holding per-point asset ids — empty per-point values fall back to assetId. colorAttr (when non-empty) additionally carries a per-instance RGB read from that point attribute, which is how instances of ONE asset id vary in appearance — age, health, season, a hue drift — without splitting into more assets. The 'instances' pin emits one instances item (input tags carried over); 'points' passes the input geometry through unchanged for chaining or debug rendering. One cook may spawn at most 1048576 instances (one per input point); a runaway density is refused with a diagnostic rather than an allocation failure. That budget is per COOK, not per world, so a streamed world cooking one cell at a time may hold many times it across its resident cells.",
     "category": "spawn",
     "inputs": [
       {
@@ -1402,6 +1402,11 @@
         "type": "string",
         "default": "",
         "description": "Optional name of a string point attribute holding per-point asset ids; empty string disables the override. Points whose attribute value is empty use assetId instead. Errors when the named attribute is missing or not a string attribute. Device-resident spawning supports it: the grouping is planned on the CPU (the asset column is always host-resident) and the device composes one transform buffer per asset, in the same batch order the CPU path produces."
+      },
+      "colorAttr": {
+        "type": "string",
+        "default": "",
+        "description": "Optional name of an f32 point attribute (tupleSize 3 or more) whose components 0, 1 and 2 are carried to the renderer as each instance's RGB. ALPHA IS DROPPED — both three adapters take RGB, so a fourth component (the standard `color` attribute is f32x4) has nowhere to go and is not carried. Empty (the default) carries no colour at all, and the renderer then leaves its instance-colour channel untouched. Nothing is picked up automatically and nothing scans the values: every point cloud in this library already carries `color` at [1,1,1,1], so its presence says nothing about intent, and writing an all-white instance-colour buffer would recompile the renderer's shader for zero pixels changed. Naming it is what states the intent — which also means an attribute written upstream and never named here is silently NOT drawn. Any colour-shaped attribute works: `color`, or a `tint`/`speciesColor` written with setAttribute. Errors when the named attribute is missing or is not f32 with tupleSize >= 3, listing the attributes that would fit."
       }
     }
   },

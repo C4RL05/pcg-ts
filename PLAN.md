@@ -1674,6 +1674,151 @@ the copy itself is one existing call to `copyElements`.
   width; `transferAttribute` can read a primitive source; the corpus
   proves it from serialized JSON; docs idempotent.
 
+## Phase 45 — Per-instance colour, and a budget on the spawner
+
+**Added 2026-08-10, ahead of an agent-authored forest demo built on real
+glTF assets.** Both items are library gaps the demo would hit on day one,
+and both are small; the demo itself is the caller that earns them.
+
+**1. Per-instance colour is dropped at the renderer boundary.** `color`
+is a standard point attribute (f32×4) and survives the entire graph —
+and then `spawnInstances` reads only `P`/`rot`/`scale`, and the three
+adapters write only the 16-float matrix. There is no `instanceColor` and
+no custom instanced attribute anywhere in `src/three`. So every instance
+sharing an asset id is identical except for its transform: no age, no
+health, no seasonal variation, no hue drift. The only variation channel
+that survives today is splitting into more asset ids.
+
+The attribute exists, the data flows, it is discarded at the last inch.
+
+**2. `spawnInstances` has no count guard.** Every other node that can
+explode got one — `MAX_EDGES`, `MAX_RESAMPLE_POINTS`,
+`MAX_VOLUME_POINTS`, the resident 512 MiB ceiling — but the spawner
+allocates whatever the batch says. That is tolerable when a human writes
+the graph; it is worse when an AGENT authors it, where a density typo
+becomes an allocation failure instead of a diagnostic.
+
+Two constraints that are settled and must not be re-litigated:
+
+- **The guard fires per COOK, never per world.** A global "instances
+  alive" ceiling would depend on which cells happen to be resident,
+  making the error order-dependent — a determinism violation of exactly
+  the kind phase 42 exists to prevent.
+- **Both paths or neither.** The device spawner composes matrices in
+  WGSL and never reads back, so a guard living only in the CPU node
+  gives a graph that throws on one path and cooks on the other. That is
+  the divergence class the phase 42 fusion investigation found.
+
+**Designed 2026-08-10.**
+
+- **Opt-in, via a `colorAttr` name param (default `""`).** Phase 44 chose
+  AUTOMATIC for primitive attributes on samplers, and that reasoning
+  does NOT transfer: there, a primitive attribute exists only because an
+  author made one, so its presence IS the intent. `color` is minted at
+  `[1,1,1,1]` on every cloud, so its presence carries no intent at all.
+  The decisive cost is not the wasted `count*3` floats: setting
+  `instanceColor` flips three's program variant (`instancingColor !==
+  null` forces the `vColor` varying and a shader recompile) for zero
+  pixels changed. A name param also accepts `tint` or `speciesColor`,
+  matching the `hitAttr`/`degreeAttr`/`lengthAttr` idiom.
+  - Accepted cost, mitigated in the description and NOT by sniffing the
+    column: an agent that writes `setAttribute("color", ...)` and then
+    spawns gets silence. An "is it all white?" scan would be O(n) per
+    cook AND would make the renderer's shader variant data-dependent,
+    which is worse than the silence.
+- **Alpha is DROPPED at the spawner**, stated in the param description
+  rather than discovered. Both three paths are RGB. Accept `tupleSize
+  >= 3`, since `examples/07-galaxy` ships a 3-tuple `color`.
+- **The device path COMPOSES colour rather than declining it**, and the
+  agreement argument is structural rather than empirical: colour is a
+  GATHER, not arithmetic, so there is no ULP class to diverge — unlike
+  `composeTRS`. three 0.185 already reads a storage instance-colour
+  attribute, reachable through the existing adoption seam. Hazard to
+  respect: WGSL `array<vec3<f32>>` has a 16-byte stride, so the device
+  buffer is 4 floats per instance.
+- **Ordering cannot drift by construction:** colour is read inside the
+  existing per-instance loop and emitted inside the existing compose
+  kernel, so both reuse the one index expression and no second traversal
+  exists to fall out of step.
+
+**The budget: `MAX_INSTANCES = 1_048_576`** (2^20, matching `MAX_EDGES`
+and `MAX_RESAMPLE_POINTS`; 64 MiB of transforms). The device path does
+not duplicate the message — it raises `PlanFail`, which rejects the
+resident run and falls back per-node, and the CPU node then raises the
+one message. That is the mechanism `assetAttr` already uses, so it costs
+no new fallback reason and the two paths cannot word it differently.
+Measured maxima: `02-forest` 9000 (24000 at the slider's max),
+`01-scatter` 2600, the pipeline asserts 1000 — nothing trips it.
+
+- Exit: an instance carries colour to both the CPU and WebGPU adapters;
+  a runaway spawn is a diagnostic naming the count and the fix on both
+  paths; existing graphs and demos are unchanged when colour is not
+  asked for.
+
+## Backlog — earned, waiting for a caller
+
+Distinct from "Stretch" below, and the distinction is the point: Stretch
+records things DECIDED AGAINST, with the measurements that killed them.
+These are things we want, deferred only because nothing is pulling yet.
+Every re-survey this cycle changed its own phase once a real consumer
+existed, so the discipline is to let the consumer specify the mechanism
+rather than guess at it. Each entry carries the analysis, because
+re-deriving it is the expensive part.
+
+**Strings readable as fields.** A field cannot read a string attribute,
+so a `species` or `biome` string cannot drive a density field. Workaround
+today: `setAttribute` in string mode already takes a NUMERIC selector to
+index its `values` list, so an author has that number in hand and can
+write it to an int attribute with one extra node.
+- **The obvious design is a determinism bug, and this is the part worth
+  keeping.** A field fn returning the string's TABLE INDEX would expose
+  an insertion-ordered artifact: the same logical value can intern at
+  different indices in different geometries, and under partitioned
+  cooking, in different cells. It is the identity-versus-index lesson of
+  phase 42 wearing a new costume, and it would pass every test we have
+  until two cells disagreed.
+- The safe form is a PREDICATE — `attributeIs(name, "pine")` → 0/1 —
+  which never exposes the index. It also compiles to the GPU cleanly:
+  the literal resolves against the geometry's string table HOST-SIDE at
+  kernel build time, so the kernel compares a u32 column to a constant
+  and the hazard disappears because the index never leaves the host.
+- Cost: the fixed five-site grammar change `ne` and `fraction` both paid.
+
+**For-each over a collection.** `partitionByAttribute` emits one
+geometry per distinct value and nothing can process them separately, so
+per-region treatment means K hardcoded parallel branches. This is the
+long-running `filterGroup` blocker, and phase 37's stated reason for it
+was wrong — see the correction in that phase.
+- The mechanism is closer than the history suggests: pins are ALREADY
+  collection-shaped (`DataCollection = DataItem[]`, and subgraphs
+  forward the whole array); the only blocker is `requireGeometry` taking
+  `item[0]`, which phase 40 turned from silent truncation into a
+  diagnostic. The subgraph machinery — payload, exposed params,
+  registry, serializable form — already exists, so a `forEach` could
+  reuse that execution path rather than invent one.
+- **The design question to settle first is what seeds each iteration.**
+  Keying on the item INDEX is the trap: a collection from
+  `partitionByAttribute` is ordered by discovery, and a partitioned cook
+  can reorder it. Key on the hashed group VALUE. Same lesson again.
+- It also touches the executor, memoization (the memo key becomes
+  per-item), the GPU resident planner and serialization. A phase, not a
+  patch.
+
+**A topology-preserving union.** `mergePoints` destroys topology, so two
+polyline geometries cannot be combined — which blocks mixing authored
+and procedural networks (a hand-placed trail plus a generated one). Was
+ranked #3 in the stage-5 design's missing list.
+
+**Documentation that quotes measured output has no assertion behind
+it.** Phase 44's docs pass found the manual's Part II transcripts had
+silently become fiction — 1008 points where the library now produces
+1038, a stale determinism fingerprint, an error listing 25 registered
+types against a registry of 38 — because phases 42-44 moved per-point
+randomness onto identity and every number shifted. The countable half is
+now policed by `COUNT_CLAIMS` in `src/docs/site.ts` (19 claims). The
+transcripts are not. Fixing it means either generating them or asserting
+them, and both are real work.
+
 ## Stretch — surveyed and NOT scheduled
 
 - **Rescaling the shared noise convention so an amplitude knob reaches

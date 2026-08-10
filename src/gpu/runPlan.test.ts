@@ -30,8 +30,11 @@ interface StepShape {
 interface InstancesShape {
   readonly assetId: string;
   readonly assetAttr: string;
+  readonly colorAttr: string;
+  readonly colorTupleSize: number;
   readonly count: number;
   readonly bytes: number;
+  readonly colorBytes: number;
   readonly permBytes: number;
 }
 
@@ -457,7 +460,7 @@ const TRS_LAYOUT: ResidentRunContext["attributes"] = {
 };
 
 const spawn = (params: Record<string, unknown> = {}): ResidentMemberDesc =>
-  member("spawnInstances", { assetId: "tree", assetAttr: "", ...params }, "spawn");
+  member("spawnInstances", { assetId: "tree", assetAttr: "", colorAttr: "", ...params }, "spawn");
 
 describe("resident run planning: spawnInstances terminal", () => {
   it("adds one compose kernel, a retained buffer, and writes no attribute", () => {
@@ -478,8 +481,11 @@ describe("resident run planning: spawnInstances terminal", () => {
     expect(p.instances).toEqual({
       assetId: "tree",
       assetAttr: "",
+      colorAttr: "", // no colour asked for: no buffer, no binding
+      colorTupleSize: 0,
       count: 1000,
       bytes: 64_000,
+      colorBytes: 0,
       permBytes: 0, // constant mode uploads no permutation
     });
     expect(applyOf(p, 0).perBatch).toBe(false); // one dispatch over everything
@@ -640,8 +646,11 @@ describe("resident run planning: multi-asset spawner terminal", () => {
     expect(p.instances).toEqual({
       assetId: "tree",
       assetAttr: "species",
+      colorAttr: "",
+      colorTupleSize: 0,
       count: 1000,
       bytes: 64_000,
+      colorBytes: 0,
       permBytes: 4000,
     });
     // The string column is NEVER uploaded: the host resolves the key.
@@ -719,13 +728,209 @@ describe("resident run planning: multi-asset spawner terminal", () => {
   it("stamps the plan format, so a shape change cannot silently reuse old plans", () => {
     // The tag is what stops a plan built by one shape of this code from
     // being executed by another. Phase 29 made `instances` plural and
-    // added `permBytes`, so it moved to /4. Change the plan's shape and
+    // added `permBytes`, so it moved to /4; phase 45 added the colour
+    // output (`colorAttr`, `colorTupleSize`, `colorBytes`) and the
+    // `colorOut` buffer ref, so it is at /5. Change the plan's shape and
     // this must move with it — an unbumped tag is a stale-plan bug, not
     // a cosmetic slip, and nothing else in the suite notices a revert.
     const p = plan(
       [member("transformPoints", { translate: [1, 2, 3], rotateEuler: [0, 90, 0], scale: [2, 2, 2] })],
       8,
     );
-    expect((p as unknown as { readonly format: string }).format).toBe("pcg-resident-run/4");
+    expect((p as unknown as { readonly format: string }).format).toBe("pcg-resident-run/5");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// phase 45: per-instance colour, and the spawner's budget
+
+/** TRS layout plus the two colour-shaped columns and one that is not. */
+const COLOUR_LAYOUT: ResidentRunContext["attributes"] = {
+  ...TRS_LAYOUT,
+  color: { type: "f32", tupleSize: 4 },
+  tint: { type: "f32", tupleSize: 3 },
+  species: { type: "string", tupleSize: 1 },
+  height: { type: "f32", tupleSize: 1 },
+  flags: { type: "u32", tupleSize: 4 },
+};
+
+describe("resident run planning: instance colour", () => {
+  it("gathers colour in the SAME kernel as the transform, from the same source", () => {
+    // The structural guarantee, read off the generated body: one `i`,
+    // one set of reads, no second traversal. A colour written by a kernel
+    // of its own could drift from the matrix ordering; this cannot.
+    const p = plan([spawn({ colorAttr: "color" })], 1000, COLOUR_LAYOUT, Number.MAX_SAFE_INTEGER, false);
+    expect(p.members).toHaveLength(1);
+    expect(p.members[0].steps).toHaveLength(1); // still ONE dispatch, not two
+    const apply = applyOf(p, 0);
+    expect(apply.key).toBe("apply2|spawnInstances|rot=1|scl=1|color=4");
+    // The colour bindings come last, so P/rot/scale/transforms keep the
+    // indices every earlier variant gave them.
+    expect(apply.bindings).toEqual([
+      { binding: 1, ref: { kind: "slot", index: 0 } },
+      { binding: 2, ref: { kind: "slot", index: 1 } },
+      { binding: 3, ref: { kind: "slot", index: 2 } },
+      { binding: 4, ref: { kind: "out" } },
+      { binding: 5, ref: { kind: "slot", index: 3 } }, // the colour column
+      { binding: 6, ref: { kind: "colorOut" } },
+    ]);
+    // Read at the source's own tuple stride, written at 4.
+    expect(apply.wgsl).toContain("let cs = i * 4u;");
+    expect(apply.wgsl).toContain("let co = i * 4u;");
+    expect(apply.wgsl).toContain("b6[co] = b5[cs];");
+    expect(apply.wgsl).toContain("b6[co + 1u] = b5[cs + 1u];");
+    expect(apply.wgsl).toContain("b6[co + 2u] = b5[cs + 2u];");
+    // Alpha is DROPPED: the pad slot is a literal 0, never `b5[cs + 3u]`.
+    expect(apply.wgsl).toContain("b6[co + 3u] = 0f;");
+    expect(apply.wgsl).not.toContain("b5[cs + 3u]");
+    expect(p.written).toEqual([]); // a spawner still mutates nothing
+  });
+
+  it("reads a 3-tuple source at ITS stride, and still writes 4 floats out", () => {
+    // The two strides are independent: the source tuple is whatever the
+    // attribute is, the destination is always the WGSL vec3 stride.
+    const apply = applyOf(
+      plan([spawn({ colorAttr: "tint" })], 8, COLOUR_LAYOUT, Number.MAX_SAFE_INTEGER, false),
+      0,
+    );
+    expect(apply.key).toBe("apply2|spawnInstances|rot=1|scl=1|color=3");
+    expect(apply.wgsl).toContain("let cs = i * 3u;");
+    expect(apply.wgsl).toContain("let co = i * 4u;");
+  });
+
+  it("gathers through the permutation when the spawn is multi-asset", () => {
+    const p = plan(
+      [spawn({ assetAttr: "species", colorAttr: "color" })],
+      1000,
+      COLOUR_LAYOUT,
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    const apply = applyOf(p, 0);
+    expect(apply.key).toBe("apply2|spawnInstances|rot=1|scl=1|perm|color=4");
+    expect(apply.perBatch).toBe(true);
+    // THE line that makes ordering structural: the colour's source index
+    // is the same `src` the matrix read, not `i`.
+    expect(apply.wgsl).toContain("let src = b5[params.base + i];");
+    expect(apply.wgsl).toContain("let cs = src * 4u;");
+    // ...and the destination is still dense, so no two lanes collide.
+    expect(apply.wgsl).toContain("let co = i * 4u;");
+    expect(p.instances).toEqual({
+      assetId: "tree",
+      assetAttr: "species",
+      colorAttr: "color",
+      colorTupleSize: 4,
+      count: 1000,
+      bytes: 64_000,
+      colorBytes: 16_000, // 16 bytes per instance, not 12
+      permBytes: 4000,
+    });
+  });
+
+  it("sizes the colour buffer at 16 bytes per instance and counts it against the bound", () => {
+    // 12 on the CPU, 16 here: `array<vec3<f32>>` has a 16-byte stride, so
+    // this number is the renderer's, not ours. Getting it wrong shifts
+    // every colour by a growing offset instead of failing.
+    // Slots P(12) + rot(16) + scale(12) + the colour source color(16) =
+    // 56 B/pt, plus 64 retained transform and 16 retained colour.
+    const exact = 8 * (56 + 64 + 16);
+    const p = plan([spawn({ colorAttr: "color" })], 8, COLOUR_LAYOUT, exact, false);
+    expect(p.instances?.colorBytes).toBe(8 * 16);
+    expect(p.totalBytes).toBe(exact);
+    expect(rejection([spawn({ colorAttr: "color" })], 8, COLOUR_LAYOUT, exact - 1, false)).toBe(
+      "run-too-large",
+    );
+  });
+
+  it("leaves every colourless variant's key, bindings and text exactly as they were", () => {
+    // The colour bindings are declared last precisely so this holds —
+    // it is what lets APPLY_VERSION stay at apply2 and keeps every
+    // cached pipeline and every memoized byte valid.
+    for (const [params, key, bindings] of [
+      [{}, "apply2|spawnInstances|rot=1|scl=1", 4],
+      [{ assetAttr: "species" }, "apply2|spawnInstances|rot=1|scl=1|perm", 5],
+    ] as const) {
+      const apply = applyOf(
+        plan([spawn(params)], 8, COLOUR_LAYOUT, Number.MAX_SAFE_INTEGER, false),
+        0,
+      );
+      expect(apply.key).toBe(key);
+      expect(apply.bindings).toHaveLength(bindings);
+      expect(apply.wgsl).not.toContain("colors");
+      expect(apply.wgsl).not.toContain("let co =");
+    }
+  });
+
+  it("rejects the shapes the CPU spawner throws on, so the CPU raises them", () => {
+    // Missing, wrong type, too narrow, and a non-string param value. All
+    // four reject as run-plan-failed — the EXISTING reason — so the
+    // per-node path surfaces requireRgbSource's message, which names the
+    // param, the shape it found, and the attributes that would fit.
+    for (const colorAttr of ["absent", "species", "height", 7]) {
+      expect(rejection([spawn({ colorAttr })], 16, COLOUR_LAYOUT), String(colorAttr)).toBe(
+        "run-plan-failed",
+      );
+    }
+    // u32x4 is wide enough but the wrong element type.
+    expect(rejection([spawn({ colorAttr: "flags" })], 16, COLOUR_LAYOUT)).toBe("run-plan-failed");
+  });
+
+  it("reads the LATEST epoch of a colour an earlier member wrote", () => {
+    // setAttribute replaces `tint` mid-run, so the spawner must bind that
+    // member's fresh slot — the same "whatever the chain produced" the
+    // CPU spawner sees when it reads the chain's output geometry.
+    const p = plan(
+      [
+        member("setAttribute", { name: "tint", type: "f32", tupleSize: 3, value: 0.5, seed: 0 }, "sa"),
+        spawn({ colorAttr: "tint" }),
+      ],
+      64,
+      COLOUR_LAYOUT,
+      Number.MAX_SAFE_INTEGER,
+      false,
+    );
+    const written = p.written.map((w) => w.name);
+    expect(written).toEqual(["tint"]);
+    const colourRef = applyOf(p, 1).bindings[4].ref as { kind: string; index: number };
+    const targetRef = applyOf(p, 0).bindings[0].ref as { kind: string; index: number };
+    expect(colourRef.kind).toBe("slot");
+    // The very slot setAttribute wrote, not the input epoch.
+    expect(colourRef.index).toBe(targetRef.index);
+  });
+});
+
+describe("resident run planning: the spawner's instance budget", () => {
+  const P_ONLY: ResidentRunContext["attributes"] = { P: { type: "f32", tupleSize: 3 } };
+  const MAX = 1_048_576;
+
+  it("rejects an over-budget spawn with the EXISTING reason, adding no new vocabulary", () => {
+    // The device path does not raise the diagnostic. It rejects the run;
+    // the members cook per-node; `buildInstanceBatches` says the one
+    // thing. A new fallback reason here would be a second way to phrase
+    // one refusal — exactly what reusing assetAttr's mechanism avoids.
+    expect(rejection([spawn()], MAX + 1, P_ONLY, Number.MAX_SAFE_INTEGER, false)).toBe(
+      "run-plan-failed",
+    );
+  });
+
+  it("plans the boundary itself, so the ceiling is not off by one", () => {
+    const p = plan([spawn()], MAX, P_ONLY, Number.MAX_SAFE_INTEGER, false);
+    expect(p.instances?.count).toBe(MAX);
+    expect(p.instances?.bytes).toBe(MAX * 64);
+  });
+
+  it("is decided per SPAWN, not per run: a chain with no spawner is unaffected", () => {
+    // The budget bounds instances, not points. A huge cloud that never
+    // reaches a spawner is a memory question (`run-too-large`), not a
+    // budget one, and must still plan.
+    const p = plan(
+      [member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf")],
+      MAX + 1,
+      P_ONLY,
+      Number.MAX_SAFE_INTEGER,
+      true,
+    );
+    expect(p.instances).toBeNull();
+    expect(p.members).toHaveLength(1);
   });
 });

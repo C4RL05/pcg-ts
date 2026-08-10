@@ -7,8 +7,18 @@
  * quaternions). Then exercises the ownership model on real device
  * memory: detach accounting, dispose (including twice), evaluator
  * dispose with an outstanding handle, cook→dispose→recook cycles, and
- * cancellation. Finally pins the CPU fallback: an `assetAttr` spawner
+ * cancellation. Then pins the CPU fallback: an `assetAttr` spawner
  * produces bytes identical to a CPU-only cook, with the reason counted.
+ *
+ * Phase 45 adds two cases with a different bar. `instanceColour` compares
+ * device colours against the CPU batch's at BYTE equality — colour is a
+ * gather, not arithmetic, so there is no tolerance to spend — over a
+ * sample whose head pins signed zero, subnormals, the f32 extremes and
+ * out-of-gamut components, and it checks the 4-float device stride and
+ * the zeroed pad slot the CPU's 3-float array has no room for. `budget`
+ * cooks over `MAX_INSTANCES` on both paths and reports both whole error
+ * messages, so the test can compare them character for character rather
+ * than pattern-match each separately.
  *
  * Test-only: bundled by instances.device.test.ts (esbuild) and executed
  * in a plain Node child process — Dawn is unstable inside vitest workers
@@ -23,7 +33,7 @@ import { hashCombine, hashFloat } from "../random/index.js";
 import { dataInput } from "../runtime/dataInput.js";
 import { orientAlongVector, transformPoints } from "../nodes/index.js";
 import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
-import { buildInstanceBatches, spawnInstances } from "../spawn/index.js";
+import { MAX_INSTANCES, buildInstanceBatches, spawnInstances } from "../spawn/index.js";
 import { BUFFER_USAGE, MAP_MODE, type GpuDeviceLike } from "./device.js";
 import { deviceTransformsBuffer } from "./deviceTransforms.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
@@ -117,7 +127,12 @@ interface SpawnRig {
 /** dataInput → [chain] → spawnInstances; "instances" is the only output. */
 function spawnRig(
   geo: Geometry,
-  opts: { chain?: boolean; assetAttr?: string; declarePoints?: boolean } = {},
+  opts: {
+    chain?: boolean;
+    assetAttr?: string;
+    colorAttr?: string;
+    declarePoints?: boolean;
+  } = {},
 ): SpawnRig {
   const g = new Graph(7);
   const din = g.add(dataInput, { items: [makeGeometryItem(geo)] });
@@ -136,6 +151,7 @@ function spawnRig(
   const sp = g.add(spawnInstances, {
     assetId: "tree",
     ...(opts.assetAttr !== undefined ? { assetAttr: opts.assetAttr } : {}),
+    ...(opts.colorAttr !== undefined ? { colorAttr: opts.colorAttr } : {}),
   });
   g.connect(tail, "out", sp, "in");
   g.output(sp, "instances", "instances");
@@ -826,6 +842,366 @@ async function assetAttrChain(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// per-instance colour (phase 45)
+
+/**
+ * Colour rows a COPY must survive unchanged, pinned at the head of the
+ * sample rather than hoped for. A gather has no arithmetic in it, so
+ * every one of these is a byte-equality claim, not a tolerance one:
+ *
+ * - signed zero, whose sign bit only survives a genuine copy;
+ * - out-of-gamut and negative components (nothing clamps anywhere);
+ * - the f32 extremes and the smallest normal;
+ * - SUBNORMALS, the one class a device could plausibly flush to zero —
+ *   the same hazard the constant-slot work measured for `-0` literals, on
+ *   the load/store path this time;
+ * - ordinary decimals that are not exactly representable, so the stored
+ *   f32 is an arbitrary bit pattern rather than a tidy fraction.
+ *
+ * Alpha is deliberately non-zero on most rows: it is what a kernel that
+ * wrote the source's fourth component into the pad slot — instead of the
+ * literal 0 — would leak, and it must never appear in the buffer.
+ */
+const COLOR_EDGES: readonly (readonly number[])[] = [
+  [0, 0, 0, 0.5],
+  [1, 1, 1, 1],
+  [-0, -0, -0, 0.25],
+  [-1.5, 2.75, 1e-7, 0.75],
+  [3.4028234663852886e38, -3.4028234663852886e38, 1.1754943508222875e-38, 1],
+  [1.401298464324817e-45, 5.877471754111438e-39, 7.006492321624085e-46, 1],
+  [0.1, 0.2, 0.3, 0.4],
+  [123456.78, 0.000123456, 65504, 0.875],
+];
+
+/**
+ * The transform sample plus two colour columns: the standard f32x4
+ * `color` (alpha to be dropped) and a hand-written f32x3 `tint`, which
+ * the extraction rule must read identically. Optionally a `species`
+ * column so the gather can be checked THROUGH the grouping permutation.
+ */
+function makeColourSample(count: number, withSpecies: boolean): Geometry {
+  const geo = withSpecies ? makeSpeciesSample(count) : makeTransformSample(count);
+  const set = geo.attrs.point;
+  const color = set.add("color", "f32", 4);
+  const tint = set.add("tint", "f32", 3);
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 4; k++) color.data[i * 4 + k] = hashFloat(hashCombine(55, i, k));
+    for (let k = 0; k < 3; k++) tint.data[i * 3 + k] = (hashFloat(hashCombine(66, i, k)) - 0.5) * 3;
+  }
+  for (let e = 0; e < COLOR_EDGES.length && e < count; e++) {
+    for (let k = 0; k < 4; k++) color.data[e * 4 + k] = COLOR_EDGES[e][k];
+    for (let k = 0; k < 3; k++) tint.data[e * 3 + k] = COLOR_EDGES[e][k];
+  }
+  return geo;
+}
+
+interface ColorAgreement {
+  /** Components compared (`count * 3`). */
+  n: number;
+  /** Components not bit-identical to the CPU batch. */
+  mismatchCount: number;
+  /** The first few, for a failure that names values rather than a count. */
+  mismatches: Array<{ instance: number; component: number; cpu: number; gpu: number }>;
+  /** Instances whose pad slot (float 3 of 4) is not exactly +0. */
+  padNonZero: number;
+  /** Device floats per instance, derived from the buffer, not assumed. */
+  floatsPerInstance: number;
+}
+
+/**
+ * Byte equality between one CPU batch's `colors` (3 floats per instance)
+ * and the device buffer (4, the WGSL vec3 stride). `Object.is` rather
+ * than `===`, so -0 does NOT pass as 0 and a NaN would compare equal to
+ * itself; there is no tolerance parameter here on purpose.
+ */
+function compareColors(
+  cpu: Float32Array | undefined,
+  gpu: Float32Array,
+  count: number,
+): ColorAgreement {
+  const out: ColorAgreement = {
+    n: count * 3,
+    mismatchCount: 0,
+    mismatches: [],
+    padNonZero: 0,
+    floatsPerInstance: count === 0 ? 0 : gpu.length / count,
+  };
+  if (cpu === undefined || cpu.length !== count * 3) {
+    out.mismatchCount = count * 3;
+    return out;
+  }
+  for (let k = 0; k < count; k++) {
+    for (let c = 0; c < 3; c++) {
+      const a = cpu[k * 3 + c];
+      const b = gpu[k * 4 + c];
+      if (Object.is(a, b)) continue;
+      out.mismatchCount++;
+      if (out.mismatches.length < 8) {
+        out.mismatches.push({ instance: k, component: c, cpu: a, gpu: b });
+      }
+    }
+    if (!Object.is(gpu[k * 4 + 3], 0)) out.padNonZero++;
+  }
+  return out;
+}
+
+/** Every batch's colours, read back and compared against the CPU batches. */
+async function colorObservations(
+  device: GpuDeviceLike,
+  batches: readonly DeviceInstanceBatch[],
+  cpu: readonly { assetId: string; count: number; colors?: Float32Array }[],
+): Promise<Record<string, unknown>> {
+  const perBatch: Array<Record<string, unknown>> = [];
+  let mismatchTotal = 0;
+  let padNonZeroTotal = 0;
+  let compared = 0;
+  for (let j = 0; j < batches.length; j++) {
+    const handle = batches[j].colors;
+    if (handle === undefined) {
+      perBatch.push({ assetId: batches[j].assetId, missing: true });
+      mismatchTotal += batches[j].count * 3;
+      continue;
+    }
+    const gpu = await readHandle(device, handle);
+    const agreement = compareColors(cpu[j]?.colors, gpu, batches[j].count);
+    mismatchTotal += agreement.mismatchCount;
+    padNonZeroTotal += agreement.padNonZero;
+    compared += agreement.n;
+    perBatch.push({
+      assetId: batches[j].assetId,
+      count: batches[j].count,
+      byteLength: handle.byteLength,
+      backend: handle.backend,
+      agreement,
+    });
+  }
+  return { perBatch, mismatchTotal, padNonZeroTotal, compared };
+}
+
+/** Flatten a device batch list's transform bytes, in batch order. */
+async function flatTransforms(
+  device: GpuDeviceLike,
+  batches: readonly DeviceInstanceBatch[],
+): Promise<number[]> {
+  const out: number[] = [];
+  for (const b of batches) out.push(...(await readHandle(device, b.transforms)));
+  return out;
+}
+
+/**
+ * Colour on the device. Composed by the SAME kernel as the matrix, from
+ * the same source index, so the two cannot disagree about which point an
+ * instance came from — and because a colour is copied rather than
+ * computed, the bar is byte equality with the CPU batch, not a tolerance.
+ */
+async function instanceColour(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  const count = 1024;
+  const ev = new GpuFieldEvaluator(device, { adapterInfo, deviceInstances: true });
+  const cases: Array<Record<string, unknown>> = [];
+
+  for (const [name, colorAttr, assetAttr, chain] of [
+    // f32x4 `color`: alpha must be dropped, not padded through.
+    ["rgba", "color", "", false],
+    // f32x3 `tint`: the same extraction over a narrower column.
+    ["rgb", "tint", "", false],
+    // Through the grouping permutation — the case where a colour read in
+    // a second pass would silently pick up the wrong point.
+    ["grouped", "color", "species", false],
+    // And behind a fused chain, so colour rides a run of three members.
+    ["chained", "tint", "species", true],
+  ] as const) {
+    const geo = makeColourSample(count, assetAttr !== "");
+    const rig = spawnRig(geo, {
+      colorAttr,
+      ...(assetAttr !== "" ? { assetAttr } : {}),
+      ...(chain ? { chain: true } : {}),
+    });
+    const cooked = await cook(rig.g, { gpu: ev });
+    const batches = instancesOf(cooked).deviceBatches!;
+
+    // The CPU reference. For the chained case it must be the CPU cook of
+    // the same chain, so the comparison is spawner-vs-spawner rather
+    // than device-chain-vs-input.
+    let source = geo;
+    if (chain) {
+      const refGraph = new Graph(7);
+      const din = refGraph.add(dataInput, { items: [makeGeometryItem(geo)] }, rig.ids.din);
+      const xf = refGraph.add(
+        transformPoints,
+        { translate: [1, 2, 3], rotateEuler: [0, 30, 0], scale: [2, 2, 2] },
+        rig.ids.xf,
+      );
+      const or = refGraph.add(orientAlongVector, { direction: field({ fn: "position" }) }, rig.ids.or);
+      refGraph.connect(din, "out", xf, "in");
+      refGraph.connect(xf, "out", or, "in");
+      refGraph.output(or, "out", "out");
+      const refItem = (await cook(refGraph)).outputs.out[0];
+      if (refItem.kind !== "geometry") throw new Error("scenario: expected geometry");
+      source = refItem.geo;
+    }
+    const cpu = buildInstanceBatches(source, {
+      defaultAssetId: "tree",
+      ...(assetAttr !== "" ? { assetAttr } : {}),
+      colorAttr,
+    });
+
+    const colors = await colorObservations(device, batches, cpu);
+    // The head of batch 0's buffers, so the pinned edge rows are readable
+    // in a failure message rather than only counted. Batch 0 is the whole
+    // cloud in point order when no assetAttr is set, which is where the
+    // COLOR_EDGES rows sit.
+    const headGpu = Array.from((await readHandle(device, batches[0].colors!)).subarray(0, 32));
+    const headCpu = Array.from((cpu[0].colors ?? new Float32Array(0)).subarray(0, 24));
+    // Colour must not have moved a TRANSFORM byte: the same graph
+    // without colorAttr composes the identical matrices.
+    const withColour = await flatTransforms(device, batches);
+    const plainRig = spawnRig(geo, {
+      ...(assetAttr !== "" ? { assetAttr } : {}),
+      ...(chain ? { chain: true } : {}),
+    });
+    const plainCook = await cook(plainRig.g, { gpu: ev });
+    const plainBatches = instancesOf(plainCook).deviceBatches!;
+    const withoutColour = await flatTransforms(device, plainBatches);
+    let transformsUnmoved = withColour.length === withoutColour.length;
+    for (let i = 0; transformsUnmoved && i < withColour.length; i++) {
+      transformsUnmoved = Object.is(withColour[i], withoutColour[i]);
+    }
+    const plainCarriesNoColour = plainBatches.every((b) => b.colors === undefined);
+
+    // Determinism: a second cook of a fresh graph gathers the same bytes.
+    const againBatches = instancesOf(
+      await cook(
+        spawnRig(makeColourSample(count, assetAttr !== ""), {
+          colorAttr,
+          ...(assetAttr !== "" ? { assetAttr } : {}),
+          ...(chain ? { chain: true } : {}),
+        }).g,
+        { gpu: ev },
+      ),
+    ).deviceBatches!;
+    const first: number[] = [];
+    const second: number[] = [];
+    for (const b of batches) first.push(...(await readHandle(device, b.colors!)));
+    for (const b of againBatches) second.push(...(await readHandle(device, b.colors!)));
+    let deterministic = first.length === second.length;
+    for (let i = 0; deterministic && i < first.length; i++) {
+      deterministic = Object.is(first[i], second[i]);
+    }
+
+    // Ownership: two detached buffers per batch while held, none after.
+    const holding = {
+      detachedBuffers: ev.poolStats.detachedBuffers,
+      detachedBytes: ev.poolStats.detachedBytes,
+    };
+    for (const b of [...batches, ...againBatches, ...plainBatches]) {
+      b.transforms.dispose();
+      b.colors?.dispose();
+    }
+    const afterDispose = {
+      detachedBuffers: ev.poolStats.detachedBuffers,
+      detachedBytes: ev.poolStats.detachedBytes,
+      inFlight:
+        ev.poolStats.buffersCreated - ev.poolStats.buffersDestroyed - ev.poolStats.pooledBuffers,
+    };
+
+    cases.push({
+      name,
+      colorAttr,
+      assetAttr,
+      stats: statsOf(cooked),
+      batchCount: batches.length,
+      cpuShapes: cpu.map((b) => [b.assetId, b.count] as const),
+      shapes: batches.map((b) => [b.assetId, b.count] as const),
+      colors,
+      transformsUnmoved,
+      plainCarriesNoColour,
+      deterministic,
+      holding,
+      afterDispose,
+      headGpu,
+      headCpu,
+    });
+  }
+  ev.dispose();
+  return { cases };
+}
+
+/**
+ * The spawner's per-cook budget, from the device side.
+ *
+ * The device path does not carry its own copy of the diagnostic: an
+ * over-budget spawn is a `PlanFail`, which rejects the resident run, puts
+ * every member back on the per-node path, and lets the CPU spawner raise
+ * THE message. So the observation that matters is not "it throws" but
+ * "it throws the identical string a CPU-only cook throws" — captured here
+ * as two whole messages the test compares character for character.
+ */
+async function budget(
+  device: GpuDeviceLike,
+  adapterInfo: { vendor?: string },
+): Promise<Record<string, unknown>> {
+  /** A bare P-only cloud of `n` points (no rot/scale: 12 bytes each). */
+  const bareCloud = (n: number): Geometry => {
+    const geo = new Geometry();
+    const set = geo.attrs.point;
+    const P = set.add("P", "f32", 3);
+    set.resize(n);
+    for (let i = 0; i < n; i++) P.data[i * 3] = i;
+    return geo;
+  };
+
+  const ev = new GpuFieldEvaluator(device, { adapterInfo, deviceInstances: true });
+  const over = bareCloud(MAX_INSTANCES + 1);
+  const deviceCook = await cook(spawnRig(over).g, { gpu: ev }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  const cpuCook = await cook(spawnRig(over).g).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  // A rejected cook returns no CookStats, so the fallback REASON is
+  // pinned device-free in runPlan.test.ts (it must stay the existing
+  // "run-plan-failed" — a new reason would be a second way to say the
+  // same thing). What is observable here is that nothing was allocated
+  // and nothing was stranded on the way out.
+  const detachedAfterFailure = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+    inFlight:
+      ev.poolStats.buffersCreated - ev.poolStats.buffersDestroyed - ev.poolStats.pooledBuffers,
+  };
+
+  // The boundary below it fuses and composes for real: 2^20 instances,
+  // 64 MiB of transforms retained on the device.
+  const atLimit = bareCloud(MAX_INSTANCES);
+  const limitCook = await cook(spawnRig(atLimit).g, { gpu: ev });
+  const limitItem = instancesOf(limitCook);
+  const limitBatches = limitItem.deviceBatches;
+  const limitShape = limitBatches?.map((b) => [b.assetId, b.count, b.transforms.byteLength]);
+  for (const b of limitBatches ?? []) b.transforms.dispose();
+  const afterLimit = {
+    detachedBuffers: ev.poolStats.detachedBuffers,
+    detachedBytes: ev.poolStats.detachedBytes,
+  };
+  ev.dispose();
+
+  return {
+    max: MAX_INSTANCES,
+    deviceMessage: deviceCook instanceof Error ? deviceCook.message : String(deviceCook),
+    cpuMessage: cpuCook instanceof Error ? cpuCook.message : String(cpuCook),
+    detachedAfterFailure,
+    limitStats: statsOf(limitCook),
+    limitDeviceResident: limitBatches !== undefined,
+    limitShape,
+    afterLimit,
+  };
+}
+
 /** With the opt-in withheld, nothing about the spawner changes. */
 async function optInWithheld(
   device: GpuDeviceLike,
@@ -872,6 +1248,8 @@ async function main(): Promise<void> {
   out.cancellation = await cancellation(structural, adapter.info);
   out.grouping = await assetAttrGrouping(structural, adapter.info);
   out.groupingChain = await assetAttrChain(structural, adapter.info);
+  out.colour = await instanceColour(structural, adapter.info);
+  out.budget = await budget(structural, adapter.info);
   out.optOut = await optInWithheld(structural, adapter.info);
 
   process.stdout.write(JSON.stringify(out));

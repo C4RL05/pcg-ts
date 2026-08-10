@@ -6,7 +6,16 @@
  * ownership model holds on real device memory across
  * cook → retain → dispose → recook cycles (including evaluator dispose
  * with an outstanding handle and cancellation), and that the CPU
- * fallbacks are byte-identical with their reason counted. Bundles
+ * fallbacks are byte-identical with their reason counted.
+ *
+ * Phase 45 adds the two halves of the spawner's remaining gap. Colour is
+ * held to a different and stricter bar than the transforms above it: a
+ * matrix is COMPUTED (an f32 kernel against an f64 reference, hence a
+ * measured tolerance), while a colour is GATHERED, so the device bytes
+ * must equal the CPU batch's bit for bit and any difference is a layout
+ * or an indexing bug, never rounding. The budget's half asserts that the
+ * device path adds no diagnostic of its own — the two paths' messages are
+ * compared as whole strings. Bundles
  * instancesScenario.ts with esbuild and executes it in a plain Node
  * child process (see deviceRunner.mjs for why no vitest worker may touch
  * Dawn). Skips visibly without an adapter.
@@ -134,6 +143,17 @@ interface ScenarioOutput {
     observed: BatchObs;
     batchCount: number;
   };
+  colour: { cases: ColourCase[] };
+  budget: {
+    max: number;
+    deviceMessage: string;
+    cpuMessage: string;
+    detachedAfterFailure: PoolSnap;
+    limitStats: StatsShape;
+    limitDeviceResident: boolean;
+    limitShape: Array<[string, number, number]>;
+    afterLimit: { detachedBuffers: number; detachedBytes: number };
+  };
   optOut: {
     residentTerminals: string[];
     deviceBatchesPresent: boolean;
@@ -142,6 +162,44 @@ interface ScenarioOutput {
     parityVsCpuOnly: Parity;
     detachedBuffers: number;
   };
+}
+
+interface ColourAgreement {
+  n: number;
+  mismatchCount: number;
+  mismatches: Array<{ instance: number; component: number; cpu: number; gpu: number }>;
+  padNonZero: number;
+  floatsPerInstance: number;
+}
+
+interface ColourCase {
+  name: string;
+  colorAttr: string;
+  assetAttr: string;
+  stats: StatsShape;
+  batchCount: number;
+  cpuShapes: Array<[string, number]>;
+  shapes: Array<[string, number]>;
+  colors: {
+    perBatch: Array<{
+      assetId: string;
+      count?: number;
+      byteLength?: number;
+      backend?: string;
+      missing?: boolean;
+      agreement?: ColourAgreement;
+    }>;
+    mismatchTotal: number;
+    padNonZeroTotal: number;
+    compared: number;
+  };
+  transformsUnmoved: boolean;
+  plainCarriesNoColour: boolean;
+  deterministic: boolean;
+  holding: { detachedBuffers: number; detachedBytes: number };
+  afterDispose: PoolSnap;
+  headGpu: number[];
+  headCpu: number[];
 }
 
 /**
@@ -534,6 +592,163 @@ describe.skipIf(testDevice === null)(
       expect(c.observed.shapesMatchCpu).toBe(true);
       expect(c.observed.parity.n).toBe(256 * 16);
       expect(c.observed.parity.rangeRel).toBeLessThanOrEqual(CHAIN_RANGE_REL);
+    });
+
+    // -----------------------------------------------------------------
+    // 6. per-instance colour (phase 45)
+
+    const colourCase = (name: string): ColourCase => {
+      const c = scenario.colour.cases.find((x) => x.name === name);
+      if (c === undefined) throw new Error(`scenario reported no colour case "${name}"`);
+      return c;
+    };
+
+    it("a coloured spawn FUSES — the interim opt-out is gone, nothing falls back", () => {
+      // Before this phase a `colorAttr` spawn declined device fusion with
+      // the reason "instance-color": residentRuns 0, fusedNodes 0, and
+      // CPU batches out. Every one of those numbers has to have moved,
+      // and the reason must not appear anywhere.
+      expect(scenario.colour.cases.map((c) => c.name)).toEqual([
+        "rgba",
+        "rgb",
+        "grouped",
+        "chained",
+      ]);
+      for (const c of scenario.colour.cases) {
+        expect(c.stats.residentRuns, c.name).toBe(1);
+        expect(c.stats.fallbacks, c.name).toEqual({});
+        expect(Object.keys(c.stats.fallbacks), c.name).not.toContain("instance-color");
+      }
+      // Fusion still reaches THROUGH the spawner: the chained case fuses
+      // transform + orient + spawn and reads nothing back at all.
+      expect(colourCase("chained").stats.fusedNodes).toBe(3);
+      expect(colourCase("chained").stats.readbacksSaved).toBe(3);
+    });
+
+    it("the device colours equal the CPU colours BIT FOR BIT, not approximately", () => {
+      // A colour is a GATHER. There is no arithmetic in it and therefore
+      // no ULP budget to hide a layout bug behind: any difference at all
+      // means an instance took its colour from the wrong point, or the
+      // stride is wrong. Compared with Object.is, so -0 does not pass as
+      // 0 either.
+      for (const c of scenario.colour.cases) {
+        expect(
+          c.colors.mismatchTotal,
+          `${c.name}: first mismatches ${JSON.stringify(
+            c.colors.perBatch.flatMap((b) => b.agreement?.mismatches ?? []),
+          )}`,
+        ).toBe(0);
+        // Pin the sample size: a zero mismatch count over zero
+        // comparisons would be the classic vacuous pass.
+        expect(c.colors.compared, c.name).toBe(1024 * 3);
+        expect(c.colors.perBatch.length, c.name).toBe(c.batchCount);
+        for (const b of c.colors.perBatch) {
+          expect(b.missing, `${c.name}/${b.assetId}`).toBeUndefined();
+          expect(b.backend, `${c.name}/${b.assetId}`).toBe("webgpu");
+        }
+      }
+      // The pinned edge rows, in the buffer: signed zero, out-of-gamut
+      // and negative components, f32 extremes and SUBNORMALS all survived
+      // the round trip unchanged — measured, not assumed, because a
+      // flush-to-zero on load would have shown up here and nowhere else.
+      const rgba = colourCase("rgba");
+      expect(rgba.headGpu.slice(0, 4)).toEqual([0, 0, 0, 0]);
+      expect(rgba.headGpu.slice(4, 8)).toEqual([1, 1, 1, 0]);
+      expect(rgba.headGpu.slice(12, 16)).toEqual([-1.5, 2.75, 1.0000000116860974e-7, 0]);
+    });
+
+    it("the device buffer is 4 floats per instance, and the pad is 0 — never the alpha", () => {
+      // The layout hazard, asserted rather than trusted: WGSL gives
+      // `array<vec3<f32>>` a 16-byte stride, so a 3-float buffer would
+      // shift every colour by a growing offset. `floatsPerInstance` is
+      // derived from the handle's own byteLength, so this checks the
+      // producer, not a constant.
+      for (const c of scenario.colour.cases) {
+        for (const b of c.colors.perBatch) {
+          expect(b.agreement?.floatsPerInstance, `${c.name}/${b.assetId}`).toBe(4);
+          expect(b.byteLength, `${c.name}/${b.assetId}`).toBe((b.count ?? -1) * 16);
+          // Alpha is DROPPED, not padded through: the source's fourth
+          // component is non-zero on most rows, so writing it into the
+          // pad slot would light this up immediately.
+          expect(b.agreement?.padNonZero, `${c.name}/${b.assetId}`).toBe(0);
+        }
+        expect(c.colors.padNonZeroTotal, c.name).toBe(0);
+      }
+    });
+
+    it("colour rides the transform's own source index, through the grouping too", () => {
+      // The structural claim: one kernel, one `src`, so an instance's
+      // colour cannot come from a different point than its matrix did.
+      // The multi-asset case is where a second traversal would break —
+      // batch order is first-occurrence and within-batch order is the
+      // host permutation, so a colour gathered in point order instead
+      // would mismatch almost everywhere.
+      for (const name of ["grouped", "chained"]) {
+        const c = colourCase(name);
+        expect(c.batchCount, name).toBe(4);
+        expect(c.shapes, name).toEqual(c.cpuShapes);
+        expect(c.colors.mismatchTotal, name).toBe(0);
+      }
+    });
+
+    it("asking for colour does not move a transform byte, and not asking carries none", () => {
+      for (const c of scenario.colour.cases) {
+        expect(c.transformsUnmoved, c.name).toBe(true);
+        expect(c.plainCarriesNoColour, c.name).toBe(true);
+        expect(c.deterministic, c.name).toBe(true);
+      }
+    });
+
+    it("a coloured batch retains TWO buffers, and both come back", () => {
+      // The colour buffer is a second allocation behind a second handle.
+      // Nothing in the library frees it, so a binding that retained only
+      // `transforms` would leak one buffer per batch per cook.
+      for (const c of scenario.colour.cases) {
+        expect(c.holding.detachedBuffers, c.name).toBeGreaterThanOrEqual(c.batchCount * 2);
+        expect(c.afterDispose, c.name).toMatchObject({
+          detachedBuffers: 0,
+          detachedBytes: 0,
+          inFlight: 0,
+        });
+      }
+      expect(colourCase("rgba").holding.detachedBuffers).toBe(5); // 2 + 2 + 1 uncoloured
+      expect(colourCase("grouped").holding.detachedBuffers).toBe(20); // (4*2) * 2 + 4
+    });
+
+    // -----------------------------------------------------------------
+    // 7. the spawner's budget, on the device path
+
+    it("an over-budget spawn raises THE message — the identical string, not a device copy", () => {
+      const b = scenario.budget;
+      expect(b.max).toBe(1_048_576);
+      // Character for character. The device path raises no diagnostic of
+      // its own: it rejects the run with PlanFail, the members cook
+      // per-node, and the CPU spawner says the one thing there is to say.
+      // Two wordings of one refusal is the failure this pins.
+      expect(b.deviceMessage).toBe(b.cpuMessage);
+      expect(b.deviceMessage).toMatch(/would spawn 1048577 instances/);
+      expect(b.deviceMessage).toMatch(/over the budget of 1048576/);
+      expect(b.deviceMessage).toMatch(/64 MiB of matrices/);
+      expect(b.deviceMessage).toMatch(/per COOK, not per world/);
+      // And nothing device-flavoured leaked into it.
+      expect(b.deviceMessage).not.toMatch(/resident run|GpuFieldEvaluator|PlanFail/);
+      // The rejection allocates nothing and strands nothing.
+      expect(b.detachedAfterFailure).toMatchObject({
+        detachedBuffers: 0,
+        detachedBytes: 0,
+        inFlight: 0,
+      });
+    });
+
+    it("the budget's own boundary still fuses: 2^20 instances, 64 MiB retained", () => {
+      // A ceiling that also refused the largest legal cook would be a
+      // silent off-by-one, so the boundary is composed for real.
+      const b = scenario.budget;
+      expect(b.limitDeviceResident).toBe(true);
+      expect(b.limitStats.residentRuns).toBe(1);
+      expect(b.limitStats.fallbacks).toEqual({});
+      expect(b.limitShape).toEqual([["tree", 1_048_576, 1_048_576 * 64]]);
+      expect(b.afterLimit).toMatchObject({ detachedBuffers: 0, detachedBytes: 0 });
     });
 
     it("without the opt-in the spawner is exactly what it was in v0.6.1", () => {
