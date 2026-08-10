@@ -1,6 +1,6 @@
 {
   "project": "pcg-ts",
-  "updated": "2026-08-10 03:11",
+  "updated": "2026-08-10 07:52",
   "currentPhase": 45,
   "phases": [
     {
@@ -237,6 +237,11 @@
       "id": 45,
       "title": "Per-instance colour and a spawn budget",
       "state": "done"
+    },
+    {
+      "id": 46,
+      "title": "The preview harness, and the forest demo",
+      "state": "pending"
     }
   ],
   "tests": {

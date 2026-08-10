@@ -1755,6 +1755,83 @@ Measured maxima: `02-forest` 9000 (24000 at the slider's max),
   paths; existing graphs and demos are unchanged when colour is not
   asked for.
 
+## Phase 46 — The preview harness, and the forest demo
+
+**Planned 2026-08-10.** The demo is the caller phase 45 was built for,
+and it is being built by a specific method that dictates the tooling:
+fan out sub-agents per component in parallel, have a SEPARATE sub-agent
+act as a harsh critic, and loop — where the verification signal is a
+blind side-by-side visual comparison against reference imagery.
+
+**That makes rendered pixels the feedback signal, not a convenience.**
+Without them the loop degenerates into structure-checking, which `pcg
+render` already does. This is why the harness comes first.
+
+### The harness (`npm run preview <graph.json>`)
+
+A repo script, NOT a CLI subcommand. The reason is settled: three.js
+WebGPU needs a real browser — headless was unreliable enough that `npm
+run capture` runs headed — so a `pcg preview` would drag Chromium behind
+the published `bin`, leaving either a ~150 MB download on every install
+or a command that appears in `--help` and throws for everyone but the
+maintainer. That second shape is the shipped-restriction failure this
+project keeps avoiding.
+
+Most of the hard parts already exist in `scripts/capture-demos.mjs` and
+are trusted: headed browser, readiness gates keyed on a real
+cook-complete signal rather than a sleep, stable-frame detection by
+comparing successive screenshots. What is missing is rendering an
+ARBITRARY graph rather than screenshotting a fixed demo.
+
+- **Fixed camera poses, held constant across iterations**, or the
+  comparison is meaningless. Include GROUND-LEVEL — the reference
+  comparison is first-person, and a forest judged from above is a
+  different artefact: density that reads well top-down can be a bald
+  patch at eye height.
+- Deterministic output, so two renders differ only where the graph does.
+
+### Two workflow rules the method needs and does not state
+
+- **Hold the seed.** A seed change moves every tree, so an iteration
+  that changes a parameter AND the seed produces two incomparable
+  images. One variable per cycle.
+- **Require falsifiable critiques.** "Until utterly perfect" has no
+  stopping rule and will loop forever on taste. A finding must name a
+  checkable defect — "the understory shows a visible grid at 8 m
+  spacing", "trunks intersect the rock at (x, z)", "canopy density is
+  uniform where it should cluster". "Doesn't feel AAA" does not
+  terminate.
+
+### Where this library ends, stated up front
+
+The quality bar this method chases is dominated by lighting, materials,
+tone mapping and post — none of which pcg-ts touches. `castShadow` and
+`receiveShadow` are never set anywhere in `src/three`. **Expect most
+critique cycles to land on demo and renderer work rather than on
+generation.** pcg-ts's contribution is placement realism: density,
+slope, declutter, species mix, clearings, trails.
+
+### Inputs the demo needs from the user
+
+An asset table beside the glTF files. Derived fields (bounding box,
+triangle count, submesh and material count, alpha-tested) should come
+from a load-time pass, not be hand-typed. What needs a human:
+`assetId` (the exact string `assetAttr` emits and `AssetMap` keys on —
+`toInstancedMeshes` throws on an unknown id), type and species labels,
+intended real-world height (`write/random-scale`'s min/max are
+MULTIPLIERS, so they only mean something relative to authored size),
+hero-versus-filler, and above all the **pivot convention**: origin at
+the base or at the centroid. A centroid-origin asset sinks halfway into
+the ground under `place/drop-to-surface` and reads as a placement bug in
+the graph rather than an asset-metadata problem, which makes it
+expensive to diagnose.
+
+Settled: the demo is **agent-authored with GENERATED terrain**
+(`meshPrimitive` plane + displacement), which keeps the whole graph
+JSON-authorable and in scope for the corpus, the skills and `pcg run`.
+An imported terrain mesh would force `dataInput`, which carries nothing
+through serialization.
+
 ## Backlog — earned, waiting for a caller
 
 Distinct from "Stretch" below, and the distinction is the point: Stretch
