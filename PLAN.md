@@ -1832,6 +1832,146 @@ JSON-authorable and in scope for the corpus, the skills and `pcg run`.
 An imported terrain mesh would force `dataInput`, which carries nothing
 through serialization.
 
+### The harness SHIPPED 2026-08-10 (the demo has not)
+
+**The survey changed the phase, as every re-survey this cycle has.** The
+plan assumed the harness was a scripting job on top of an adequate
+library. It was not: **`pcg-ts/three` could draw points and instances and
+nothing else.** No converter existed for a cooked triangle mesh or for a
+polyline, so `meshPrimitive`, `pointsToPath`, `pathResample`,
+`connectPoints` and `createPolyline` all shipped output that this package
+had no way to display — the generated terrain the demo is built on
+included. Rendering an arbitrary graph is not possible without that, so
+the phase started in the library.
+
+- **`toBufferGeometry`** (the `poly` primitives, indexed triangles, fan
+  triangulation for n-gons) and **`toLineGeometry`** (the `polyline`
+  primitives, one segment per consecutive vertex pair). Both return a
+  bare `BufferGeometry` and pick no material; `toPointsObject` remains
+  the one helper that does, and it is named for the debugging it is for.
+- **Compaction is in ascending point order, and that is load-bearing.**
+  The first version compacted in first-referenced order, which is simpler
+  and wrong in a way only the round-trip test caught: a `BoxGeometry`
+  came back with a valid PERMUTATION of its index buffer. Ascending order
+  costs one extra pass and makes `toBufferGeometry(fromBufferGeometry(x))`
+  return x's index buffer unchanged. It compacts at all so unreferenced
+  points and non-finite positions cannot reach the buffer — either makes
+  `computeBoundingSphere()` produce a NaN radius, which silently disables
+  culling for the whole object.
+- **`primitiveTypeCounts`** on the core, replacing an inline loop in the
+  CLI's summary. A caller has to ask what a geometry IS before deciding
+  what to do with it, and the alternative is every consumer knowing that
+  `primtype` is a string attribute on the primitive domain.
+
+The harness itself: **`npm run preview <graph.json>`**, writing one JPEG
+per view plus a JSON sidecar. It reuses `scripts/capture-demos.mjs`'s
+machinery through a new `scripts/lib/capture.mjs` — the rAF liveness
+counter, the stable-frame loop with both acceptance criteria, the JPEG
+encoder and its blank guard, the browser flags. That extraction was
+verified by running both criteria against the trusted path (demo 01
+accepts on `pixel`, demo 07 on `stats-plateau`) rather than by reading.
+
+Five things learned by running it, each of which would otherwise be
+rediscovered:
+
+- **The demo-calibrated blank guard false-fails on correct renders.** Its
+  floors are luma sd 3 and 48 distinct 5-bit colour buckets, which cost a
+  demo screenshot nothing — they carry UI chrome, text and gradients. A
+  sparse cloud seen from directly above measures sd ~2; a flat mesh at
+  eye height is sky over surface and measures ELEVEN buckets. Both are
+  exactly right. The floors are now parameters: capture keeps its own,
+  preview uses sd 1 / 4 buckets, which still sits far above a lost WebGL
+  context (one flat colour, sd ~0, one or two buckets).
+- **A stand-in ground plane is not decoration.** Placement is
+  unjudgeable against a void — nothing catches a shadow, so a tree
+  standing on the ground and one hovering above it render identically —
+  and the standard `color` point attribute defaults to WHITE, so an
+  ordinary cloud over a bright sky is very nearly invisible. It is
+  skipped when the graph made its own mesh, which for a terrain graph is
+  the real ground.
+- **One shared unknown-asset fallback makes a species mix invisible.**
+  `assetAttr` lets a graph name assets no viewer registered, and the
+  corpus does exactly that; drawing every unknown id as the same magenta
+  box erases the only thing such a graph is about. Each unknown id now
+  gets its own shape and hue from `hashString`, so the same id looks the
+  same on every run and machine. The sidecar reports counts PER ASSET for
+  the same reason — "400 instances" cannot show you that a species is
+  missing.
+- **The camera is held by quantizing the extent**, not by pinning it.
+  Auto-framing re-frames on every edit and destroys the comparison the
+  whole method rests on; a fixed extent has to be guessed before the
+  graph exists. Snapping to a ~25% ladder means ordinary tuning leaves
+  the pose bit-identical, and when the frame does move the harness says
+  the images are not comparable and prints the `--extent` that would have
+  held it. It reports a seed change the same way.
+- **`preview/` in `.gitignore` also matches `examples/preview/`.** git
+  patterns without a leading slash match at any depth, so the unanchored
+  rule silently excluded the preview PAGE — source that must be
+  committed — from `git status`. Anchored to `/preview/`.
+
+**What independent verification changed.** Two verifiers ran against the
+first working version — one mutation-testing the converters, one
+reviewing the harness and re-deriving the capture refactor. Between them
+they found the phase's worst bug and several of its quieter ones:
+
+- **The ground camera stood UNDERGROUND on any terrain with relief.**
+  Eye height was measured from the bounding box's minimum, which on
+  displaced terrain is the lowest point of the whole map: on
+  `pipeline-3-lots` the camera sat ~5 m below the surface and
+  photographed sky through the back of a front-facing mesh. It rendered
+  confidently and was completely wrong — the exact failure this tool
+  exists to prevent. The eye now raycasts down onto the surfaces
+  (instanced meshes excluded: standing on top of a tree is not eye
+  level).
+- **Quantizing the extent does not hold the camera by itself.** Every
+  pose is also anchored to the centre and the ground, both raw off the
+  bounding box, so tuning a density moved all three cameras with the
+  extent bucket unchanged and nothing reported. Those are snapped to a
+  power-of-two fraction of the extent too. And comparability is now
+  judged on the POSES, not on the extent that derives them — `--eye` and
+  `--size` moved the camera while the tool announced the run was
+  comparable.
+- **A refusal was being swallowed.** The page offers both exporters to an
+  untagged geometry and at most one can be right, so it caught their
+  throws — but the same `catch` covered the TAGGED case, where the only
+  refusals left are a missing `P` and "every primitive touches a
+  non-finite position". A NaN blowup upstream degraded silently to a
+  point cloud. It now swallows only when guessing, and reports the rest.
+- **`vertexColors` was asked of the wrong object.** The page set it from
+  "the graph has an attribute named `color`", but the exporter emits that
+  buffer only for an f32 column of at least three components — so any
+  other shape gave `vertexColors: true` with no buffer, and three renders
+  the whole mesh solid black. Ask the exported geometry.
+- **A mutant that survived was a guard nothing tested.** `selects`
+  consults only the tag, so a primitive tagged `poly` with two vertices
+  reaches the walk; without the vertex-count guard `slotsPerPrimitive`
+  returns a negative, the buffer is under-allocated, and the surplus
+  writes fall off the end of a typed array SILENTLY — a truncated index
+  buffer rather than an error. Now pinned. The same pass found the
+  refusal message for that case said there were no `poly` primitives and
+  then said how many `poly` primitives there were.
+- Framing needed a 10% margin at the quantizer: the hero pose is a fixed
+  offset rather than a frustum fit, so content filling its whole extent
+  bucket clipped its near corner. Asking for a bucket 10% larger moves
+  only the graphs above ~91% fill, which is exactly the band that
+  clipped.
+
+Also carried: the stall detector now needs TWO consecutive non-advancing
+samples, because samples are ~300 ms apart and a scene slower than that
+was being diagnosed as a stalled tab. And `--debug` regained the pixel
+column the extraction had dropped — on the galaxy it prints "pixels
+CHANGED, signal moved: none" on every sample, which is the plateau
+criterion's whole reason for existing made visible.
+
+The page lives at `examples/preview/` so it can import `../shared/` and
+run under the existing vite DEV server (no build per iteration, and
+aliases that always exercise current `src/`). It is deliberately absent
+from `build.rollupOptions.input`, so `npm run examples:pages` never
+deploys it: it renders nothing without a job, and a blank tenth page
+beside nine working demos is worse than no page.
+
+**Still to do: the forest demo**, which waits on the asset table above.
+
 ## Backlog — earned, waiting for a caller
 
 Distinct from "Stretch" below, and the distinction is the point: Stretch

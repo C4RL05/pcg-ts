@@ -3,7 +3,14 @@
  * only module of the package allowed to import `three` (an optional peer
  * dependency); the core stays renderer-agnostic.
  */
-export { fromBufferGeometry, fromCurve } from "./convert.js";
+export {
+  fromBufferGeometry,
+  fromCurve,
+  toBufferGeometry,
+  toLineGeometry,
+  type ToBufferGeometryOptions,
+  type ToThreeGeometryOptions,
+} from "./convert.js";
 export { toInstancedMeshes, type AssetMap, type InstancedAsset } from "./instanced.js";
 export { toPointsObject, type ToPointsOptions } from "./debug.js";
 export {

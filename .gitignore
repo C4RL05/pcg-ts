@@ -6,6 +6,16 @@ coverage/
 .DS_Store
 .test-results.json
 
+# `npm run preview` output: iteration frames plus their sidecar. These are
+# working artefacts of an authoring loop, not documentation assets — the
+# committed screenshots are the nine under docs/, produced by `npm run
+# capture`.
+#
+# Anchored with a leading slash. Unanchored, this pattern matches a
+# directory named `preview` at ANY depth, which silently swallows the
+# preview PAGE at examples/preview/ — source that must be committed.
+/preview/
+
 # Scratch git worktrees used to isolate concurrent agents. These are real
 # repositories, so an unqualified `git add -A` commits one as a gitlink and
 # the next clone gets a dangling submodule reference it cannot resolve.

@@ -81,6 +81,29 @@ export class Geometry {
 }
 
 /**
+ * How many primitives carry each {@link PRIMTYPE_ATTR} value — `{}` for a
+ * geometry with no primitives, and also for one whose topology was set
+ * through {@link Geometry.setTopology} directly, which stamps no tag.
+ *
+ * This is how a caller asks what a geometry IS before deciding what to do
+ * with it: a mesh (`poly`) goes to a surface sampler or a triangle
+ * renderer, a path or edge network (`polyline`) to an arc-length sampler
+ * or a line renderer, and neither is inferable from point count. Reading
+ * `primtype` by hand means knowing it is a string attribute on the
+ * primitive domain, which is exactly the internal detail this saves.
+ */
+export function primitiveTypeCounts(geo: Geometry): Record<string, number> {
+  const attr = geo.attrs.primitive.get(PRIMTYPE_ATTR);
+  const counts: Record<string, number> = {};
+  if (attr === undefined || attr.type !== "string") return counts;
+  for (let p = 0; p < geo.primitiveCount; p++) {
+    const value = attr.getString(p);
+    counts[value] = (counts[value] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
  * Build a triangle-mesh Geometry from flat xyz positions and indexed
  * triangles (three point indices per triangle). Creates the `P` point
  * attribute and one `poly` primitive per triangle.

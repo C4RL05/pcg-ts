@@ -15,6 +15,11 @@
  * script got wrong, encoded so the next person does not have to rediscover
  * them.
  *
+ * The machinery this shares with `npm run preview` — the rAF counter, the
+ * stable-frame loop, the JPEG encoder and its blank guard, the browser
+ * flags — lives in `scripts/lib/capture.mjs`. What stays here is what is
+ * specific to these nine pages.
+ *
  * ---------------------------------------------------------------------------
  * THE READINESS SIGNAL (the important part)
  *
@@ -76,13 +81,17 @@
  */
 
 import { createServer } from "node:http";
-import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
-import puppeteer from "puppeteer";
+import {
+  encodeJpeg,
+  frameCounterScript,
+  launchCaptureBrowser,
+  waitForStableFrame,
+} from "./lib/capture.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "node_modules", ".cache", "pcg-capture");
@@ -222,15 +231,12 @@ const VOLATILE = new Set([
   "device dispatches",
 ]);
 
-/** Injected into every demo page before its own scripts run. */
+/**
+ * Injected into every demo page before its own scripts run, alongside the
+ * shared frame counter. Everything here reads the demo's OWN
+ * instrumentation — no demo-side hooks were added for this script.
+ */
 function pageInstrumentation() {
-  window.__capFrames = 0;
-  const tick = () => {
-    window.__capFrames++;
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-
   const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
 
   window.__capStats = () => {
@@ -326,9 +332,6 @@ function serve(dir) {
   });
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const sha = (buf) => createHash("sha1").update(buf).digest("hex");
-
 /**
  * Poll a predicate inside the page. The predicate is shipped as source and
  * rebuilt there, so it can read the DOM directly; it receives the demo's stats
@@ -364,124 +367,29 @@ function clipFor([w, h]) {
 }
 
 /**
- * Wait until the frame stops changing. Returns the criterion that was met.
- * Throws if neither criterion is reached, or if rendering stalls.
+ * The demos' own non-volatile counters, as a string the shared stabilizer
+ * can compare. This is the "stats-plateau" signal: readouts that tick
+ * every frame or every 500 ms are filtered out first, or nothing would
+ * ever hold still.
  */
-async function waitForStableFrame(page, css, animated, log) {
-  const clip = clipFor(css);
-  const started = Date.now();
-  let lastPixels = null;
-  let lastStats = null;
-  let lastFrames = -1;
-  let pixelRun = 0;
-  let statsRun = 0;
-
-  for (let i = 0; i < 60; i++) {
-    const shot = await page.screenshot({ type: "png", clip, optimizeForSpeed: true });
-    const frames = await page.evaluate(() => window.__capFrames);
-    const stats = await page.evaluate(() => {
-      const s = window.__capStats();
-      return JSON.stringify(s);
-    });
-
-    if (lastFrames >= 0 && frames <= lastFrames) {
-      throw new Error(
-        "rendering stalled — requestAnimationFrame stopped firing " +
-          "(occluded or backgrounded window, or the demo's loop died)",
-      );
-    }
-    lastFrames = frames;
-
-    const pixels = sha(shot);
-    const stable = JSON.stringify(
+function demoSignal(page) {
+  return async () => {
+    const stats = await page.evaluate(() => JSON.stringify(window.__capStats()));
+    return JSON.stringify(
       Object.fromEntries(Object.entries(JSON.parse(stats)).filter(([k]) => !VOLATILE.has(k))),
     );
-
-    if (DEBUG && lastStats !== null) {
-      const before = JSON.parse(lastStats);
-      const after = JSON.parse(stable);
-      const moved = Object.keys(after).filter((k) => before[k] !== after[k]);
-      log(
-        `    [debug] pixels ${pixels === lastPixels ? "same" : "CHANGED"}` +
-          `  stats moved: ${moved.length ? moved.map((k) => `${k}=${after[k]}`).join(", ") : "none"}`,
-      );
-    }
-
-    pixelRun = pixels === lastPixels ? pixelRun + 1 : 0;
-    statsRun = stable === lastStats ? statsRun + 1 : 0;
-    lastPixels = pixels;
-    lastStats = stable;
-
-    const elapsed = Date.now() - started;
-    if (!animated && pixelRun >= 2) return { criterion: "pixel", elapsed };
-    if (elapsed > 6000 && statsRun >= 6) {
-      if (!animated) log(`    note: no pixel-identical run; accepted on a counter plateau`);
-      return { criterion: "stats-plateau", elapsed };
-    }
-    await sleep(250);
-  }
-  throw new Error(
-    `never reached a stable frame (${Math.round((Date.now() - started) / 1000)}s): ` +
-      "the picture kept changing and the demo's counters never plateaued",
-  );
+  };
 }
 
-/**
- * Resample a raw 2x screenshot to its committed size, JPEG-encode it, and
- * measure it. Runs in a spare page so the demo page is never competing.
- */
-async function encode(encPage, pngBase64, [w, h], quality) {
-  const result = await encPage.evaluate(
-    async (b64, width, height, q) => {
-      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bin], { type: "image/png" }));
-      const canvas = new OffscreenCanvas(width, height);
-      const ctx = canvas.getContext("2d");
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(bitmap, 0, 0, width, height);
-      bitmap.close();
-
-      // Blank/broken detection: a flat rectangle has ~no luma variance and
-      // almost no distinct colours. Darkness alone is not suspicious here —
-      // the galaxy demo is mostly black by design.
-      const data = ctx.getImageData(0, 0, width, height).data;
-      let sum = 0;
-      let sumSq = 0;
-      let n = 0;
-      const colours = new Set();
-      for (let i = 0; i < data.length; i += 4 * 13) {
-        const l = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-        sum += l;
-        sumSq += l * l;
-        n++;
-        colours.add(((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3));
-      }
-      const mean = sum / n;
-      const sd = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
-
-      const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: q });
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      let s = "";
-      const CHUNK = 0x8000;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-      }
-      return { jpeg: btoa(s), mean, sd, colours: colours.size };
-    },
-    pngBase64,
-    w,
-    h,
-    quality,
-  );
-
-  if (result.sd < 3 || result.colours < 48) {
-    throw new Error(
-      `render looks blank (luma sd ${result.sd.toFixed(1)}, ${result.colours} distinct colours) — ` +
-        "refusing to write a flat rectangle",
-    );
-  }
-  return { buffer: Buffer.from(result.jpeg, "base64"), ...result };
+/** Stabilize this demo at the given CSS size. */
+function settleAt(page, css, animated, log) {
+  return waitForStableFrame(page, {
+    clip: clipFor(css),
+    signal: demoSignal(page),
+    acceptPixels: !animated,
+    debug: DEBUG,
+    log,
+  });
 }
 
 async function captureDemo(browser, encPage, origin, demo, log) {
@@ -504,6 +412,7 @@ async function captureDemo(browser, encPage, origin, demo, log) {
     page.on("requestfailed", (r) => {
       if (!ignorable(r.url())) errors.push(`request failed: ${r.url()}`);
     });
+    await page.evaluateOnNewDocument(frameCounterScript);
     await page.evaluateOnNewDocument(pageInstrumentation);
     await page.setViewport({ width: size.css[0], height: size.css[1], deviceScaleFactor: 2 });
     await page.bringToFront();
@@ -531,7 +440,7 @@ async function captureDemo(browser, encPage, origin, demo, log) {
     await waitForPredicate(page, demo.ready, 180_000);
 
     // (3) a stable frame
-    const stability = await waitForStableFrame(page, size.css, demo.animated === true, log);
+    const stability = await settleAt(page, size.css, demo.animated === true, log);
 
     const stats = await page.evaluate(() => window.__capStats());
     const rawManual = await page.screenshot({ type: "png", optimizeForSpeed: true });
@@ -542,7 +451,7 @@ async function captureDemo(browser, encPage, origin, demo, log) {
     let rawThumb = rawManual;
     if (size.css[0] !== THUMB.css[0] || size.css[1] !== THUMB.css[1]) {
       await page.setViewport({ width: THUMB.css[0], height: THUMB.css[1], deviceScaleFactor: 2 });
-      await waitForStableFrame(page, THUMB.css, demo.animated === true, log);
+      await settleAt(page, THUMB.css, demo.animated === true, log);
       rawThumb = await page.screenshot({ type: "png", optimizeForSpeed: true });
     }
 
@@ -552,8 +461,8 @@ async function captureDemo(browser, encPage, origin, demo, log) {
 
     await page.close();
 
-    const manual = await encode(encPage, rawManual.toString("base64"), size.out, MANUAL_QUALITY);
-    const thumb = await encode(encPage, rawThumb.toString("base64"), THUMB.out, THUMB.quality);
+    const manual = await encodeJpeg(encPage, rawManual.toString("base64"), size.out, MANUAL_QUALITY);
+    const thumb = await encodeJpeg(encPage, rawThumb.toString("base64"), THUMB.out, THUMB.quality);
 
     await writeFile(join(MANUAL_DIR, `${demo.id}.jpg`), manual.buffer);
     await writeFile(join(THUMB_DIR, `${demo.id}.jpg`), thumb.buffer);
@@ -594,21 +503,7 @@ async function main() {
   const origin = `http://127.0.0.1:${port}`;
   log(`serving ${OUT_DIR} at ${origin}`);
 
-  const browser = await puppeteer.launch({
-    headless: false,
-    defaultViewport: null,
-    args: [
-      "--window-position=0,0",
-      "--window-size=1520,1000",
-      "--hide-scrollbars",
-      // Chrome stops painting a window it thinks is covered, and throttles
-      // renderers it thinks are hidden. Both produce empty captures.
-      "--disable-features=CalculateNativeWinOcclusion",
-      "--disable-backgrounding-occluded-windows",
-      "--disable-renderer-backgrounding",
-      "--disable-background-timer-throttling",
-    ],
-  });
+  const browser = await launchCaptureBrowser();
 
   // A parked page used only to resample and JPEG-encode. It never renders, so
   // it is safe for it to sit in the background while a demo is in front.

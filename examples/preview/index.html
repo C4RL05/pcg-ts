@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>pcg-ts preview</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #8fb4d9;
+      }
+      #err {
+        position: fixed;
+        inset: 0;
+        display: none;
+        padding: 4vh 6vw;
+        font: 14px/1.6 ui-monospace, "JetBrains Mono", Menlo, monospace;
+        color: #ffd7d7;
+        background: #2a1215;
+        white-space: pre-wrap;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="err"></pre>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

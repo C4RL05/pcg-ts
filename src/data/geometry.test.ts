@@ -4,6 +4,7 @@ import {
   PRIMTYPE_ATTR,
   createPolyline,
   createTriangleMesh,
+  primitiveTypeCounts,
   setPolylineTopology,
 } from "./geometry.js";
 
@@ -181,5 +182,34 @@ describe("setPolylineTopology", () => {
     expect(() => setPolylineTopology(cloud(), [0, 1, 2], [1], [3])).toThrow(
       /spans vertices \[1, 4\) but only 3 vertex indices were given/,
     );
+  });
+});
+
+describe("primitiveTypeCounts", () => {
+  it("counts each primtype value", () => {
+    expect(primitiveTypeCounts(createTriangleMesh(QUAD_POSITIONS, QUAD_TRIANGLES))).toEqual({
+      poly: 2,
+    });
+    expect(primitiveTypeCounts(createPolyline([0, 0, 0, 1, 0, 0]))).toEqual({ polyline: 1 });
+  });
+
+  it("returns an empty record for untagged topology and for no primitives at all", () => {
+    const geo = new Geometry();
+    geo.attrs.point.add("P", "f32", 3);
+    geo.attrs.point.resize(3);
+    expect(primitiveTypeCounts(geo)).toEqual({});
+
+    // setTopology is public and stamps no tag, so a geometry can carry
+    // primitives and still report nothing about their kind.
+    geo.setTopology(Uint32Array.of(0, 1, 2), Uint32Array.of(0), Uint32Array.of(3));
+    expect(geo.primitiveCount).toBe(1);
+    expect(geo.attrs.primitive.get(PRIMTYPE_ATTR)).toBeUndefined();
+    expect(primitiveTypeCounts(geo)).toEqual({});
+  });
+
+  it("counts a mixed geometry per value rather than collapsing to a kind", () => {
+    const geo = createTriangleMesh(QUAD_POSITIONS, QUAD_TRIANGLES);
+    geo.attrs.primitive.require(PRIMTYPE_ATTR).setString(1, "polyline");
+    expect(primitiveTypeCounts(geo)).toEqual({ poly: 1, polyline: 1 });
   });
 });

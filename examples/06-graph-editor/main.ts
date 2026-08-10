@@ -20,7 +20,7 @@ import {
 import { createFpsMeter } from "../shared/fps.js";
 import { createOverlay } from "../shared/overlay.js";
 import { createScene } from "../shared/scene.js";
-import { createBaseAssets, resolveAssets } from "./assets.js";
+import { createPlaceholderAssets, resolveAssets } from "../shared/assets.js";
 import { EditorController, type CookStatus } from "./controller.js";
 import Editor from "./Editor.svelte";
 
@@ -37,7 +37,7 @@ ground.position.y = -0.02;
 scene.add(ground);
 scene.add(new GridHelper(30, 30, 0x2c3a52, 0x1e2939));
 
-const assets = createBaseAssets();
+const assets = createPlaceholderAssets();
 const outputGroup = new Group();
 scene.add(outputGroup);
 let disposables: { obj: Object3D; dispose(): void }[] = [];

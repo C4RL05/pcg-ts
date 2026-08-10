@@ -11,6 +11,7 @@ import {
   Attribute,
   createPointCloud,
   createPolyline,
+  createTriangleMesh,
   makeGeometryItem,
   makeInstancesItem,
 } from "../index.js";
@@ -146,6 +147,16 @@ describe("geometrySummary", () => {
     const summary = geometrySummary(createPolyline(Float32Array.of(0, 0, 0, 1, 0, 1)));
     expect(summary.primitives).toBe(1);
     expect(summary.primTypes).toEqual({ polyline: 1 });
+  });
+
+  it("omits primTypes for a primtype column over zero primitives", () => {
+    // What a primitive filter that kept nothing produces: the column
+    // survives the resize, so the geometry is tagged and empty at once.
+    // `primitives: 0` already says this; an empty record would be a
+    // second spelling of the same fact in the --json payload.
+    const empty = geometrySummary(createTriangleMesh(Float32Array.of(0, 0, 0), []));
+    expect(empty.primitives).toBe(0);
+    expect(Object.hasOwn(empty, "primTypes")).toBe(false);
   });
 });
 

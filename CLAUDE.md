@@ -46,7 +46,14 @@ Three foundations, each carried through the whole library:
 
 - `npm test` — vitest run (unit + integration)
 - `npm run build` — build the library (subpath exports: `.`, `./three`)
+- `npm run check` — `tsc --noEmit`; needs a current `dist/` first, because
+  `examples/` import `pcg-ts` by package name
 - `npm run examples` — vite dev server for the examples
+- `npm run preview -- <graph.json>` — render any serialized graph from
+  fixed camera poses (hero / ground / top) into `preview/`, with a JSON
+  sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a
+  repo script rather than a `pcg` subcommand
+- `npm run capture` — regenerate the committed demo screenshots
 - `npm run status` — regenerate `status.html` from `status.json`
 
 ## Conventions

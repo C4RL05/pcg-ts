@@ -12,8 +12,8 @@ import {
   type DataValue,
   type Domain,
   type Geometry,
-  PRIMTYPE_ATTR,
   isDeviceResidentInstances,
+  primitiveTypeCounts,
 } from "../index.js";
 import { fmtStat, plural } from "./format.js";
 
@@ -103,7 +103,14 @@ export interface GeometrySummary {
    * printed as if it were complete is worse than no box at all.
    */
   readonly boundsExcluded?: number;
-  /** Primitive counts per `primtype` value, when the attribute exists. */
+  /**
+   * Primitive counts per `primtype` value. Absent when the geometry
+   * carries no such column, when the column is not a string, and — the
+   * case worth stating — when the column exists over ZERO primitives,
+   * which a primitive filter that kept nothing produces. `primitives: 0`
+   * already says that, so an empty record would only be a second way to
+   * say it.
+   */
   readonly primTypes?: Readonly<Record<string, number>>;
 }
 
@@ -142,15 +149,10 @@ export function geometrySummary(geo: Geometry): GeometrySummary {
       }
     }
   }
-  const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
-  if (primType !== undefined && primType.type === "string") {
-    const counts: Record<string, number> = {};
-    for (let i = 0; i < geo.primitiveCount; i++) {
-      const value = primType.getString(i);
-      counts[value] = (counts[value] ?? 0) + 1;
-    }
-    summary.primTypes = counts;
-  }
+  // Absent rather than empty when the geometry carries no tag, so the
+  // rendered summary keeps saying nothing instead of saying "none".
+  const primTypes = primitiveTypeCounts(geo);
+  if (Object.keys(primTypes).length > 0) summary.primTypes = primTypes;
   return summary;
 }
 
