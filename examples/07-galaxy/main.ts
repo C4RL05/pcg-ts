@@ -38,6 +38,7 @@ import {
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createFpsMeter } from "../shared/fps.js";
+import { NARROW_MEDIA_QUERY } from "../shared/mobile.js";
 import { createOverlay } from "../shared/overlay.js";
 import { FINE_CELL, deriveGalaxy, makeHaloLevel, makeStarLevel, type GalaxyForm } from "./galaxy.js";
 import { generateSystem, type SystemSpec } from "./system.js";
@@ -612,11 +613,33 @@ function systemTick(dt: number): void {
 
 // -- star card -------------------------------------------------------------
 
+/* The card's layout lives in a stylesheet (not style.cssText) so the narrow-
+   screen media query below can override it; inline declarations would win
+   over any media query. Only display stays inline, because showCard and
+   exitSystem toggle card.style.display directly. */
+const cardStyle = document.createElement("style");
+cardStyle.textContent = `
+.pcg07-card {
+  position: fixed; top: 16px; right: 16px; width: 300px; z-index: 10;
+  background: rgba(15,20,30,0.92); border: 1px solid #223047; border-radius: 10px;
+  padding: 16px 18px; color: #dbe4f0; font: 13px/1.5 ui-monospace, monospace;
+}
+/* On narrow screens the shared overlay owns the bottom edge, so the card
+   spans the top instead and scrolls internally rather than growing past a
+   phone-height viewport. */
+@media ${NARROW_MEDIA_QUERY} {
+  .pcg07-card {
+    left: 12px; right: 12px; width: auto;
+    top: calc(12px + env(safe-area-inset-top));
+    max-height: 40vh; max-height: 40dvh; overflow-y: auto;
+  }
+}
+`;
+document.head.appendChild(cardStyle);
+
 const card = document.createElement("div");
-card.style.cssText =
-  "position:fixed;top:16px;right:16px;width:300px;display:none;z-index:10;" +
-  "background:rgba(15,20,30,0.92);border:1px solid #223047;border-radius:10px;" +
-  "padding:16px 18px;color:#dbe4f0;font:13px/1.5 ui-monospace,monospace;";
+card.className = "pcg07-card";
+card.style.display = "none";
 document.body.appendChild(card);
 
 function showCard(spec: SystemSpec, dist: number): void {

@@ -119,6 +119,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { MeshStandardNodeMaterial, WebGPURenderer } from "three/webgpu";
 import { createFpsMeter } from "../shared/fps.js";
+import { NARROW_MEDIA_QUERY } from "../shared/mobile.js";
 import { createOverlay } from "../shared/overlay.js";
 import { makeRecooker } from "../shared/recook.js";
 
@@ -643,6 +644,17 @@ style.textContent = `
 .pcg02-hud .pcg02-keys { color: #6f7c8f; }
 .pcg02-hud.pcg02-warn { border-color: #7a4a2a; color: #ffd8b4; }
 .pcg02-hud.pcg02-warn b { color: #ffb066; }
+/* On narrow screens the shared overlay becomes a bottom sheet, so the HUD
+   moves to the top edge the overlay vacated instead of colliding with it.
+   The desktop max-width reserved 360px for the left panel; there is no side
+   panel here, so the HUD may span the viewport minus margins. */
+@media ${NARROW_MEDIA_QUERY} {
+  .pcg02-hud {
+    bottom: auto;
+    top: calc(12px + env(safe-area-inset-top));
+    max-width: calc(100vw - 24px);
+  }
+}
 `;
 document.head.appendChild(style);
 

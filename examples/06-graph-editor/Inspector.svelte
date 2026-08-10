@@ -14,6 +14,7 @@
     controller,
     node,
     paramsRev,
+    open = false,
     onPlain,
     onFieldApply,
     onDelete,
@@ -21,6 +22,12 @@
     controller: EditorController;
     node: NodeView | null;
     paramsRev: number;
+    /**
+     * On narrow screens the inspector is a slide-over drawer and `open`
+     * (driven by the editor's "params" tab) slides it in from the right.
+     * At desktop widths it has no styled effect.
+     */
+    open?: boolean;
     onPlain: (id: string, key: string, value: unknown) => void;
     onFieldApply: (id: string, key: string, text: string) => string | null;
     onDelete: (id: string) => void;
@@ -99,7 +106,7 @@
   }
 </script>
 
-<div class="inspector">
+<div class="inspector" class:open>
   {#if node === null}
     <div class="hint">select a node to edit its params — pins connect left (in) to right (out)</div>
   {:else}
@@ -278,5 +285,29 @@
     border-radius: 5px;
     font: 11px system-ui, sans-serif;
     cursor: pointer;
+  }
+  @media (max-width: 700px) {
+    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
+    .inspector {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      z-index: 15;
+      width: min(70vw, 240px);
+      box-sizing: border-box;
+      background: rgba(13, 17, 23, 0.97);
+      transform: translateX(100%);
+      /* Hidden when closed so the off-screen drawer can't take focus or
+         intercept hit-testing. */
+      visibility: hidden;
+      transition:
+        transform 0.2s ease,
+        visibility 0.2s;
+    }
+    .inspector.open {
+      transform: none;
+      visibility: visible;
+    }
   }
 </style>

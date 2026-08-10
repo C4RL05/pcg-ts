@@ -14,6 +14,7 @@
   import Modal from "./Modal.svelte";
   import Palette from "./Palette.svelte";
   import Toolbar from "./Toolbar.svelte";
+  import { narrowScreen } from "../shared/mobile.js";
   import type { CookStatus, EditorController } from "./controller.js";
   import { topoLayout } from "./layout.js";
   import {
@@ -38,6 +39,44 @@
 
   const groups = paletteGroups();
   const selectedNode = $derived(model.nodes.find((n) => n.id === selectedId) ?? null);
+
+  /**
+   * Narrow-screen treatment (viewing-grade, not a mobile editor): the dock
+   * becomes a full-width bottom sheet collapsed to the toolbar's first
+   * row, and the palette/inspector columns become slide-over drawers so
+   * the node canvas gets the full width. All of it is media-query-gated —
+   * at desktop widths these flags exist but style nothing. Entering the
+   * narrow range collapses the dock, leaving it clears the collapse, so
+   * rotating a phone never strands the dock in a stale state.
+   */
+  let dockCollapsed = $state(narrowScreen().matches);
+  let paletteOpen = $state(false);
+  let inspectorOpen = $state(false);
+
+  $effect(() => {
+    const mql = narrowScreen();
+    const onChange = (e: MediaQueryListEvent): void => {
+      dockCollapsed = e.matches;
+      // Leaving the narrow range also resets the drawers, so one left open
+      // does not silently reappear the next time the range is entered.
+      if (!e.matches) {
+        paletteOpen = false;
+        inspectorOpen = false;
+      }
+    };
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  });
+
+  // Opening one drawer closes the other so they never stack over the canvas.
+  function togglePalette(): void {
+    paletteOpen = !paletteOpen;
+    if (paletteOpen) inspectorOpen = false;
+  }
+  function toggleInspector(): void {
+    inspectorOpen = !inspectorOpen;
+    if (inspectorOpen) paletteOpen = false;
+  }
 
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   function showToast(text: string, kind: "error" | "info" = "info"): void {
@@ -91,6 +130,10 @@
       outputs: res.outputs,
     });
     selectedId = id;
+    // On narrow screens the palette is a drawer covering the canvas; close
+    // it after a successful add so the new node is visible. No-op on
+    // desktop, where `open` has no styled effect.
+    paletteOpen = false;
   }
 
   function moveNode(id: string, x: number, y: number): void {
@@ -191,14 +234,16 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="editor">
+<div class="editor" class:collapsed={dockCollapsed}>
   <Toolbar
     seed={model.seed}
     {status}
+    collapsed={dockCollapsed}
     onSeed={setSeed}
     onExport={openExport}
     onImport={() => (modal = "import")}
     onLayout={relayout}
+    onToggle={() => (dockCollapsed = !dockCollapsed)}
   />
   {#if status && status.errors.length > 0}
     <div class="cook-errors">
@@ -208,7 +253,7 @@
     </div>
   {/if}
   <div class="body">
-    <Palette {groups} onAdd={addNode} />
+    <Palette {groups} onAdd={addNode} open={paletteOpen} />
     <div class="canvas-wrap">
       <Canvas
         {model}
@@ -224,10 +269,31 @@
       {controller}
       node={selectedNode}
       {paramsRev}
+      open={inspectorOpen}
       onPlain={onPlainParam}
       onFieldApply={onFieldParam}
       onDelete={deleteNode}
     />
+    <!-- Narrow-screen drawer toggles, floating over the canvas edges.
+         display: none outside the media query. The labels "nodes" and
+         "params" are chosen to dodge the capture tooling's
+         click-button-by-substring needles. -->
+    <button
+      class="drawer-tab left"
+      aria-label="toggle the node palette drawer"
+      aria-expanded={paletteOpen}
+      onclick={togglePalette}
+    >
+      nodes
+    </button>
+    <button
+      class="drawer-tab right"
+      aria-label="toggle the param inspector drawer"
+      aria-expanded={inspectorOpen}
+      onclick={toggleInspector}
+    >
+      params
+    </button>
   </div>
   {#if toast}
     <div class="toast {toast.kind}">{toast.text}</div>
@@ -274,6 +340,9 @@
     display: flex;
     flex: 1;
     min-height: 0;
+    /* Anchors the narrow-screen drawers and their toggle tabs below the
+       toolbar. Visually inert at desktop widths. */
+    position: relative;
   }
   .canvas-wrap {
     flex: 1;
@@ -319,5 +388,60 @@
     color: #ffb9c2;
     font-family: ui-monospace, monospace;
     font-size: 11px;
+  }
+  /* Desktop: the drawer tabs do not exist. This rule must precede the media
+     block so the narrow-screen rule wins the cascade at equal specificity. */
+  .drawer-tab {
+    display: none;
+  }
+  @media (max-width: 700px) {
+    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
+    .editor {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border-radius: 12px 12px 0 0;
+      height: 50vh;
+      height: 50dvh; /* dvh where supported; vh fallback above */
+      min-height: 0;
+      transition: height 0.25s ease;
+    }
+    /* Collapse clips to the toolbar's first row via height + overflow,
+       never {#if}: the capture tooling's readiness probe scrapes
+       `.toolbar .status` and needs it rendered either way. */
+    .editor.collapsed {
+      height: 44px;
+      overflow: hidden;
+    }
+    .drawer-tab {
+      display: block;
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      /* Above the drawers (z-index 15) so a second tap can close them. */
+      z-index: 16;
+      padding: 10px 6px;
+      background: rgba(29, 42, 63, 0.92);
+      color: #9ecbff;
+      border: 1px solid #33405a;
+      font: 11px system-ui, sans-serif;
+      cursor: pointer;
+    }
+    .drawer-tab.left {
+      left: 0;
+      border-left: none;
+      border-radius: 0 6px 6px 0;
+    }
+    .drawer-tab.right {
+      right: 0;
+      border-right: none;
+      border-radius: 6px 0 0 6px;
+    }
+    /* The collapsed dock is a title bar only; the tabs would otherwise
+       poke into it, because .body still has a few clipped pixels and the
+       tabs anchor to its vertical center. */
+    .editor.collapsed .drawer-tab {
+      display: none;
+    }
   }
 </style>

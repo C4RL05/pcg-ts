@@ -3,8 +3,12 @@
  * panel with a title, plain-DOM controls (seed input, sliders, selects,
  * checkboxes), live stat lines, and collapsible <pre> sections. Per
  * project convention this stays plain DOM — anything richer (see the
- * fields playground) uses Svelte.
+ * fields playground) uses Svelte. Below NARROW_MEDIA_QUERY the panel
+ * becomes a full-width bottom sheet, collapsed to its title bar by
+ * default; tapping the title expands it to a scrollable ~50dvh sheet.
  */
+
+import { NARROW_MEDIA_QUERY, narrowScreen } from "./mobile.js";
 
 let stylesInjected = false;
 
@@ -54,6 +58,37 @@ function injectStyles(): void {
   color: #9ecbff; font: 11px/1.5 ui-monospace, monospace; white-space: pre;
 }
 .pcg-overlay .pcg-note { margin-top: 8px; color: #6f7c8f; font-size: 11px; }
+/* The chevron only exists for the bottom-sheet layout below; on desktop the
+   title is not a toggle, so the glyph stays hidden. */
+.pcg-overlay .pcg-chevron { display: none; }
+/* Below the shared breakpoint the panel becomes a full-width bottom sheet so
+   the 3D content keeps the screen. Collapse is a max-height clip rather than
+   display:none: the capture tooling scrapes .pcg-stat textContent for
+   readiness, so the stat rows must stay in the DOM. */
+@media ${NARROW_MEDIA_QUERY} {
+  .pcg-overlay {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: auto; z-index: 12;
+    max-height: 50vh;   /* fallback for pre-dvh browsers */
+    max-height: 50dvh;
+    border-radius: 12px 12px 0 0;
+    border-width: 1px 0 0 0;
+    padding: 0 16px calc(10px + env(safe-area-inset-bottom));
+    transition: max-height 0.25s ease;
+    overscroll-behavior: contain;
+  }
+  .pcg-overlay h1 {
+    position: sticky; top: 0; z-index: 1;
+    margin: 0 -16px;                    /* full-bleed tap target */
+    padding: 13px 16px;
+    line-height: 22px;                  /* bar height: 22 + 2*13 = 48px */
+    background: rgba(13, 17, 23, 0.96); /* content scrolls under the sticky bar */
+    cursor: pointer;
+  }
+  .pcg-overlay .pcg-chevron { display: inline-block; float: right; color: #8b98ab; transition: transform 0.2s; }
+  .pcg-overlay.pcg-collapsed { max-height: calc(48px + env(safe-area-inset-bottom)); overflow: hidden; }
+  .pcg-overlay.pcg-collapsed .pcg-chevron { transform: rotate(180deg); }
+}
 `;
   document.head.appendChild(style);
 }
@@ -89,7 +124,43 @@ export function createOverlay(opts: { title: string; info?: string }): Overlay {
   el.className = "pcg-overlay";
   const h1 = document.createElement("h1");
   h1.textContent = opts.title;
+  /* The chevron lives inside the h1 (never as a sibling): some examples
+     locate the controls container via .pcg-stats.previousElementSibling, so
+     no element may come between the controls div and the stats div. */
+  const chevron = document.createElement("span");
+  chevron.className = "pcg-chevron";
+  chevron.textContent = "▾";
+  h1.appendChild(chevron);
   el.appendChild(h1);
+
+  /* The title doubles as the bottom-sheet collapse toggle on narrow screens.
+     The listeners are always attached; outside the media query the
+     pcg-collapsed class has no visual effect, so desktop is unaffected. */
+  h1.setAttribute("role", "button");
+  h1.tabIndex = 0;
+  const syncExpanded = (): void => {
+    h1.setAttribute("aria-expanded", String(!el.classList.contains("pcg-collapsed")));
+  };
+  const toggle = (): void => {
+    el.classList.toggle("pcg-collapsed");
+    syncExpanded();
+  };
+  h1.addEventListener("click", toggle);
+  h1.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      toggle();
+    }
+  });
+  const narrow = narrowScreen();
+  if (narrow.matches) el.classList.add("pcg-collapsed");
+  /* Entering narrow collapses the sheet; leaving it clears the class so a
+     rotation or resize never strands the desktop panel clipped. */
+  narrow.addEventListener("change", (ev) => {
+    el.classList.toggle("pcg-collapsed", ev.matches);
+    syncExpanded();
+  });
+  syncExpanded();
   if (opts.info) {
     const p = document.createElement("p");
     p.className = "pcg-info";

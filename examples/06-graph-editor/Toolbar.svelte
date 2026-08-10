@@ -5,17 +5,23 @@
   let {
     seed,
     status,
+    collapsed,
     onSeed,
     onExport,
     onImport,
     onLayout,
+    onToggle,
   }: {
     seed: number;
     status: CookStatus | null;
+    /** Whether the dock is collapsed to this bar (narrow screens only). */
+    collapsed: boolean;
     onSeed: (seed: number) => void;
     onExport: () => void;
     onImport: () => void;
     onLayout: () => void;
+    /** Collapse/expand the dock; wired to the title on narrow screens. */
+    onToggle: () => void;
   } = $props();
 
   const statusText = $derived(
@@ -30,10 +36,28 @@
     const v = Math.floor((e.currentTarget as HTMLInputElement).valueAsNumber);
     if (Number.isFinite(v)) onSeed(v >>> 0);
   }
+
+  function onTitleKeydown(e: KeyboardEvent): void {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onToggle();
+    }
+  }
 </script>
 
-<div class="toolbar">
-  <span class="title">06 · graph editor</span>
+<div class="toolbar" class:collapsed>
+  <!-- The title doubles as the dock's collapse toggle on narrow screens.
+       Deliberately not a <button>: the capture tooling clicks buttons by
+       substring, and the chevron is display: none at desktop widths so
+       the bar stays pixel-identical there. -->
+  <span
+    class="title"
+    role="button"
+    tabindex="0"
+    aria-expanded={!collapsed}
+    onclick={onToggle}
+    onkeydown={onTitleKeydown}
+  >06 · graph editor<span class="chevron" class:flip={collapsed}>▾</span></span>
   <label>
     seed
     <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
@@ -98,5 +122,39 @@
   }
   .status.err {
     color: #ff9ca8;
+  }
+  /* Desktop: the chevron does not exist. This rule must precede the media
+     block so the narrow-screen rule wins the cascade at equal specificity. */
+  .chevron {
+    display: none;
+  }
+  @media (max-width: 700px) {
+    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
+    .toolbar {
+      /* Seed, buttons, and status wrap to fit a phone width. */
+      flex-wrap: wrap;
+    }
+    /* Collapsed, the bar shows only the title — clipping the wrapped rows
+       at the dock's 44px would leave a sliver of the second row visible.
+       display: none keeps the elements in the DOM, so the capture
+       tooling's readiness probe (`.toolbar .status` textContent) still
+       reads; captures also never run at narrow widths. */
+    .toolbar.collapsed label,
+    .toolbar.collapsed button,
+    .toolbar.collapsed .status {
+      display: none;
+    }
+    .title {
+      cursor: pointer;
+    }
+    .chevron {
+      display: inline-block;
+      margin-left: 6px;
+      color: #8b98ab;
+      transition: transform 0.2s;
+    }
+    .chevron.flip {
+      transform: rotate(180deg);
+    }
   }
 </style>

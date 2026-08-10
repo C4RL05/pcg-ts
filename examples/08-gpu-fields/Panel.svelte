@@ -7,6 +7,7 @@
    * hashes, `CookStats.gpu` counters including the resident-run ones,
    * and the CPU-vs-GPU deviation readout).
    */
+  import { narrowScreen } from "../shared/mobile.js";
   import {
     COOK_PATHS,
     COUNT_OPTIONS,
@@ -29,6 +30,37 @@
   bridge.publish = (v: PanelView) => {
     view = v;
   };
+
+  /**
+   * On narrow screens the fixed side panel becomes a full-width bottom
+   * sheet, collapsed to its 48px title bar by default so the 3D content
+   * keeps the screen. The same treatment is duplicated in
+   * 05-fields-playground/Panel.svelte on purpose — two copies are cheaper
+   * than a shared component's indirection, but a third panel should
+   * trigger extraction. Entering the narrow range collapses, leaving it
+   * clears the collapse, so rotating a phone never strands the panel in a
+   * stale state.
+   */
+  let collapsed = $state(narrowScreen().matches);
+
+  $effect(() => {
+    const mql = narrowScreen();
+    const onChange = (e: MediaQueryListEvent): void => {
+      collapsed = e.matches;
+    };
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  });
+
+  function toggleCollapsed(): void {
+    collapsed = !collapsed;
+  }
+  function onTitleKeydown(e: KeyboardEvent): void {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      collapsed = !collapsed;
+    }
+  }
 
   function fmtCount(n: number): string {
     return n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1_000}k`;
@@ -84,8 +116,23 @@
   const tightMiB = TIGHT_RESIDENT_BYTES / (1024 * 1024);
 </script>
 
-<div class="panel">
-  <h1>08 · gpu fields</h1>
+<div class="panel" class:collapsed>
+  <!-- The title doubles as the bottom sheet's collapse toggle on narrow
+       screens; it stays a plain heading visually on desktop. Deliberately
+       not a <button>: the capture tooling clicks buttons by substring
+       (e.g. "cook all paths"), and the readiness probe scrapes
+       `.panel .stat` — which is why collapse clips via CSS instead of
+       {#if}-ing any content away. -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+  <h1
+    role="button"
+    tabindex="0"
+    aria-expanded={!collapsed}
+    onclick={toggleCollapsed}
+    onkeydown={onTitleKeydown}
+  >
+    08 · gpu fields<span class="chevron">▾</span>
+  </h1>
   <p class="info">
     <code>setAttribute(wobble) → jitterPoints → transformPoints → setAttribute(tint) →
     setAttribute(psize)</code> over a million-point scatter. All five are fusable node kinds in a
@@ -473,5 +520,54 @@
   }
   .note b {
     color: #8b98ab;
+  }
+  /* Desktop: the chevron does not exist. This rule must precede the media
+     block so the narrow-screen rule wins the cascade at equal specificity. */
+  .chevron {
+    display: none;
+  }
+  @media (max-width: 700px) {
+    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
+    .panel {
+      top: auto;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: auto;
+      z-index: 12;
+      max-height: 50vh;
+      max-height: 50dvh; /* dvh where supported; vh fallback above */
+      border-radius: 12px 12px 0 0;
+      border-width: 1px 0 0 0;
+      padding: 0 16px calc(10px + env(safe-area-inset-bottom));
+      transition: max-height 0.25s ease;
+      overscroll-behavior: contain;
+    }
+    .panel h1 {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      margin: 0 -16px;
+      padding: 13px 16px;
+      line-height: 22px; /* 13 + 22 + 13 = the 48px collapsed bar */
+      background: rgba(13, 17, 23, 0.96);
+      cursor: pointer;
+    }
+    .chevron {
+      display: inline-block;
+      float: right;
+      color: #8b98ab;
+      transition: transform 0.2s;
+    }
+    /* Collapse clips via max-height + overflow, never {#if}: the capture
+       tooling's readiness probe scrapes `.panel .stat` textContent and
+       needs the stats rendered whether the sheet is open or shut. */
+    .panel.collapsed {
+      max-height: calc(48px + env(safe-area-inset-bottom));
+      overflow: hidden;
+    }
+    .panel.collapsed .chevron {
+      transform: rotate(180deg);
+    }
   }
 </style>

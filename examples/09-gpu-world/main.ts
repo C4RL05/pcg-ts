@@ -53,6 +53,7 @@ import {
 } from "three";
 import { MeshStandardNodeMaterial, WebGPURenderer } from "three/webgpu";
 import { createFpsMeter } from "../shared/fps.js";
+import { NARROW_MEDIA_QUERY } from "../shared/mobile.js";
 import { createOverlay } from "../shared/overlay.js";
 import { FINE_CELL, MAX_SCALE_TALL, MAX_SCALE_WIDE, makeSpireLevel } from "./levels.js";
 
@@ -518,6 +519,17 @@ style.textContent = `
 .pcg09-hud .pcg09-keys { color: #6f7c8f; }
 .pcg09-hud.pcg09-warn { border-color: #7a4a2a; color: #ffd8b4; }
 .pcg09-hud.pcg09-warn b { color: #ffb066; }
+/* On narrow screens the shared overlay becomes a bottom sheet, so the HUD
+   moves to the top edge the overlay vacated instead of colliding with it.
+   The desktop max-width reserved 360px for the left panel; there is no side
+   panel here, so the HUD may span the viewport minus margins. */
+@media ${NARROW_MEDIA_QUERY} {
+  .pcg09-hud {
+    bottom: auto;
+    top: calc(12px + env(safe-area-inset-top));
+    max-width: calc(100vw - 24px);
+  }
+}
 `;
 document.head.appendChild(style);
 
