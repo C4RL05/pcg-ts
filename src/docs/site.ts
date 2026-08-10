@@ -349,9 +349,39 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
   },
   {
     page: "manual.html",
-    label: "field fns (ch. 12 code comment)",
+    label: "node types (ch. 8 `pcg nodes` transcript)",
+    source: "listNodeTypes().length",
+    pattern: /([\d,]+) node types, by category/g,
+  },
+  {
+    page: "manual.html",
+    label: "named primitives (ch. 8 prose)",
+    source: "docs/primitives.json entries",
+    pattern: /([\d,]+) named primitives ship with the library/g,
+  },
+  {
+    page: "manual.html",
+    label: "listSubgraphs().length (ch. 8 code comment)",
+    source: "docs/primitives.json entries",
+    pattern: /all\.length;[^<]*<span class="c">\/\/ ([\d,]+)<\/span>/g,
+  },
+  {
+    page: "manual.html",
+    label: "corpus graphs (ch. 8 catalog table)",
+    source: "docs/examples.json entries",
+    pattern: /([\d,]+) graphs under <code>examples\/graphs\/<\/code>/g,
+  },
+  {
+    page: "manual.html",
+    label: "corpus graphs (ch. 14 prose)",
+    source: "docs/examples.json entries",
+    pattern: /indexes ([\d,]+) corpus graphs/g,
+  },
+  {
+    page: "manual.html",
+    label: "field fns (ch. 8 `pcg fields` transcript)",
     source: "listFieldFns().length",
-    pattern: /\/\/ ([\d,]+) field fns/g,
+    pattern: /([\d,]+) field fns/g,
   },
   {
     page: "manual.html",

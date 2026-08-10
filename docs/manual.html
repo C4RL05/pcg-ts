@@ -866,13 +866,14 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
   <div class="part-banner" id="part-2">
     <p class="num">Part II</p>
     <h2>Driving the library as an agent</h2>
-    <p>For an LLM or a program: everything needed to author, cook, inspect and edit a graph without reading the source.</p>
+    <p>For an LLM or a program: everything needed to author, cook, inspect and edit a graph without reading the source — the runtime registries, the JSON format, the <code>pcg</code> CLI, and the loop that ties them together.</p>
   </div>
 
   <section id="discovery" class="first-of-part">
     <p class="eyebrow">Chapter 8</p>
     <h2>Runtime capability discovery</h2>
     <p class="lead">The registry is the truth. Node types are not a list in the documentation that the code happens to match — the documentation is generated from the registry, so anything you can read in <code>docs/nodes.md</code> you can also ask for at runtime.</p>
+    <p>There are three registries, and an agent should know all three before emitting anything: <code>listNodeTypes()</code> for node types, <code>listFieldFns()</code> for the field-expression vocabulary, and <code>listSubgraphs()</code> for the named primitives — the ready-made recipes a graph can reference by name instead of rebuilding. Each has a generated twin on disk and a <code>pcg</code> subcommand that prints the same thing from a shell.</p>
 
     <h3>listNodeTypes()</h3>
     <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 38 types in the standard library, all categorized.</p>
@@ -919,7 +920,7 @@ types.length;                                <span class="c">// 38</span>
         <tr><td><code>source</code></td><td><code>pointGrid</code>, <code>pointLine</code>, <code>pointScatterInBounds</code>, <code>pointScatterInWorld</code>, <code>meshPrimitive</code></td></tr>
         <tr><td><code>sampler</code></td><td><code>surfaceSample</code>, <code>splineSample</code>, <code>volumeSample</code>, <code>pathResample</code></td></tr>
         <tr><td><code>point op</code></td><td><code>pointsToPath</code>, <code>connectPoints</code>, <code>transformPoints</code>, <code>jitterPoints</code>, <code>copyToPoints</code>, <code>mergePoints</code>, <code>orientAlongVector</code>, <code>setBounds</code></td></tr>
-        <tr><td><code>filter</code></td><td><code>filterByDensity</code>, <code>filterByBounds</code>, <code>filterByAttribute</code>, <code>filterByExpression</code>, <code>selfPrune</code>, <code>projectToPlane</code></td></tr>
+        <tr><td><code>filter</code></td><td><code>filterByDensity</code>, <code>filterByBounds</code>, <code>filterByAttribute</code>, <code>filterByExpression</code>, <code>filterPrimitivesByBounds</code>, <code>selfPrune</code>, <code>projectToPlane</code></td></tr>
         <tr><td><code>attribute</code></td><td><code>writeTangents</code>, <code>pointNeighborhood</code>, <code>sampleNearestPoint</code>, <code>setAttribute</code>, <code>promoteAttribute</code>, <code>transferAttribute</code>, <code>attributeReduce</code>, <code>attributeRemap</code>, <code>removeAttribute</code>, <code>partitionByAttribute</code></td></tr>
         <tr><td><code>value</code></td><td><code>valueConstant</code></td></tr>
         <tr><td><code>spawn</code></td><td><code>spawnInstances</code></td></tr>
@@ -951,11 +952,52 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
  <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>, <span class="s">"valueNoise"</span>,
  <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
-    <h3>docs/nodes.json as an offline catalog</h3>
-    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a> is a plain top-level JSON array of the same 38 entries in the same shape <code>listNodeTypes()</code> returns. It ships inside the npm package, and it is regenerated from the registry (<code>npm run docs:nodes</code>), never hand-edited. The prose version, <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a>, is generated from the same source.</p>
+    <h3>listSubgraphs()</h3>
+    <p>The third registry, and the one an agent gains most from: the <strong>named primitives</strong>. A primitive is a registered subgraph — a tested recipe with exposed params — that a graph references by name rather than rebuilding out of node types. 34 named primitives ship with the library, and <code>listSubgraphs()</code> returns them as <code>{ name, subgraph, hash, meta }</code>: the canonical payload, its content hash, and a <code>meta</code> block whose <code>title</code> and <code>description</code> say what the recipe is for and how its knobs behave.</p>
+    <p>One thing about it is unlike the other two registries and will otherwise cost you an afternoon. <strong>Primitives register on import of their own subpath</strong>, so <code>listSubgraphs()</code> returns an empty array until something imports it:</p>
+    <div class="codeblock"><pre><code><span class="k">import</span> <span class="s">"pcg-ts/primitives"</span>;              <span class="c">// registers the whole catalog, as a side effect</span>
+<span class="k">import</span> { listSubgraphs } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> all = <span class="n">listSubgraphs</span>();
+all.length;                            <span class="c">// 34</span>
+all.<span class="n">find</span>(s => s.name === <span class="s">"fill/scatter-even"</span>).hash;   <span class="c">// "3a0d277f9d3b1840"</span></code></pre></div>
+    <p>That is a cost boundary rather than an oversight: <code>import "pcg-ts"</code> keeps costing nothing, and the catalog sits behind a subpath nobody pays for unless they want it. The <code>pcg</code> CLI imports it for you, which is why <code>pcg run fill/scatter-even</code> works on a clean install. Names are <code>&lt;family&gt;/&lt;kebab-case&gt;</code> over a closed set of seven families — <code>shape</code>, <code>fill</code>, <code>transform</code>, <code>compose</code>, <code>filter</code>, <code>place</code>, <code>write</code> — and the family is a promise about the pin shape. Node types are camelCase with no separator, so a name containing <code>/</code> can never be mistaken for a <code>type</code>. Chapter 9 covers how a graph references one.</p>
+
+    <h3>The same catalogs, from a shell</h3>
+    <p>Two of those registries are also commands. The <code>pcg</code> CLI is the library's other front door — <code>npx pcg …</code> when the package is installed, <code>node bin/pcg.mjs …</code> from a clone — and its discovery commands read the same registries this chapter has been calling:</p>
+    <div class="codeblock"><pre><code><span class="c"># the whole registry, grouped by category</span>
+pcg nodes                      <span class="c"># -> "38 node types, by category"</span>
+
+<span class="c"># one type: its pins and its full param table, with ranges, enums and</span>
+<span class="c"># which params accept a field</span>
+pcg nodes pointGrid
+
+<span class="c"># the field vocabulary, and one fn's allowed keys</span>
+pcg fields                     <span class="c"># -> "42 field fns"</span>
+pcg fields randomField         <span class="c"># -> usage: { fn: "randomField", key?: 0 | "salt" }</span>
+
+<span class="c"># every command takes --json and prints the machine-readable report instead</span>
+pcg nodes pointGrid --json</code></pre></div>
+    <p>Two properties make this usable as a tool rather than as a convenience. <strong>Every command emits both renderings</strong> — a text one and, under <code>--json</code>, a structured one built from the same data — so the human reading a terminal and the agent parsing stdout are looking at one run and cannot disagree about it. And <strong>the exit codes are scriptable</strong>: <code>0</code> did what was asked, <code>1</code> a named thing does not exist or the run failed, <code>2</code> the command line itself was wrong. The distinction in the last two is the useful part — a graph that does not cook and a flag you spelled wrong are different problems and never share a code.</p>
+    <p>The primitives have no discovery subcommand of their own — they are read from <code>docs/primitives.md</code>, and <code>pcg run &lt;name&gt;</code> lists every registered name when it does not recognize one. Cooking a primitive standalone is <code>pcg run</code> too: <code>pcg run shape/disc --param count=400 --param size=24,0,24</code> synthesizes a one-node wrapper around it and needs no graph file at all, which makes it the fastest way to find out what a primitive actually produces before committing a <code>ref</code> to a document.</p>
+    <p>The rule the <code>graph-authoring</code> skill states, and the reason these commands exist: <strong>never write a param name from memory.</strong> <code>pcg nodes &lt;type&gt;</code> costs a second and the deserializer will reject the guess anyway.</p>
+
+    <h3>The generated catalogs, offline</h3>
+    <p>If you would rather load a catalog than call into the library — for planning, for prompt context, for validating candidate graphs before a runtime exists — each registry has a generated file beside it. All of them ship inside the npm package, all are regenerated from the code (<code>npm run docs</code>), and none is ever hand-edited.</p>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th>Prose</th><th>Machine-readable</th><th>What it indexes</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 38 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">docs/examples.json</a></td><td>The example corpus: 37 graphs under <code>examples/graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>The corpus is worth a sentence of its own, because it is the cheapest way to start. Every file in it teaches exactly one thing, carries a <code>meta</code> block saying which thing, and <strong>cooks from JSON alone</strong> — none uses <code>dataInput</code>, whose items never survive serialization — so any entry can be copied, cooked and modified with nothing but the CLI. Reading one graph near your goal and copying its shape beats composing from schemas.</p>
     <div class="note">
       <span class="tag">Discovery checklist</span>
-      <p>Before emitting a graph: confirm the type exists (<code>hasNodeType</code>), confirm each parameter name is in <code>params</code>, confirm enum values against <code>enum</code> and numbers against <code>min</code>/<code>max</code>, confirm a field spec is only used where <code>acceptsField</code> is true, and confirm pin names against <code>inputs</code>/<code>outputs</code>. Every one of those checks the deserializer will also make — but making them first turns a thrown error into a corrected emission.</p>
+      <p>Before emitting a graph: check whether a <strong>primitive</strong> already does it (<code>docs/primitives.md</code> opens with a one-line summary of each) — referencing one is a single node and it arrives tested. Then, for anything you are wiring by hand: confirm the type exists (<code>hasNodeType</code>, or <code>pcg nodes &lt;type&gt;</code>), confirm each parameter name is in <code>params</code>, confirm enum values against <code>enum</code> and numbers against <code>min</code>/<code>max</code>, confirm a field spec is only used where <code>acceptsField</code> is true, and confirm pin names against <code>inputs</code>/<code>outputs</code>. Every one of those checks the deserializer will also make — but making them first turns a thrown error into a corrected emission.</p>
     </div>
   </section>
 
@@ -968,10 +1010,18 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
     <dl class="defs">
       <dt>formatVersion</dt><dd>Always <code>1</code>.</dd>
       <dt>seed</dt><dd>Number. The graph seed; every node seed derives from it.</dd>
-      <dt>nodes</dt><dd>Array of <code>{ id, type, params }</code>. <code>id</code> is yours to choose and is what every error message and every introspection read will call the node. Omitted parameters take their schema defaults. A <code>subgraph</code> node additionally carries <code>subgraph: { graph, inputs, outputs }</code> — the inner graph recursively in this same format, plus the exposed pin mappings.</dd>
+      <dt>meta</dt><dd>Optional <code>{ title, description, tags }</code>. The only place descriptive text belongs — there is no comment or annotation key. It is excluded from the content hash and does not bump the graph version, so retitling a graph cannot invalidate a cache.</dd>
+      <dt>nodes</dt><dd>Array of <code>{ id, type, params }</code>. <code>id</code> is yours to choose and is what every error message and every introspection read will call the node. Omitted parameters take their schema defaults. A <code>subgraph</code> node additionally carries <em>either</em> a <code>subgraph: { graph, inputs, outputs, params }</code> payload — the inner graph recursively in this same format, plus the exposed pin mappings and param declarations — <em>or</em> a <code>ref</code> naming a registered primitive. The two are mutually exclusive, and no other node type may carry either.</dd>
       <dt>connections</dt><dd>Array of <code>{ from: [nodeId, outputPin], to: [nodeId, inputPin] }</code>. Order matters on <code>multi</code> inputs: it is part of determinism.</dd>
       <dt>outputs</dt><dd>Array of <code>{ id, pin, name }</code>. <code>name</code> becomes the key in <code>result.outputs</code>.</dd>
     </dl>
+
+    <p><strong>The format is closed, at every object position.</strong> An unrecognized key is an error, not something quietly ignored — inside the graph object, a node, a <code>subgraph</code> payload, a <code>ref</code>, a connection, a declared output, an exposed-pin or exposed-param declaration. This matters more to a generator than to a person, because the near-miss is the dangerous case: <code>"refs"</code> for <code>"ref"</code> under a lenient reader would have cooked as an ordinary subgraph node and reported success. The consequence is deliberate and permanent — a future format field arrives with a <code>formatVersion</code> bump, never by riding along unnoticed:</p>
+    <div class="codeblock"><pre><code>deserializeGraph: unknown key <span class="s">"notes"</span>; valid keys: formatVersion, seed, meta,
+nodes, connections, outputs. The format is closed — an unrecognized key is a typo,
+not an extension, so a future field arrives with a formatVersion bump. There is no
+annotation key: descriptive text belongs in the graph's <span class="s">"meta"</span> block
+({ title, description, tags })</code></pre></div>
 
     <h3>A complete working example</h3>
     <p>This document deserializes, cooks, and round-trips as written. It scatters two thousand points over a hundred-unit square, writes a normalized four-octave fBm into the <code>density</code> attribute, keeps points probabilistically against that density, and spawns the survivors.</p>
@@ -1011,14 +1061,14 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
 <span class="k">const</span> graph = <span class="n">deserializeGraph</span>(doc);   <span class="c">// validates everything, names any fault</span>
 <span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
 
-<span class="n">firstGeometry</span>(result.outputs.points).pointCount;   <span class="c">// 1008</span>
-result.stats;                                      <span class="c">// { cooked: 4, cached: 0, elapsedMs: 13.6 }</span>
+<span class="n">firstGeometry</span>(result.outputs.points).pointCount;   <span class="c">// 1038</span>
+result.stats;                                      <span class="c">// { cooked: 4, cached: 0, elapsedMs: 13.8 }</span>
 
 <span class="k">const</span> batch = result.outputs.instances
   .<span class="n">find</span>(i => i.kind === <span class="s">"instances"</span>).batches[<span class="n">0</span>];
 batch.assetId;               <span class="c">// "rock"</span>
-batch.count;                 <span class="c">// 1008</span>
-batch.transforms.length;     <span class="c">// 16128  (16 floats per instance, column-major)</span></code></pre></div>
+batch.count;                 <span class="c">// 1038</span>
+batch.transforms.length;     <span class="c">// 16608  (16 floats per instance, column-major)</span></code></pre></div>
 
     <h3>What round-tripping actually guarantees</h3>
     <p>This is the one place where an imprecise mental model causes real trouble, so be precise. <code>serializeGraph(deserializeGraph(doc))</code> is <strong>not</strong> byte-identical to <code>doc</code>. Deserialization applies schema defaults, and serialization emits the full parameter set — so a node you wrote as <code>{ "count": 500 }</code> comes back as <code>{ "count": 500, "boundsMin": [0,0,0], "boundsMax": [1,1,1], "seed": 0 }</code>.</p>
@@ -1029,8 +1079,30 @@ batch.transforms.length;     <span class="c">// 16128  (16 floats per instance, 
     </ul>
     <p>So the correct diffing strategy for an agent is: normalise both sides through one serialize before comparing. Comparing your hand-written emission against a serialize output will report differences that are not differences.</p>
 
+    <h3>Referencing a primitive instead of writing one</h3>
+    <p>Everything above assumes you are wiring node types by hand. Often you should not be. A <code>subgraph</code> node can name a registered primitive instead of carrying a payload, and then the whole recipe is <strong>one node</strong>:</p>
+    <div class="codeblock"><pre><code>{ <span class="s">"id"</span>: <span class="s">"ground"</span>, <span class="s">"type"</span>: <span class="s">"subgraph"</span>,
+  <span class="s">"params"</span>: { <span class="s">"count"</span>: <span class="n">400</span>, <span class="s">"size"</span>: [<span class="n">24</span>, <span class="n">0</span>, <span class="n">24</span>] },
+  <span class="s">"ref"</span>: { <span class="s">"name"</span>: <span class="s">"shape/disc"</span> } }</code></pre></div>
+    <p>For a generator this is the highest-leverage line in the chapter, and the reason is arithmetic rather than aesthetic: a reference is three keys where the equivalent embedded payload is an entire nested graph, so every primitive that fits collapses a passage of JSON you would otherwise have to emit correctly, and it arrives already tested with defaults tuned to produce something on the first cook. <code>params</code> on a <code>ref</code> node are the primitive's <strong>exposed</strong> params — not the inner nodes' params — and naming one that is not exposed is refused with the exposed set listed. <code>docs/primitives.md</code> and <code>pcg run &lt;name&gt;</code> are the two ways to find out what a given primitive exposes. Reach past a primitive to raw node types when it does not offer the pin or the param you need, not because a flat graph looks cleaner; it does not, it just loses the tests.</p>
+    <p>What is registered is a <em>recipe</em>, never a live graph, and every reference materializes a fresh copy through the same path an embedded payload takes. So the contract is the one you want: <strong>a reference and an embedded copy of the same recipe cook byte-identically</strong> — same output bytes, same cache decisions. Resolution happens once, at load, which also means a name must be registered before any graph referencing it is deserialized. Import <code>pcg-ts/primitives</code> first (chapter 8); the CLI does it for you.</p>
+
+    <h4>Why the hash is optional</h4>
+    <p><code>ref</code> takes an optional second key, <code>hash</code> — the primitive's content hash, as returned by <code>listSubgraphs()</code> or <code>registerSubgraph</code>. Including it is a decision, not decoration, and the two modes are the whole design:</p>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th><code>hash</code></th><th>What you are asking for</th><th>When the primitive changes</th></tr></thead>
+      <tbody>
+        <tr><td>absent (the default)</td><td>"give me the library's current <code>shape/disc</code>"</td><td>Resolves and cooks. No friction — the graph gets the improvement.</td></tr>
+        <tr><td>present</td><td>"cook exactly what I authored against"</td><td><strong>Hard error</strong>, naming both hashes.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>Optional is the load-bearing word, and it points both ways. Mandatory pinning would mean every improvement to a shipped primitive breaks every saved graph that references it — so a name-only reference is the default precisely so that it can upgrade freely. But there is no third mode, because <strong>neither mode warns</strong>. A library warning lands in a CI log or a console that the agent driving the graph never reads, which makes "resolve and warn" operationally indistinguishable from resolving silently — exactly the class of failure the determinism pillar exists to exclude. So: omit the hash while a graph is being developed against a library you control, add it when the graph is an artifact whose output you have recorded and intend to reproduce.</p>
+    <p>One boundary is worth knowing before you rely on a pin. The hash, and the byte-identity between the by-name and embedded forms, hold <strong>within one build</strong>. Across library versions neither can, by any design — an embedded payload freezes the defaults of the build that wrote it while a registry entry is re-derived from the current one, so adding a param to any node type a primitive uses moves its hash. The optional pin is what turns that divergence from silent into stated. <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a>, "Pinning: the optional content hash", has exactly what the hash covers and what it deliberately excludes.</p>
+
     <h3>Two nodes that serialize specially</h3>
-    <p><code>subgraph</code> nodes carry their inner graph as a nested payload in the same format, recursively, so composition survives a round trip with no external registry. <code>dataInput</code> nodes serialize with an empty <code>items</code> list — live data items are runtime-injected by definition, so after deserializing you must re-bind them:</p>
+    <p><code>subgraph</code> nodes that are <em>not</em> references carry their inner graph as a nested payload in the same format, recursively, so composition survives a round trip with no external registry. (Editing a <em>referenced</em> primitive's inner graph in place and then saving is refused, naming the node: writing the reference back out would write the registry's content and silently discard the edit.) <code>dataInput</code> nodes serialize with an empty <code>items</code> list — live data items are runtime-injected by definition, so after deserializing you must re-bind them:</p>
     <div class="codeblock"><pre><code><span class="c">// A graph containing a dataInput serializes as:</span>
 {<span class="s">"formatVersion"</span>:<span class="n">1</span>,<span class="s">"seed"</span>:<span class="n">1</span>,<span class="s">"nodes"</span>:[{<span class="s">"id"</span>:<span class="s">"dataInput_0"</span>,<span class="s">"type"</span>:<span class="s">"dataInput"</span>,<span class="s">"params"</span>:{<span class="s">"items"</span>:[]}}],
  <span class="s">"connections"</span>:[],<span class="s">"outputs"</span>:[{<span class="s">"id"</span>:<span class="s">"dataInput_0"</span>,<span class="s">"pin"</span>:<span class="s">"out"</span>,<span class="s">"name"</span>:<span class="s">"geo"</span>}]}
@@ -1043,6 +1115,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
     <p class="eyebrow">Chapter 10</p>
     <h2>The field grammar as a generation target</h2>
     <p class="lead">A field spec is <code>{ "fn": &lt;name&gt;, ...args }</code>. Entries inside <code>args</code> may be nested specs, finite numbers, or number arrays — plain values wrap into <code>constant</code> automatically, so you never emit a <code>constant</code> node by hand unless you want to.</p>
+    <p>The vocabulary below is printed here to be read whole; to look one entry up while working, <code>pcg fields &lt;fn&gt;</code> gives that function's allowed keys and its usage line, and <code>pcg fields</code> gives the closed set — the same answer <code>listFieldFns()</code> returns in process.</p>
 
     <h3>The complete vocabulary</h3>
     <h4>Inputs</h4>
@@ -1115,12 +1188,15 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <div class="code-label">Unknown node type — the message enumerates the entire registry</div>
     <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown node type <span class="s">"pointScatterInBox"</span>;
-registered types: copyToPoints, dataInput, filterByAttribute, filterByBounds,
-filterByDensity, jitterPoints, mergePoints, orientAlongVector,
-partitionByAttribute, pointGrid, pointLine, pointScatterInBounds,
-projectToPlane, promoteAttribute, selfPrune, setAttribute, setBounds,
-spawnInstances, splineSample, subgraph, surfaceSample, transferAttribute,
-transformPoints, valueConstant, volumeSample</code></pre></div>
+registered types: attributeReduce, attributeRemap, connectPoints, copyToPoints,
+dataInput, filterByAttribute, filterByBounds, filterByDensity,
+filterByExpression, filterPrimitivesByBounds, jitterPoints, mergePoints,
+meshPrimitive, orientAlongVector, partitionByAttribute, pathResample, pointGrid,
+pointLine, pointNeighborhood, pointScatterInBounds, pointScatterInWorld,
+pointsToPath, projectToPlane, promoteAttribute, removeAttribute,
+sampleNearestPoint, selfPrune, setAttribute, setBounds, spawnInstances,
+splineSample, subgraph, surfaceSample, transferAttribute, transformPoints,
+valueConstant, volumeSample, writeTangents</code></pre></div>
 
     <div class="code-label">Unknown parameter — the message enumerates that type's parameters</div>
     <div class="codeblock"><pre><code>GraphSerializationError: node <span class="s">"a"</span>: unknown param <span class="s">"counts"</span> for type
@@ -1183,6 +1259,10 @@ WorldValidationError: level 0 (<span class="s">"a"</span>): cookOutputs names un
     </table>
     </div>
     <p>The general rule for a correction loop: <strong>never retry an identical emission.</strong> Every error above is deterministic and total — the same input always produces the same message, so a retry without a change is guaranteed to fail again. The message tells you what to change; change that.</p>
+
+    <h3>The same errors from the CLI</h3>
+    <p>The <code>pcg</code> commands print the library's own message verbatim — they do not summarize it, so nothing above is lost by driving the library from a shell instead of from a process. What the CLI adds is a coarse classification the message does not carry: <strong>exit <code>1</code> means a named thing does not exist or the run failed</strong> (every error class in the table above lands here), and <strong>exit <code>2</code> means the command line itself was wrong</strong> — an unknown or repeated flag, a missing flag value, a number of the wrong shape, or contradictory targets like <code>--node</code> together with <code>--output</code>. A correction loop should branch on that first: a <code>2</code> is your invocation and never the graph, so re-reading the graph is wasted work.</p>
+    <p>The registry errors get the same enumerate-the-alternatives treatment for primitives that they get for node types: <code>pcg run fill/scatter-uneven</code> exits <code>1</code> with <code>unknown subgraph "fill/scatter-uneven"; registered subgraphs:</code> followed by every registered name. And <code>pcg validate</code> is the cheapest error surface there is — it deserializes and reports structure without cooking anything, so it catches unknown types, unknown params, bad pins, unknown keys and cycles before any work happens. Run it after every edit.</p>
   </section>
 
   <section id="introspection">
@@ -1291,7 +1371,7 @@ g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep"
       <li><strong>Same graph plus same seed produces byte-identical output</strong> across runs and platforms. All randomness flows from seeds through PCG32 and murmur-style hash combining. There is no <code>Math.random</code> anywhere in the library.</li>
       <li><strong>The seed chain is specified, and it has exactly one exception.</strong> Graph seed → node seed = <code>hashCombine(graphSeed, hashString(nodeId))</code> → per-point <code>hashCombine(seed, index, axis)</code>. Cell seeds are <code>hashCombine(worldSeed, levelIndex, ...coord)</code>, with every coordinate hashed; <code>ctx.worldSeed</code> and <code>ctx.levelSeed</code> are the cell-invariant anchors beside them. The exception is <code>pointScatterInWorld</code>, whose lattice derives from its own <code>seed</code> param alone so that reseeding cannot silently de-anchor a world — see <a href="#anchoring">2.5</a>.</li>
       <li><strong>Order and path independence.</strong> Cook order, streaming order, cancellation, eviction and recooks never change the bytes produced. Per-point randomness is hashed from a key, never drawn from a stream, which is why it does not matter what was generated before it.</li>
-      <li><strong>Window independence, where the node promises it.</strong> On the point domain the key is the point's <em>identity</em> — its stored position bits plus its <code>seed</code> attribute — not its array index, in <code>filterByDensity</code> (probabilistic), <code>jitterPoints</code>, <code>randomField</code> and the tiebreaks of <code>selfPrune</code> and <code>pointNeighborhood</code>. An upstream filter that renumbers everything therefore cannot move a survivor's draw, which is what makes a halo reproduce a neighbouring cell exactly. Other domains have no position and still key on index; <code>surfaceSample</code> does too, because it manufactures its own candidates.</li>
+      <li><strong>Window independence, where the node promises it.</strong> On the point domain the key is the point's <em>identity</em> — its stored position bits plus its <code>seed</code> attribute — not its array index, in <code>filterByDensity</code> (probabilistic), <code>jitterPoints</code>, <code>randomField</code> and the tiebreaks of <code>selfPrune</code> and <code>pointNeighborhood</code>. An upstream filter that renumbers everything therefore cannot move a survivor's draw, which is what makes a halo reproduce a neighbouring cell exactly. Other domains have no position and still key on index; <code>surfaceSample</code> does too, because it manufactures its own candidates. The trap to know: identity keying makes those nodes indifferent to the <em>window</em>, never to their own seed — wire a per-cell <code>ctx.seed</code> into one and the chain de-anchors one node <em>after</em> the source, silently. See <a href="#anchoring">2.5</a>.</li>
       <li><strong>Execution is introspectable.</strong> Cook stats, cache hit and miss counts, and per-node progress callbacks expose what actually ran.</li>
     </ul>
 
@@ -1305,8 +1385,26 @@ g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep"
   <span class="k">return</span> h.<span class="n">toString</span>(<span class="n">16</span>).<span class="n">padStart</span>(<span class="n">8</span>, <span class="s">"0"</span>);
 };
 
-<span class="k">await</span> <span class="n">fingerprint</span>(doc);   <span class="c">// "62fdb8a9"</span>
-<span class="k">await</span> <span class="n">fingerprint</span>(doc);   <span class="c">// "62fdb8a9"  — identical, from a cold graph each time</span></code></pre></div>
+<span class="k">await</span> <span class="n">fingerprint</span>(doc);   <span class="c">// "9608b6f4"</span>
+<span class="k">await</span> <span class="n">fingerprint</span>(doc);   <span class="c">// "9608b6f4"  — identical, from a cold graph each time</span></code></pre></div>
+
+    <h3>Verifying it without writing any code</h3>
+    <p>The fingerprint above is the in-process form. From a shell the same check is two commands and a <code>cmp</code>, because both the SVG renderer and the JSON reports are deterministic functions of the cook:</p>
+    <div class="codeblock"><pre><code><span class="c"># the picture is a deterministic function of the graph</span>
+pcg render g.json --out a.svg
+pcg render g.json --out b.svg
+cmp a.svg b.svg
+
+<span class="c"># the numbers too — but strip the timings, which are the one thing that varies</span>
+pcg inspect g.json --json | grep -v elapsedMs &gt; a.json
+pcg inspect g.json --json | grep -v elapsedMs &gt; b.json
+cmp a.json b.json</code></pre></div>
+    <p>Then the half that is easy to forget, and without which the first half proves nothing: <strong><code>pcg cook g.json --seed &lt;other&gt;</code> must produce <em>different</em> output.</strong> If it does not, nothing in the graph is actually seeded, and the reproducible result is reproducible for the wrong reason — a graph of pure <code>pointGrid</code> and arithmetic passes every identity check above while having no randomness to be deterministic about. Assert both directions or assert neither.</p>
+
+    <h3>Can this operation be partitioned at all?</h3>
+    <p>Determinism across <em>runs</em> is free; determinism across <em>partitions</em> is not, and the boundary between them is the thing most likely to be assumed rather than checked. Two distinctions carry it.</p>
+    <p>First, <strong>a cook budget partitions time and a <code>World</code> cell partitions data</strong>, and only the second changes what a node can see. Node bodies are atomic under a budget, so <code>--budget</code> can never alter an output; a cell can, because "all the points" now means all the points <em>here</em>. Second, within a partitioned cook, an op is safe only where its reach is <em>bounded</em>, and bounded is a stronger claim than local — every step of a greedy chain is local and the chain is not. The test is <strong>how many hops of dependency it takes before an answer is settled</strong>: zero hops reads only the stored values of the elements it names, one hop reads its neighbours' stored values but never their <em>answers</em>, and unbounded reads another element's answer. The first two are halo-exact at a stated width; the third is exact at no width at all. <a href="#anchoring">Section 2.5</a> works the ladder through with the shipped nodes on each rung, and the <code>determinism</code> skill states it as a table.</p>
+    <p>The practical consequence for a generator is a short list to recognize rather than a rule to derive. Hashed randomness is always safe — <code>randomField</code>, <code>filterByDensity</code> in <code>probabilistic</code> mode, <code>jitterPoints</code>, the per-point <code>seed</code> — because it hashes a key instead of measuring a population. Anything that <em>fits a parameter to the data present in this cook</em> is not: <code>attributeRemap</code> mode <code>"fit"</code> (mode <code>"range"</code> is its partition-safe form), <code>attributeReduce</code>, an aggregate <code>promoteAttribute</code>, and the <code>fraction</code> and <code>index</code> fields. Those have no reach to widen and no halo helps; compute the quantity once on a coarse or unbounded level and push it down. The <code>performance-and-budgets</code> skill catalogues them.</p>
 
     <h3>Why this matters for generation you can trust</h3>
     <p>A fingerprint over an output column turns three otherwise awkward problems into equality checks.</p>
@@ -1326,58 +1424,114 @@ g.<span class="n">describe</span>().outputs;   <span class="c">// [ { id: "keep"
   <section id="loop">
     <p class="eyebrow">Chapter 14</p>
     <h2>A worked end-to-end agent loop</h2>
-    <p class="lead">Discover what exists, emit a graph, cook it, read the result, change one thing, recook. Every value shown below is real output from running exactly this sequence.</p>
+    <p class="lead">The loop is <strong>validate → cook → inspect → render</strong>, run from a shell against a file on disk. It is the loop the <code>graph-authoring</code> skill teaches, and the four steps are four different questions: is this a graph, does it run, are the numbers right, does it look like the thing. Every value shown below is real output from running exactly this sequence.</p>
 
     <h3>1 · Discover</h3>
-    <div class="codeblock"><pre><code><span class="k">import</span> {
-  listNodeTypes, listFieldFns, hasNodeType,
-  deserializeGraph, serializeGraph, cook, firstGeometry, fieldFromJson,
-} <span class="k">from</span> <span class="s">"pcg-ts"</span>;
-
-<span class="k">const</span> types = <span class="n">listNodeTypes</span>();               <span class="c">// 37 entries, each fully self-describing</span>
-<span class="k">const</span> fns = <span class="n">listFieldFns</span>();                 <span class="c">// 42 field fns — the closed vocabulary</span>
-
-<span class="c">// Plan against the schemas rather than against memory.</span>
-<span class="k">const</span> scatterSchema = types.<span class="n">find</span>(t => t.type === <span class="s">"pointScatterInBounds"</span>).params;
-Object.<span class="n">keys</span>(scatterSchema);                <span class="c">// [ "count", "boundsMin", "boundsMax", "seed" ]</span>
-
-<span class="k">const</span> setAttr = types.<span class="n">find</span>(t => t.type === <span class="s">"setAttribute"</span>).params;
-setAttr.value.acceptsField;                <span class="c">// true  -> a field spec is legal here</span>
-setAttr.type.enum;                         <span class="c">// [ "f32", "i32", "u32", "bool", "string" ]</span>
-setAttr.tupleSize.min;                     <span class="c">// 1</span>
-setAttr.tupleSize.max;                     <span class="c">// 4</span></code></pre></div>
+    <p>Look up what you are about to type rather than recalling it. From a shell that is two commands, and the answers are the same registries chapter 8 describes:</p>
+    <div class="codeblock"><pre><code>pcg nodes pointScatterInBounds   <span class="c"># pins, and every param with its range</span>
+pcg fields fbm                   <span class="c"># the field fn's allowed keys and usage line</span></code></pre></div>
+    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/examples.md</code> indexes 37 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
 
     <h3>2 · Emit</h3>
-    <p>Build the document from what discovery reported. Use the chapter 9 example verbatim — four nodes, three connections, two outputs.</p>
-    <div class="codeblock"><pre><code><span class="k">const</span> doc = { <span class="c">/* the JSON from chapter 9 */</span> };
+    <p>Write the document to a file. Use the chapter 9 example verbatim — four nodes, three connections, two outputs — saved as <code>g.json</code>. From here on the file on disk is the artifact; every command below reads it and none of them modifies it.</p>
 
-<span class="c">// Cheap pre-flight before handing it over.</span>
-<span class="k">for</span> (<span class="k">const</span> n <span class="k">of</span> doc.nodes) {
-  <span class="k">if</span> (!<span class="n">hasNodeType</span>(n.type)) <span class="k">throw</span> <span class="k">new</span> Error(<span class="s">`no such type: </span>${n.type}<span class="s">`</span>);
-}
+    <h3>3 · Validate</h3>
+    <p>Deserialization without cooking. It is nearly free and it catches unknown types, unknown params, unknown keys, bad pins and cycles before any work happens, so it belongs after every edit rather than at the end.</p>
+    <div class="codeblock"><pre><code>$ pcg validate g.json
 
-<span class="k">const</span> graph = <span class="n">deserializeGraph</span>(doc);   <span class="c">// throws with the fix if anything is wrong</span></code></pre></div>
+ok  g.json
+seed 7  4 nodes  3 connections  2 outputs
 
-    <h3>3 · Cook and inspect</h3>
-    <div class="codeblock"><pre><code><span class="k">const</span> r1 = <span class="k">await</span> <span class="n">cook</span>(graph);
+nodes:
+  scatter  pointScatterInBounds
+  density  setAttribute
+  keep     filterByDensity
+  spawn    spawnInstances
 
-r1.stats;                                       <span class="c">// { cooked: 4, cached: 0, elapsedMs: 13.6 }</span>
-<span class="n">firstGeometry</span>(r1.outputs.points).pointCount;    <span class="c">// 1008  (of 2000 scattered)</span>
+outputs:
+  points     &lt;- keep.out
+  instances  &lt;- spawn.instances</code></pre></div>
+    <p>Exit <code>0</code>. Note what this does <em>not</em> tell you: the graph is structurally sound, which is a statement about the JSON and not about the content. A path built before a filter instead of after it validates perfectly and is already wrong — see <a href="#debugging">chapter 7</a>.</p>
 
-<span class="k">const</span> geo = <span class="n">firstGeometry</span>(r1.outputs.points);
-[...geo.attrs.point.<span class="n">names</span>()];
-<span class="c">// [ "P", "rot", "scale", "density", "boundsMin", "boundsMax", "color", "seed" ]</span>
+    <h3>4 · Cook</h3>
+    <p><code>--stats</code> adds the per-node breakdown, which is the line that tells you whether your model of the graph matches the graph.</p>
+    <div class="codeblock"><pre><code>$ pcg cook g.json --stats
 
-<span class="k">const</span> d = geo.attrs.point.<span class="n">require</span>(<span class="s">"density"</span>);
-d.type, d.tupleSize;                            <span class="c">// "f32", 1</span>
-[...d.data.<span class="n">subarray</span>(<span class="n">0</span>, <span class="n">4</span>)];                    <span class="c">// [ 0.4724, 0.4536, 0.6287, 0.5888 ]</span>
+cooked g.json (seed 7)
+4 cooked, 0 cached, 11.4 ms
 
-<span class="k">const</span> batch = r1.outputs.instances.<span class="n">find</span>(i => i.kind === <span class="s">"instances"</span>).batches[<span class="n">0</span>];
-batch.assetId, batch.count;                     <span class="c">// "rock", 1008</span></code></pre></div>
-    <p>The observations that matter for a decision are all here: how many nodes actually ran, how many points survived, what the density channel looks like, and whether the spawner produced the expected batch. An agent aiming for "roughly six hundred rocks" now knows it overshot by two-thirds and knows which node controls it.</p>
+outputs:
+  points (1 item)
+    [0] geometry   points 1038  vertices 0  primitives 0
+        bounds 0.004381,0,0.246978 .. 99.973503,0,99.986687
+        point attrs: P(f32x3), rot(f32x4), scale(f32x3), density(f32),
+        boundsMin(f32x3), boundsMax(f32x3), color(f32x4), seed(u32)
+  instances (1 item)
+    [0] instances  1038 instances in 1 batch (cpu) — rock x1038
 
-    <h3>4 · Mutate</h3>
-    <p>Reconstruct handles from the snapshot, then change exactly one parameter — the density field's frequency, from 0.03 to 0.09.</p>
+per-node:
+  id       type                  state   elapsed
+  scatter  pointScatterInBounds  cooked  1.5 ms
+  density  setAttribute          cooked  7.4 ms
+  keep     filterByDensity       cooked  1.6 ms
+  spawn    spawnInstances        cooked  0.7 ms</code></pre></div>
+    <p>1038 survivors of 2000 scattered, one batch of rocks, and the cost is concentrated in one node. Two flags matter here beyond <code>--stats</code>: <code>--seed &lt;n&gt;</code> overrides the graph seed without editing the file, and <code>--budget &lt;ms&gt;</code> bounds a pass. Neither can change what comes out — a budget partitions time, not data.</p>
+
+    <h3>5 · Inspect</h3>
+    <p><code>inspect</code> is the debugger. Point it at an <em>intermediate</em> node with <code>--node &lt;id&gt;</code> and it cooks just enough to produce that pin, then prints per-attribute min/max/mean, a non-finite count, and the first rows:</p>
+    <div class="codeblock"><pre><code>$ pcg inspect g.json --node density --rows 3
+
+g.json — node <span class="s">"density"</span> pin <span class="s">"out"</span>
+1 item, cooked 2, cached 0
+
+item 0: geometry   points 2000  vertices 0  primitives 0
+  point — 2000 elements:
+    attr       type  tuple  min                  max                    mean       non-finite
+    P          f32   3      0.004381,0,0.117069  99.973503,0,99.986687  50.5,0,50.1  0
+    density    f32   1      0.340792             0.690972               0.509424     0
+    seed       u32   1      4539884              4292361164             2146090434   0
+
+  first 3 of 2000 point rows:
+    #  P                          density   seed
+    0  [86.869583, 0, 11.79151]   0.437551  2646749418
+    1  [39.718246, 0, 85.543388]  0.381043  2141006151
+    2  [22.63518, 0, 82.748413]   0.42236   4147278842</code></pre></div>
+    <p>That one table settles the question the survivor count could not. The density channel spans 0.34 to 0.69 with a mean of 0.51 — a four-octave fBm normalized to [0, 1] does not use the whole range, which is exactly why a probabilistic filter kept about half. If you wanted a quarter, the fix is the field, not the filter. <strong>When a graph is wrong, bisect it</strong>: inspect the first node, then the next, until the numbers stop being what you expect. That node is the bug.</p>
+
+    <h3>6 · Render</h3>
+    <p>A deterministic top-down SVG. <code>--attr</code> colors by an attribute — a scalar through a ramp, a vec3 or wider as RGB, strings categorically — which turns "is the density doing what I meant" into something you can see rather than infer:</p>
+    <div class="codeblock"><pre><code>$ pcg render g.json --output points --attr density --out g.svg
+
+wrote g.svg  800x798
+g.json — output <span class="s">"points"</span>
+1038 of 1038 points, 0 of 0 primitives, 0 of 0 instances
+colored by <span class="s">"density"</span> — point values on the circles
+bounds (world) x 0.004381..99.973503  z 0.246978..99.986687</code></pre></div>
+    <p>The first count is the one to read: <code>1038 of 1038</code> means nothing was decimated. Past <code>--max-points</code> (50,000 by default) the picture is a sample and the report says so. A name that lives on both the point and primitive domains colors both — circles from the point column, paths from the primitive one — and <code>--attr-domain</code> narrows it when that is not what you want.</p>
+
+    <h3>7 · The machine-readable half</h3>
+    <p>Everything above has a <code>--json</code> twin built from the same data, so an agent and a person reading the same run cannot end up with different facts about it:</p>
+    <div class="codeblock"><pre><code>$ pcg inspect g.json --output points --json
+
+{
+  <span class="s">"path"</span>: <span class="s">"g.json"</span>,
+  <span class="s">"target"</span>: <span class="s">"output \"points\""</span>,
+  <span class="s">"stats"</span>: { <span class="s">"cooked"</span>: <span class="n">3</span>, <span class="s">"cached"</span>: <span class="n">0</span>, <span class="s">"elapsedMs"</span>: <span class="n">11.38</span> },
+  <span class="s">"domain"</span>: <span class="s">"point"</span>,
+  <span class="s">"items"</span>: [ { <span class="s">"kind"</span>: <span class="s">"geometry"</span>, <span class="s">"tags"</span>: [],
+              <span class="s">"geometry"</span>: { <span class="s">"points"</span>: <span class="n">1038</span>, <span class="s">"vertices"</span>: <span class="n">0</span>, <span class="s">"primitives"</span>: <span class="n">0</span>,
+                            <span class="s">"domains"</span>: [ <span class="c">/* per-attribute min / max / mean / nonFinite */</span> ] },
+              <span class="s">"sample"</span>: <span class="c">/* the printed rows, as data */</span> } ]
+}</code></pre></div>
+    <p>Two edges worth knowing. <code>elapsedMs</code> is the one field that varies between identical runs, so strip it before diffing two reports (chapter 13 shows the two-line form). And <code>render --json</code> requires <code>--out</code>, exiting <code>2</code> otherwise — without a file to write, the SVG <em>is</em> the output and there is nowhere for a report to go.</p>
+
+    <div class="note">
+      <span class="tag">What "correct" means here</span>
+      <p>A cook that errors on nothing is not evidence. Before calling a graph done, check five things: the counts are in the range you expected, the attributes you meant to write are present with the right type and tuple size, the bounds are where the geometry should be, <code>non-finite</code> is <code>0</code>, and the picture looks like the thing. <code>pcg inspect</code> answers the first four and <code>pcg render</code> the fifth — which is the whole reason the loop has four steps instead of two.</p>
+    </div>
+
+    <h3>8 · Edit, and keep the caches</h3>
+    <p>The shell loop rebuilds from the file every time, which is correct for a one-shot and wasteful for a tool that stays up: a rebuild starts with cold caches. A long-running agent holds one live graph instead and edits it in place with the chapter 12 API. Reconstruct handles from the snapshot, then change exactly one parameter — the density field's frequency, from 0.03 to 0.09.</p>
     <div class="codeblock"><pre><code><span class="k">const</span> byId = Object.<span class="n">fromEntries</span>(
   graph.<span class="n">describe</span>().nodes.<span class="n">map</span>(n => [n.id, { id: n.id }])
 );
@@ -1389,11 +1543,11 @@ graph.<span class="n">setParam</span>(byId.density, <span class="s">"value"</spa
   opts: { frequency: <span class="n">0.09</span>, octaves: <span class="n">4</span>, normalized: <span class="k">true</span> },
 }));                                     <span class="c">// fieldFromJson, NOT the raw spec object</span></code></pre></div>
 
-    <h3>5 · Recook and compare</h3>
+    <h3>9 · Recook and compare</h3>
     <div class="codeblock"><pre><code><span class="k">const</span> r2 = <span class="k">await</span> <span class="n">cook</span>(graph);
 
 r2.stats;                                       <span class="c">// { cooked: 3, cached: 1 }</span>
-<span class="n">firstGeometry</span>(r2.outputs.points).pointCount;    <span class="c">// 967   (was 1008)</span>
+<span class="n">firstGeometry</span>(r2.outputs.points).pointCount;    <span class="c">// 1005  (was 1038)</span>
 
 <span class="c">// The live graph and its serialized form stay in step:</span>
 <span class="n">serializeGraph</span>(graph).nodes[<span class="n">1</span>].params.value;
@@ -1402,7 +1556,7 @@ r2.stats;                                       <span class="c">// { cooked: 3, 
 
     <p>Read the stats as a check on your own model. <code>cached: 1</code> is the scatter node — upstream of the edit, so untouched. <code>cooked: 3</code> is the edited node plus its two dependents. Had the numbers come back <code>{ cooked: 4, cached: 0 }</code>, something changed that you did not intend to change, and that is worth investigating before trusting the output.</p>
 
-    <h3>6 · Close the loop</h3>
+    <h3>10 · Close the loop</h3>
     <div class="codeblock"><pre><code>graph.<span class="n">removeNode</span>(byId.spawn);       <span class="c">// documented cascade: the node, its connections,</span>
                                    <span class="c">// and the "instances" output declared on it</span>
 graph.<span class="n">describe</span>().outputs;          <span class="c">// [ { id: "keep", pin: "out", name: "points" } ]</span>
@@ -1411,7 +1565,9 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
 
 <span class="k">const</span> finalDoc = <span class="n">serializeGraph</span>(graph);   <span class="c">// canonical, and idempotent from here on</span></code></pre></div>
 
-    <p>The loop in one sentence: <em>discovery gives you the legal moves, deserialization rejects the illegal ones with the fix attached, cook stats tell you what actually happened, introspection lets you locate the next edit, mutation applies it without discarding warm caches, and serialization hands back a canonical document.</em> No step requires reading the library's source, and no step requires guessing.</p>
+    <p>Write <code>finalDoc</code> back to <code>g.json</code> and the shell loop picks up where the in-process one left off. That is the point of running both halves against one file: <code>validate</code> / <code>cook</code> / <code>inspect</code> / <code>render</code> is the outer loop that decides whether a graph is right, and the mutation API is the inner one that gets it there without throwing away caches between attempts.</p>
+
+    <p>The loop in one sentence: <em>discovery gives you the legal moves, validation rejects the illegal ones with the fix attached, cook stats tell you what actually happened, inspect and render tell you whether it was what you meant, mutation applies the next edit without discarding warm caches, and serialization hands back a canonical document.</em> No step requires reading the library's source, and no step requires guessing.</p>
   </section>
 
   <section id="reference">
@@ -1421,17 +1577,20 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
     <table>
       <thead><tr><th>Document</th><th>What it is</th><th>Best for</th></tr></thead>
       <tbody>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td>Generated node reference: every pin, parameter, default and range for all 38 types.</td><td>Looking up one node exactly.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>The same registry metadata as a plain JSON array.</td><td>Machine consumption, offline planning, validation.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a></td><td>Graph JSON spec, the full field grammar, recipes, transfer mappings, GPU eligibility rules.</td><td>The precise format, and worked recipes.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a></td><td>Compact agent capability map with the full measured GPU budget tables.</td><td>Context for an LLM; the deviation numbers.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a></td><td>The compact agent capability map: the mental model, the JSON field names, the invariants, and the full measured GPU budget tables. It ends in a pointer list to everything below.</td><td>The single file to load as context for an LLM.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/tree/main/skills">skills/</a></td><td>Three doctrine skills in the standard Agent Skills format — <code>graph-authoring</code> (the loop, and choosing a primitive over raw nodes), <code>determinism</code> (seeding, anchoring, the hop ladder, how to verify), <code>performance-and-budgets</code> (what a budget does and does not fix). None lists a node or a param: they carry <em>how to work</em>, and cite the generated references for <em>what exists</em>.</td><td>Deciding what to do, and in what order.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a> · <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">.json</a></td><td>Generated node reference: every pin, parameter, default and range.</td><td>Looking up one node exactly; offline validation.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a> · <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">.json</a></td><td>Generated catalog of the named primitives: pins, exposed params with derived schemas, content hash, and a <code>pcg run</code> line each.</td><td>Finding a recipe before building one.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a> · <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">.json</a></td><td>The corpus under <a href="https://github.com/C4RL05/pcg-ts/tree/main/examples/graphs">examples/graphs/</a>, indexed by what each graph teaches. Every file cooks from JSON alone.</td><td>Copying a working shape near your goal.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a></td><td>Graph JSON spec, the full field grammar, named subgraphs and hash pinning, recipes, transfer mappings, GPU eligibility rules.</td><td>The precise format, and worked recipes.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/README.md">README.md</a></td><td>The human API tour.</td><td>A second angle on anything in Part I.</td></tr>
         <tr><td><a href="./index.html">Project overview</a></td><td>Architecture and pipeline diagrams, roadmap.</td><td>How the modules layer, and what shipped when.</td></tr>
         <tr><td><a href="https://c4rl05.github.io/pcg-ts/examples/">Live demos</a></td><td>All nine examples, running.</td><td>Seeing it before reading about it.</td></tr>
       </tbody>
     </table>
     </div>
-    <p>Development commands, for working in the repository itself: <code>npm test</code> runs the unit, integration and determinism suites; <code>npm run build</code> produces <code>dist/</code> with the <code>.</code>, <code>./three</code> and <code>./gpu</code> subpath exports; <code>npm run check</code> type-checks; <code>npm run examples</code> starts the demo server; <code>npm run docs:nodes</code> regenerates the node reference from the registry.</p>
+    <p>The order in that table is the order to read it in. <code>llms.txt</code> first, because it is the map; then the skill that matches what you are about to do; then a generated reference, and only for the one entry you need. Nothing hand-written in this project embeds a listing that a generator already owns — which is why this manual explains <em>why</em> and <em>when</em>, and those files answer <em>exactly what</em>.</p>
+    <p>Development commands, for working in the repository itself: <code>npm test</code> runs the unit, integration and determinism suites; <code>npm run build</code> produces <code>dist/</code> with the <code>.</code>, <code>./three</code>, <code>./gpu</code>, <code>./cli</code> and <code>./primitives</code> subpath exports; <code>npm run check</code> type-checks; <code>npm run examples</code> starts the demo server; <code>npm run docs</code> regenerates the node, primitive and corpus references and restamps the site. The CLI itself is <code>node bin/pcg.mjs</code> from a clone (it runs the built <code>dist/</code>, so build first) and <code>npx pcg</code> from an install.</p>
   </section>
 
 </main>
