@@ -9,9 +9,10 @@ import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import {
+  ORIENT_AXES,
   type FieldParam,
   geometryItems,
-  quatFromBasis,
+  orientQuat,
   quatFromEulerDeg,
   quatMul,
   readComp,
@@ -354,12 +355,6 @@ export interface OrientAlongVectorParams {
   axis: string;
 }
 
-/** Axis enum values accepted by {@link orientAlongVector}. */
-const ORIENT_AXES = ["+x", "-x", "+y", "-y", "+z", "-z"] as const;
-
-/** Squared-length threshold below which up and direction count as parallel. */
-const ORIENT_PARALLEL_EPS = 1e-12;
-
 /** Build rot quaternions pointing a chosen local axis along a direction. */
 export const orientAlongVector = standardNode<OrientAlongVectorParams>({
   type: "orientAlongVector",
@@ -443,58 +438,7 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
       const dl = dx * dx + dy * dy + dz * dz;
       if (dl === 0) continue; // zero direction: keep the prior rot
       const dInv = 1 / Math.sqrt(dl);
-      const fx = dx * dInv;
-      const fy = dy * dInv;
-      const fz = dz * dInv;
-      // right = up x forward, falling back when (anti)parallel.
-      let rx = upy * fz - upz * fy;
-      let ry = upz * fx - upx * fz;
-      let rz = upx * fy - upy * fx;
-      let rl = rx * rx + ry * ry + rz * rz;
-      if (rl <= ORIENT_PARALLEL_EPS) {
-        // [0, 0, 1] x f
-        rx = -fy;
-        ry = fx;
-        rz = 0;
-        rl = rx * rx + ry * ry;
-        if (rl <= ORIENT_PARALLEL_EPS) {
-          // f is (anti)parallel to Z too; [1, 0, 0] x f always works here.
-          rx = 0;
-          ry = -fz;
-          rz = fy;
-          rl = ry * ry + rz * rz;
-        }
-      }
-      const rInv = 1 / Math.sqrt(rl);
-      rx *= rInv;
-      ry *= rInv;
-      rz *= rInv;
-      // u = forward x right (unit: forward and right are orthonormal).
-      const ux = fy * rz - fz * ry;
-      const uy = fz * rx - fx * rz;
-      const uz = fx * ry - fy * rx;
-      // Assign (right, u, forward) to basis columns so the chosen local
-      // axis maps to forward and the frame stays right-handed.
-      switch (axis) {
-        case "+x":
-          quatFromBasis(q, fx, fy, fz, ux, uy, uz, -rx, -ry, -rz);
-          break;
-        case "-x":
-          quatFromBasis(q, -fx, -fy, -fz, ux, uy, uz, rx, ry, rz);
-          break;
-        case "+y":
-          quatFromBasis(q, -rx, -ry, -rz, fx, fy, fz, ux, uy, uz);
-          break;
-        case "-y":
-          quatFromBasis(q, rx, ry, rz, -fx, -fy, -fz, ux, uy, uz);
-          break;
-        case "+z":
-          quatFromBasis(q, rx, ry, rz, ux, uy, uz, fx, fy, fz);
-          break;
-        default: // "-z"
-          quatFromBasis(q, -rx, -ry, -rz, ux, uy, uz, -fx, -fy, -fz);
-          break;
-      }
+      orientQuat(q, dx * dInv, dy * dInv, dz * dInv, upx, upy, upz, axis);
       rot[i * 4] = q[0];
       rot[i * 4 + 1] = q[1];
       rot[i * 4 + 2] = q[2];

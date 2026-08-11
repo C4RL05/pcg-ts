@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-38 node types, grouped by `category` (node sections below are alphabetical):
+39 node types, grouped by `category` (node sections below are alphabetical):
 
 **attribute**
 
@@ -49,6 +49,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 **sampler**
 
 - [pathResample](#pathresample) — Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed.
+- [pathSegments](#pathsegments) — Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry.
 - [splineSample](#splinesample) — Samples points along polyline primitives by arc length, treating all polylines of the input as one concatenated curve.
 - [surfaceSample](#surfacesample) — Scatters points on a triangle mesh: each of `count` candidates picks a triangle with probability proportional to its area, then a uniform position on it (uniform barycentric placement).
 - [volumeSample](#volumesample) — Fills an axis-aligned box with a regular grid of points: each axis is divided into floor(extent / cellSize) cells (at least 1) and a point is placed at each cell center, then jittered inside its cell.
@@ -354,6 +355,24 @@ Resamples every polyline primitive at even arc-length steps and emits a PATH, no
 | `mode` | enum | `"count"` |  | `count`, `spacing` |  | How samples are placed: 'count' puts exactly `count` samples on each path; 'spacing' steps every `spacing` units along each path. |
 | `count` | i32 | `10` | >= 2 |  |  | Samples per path when mode is 'count'. Minimum 2 for an open path and 3 for a closed one — below that the result would not be a path. Ignored in 'spacing' mode. |
 | `spacing` | f32 | `1` | >= 0 |  |  | Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than `spacing` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under `spacing`. To divide a loop EVENLY, switch mode to 'count': it splits the length into `count` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under 1048576 samples. Ignored in 'count' mode. |
+
+## pathSegments
+
+Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is how a curve becomes something you can look at: the library has no sweep, extrude or loft, and toLineGeometry only ever draws a one-pixel line, so a cable, a chain, a rod or a tube is a run of instanced segments rather than a swept surface. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.
+
+**Category:** sampler
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `axis` | enum | `"+y"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | Which local axis of the spawned asset runs along the segment, and therefore which `scale` component carries the segment length. Default '+y' — three.js CylinderGeometry and CapsuleGeometry are built along Y, and this node exists to feed them. The other two components carry `radius`. |
+| `radius` | f32 | `0.05` | >= 0 |  | yes | Scale written to the two components that are not the axis; with a unit-radius asset this is the tube's radius in world units. Field-capable, but note WHERE it resolves: on the INPUT points (the path's own points), not on the segments this node emits — the output domain does not exist yet when the field runs. Each segment takes the AVERAGE of the values at its two endpoints, so a radius that tapers along a path tapers smoothly across the segments. That also means a field can only read attributes the input POINTS carry: a per-path radius living on the PRIMITIVE domain has to be promoted onto the points first (promoteAttribute, primitive to point) before a field can see it. Values below 0 are clamped to 0. |
+| `extend` | f32 | `0` | >= 0 |  |  | World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely. |
 
 ## pointGrid
 

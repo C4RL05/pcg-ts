@@ -26,7 +26,7 @@ import { describe, expect, it } from "vitest";
 // the whole public barrel so "every registered node type" means every node
 // type the library ships (spawnInstances lives outside `src/nodes`).
 import "../index.js";
-import { createTriangleMesh } from "../data/index.js";
+import { createPolyline, createTriangleMesh } from "../data/index.js";
 import {
   evaluateField,
   randomField,
@@ -50,6 +50,7 @@ import {
   jitterPoints,
   listNodeTypes,
   orientAlongVector,
+  pathSegments,
   setAttribute,
   surfaceSample,
   transformPoints,
@@ -118,7 +119,7 @@ function probeResolver(opts: { acceptDerivedSpecs?: boolean } = {}): ProbeResolv
 }
 
 // ---------------------------------------------------------------------------
-// Per-node-type fixtures for the six `gpu: "fields"` adopters
+// Per-node-type fixtures for the `gpu: "fields"` adopters
 
 interface AdopterFixture {
   readonly type: string;
@@ -187,6 +188,22 @@ const ADOPTERS: AdopterFixture[] = [
       const din = g.add(dataInput);
       g.setParam(din, "items", [makeGeometryItem(unitSquare())]);
       const n = g.add(surfaceSample, { count: 64, densityField: value as never });
+      g.connect(din, "out", n, "in");
+      g.output(n, "out", "out");
+      return { g, id: n.id };
+    },
+  },
+  {
+    type: "pathSegments",
+    build: (value) => {
+      const g = new Graph(7);
+      const din = g.add(dataInput);
+      // A path, not a cloud: this adopter resolves `radius` on the
+      // points of the polyline it segments.
+      g.setParam(din, "items", [
+        makeGeometryItem(createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 2, 1, 0])),
+      ]);
+      const n = g.add(pathSegments, { radius: value as never });
       g.connect(din, "out", n, "in");
       g.output(n, "out", "out");
       return { g, id: n.id };

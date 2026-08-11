@@ -7,6 +7,7 @@ import {
   setPolylineTopology,
 } from "../data/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
+import { dataInput } from "../runtime/index.js";
 import {
   deserializeGraph,
   fieldFromJson,
@@ -15,6 +16,7 @@ import {
   orientAlongVector,
   partitionByAttribute,
   pathResample,
+  pathSegments,
   pointScatterInBounds,
   pointsToPath,
   projectToPlane,
@@ -24,6 +26,7 @@ import {
   writeTangents,
 } from "./index.js";
 import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./nodes.testsupport.js";
+import { rotateVec } from "./util.js";
 // Registers the shipped primitives, so `place/along-curve` can be reached
 // by name from a serialized graph — the way the pipeline actually wires it.
 import "../primitives/index.js";
@@ -560,6 +563,223 @@ describe("pathResample", () => {
     expect(msg).toContain('"tangent"');
     expect(msg).toContain("removeAttribute");
     expect(msg).not.toBe('attribute "tangent" already exists');
+  });
+});
+
+describe("pathSegments", () => {
+  /** An L: a 2-long segment along +X, then a 4-long one along +Y. */
+  function elbow(): Geometry {
+    return createPolyline([0, 0, 0, 2, 0, 0, 2, 4, 0]);
+  }
+
+  /** Run pathSegments over one geometry and return the output cloud. */
+  async function segments(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(pathSegments, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  /** Tuple `name` of every point, as plain arrays. */
+  function tuplesOf(geo: Geometry, name: string): number[][] {
+    const attr = geo.attrs.point.require(name);
+    const out: number[][] = [];
+    for (let i = 0; i < geo.pointCount; i++) {
+      const t: number[] = [];
+      for (let k = 0; k < attr.tupleSize; k++) t.push(attr.data[i * attr.tupleSize + k]);
+      out.push(t);
+    }
+    return out;
+  }
+
+  it("emits one point per segment, at the midpoint, with the length on the axis", async () => {
+    const geo = await segments({ radius: 0.5 }, elbow());
+    expect(geo.pointCount).toBe(2);
+    expect(positionsOf(geo)).toEqual([
+      [1, 0, 0],
+      [2, 2, 0],
+    ]);
+    // Default axis '+y': length on Y, radius on X and Z.
+    expect(tuplesOf(geo, "scale")).toEqual([
+      [0.5, 2, 0.5],
+      [0.5, 4, 0.5],
+    ]);
+    expect(tuplesOf(geo, "tangent")).toEqual([
+      [1, 0, 0],
+      [0, 1, 0],
+    ]);
+  });
+
+  it("turns the chosen axis onto the segment, so a unit asset spans it", async () => {
+    // The rot must carry the asset's local axis onto the tangent. Checked
+    // through the same rotation the spawner applies, for every axis.
+    for (const [axis, local] of [
+      ["+x", [1, 0, 0]],
+      ["-x", [-1, 0, 0]],
+      ["+y", [0, 1, 0]],
+      ["-y", [0, -1, 0]],
+      ["+z", [0, 0, 1]],
+      ["-z", [0, 0, -1]],
+    ] as const) {
+      const geo = await segments({ axis }, elbow());
+      const rot = geo.attrs.point.require("rot");
+      const tangent = tuplesOf(geo, "tangent");
+      for (let i = 0; i < geo.pointCount; i++) {
+        const q = [rot.data[i * 4], rot.data[i * 4 + 1], rot.data[i * 4 + 2], rot.data[i * 4 + 3]];
+        const v = rotateVec([0, 0, 0], q[0], q[1], q[2], q[3], local[0], local[1], local[2]);
+        for (let k = 0; k < 3; k++) expect(v[k]).toBeCloseTo(tangent[i][k], 6);
+      }
+      // ...and the length lands on that axis's scale component, not another.
+      const comp = axis[1] === "x" ? 0 : axis[1] === "y" ? 1 : 2;
+      expect(tuplesOf(geo, "scale").map((s) => s[comp])).toEqual([2, 4]);
+    }
+  });
+
+  it("writes curveU at the midpoint's normalized position along its own path", async () => {
+    // The L is 6 long: midpoints at arc 1 and arc 4.
+    const geo = await segments({}, elbow());
+    const u = geo.attrs.point.require("curveU");
+    expect(u.get(0)).toBeCloseTo(1 / 6, 6);
+    expect(u.get(1)).toBeCloseTo(4 / 6, 6);
+  });
+
+  it("skips zero-length segments instead of emitting degenerate instances", async () => {
+    // A repeated point in the middle: 3 segments, one of them degenerate.
+    const geo = await segments({}, createPolyline([0, 0, 0, 1, 0, 0, 1, 0, 0, 3, 0, 0]));
+    expect(geo.pointCount).toBe(2);
+    expect(positionsOf(geo)).toEqual([
+      [0.5, 0, 0],
+      [2, 0, 0],
+    ]);
+  });
+
+  it("extends both ends without moving the midpoint", async () => {
+    const plain = await segments({ radius: 0.25 }, elbow());
+    const grown = await segments({ radius: 0.25, extend: 0.25 }, elbow());
+    expect(positionsOf(grown)).toEqual(positionsOf(plain));
+    expect(tuplesOf(grown, "scale").map((s) => s[1])).toEqual([2.5, 4.5]);
+    // Only the axis component grows; the radius is untouched.
+    expect(tuplesOf(grown, "scale").map((s) => [s[0], s[2]])).toEqual([
+      [0.25, 0.25],
+      [0.25, 0.25],
+    ]);
+  });
+
+  it("resolves radius on the input points and averages it across each segment", async () => {
+    // A radius attribute of 1, 3, 7 on the L's three points: the segments
+    // between them take 2 and 5.
+    const src = withAttr(elbow(), "rad", [1, 3, 7]);
+    const geo = await segments({ radius: fieldFromJson({ fn: "attribute", name: "rad" }) }, src);
+    expect(tuplesOf(geo, "scale").map((s) => [s[0], s[2]])).toEqual([
+      [2, 2],
+      [5, 5],
+    ]);
+  });
+
+  it("clamps a negative radius to zero rather than mirroring the asset", async () => {
+    const src = withAttr(elbow(), "rad", [-4, -2, 2]);
+    const geo = await segments({ radius: fieldFromJson({ fn: "attribute", name: "rad" }) }, src);
+    // Segment 0 averages to -3 (clamped); segment 1 averages to 0.
+    expect(tuplesOf(geo, "scale").map((s) => s[0])).toEqual([0, 0]);
+  });
+
+  it("emits a plain cloud, not a path", async () => {
+    const geo = await segments({}, elbow());
+    expect(geo.primitiveCount).toBe(0);
+    expect(geo.vertexToPoint.length).toBe(0);
+  });
+
+  it("gives a closed path its closing segment too", async () => {
+    // A unit square as a closed path: 4 sides, not 3.
+    const geo = await segments(
+      {},
+      createPolyline([0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1], { closed: true }),
+    );
+    expect(geo.pointCount).toBe(4);
+    expect(positionsOf(geo)).toEqual([
+      [0.5, 0, 0],
+      [1, 0, 0.5],
+      [0.5, 0, 1],
+      [0, 0, 0.5],
+    ]);
+  });
+
+  it("segments each path on its own, carrying that path's primitive attributes", async () => {
+    const roads = withPrimString(withPrimValue(twoPaths(), "roadWidth", [2, 7]), "roadKind", [
+      "avenue",
+      "lane",
+    ]);
+    const geo = await segments({}, roads);
+    expect(geo.pointCount).toBe(2); // one segment per path
+    const width = geo.attrs.point.require("roadWidth");
+    expect([width.get(0), width.get(1)]).toEqual([2, 7]);
+    const kind = geo.attrs.point.require("roadKind");
+    expect([kind.getString(0), kind.getString(1)]).toEqual(["avenue", "lane"]);
+    expect(geo.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+  });
+
+  it("refuses a primitive attribute that would clobber one it writes itself", async () => {
+    const roads = withPrimValue(twoPaths(), "curveU", [0, 0]);
+    const msg = await rejection(
+      runNode(pathSegments, {}, { in: [makeGeometryItem(roads)] }),
+    );
+    expect(msg).toContain("pathSegments");
+    expect(msg).toContain('"curveU"');
+    expect(msg).toContain("removeAttribute");
+  });
+
+  it("reports a bad axis or extend before it looks at the geometry", async () => {
+    const empty = { in: [makeGeometryItem(createPointCloud(0))] };
+    const axisMsg = await rejection(runNode(pathSegments, { axis: "up" }, empty));
+    expect(axisMsg).toContain('pathSegments: param "axis"');
+    expect(axisMsg).toContain("+x, -x, +y, -y, +z, -z");
+    const extendMsg = await rejection(runNode(pathSegments, { extend: -1 }, empty));
+    expect(extendMsg).toContain('pathSegments: param "extend"');
+  });
+
+  it("errors when every segment is degenerate, naming the cause", async () => {
+    const msg = await rejection(
+      runNode(pathSegments, {}, { in: [makeGeometryItem(createPolyline([1, 1, 1, 1, 1, 1]))] }),
+    );
+    expect(msg).toContain("pathSegments");
+    expect(msg).toContain("zero length");
+    expect(msg).toContain("move the points apart");
+  });
+
+  it("is deterministic across fresh runs and stable when run twice", async () => {
+    const src = twoPaths();
+    const run = async () => snapshotGeometry(await segments({ radius: 0.3, extend: 0.1 }, src));
+    expect(await run()).toEqual(await run());
+    // Purity: the node builds a fresh cloud and never writes into its input.
+    expect(topologyOf(src)).toEqual({ v: [0, 1, 2, 3], start: [0, 2], count: [2, 2] });
+  });
+
+  it("does not depend on the order the paths' points arrived in", async () => {
+    // The same two paths, with their points permuted and the topology
+    // rebuilt over the new indices: the segments are the same segments.
+    const a = twoPaths();
+    const b = createPointCloud(4);
+    const P = b.attrs.point.require("P");
+    P.setTuple(0, [10, 0, 0]);
+    P.setTuple(1, [0, 0, 0]);
+    P.setTuple(2, [14, 0, 0]);
+    P.setTuple(3, [1, 0, 0]);
+    setPolylineTopology(b, [1, 3, 0, 2], [0, 2], [2, 2]);
+    expect(positionsOf(await segments({}, b))).toEqual(positionsOf(await segments({}, a)));
+  });
+
+  it("draws a path built and resampled in-graph, end to end", async () => {
+    // The shape the demo uses: a path, evened out, then made solid.
+    const graph = new Graph(7);
+    const input = graph.add(dataInput, { items: [makeGeometryItem(row(5))] }, "in");
+    const src = graph.add(pointsToPath, { closed: false });
+    const even = graph.add(pathResample, { mode: "count", count: 9 });
+    const tubes = graph.add(pathSegments, { radius: 0.2 });
+    graph.connect(input, "out", src, "in");
+    graph.connect(src, "out", even, "in");
+    graph.connect(even, "out", tubes, "in");
+    graph.output(tubes, "out", "tubes");
+    const geo = firstGeo((await cook(graph)).outputs.tubes);
+    // 9 samples along a 4-long row: 8 segments of 0.5.
+    expect(geo.pointCount).toBe(8);
+    expect(tuplesOf(geo, "scale").map((s) => s[1])).toEqual(new Array(8).fill(0.5));
   });
 });
 

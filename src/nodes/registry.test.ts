@@ -381,6 +381,7 @@ describe("category metadata", () => {
       splineSample: "sampler",
       volumeSample: "sampler",
       pathResample: "sampler",
+      pathSegments: "sampler",
       transformPoints: "point op",
       jitterPoints: "point op",
       copyToPoints: "point op",

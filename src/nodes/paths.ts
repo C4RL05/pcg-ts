@@ -1,7 +1,14 @@
 /**
  * Path authoring nodes: build polyline topology over a point cloud,
- * resample a path by arc length, and write per-point tangents at a path's
- * own points.
+ * resample a path by arc length, write per-point tangents at a path's own
+ * points, and turn a path's segments into oriented instance points.
+ *
+ * That last one, pathSegments, is the only way a curve in this library
+ * becomes solid. There is no sweep, extrude, loft or revolve anywhere in
+ * src/, and meshPrimitive builds planes and boxes; the polyline converter
+ * emits line segments a pixel wide. So a tube is not a surface here — it
+ * is a run of instanced assets, one per segment, which is also why it
+ * costs one draw call for a whole tangle of cable.
  *
  * These are the in-graph door to polyline geometry. Before them the
  * library had a polyline consumer (splineSample), a polyline type
@@ -41,11 +48,16 @@ import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import {
+  ORIENT_AXES,
+  type FieldParam,
   carryPrimitiveAttributes,
   locateOnArcLength,
+  orientQuat,
   polylineArcTables,
   requireGeometry,
   requireReportSlot,
+  requireTuple,
+  resolveOnMaybeGpu,
 } from "./util.js";
 
 /**
@@ -393,6 +405,161 @@ export const pathResample = standardNode<PathResampleParams>({
       outPrimSrc,
       "pathResample",
       "primitive",
+    );
+    return { out: [makeGeometryItem(out)] };
+  },
+});
+
+/** Params of {@link pathSegments}. */
+export interface PathSegmentsParams {
+  axis: string;
+  radius: FieldParam;
+  extend: number;
+}
+
+/** One oriented instance point per polyline segment. */
+export const pathSegments = standardNode<PathSegmentsParams>({
+  type: "pathSegments",
+  category: "sampler",
+  description:
+    "Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is how a curve becomes something you can look at: the library has no sweep, extrude or loft, and toLineGeometry only ever draws a one-pixel line, so a cable, a chain, a rod or a tube is a run of instanced segments rather than a swept surface. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    axis: {
+      type: "enum",
+      default: "+y",
+      enum: [...ORIENT_AXES],
+      description:
+        "Which local axis of the spawned asset runs along the segment, and therefore which `scale` component carries the segment length. Default '+y' — three.js CylinderGeometry and CapsuleGeometry are built along Y, and this node exists to feed them. The other two components carry `radius`.",
+    },
+    radius: {
+      type: "f32",
+      default: 0.05,
+      min: 0,
+      acceptsField: true,
+      description:
+        "Scale written to the two components that are not the axis; with a unit-radius asset this is the tube's radius in world units. Field-capable, but note WHERE it resolves: on the INPUT points (the path's own points), not on the segments this node emits — the output domain does not exist yet when the field runs. Each segment takes the AVERAGE of the values at its two endpoints, so a radius that tapers along a path tapers smoothly across the segments. That also means a field can only read attributes the input POINTS carry: a per-path radius living on the PRIMITIVE domain has to be promoted onto the points first (promoteAttribute, primitive to point) before a field can see it. Values below 0 are clamped to 0.",
+    },
+    extend: {
+      type: "f32",
+      default: 0,
+      min: 0,
+      description:
+        "World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely.",
+    },
+  },
+  // `radius` may resolve on the GPU. It is evaluated on the INPUT
+  // geometry, which this node never mutates (it builds a fresh cloud),
+  // so the resolver and the CPU fallback see identical bytes.
+  gpu: "fields",
+  async execute({ inputs, params, seed, gpu, checkCancelled }) {
+    const axis = params.axis;
+    if (!(ORIENT_AXES as readonly string[]).includes(axis)) {
+      throw new Error(
+        `pathSegments: param "axis" must be one of ${ORIENT_AXES.join(", ")}; got "${axis}"`,
+      );
+    }
+    const extend = params.extend;
+    if (!Number.isFinite(extend) || extend < 0) {
+      throw new Error(
+        `pathSegments: param "extend" must be a finite number >= 0, got ${extend}`,
+      );
+    }
+    const geo = requireGeometry(inputs, "in", "pathSegments");
+    const tables = polylineArcTables(geo, "pathSegments");
+    const radius = requireTuple(
+      await resolveOnMaybeGpu(gpu, geo, "point", params.radius, seed),
+      [1],
+      "pathSegments",
+      "radius",
+    );
+
+    // Count first: zero-length segments are skipped, so the output size
+    // is not simply the vertex count and the cloud must be sized before
+    // anything is written into it.
+    let total = 0;
+    for (const table of tables) {
+      for (let k = 0; k < table.segLen.length; k++) {
+        if (table.segLen[k] > 0) total++;
+      }
+    }
+    if (total === 0) {
+      throw new Error(
+        `pathSegments: every segment of the input's ${tables.length} path(s) has zero length (all of a path's points sit at the same position), so there is nothing to draw; move the points apart, or drop the degenerate paths upstream`,
+      );
+    }
+
+    const out = createPointCloud(total);
+    const op = out.attrs.point.require("P").data;
+    const rot = out.attrs.point.require("rot").data;
+    const scale = out.attrs.point.require("scale").data;
+    const seeds = out.attrs.point.require("seed").data;
+    const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
+    const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
+    // Which input polyline each segment came from. There is no output
+    // primitive domain to carry onto — the output is a cloud.
+    const samplePrim = new Uint32Array(total);
+    // Which scale component the length goes on; the other two take the
+    // radius. The sign in the axis name only picks a direction, not a
+    // component, and a negative scale would mirror the asset.
+    const lengthComp = axis[1] === "x" ? 0 : axis[1] === "y" ? 1 : 2;
+    const q: number[] = [0, 0, 0, 1];
+    let w = 0;
+    for (const table of tables) {
+      const L = table.length;
+      const pts = table.points;
+      for (let k = 0; k < table.segLen.length; k++) {
+        if ((w & 1023) === 0) checkCancelled();
+        // The geometric length of the delta this node also takes the
+        // direction from, NOT a difference of cumulative lengths: those
+        // agree to a float hair, and here the two must be the SAME
+        // number or a segment's tube would not span its own endpoints.
+        const len = table.segLen[k];
+        if (len === 0) continue; // degenerate: no direction, nothing to draw
+        const dx = table.segDir[k * 3];
+        const dy = table.segDir[k * 3 + 1];
+        const dz = table.segDir[k * 3 + 2];
+        const inv = 1 / len;
+        const fx = dx * inv;
+        const fy = dy * inv;
+        const fz = dz * inv;
+        // Midpoint, from the segment's own start and delta.
+        op[w * 3] = table.segStart[k * 3] + dx * 0.5;
+        op[w * 3 + 1] = table.segStart[k * 3 + 1] + dy * 0.5;
+        op[w * 3 + 2] = table.segStart[k * 3 + 2] + dz * 0.5;
+        tangent[w * 3] = fx;
+        tangent[w * 3 + 1] = fy;
+        tangent[w * 3 + 2] = fz;
+        // A path of zero total length cannot reach here: every one of
+        // its segments is degenerate and was skipped above.
+        curveU[w] = (table.cum[k] + len * 0.5) / L;
+        orientQuat(q, fx, fy, fz, 0, 1, 0, axis);
+        rot[w * 4] = q[0];
+        rot[w * 4 + 1] = q[1];
+        rot[w * 4 + 2] = q[2];
+        rot[w * 4 + 3] = q[3];
+        // Radius resolves on the INPUT points, so it is averaged over
+        // the two the segment runs between — the segment itself has no
+        // element in that domain to have been evaluated at.
+        const r0 = radius.data[pts[k]];
+        const r1 = radius.data[pts[k + 1]];
+        const r = Math.max(0, (r0 + r1) * 0.5);
+        scale[w * 3] = r;
+        scale[w * 3 + 1] = r;
+        scale[w * 3 + 2] = r;
+        scale[w * 3 + lengthComp] = len + 2 * extend;
+        seeds[w] = hashCombine(seed, w);
+        samplePrim[w] = table.prim;
+        w++;
+      }
+    }
+    carryPrimitiveAttributes(
+      geo.attrs.primitive,
+      out.attrs.point,
+      samplePrim,
+      "pathSegments",
+      "point",
     );
     return { out: [makeGeometryItem(out)] };
   },

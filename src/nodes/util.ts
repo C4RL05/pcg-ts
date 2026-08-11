@@ -782,6 +782,91 @@ export function quatFromBasis(
   return out;
 }
 
+/** Which local axis an orientation maps onto its forward direction. */
+export const ORIENT_AXES = ["+x", "-x", "+y", "-y", "+z", "-z"] as const;
+
+/** Squared-length threshold below which up and forward count as parallel. */
+export const ORIENT_PARALLEL_EPS = 1e-12;
+
+/**
+ * Quaternion ([x, y, z, w]) putting the chosen local `axis` along a UNIT
+ * forward direction, with a UNIT `up` hint fixing the roll. Both inputs
+ * must already be normalized — the callers normalize once, outside their
+ * per-element loops, and the parallel test below is only scale-invariant
+ * because of it.
+ *
+ * This is the one place the library builds an orientation from a
+ * direction. orientAlongVector and pathSegments both go through it for
+ * the reason {@link PolylineArcTable} gives about arc length: two nodes
+ * computing the same quantity is how they drift apart, and here the
+ * drift would be invisible — a roll that disagrees by a degree still
+ * looks like a rotation. The up-hint fallbacks ([0, 0, 1], then
+ * [1, 0, 0]) are part of that contract, not an implementation detail:
+ * they are what makes a vertical direction's roll deterministic rather
+ * than whatever the cross product degenerated to.
+ */
+export function orientQuat(
+  out: number[],
+  fx: number,
+  fy: number,
+  fz: number,
+  upx: number,
+  upy: number,
+  upz: number,
+  axis: string,
+): number[] {
+  // right = up x forward, falling back when (anti)parallel.
+  let rx = upy * fz - upz * fy;
+  let ry = upz * fx - upx * fz;
+  let rz = upx * fy - upy * fx;
+  let rl = rx * rx + ry * ry + rz * rz;
+  if (rl <= ORIENT_PARALLEL_EPS) {
+    // [0, 0, 1] x f
+    rx = -fy;
+    ry = fx;
+    rz = 0;
+    rl = rx * rx + ry * ry;
+    if (rl <= ORIENT_PARALLEL_EPS) {
+      // f is (anti)parallel to Z too; [1, 0, 0] x f always works here.
+      rx = 0;
+      ry = -fz;
+      rz = fy;
+      rl = ry * ry + rz * rz;
+    }
+  }
+  const rInv = 1 / Math.sqrt(rl);
+  rx *= rInv;
+  ry *= rInv;
+  rz *= rInv;
+  // u = forward x right (unit: forward and right are orthonormal).
+  const ux = fy * rz - fz * ry;
+  const uy = fz * rx - fx * rz;
+  const uz = fx * ry - fy * rx;
+  // Assign (right, u, forward) to basis columns so the chosen local
+  // axis maps to forward and the frame stays right-handed.
+  switch (axis) {
+    case "+x":
+      quatFromBasis(out, fx, fy, fz, ux, uy, uz, -rx, -ry, -rz);
+      break;
+    case "-x":
+      quatFromBasis(out, -fx, -fy, -fz, ux, uy, uz, rx, ry, rz);
+      break;
+    case "+y":
+      quatFromBasis(out, -rx, -ry, -rz, fx, fy, fz, ux, uy, uz);
+      break;
+    case "-y":
+      quatFromBasis(out, rx, ry, rz, -fx, -fy, -fz, ux, uy, uz);
+      break;
+    case "+z":
+      quatFromBasis(out, rx, ry, rz, ux, uy, uz, fx, fy, fz);
+      break;
+    default: // "-z"
+      quatFromBasis(out, -rx, -ry, -rz, ux, uy, uz, -fx, -fy, -fz);
+      break;
+  }
+  return out;
+}
+
 /** Rotate vector v by unit quaternion q, writing into out (xyz). */
 export function rotateVec(
   out: number[],
