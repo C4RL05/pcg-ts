@@ -1,6 +1,6 @@
 {
   "name": "pcg-ts",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Deterministic procedural content generation for TypeScript: domain attributes, node graphs, deferred fields, hierarchical streaming. Optional three.js interop.",
   "license": "MIT",
   "author": "C4RL05 <carlos@helloenjoy.com>",
@@ -41,7 +41,8 @@
     "docs/design.md",
     "docs/examples.md",
     "docs/examples.json",
-    "examples/graphs",
+    "examples/graphs/basics-*.json",
+    "examples/graphs/pipeline-*.json",
     "skills"
   ],
   "exports": {
@@ -95,7 +96,7 @@
     "docs:examples": "node scripts/gen-examples.mjs",
     "docs:site": "node scripts/gen-site.mjs",
     "corpus:golden": "node scripts/gen-corpus-golden.mjs",
-    "prepublishOnly": "npm run check && npm test && npm run build"
+    "prepublishOnly": "npm run check && npm test && npm run build && node scripts/smoke-dist.mjs"
   },
   "peerDependencies": {
     "three": "^0.185.1"

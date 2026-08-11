@@ -28,6 +28,7 @@
  * `filter/thin-by-density`, `filter/by-distance-to-curve` ->
  * `filter/by-distance-to`, and `shape/path-loop` -> `shape/ring`.
  */
+import { ensureStandardNodesRegistered } from "../nodes/registerAll.js";
 import { registerComposePrimitives } from "./compose.js";
 import { registerFillPrimitives } from "./fill.js";
 import { registerFilterPrimitives } from "./filter.js";
@@ -45,6 +46,13 @@ export {
   primitiveFamily,
 } from "./define.js";
 
+// The recipes below name standard node types, and definePrimitive resolves
+// those names eagerly (registerSubgraph validates them at registration).
+// This call is a symbol-level dependency on every standard-node module, so
+// bundler code splitting cannot evaluate this module first — a bare
+// side-effect import can be reordered, a used symbol cannot. See
+// src/nodes/registerAll.ts for the shipped failure this prevents.
+ensureStandardNodesRegistered();
 // write first: place/on-surface references write/height-slope.
 registerWritePrimitives();
 // filter next: fill/scatter-by-density references filter/thin-by-density.

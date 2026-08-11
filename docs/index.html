@@ -399,12 +399,12 @@
     <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>2,675</b><span>tests, all green</span></div>
+      <div class="stat"><b>2,841</b><span>tests, all green</span></div>
       <div class="stat"><b>38</b><span>registered node types</span></div>
       <div class="stat"><b>34</b><span>named primitives</span></div>
       <div class="stat"><b>42</b><span>field-grammar functions</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b><!--pcg:version-minor-->v0.14<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b><!--pcg:version-minor-->v0.15<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -679,6 +679,13 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.15.0 <small>2026-08-11</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Cooks leave the main thread. A profile of a streamed world found the freeze nobody's budget could slice: <code>budgetMs</code> yields <em>between</em> nodes, and one noise field over a cell's points is a ~100&nbsp;ms atom — so <code>pcg-ts/worker</code> ships a <code>CookWorkerPool</code> that cooks serialized graphs off-thread. The design was already the right shape: a graph crosses once per worker as JSON, each cook sends parameter patches, and outputs return with every typed array on the transfer list — the boundary costs under a millisecond against the cook it relocates. Byte-identity is tested rather than assumed: string tables cross in interning order so <code>u32</code> index columns survive exactly, errors rehydrate into real classes with the node name and the fix intact, and a pooled <code>World</code> matches a no-pool <code>World</code> byte-for-byte along a streaming path with evictions. <code>LevelDef</code> gains <code>bindPatches</code>, the serializable sibling of <code>bind()</code>, applied by one shared implementation on both paths so they cannot drift. Two defects fixed with names: three r0.185 keys renderer state per instanced mesh and frees it only on a material's <code>dispose</code> event, so sharing one material across meshes leaks pipelines unboundedly — per-mesh clones disposed on every release path end it; and esbuild builds cross-chunk edges from <em>used symbols</em>, so a bare side-effect import of the node registry rode on chunk-ordering luck that two new entry points ran out of — an evaluation-order witness makes the edge real, and a twelve-case fresh-process smoke gate on the built package now runs before any publish. 2841 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
@@ -692,7 +699,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts <!--pcg:version-->v0.14.0<!--/pcg:version--></span>
+    <span>pcg-ts <!--pcg:version-->v0.15.0<!--/pcg:version--></span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
