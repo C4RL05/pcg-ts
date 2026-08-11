@@ -34,9 +34,22 @@ export interface SliderSpec {
   unit?: string;
 }
 
+/** Params a slider cannot drive: a choice from a fixed set. */
+export type EnumParam = {
+  [K in keyof RigParams]: RigParams[K] extends string ? K : never;
+}[keyof RigParams];
+
+/** One select: the param it drives and the options it offers. */
+export interface SelectSpec {
+  key: EnumParam;
+  label: string;
+  options: readonly { value: string; label: string }[];
+}
+
 export interface Section {
   title: string;
   sliders: SliderSpec[];
+  selects?: SelectSpec[];
 }
 
 /**
@@ -78,6 +91,16 @@ export const SECTIONS: readonly Section[] = [
   },
   {
     title: "cables",
+    selects: [
+      {
+        key: "drapeMode",
+        label: "drape net",
+        options: [
+          { value: "radius", label: "radius — every near pair" },
+          { value: "relativeNeighborhood", label: "relative neighbourhood" },
+        ],
+      },
+    ],
     sliders: [
       { key: "danglerCount", label: "danglers", min: 0, max: 400, step: 5 },
       { key: "danglerLength", label: "drop", min: 0.2, max: 10, step: 0.1, unit: "m" },
@@ -88,6 +111,7 @@ export const SECTIONS: readonly Section[] = [
       { key: "curlVariant", label: "cable variant", min: 0, max: 20, step: 1 },
       { key: "drapeCount", label: "drape anchors", min: 0, max: 120, step: 2 },
       { key: "drapeReach", label: "drape reach", min: 1, max: 20, step: 0.5, unit: "m" },
+      { key: "drapeMinLength", label: "drop chords under", min: 0, max: 20, step: 0.25, unit: "m" },
       { key: "drapeSlack", label: "slack", min: 0, max: 2, step: 0.05 },
       { key: "slackJitter", label: "slack variation", min: 0, max: 1, step: 0.05 },
       { key: "cableRadius", label: "cable radius", min: 0.005, max: 0.2, step: 0.005, unit: "m" },
@@ -125,6 +149,7 @@ export interface PanelView {
 /** Control callbacks the panel invokes on the host. */
 export interface PanelHost {
   setNumber(key: NumericParam, value: number): void;
+  setChoice(key: EnumParam, value: string): void;
   setWeight(kind: PartKind, weight: number): void;
   setSeed(seed: number): void;
   setShading(shading: Shading): void;

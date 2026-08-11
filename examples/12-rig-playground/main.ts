@@ -49,7 +49,7 @@ import {
   type RigParams,
   type RigResult,
 } from "./rig.js";
-import type { NumericParam, PanelBridge, PanelView, Shading } from "./view.js";
+import type { EnumParam, NumericParam, PanelBridge, PanelView, Shading } from "./view.js";
 
 // -- scene ------------------------------------------------------------------
 
@@ -246,6 +246,10 @@ const host = {
     params = { ...params, [key]: value };
     rebuildGraph();
   },
+  setChoice(key: EnumParam, value: string) {
+    params = { ...params, [key]: value };
+    rebuildGraph();
+  },
   setWeight(kind: PartKind, weight: number) {
     params = { ...params, weights: { ...params.weights, [kind]: weight } };
     rebuildGraph();
@@ -287,9 +291,20 @@ declare global {
     __rigReady?: () => boolean;
     __rigChrome?: (show: boolean) => void;
     __rigView?: (name: string) => void;
+    __rigSet?: (patch: Partial<RigParams>) => void;
   }
 }
 window.__rigReady = () => !cooking && lastResult !== undefined;
+/**
+ * Set any subset of the params at once. The panel drives one knob at a
+ * time; this is for scripted comparisons, where the whole point is that
+ * two frames differ by exactly the fields named here and nothing else.
+ */
+window.__rigSet = (patch: Partial<RigParams>) => {
+  params = { ...params, ...patch, weights: { ...params.weights, ...(patch.weights ?? {}) } };
+  rebuildGraph();
+  publish();
+};
 window.__rigChrome = (show: boolean) => {
   const panel = document.getElementById("panel");
   if (panel) panel.style.display = show ? "" : "none";

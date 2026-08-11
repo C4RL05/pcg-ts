@@ -18,6 +18,7 @@
     type PanelBridge,
     type PanelHost,
     type PanelView,
+    type SelectSpec,
     type Shading,
     type SliderSpec,
   } from "./view.js";
@@ -54,6 +55,9 @@
   function adopt(v: PanelView): void {
     for (const section of SECTIONS) {
       for (const spec of section.sliders) {
+        if (v.params[spec.key] !== last.params[spec.key]) params[spec.key] = v.params[spec.key];
+      }
+      for (const spec of section.selects ?? []) {
         if (v.params[spec.key] !== last.params[spec.key]) params[spec.key] = v.params[spec.key];
       }
     }
@@ -120,6 +124,12 @@
    * a control that silently disappears is worse than one out of place.
    */
   const MIX_SECTION = "components";
+  /** A choice from a fixed set — no drag phase, so it commits at once. */
+  function applyChoice(spec: SelectSpec, value: string): void {
+    params[spec.key] = value as RigParams[typeof spec.key];
+    host.setChoice(spec.key, value);
+  }
+
   const mixHasHome = SECTIONS.some((s) => s.title === MIX_SECTION);
 
   /** Decimals to show, read off the step so the readout never over-reports. */
@@ -253,6 +263,19 @@
       <h2>{section.title}</h2>
 
       {#if section.title === MIX_SECTION}{@render mix()}{/if}
+
+      {#each section.selects ?? [] as spec (spec.key)}
+        <label class="row">
+          <span>{spec.label}</span>
+          <select
+            value={params[spec.key]}
+            onchange={(e) => applyChoice(spec, e.currentTarget.value)}>
+            {#each spec.options as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+      {/each}
 
       {#each section.sliders as spec (spec.key)}
         <label class="row">

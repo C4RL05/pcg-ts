@@ -27,6 +27,7 @@ import {
   cos,
   div,
   fbm,
+  filterByAttribute,
   filterByDensity,
   firstGeometry,
   floor,
@@ -112,7 +113,11 @@ export interface RigParams {
   curlOctaves: number;
   curlVariant: number;
   drapeCount: number;
+  /** How the chords are chosen: "radius" or "relativeNeighborhood". */
+  drapeMode: string;
   drapeReach: number;
+  /** Chords shorter than this are dropped entirely, in metres. */
+  drapeMinLength: number;
   drapeSlack: number;
   /** How much the sag varies from chord to chord. */
   slackJitter: number;
@@ -148,7 +153,9 @@ export const DEFAULT_PARAMS: RigParams = {
   curlOctaves: 2,
   curlVariant: 0,
   drapeCount: 34,
-  drapeReach: 7,
+  drapeMode: "relativeNeighborhood",
+  drapeReach: 12,
+  drapeMinLength: 0,
   drapeSlack: 0.55,
   slackJitter: 0.35,
   cableRadius: 0.035,
@@ -461,7 +468,13 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
   // chain to hang, and free above that.
   const spacing = params.span / Math.max(1, params.drapeCount - 1);
   const chords = graph.add(connectPoints, {
-    mode: "radius",
+    // BOTH modes read the same radius neighbourhood; 'relativeNeighborhood'
+    // then applies the lune test on top, keeping a pair only when no third
+    // point is closer to both endpoints. On points strung along a curve
+    // that is a strong thinner — the intermediate anchors block most
+    // long chords — so it wants a much larger reach than radius mode to
+    // find anything at all.
+    mode: params.drapeMode,
     radius: Math.max(params.drapeReach, spacing * 1.05),
     lengthAttr: "edgeLength",
   });
@@ -502,7 +515,28 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
   graph.connect(chords, "out", drapeEven, "in");
   graph.connect(drapeEven, "out", sag, "in");
   graph.connect(sag, "out", drapeTube, "in");
-  graph.connect(drapeTube, "out", drapeSpawn, "in");
+
+  // The length filter runs on the TUBE SEGMENTS, not on the chords —
+  // which sounds backwards and is the only place it fits. There is no
+  // filter in this library that selects primitives by an attribute
+  // (filterPrimitivesByBounds goes by bounds), and the point filters all
+  // destroy topology, which a chord still needs at that stage. By the
+  // time pathSegments has run the topology has served its purpose and
+  // the segments are just instance points — and each one carries the
+  // `edgeLength` of the chord it came from, having ridden the primitive
+  // domain the whole way down. Every segment of one chord shares that
+  // value, so a threshold takes whole chords and never half of one.
+  if (params.drapeMinLength > 0) {
+    const long = graph.add(filterByAttribute, {
+      attribute: "edgeLength",
+      comparison: "ge",
+      value: params.drapeMinLength,
+    });
+    graph.connect(drapeTube, "out", long, "in");
+    graph.connect(long, "out", drapeSpawn, "in");
+  } else {
+    graph.connect(drapeTube, "out", drapeSpawn, "in");
+  }
   graph.output(drapeSpawn, "instances", "drapes");
 }
 
