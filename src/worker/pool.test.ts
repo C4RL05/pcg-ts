@@ -14,11 +14,14 @@ import {
   deserializeGraph,
   fieldFromJson,
   jitterPoints,
+  meshPrimitive,
   pointScatterInBounds,
   pointScatterInWorld,
   serializeGraph,
-  transformPoints,
+  setAttribute,
+  spawnInstances,
   type SerializedGraph,
+  transformPoints,
 } from "../index.js";
 import { applyParamPatches } from "../runtime/patches.js";
 import type { CellOutputs, ParamPatch } from "../runtime/types.js";
@@ -46,31 +49,57 @@ async function cookLocally(
 }
 
 /**
- * Re-window the endless-forest graph to one streaming cell: every
- * world-anchored scatter gets the cell's query window and the terrain
- * plane recenters on it — the exact shape of patch the forest demo's
- * per-cell binds produce.
+ * A serialized streaming-world graph in the shape a per-cell bind
+ * produces patches for: a terrain plane, a world-anchored scatter with a
+ * per-point species string, and an instances terminal. The scatter is
+ * windowed and the plane recentred per cell by `windowPatches` below —
+ * the exact contract a `World` level's `bindPatches` exercises.
  */
-function forestWindowPatches(json: SerializedGraph, cx: number, cz: number, size: number): ParamPatch[] {
+function streamingGraphJson(): SerializedGraph {
+  const graph = new Graph(46);
+  const ground = graph.add(meshPrimitive, {
+    shape: "plane",
+    size: [40, 0, 40],
+    subdivisions: [16, 1, 16],
+  });
+  const scatter = graph.add(pointScatterInWorld, { density: 0.5, cellSize: 8, seed: 11 });
+  const species = graph.add(setAttribute, {
+    name: "species",
+    type: "string",
+    values: ["fir", "boulder"],
+    value: fieldFromJson({ fn: "mul", args: [{ fn: "randomField", key: "species" }, 2] }),
+  });
+  const spawn = graph.add(spawnInstances, { assetId: "fir", assetAttr: "species" });
+  graph.connect(scatter, "out", species, "in");
+  graph.connect(species, "out", spawn, "in");
+  graph.output(ground, "out", "terrain");
+  graph.output(spawn, "instances", "instances");
+  return serializeGraph(graph);
+}
+
+/**
+ * Re-window a streaming graph to one cell: every world-anchored scatter
+ * gets the cell's query window, and every terrain plane recenters on it.
+ */
+function windowPatches(json: SerializedGraph, cx: number, cz: number, size: number): ParamPatch[] {
   const min = [cx * size, 0, cz * size];
   const max = [(cx + 1) * size, 0, (cz + 1) * size];
   const patches: ParamPatch[] = [];
   for (const node of json.nodes) {
-    if (node.type !== "pointScatterInWorld") continue;
-    patches.push(
-      { node: node.id, param: "boundsMin", value: min },
-      { node: node.id, param: "boundsMax", value: max },
-    );
+    if (node.type === "pointScatterInWorld") {
+      patches.push(
+        { node: node.id, param: "boundsMin", value: min },
+        { node: node.id, param: "boundsMax", value: max },
+      );
+    } else if (node.type === "meshPrimitive") {
+      patches.push(
+        { node: node.id, param: "size", value: [size, 0, size] },
+        { node: node.id, param: "center", value: [(cx + 0.5) * size, 0, (cz + 0.5) * size] },
+      );
+    }
   }
-  patches.push(
-    { node: "ground", param: "size", value: [size, 0, size] },
-    { node: "ground", param: "center", value: [(cx + 0.5) * size, 0, (cz + 0.5) * size] },
-    { node: "ground", param: "subdivisions", value: [16, 1, 16] },
-  );
   return patches;
 }
-
-const FOREST = loadGraphJson("endless-forest.json");
 
 /**
  * A deliberately slow serialized graph (~hundreds of ms: fbm noise over a
@@ -128,7 +157,8 @@ describe("CookWorkerPool", () => {
     }
   }, 60_000);
 
-  it("cooks re-windowed endless-forest cells byte-identically (the real consumer's shape)", async () => {
+  it("cooks re-windowed streaming cells byte-identically (the per-cell bind shape)", async () => {
+    const json = streamingGraphJson();
     const pool = new CookWorkerPool({ workers: 2, createWorker: entry.createWorker });
     try {
       const windows: readonly (readonly [number, number])[] = [
@@ -136,14 +166,14 @@ describe("CookWorkerPool", () => {
         [-1, 2],
       ];
       for (const [cx, cz] of windows) {
-        const patches = forestWindowPatches(FOREST, cx, cz, 40);
-        const remote = await pool.cook({ graph: FOREST, patches });
-        const local = await cookLocally(FOREST, patches);
+        const patches = windowPatches(json, cx, cz, 40);
+        const remote = await pool.cook({ graph: json, patches });
+        const local = await cookLocally(json, patches);
         expect(outputsDiff(local, remote.outputs), `window ${cx},${cz}`).toBeNull();
-        // A forest cell is not trivially empty: the equality above must
-        // be about real content.
-        const trees = remote.outputs["trees"];
-        expect(trees.some((i) => i.kind === "instances" && i.batches.length > 0)).toBe(true);
+        // A cell is not trivially empty: the equality above must be
+        // about real content (density 0.5 over 1,600 m² ≈ 800 points).
+        const instances = remote.outputs["instances"];
+        expect(instances.some((i) => i.kind === "instances" && i.batches.length > 0)).toBe(true);
       }
     } finally {
       await pool.close();
@@ -250,7 +280,7 @@ describe("CookWorkerPool", () => {
       const controller = new AbortController();
       controller.abort();
       await expect(
-        pool.cook({ graph: FOREST, signal: controller.signal }),
+        pool.cook({ graph: streamingGraphJson(), signal: controller.signal }),
       ).rejects.toBeInstanceOf(CookCancelledError);
     } finally {
       await pool.close();
@@ -332,7 +362,7 @@ describe("CookWorkerPool", () => {
     const hanging = pool.cook({ graph: slowGraphJson() });
     await pool.close();
     await expect(hanging).rejects.toBeInstanceOf(CookCancelledError);
-    await expect(pool.cook({ graph: FOREST })).rejects.toThrow(/closed/);
+    await expect(pool.cook({ graph: streamingGraphJson() })).rejects.toThrow(/closed/);
   }, 60_000);
 
   it("fails loudly (with the fix) when no worker can boot", async () => {
