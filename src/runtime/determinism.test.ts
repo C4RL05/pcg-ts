@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CookCancelledError } from "../graph/index.js";
-import { coordKeys, outputsDiff, scatterLevel } from "./testSupport.js";
+import { coordKeys, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
 import type { CellCoord } from "./types.js";
 import { World, type WorldOptions } from "./world.js";
 

@@ -16,7 +16,7 @@ import {
 } from "./index.js";
 import { subgraphNode } from "../graph/index.js";
 import { __defineSubgraphUnchecked, __resetSubgraphRegistry, listSubgraphs } from "./subgraphRegistry.js";
-import { firstGeo, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, snapshotGeometry } from "./nodes.testsupport.js";
 
 /**
  * An outer graph holding ONE subgraph node ("sub") with an embedded

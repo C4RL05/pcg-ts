@@ -8,7 +8,7 @@ import {
   pointScatterInWorld,
   type PointScatterInWorldParams,
 } from "./index.js";
-import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 
 describe("pointGrid", () => {
   it("lays out origin + spacing with X fastest", async () => {

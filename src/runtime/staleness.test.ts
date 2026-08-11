@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { firstGeometry } from "../graph/index.js";
-import { childEchoLevel, coordKeys, outputsDiff, scatterLevel } from "./testSupport.js";
+import { childEchoLevel, coordKeys, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
 import { World } from "./world.js";
 
 /** Unbounded "planet" + bounded "chunk", with handles kept for edits. */

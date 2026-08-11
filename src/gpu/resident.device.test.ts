@@ -5,7 +5,7 @@
  * chains of 2-8 fusable nodes, the ported node semantics, run-to-run
  * determinism, chunk-seam byte equality, budget slicing, cancellation
  * without resource leaks, the resident memory bound, and stats /
- * pipeline-cache semantics. Bundles residentScenario.ts with esbuild and
+ * pipeline-cache semantics. Bundles resident.testsupport.ts with esbuild and
  * executes it in a plain Node child process (see deviceRunner.mjs for
  * why no vitest worker may touch Dawn). Skips visibly without an adapter.
  */
@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./testDevice.js";
+import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
 
 interface AttrCompare {
   name: string;
@@ -277,7 +277,7 @@ function runScenario(): ScenarioOutput {
   const outfile = join(outDir, `resident-${process.pid}.mjs`);
   try {
     buildSync({
-      entryPoints: [join(here, "residentScenario.ts")],
+      entryPoints: [join(here, "resident.testsupport.ts")],
       bundle: true,
       platform: "node",
       format: "esm",

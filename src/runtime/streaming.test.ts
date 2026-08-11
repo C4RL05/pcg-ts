@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { firstGeometry } from "../graph/index.js";
-import { childEchoLevel, coordKeys, scatterLevel } from "./testSupport.js";
+import { childEchoLevel, coordKeys, scatterLevel } from "./runtime.testsupport.js";
 import type { CellCoord } from "./types.js";
 import { World } from "./world.js";
 

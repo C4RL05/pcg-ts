@@ -12,7 +12,7 @@ import { Graph } from "../graph/index.js";
 import { setAttribute } from "../nodes/attributes.js";
 import { pointScatterInBounds } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
-import { geometryDiff, outputsDiff } from "./testSupport.js";
+import { geometryDiff, outputsDiff } from "./runtime.testsupport.js";
 import type { CellOutputs, LevelDef } from "./types.js";
 import { World } from "./world.js";
 

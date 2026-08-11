@@ -12,7 +12,7 @@ import {
   serializeGraph,
   transformPoints,
 } from "../nodes/index.js";
-import { firstGeo, snapshotGeometry } from "../nodes/testSupport.js";
+import { firstGeo, snapshotGeometry } from "../nodes/nodes.testsupport.js";
 import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";
 import { cook } from "./execute.js";

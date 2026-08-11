@@ -9,7 +9,7 @@ import {
   transferAttribute,
   type TransferAttributeParams,
 } from "./index.js";
-import { firstGeo, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 
 /** Ground quad on y=0 spanning [0,10]^2 in xz; uv = xz/10; val, id attrs. */
 function quadSource(): Geometry {

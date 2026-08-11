@@ -7,7 +7,7 @@ import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/
 import { resolveExposedParam } from "../nodes/subgraphParams.js";
 import { dataInput } from "./dataInput.js";
 import { applyParamPatches } from "./patches.js";
-import { geometryDiff } from "./testSupport.js";
+import { geometryDiff } from "./runtime.testsupport.js";
 import type { ParamPatch } from "./types.js";
 
 function scatterGraph(): { graph: Graph; scatter: NodeHandle<PointScatterInBoundsParams> } {

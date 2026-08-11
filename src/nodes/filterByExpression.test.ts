@@ -22,7 +22,7 @@ import {
 } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import { fieldFromJson, filterByExpression, type FilterByExpressionParams } from "./index.js";
-import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 
 function cloudAt(positions: readonly (readonly number[])[]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);

@@ -23,7 +23,7 @@ import {
   splineSample,
   writeTangents,
 } from "./index.js";
-import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 // Registers the shipped primitives, so `place/along-curve` can be reached
 // by name from a serialized graph — the way the pipeline actually wires it.
 import "../primitives/index.js";

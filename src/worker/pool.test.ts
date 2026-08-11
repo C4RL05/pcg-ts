@@ -25,9 +25,9 @@ import {
 } from "../index.js";
 import { applyParamPatches } from "../runtime/patches.js";
 import type { CellOutputs, ParamPatch } from "../runtime/types.js";
-import { outputsDiff } from "../runtime/testSupport.js";
+import { outputsDiff } from "../runtime/runtime.testsupport.js";
 import { CookWorkerPool } from "./pool.js";
-import { bundleWorkerEntry, type BundledEntry } from "./testSupport.js";
+import { bundleWorkerEntry, type BundledEntry } from "./worker.testsupport.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GRAPHS_DIR = join(HERE, "../../examples/graphs");

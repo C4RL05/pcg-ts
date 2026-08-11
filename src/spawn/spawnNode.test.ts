@@ -15,7 +15,7 @@ import {
 } from "../graph/index.js";
 import { fieldFromJson, filterByExpression, setAttribute } from "../nodes/index.js";
 import { getNodeType } from "../nodes/registry.js";
-import { snapshotGeometry } from "../nodes/testSupport.js";
+import { snapshotGeometry } from "../nodes/nodes.testsupport.js";
 import { spawnInstances, type SpawnInstancesParams } from "./spawnNode.js";
 
 /** Source emitting one fixed geometry item (stable rev across cooks). */

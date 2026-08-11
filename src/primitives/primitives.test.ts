@@ -23,7 +23,7 @@ import {
   getRegisteredSubgraph,
   listSubgraphs,
 } from "../index.js";
-import { snapshotGeometry } from "../nodes/testSupport.js";
+import { snapshotGeometry } from "../nodes/nodes.testsupport.js";
 import "./index.js";
 import { PRIMITIVE_FAMILIES, primitiveFamily } from "./define.js";
 

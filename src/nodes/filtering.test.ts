@@ -22,7 +22,7 @@ import {
   runNode,
   shuffledOrder,
   snapshotGeometry,
-} from "./testSupport.js";
+} from "./nodes.testsupport.js";
 
 function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);

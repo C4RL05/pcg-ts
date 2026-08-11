@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { Graph, firstGeometry } from "../graph/index.js";
 import { pointScatterInBounds } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
-import { childEchoLevel, coordKeys, outputsDiff, scatterLevel } from "./testSupport.js";
+import { childEchoLevel, coordKeys, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
 import type { CellCoord, LevelDef } from "./types.js";
 import { World, WorldValidationError } from "./world.js";
 

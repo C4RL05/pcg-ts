@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Graph, cook, firstGeometry, makeValueItem, type NodeHandle } from "../graph/index.js";
 import { deserializeGraph, getNodeType, serializeGraph } from "../nodes/index.js";
 import { dataInput, type DataInputParams } from "./dataInput.js";
-import { childEchoLevel, scatterLevel } from "./testSupport.js";
+import { childEchoLevel, scatterLevel } from "./runtime.testsupport.js";
 import type { LevelDef } from "./types.js";
 import { World } from "./world.js";
 

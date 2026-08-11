@@ -1,6 +1,6 @@
 /**
  * Real-device integration of the evaluator with cook, subgraphs, the
- * World, and captureAsync: bundles deviceScenario.ts with esbuild (a
+ * World, and captureAsync: bundles device.testsupport.ts with esbuild (a
  * transitive dev dependency via vite) and executes it in a plain Node
  * child process (see deviceRunner.mjs for why no vitest worker may
  * touch Dawn), asserting on its JSON observations. Skips visibly
@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./testDevice.js";
+import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
 
 interface ScenarioOutput {
   ok: boolean;
@@ -87,7 +87,7 @@ function runScenario(): ScenarioOutput {
   const outfile = join(outDir, `scenario-${process.pid}.mjs`);
   try {
     buildSync({
-      entryPoints: [join(here, "deviceScenario.ts")],
+      entryPoints: [join(here, "device.testsupport.ts")],
       bundle: true,
       platform: "node",
       format: "esm",

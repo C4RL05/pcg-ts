@@ -10,7 +10,7 @@ import {
 import { makeGeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { fieldFromJson, splineSample, surfaceSample, volumeSample } from "./index.js";
-import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 
 /** Unit square in the XY plane at z = 0, two CCW triangles. */
 function unitSquare() {

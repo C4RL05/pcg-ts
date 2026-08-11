@@ -10,9 +10,9 @@
  * - `corpusFingerprint` (`src/docs/corpus.ts`) is float-exact but hashes
  *   each attribute COLUMN in index order, so any reordering is a total
  *   mismatch with nothing to read. Right for determinism, unusable here.
- * - `geometryDiff` (`src/runtime/testSupport.ts`) walks the buffers
+ * - `geometryDiff` (`src/runtime/runtime.testsupport.ts`) walks the buffers
  *   element by element — also index-ordered.
- * - `snapshotGeometry` (`src/nodes/testSupport.ts`) returns VALUES rather
+ * - `snapshotGeometry` (`src/nodes/nodes.testsupport.ts`) returns VALUES rather
  *   than a hash, so it can be permuted before comparing, and that is
  *   exactly what the equivariance suite does when it knows the
  *   permutation. It does not help when the reordering is implicit.

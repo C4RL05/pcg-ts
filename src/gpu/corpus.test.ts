@@ -22,7 +22,7 @@ import {
   MINIMAL_SPECS,
   PARITY_CASES,
   corpusSpecs,
-} from "./corpus.js";
+} from "./corpus.testsupport.js";
 
 describe("device-test corpus", () => {
   it("minimal corpus covers every grammar fn (drift pin)", () => {

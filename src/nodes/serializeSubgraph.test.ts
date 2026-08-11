@@ -20,7 +20,7 @@ import {
   setAttribute,
   transformPoints,
 } from "./index.js";
-import { firstGeo, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, snapshotGeometry } from "./nodes.testsupport.js";
 
 /**
  * Outer graph with one subgraph node whose inner graph is nontrivial:

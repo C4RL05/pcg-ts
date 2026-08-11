@@ -13,7 +13,7 @@ import {
   transferAttribute,
   type MeshPrimitiveParams,
 } from "./index.js";
-import { firstGeo, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 
 async function mesh(params: Partial<MeshPrimitiveParams> = {}): Promise<Geometry> {
   return firstGeo((await runNode(meshPrimitive, params)).out);

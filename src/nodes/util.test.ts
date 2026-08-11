@@ -18,7 +18,7 @@ import {
   transformPoints,
   volumeSample,
 } from "./index.js";
-import { firstGeo, runNode } from "./testSupport.js";
+import { firstGeo, runNode } from "./nodes.testsupport.js";
 
 function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);

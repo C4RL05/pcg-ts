@@ -7,9 +7,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { compileFieldSpec } from "./compile.js";
-import { CORPUS_LAYOUT, corpusSpecs } from "./corpus.js";
+import { CORPUS_LAYOUT, corpusSpecs } from "./corpus.testsupport.js";
 import { runDeviceTasks } from "./runnerClient.js";
-import { deviceSuiteName, testDevice } from "./testDevice.js";
+import { deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
 
 describe.skipIf(testDevice === null)(deviceSuiteName("WGSL front-end validation"), () => {
   it("accepts every representative kernel with zero errors", () => {

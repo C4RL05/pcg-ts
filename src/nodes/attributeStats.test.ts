@@ -13,7 +13,7 @@ import {
   type AttributeRemapParams,
   type RemoveAttributeParams,
 } from "./index.js";
-import { firstGeo, runNode, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, runNode, snapshotGeometry } from "./nodes.testsupport.js";
 
 /** Point cloud with a scalar `v` attribute holding the given values. */
 function withValues(values: readonly number[], tupleSize = 1): ReturnType<typeof createPointCloud> {

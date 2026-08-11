@@ -10,7 +10,7 @@ import type { Geometry } from "../data/index.js";
 import { Graph, firstGeometry, type DataCollection, type NodeHandle } from "../graph/index.js";
 import { jitterPoints, type JitterPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
-import { geometryDiff, scatterLevel } from "./testSupport.js";
+import { geometryDiff, scatterLevel } from "./runtime.testsupport.js";
 import type { LevelDef } from "./types.js";
 import { World } from "./world.js";
 

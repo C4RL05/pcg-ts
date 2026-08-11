@@ -4,9 +4,9 @@ import { jitterPoints, type JitterPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
 import { CookWorkerPool } from "../worker/pool.js";
-import { bundleWorkerEntry, type BundledEntry } from "../worker/testSupport.js";
+import { bundleWorkerEntry, type BundledEntry } from "../worker/worker.testsupport.js";
 import { dataInput } from "./dataInput.js";
-import { coordKeys, outputsDiff, scatterLevel } from "./testSupport.js";
+import { coordKeys, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
 import type { LevelDef, ParamPatch } from "./types.js";
 import { World, WorldValidationError, type UpdateStats } from "./world.js";
 

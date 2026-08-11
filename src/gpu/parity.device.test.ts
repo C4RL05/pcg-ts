@@ -23,9 +23,9 @@ import {
   PARITY_CASES,
   PARITY_COUNT,
   PARITY_SEED,
-} from "./corpus.js";
+} from "./corpus.testsupport.js";
 import { decodeRun, dispatchTask, runDeviceTasks, type RunnerTask } from "./runnerClient.js";
-import { deviceSuiteName, testDevice } from "./testDevice.js";
+import { deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
 
 function cpuColumn(spec: FieldSpecArg, count: number, seed: number): Column {

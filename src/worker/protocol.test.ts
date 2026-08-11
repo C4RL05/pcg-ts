@@ -10,7 +10,7 @@ import {
   makeValueItem,
 } from "../graph/index.js";
 import type { CellOutputs } from "../runtime/types.js";
-import { geometryDiff, outputsDiff } from "../runtime/testSupport.js";
+import { geometryDiff, outputsDiff } from "../runtime/runtime.testsupport.js";
 import {
   decodeError,
   decodeOutputs,

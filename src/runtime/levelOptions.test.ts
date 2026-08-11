@@ -10,7 +10,7 @@ import { Graph, firstGeometry } from "../graph/index.js";
 import { jitterPoints } from "../nodes/pointOps.js";
 import { pointScatterInBounds } from "../nodes/sources.js";
 import { hashCombine } from "../random/index.js";
-import { childEchoLevel, geometryDiff, outputsDiff, scatterLevel } from "./testSupport.js";
+import { childEchoLevel, geometryDiff, outputsDiff, scatterLevel } from "./runtime.testsupport.js";
 import type { LevelDef } from "./types.js";
 import { World, WorldValidationError } from "./world.js";
 

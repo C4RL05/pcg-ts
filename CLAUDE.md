@@ -108,6 +108,13 @@ Not public API:
 - Any UI (editor tooling, example chrome beyond plain HTML) uses Svelte.
 - Error messages are part of the agent API: name the offending node, pin,
   or param and state the valid alternatives or the fix.
+- Test-only modules are named `*.testsupport.ts` — fixtures, scenario
+  builders and shared helpers that only tests may import. `*.test.ts` is
+  the test itself; `*.testsupport.ts` is what tests import. Nothing
+  reachable from a `tsup.config.ts` entry may import one, so a fixture can
+  never reach `dist/`. Some device suites bundle a `.testsupport.ts` by
+  PATH through esbuild rather than importing it, so renaming one means
+  grepping for the bare filename too, not just the import specifier.
 
 ## Unattended build protocol
 

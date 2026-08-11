@@ -12,7 +12,7 @@ import {
   setAttribute,
   transformPoints,
 } from "./index.js";
-import { firstGeo, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, snapshotGeometry } from "./nodes.testsupport.js";
 
 /**
  * The grammar's nesting cap, restated here rather than imported: this is

@@ -16,7 +16,7 @@
  * or an indexing bug, never rounding. The budget's half asserts that the
  * device path adds no diagnostic of its own — the two paths' messages are
  * compared as whole strings. Bundles
- * instancesScenario.ts with esbuild and executes it in a plain Node
+ * instances.testsupport.ts with esbuild and executes it in a plain Node
  * child process (see deviceRunner.mjs for why no vitest worker may touch
  * Dawn). Skips visibly without an adapter.
  */
@@ -26,7 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./testDevice.js";
+import { DEVICE_HOOK_TIMEOUT_MS, deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
 
 interface Parity {
   n: number;
@@ -240,7 +240,7 @@ function runScenario(): ScenarioOutput {
   const outfile = join(outDir, `instances-${process.pid}.mjs`);
   try {
     buildSync({
-      entryPoints: [join(here, "instancesScenario.ts")],
+      entryPoints: [join(here, "instances.testsupport.ts")],
       bundle: true,
       platform: "node",
       format: "esm",

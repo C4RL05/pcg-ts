@@ -15,7 +15,7 @@ import {
   runNode,
   shuffledOrder,
   snapshotGeometry,
-} from "./testSupport.js";
+} from "./nodes.testsupport.js";
 import { gatherPoints } from "./util.js";
 
 // ---------------------------------------------------------------------------

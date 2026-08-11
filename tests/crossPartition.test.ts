@@ -55,7 +55,7 @@ import {
   randomField,
   setAttribute,
 } from "../src/index.js";
-import { firstGeo } from "../src/nodes/testSupport.js";
+import { firstGeo } from "../src/nodes/nodes.testsupport.js";
 import { gatherPoints } from "../src/nodes/util.js";
 import {
   edgeKeys,

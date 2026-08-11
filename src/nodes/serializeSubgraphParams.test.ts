@@ -24,7 +24,7 @@ import {
   setAttribute,
   transformPoints,
 } from "./index.js";
-import { firstGeo, snapshotGeometry } from "./testSupport.js";
+import { firstGeo, snapshotGeometry } from "./nodes.testsupport.js";
 
 /**
  * An outer graph whose single subgraph node exposes two params: `count`,

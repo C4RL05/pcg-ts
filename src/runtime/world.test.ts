@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Graph, cook, makeValueItem } from "../graph/index.js";
 import { hasNodeType } from "../nodes/registry.js";
 import { dataInput } from "./dataInput.js";
-import { coordKeys, scatterLevel } from "./testSupport.js";
+import { coordKeys, scatterLevel } from "./runtime.testsupport.js";
 import type { LevelDef } from "./types.js";
 import { World, WorldValidationError } from "./world.js";
 
