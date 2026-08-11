@@ -217,8 +217,8 @@ export function peekFieldSpec(field: Field): FieldSpec | undefined {
  *
  * `acceptDerivedSpecs` is the caller's `GpuFieldResolver`-advertised
  * flag, read through {@link acceptsDerivedSpecs}. False (the default):
- * only specs AUTHORED via `fieldFromJson` are eligible, so every byte a
- * pre-v0.9 graph produced is unchanged — a derived spec describes a
+ * only specs AUTHORED via `fieldFromJson` are eligible, so a graph that
+ * never asked for the device keeps CPU bytes — a derived spec describes a
  * field faithfully, but accepting one moves that field's evaluation from
  * the CPU (the bit-exact reference) to the GPU (a documented
  * approximation) for a graph that never asked. True: any spec is
@@ -270,8 +270,8 @@ export function acceptsDerivedSpecs(
  * This is the fifth seam, and the one the type system cannot guard by
  * itself. {@link deviceSpec} makes the flag a REQUIRED argument, so a
  * seam that READS the predicate without it is a compile error. But
- * `GpuFieldResolver.acceptDerivedSpecs` has to stay optional — resolvers
- * written before v0.9 omit it — so a wrapper that FORGETS to forward it
+ * `GpuFieldResolver.acceptDerivedSpecs` has to stay optional — any
+ * third-party resolver may omit it — so a wrapper that FORGETS to forward it
  * typechecks cleanly while silently narrowing what the executor believes
  * the base will accept. The executor then salts memo keys for the
  * authored population while the base resolves the wider one: GPU bytes

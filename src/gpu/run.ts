@@ -237,8 +237,7 @@ interface KernelStep {
    * element range, with the uniform's `count` set to the batch's size and
    * `base` to its offset into the permutation — instead of once over the
    * whole element range. Only the indexed compose kernel of a
-   * multi-asset spawner terminal sets it; every other step, and every
-   * plan a v0.7 build could produce, is `false`.
+   * multi-asset spawner terminal sets it; every other step is `false`.
    */
   readonly perBatch: boolean;
   readonly bindings: readonly { readonly binding: number; readonly ref: BufRef }[];
@@ -304,8 +303,8 @@ interface InstancesDesc {
   readonly assetId: string;
   /**
    * String point attribute holding per-point asset ids, or `""` for
-   * constant mode (exactly one batch, no permutation, and a compose
-   * kernel byte-identical to v0.7's).
+   * constant mode (exactly one batch, no permutation, and the
+   * non-indexed compose kernel).
    */
   readonly assetAttr: string;
   /**

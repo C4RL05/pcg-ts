@@ -63,11 +63,10 @@ import type { Column, EvalContext, Field } from "./types.js";
  * `eligible` predicate returned a reason string — see `ResidentDesc`;
  * counted once per cook per such node, whether or not a run formed
  * around it) are part of this vocabulary, but the standard node library
- * declares none: every reason a standard node stays off the device today
- * is one of the per-field or per-run reasons above. (v0.7's
- * `"spawn-asset-attr"` was the only one, and v0.8 retired it —
- * `spawnInstances` is device-resident with `assetAttr` set as well,
- * since the grouping needs no device-side sort.)
+ * declares none: every reason a standard node stays off the device is one
+ * of the per-field or per-run reasons above. `spawnInstances` in
+ * particular is device-resident with `assetAttr` set as well, since the
+ * grouping needs no device-side sort.
  *
  * Element count is never a fallback reason: counts beyond one
  * dispatch's coverage split into chunked dispatches.
@@ -373,7 +372,7 @@ export interface GpuFieldResolver {
    * combinator API (`mul(position(), 0.1)`) rather than AUTHORED through
    * `fieldFromJson`? Omitted or false — the default — means no: such
    * fields evaluate on the CPU and count a `"derived-spec"` fallback, so
-   * every byte and every memo key is what a pre-v0.9 cook produced.
+   * every byte and every memo key is the CPU reference's.
    *
    * This advertisement is the SINGLE source of truth for that decision.
    * The executor reads it here to decide whether a node's memo key gains

@@ -170,10 +170,10 @@ export interface GpuFieldEvaluatorOptions {
   /**
    * Opt in to resolving fields whose spec was DERIVED by the combinator
    * API — `mul(position(), 0.1)`, `ge(randomField("species"), 0.72)` —
-   * rather than AUTHORED through `fieldFromJson`. Since v0.9 a combinator
-   * field describes itself faithfully, so "can this field be described"
-   * and "may it run on the device" became different questions, and this
-   * flag answers the second one.
+   * rather than AUTHORED through `fieldFromJson`. A combinator field
+   * describes itself faithfully, so "can this field be described" and
+   * "may it run on the device" are different questions; this flag answers
+   * the second one.
    *
    * Default false: a code-authored field evaluates on the CPU exactly as
    * it always has, byte for byte, and counts a `"derived-spec"` fallback

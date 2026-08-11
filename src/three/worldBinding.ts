@@ -41,8 +41,8 @@ import { materialListOf, toInstancedMeshes, type AssetMap } from "./instanced.js
  * Derive it from `CellContext.min`/`max`: the cell AABB's centre, and
  * half its diagonal plus the radius of the asset being drawn, so
  * instances straddling the cell border are not culled while still on
- * screen. Since v0.8 a cell can hold several assets and the sphere is
- * asked for per asset, so that padding is the *drawn* asset's radius,
+ * screen. A cell can hold several assets and the sphere is asked for
+ * per asset, so that padding is the *drawn* asset's radius,
  * not the largest one in the map — see {@link DeviceInstanceBinding.bounds}.
  */
 export interface DeviceCellBounds {
@@ -235,8 +235,8 @@ export class WorldThreeBinding {
    * coloured one (4 f32 per instance, the WGSL `array<vec3<f32>>`
    * stride).
    *
-   * This is a lower bound on device occupancy, and since v0.8 a loose
-   * one. The evaluator's buffer pool buckets allocations to powers of
+   * This is a lower bound on device occupancy, and a loose one. The
+   * evaluator's buffer pool buckets allocations to powers of
    * two with a 256-byte floor, and a multi-asset spawn takes one buffer
    * per asset (two with colour), so a cell with four small batches pays
    * four roundings instead of one: a 3-instance batch is 192 logical

@@ -94,8 +94,8 @@ export interface CookOptions {
    * that advertisement to decide both which nodes are salted and which
    * may fuse, and folds it into the salt itself, so cooks under the two
    * settings never serve each other's bytes. Absent or false — the
-   * default — every produced byte and every memo key is what a pre-v0.9
-   * cook produced.
+   * default — every produced byte and every memo key is the CPU
+   * reference's.
    */
   gpu?: GpuFieldResolver;
 }
@@ -841,8 +841,8 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
    * entirely. Without this suffix those cooks would share a key and serve
    * each other's bytes.
    *
-   * Empty suffix when the flag is off, so every memo key a pre-v0.9 graph
-   * produced is byte-identical.
+   * Empty suffix when the flag is off, so a cook without the flag keys
+   * exactly as a cook that never knew about it.
    */
   const gpuSalt = gpu === undefined ? "" : `${gpu.cacheSalt}${acceptDerived ? "+derived" : ""}`;
   const stats: CookStats = { cooked: 0, cached: 0, elapsedMs: 0 };
@@ -856,9 +856,9 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
   const order = topoOrder(graph, decls);
 
   // Device-resident runs exist only when the resolver implements both
-  // optional run methods; otherwise (including CPU-only cooks and
-  // v0.5-style resolvers) every code path below is exactly the per-node
-  // one and produced bytes and memo keys are unchanged.
+  // optional run methods; otherwise (including CPU-only cooks, and any
+  // resolver implementing neither) every code path below is exactly the
+  // per-node one and produced bytes and memo keys are unchanged.
   const detection =
     gpu !== undefined && gpu.planRun !== undefined && gpu.executeRun !== undefined
       ? detectResidentRuns(graph, order, new Set(gpu.residentTerminals ?? []), acceptDerived)

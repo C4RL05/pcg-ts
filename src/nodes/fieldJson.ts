@@ -249,9 +249,7 @@ register(
  * singleton would therefore stamp it: one `fieldFromJson({fn:"position"})`
  * anywhere in a process would make EVERY later `position()` look authored
  * — device eligibility would depend on module load order, which is not a
- * property a deterministic library may have. (Harmless before v0.9 only
- * because nothing else could carry a spec; the flip itself is as old as
- * `fieldFromJson`.)
+ * property a deterministic library may have.
  *
  * The copy is indistinguishable in everything the library keys on: same
  * `key`, same `tupleSize`, and evaluation delegates through

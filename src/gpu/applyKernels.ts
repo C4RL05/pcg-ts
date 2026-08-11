@@ -78,11 +78,13 @@ export const APPLY_WORKGROUP_SIZE = 64;
  * produced bytes, ALSO bump the evaluator's `SALT_VERSION` so memo
  * caches never serve stale fused output.
  *
- * Phase 29 deliberately did NOT bump it. Multi-asset grouping added a
- * NEW compose variant (`|perm`, with the `base` header field), and every
+ * Multi-asset grouping deliberately did NOT bump it. It added a NEW
+ * compose variant (`|perm`, with the `base` header field), and every
  * pre-existing kernel — the non-indexed compose included — still emits
- * character-for-character the text it emitted at v0.7.0 under the same
- * key. Nothing cached can be stale, because nothing cached changed.
+ * character-for-character the text it emitted before, under the same key.
+ * Nothing cached can be stale, because nothing cached changed. That is
+ * the test to apply to any future variant: a bump is required unless the
+ * existing keys still map to the existing bytes.
  */
 const APPLY_VERSION = "apply2";
 
