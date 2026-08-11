@@ -27,7 +27,7 @@ import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/inde
 import { isDeviceResidentInstances } from "../graph/data.js";
 import type { CellCoord, CellOutputs } from "../runtime/types.js";
 import { toPointsObject } from "./debug.js";
-import { toInstancedMeshes, type AssetMap } from "./instanced.js";
+import { materialListOf, toInstancedMeshes, type AssetMap } from "./instanced.js";
 
 /**
  * Bounding sphere for a cell, supplied out of band because a
@@ -165,9 +165,15 @@ interface CellEntry {
  *
  * Disposal contract: debug-point geometry and material are created per
  * cell and are disposed on evict. Instanced meshes have their
- * per-instance buffers released via `InstancedMesh.dispose()`, but the
- * asset geometry and material they reference are shared across cells and
- * are NOT disposed — they belong to the caller's asset map.
+ * per-instance buffers released via `InstancedMesh.dispose()` AND their
+ * material disposed — the material is a per-mesh clone `toInstancedMeshes`
+ * mints, and its `dispose` event is the one signal three's renderer
+ * accepts to drop the mesh's cached render state (render object, built
+ * shaders, pipeline, uniform buffers; see `cloneAssetMaterial` and
+ * `renderStateRelease.test.ts`). Without it a streaming world's renderer
+ * caches grow by every mesh ever cooked. The asset GEOMETRY (and any
+ * textures) stays shared across cells and is NOT disposed — it belongs to
+ * the caller's asset map, and the clone shares those by reference.
  *
  * Device-resident batches add a second disposal contract. `World` never
  * frees a `DeviceTransformsHandle` and the graph refuses to own one, so
@@ -458,16 +464,25 @@ export class WorldThreeBinding {
     // the rest are suppressed, since only one error can propagate and the
     // first is the one with a live cause.
     let failure: TeardownFailure;
-    // Releases the per-mesh instance buffers; shared asset geometry and
-    // material are intentionally left alone. These are guarded for the
-    // same reason the device section below is: `InstancedMesh.dispose()`,
-    // `BufferGeometry.dispose()` and `Material.dispose()` each dispatch a
-    // `dispose` event before doing anything else, and a listener (three's
-    // own renderer bookkeeping, or a caller's) may throw — which would
-    // otherwise abort teardown *above* the device section and strand
-    // every one of the cell's GPU buffers.
+    // Releases the per-mesh instance buffers AND the per-mesh material
+    // clones; shared asset geometry is intentionally left alone. The
+    // material dispose is not optional hygiene: firing its `dispose`
+    // event is the only way three's renderer releases the mesh's cached
+    // render state (render object, node builder state, pipeline,
+    // programs, uniform buffers) — skip it and a streaming world's
+    // renderer caches climb by ~one shader program per mesh per cook,
+    // forever. Every step is guarded for the same reason the device
+    // section below is: `InstancedMesh.dispose()` and
+    // `Material.dispose()` each dispatch a `dispose` event before doing
+    // anything else, and a listener (three's own renderer bookkeeping,
+    // or a caller's) may throw — which would otherwise abort teardown
+    // *above* the device section and strand every one of the cell's GPU
+    // buffers.
     for (const mesh of entry.instanced) {
       failure = attempt(failure, () => mesh.dispose());
+      for (const material of materialListOf(mesh.material)) {
+        failure = attempt(failure, () => material.dispose());
+      }
     }
     // Debug points own their geometry and material — created per cell.
     for (const points of entry.debug) {

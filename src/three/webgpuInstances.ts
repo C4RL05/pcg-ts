@@ -55,15 +55,25 @@
  *
  * The adapter never disposes a `DeviceTransformsHandle` — matrices or
  * colours; `WorldThreeBinding` reference-counts and disposes those. The
- * adapter owns only the `InstancedMesh` and its attributes, and it must
- * never let three call `destroyAttribute` on an adopted attribute (that
- * would `destroy()` a buffer somebody else owns) — see
- * {@link WebGpuInstanceAdapter.release}.
+ * adapter owns the `InstancedMesh`, its attributes AND a per-mesh
+ * MATERIAL CLONE of the asset's material, all freed in
+ * {@link WebGpuInstanceAdapter.release}. The clone exists because
+ * three's renderer keys an instanced mesh's render state (render
+ * object, built WGSL, pipeline, uniform buffers) per mesh and releases
+ * it only when that mesh's material fires `dispose` — a shared asset
+ * material never does, so without the clone every evicted cell leaves
+ * its shader programs cached forever (see `cloneAssetMaterial` and
+ * `renderStateRelease.test.ts`). What release must NOT do is let three
+ * call `destroyAttribute` on an adopted attribute (that would
+ * `destroy()` a buffer somebody else owns) — and it cannot: releasing a
+ * render object's bindings destroys only its per-object uniform buffers
+ * and samplers, never a storage attribute's buffer (pinned by the same
+ * test).
  */
 import { InstancedMesh, Object3D, Sphere, Vector3, type Material } from "three";
 import type { DeviceInstanceBatch } from "../fields/index.js";
 import type { DeviceInstanceAdapter, DeviceInstanceContext } from "./worldBinding.js";
-import type { AssetMap } from "./instanced.js";
+import { cloneAssetMaterial, materialListOf, type AssetMap } from "./instanced.js";
 
 /** Backend tag every WebGPU device-transforms handle carries. */
 const WEBGPU_BACKEND = "webgpu";
@@ -408,36 +418,61 @@ export async function createWebGpuInstanceAdapter(
 
       // `resource` throws for a disposed handle — read BOTH before
       // anything else is allocated so a stale batch fails cleanly and
-      // leaves no half-built mesh behind.
+      // leaves no half-built mesh behind. Bounds are validated here too
+      // (a bad radius throws), for the same reason.
       const buffer = batch.transforms.resource;
       const colorBuffer = colors?.resource;
+      const boundingSphere = resolveBoundingSphere(ctx, batch.assetId);
       const attribute = makeAttribute(batch.count, MATRIX_ITEM_SIZE);
       attribute.name = `pcg:instanceMatrix:${batch.assetId}`;
       adoptInto(backend, attribute, buffer);
       adopted++;
 
-      // count 0 at construction so three's own `new Float32Array(count *
-      // 16)` is zero-length; the real count is set after the storage
-      // attribute replaces it.
-      const mesh = new InstancedMesh(asset.geometry, asset.material as Material, 0);
-      mesh.instanceMatrix = attribute;
-      if (colorBuffer !== undefined) {
-        // `NodeMaterial.setupDiffuseColor` multiplies in `instanceColor`
-        // whenever this is non-null, and `Instance.js` takes the storage
-        // branch for it exactly as it does for the matrix. Setting it is
-        // therefore the whole adoption: no material flag, no
-        // `vertexColors`, no second draw path.
-        const colorAttribute = makeAttribute(batch.count, COLOR_ITEM_SIZE);
-        colorAttribute.name = `pcg:instanceColor:${batch.assetId}`;
-        adoptInto(backend, colorAttribute, colorBuffer);
-        adopted++;
-        mesh.instanceColor = colorAttribute;
+      // Per-mesh material clone — the handle three's renderer needs to
+      // release this mesh's render state at `release` (see the module
+      // docs' Ownership section). Everything after the clone runs under
+      // a guard that disposes it, so a throwing colour adoption cannot
+      // mint a material nothing will ever free.
+      const material = cloneAssetMaterial(asset.material);
+      try {
+        // count 0 at construction so three's own `new Float32Array(count *
+        // 16)` is zero-length; the real count is set after the storage
+        // attribute replaces it.
+        const mesh = new InstancedMesh(asset.geometry, material as Material, 0);
+        mesh.instanceMatrix = attribute;
+        if (colorBuffer !== undefined) {
+          // `NodeMaterial.setupDiffuseColor` multiplies in `instanceColor`
+          // whenever this is non-null, and `Instance.js` takes the storage
+          // branch for it exactly as it does for the matrix. Setting it is
+          // therefore the whole adoption: no material flag, no
+          // `vertexColors`, no second draw path.
+          const colorAttribute = makeAttribute(batch.count, COLOR_ITEM_SIZE);
+          colorAttribute.name = `pcg:instanceColor:${batch.assetId}`;
+          adoptInto(backend, colorAttribute, colorBuffer);
+          adopted++;
+          mesh.instanceColor = colorAttribute;
+        }
+        mesh.count = batch.count;
+        mesh.name = batch.assetId;
+        if (boundingSphere === null) {
+          // No usable sphere: culling is disabled rather than guessed —
+          // drawing too much is recoverable, culling visible geometry
+          // is not.
+          mesh.frustumCulled = false;
+        } else {
+          // `Frustum.intersectsObject` prefers `object.boundingSphere`
+          // over the geometry's and never falls back to
+          // `computeBoundingSphere()`, which would read the empty CPU
+          // array and cull the cell away.
+          mesh.boundingSphere = boundingSphere;
+          mesh.frustumCulled = true;
+        }
+        liveInstances += batch.count;
+        return mesh;
+      } catch (err) {
+        for (const m of materialListOf(material)) m.dispose();
+        throw err;
       }
-      mesh.count = batch.count;
-      mesh.name = batch.assetId;
-      applyBounds(mesh, ctx, batch.assetId);
-      liveInstances += batch.count;
-      return mesh;
     },
 
     release(object: Object3D): void {
@@ -452,6 +487,13 @@ export async function createWebGpuInstanceAdapter(
       // the buffer belongs to the batch's handle, and a cell aliasing a
       // parent's outputs can share it with a live cell.
       mesh.dispose();
+      // The per-mesh clone `build` minted. Its dispose event is what
+      // makes the renderer drop this mesh's render object, node builder
+      // state, pipeline, programs and uniform buffers — the adopted
+      // storage buffers are untouched by that teardown (pinned by
+      // renderStateRelease.test.ts), so this is safe while the handle
+      // is still shared with a live cell.
+      for (const material of materialListOf(mesh.material)) material.dispose();
     },
   };
 }
@@ -473,29 +515,24 @@ function adoptInto(backend: BackendLike, attribute: object, buffer: unknown): vo
 }
 
 /**
- * Frustum culling without CPU matrices: assign the bounding sphere the
- * binding supplied for this batch's asset so `Frustum.intersectsObject`
- * uses it (it prefers `object.boundingSphere` over the geometry's) and
- * never falls back to `computeBoundingSphere()`, which would read the
- * empty CPU array and cull the cell away. With no bounds supplied,
- * culling is disabled — drawing too much is recoverable, culling visible
- * geometry is not.
+ * Frustum culling without CPU matrices: resolve the bounding sphere the
+ * binding supplied for this batch's asset, or `null` when culling must
+ * be disabled instead (no bounds supplied, or an unbounded level's
+ * infinite AABB that no sphere can express). Runs in `build`'s
+ * validation phase — before any attribute, mesh or material is minted —
+ * so a rejected radius fails cleanly with nothing to unwind.
  *
  * `ctx.bounds` is per asset, so a rejected radius names the asset as
  * well as the cell: with several assets per cell the cell alone does not
  * identify which `bounds(...)` return value was wrong.
  */
-function applyBounds(mesh: InstancedMesh, ctx: DeviceInstanceContext, assetId: string): void {
+function resolveBoundingSphere(ctx: DeviceInstanceContext, assetId: string): Sphere | null {
   const bounds = ctx.bounds;
-  if (bounds === undefined) {
-    mesh.frustumCulled = false;
-    return;
-  }
+  if (bounds === undefined) return null;
   const [x, y, z] = bounds.center;
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
     // An unbounded level's AABB is infinite: no sphere can express it.
-    mesh.frustumCulled = false;
-    return;
+    return null;
   }
   if (!Number.isFinite(bounds.radius) || bounds.radius < 0) {
     throw new Error(
@@ -504,6 +541,5 @@ function applyBounds(mesh: InstancedMesh, ctx: DeviceInstanceContext, assetId: s
         "non-negative number (return undefined from `bounds` to disable frustum culling instead)",
     );
   }
-  mesh.boundingSphere = new Sphere(new Vector3(x, y, z), bounds.radius);
-  mesh.frustumCulled = true;
+  return new Sphere(new Vector3(x, y, z), bounds.radius);
 }

@@ -769,6 +769,121 @@ describe("createWebGpuInstanceAdapter", () => {
   });
 });
 
+// -- per-mesh material lifecycle ---------------------------------------------
+
+/**
+ * Every mesh the adapter builds wears a per-mesh CLONE of the asset's
+ * material, and `release` disposes it. The clone is not decoration:
+ * three's renderer keys an instanced mesh's render state — render
+ * object, built WGSL, pipeline, per-object uniform buffers — per mesh
+ * (`RenderObject.getMaterialCacheKey()` appends `object.uuid`), and the
+ * ONLY signal that releases any of it is the `dispose` event of the
+ * material that mesh rendered with. A shared asset material never fires
+ * mid-session, which measured as three's program count climbing ~15 per
+ * cooked cell of streaming flight and never returning. The pinned three
+ * internals live in renderStateRelease.test.ts; what is pinned HERE is
+ * that the adapter mints one clone per mesh and fires its dispose on
+ * every path a mesh can die — release, and a build that fails after the
+ * clone exists.
+ */
+describe("createWebGpuInstanceAdapter per-mesh materials", () => {
+  /** Assets whose material records every clone minted and every dispose received. */
+  async function makeTrackedAdapter() {
+    const backend = new WebGPUBackend({});
+    const renderer = { backend } as { readonly backend: unknown };
+    const material = new MeshBasicMaterial();
+    const minted: MeshBasicMaterial[] = [];
+    const disposed: MeshBasicMaterial[] = [];
+    const originalClone = material.clone.bind(material);
+    material.clone = () => {
+      const clone = originalClone();
+      minted.push(clone);
+      clone.addEventListener("dispose", () => disposed.push(clone));
+      return clone;
+    };
+    let assetDisposed = 0;
+    material.addEventListener("dispose", () => assetDisposed++);
+    const assets = { spire: { geometry: new BoxGeometry(), material } };
+    const adapter = await createWebGpuInstanceAdapter({ renderer, assets });
+    return { adapter, material, minted, disposed, assetDisposeCount: () => assetDisposed };
+  }
+
+  it("each mesh wears its own clone — never the asset's material, never a sibling's", async () => {
+    const { adapter, material, minted } = await makeTrackedAdapter();
+    const a = adapter.build(stubBatch("spire", 4), CTX) as InstancedMesh;
+    const b = adapter.build(stubBatch("spire", 6), CTX) as InstancedMesh;
+    expect(a.material).not.toBe(material);
+    expect(b.material).not.toBe(material);
+    expect(a.material).not.toBe(b.material);
+    expect(minted).toEqual([a.material, b.material]);
+  });
+
+  it("release disposes the mesh's clone exactly once, and never the asset's material", async () => {
+    const { adapter, minted, disposed, assetDisposeCount } = await makeTrackedAdapter();
+    const mesh = adapter.build(stubBatch("spire", 12), CTX) as InstancedMesh;
+    expect(disposed).toHaveLength(0);
+    adapter.release(mesh);
+    expect(disposed).toEqual(minted);
+    expect(disposed).toHaveLength(1);
+    expect(assetDisposeCount()).toBe(0);
+  });
+
+  it("a zero-instance placeholder mints no clone and releases without one", async () => {
+    const { adapter, minted } = await makeTrackedAdapter();
+    const placeholder = adapter.build(stubBatch("spire", 0), CTX);
+    expect(minted).toHaveLength(0);
+    adapter.release(placeholder);
+    expect(minted).toHaveLength(0);
+  });
+
+  it("a bad radius fails BEFORE the clone is minted — validation precedes minting", async () => {
+    const { adapter, minted } = await makeTrackedAdapter();
+    const bad: DeviceInstanceContext = {
+      levelName: "spires",
+      coord: [1, 1],
+      bounds: { center: [0, 0, 0], radius: -3 },
+    };
+    expect(() => adapter.build(stubBatch("spire", 4), bad)).toThrow(/bounding radius of -3/);
+    expect(minted, "nothing to unwind: the clone must not exist yet").toHaveLength(0);
+  });
+
+  it("a build that fails after the clone exists disposes it before rethrowing", async () => {
+    // A backend that hands every attribute ONE shared record makes the
+    // colour adoption throw (`record.buffer` already set by the matrix
+    // adoption) — which is a throw from inside the guarded region, after
+    // the clone was minted.
+    const shared: Record<string, unknown> = {};
+    const sharingBackend = {
+      get(): Record<string, unknown> {
+        return shared;
+      },
+      createStorageAttribute(): void {
+        /* short-circuits: the record already has a buffer */
+      },
+    };
+    const material = new MeshBasicMaterial();
+    const minted: MeshBasicMaterial[] = [];
+    const disposed: MeshBasicMaterial[] = [];
+    const originalClone = material.clone.bind(material);
+    material.clone = () => {
+      const clone = originalClone();
+      minted.push(clone);
+      clone.addEventListener("dispose", () => disposed.push(clone));
+      return clone;
+    };
+    const adapter = await createWebGpuInstanceAdapter({
+      renderer: fakeRenderer(sharingBackend),
+      assets: { spire: { geometry: new BoxGeometry(), material } },
+    });
+    delete shared.buffer; // the seam probes cleaned up; be explicit anyway
+    expect(() => adapter.build(colouredBatch("spire", 4), CTX)).toThrow(
+      /attribute records are being reused across batches/,
+    );
+    expect(minted, "the clone was minted before the colour adoption threw").toHaveLength(1);
+    expect(disposed, "…and disposed before the error escaped").toEqual(minted);
+  });
+});
+
 // -- v0.8: several batches from one cell -----------------------------------
 
 /**

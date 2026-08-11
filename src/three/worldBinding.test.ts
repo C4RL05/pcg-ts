@@ -1,4 +1,4 @@
-import { BoxGeometry, Group, InstancedMesh, MeshBasicMaterial, Points } from "three";
+import { BoxGeometry, Group, InstancedMesh, MeshBasicMaterial, Points, type Material } from "three";
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { makeGeometryItem, makeInstancesItem, makeValueItem } from "../graph/index.js";
@@ -121,5 +121,123 @@ describe("WorldThreeBinding", () => {
     expect(binding.cellCount).toBe(0);
     expect(root.children).toHaveLength(0);
     expect(assetGeoDisposed).toBe(0);
+  });
+});
+
+/**
+ * Per-mesh material lifecycle. Each instanced mesh's material is a clone
+ * `toInstancedMeshes` mints, and its `dispose` event is the ONE signal
+ * three's renderer accepts to drop that mesh's cached render state
+ * (render object, built shaders, pipeline, uniform buffers — see
+ * renderStateRelease.test.ts for the pinned three internals). These
+ * tests pin that the binding fires it on every release path — evict,
+ * recook swap, partial build failure, teardown — exactly once per minted
+ * material, and never at the asset map's own material.
+ */
+describe("WorldThreeBinding per-mesh material lifecycle", () => {
+  /** An asset map whose material records every clone it mints and every dispose those clones receive. */
+  function trackedAssets() {
+    const material = new MeshBasicMaterial();
+    const minted: Material[] = [];
+    const disposed: Material[] = [];
+    const originalClone = material.clone.bind(material);
+    material.clone = () => {
+      const clone = originalClone();
+      minted.push(clone);
+      clone.addEventListener("dispose", () => disposed.push(clone));
+      return clone;
+    };
+    let assetDisposed = 0;
+    material.addEventListener("dispose", () => assetDisposed++);
+    return {
+      assets: { tree: { geometry: new BoxGeometry(), material } },
+      minted,
+      disposed,
+      assetDisposeCount: () => assetDisposed,
+    };
+  }
+
+  function treeOutputs(points = 3) {
+    const cloud = createPointCloud(points);
+    return { main: [makeInstancesItem(buildInstanceBatches(cloud, { defaultAssetId: "tree" }))] };
+  }
+
+  it("evict disposes each mesh's material exactly once, and never the asset's", () => {
+    const { assets, minted, disposed, assetDisposeCount } = trackedAssets();
+    const binding = new WorldThreeBinding({ group: new Group(), assets });
+    binding.cellReady("ground", [0, 0], treeOutputs());
+    binding.cellReady("ground", [1, 0], treeOutputs());
+    expect(minted).toHaveLength(2);
+    expect(disposed).toHaveLength(0);
+
+    binding.cellEvicted("ground", [0, 0]);
+    expect(disposed).toEqual([minted[0]]);
+
+    binding.cellEvicted("ground", [1, 0]);
+    expect(disposed).toEqual(minted);
+    // Exactly once each: a double dispose would appear as a repeat.
+    expect(new Set(disposed).size).toBe(disposed.length);
+    expect(assetDisposeCount(), "the asset map's material is the caller's").toBe(0);
+  });
+
+  it("a recook swap disposes the outgoing meshes' materials and keeps the incoming alive", () => {
+    const { assets, minted, disposed } = trackedAssets();
+    const binding = new WorldThreeBinding({ group: new Group(), assets });
+    binding.cellReady("ground", [2, 2], treeOutputs());
+    binding.cellReady("ground", [2, 2], treeOutputs());
+    expect(minted).toHaveLength(2);
+    expect(disposed, "only the replaced cook's material").toEqual([minted[0]]);
+    binding.dispose();
+    expect(disposed).toEqual(minted);
+  });
+
+  it("a partial build failure disposes the materials of the meshes it already built", () => {
+    const { assets, minted, disposed, assetDisposeCount } = trackedAssets();
+    const binding = new WorldThreeBinding({ group: new Group(), assets });
+    const outputs = {
+      main: [
+        makeInstancesItem(buildInstanceBatches(createPointCloud(2), { defaultAssetId: "tree" })),
+        makeInstancesItem(buildInstanceBatches(createPointCloud(1), { defaultAssetId: "missing" })),
+      ],
+    };
+    expect(() => binding.cellReady("ground", [0, 0], outputs)).toThrow(/unknown assetId/);
+    expect(minted, "the first item's mesh was built before the second threw").toHaveLength(1);
+    expect(disposed, "…and its material must not outlive the failed cell").toEqual(minted);
+    expect(binding.cellCount).toBe(0);
+    expect(assetDisposeCount()).toBe(0);
+  });
+
+  it("binding.dispose() disposes every live cell's mesh materials", () => {
+    const { assets, minted, disposed, assetDisposeCount } = trackedAssets();
+    const binding = new WorldThreeBinding({ group: new Group(), assets });
+    for (const coord of [
+      [0, 0],
+      [0, 1],
+      [1, 1],
+    ] as const) {
+      binding.cellReady("ground", coord, treeOutputs());
+    }
+    expect(minted).toHaveLength(3);
+    binding.dispose();
+    expect(disposed).toEqual(minted);
+    expect(new Set(disposed).size).toBe(3);
+    expect(assetDisposeCount()).toBe(0);
+  });
+
+  it("a sustained cook/evict churn disposes one material per cook — nothing accumulates", () => {
+    const { assets, minted, disposed } = trackedAssets();
+    const binding = new WorldThreeBinding({ group: new Group(), assets });
+    for (let i = 0; i < 60; i++) {
+      const coord: [number, number] = [i % 5, 0];
+      binding.cellReady("ground", coord, treeOutputs(2));
+      if (i >= 5) binding.cellEvicted("ground", [(i - 5) % 5, 0]);
+    }
+    binding.dispose();
+    expect(minted).toHaveLength(60);
+    // Every minted material disposed exactly once — recook swaps and
+    // evictions interleave, so the order differs from mint order.
+    expect(disposed).toHaveLength(60);
+    expect(new Set(disposed).size).toBe(60);
+    expect(new Set(disposed)).toEqual(new Set(minted));
   });
 });

@@ -1,8 +1,17 @@
-import { BoxGeometry, Color, Matrix4, MeshBasicMaterial, Quaternion, Vector3 } from "three";
+import {
+  BoxGeometry,
+  Color,
+  Matrix4,
+  MeshBasicMaterial,
+  Quaternion,
+  Texture,
+  Vector3,
+  type Material,
+} from "three";
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { buildInstanceBatches } from "../spawn/instances.js";
-import { toInstancedMeshes, type AssetMap } from "./instanced.js";
+import { materialListOf, toInstancedMeshes, type AssetMap } from "./instanced.js";
 
 function assets(...ids: string[]): AssetMap {
   const map: AssetMap = {};
@@ -59,7 +68,7 @@ describe("toInstancedMeshes", () => {
     });
   });
 
-  it("builds one mesh per batch, sharing asset geometry and material", () => {
+  it("builds one mesh per batch, sharing asset geometry but cloning the material", () => {
     const geo = createPointCloud(3);
     const attr = geo.attrs.point.add("asset", "string", 1, "");
     attr.setString(0, "tree");
@@ -71,7 +80,78 @@ describe("toInstancedMeshes", () => {
     expect(meshes.map((m) => m.name)).toEqual(["tree", "rock"]);
     expect(meshes.map((m) => m.count)).toEqual([2, 1]);
     expect(meshes[0].geometry).toBe(map.tree.geometry);
-    expect(meshes[0].material).toBe(map.tree.material);
+    // The material is a per-mesh CLONE: three's renderer releases a
+    // mesh's cached render state only when that mesh's material fires
+    // `dispose`, and the asset map's material must never be disposed —
+    // so each mesh needs its own (see renderStateRelease.test.ts).
+    expect(meshes[0].material).not.toBe(map.tree.material);
+    expect((meshes[0].material as Material).type).toBe((map.tree.material as Material).type);
+  });
+
+  it("clones per MESH, not per asset: two meshes of one asset get distinct materials", () => {
+    const geo = createPointCloud(2);
+    const batches = [
+      ...buildInstanceBatches(geo, { defaultAssetId: "tree" }),
+      ...buildInstanceBatches(geo, { defaultAssetId: "tree" }),
+    ];
+    const meshes = toInstancedMeshes(batches, assets("tree"));
+    expect(meshes).toHaveLength(2);
+    expect(meshes[0].material).not.toBe(meshes[1].material);
+  });
+
+  it("the clone shares textures by reference — no GPU resource is duplicated", () => {
+    const texture = new Texture();
+    const material = new MeshBasicMaterial({ map: texture, color: 0x336644 });
+    const map: AssetMap = { tree: { geometry: new BoxGeometry(), material } };
+    const batches = buildInstanceBatches(createPointCloud(1), { defaultAssetId: "tree" });
+    const [mesh] = toInstancedMeshes(batches, map);
+    const clone = mesh.material as MeshBasicMaterial;
+    expect(clone.map, "textures must be shared, not cloned").toBe(texture);
+    expect(clone.color.getHex()).toBe(0x336644);
+    // Disposing the clone must not ripple into the shared texture.
+    let textureDisposed = 0;
+    texture.addEventListener("dispose", () => textureDisposed++);
+    clone.dispose();
+    expect(textureDisposed).toBe(0);
+  });
+
+  it("clones every element of a multi-material asset, and materialListOf sees them all", () => {
+    const materials = [new MeshBasicMaterial(), new MeshBasicMaterial()];
+    const map: AssetMap = { tree: { geometry: new BoxGeometry(), material: materials } };
+    const batches = buildInstanceBatches(createPointCloud(1), { defaultAssetId: "tree" });
+    const [mesh] = toInstancedMeshes(batches, map);
+    const clones = materialListOf(mesh.material as Material | Material[]);
+    expect(clones).toHaveLength(2);
+    for (const [i, clone] of clones.entries()) {
+      expect(clone, `element ${i} must be a clone`).not.toBe(materials[i]);
+    }
+  });
+
+  it("a failing later batch disposes the materials the earlier batches minted", () => {
+    // The meshes are local to the throwing call — the caller never sees
+    // them, so nothing else could ever dispose their clones. Intercept
+    // `clone` so every minted material carries a dispose listener from
+    // birth.
+    const material = new MeshBasicMaterial();
+    const minted: Material[] = [];
+    const disposed: Material[] = [];
+    const originalClone = material.clone.bind(material);
+    material.clone = () => {
+      const clone = originalClone();
+      minted.push(clone);
+      clone.addEventListener("dispose", () => disposed.push(clone));
+      return clone;
+    };
+    const map: AssetMap = { tree: { geometry: new BoxGeometry(), material } };
+    const good = buildInstanceBatches(createPointCloud(2), { defaultAssetId: "tree" });
+    const bad = buildInstanceBatches(createPointCloud(1), { defaultAssetId: "missing" });
+    expect(() => toInstancedMeshes([...good, ...bad], map)).toThrow(/unknown assetId "missing"/);
+    expect(minted, "the good batch's clone must have been minted first").toHaveLength(1);
+    expect(disposed, "…and disposed before the error escaped").toEqual(minted);
+    // The asset's own material was never disposed — only the clone.
+    let assetDisposed = 0;
+    material.addEventListener("dispose", () => assetDisposed++);
+    expect(assetDisposed).toBe(0);
   });
 
   it("unknown assetId throws, listing the known ids", () => {
