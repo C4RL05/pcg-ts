@@ -1416,6 +1416,9 @@ not raised.
   line each); docs/primitives.json is the same, machine-readable
 - docs/authoring.md — graph JSON spec, complete field grammar, recipes,
   GPU eligibility rules
+- docs/design.md — why the data model has the shape it has: why there are
+  four domains and not three or five, why an edge is a primitive, what a
+  fifth domain would have to prove to exist
 - examples/ — nine vite demos; 06-graph-editor is an interactive node
   editor built on this same registry metadata and JSON format;
   08-gpu-fields cooks one five-node fusable chain three ways (CPU, GPU

@@ -1085,6 +1085,10 @@ plainly because it is not the answer the question expects:
 > over shared points already IS an edge — so an edge is a `primitive`,
 > and a per-edge value is an ordinary primitive attribute.**
 
+(The general form of that answer — which cardinalities get a domain, and
+what a candidate fifth one would have to prove — is in
+[design.md](./design.md#why-not-more-the-domains-that-dont-exist).)
+
 Nothing was added to the data model for this. The `polyline` topology
 that carries a path has never required one point to belong to one
 primitive; that restriction was only ever `pointsToPath`'s, which gives

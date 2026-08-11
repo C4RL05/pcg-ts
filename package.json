@@ -38,6 +38,7 @@
     "docs/primitives.md",
     "docs/primitives.json",
     "docs/authoring.md",
+    "docs/design.md",
     "docs/examples.md",
     "docs/examples.json",
     "examples/graphs",

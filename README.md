@@ -11,7 +11,8 @@ errors name the offending node, pin, or param. Agent-facing entry points:
 [llms.txt](./llms.txt), [docs/nodes.md](./docs/nodes.md),
 [docs/primitives.md](./docs/primitives.md),
 [docs/examples.md](./docs/examples.md),
-[docs/authoring.md](./docs/authoring.md), and three doctrine skills in
+[docs/authoring.md](./docs/authoring.md),
+[docs/design.md](./docs/design.md), and three doctrine skills in
 [skills/](./skills) — `graph-authoring` (what to read first, primitive
 or nodes, the validate → cook → inspect loop), `determinism` (the
 seed chain, and how to verify reproducibility rather than assume it) and
@@ -24,7 +25,8 @@ architecture and pipeline diagrams, and the roadmap.
 Three foundations, carried through the whole library:
 
 - **The data model.** Attributes live on domains (point / vertex /
-  primitive / detail) as SoA typed-array columns, with promote and
+  primitive / detail — [why exactly those four](./docs/design.md#why-four-domains))
+  as SoA typed-array columns, with promote and
   transfer between domains — transfer maps by nearest source point, by
   barycentric lookup in the source triangulation's UV space, or by
   raycast against the source mesh. The standard "point with attributes"
