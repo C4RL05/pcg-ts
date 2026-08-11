@@ -492,6 +492,48 @@ class PlanFail extends Error {}
 /** Shared empty constant list for steps carrying no uniform slots. */
 const NO_CONSTS: readonly number[] = [];
 
+/** What a planned run costs on the device, and what it must read back. */
+interface RunFootprint {
+  readonly writtenList: { name: string; slot: number }[];
+  readonly materialize: boolean;
+  readonly totalBytes: number;
+}
+
+/**
+ * Plan-time device footprint of a run.
+ *
+ * Retained buffers count against the bound like any other allocation even
+ * though they outlive the run: they are memory the run must be able to
+ * allocate. Their total is grouping-independent — the batches partition
+ * the points — which is exactly what keeps this a PLAN-time number, and so
+ * a number the same members produce whatever grouping execution chooses.
+ */
+function residentRunFootprint(
+  written: ReadonlyMap<string, number>,
+  slots: readonly SlotDesc[],
+  cols: readonly number[],
+  instances: InstancesDesc | null,
+  needsGeometry: boolean,
+): RunFootprint {
+  const writtenList = [...written].map(([name, slot]) => ({ name, slot }));
+  // A run with no other output must materialize whatever it wrote, so
+  // ordinary (pre-existing) plans always read back exactly as before.
+  const materialize = needsGeometry || instances === null;
+  const slotBytes = slots.reduce((acc, s) => acc + s.bytes, 0);
+  const colBytes = cols.reduce((acc, b) => acc + b, 0);
+  const readbackBytes = materialize
+    ? writtenList.reduce((acc, w) => acc + slots[w.slot].bytes, 0)
+    : 0;
+  const totalBytes =
+    slotBytes +
+    colBytes +
+    readbackBytes +
+    (instances?.bytes ?? 0) +
+    (instances?.colorBytes ?? 0) +
+    (instances?.permBytes ?? 0);
+  return { writtenList, materialize, totalBytes };
+}
+
 /**
  * Plan a resident run: synchronous, device-free. Simulates the chain's
  * attribute-layout evolution member by member, compiles each member's
@@ -904,26 +946,13 @@ export function planResidentRun(
     throw err;
   }
 
-  const writtenList = [...written].map(([name, slot]) => ({ name, slot }));
-  // A run with no other output must materialize whatever it wrote, so
-  // ordinary (pre-existing) plans always read back exactly as before.
-  const materialize = ctx.needsGeometry || instances === null;
-  const slotBytes = slots.reduce((acc, s) => acc + s.bytes, 0);
-  const colBytes = cols.reduce((acc, b) => acc + b, 0);
-  const readbackBytes = materialize
-    ? writtenList.reduce((acc, w) => acc + slots[w.slot].bytes, 0)
-    : 0;
-  // The retained buffers count against the run's bound like any other
-  // allocation, even though they outlive the run: they are device memory
-  // the run must be able to allocate. Their total is grouping-independent
-  // (the batches partition the points), so this stays a plan-time number.
-  const totalBytes =
-    slotBytes +
-    colBytes +
-    readbackBytes +
-    (instances?.bytes ?? 0) +
-    (instances?.colorBytes ?? 0) +
-    (instances?.permBytes ?? 0);
+  const { writtenList, materialize, totalBytes } = residentRunFootprint(
+    written,
+    slots,
+    cols,
+    instances,
+    ctx.needsGeometry,
+  );
   if (totalBytes > maxResidentBytes) return { reason: "run-too-large" };
 
   return {

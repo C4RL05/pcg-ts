@@ -648,21 +648,28 @@ export function transferUv(
  * Creates or overwrites the attribute on `dst`'s point domain and returns
  * it with the miss count and the per-point hit flags.
  */
-export function transferRaycast(
-  dst: Geometry,
-  src: Geometry,
-  attrName: string,
-  options: TransferRaycastOptions = {},
-): TransferMappingResult {
-  const fn = "transferRaycast";
-  const posName = options.positionAttr ?? "P";
-  const attrDomain = options.attrDomain ?? "point";
-  const srcAttr = requireSourceAttr(src, attrName, attrDomain, fn);
-  const srcP = requireF32(src.attrs.point, posName, 3, fn, "source position");
-  const dstP = requireF32(dst.attrs.point, posName, 3, fn, "destination position");
+/** Ray direction for every destination point, resolved once per call. */
+interface RayDirection {
+  /** Per-point direction data, or null when one constant direction applies. */
+  readonly dirData: Float32Array | null;
+  readonly dirStride: number;
+  /** Normalized constant direction. Read only when `dirData` is null. */
+  readonly cdx: number;
+  readonly cdy: number;
+  readonly cdz: number;
+}
 
-  let dirData: Float32Array | null = null;
-  let dirStride = 3;
+/**
+ * `directionAttr` (per point) wins over `direction` (constant), which
+ * defaults to straight down. The constant is normalized here so the cast
+ * loop never divides, and a zero or non-finite vector is rejected up front
+ * rather than producing silent misses for every point.
+ */
+function resolveRayDirection(
+  dst: Geometry,
+  options: TransferRaycastOptions,
+  fn: string,
+): RayDirection {
   if (options.directionAttr !== undefined && options.directionAttr !== "") {
     const attr = requireF32(
       dst.attrs.point,
@@ -671,46 +678,51 @@ export function transferRaycast(
       fn,
       "destination per-point direction",
     );
-    dirData = attr.data;
-    dirStride = attr.tupleSize;
+    return { dirData: attr.data, dirStride: attr.tupleSize, cdx: 0, cdy: -1, cdz: 0 };
   }
-  let cdx = 0;
-  let cdy = -1;
-  let cdz = 0;
-  if (dirData === null) {
-    const d = options.direction ?? [0, -1, 0];
-    const x = d[0];
-    const y = d[1];
-    const z = d[2];
-    const len =
-      d.length >= 3 && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
-        ? Math.sqrt(x * x + y * y + z * z)
-        : NaN;
-    if (!(len > 0) || !Number.isFinite(len)) {
-      throw new Error(
-        `${fn}: direction must be a finite, non-zero [x, y, z] vector, got ${JSON.stringify(d)}; pass e.g. [0, -1, 0] to cast straight down`,
-      );
-    }
-    cdx = x / len;
-    cdy = y / len;
-    cdz = z / len;
-  }
-
-  const maxT = options.maxDistance ?? Infinity;
-  if (options.maxDistance !== undefined && (!Number.isFinite(maxT) || maxT <= 0)) {
+  const d = options.direction ?? [0, -1, 0];
+  const x = d[0];
+  const y = d[1];
+  const z = d[2];
+  const len =
+    d.length >= 3 && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
+      ? Math.sqrt(x * x + y * y + z * z)
+      : NaN;
+  if (!(len > 0) || !Number.isFinite(len)) {
     throw new Error(
-      `${fn}: maxDistance must be a positive finite number (world units), got ${String(options.maxDistance)}; omit it for an unlimited ray`,
+      `${fn}: direction must be a finite, non-zero [x, y, z] vector, got ${JSON.stringify(d)}; pass e.g. [0, -1, 0] to cast straight down`,
     );
   }
+  return { dirData: null, dirStride: 3, cdx: x / len, cdy: y / len, cdz: z / len };
+}
 
+/** Usable source triangles in SoA form, degenerate ones already dropped. */
+interface CompactedTriangles {
+  /** `[A, edge1, edge2]` per triangle, 9 float64 each. */
+  readonly triGeo: Float64Array;
+  /** Attribute element id per corner, 3 each. */
+  readonly triCorner: Uint32Array;
+  /** Padded world bbox per triangle, 6 float64 each. */
+  readonly triBox: Float64Array;
+  /** Count of usable triangles; the arrays are allocated for the full set. */
+  readonly nt: number;
+}
+
+/**
+ * Compacts the source triangulation into the flat arrays the cast loop
+ * reads. float64 for the geometry because the ray test subtracts nearly
+ * equal quantities, where f32 rounding decides hit vs miss on grazing rays.
+ */
+function compactRaycastTriangles(
+  src: Geometry,
+  pd: Float32Array,
+  ps: number,
+  attrDomain: TransferAttrDomain,
+  fn: string,
+): CompactedTriangles {
   const { start: triStart, prim: triPrim } = collectTriangles(src, fn);
   const perPrim = attrDomain === "primitive";
   const v2p = src.vertexToPoint;
-  const ps = srcP.tupleSize;
-  const pd = srcP.data;
-
-  // Compact usable triangles: [A, edge1, edge2] in float64, attr corner
-  // element ids, padded world bbox.
   const ntAll = triStart.length;
   const triGeo = new Float64Array(ntAll * 9);
   const triCorner = new Uint32Array(ntAll * 3);
@@ -774,6 +786,119 @@ export function transferRaycast(
     triBox[o6 + 5] = bz1 + pad;
     nt++;
   }
+  return { triGeo, triCorner, triBox, nt };
+}
+
+/** Uniform grid over the triangle bboxes, used to narrow each ray. */
+interface RaycastGrid {
+  /** Linear cell key -> triangle indices overlapping that cell. */
+  readonly cells: Map<number, number[]>;
+  readonly cell: number;
+  readonly nx: number;
+  readonly ny: number;
+  readonly nz: number;
+  readonly minX: number;
+  readonly minY: number;
+  readonly minZ: number;
+  /** Upper corner, needed to clip each ray against the grid before walking it. */
+  readonly maxX: number;
+  readonly maxY: number;
+  readonly maxZ: number;
+}
+
+/**
+ * A triangle is inserted into every cell its padded bbox touches, so a ray
+ * that finds a cell finds every candidate in it. Cell size is clamped so no
+ * axis exceeds MAX_DIM buckets: a sliver-thin mesh would otherwise derive a
+ * cell size that allocates an unbounded grid.
+ */
+function buildRaycastGrid(
+  triBox: Float64Array,
+  nt: number,
+  cellSize: number | undefined,
+  fn: string,
+): RaycastGrid {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let ti = 0; ti < nt; ti++) {
+    const o6 = ti * 6;
+    if (triBox[o6] < minX) minX = triBox[o6];
+    if (triBox[o6 + 1] < minY) minY = triBox[o6 + 1];
+    if (triBox[o6 + 2] < minZ) minZ = triBox[o6 + 2];
+    if (triBox[o6 + 3] > maxX) maxX = triBox[o6 + 3];
+    if (triBox[o6 + 4] > maxY) maxY = triBox[o6 + 4];
+    if (triBox[o6 + 5] > maxZ) maxZ = triBox[o6 + 5];
+  }
+  const ex = maxX - minX;
+  const ey = maxY - minY;
+  const ez = maxZ - minZ;
+  let cell = cellSize ?? deriveCell([ex, ey, ez], nt);
+  checkCellSize(cell, fn);
+  cell = Math.max(cell, ex / MAX_DIM, ey / MAX_DIM, ez / MAX_DIM);
+  const nx = Math.floor(ex / cell) + 1;
+  const ny = Math.floor(ey / cell) + 1;
+  const nz = Math.floor(ez / cell) + 1;
+
+  const cells = new Map<number, number[]>();
+  for (let ti = 0; ti < nt; ti++) {
+    const o6 = ti * 6;
+    const x0 = Math.max(0, Math.floor((triBox[o6] - minX) / cell));
+    const y0 = Math.max(0, Math.floor((triBox[o6 + 1] - minY) / cell));
+    const z0 = Math.max(0, Math.floor((triBox[o6 + 2] - minZ) / cell));
+    const x1 = Math.min(nx - 1, Math.floor((triBox[o6 + 3] - minX) / cell));
+    const y1 = Math.min(ny - 1, Math.floor((triBox[o6 + 4] - minY) / cell));
+    const z1 = Math.min(nz - 1, Math.floor((triBox[o6 + 5] - minZ) / cell));
+    for (let cz = z0; cz <= z1; cz++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        for (let cx = x0; cx <= x1; cx++) {
+          const key = cx + nx * (cy + ny * cz);
+          let bucket = cells.get(key);
+          if (!bucket) {
+            bucket = [];
+            cells.set(key, bucket);
+          }
+          bucket.push(ti);
+        }
+      }
+    }
+  }
+  return { cells, cell, nx, ny, nz, minX, minY, minZ, maxX, maxY, maxZ };
+}
+
+export function transferRaycast(
+  dst: Geometry,
+  src: Geometry,
+  attrName: string,
+  options: TransferRaycastOptions = {},
+): TransferMappingResult {
+  const fn = "transferRaycast";
+  const posName = options.positionAttr ?? "P";
+  const attrDomain = options.attrDomain ?? "point";
+  const srcAttr = requireSourceAttr(src, attrName, attrDomain, fn);
+  const srcP = requireF32(src.attrs.point, posName, 3, fn, "source position");
+  const dstP = requireF32(dst.attrs.point, posName, 3, fn, "destination position");
+
+  const { dirData, dirStride, cdx, cdy, cdz } = resolveRayDirection(dst, options, fn);
+
+  const maxT = options.maxDistance ?? Infinity;
+  if (options.maxDistance !== undefined && (!Number.isFinite(maxT) || maxT <= 0)) {
+    throw new Error(
+      `${fn}: maxDistance must be a positive finite number (world units), got ${String(options.maxDistance)}; omit it for an unlimited ray`,
+    );
+  }
+
+  const perPrim = attrDomain === "primitive";
+  const { triGeo, triCorner, triBox, nt } = compactRaycastTriangles(
+    src,
+    srcP.data,
+    srcP.tupleSize,
+    attrDomain,
+    fn,
+  );
 
   const nd = dst.attrs.point.count;
   const cornerElem = new Uint32Array(nd * 3);
@@ -781,54 +906,12 @@ export function transferRaycast(
   const hit = new Uint8Array(nd);
 
   if (nt > 0) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let minZ = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let maxZ = -Infinity;
-    for (let ti = 0; ti < nt; ti++) {
-      const o6 = ti * 6;
-      if (triBox[o6] < minX) minX = triBox[o6];
-      if (triBox[o6 + 1] < minY) minY = triBox[o6 + 1];
-      if (triBox[o6 + 2] < minZ) minZ = triBox[o6 + 2];
-      if (triBox[o6 + 3] > maxX) maxX = triBox[o6 + 3];
-      if (triBox[o6 + 4] > maxY) maxY = triBox[o6 + 4];
-      if (triBox[o6 + 5] > maxZ) maxZ = triBox[o6 + 5];
-    }
-    const ex = maxX - minX;
-    const ey = maxY - minY;
-    const ez = maxZ - minZ;
-    let cell = options.cellSize ?? deriveCell([ex, ey, ez], nt);
-    checkCellSize(cell, fn);
-    cell = Math.max(cell, ex / MAX_DIM, ey / MAX_DIM, ez / MAX_DIM);
-    const nx = Math.floor(ex / cell) + 1;
-    const ny = Math.floor(ey / cell) + 1;
-    const nz = Math.floor(ez / cell) + 1;
-
-    const cells = new Map<number, number[]>();
-    for (let ti = 0; ti < nt; ti++) {
-      const o6 = ti * 6;
-      const x0 = Math.max(0, Math.floor((triBox[o6] - minX) / cell));
-      const y0 = Math.max(0, Math.floor((triBox[o6 + 1] - minY) / cell));
-      const z0 = Math.max(0, Math.floor((triBox[o6 + 2] - minZ) / cell));
-      const x1 = Math.min(nx - 1, Math.floor((triBox[o6 + 3] - minX) / cell));
-      const y1 = Math.min(ny - 1, Math.floor((triBox[o6 + 4] - minY) / cell));
-      const z1 = Math.min(nz - 1, Math.floor((triBox[o6 + 5] - minZ) / cell));
-      for (let cz = z0; cz <= z1; cz++) {
-        for (let cy = y0; cy <= y1; cy++) {
-          for (let cx = x0; cx <= x1; cx++) {
-            const key = cx + nx * (cy + ny * cz);
-            let bucket = cells.get(key);
-            if (!bucket) {
-              bucket = [];
-              cells.set(key, bucket);
-            }
-            bucket.push(ti);
-          }
-        }
-      }
-    }
+    const { cells, cell, nx, ny, nz, minX, minY, minZ, maxX, maxY, maxZ } = buildRaycastGrid(
+      triBox,
+      nt,
+      options.cellSize,
+      fn,
+    );
 
     // Per-query dedup stamp so triangles spanning several cells are tested
     // once (results are unaffected either way — same (t, index) outcome).
