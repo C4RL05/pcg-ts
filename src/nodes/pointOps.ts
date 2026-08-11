@@ -8,6 +8,7 @@ import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
+import { isField, type Column } from "../fields/index.js";
 import {
   ORIENT_AXES,
   type FieldParam,
@@ -351,7 +352,12 @@ export const mergePoints = standardNode<MergePointsParams>({
 /** Params of {@link orientAlongVector}. */
 export interface OrientAlongVectorParams {
   direction: FieldParam;
-  up: readonly number[];
+  /**
+   * Widened from `readonly number[]` when `up` became field-capable. The
+   * runtime keeps the two apart deliberately — see the execute body for
+   * why a plain array must not be routed through a field column.
+   */
+  up: FieldParam;
   axis: string;
 }
 
@@ -374,8 +380,9 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
     up: {
       type: "vec3",
       default: [0, 1, 0],
+      acceptsField: true,
       description:
-        "Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0].",
+        "Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0]. Field-capable (resolved per point on the input; tuple 1 broadcasts). A per-point up is what a curve that turns over needs: a CONSTANT up flips the roll a half turn as the direction passes through it, and everything placed along the curve snaps round with it — feed writeCurveFrame's `curveNormal` here instead and the roll varies smoothly. A field `up` keeps this node OFF the device-resident path, because the apply kernel bakes the normalized up in as a constant; the cook reports that by name in its fallbacks rather than silently producing different bytes.",
     },
     axis: {
       type: "enum",
@@ -394,7 +401,15 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
   // basis construction (up fallbacks, zero-direction keep-prior rot,
   // quatFromBasis trace branches) with the axis and normalized up
   // baked as constants.
-  resident: { kind: "orientAlongVector" },
+  resident: {
+    kind: "orientAlongVector",
+    // A per-point up has nowhere to live in a kernel that bakes it in as
+    // a constant. Named rather than a plain `false` because it is a
+    // choice the author made and can unmake — the executor counts it
+    // under exactly this string in CookStats.gpu.fallbacks.
+    eligible: (params) =>
+      !isField(params.up) || "up is a field; per-point roll is not ported to the device",
+  },
   async execute({ inputs, params, seed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "orientAlongVector"));
     const axis = params.axis;
@@ -409,18 +424,38 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
       "orientAlongVector",
       "direction",
     );
-    const up = params.up;
-    if (!Array.isArray(up) || up.length !== 3 || !up.every((v) => Number.isFinite(v))) {
-      throw new Error(
-        'orientAlongVector: param "up" must be an array of 3 finite numbers (e.g. [0, 1, 0])',
+    // A field up resolves per point; a plain one keeps the original code
+    // path untouched, deliberately. resolveField wraps a plain array
+    // through constant(), which stores f32, where the arithmetic below is
+    // f64 over the raw param — so routing every up through a column
+    // would shift `rot` for any up that is not f32-exact, and redden the
+    // corpus golden for graphs that never asked for a field at all.
+    const upIsField = isField(params.up);
+    let upCol: Column | undefined;
+    let upx = 0;
+    let upy = 0;
+    let upz = 0;
+    if (upIsField) {
+      upCol = requireTuple(
+        await resolveOnMaybeGpu(gpu, geo, "point", params.up, seed),
+        [1, 3],
+        "orientAlongVector",
+        "up",
       );
+    } else {
+      const up = params.up;
+      if (!Array.isArray(up) || up.length !== 3 || !up.every((v) => Number.isFinite(v))) {
+        throw new Error(
+          'orientAlongVector: param "up" must be an array of 3 finite numbers (e.g. [0, 1, 0])',
+        );
+      }
+      // Normalize the up hint once so the parallel test is scale-invariant.
+      const upLenSq = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
+      const upInv = upLenSq > 0 ? 1 / Math.sqrt(upLenSq) : 0;
+      upx = up[0] * upInv;
+      upy = up[1] * upInv;
+      upz = up[2] * upInv;
     }
-    // Normalize the up hint once so the parallel test is scale-invariant.
-    const upLenSq = up[0] * up[0] + up[1] * up[1] + up[2] * up[2];
-    const upInv = upLenSq > 0 ? 1 / Math.sqrt(upLenSq) : 0;
-    const upx = up[0] * upInv;
-    const upy = up[1] * upInv;
-    const upz = up[2] * upInv;
 
     const set = geo.attrs.point;
     let rotAttr = set.get("rot");
@@ -438,6 +473,20 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
       const dl = dx * dx + dy * dy + dz * dz;
       if (dl === 0) continue; // zero direction: keep the prior rot
       const dInv = 1 / Math.sqrt(dl);
+      if (upCol !== undefined) {
+        // Per-point up, normalized here for the scale invariance the
+        // constant path gets once outside the loop. A zero-length up
+        // normalizes to zero and lands on orientQuat's own parallel
+        // fallbacks, which is the documented behaviour for a bad hint.
+        const ux = readComp(upCol, i, 0);
+        const uy = readComp(upCol, i, 1);
+        const uz = readComp(upCol, i, 2);
+        const ulSq = ux * ux + uy * uy + uz * uz;
+        const uInv = ulSq > 0 ? 1 / Math.sqrt(ulSq) : 0;
+        upx = ux * uInv;
+        upy = uy * uInv;
+        upz = uz * uInv;
+      }
       orientQuat(q, dx * dInv, dy * dInv, dz * dInv, upx, upy, upz, axis);
       rot[i * 4] = q[0];
       rot[i * 4 + 1] = q[1];

@@ -359,7 +359,7 @@ Casts a ray from every point onto a mesh, reads the surface `normal` where it la
 | `axis` | enum | `"+y"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | orient.axis | Which local axis of the asset stands along the surface normal. '+y' is upright. |
 | `direction` | vec3 | `[0,-1,0]` |  |  |  | normal.direction | Which way the ray travels to find the surface. [0,-1,0] looks straight down. |
 | `maxDistance` | f32 | `0` | >= 0 |  |  | normal.maxDistance | Longest ray that still counts as a find, in world units. 0 means unlimited. |
-| `up` | vec3 | `[0,1,0]` |  |  |  | orient.up | Up hint fixing the roll around the normal. |
+| `up` | vec3 | `[0,1,0]` |  |  | yes | orient.up | Up hint fixing the roll around the normal. |
 
 Run it: `pcg run place/align-to-surface`
 
@@ -385,7 +385,7 @@ Places points at even arc-length steps along every path of the supplied `curve` 
 | `count` | i32 | `24` | >= 2 |  |  | resample.count | Points per path in 'count' mode: exactly this many come out, whatever the path's length, and they are evenly spaced at length / (count - 1) — so a 40-unit path at count 5 pitches them every 10 units, and the two ends are always occupied. At least 2 (3 on a closed path); ignored in 'spacing' mode. |
 | `mode` | enum | `"count"` |  | `count`, `spacing` |  | resample.mode | 'count' puts exactly `count` points on each path whatever its length; 'spacing' steps every `spacing` world units, so longer paths get more points — the right one for evenly pitched props. |
 | `spacing` | f32 | `1` | >= 0 |  |  | resample.spacing | Distance between points in world units in 'spacing' mode — exact for every step except the LAST, which is the leftover. The walk starts at the beginning of each path, steps `spacing` until another step would overshoot, then puts a final point exactly on the end: a 40-unit path at spacing 7 comes out with gaps 7, 7, 7, 7, 7, 5. So the count per path is floor(length / spacing) + 2, or length / spacing + 1 when it divides exactly, and the far end is always the short one. For props that must be evenly pitched the whole way, pick a `spacing` that divides the path length. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode. |
-| `up` | vec3 | `[0,1,0]` |  |  |  | orient.up | Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground. |
+| `up` | vec3 | `[0,1,0]` |  |  | yes | orient.up | Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground. |
 
 Run it: `pcg run place/along-curve`
 
@@ -818,7 +818,7 @@ Writes a unit `tangent` along the polyline at every point of a path, then sets `
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `axis` | enum | `"+z"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | orient.axis | Which local axis of the asset points along the path. '+z' is the forward axis assets face by convention. |
-| `up` | vec3 | `[0,1,0]` |  |  |  | orient.up | Up hint fixing the roll around the path; leave it at world up for props that stand on the ground. |
+| `up` | vec3 | `[0,1,0]` |  |  | yes | orient.up | Up hint fixing the roll around the path; leave it at world up for props that stand on the ground. |
 
 Run it: `pcg run write/orient-along-path`
 
@@ -865,6 +865,6 @@ Writes the standard `rot` attribute so every point faces a uniformly random dire
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `axis` | enum | `"+z"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | yaw.axis | Which local axis of the asset turns to face the random direction. '+z' is the forward axis assets face by convention. |
-| `up` | vec3 | `[0,1,0]` |  |  |  | yaw.up | Up hint fixing the roll; leave it at world up unless the assets stand along another axis. |
+| `up` | vec3 | `[0,1,0]` |  |  | yes | yaw.up | Up hint fixing the roll; leave it at world up unless the assets stand along another axis. |
 
 Run it: `pcg run write/random-yaw`

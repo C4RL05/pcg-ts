@@ -400,6 +400,7 @@ describe("category metadata", () => {
       setAttribute: "attribute",
       promoteAttribute: "attribute",
       transferAttribute: "attribute",
+      writeCurveFrame: "attribute",
       partitionByAttribute: "attribute",
       attributeReduce: "attribute",
       attributeRemap: "attribute",

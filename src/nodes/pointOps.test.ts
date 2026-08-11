@@ -339,6 +339,82 @@ describe("orientAlongVector", () => {
     return [v[0] / len, v[1] / len, v[2] / len];
   }
 
+  describe("field-capable up", () => {
+    it("gives a plain up and the same up as a constant field identical bytes", async () => {
+      // The whole reason the plain path was left untouched: a field
+      // resolves through constant(), which stores f32, where the plain
+      // path normalizes in f64 over the raw param. For an f32-exact up
+      // the two MUST agree, and this is what says so.
+      const positions = [
+        [1, 0, 0],
+        [0, 0, 1],
+        [0.3, 0.5, -0.8],
+      ];
+      const plain = await orient(positions, { direction: position(), up: [0, 1, 0] });
+      const field = await orient(positions, { direction: position(), up: constant([0, 1, 0]) });
+      expect(field).toEqual(plain);
+    });
+
+    it("rolls per point when up is a field", async () => {
+      // Same direction everywhere, two different ups: the roll has to
+      // differ, which a constant up could never express.
+      const positions = [
+        [0, 0, 1],
+        [0, 0, 1],
+      ];
+      const input = cloudAt(positions);
+      const upAttr = input.attrs.point.add("myUp", "f32", 3, [0, 1, 0]);
+      upAttr.setTuple(0, [0, 1, 0]);
+      upAttr.setTuple(1, [1, 0, 0]);
+      const geo = firstGeo(
+        (
+          await runNode(
+            orientAlongVector,
+            { direction: [0, 0, 1], up: attribute("myUp", 3), axis: "+z" },
+            { in: [makeGeometryItem(input)] },
+          )
+        ).out,
+      );
+      const rot = geo.attrs.point.require("rot");
+      const q0 = rot.getTuple(0);
+      const q1 = rot.getTuple(1);
+      expect(q0).not.toEqual(q1);
+      // Both still put +z on the direction; only the roll moved.
+      for (const q of [q0, q1]) {
+        const f = rotate(q, [0, 0, 1]);
+        expect(f[0]).toBeCloseTo(0, 6);
+        expect(f[1]).toBeCloseTo(0, 6);
+        expect(f[2]).toBeCloseTo(1, 6);
+      }
+      // With up = +y the local +Y lands on +y; with up = +x it lands on +x.
+      expect(rotate(q0, [0, 1, 0])[1]).toBeCloseTo(1, 6);
+      expect(rotate(q1, [0, 1, 0])[0]).toBeCloseTo(1, 6);
+    });
+
+    it("a zero-length field up falls back exactly as a zero plain up does", async () => {
+      const positions = [[0, 0, 1]];
+      const plain = await orient(positions, { direction: position(), up: [0, 0, 0] });
+      const field = await orient(positions, { direction: position(), up: constant([0, 0, 0]) });
+      expect(field).toEqual(plain);
+    });
+
+    it("declares itself ineligible for the device when up is a field", () => {
+      // Without this gate the apply kernel would bake the DEFAULT up in
+      // and quietly produce different bytes on the device path — the one
+      // failure this library refuses to have.
+      const resident = getNodeType("orientAlongVector").def.resident;
+      expect(resident?.eligible).toBeDefined();
+      expect(resident?.eligible?.({ direction: [0, 0, 1], up: [0, 1, 0], axis: "+z" })).toBe(true);
+      const verdict = resident?.eligible?.({
+        direction: [0, 0, 1],
+        up: attribute("curveNormal", 3),
+        axis: "+z",
+      });
+      expect(typeof verdict).toBe("string");
+      expect(verdict).toContain("up is a field");
+    });
+  });
+
   it("maps every axis option onto the direction with a unit quaternion", async () => {
     const dirs: Array<[number, number, number]> = [
       [1, 2, 3],

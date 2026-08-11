@@ -6,6 +6,7 @@
 import {
   Geometry,
   PRIMTYPE_ATTR,
+  type AttrData,
   type AttrType,
   type Attribute,
   type AttributeSet,
@@ -780,6 +781,71 @@ export function quatFromBasis(
     out[3] = (m21 - m12) / s;
   }
   return out;
+}
+
+/**
+ * Write a unit central-difference tangent at every point of every
+ * polyline, into a tuple-3 destination indexed by POINT.
+ *
+ * The rule, which both callers repeat in their own descriptions: the
+ * tangent at a point is the normalized difference between its
+ * neighbours along the path, which stays smooth through corners; at the
+ * ends of an open path it is the adjacent segment direction, and a
+ * closed path wraps. Where the two neighbours coincide — a hairpin — the
+ * forward segment stands in, pointing the way the path LEAVES the point.
+ * A point whose neighbours all sit on top of it is left as found (both
+ * callers zero the column first), and a point visited by several
+ * polylines takes the tangent of the last one in primitive order.
+ *
+ * Shared rather than written twice for the reason {@link PolylineArcTable}
+ * gives about arc length: writeTangents and writeCurveFrame have to
+ * agree to the bit, or a frame's normal ends up not quite perpendicular
+ * to the tangent sitting in the column beside it, and everything placed
+ * with that frame inherits the skew.
+ */
+export function writePolylineTangents(
+  tables: readonly PolylineArcTable[],
+  pd: AttrData,
+  ps: number,
+  out: Float32Array,
+): void {
+  for (const table of tables) {
+    const pts = table.points;
+    const nv = pts.length;
+    // A closed path repeats its first point as the last vertex; that
+    // repeat is the closure, not a separate point to write twice.
+    const m = table.closed ? nv - 1 : nv;
+    for (let k = 0; k < m; k++) {
+      const cur = pts[k] * ps;
+      const prev = (table.closed ? pts[(k + m - 1) % m] : pts[k > 0 ? k - 1 : 0]) * ps;
+      const next = (table.closed ? pts[(k + 1) % m] : pts[k + 1 < nv ? k + 1 : nv - 1]) * ps;
+      // Central difference, falling back to the forward segment when the
+      // two neighbours land on top of each other (a hairpin).
+      let dx = pd[next] - pd[prev];
+      let dy = pd[next + 1] - pd[prev + 1];
+      let dz = pd[next + 2] - pd[prev + 2];
+      let sq = dx * dx + dy * dy + dz * dz;
+      if (sq === 0) {
+        dx = pd[next] - pd[cur];
+        dy = pd[next + 1] - pd[cur + 1];
+        dz = pd[next + 2] - pd[cur + 2];
+        sq = dx * dx + dy * dy + dz * dz;
+      }
+      // There is deliberately NO backward fallback after this one, and
+      // restoring it would only add dead code: reaching it needs `next`
+      // to coincide with `prev` AND with `cur`, which makes `cur` and
+      // `prev` coincide too, so `cur - prev` could only ever be zero.
+      // P is f32 (polylineArcTables requires it), so `sq === 0` really
+      // does mean the deltas are exactly 0 — the smallest nonzero gap
+      // between two f32 values squares to ~2e-90, far from underflow.
+      if (sq === 0) continue; // every neighbour coincides: leave as found
+      const inv = 1 / Math.sqrt(sq);
+      const o = pts[k] * 3;
+      out[o] = dx * inv;
+      out[o + 1] = dy * inv;
+      out[o + 2] = dz * inv;
+    }
+  }
 }
 
 /** Which local axis an orientation maps onto its forward direction. */

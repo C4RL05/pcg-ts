@@ -6,6 +6,7 @@ import {
   createPolyline,
   setPolylineTopology,
 } from "../data/index.js";
+import { attribute } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import { dataInput } from "../runtime/index.js";
 import {
@@ -23,6 +24,7 @@ import {
   serializeGraph,
   setAttribute,
   splineSample,
+  writeCurveFrame,
   writeTangents,
 } from "./index.js";
 import { firstGeo, positionsOf, runNode, snapshotGeometry } from "./nodes.testsupport.js";
@@ -780,6 +782,179 @@ describe("pathSegments", () => {
     // 9 samples along a 4-long row: 8 segments of 0.5.
     expect(geo.pointCount).toBe(8);
     expect(tuplesOf(geo, "scale").map((s) => s[1])).toEqual(new Array(8).fill(0.5));
+  });
+});
+
+describe("writeCurveFrame", () => {
+  /**
+   * A semicircle in the XY plane whose TANGENT sweeps through world up:
+   * at the middle sample the direction is exactly [0, 1, 0], which is the
+   * case a constant `up` cannot survive and this node exists for.
+   */
+  function throughVertical(n = 41): Geometry {
+    const pos: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (i / (n - 1)) * Math.PI;
+      pos.push(Math.cos(a), Math.sin(a), 0);
+    }
+    return createPolyline(pos);
+  }
+
+  async function frame(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(writeCurveFrame, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  const at = (geo: Geometry, name: string, i: number): number[] => {
+    const a = geo.attrs.point.require(name);
+    return [a.data[i * 3], a.data[i * 3 + 1], a.data[i * 3 + 2]];
+  };
+  const dot = (a: number[], b: number[]): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  it("writes an orthonormal right-handed frame at every point", async () => {
+    const geo = await frame({}, throughVertical());
+    for (let i = 0; i < geo.pointCount; i++) {
+      const t = at(geo, "tangent", i);
+      const n = at(geo, "curveNormal", i);
+      const b = at(geo, "curveBinormal", i);
+      expect(dot(t, t)).toBeCloseTo(1, 5);
+      expect(dot(n, n)).toBeCloseTo(1, 5);
+      expect(dot(b, b)).toBeCloseTo(1, 5);
+      expect(dot(t, n)).toBeCloseTo(0, 5);
+      expect(dot(t, b)).toBeCloseTo(0, 5);
+      expect(dot(n, b)).toBeCloseTo(0, 5);
+      // b = t x n, so (t, n, b) is right-handed rather than mirrored.
+      expect(b[0]).toBeCloseTo(t[1] * n[2] - t[2] * n[1], 5);
+      expect(b[1]).toBeCloseTo(t[2] * n[0] - t[0] * n[2], 5);
+      expect(b[2]).toBeCloseTo(t[0] * n[1] - t[1] * n[0], 5);
+    }
+  });
+
+  it("carries the normal smoothly through a tangent that passes vertical", async () => {
+    // THE motivating case. A constant up flips a half turn here; the
+    // transported normal must not, so consecutive normals stay nearly
+    // parallel all the way across.
+    const geo = await frame({}, throughVertical());
+    let worst = 1;
+    for (let i = 1; i < geo.pointCount; i++) {
+      worst = Math.min(worst, dot(at(geo, "curveNormal", i - 1), at(geo, "curveNormal", i)));
+    }
+    expect(worst).toBeGreaterThan(0.99);
+  });
+
+  it("agrees with writeTangents bit for bit on the tangent", async () => {
+    // Both go through the same shared helper; this is the pin that says
+    // so, because a frame whose normal is perpendicular to a DIFFERENT
+    // tangent than the one in the column beside it is silently skewed.
+    const src = throughVertical();
+    const framed = await frame({}, src);
+    const tangents = firstGeo(
+      (await runNode(writeTangents, {}, { in: [makeGeometryItem(src)] })).out,
+    );
+    expect(Array.from(framed.attrs.point.require("tangent").data)).toEqual(
+      Array.from(tangents.attrs.point.require("tangent").data),
+    );
+  });
+
+  it("keeps the points, their attributes and the topology", async () => {
+    const src = withAttr(createPolyline([0, 0, 0, 1, 0, 0, 2, 1, 0]), "tag", [7, 8, 9]);
+    const geo = await frame({}, src);
+    expect(geo.pointCount).toBe(3);
+    expect(topologyOf(geo)).toEqual(topologyOf(src));
+    const tag = geo.attrs.point.require("tag");
+    expect([tag.get(0), tag.get(1), tag.get(2)]).toEqual([7, 8, 9]);
+  });
+
+  it("leaves a closed path's seam visible rather than smearing it out", async () => {
+    // Transport around a loop returns rotated by the curve's holonomy.
+    // A helix-like closed loop has a real residual, and pretending
+    // otherwise would need a correction this node deliberately omits.
+    const pos: number[] = [];
+    const n = 60;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      pos.push(Math.cos(a), Math.sin(a) * 0.6, Math.sin(a * 2) * 0.5);
+    }
+    const geo = await frame({}, createPolyline(pos, { closed: true }));
+    const first = at(geo, "curveNormal", 0);
+    // Transport the frame one more step, from the last point back to the
+    // first: the seam is whatever that disagrees with the stored first.
+    const last = at(geo, "curveNormal", n - 1);
+    expect(dot(first, first)).toBeCloseTo(1, 5);
+    // Not asserting a specific angle — only that the two are genuinely a
+    // frame each, and that nothing forced them to coincide.
+    expect(dot(last, last)).toBeCloseTo(1, 5);
+  });
+
+  it("gives unreferenced points a zero frame", async () => {
+    const geo = createPointCloud(4);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [1, 0, 0]);
+    P.setTuple(2, [2, 0, 0]);
+    P.setTuple(3, [9, 9, 9]); // in no polyline
+    setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+    const out = await frame({}, geo);
+    expect(at(out, "curveNormal", 3)).toEqual([0, 0, 0]);
+    expect(at(out, "curveBinormal", 3)).toEqual([0, 0, 0]);
+    expect(at(out, "tangent", 3)).toEqual([0, 0, 0]);
+  });
+
+  it("refuses names that would destroy something, before it looks at the geometry", async () => {
+    const empty = { in: [makeGeometryItem(createPointCloud(0))] };
+    expect(await rejection(runNode(writeCurveFrame, { normalName: "" }, empty))).toContain(
+      'param "normalName" must be a non-empty',
+    );
+    expect(await rejection(runNode(writeCurveFrame, { binormalName: "P" }, empty))).toContain(
+      "cannot be \"P\"",
+    );
+    const dup = await rejection(
+      runNode(writeCurveFrame, { normalName: "tangent" }, empty),
+    );
+    expect(dup).toContain("three different attributes");
+  });
+
+  it("refuses a differently shaped column under one of its names", async () => {
+    const src = withAttr(createPolyline([0, 0, 0, 1, 0, 0, 2, 1, 0]), "curveNormal", [1, 2, 3]);
+    const msg = await rejection(runNode(writeCurveFrame, {}, { in: [makeGeometryItem(src)] }));
+    expect(msg).toContain("writeCurveFrame");
+    expect(msg).toContain("curveNormal");
+  });
+
+  it("is deterministic across fresh runs and stable when run twice", async () => {
+    const src = throughVertical();
+    const run = async () => snapshotGeometry(await frame({}, src));
+    expect(await run()).toEqual(await run());
+  });
+
+  it("feeds orientAlongVector's up, which is what it is for", async () => {
+    // The whole point: frame the curve, then aim something radially by
+    // combining the two lateral axes. Here the direction IS the normal,
+    // so every rot must turn +z onto it.
+    const framed = await frame({}, throughVertical(21));
+    const oriented = firstGeo(
+      (
+        await runNode(
+          orientAlongVector,
+          { direction: attribute("curveNormal", 3), up: attribute("tangent", 3), axis: "+z" },
+          { in: [makeGeometryItem(framed)] },
+        )
+      ).out,
+    );
+    const rot = oriented.attrs.point.require("rot");
+    for (let i = 0; i < oriented.pointCount; i++) {
+      const n = at(framed, "curveNormal", i);
+      const v = rotateVec(
+        [0, 0, 0],
+        rot.data[i * 4],
+        rot.data[i * 4 + 1],
+        rot.data[i * 4 + 2],
+        rot.data[i * 4 + 3],
+        0,
+        0,
+        1,
+      );
+      for (let k = 0; k < 3; k++) expect(v[k]).toBeCloseTo(n[k], 5);
+    }
   });
 });
 

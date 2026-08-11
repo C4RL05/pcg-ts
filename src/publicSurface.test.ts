@@ -42,7 +42,7 @@ const ROOT_SURFACE = [
   "spawnInstances", "splineSample", "standardNode", "sub", "subgraphContentHash",
   "subgraphNode", "surfaceSample", "tan", "transferAttribute", "transferNearest",
   "transferRaycast", "transferUv", "transformPoints", "validateGraphMeta", "valueConstant",
-  "valueNoise", "vec", "volumeSample", "worleyNoise", "writeTangents",
+  "valueNoise", "vec", "volumeSample", "worleyNoise", "writeCurveFrame", "writeTangents",
 ] as const;
 
 describe("public surface: pcg-ts", () => {

@@ -58,6 +58,7 @@ import {
   requireReportSlot,
   requireTuple,
   resolveOnMaybeGpu,
+  writePolylineTangents,
 } from "./util.js";
 
 /**
@@ -624,45 +625,243 @@ export const writeTangents = standardNode<WriteTangentsParams>({
     const tables = polylineArcTables(geo, "writeTangents");
     const dst = geo.attrs.point.replace(name, "f32", 3, [0, 0, 0]);
     const P = geo.attrs.point.require("P");
+    writePolylineTangents(tables, P.data, P.tupleSize, dst.data);
+    return { out: [makeGeometryItem(geo)] };
+  },
+});
+
+/** Params of {@link writeCurveFrame}. */
+export interface WriteCurveFrameParams {
+  tangentName: string;
+  normalName: string;
+  binormalName: string;
+}
+
+/**
+ * A unit vector perpendicular to `t`, chosen deterministically. Used
+ * once per path, to start the transport off.
+ *
+ * It projects whichever world axis `t` is LEAST aligned with, so the
+ * projection is never near-degenerate. That choice is a branch: two
+ * curves whose start tangents sit either side of it begin a quarter turn
+ * apart. Harmless — the roll of a frame has no natural zero and every
+ * point after the first is relative to this one — but it is worth
+ * knowing that the frame at a path's end is a property of the WHOLE
+ * path, not of that point.
+ */
+function seedNormal(out: number[], tx: number, ty: number, tz: number): number[] {
+  const ax = Math.abs(tx);
+  const ay = Math.abs(ty);
+  const az = Math.abs(tz);
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  if (ax <= ay && ax <= az) sx = 1;
+  else if (ay <= az) sy = 1;
+  else sz = 1;
+  const d = sx * tx + sy * ty + sz * tz;
+  const nx = sx - d * tx;
+  const ny = sy - d * ty;
+  const nz = sz - d * tz;
+  const inv = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+  out[0] = nx * inv;
+  out[1] = ny * inv;
+  out[2] = nz * inv;
+  return out;
+}
+
+/** A rotation-minimizing frame at every point of a path. */
+export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
+  type: "writeCurveFrame",
+  category: "attribute",
+  description:
+    "Writes a full orthonormal frame — `tangent`, `curveNormal` and `curveBinormal` (f32 tuple 3) — at the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived. The tangent is the same central difference writeTangents writes, from the same shared code, so the three columns are guaranteed mutually perpendicular rather than nearly so. WHY IT EXISTS: orientAlongVector fixes the roll around a direction with an `up` hint, and a CONSTANT up cannot follow a curve that turns over — as the tangent passes through the up vector the roll flips a half turn, and everything placed along the curve (a radial spike, a chain link, a bracket) snaps round with it. The normal here is carried ALONG the curve instead of recomputed from a world axis: it starts perpendicular to the first tangent and is transported point to point by double reflection, which is the rotation that moves it as little as each step allows. Feed it back in as orientAlongVector's `up` — field-capable for exactly this — and the roll varies smoothly however the curve turns; combine `curveNormal` and `curveBinormal` with cos and sin of an angle to aim anything radially around the path. THE FRAME IS NOT LOCAL: a point's normal depends on every point before it along its path, so this must run BEFORE anything that splits a path across cook cells or partitions it — the same curve arriving as two pieces gets two unrelated frames. A CLOSED path does not come back seamless: transport around a loop returns rotated by a residual angle (the holonomy of that curve), so the frame either side of the seam differs, and no local rule can fix it. That is a property of closed curves rather than a defect, and it is left visible instead of smeared out. Degenerate points follow writeTangents: a point whose neighbours all coincide gets a zero tangent and is skipped by the transport, a point in several polylines takes the last one in primitive order, and unreferenced points get [0, 0, 0] on all three.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    tangentName: {
+      type: "string",
+      default: "tangent",
+      description:
+        "Attribute for the unit tangent (created, or reset when it already exists as f32 tuple 3). The default matches what pathResample and splineSample emit, so a path that already carries tangents has them rewritten to identical values.",
+    },
+    normalName: {
+      type: "string",
+      default: "curveNormal",
+      description:
+        "Attribute for the transported normal. NOT called 'normal' deliberately: surfaceSample writes a surface `normal` of the same shape (f32 tuple 3), and an identical shape is exactly the case a reporting slot ACCEPTS — so that name would be quietly reset in place, and a graph that samples a surface and frames a curve would have one silently overwrite the other.",
+    },
+    binormalName: {
+      type: "string",
+      default: "curveBinormal",
+      description:
+        "Attribute for the binormal, tangent cross normal — the third axis of the frame. Written here rather than left to the consumer because recomputing it downstream from two f32 columns is where a frame stops being exactly orthonormal.",
+    },
+  },
+  execute({ inputs, params }) {
+    // Params before geometry: a bad name reported as "no polyline
+    // primitives" sends the author to debug the wrong thing entirely.
+    const names = [
+      ["tangentName", params.tangentName],
+      ["normalName", params.normalName],
+      ["binormalName", params.binormalName],
+    ] as const;
+    const suggestion: Record<string, string> = {
+      tangentName: "tangent",
+      normalName: "curveNormal",
+      binormalName: "curveBinormal",
+    };
+    for (const [param, name] of names) {
+      if (name === "") {
+        throw new Error(
+          `writeCurveFrame: param "${param}" must be a non-empty attribute name; the default is "${suggestion[param]}"`,
+        );
+      }
+      if (name === "P") {
+        throw new Error(
+          `writeCurveFrame: param "${param}" cannot be "P" — that would overwrite the positions the frame is computed from; use "${suggestion[param]}" or another name`,
+        );
+      }
+    }
+    for (let i = 0; i < names.length; i++) {
+      for (let j = i + 1; j < names.length; j++) {
+        if (names[i][1] === names[j][1]) {
+          throw new Error(
+            `writeCurveFrame: params "${names[i][0]}" and "${names[j][0]}" are both "${names[i][1]}"; the three axes of a frame need three different attributes, or two of them would overwrite each other`,
+          );
+        }
+      }
+    }
+    const src = requireGeometry(inputs, "in", "writeCurveFrame");
+    // Each name is a reporting slot of this node's own shape, so a
+    // differently shaped column under one is refused rather than deleted
+    // and re-added — see writeTangents for why that distinction matters.
+    for (const [param, name] of names) {
+      requireReportSlot({
+        attrs: src.attrs.point,
+        nodeType: "writeCurveFrame",
+        param,
+        name,
+        type: "f32",
+        tupleSize: 3,
+        domain: "point",
+        suggestion: suggestion[param],
+      });
+    }
+
+    const geo = cloneGeometry(src);
+    const tables = polylineArcTables(geo, "writeCurveFrame");
+    const P = geo.attrs.point.require("P");
+    const tangent = geo.attrs.point.replace(params.tangentName, "f32", 3, [0, 0, 0]);
+    const normal = geo.attrs.point.replace(params.normalName, "f32", 3, [0, 0, 0]);
+    const binormal = geo.attrs.point.replace(params.binormalName, "f32", 3, [0, 0, 0]);
+    writePolylineTangents(tables, P.data, P.tupleSize, tangent.data);
+
+    const td = tangent.data;
+    const nd = normal.data;
+    const bd = binormal.data;
     const pd = P.data;
     const ps = P.tupleSize;
-    const td = dst.data;
+    const seed: number[] = [0, 0, 0];
 
     for (const table of tables) {
       const pts = table.points;
       const nv = pts.length;
-      // A closed path repeats its first point as the last vertex; that
-      // repeat is the closure, not a separate point to write twice.
       const m = table.closed ? nv - 1 : nv;
+      // The transport runs in f64 and is rounded to f32 only on store:
+      // the normal at one step feeds the next, so rounding inside the
+      // recurrence would compound along the path instead of staying put.
+      let nx = 0;
+      let ny = 0;
+      let nz = 0;
+      // The last point a frame was written at — NOT k - 1, which may be
+      // a degenerate point that was skipped and carries a zero tangent.
+      // Transporting from one of those reflects across nothing.
+      let prev = -1;
       for (let k = 0; k < m; k++) {
-        const cur = pts[k] * ps;
-        const prev = (table.closed ? pts[(k + m - 1) % m] : pts[k > 0 ? k - 1 : 0]) * ps;
-        const next = (table.closed ? pts[(k + 1) % m] : pts[k + 1 < nv ? k + 1 : nv - 1]) * ps;
-        // Central difference, falling back to the forward segment when the
-        // two neighbours land on top of each other (a hairpin).
-        let dx = pd[next] - pd[prev];
-        let dy = pd[next + 1] - pd[prev + 1];
-        let dz = pd[next + 2] - pd[prev + 2];
-        let sq = dx * dx + dy * dy + dz * dz;
-        if (sq === 0) {
-          dx = pd[next] - pd[cur];
-          dy = pd[next + 1] - pd[cur + 1];
-          dz = pd[next + 2] - pd[cur + 2];
-          sq = dx * dx + dy * dy + dz * dz;
+        const p = pts[k];
+        const tx = td[p * 3];
+        const ty = td[p * 3 + 1];
+        const tz = td[p * 3 + 2];
+        if (tx === 0 && ty === 0 && tz === 0) continue;
+        if (prev === -1) {
+          seedNormal(seed, tx, ty, tz);
+          nx = seed[0];
+          ny = seed[1];
+          nz = seed[2];
+        } else {
+          // Double reflection (Wang et al.): reflect the previous frame
+          // across the plane bisecting the step, then across the plane
+          // bisecting the tangent change. Two reflections compose to a
+          // rotation, so the result stays orthonormal by construction
+          // rather than by renormalizing and hoping, and it is the
+          // rotation that moves the normal least.
+          const v1x = pd[p * ps] - pd[prev * ps];
+          const v1y = pd[p * ps + 1] - pd[prev * ps + 1];
+          const v1z = pd[p * ps + 2] - pd[prev * ps + 2];
+          const c1 = v1x * v1x + v1y * v1y + v1z * v1z;
+          let lnx = nx;
+          let lny = ny;
+          let lnz = nz;
+          let ltx = td[prev * 3];
+          let lty = td[prev * 3 + 1];
+          let ltz = td[prev * 3 + 2];
+          if (c1 > 0) {
+            const f1 = (2 / c1) * (v1x * nx + v1y * ny + v1z * nz);
+            lnx = nx - f1 * v1x;
+            lny = ny - f1 * v1y;
+            lnz = nz - f1 * v1z;
+            const f2 = (2 / c1) * (v1x * ltx + v1y * lty + v1z * ltz);
+            ltx = ltx - f2 * v1x;
+            lty = lty - f2 * v1y;
+            ltz = ltz - f2 * v1z;
+          }
+          const v2x = tx - ltx;
+          const v2y = ty - lty;
+          const v2z = tz - ltz;
+          const c2 = v2x * v2x + v2y * v2y + v2z * v2z;
+          if (c2 > 0) {
+            const f3 = (2 / c2) * (v2x * lnx + v2y * lny + v2z * lnz);
+            nx = lnx - f3 * v2x;
+            ny = lny - f3 * v2y;
+            nz = lnz - f3 * v2z;
+          } else {
+            nx = lnx;
+            ny = lny;
+            nz = lnz;
+          }
+          // Re-orthogonalize against the tangent and renormalize. The
+          // reflections are exact in theory; in f64 over a few thousand
+          // points they are not, and a frame that has drifted off the
+          // tangent by a thousandth is a spike that visibly leans.
+          const d = nx * tx + ny * ty + nz * tz;
+          nx -= d * tx;
+          ny -= d * ty;
+          nz -= d * tz;
+          const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+          if (len > 0) {
+            const inv = 1 / len;
+            nx *= inv;
+            ny *= inv;
+            nz *= inv;
+          } else {
+            // The transported normal collapsed onto the tangent, which
+            // takes a full reversal inside one step. Restart from the
+            // seed rather than propagate a zero frame down the rest.
+            seedNormal(seed, tx, ty, tz);
+            nx = seed[0];
+            ny = seed[1];
+            nz = seed[2];
+          }
         }
-        // There is deliberately NO backward fallback after this one, and
-        // restoring it would only add dead code: reaching it needs `next`
-        // to coincide with `prev` AND with `cur`, which makes `cur` and
-        // `prev` coincide too, so `cur - prev` could only ever be zero.
-        // P is f32 (polylineArcTables requires it), so `sq === 0` really
-        // does mean the deltas are exactly 0 — the smallest nonzero gap
-        // between two f32 values squares to ~2e-90, far from underflow.
-        if (sq === 0) continue; // every neighbour coincides: leave [0, 0, 0]
-        const inv = 1 / Math.sqrt(sq);
-        const o = pts[k] * 3;
-        td[o] = dx * inv;
-        td[o + 1] = dy * inv;
-        td[o + 2] = dz * inv;
+        nd[p * 3] = nx;
+        nd[p * 3 + 1] = ny;
+        nd[p * 3 + 2] = nz;
+        // binormal = tangent x normal, so (t, n, b) is right-handed.
+        bd[p * 3] = ty * nz - tz * ny;
+        bd[p * 3 + 1] = tz * nx - tx * nz;
+        bd[p * 3 + 2] = tx * ny - ty * nx;
+        prev = p;
       }
     }
     return { out: [makeGeometryItem(geo)] };

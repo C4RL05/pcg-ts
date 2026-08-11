@@ -635,7 +635,8 @@
           1,
           0
         ],
-        "description": "Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0]."
+        "description": "Up hint fixing the roll around the direction; need not be unit length. When parallel/antiparallel to the direction (or zero), deterministically falls back to [0, 0, 1], then [1, 0, 0]. Field-capable (resolved per point on the input; tuple 1 broadcasts). A per-point up is what a curve that turns over needs: a CONSTANT up flips the roll a half turn as the direction passes through it, and everything placed along the curve snaps round with it — feed writeCurveFrame's `curveNormal` here instead and the roll varies smoothly. A field `up` keeps this node OFF the device-resident path, because the apply kernel bakes the normalized up in as a constant; the cook reports that by name in its fallbacks rather than silently producing different bytes.",
+        "acceptsField": true
       },
       "axis": {
         "type": "enum",
@@ -1758,6 +1759,42 @@
         "type": "u32",
         "default": 0,
         "description": "Extra seed folded into the node seed; change it to re-roll the jitter."
+      }
+    }
+  },
+  {
+    "type": "writeCurveFrame",
+    "description": "Writes a full orthonormal frame — `tangent`, `curveNormal` and `curveBinormal` (f32 tuple 3) — at the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived. The tangent is the same central difference writeTangents writes, from the same shared code, so the three columns are guaranteed mutually perpendicular rather than nearly so. WHY IT EXISTS: orientAlongVector fixes the roll around a direction with an `up` hint, and a CONSTANT up cannot follow a curve that turns over — as the tangent passes through the up vector the roll flips a half turn, and everything placed along the curve (a radial spike, a chain link, a bracket) snaps round with it. The normal here is carried ALONG the curve instead of recomputed from a world axis: it starts perpendicular to the first tangent and is transported point to point by double reflection, which is the rotation that moves it as little as each step allows. Feed it back in as orientAlongVector's `up` — field-capable for exactly this — and the roll varies smoothly however the curve turns; combine `curveNormal` and `curveBinormal` with cos and sin of an angle to aim anything radially around the path. THE FRAME IS NOT LOCAL: a point's normal depends on every point before it along its path, so this must run BEFORE anything that splits a path across cook cells or partitions it — the same curve arriving as two pieces gets two unrelated frames. A CLOSED path does not come back seamless: transport around a loop returns rotated by a residual angle (the holonomy of that curve), so the frame either side of the seam differs, and no local rule can fix it. That is a property of closed curves rather than a defect, and it is left visible instead of smeared out. Degenerate points follow writeTangents: a point whose neighbours all coincide gets a zero tangent and is skipped by the transport, a point in several polylines takes the last one in primitive order, and unreferenced points get [0, 0, 0] on all three.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "tangentName": {
+        "type": "string",
+        "default": "tangent",
+        "description": "Attribute for the unit tangent (created, or reset when it already exists as f32 tuple 3). The default matches what pathResample and splineSample emit, so a path that already carries tangents has them rewritten to identical values."
+      },
+      "normalName": {
+        "type": "string",
+        "default": "curveNormal",
+        "description": "Attribute for the transported normal. NOT called 'normal' deliberately: surfaceSample writes a surface `normal` of the same shape (f32 tuple 3), and an identical shape is exactly the case a reporting slot ACCEPTS — so that name would be quietly reset in place, and a graph that samples a surface and frames a curve would have one silently overwrite the other."
+      },
+      "binormalName": {
+        "type": "string",
+        "default": "curveBinormal",
+        "description": "Attribute for the binormal, tangent cross normal — the third axis of the frame. Written here rather than left to the consumer because recomputing it downstream from two f32 columns is where a frame stops being exactly orthonormal."
       }
     }
   },

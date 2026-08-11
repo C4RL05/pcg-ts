@@ -1181,7 +1181,8 @@
             1,
             0
           ],
-          "description": "Up hint fixing the roll around the normal."
+          "description": "Up hint fixing the roll around the normal.",
+          "acceptsField": true
         },
         "targets": [
           {
@@ -1296,7 +1297,8 @@
             1,
             0
           ],
-          "description": "Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground."
+          "description": "Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground.",
+          "acceptsField": true
         },
         "targets": [
           {
@@ -2710,7 +2712,8 @@
             1,
             0
           ],
-          "description": "Up hint fixing the roll around the path; leave it at world up for props that stand on the ground."
+          "description": "Up hint fixing the roll around the path; leave it at world up for props that stand on the ground.",
+          "acceptsField": true
         },
         "targets": [
           {
@@ -2846,7 +2849,8 @@
             1,
             0
           ],
-          "description": "Up hint fixing the roll; leave it at world up unless the assets stand along another axis."
+          "description": "Up hint fixing the roll; leave it at world up unless the assets stand along another axis.",
+          "acceptsField": true
         },
         "targets": [
           {
