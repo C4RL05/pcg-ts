@@ -1,4 +1,4 @@
-import{n as e,t}from"./mobile-DCLgnEZN.js";var n=!1;function r(){if(n)return;n=!0;let e=document.createElement(`style`);e.textContent=`
+import{n as e,t}from"./mobile-DHy7-48l.js";var n=!1;function r(){if(n)return;n=!0;let e=document.createElement(`style`);e.textContent=`
 .pcg-overlay {
   position: fixed; top: 12px; left: 12px; z-index: 10;
   width: 300px; max-height: calc(100vh - 24px); overflow-y: auto;
@@ -31,7 +31,7 @@ import{n as e,t}from"./mobile-DCLgnEZN.js";var n=!1;function r(){if(n)return;n=!
    clipping the label. */
 .pcg-overlay .pcg-stat { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 10px; margin: 2px 0; }
 .pcg-overlay .pcg-stat span:first-child { color: #8b98ab; font-size: 12px; flex: 0 1 auto; min-width: 0; }
-.pcg-overlay .pcg-stat span:last-child { color: #b8f5c8; font: 12px ui-monospace, monospace; flex: 0 0 auto; margin-left: auto; min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.pcg-overlay .pcg-stat span:last-child { color: #b8f5c8; font: 12px ui-monospace, monospace; flex: 0 1 auto; margin-left: auto; min-width: 0; text-align: right; overflow-wrap: anywhere; }
 .pcg-overlay details { margin-top: 10px; border-top: 1px solid #223047; padding-top: 8px; }
 .pcg-overlay summary { cursor: pointer; color: #aeb9c9; font-size: 12px; user-select: none; }
 .pcg-overlay pre {
