@@ -30,6 +30,7 @@ import {
   firstGeometry,
   floor,
   fraction,
+  hashCombine,
   index,
   jitterPoints,
   lerp,
@@ -57,29 +58,56 @@ type NodeRef = ReturnType<Graph["add"]>;
 export const PART_KINDS = ["rod", "bar", "panel", "clamp"] as const;
 export type PartKind = (typeof PART_KINDS)[number];
 
-/** Everything the panel can turn. */
+/**
+ * Everything the panel can turn.
+ *
+ * Every noise in here is exposed as the same three knobs — frequency,
+ * octaves, variant — because that is the shape the library's own
+ * primitives use. `variant` matters more than it looks: noise is a pure
+ * function of its OWN seed and the sample position, and the graph seed
+ * does not move it, so two rigs with different graph seeds would wander
+ * along identical noise unless something salts it. Variant is that salt,
+ * and it is what re-rolls a shape while every other number stays put.
+ */
 export interface RigParams {
   seed: number;
   // spine
   span: number;
   height: number;
-  wander: number;
+  /** Vertical amplitude of the wander, in metres. */
+  wanderV: number;
+  /** Horizontal amplitude of the wander, in metres. */
+  wanderH: number;
+  wanderFreq: number;
+  wanderOctaves: number;
+  wanderVariant: number;
   spineRadius: number;
   spineSamples: number;
   // components
   weights: Record<PartKind, number>;
   partDensity: number;
-  clusterScale: number;
+  clusterFreq: number;
+  clusterOctaves: number;
+  clusterVariant: number;
   clusterThreshold: number;
+  /** Scatter off the even resample, as a fraction of the sample spacing. */
+  scatterJitter: number;
   partSize: number;
   sizeJitter: number;
   // cables
   danglerCount: number;
   danglerLength: number;
+  /** How short the shortest dangler is, as a fraction of the longest. */
+  dropVariation: number;
   danglerCurl: number;
+  curlFreq: number;
+  curlOctaves: number;
+  curlVariant: number;
   drapeCount: number;
   drapeReach: number;
   drapeSlack: number;
+  /** How much the sag varies from chord to chord. */
+  slackJitter: number;
   cableRadius: number;
 }
 
@@ -87,23 +115,44 @@ export const DEFAULT_PARAMS: RigParams = {
   seed: 3,
   span: 34,
   height: 7,
-  wander: 2.4,
+  wanderV: 1.2,
+  wanderH: 2.4,
+  wanderFreq: 0.035,
+  wanderOctaves: 3,
+  wanderVariant: 0,
   spineRadius: 0.22,
   spineSamples: 130,
   weights: { rod: 4, bar: 2, panel: 1, clamp: 2 },
   partDensity: 320,
-  clusterScale: 9,
+  clusterFreq: 9,
+  clusterOctaves: 2,
+  clusterVariant: 0,
   clusterThreshold: 0.52,
+  scatterJitter: 0.5,
   partSize: 1,
   sizeJitter: 0.45,
   danglerCount: 150,
   danglerLength: 3.2,
+  dropVariation: 0.45,
   danglerCurl: 0.5,
+  curlFreq: 0.5,
+  curlOctaves: 2,
+  curlVariant: 0,
   drapeCount: 34,
   drapeReach: 7,
   drapeSlack: 0.55,
+  slackJitter: 0.35,
   cableRadius: 0.035,
 };
+
+/**
+ * The seed for one named noise. Salted by both the rig seed and the
+ * noise's own variant, so the seed field re-rolls everything at once and
+ * a variant re-rolls exactly one shape.
+ */
+function noiseSeed(params: RigParams, salt: number, variant: number): number {
+  return hashCombine(params.seed, hashCombine(salt, Math.round(variant)));
+}
 
 /** Corners the wander is built from, before the arc-length evening. */
 const SPINE_CORNERS = 97;
@@ -150,14 +199,30 @@ export function buildRigGraph(params: RigParams): Graph {
     end: [half, params.height, 0],
     includeEnd: true,
   });
+  const wanderOpts = {
+    frequency: params.wanderFreq,
+    octaves: Math.max(1, Math.round(params.wanderOctaves)),
+  };
   const wander = graph.add(transformPoints, {
     translate: vec(
       0,
+      // Two SEPARATE noises rather than two axes of one: a single field
+      // would make the rise and the sideways swing the same curve, and
+      // the spine would travel on a diagonal plane instead of snaking.
       mul(
-        params.wander * 0.5,
-        fbm(perlinNoise, { seed: params.seed + 11, frequency: 0.04, octaves: 3 }),
+        params.wanderV,
+        fbm(perlinNoise, {
+          ...wanderOpts,
+          seed: noiseSeed(params, 11, params.wanderVariant),
+        }),
       ),
-      mul(params.wander, fbm(perlinNoise, { seed: params.seed + 29, frequency: 0.03, octaves: 3 })),
+      mul(
+        params.wanderH,
+        fbm(perlinNoise, {
+          ...wanderOpts,
+          seed: noiseSeed(params, 29, params.wanderVariant),
+        }),
+      ),
     ),
   });
   const spinePath = graph.add(pointsToPath, { closed: false });
@@ -191,9 +256,9 @@ export function buildRigGraph(params: RigParams): Graph {
     // clusters follow the spine rather than the world axes, and they
     // stay put when the spine wanders somewhere else.
     value: fbm(perlinNoise, {
-      seed: params.seed + 47,
-      frequency: params.clusterScale,
-      octaves: 2,
+      seed: noiseSeed(params, 47, params.clusterVariant),
+      frequency: params.clusterFreq,
+      octaves: Math.max(1, Math.round(params.clusterOctaves)),
       normalized: true,
       position: vec(attribute("curveU", 1), 0, 0),
     }),
@@ -206,9 +271,13 @@ export function buildRigGraph(params: RigParams): Graph {
   // lattice, which reads as a comb rather than a cluster. The jitter is
   // about half the sample spacing.
   const spacing = params.span / Math.max(1, params.partDensity);
+  const jitter = spacing * params.scatterJitter;
   const scatter = graph.add(jitterPoints, {
-    amount: [spacing * 0.5, spacing * 0.5, spacing * 0.5],
-    seed: 5,
+    amount: [jitter, jitter, jitter],
+    // jitterPoints keys its draw on point IDENTITY (position bits plus
+    // the seed attribute), not the index, so this seed is what re-rolls
+    // the scatter without moving anything else.
+    seed: hashCombine(5, Math.round(params.clusterVariant)),
   });
   // Which shape each point spawns. The selector is floored and clamped
   // into the values list, so a 0..1 random scaled by the list length
@@ -298,7 +367,14 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
     domain: "point",
     type: "f32",
     tupleSize: 3,
-    value: vec(1, mul(params.danglerLength, lerp(0.45, 1, randomField("drop"))), 1),
+    value: vec(
+      1,
+      mul(
+        params.danglerLength,
+        lerp(1 - params.dropVariation, 1, randomField(`drop${Math.round(params.curlVariant)}`)),
+      ),
+      1,
+    ),
   });
   const copies = graph.add(copyToPoints);
   const cableId = graph.add(setAttribute, {
@@ -314,10 +390,20 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
     translate: (() => {
       const u = attribute("cableU", 1);
       const amount = mul(params.danglerCurl, mul(u, u));
+      const opts = {
+        frequency: params.curlFreq,
+        octaves: Math.max(1, Math.round(params.curlOctaves)),
+      };
       return vec(
-        mul(amount, fbm(perlinNoise, { seed: params.seed + 71, frequency: 0.5, octaves: 2 })),
+        mul(
+          amount,
+          fbm(perlinNoise, { ...opts, seed: noiseSeed(params, 71, params.curlVariant) }),
+        ),
         0,
-        mul(amount, fbm(perlinNoise, { seed: params.seed + 97, frequency: 0.5, octaves: 2 })),
+        mul(
+          amount,
+          fbm(perlinNoise, { ...opts, seed: noiseSeed(params, 97, params.curlVariant) }),
+        ),
       );
     })(),
   });
@@ -363,7 +449,25 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
       const u = attribute("curveU", 1);
       // 4 * u * (1 - u) peaks at 1 in the middle and is 0 at both ends.
       const bulge = mul(4, mul(u, sub(1, u)));
-      return vec(0, mul(-params.drapeSlack, mul(attribute("edgeLength", 1), bulge)), 0);
+      // Per-chord slack variation is awkward to express: a random keyed
+      // on point identity would vary WITHIN a chord and tear it, and
+      // there is no per-primitive random to reach for. A low-frequency
+      // noise over world position is nearly constant across any one
+      // chord but differs from chord to chord — and the small amount it
+      // does vary along a chord makes the curve slightly asymmetric,
+      // which is what a real cable does anyway.
+      const slack = add(
+        params.drapeSlack,
+        mul(
+          params.drapeSlack * params.slackJitter,
+          fbm(perlinNoise, {
+            seed: noiseSeed(params, 131, params.curlVariant),
+            frequency: 0.06,
+            octaves: 1,
+          }),
+        ),
+      );
+      return vec(0, mul(-1, mul(slack, mul(attribute("edgeLength", 1), bulge))), 0);
     })(),
   });
   const drapeTube = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius });

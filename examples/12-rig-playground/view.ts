@@ -39,13 +39,25 @@ export interface Section {
   sliders: SliderSpec[];
 }
 
+/**
+ * Every noise gets the same three knobs. `variant` is the one worth
+ * explaining in the UI: noise is a pure function of its own seed and the
+ * sample position, so it does NOT move when the graph seed moves —
+ * variant is what re-rolls one shape while every other number holds
+ * still. The library's own primitives expose exactly this knob for
+ * exactly this reason.
+ */
 export const SECTIONS: readonly Section[] = [
   {
     title: "spine",
     sliders: [
       { key: "span", label: "span", min: 8, max: 60, step: 1, unit: "m" },
       { key: "height", label: "height", min: 2, max: 14, step: 0.1, unit: "m" },
-      { key: "wander", label: "wander", min: 0, max: 8, step: 0.1, unit: "m" },
+      { key: "wanderV", label: "wander ↕", min: 0, max: 8, step: 0.1, unit: "m" },
+      { key: "wanderH", label: "wander ↔", min: 0, max: 12, step: 0.1, unit: "m" },
+      { key: "wanderFreq", label: "wander noise freq", min: 0.005, max: 0.3, step: 0.005 },
+      { key: "wanderOctaves", label: "wander octaves", min: 1, max: 6, step: 1 },
+      { key: "wanderVariant", label: "wander variant", min: 0, max: 20, step: 1 },
       { key: "spineRadius", label: "radius", min: 0.04, max: 0.6, step: 0.01, unit: "m" },
       { key: "spineSamples", label: "samples", min: 20, max: 400, step: 5 },
     ],
@@ -54,8 +66,11 @@ export const SECTIONS: readonly Section[] = [
     title: "components",
     sliders: [
       { key: "partDensity", label: "density", min: 20, max: 900, step: 10 },
-      { key: "clusterScale", label: "cluster scale", min: 1, max: 40, step: 0.5 },
+      { key: "clusterFreq", label: "cluster noise freq", min: 0.5, max: 40, step: 0.5 },
+      { key: "clusterOctaves", label: "cluster octaves", min: 1, max: 6, step: 1 },
+      { key: "clusterVariant", label: "cluster variant", min: 0, max: 20, step: 1 },
       { key: "clusterThreshold", label: "cluster cut", min: 0, max: 1, step: 0.01 },
+      { key: "scatterJitter", label: "scatter", min: 0, max: 4, step: 0.05, unit: "×gap" },
       { key: "partSize", label: "size", min: 0.2, max: 3, step: 0.05, unit: "x" },
       { key: "sizeJitter", label: "size jitter", min: 0, max: 0.9, step: 0.05 },
     ],
@@ -65,10 +80,15 @@ export const SECTIONS: readonly Section[] = [
     sliders: [
       { key: "danglerCount", label: "danglers", min: 0, max: 400, step: 5 },
       { key: "danglerLength", label: "drop", min: 0.2, max: 10, step: 0.1, unit: "m" },
+      { key: "dropVariation", label: "drop variation", min: 0, max: 0.95, step: 0.05 },
       { key: "danglerCurl", label: "curl", min: 0, max: 3, step: 0.05, unit: "m" },
+      { key: "curlFreq", label: "curl noise freq", min: 0.02, max: 3, step: 0.02 },
+      { key: "curlOctaves", label: "curl octaves", min: 1, max: 5, step: 1 },
+      { key: "curlVariant", label: "cable variant", min: 0, max: 20, step: 1 },
       { key: "drapeCount", label: "drape anchors", min: 0, max: 120, step: 2 },
       { key: "drapeReach", label: "drape reach", min: 1, max: 20, step: 0.5, unit: "m" },
       { key: "drapeSlack", label: "slack", min: 0, max: 2, step: 0.05 },
+      { key: "slackJitter", label: "slack variation", min: 0, max: 1, step: 0.05 },
       { key: "cableRadius", label: "cable radius", min: 0.005, max: 0.2, step: 0.005, unit: "m" },
     ],
   },

@@ -159,8 +159,11 @@
   }
   function randomizeSeed(): void {
     // Nothing in this repo calls Math.random — a fresh seed comes from the
-    // library's own hash, mixed with the clock so two clicks differ.
-    applySeed(hashCombine(params.seed, Date.now() >>> 0) % 10_000);
+    // library's own hash, mixed with the clock so two clicks differ. Kept
+    // to four digits so it stays readable in the field, and nudged off the
+    // current seed on a collision so the button is never a no-op.
+    const next = hashCombine(params.seed, Date.now() >>> 0) % 10_000;
+    applySeed(next === params.seed ? (next + 1) % 10_000 : next);
   }
 
   function commitWeight(kind: PartKind, text: string): void {
