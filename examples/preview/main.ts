@@ -499,7 +499,15 @@ async function main(): Promise<void> {
     scene.add(grid);
   }
 
-  scene.add(new HemisphereLight(0xbfd6f2, 0x4a4335, 1.1));
+  // 3.2 on a vegetation-bounce ground term, not 1.1 over dark earth: a
+  // closed canopy fully shadows the directional, so interiors are lit by
+  // the hemisphere alone — at 1.1 through ACES that is ~4% grey and a
+  // forest floor renders black (measured: 88% of ground-view pixels under
+  // 10% luma). Downward faces sample the ground half, and dark earth
+  // renders any canopy seen from below as black; vegetated ground bounces
+  // green. The directional stays untouched — open ground was exposed
+  // correctly.
+  scene.add(new HemisphereLight(0xbfd6f2, 0x66705a, 3.2));
   const sun = new DirectionalLight(0xfff2d8, 2.4);
   sun.position.set(centre.x + extent * 0.5, groundY + extent * 0.9, centre.z + extent * 0.35);
   sun.target.position.copy(centre);
