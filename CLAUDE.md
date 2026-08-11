@@ -54,7 +54,9 @@ Three foundations, each carried through the whole library:
   sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a
   repo script rather than a `pcg` subcommand
 - `npm run capture` — regenerate the committed demo screenshots
-- `npm run status` — regenerate `status.html` from `status.json`
+- `npm run status` — rebuild the local `status.html` dashboard from
+  `status.json`. Generated output, not committed (gitignored); CI builds
+  it per run and uploads it as the `status-html` artifact
 
 ## Conventions
 
@@ -74,11 +76,12 @@ Three foundations, each carried through the whole library:
 
 - `PLAN.md` is the source of truth for phases and exit criteria;
   `status.json` tracks live progress.
-- After each completed work unit: run tests, update `status.json`, run
-  `npm run status` to regenerate `status.html`, and commit
-  (`phase(N): <summary>`).
-- A phase is complete only when its tests are green, status.html is
-  regenerated, and (for nontrivial phases) an independent verification
+- After each completed work unit: run tests, update `status.json`, and
+  commit (`phase(N): <summary>`). Do NOT commit `status.html` — it is
+  derived from `status.json` and gitignored. Run `npm run status` whenever
+  you want to read the dashboard locally.
+- A phase is complete only when its tests are green and (for nontrivial
+  phases) an independent verification
   agent has re-derived correctness per the delegation rules below.
 - Never mark a task done in `status.json` without a passing test run to
   back it.
