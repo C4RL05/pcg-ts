@@ -6,7 +6,7 @@ and Node. Deterministic by construction.
 
 ## Design pillars
 
-Three foundations, each carried through the whole library:
+Four foundations, each carried through the whole library:
 
 - **The data model.** Attributes live on domains (point / vertex /
   primitive / detail) with promote and transfer between them. The PCG
@@ -14,8 +14,11 @@ Three foundations, each carried through the whole library:
   (transform, density, bounds, color, seed).
 - **The runtime.** Hierarchical generation across grid levels with an
   unbounded level above, partitioned (budgeted, cancellable) cooking,
-  spawners as first-class graph terminals. GPU subgraphs are a recorded
-  stretch goal (WebGPU), not scheduled.
+  spawners as first-class graph terminals. GPU cooking ships (WebGPU):
+  the serializable field grammar lowers to WGSL compute kernels, eligible
+  runs fuse into device-resident pipelines, and instance transforms can
+  stay on the device. Every path falls back to the CPU with a
+  machine-readable reason rather than producing different bytes.
 - **Fields.** A node output can be a deferred function of evaluation
   context (`Field<T>`), resolved only when it lands on a domain. Node
   params accept `T | Field<T>`. Anonymous attributes carry intermediate
@@ -29,18 +32,52 @@ Three foundations, each carried through the whole library:
 
 ## Layout
 
+Core (reachable from `import "pcg-ts"`):
+
 - `src/data` — attribute storage (SoA typed arrays), domains, promote/transfer
 - `src/random` — PCG32 RNG, seed hashing (no `Math.random` anywhere)
-- `src/fields` — `Field<T>`, combinators, evaluation context
+- `src/fields` — `Field<T>`, combinators, evaluation context, and the
+  serializable field-expression spec the GPU compiler consumes
 - `src/noise` — value/perlin/simplex/worley/fbm noise as fields
 - `src/graph` — nodes, pins, data collections, scheduler, caching, subgraphs
 - `src/runtime` — grid levels, partitioned cooking, streaming, invalidation
 - `src/nodes` — standard node library (samplers, point ops, attribute ops)
+- `src/spawn` — spawner protocol: render-agnostic instance batches and the
+  `spawnInstances` terminal
+
+Internal to the core (deliberately NOT re-exported from `src/index.ts`;
+see the comment there before adding one):
+
+- `src/spatial` — uniform grid and adjacency, the neighbor-query backing
+  for the filtering / neighborhood / topology nodes. Internal until
+  something outside the library needs it: exporting later is free,
+  un-exporting is breaking
+
+Subpath exports (each its own entry in `tsup.config.ts` and
+`package.json` `exports`; keep them out of the root import):
+
 - `src/three` — three.js interop (optional peer dep; core never imports three)
+- `src/gpu` — `pcg-ts/gpu`: WGSL compiler for the field grammar plus the
+  WebGPU device runtime, fused device-resident runs, device transforms.
+  Typed structurally, so it needs no WebGPU type dependency
+- `src/primitives` — `pcg-ts/primitives`: the shipped vocabulary.
+  Importing it REGISTERS every primitive, which is why it is not in the
+  root import
+- `src/worker` — `pcg-ts/worker`: off-thread cooking. The pool plus the
+  Node and browser worker entries, which must stay real files in
+  `dist/worker/` for the default factory's relative resolve to hold
+- `src/cli` — the `pcg` binary: catalogs, then validate → cook → inspect
+  → render against a graph JSON file
+
+Not public API:
+
+- `src/docs` — build tooling: renderers that generate the catalogs under
+  `docs/`. A build entry only so `scripts/` has a built path to import;
+  deliberately absent from `package.json` `exports`
 - `tests/` — cross-module integration and determinism suites (unit tests are
   co-located as `src/**/*.test.ts`)
 - `examples/` — vite multi-page demos
-- `scripts/` — status.html generator and other tooling
+- `scripts/` — doc/catalog generators, demo capture, preview, dist smoke
 
 ## Commands
 
