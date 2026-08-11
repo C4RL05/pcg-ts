@@ -24,6 +24,7 @@ import {
   cook,
   copyToPoints,
   connectPoints,
+  cos,
   div,
   fbm,
   filterByDensity,
@@ -43,10 +44,12 @@ import {
   pointsToPath,
   randomField,
   setAttribute,
+  sin,
   spawnInstances,
   sub,
   transformPoints,
   vec,
+  writeCurveFrame,
   type InstanceBatch,
   type InstancesItem,
 } from "pcg-ts";
@@ -90,6 +93,11 @@ export interface RigParams {
   clusterOctaves: number;
   clusterVariant: number;
   clusterThreshold: number;
+  /**
+   * How much of the full turn around the spine the components fan
+   * across. 0 puts them all on one side, 1 is a complete fan.
+   */
+  radialSpread: number;
   /** Scatter off the even resample, as a fraction of the sample spacing. */
   scatterJitter: number;
   partSize: number;
@@ -128,6 +136,7 @@ export const DEFAULT_PARAMS: RigParams = {
   clusterOctaves: 2,
   clusterVariant: 0,
   clusterThreshold: 0.52,
+  radialSpread: 1,
   scatterJitter: 0.5,
   partSize: 1,
   sizeJitter: 0.45,
@@ -247,6 +256,11 @@ export function buildRigGraph(params: RigParams): Graph {
   // Dense even samples, thinned by a noise field read along the curve
   // parameter so the survivors arrive in clusters rather than evenly.
   const dense = graph.add(pathResample, { mode: "count", count: params.partDensity });
+  // The frame goes AFTER the dense resample, not before: pathResample
+  // builds new points and does not carry the input's POINT attributes,
+  // so a frame written upstream would be dropped right here. It has to
+  // be computed on the points that survive to the end.
+  const frame = graph.add(writeCurveFrame, {});
   const density = graph.add(setAttribute, {
     name: "density",
     domain: "point",
@@ -290,13 +304,23 @@ export function buildRigGraph(params: RigParams): Graph {
     values: values.length > 0 ? values : ["rod"],
     value: mul(randomField("part"), Math.max(1, values.length)),
   });
-  // Local +Z runs along the spine, which puts local +Y as close to world
-  // up as the tangent allows — so a Y-long rod sticks out PERPENDICULAR
-  // to the spine, and a Z-long bar or collar lies along it. A full
-  // radial fan needs a per-point up, which lands with writeCurveFrame.
+  // Local +Z runs along the spine, so a Z-long bar or collar lies along
+  // it and a Y-long rod sticks out sideways. WHICH sideways is the roll,
+  // and for axis ±z the roll is exactly what the `up` hint sets — so
+  // aiming the fan needs no change to the direction at all, only a
+  // per-point up spun around the curve's own frame.
+  //
+  // cos(a) * curveNormal + sin(a) * curveBinormal is the unit vector at
+  // angle `a` in the plane perpendicular to the tangent. A constant
+  // world up cannot express it, which is the whole reason `up` is
+  // field-capable and writeCurveFrame exists.
+  const angle = mul(randomField("radial"), Math.PI * 2 * params.radialSpread);
   const orient = graph.add(orientAlongVector, {
     direction: attribute("tangent", 3),
-    up: [0, 1, 0],
+    up: add(
+      mul(cos(angle), attribute("curveNormal", 3)),
+      mul(sin(angle), attribute("curveBinormal", 3)),
+    ),
     axis: "+z",
   });
   const size = graph.add(setAttribute, {
@@ -314,7 +338,8 @@ export function buildRigGraph(params: RigParams): Graph {
   });
   const partSpawn = graph.add(spawnInstances, { assetId: "rod", assetAttr: "part" });
   graph.connect(spine, "out", dense, "in");
-  graph.connect(dense, "out", density, "in");
+  graph.connect(dense, "out", frame, "in");
+  graph.connect(frame, "out", density, "in");
   graph.connect(density, "out", cluster, "in");
   graph.connect(cluster, "out", scatter, "in");
   graph.connect(scatter, "out", part, "in");

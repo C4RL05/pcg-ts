@@ -70,6 +70,7 @@ export const SECTIONS: readonly Section[] = [
       { key: "clusterOctaves", label: "cluster octaves", min: 1, max: 6, step: 1 },
       { key: "clusterVariant", label: "cluster variant", min: 0, max: 20, step: 1 },
       { key: "clusterThreshold", label: "cluster cut", min: 0, max: 1, step: 0.01 },
+      { key: "radialSpread", label: "radial fan", min: 0, max: 1, step: 0.02, unit: "turn" },
       { key: "scatterJitter", label: "scatter", min: 0, max: 4, step: 0.05, unit: "×gap" },
       { key: "partSize", label: "size", min: 0.2, max: 3, step: 0.05, unit: "x" },
       { key: "sizeJitter", label: "size jitter", min: 0, max: 0.9, step: 0.05 },
