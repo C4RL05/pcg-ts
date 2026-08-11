@@ -5,4 +5,5 @@
  */
 export * from "./types.js";
 export * from "./dataInput.js";
+export * from "./patches.js";
 export * from "./world.js";

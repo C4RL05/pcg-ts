@@ -10,6 +10,70 @@
  */
 import type { CookResult, Graph } from "../graph/index.js";
 
+/**
+ * One serializable param write: "set `param` on the node with id `node`
+ * to `value`". The value is plain JSON — a number, string, boolean, a
+ * numeric array, or (on a field-capable param) a FieldSpec object as
+ * produced by `fieldToJson` — never a live `Field`, `DataItem`, or any
+ * other runtime object, because a patch must survive `postMessage` to a
+ * cook worker byte-for-byte. Applied by `applyParamPatches`, which
+ * validates the value against the target param's registered schema and
+ * interprets FieldSpec objects through `fieldFromJson`.
+ */
+export interface ParamPatch {
+  /** Id of the node instance to patch. */
+  readonly node: string;
+  /** Param name on that node. */
+  readonly param: string;
+  /** Plain-JSON value (or FieldSpec object on a field-capable param). */
+  readonly value: unknown;
+}
+
+/**
+ * The richer return form of {@link LevelDef.bindPatches}: param patches
+ * plus an optional graph seed (the serializable equivalent of calling
+ * `graph.setSeed` inside `bind`, with the same caveats documented there).
+ */
+export interface BindPatches {
+  readonly patches: readonly ParamPatch[];
+  /** When present, the graph seed is set (u32) before the cell cooks. */
+  readonly seed?: number;
+}
+
+/** One remote cell cook: the level graph plus this cell's patches. */
+export interface CellCookRequest {
+  /**
+   * The level's graph. A backend serializes it (once per structural
+   * version) and cooks the serialized form, so everything in it must
+   * survive `serializeGraph`: registered node types only, field params
+   * authored via `fieldFromJson`, no live item-list bindings.
+   */
+  readonly graph: Graph;
+  /** Per-cell param patches (see {@link ParamPatch}). */
+  readonly patches: readonly ParamPatch[];
+  /** Graph seed to set before cooking, when the bind asked for one. */
+  readonly seed?: number;
+  /** Cook only these declared outputs (see `CookOptions.outputs`). */
+  readonly outputs?: readonly string[];
+  /** Aborts the cook; the promise rejects with `CookCancelledError`. */
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Where a `World` sends cell cooks instead of cooking on its own thread —
+ * see `WorldOptions.pool`. The shipped implementation is `CookWorkerPool`
+ * (`pcg-ts/worker`); anything with this shape works, so a test double or
+ * a custom scheduler can stand in.
+ *
+ * Contract: the returned outputs must be byte-identical to cooking the
+ * same graph with the same patches locally (the determinism invariant
+ * crosses the thread boundary unchanged), and the promise must reject
+ * with `CookCancelledError` when `signal` aborts.
+ */
+export interface CookBackend {
+  cookCell(req: CellCookRequest): Promise<CellOutputs>;
+}
+
 /** Integer grid coordinate of a 2D cell on the XZ plane: `[cx, cz]`. */
 export type CellCoord2 = readonly [cx: number, cz: number];
 
@@ -210,7 +274,9 @@ export interface LevelDef {
   readonly cookOutputs?: readonly string[];
   /**
    * Wire one cell's context into the graph before it cooks — the only
-   * channel through which cell data enters the graph. Typical bindings:
+   * channel through which cell data enters the graph. Every level defines
+   * exactly one of `bind` (imperative, in-place) or {@link bindPatches}
+   * (declarative, serializable). Typical bindings:
    * `graph.setParam(scatter, "boundsMin", [ctx.min[0], 0, ctx.min[1]])`,
    * `graph.setParam(scatter, "seed", ctx.seed)`, or injecting
    * `ctx.parent.outputs` through a `dataInput` node's `items` param.
@@ -255,5 +321,33 @@ export interface LevelDef {
    * change data, bind a fresh array (fresh item revs) or invalidate the
    * affected cells.
    */
-  bind(graph: Graph, ctx: CellContext): void;
+  bind?(graph: Graph, ctx: CellContext): void;
+  /**
+   * The serializable alternative to {@link bind}: instead of mutating the
+   * graph, return the param patches (and optionally a graph seed) that
+   * express this cell's binding as plain JSON. Every level defines exactly
+   * one of the two forms.
+   *
+   * Same determinism contract as `bind` — derive patches only from `ctx`
+   * and static configuration — plus one addition: the callback must not
+   * touch the graph at all. The runtime applies the patches itself (or
+   * ships them to `WorldOptions.pool`), and a graph edit made in here
+   * would read as a user edit and recook the level forever.
+   *
+   * Why it exists: patches cross a `postMessage` boundary, so a level
+   * that binds this way can cook on a worker (`WorldOptions.pool`)
+   * instead of the main thread. Without a pool the runtime applies the
+   * patches to the local graph and cooks exactly as `bind` would — the
+   * two paths produce byte-identical cells, and that equivalence is
+   * pinned by tests.
+   *
+   * Limits, stated rather than discovered: values must be plain JSON
+   * (field params take FieldSpec objects, see {@link ParamPatch}), so a
+   * live-item binding — injecting `ctx.parent.outputs` through a
+   * `dataInput` node — cannot be expressed as a patch. A level that
+   * consumes parent items keeps `bind` (and cooks locally); a patched
+   * level that needs cross-cell agreement re-derives it world-anchored,
+   * exactly as the halo/seam guidance on {@link bind} describes.
+   */
+  bindPatches?(ctx: CellContext): readonly ParamPatch[] | BindPatches;
 }

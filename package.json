@@ -64,6 +64,18 @@
       "types": "./dist/primitives/index.d.ts",
       "import": "./dist/primitives/index.js"
     },
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "import": "./dist/worker/index.js"
+    },
+    "./worker/node": {
+      "types": "./dist/worker/entryNode.d.ts",
+      "import": "./dist/worker/entryNode.js"
+    },
+    "./worker/browser": {
+      "types": "./dist/worker/entryBrowser.d.ts",
+      "import": "./dist/worker/entryBrowser.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

@@ -6,13 +6,17 @@
 import type { GpuFieldResolver } from "../fields/index.js";
 import { CookCancelledError, cook, type Graph } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
+import { applyParamPatches } from "./patches.js";
 import type {
+  BindPatches,
   CellContext,
   CellCoord,
   CellCoord3,
   CellMode,
   CellOutputs,
+  CookBackend,
   LevelDef,
+  ParamPatch,
   ParentCellRef,
 } from "./types.js";
 
@@ -47,8 +51,32 @@ export interface WorldOptions {
    * cell memo provenance keeps device and CPU bytes apart. Overridable
    * per update via `UpdateOptions.gpu` (the update's value wins). Omit
    * for CPU-only cooking, byte-identical to a build without GPU support.
+   * Never reaches pool-cooked levels (see {@link WorldOptions.pool}).
    */
   gpu?: GpuFieldResolver;
+  /**
+   * Opt-in off-thread cooking (e.g. `CookWorkerPool` from
+   * `pcg-ts/worker`). Levels that bind with {@link LevelDef.bindPatches}
+   * send their cell cooks here instead of cooking on this thread;
+   * `bind` levels are untouched, and with no pool every level cooks
+   * locally exactly as before (bindPatches levels via the local patch
+   * fallback) — the bytes are identical either way.
+   *
+   * Semantics that shift with a pool, stated plainly:
+   * - `UpdateOptions.budgetMs` bounds SCHEDULING, not cook wall time:
+   *   dispatching a cell to the pool is what consumes budget, the cooks
+   *   themselves run elsewhere, and `update()` resolves once this
+   *   update's dispatched cells have landed (the main thread is free
+   *   while it waits).
+   * - Pool cooks are CPU-only: a worker has no render device, so a GPU
+   *   resolver (`WorldOptions.gpu` / `UpdateOptions.gpu`) applies only
+   *   to locally cooked levels, and pooled instance outputs are always
+   *   CPU batches.
+   * - Staleness, eviction, parent gating, and per-cell seeds are
+   *   unchanged; cells land in deterministic (nearest-first) order
+   *   regardless of which worker finishes when.
+   */
+  pool?: CookBackend;
 }
 
 /** Options for one {@link World.update} pass. */
@@ -189,6 +217,22 @@ function coordsEqual(a: CellCoord, b: CellCoord): boolean {
   return true;
 }
 
+/** Normalize either return form of {@link LevelDef.bindPatches}. */
+function normalizeBindPatches(bound: readonly ParamPatch[] | BindPatches): BindPatches {
+  return Array.isArray(bound) ? { patches: bound } : (bound as BindPatches);
+}
+
+/**
+ * Attach no-op rejection handlers to in-flight pooled cooks the update is
+ * abandoning (abort, or an earlier cell's failure): their outcomes are
+ * irrelevant now, but an unobserved rejection would crash the process.
+ */
+function settleQuietly(dispatched: readonly { result: Promise<unknown> }[]): void {
+  for (const d of dispatched) {
+    d.result.catch(() => undefined);
+  }
+}
+
 /**
  * Viewpoint-driven hierarchical cell streamer.
  *
@@ -224,6 +268,7 @@ export class World {
   private readonly onCellReady: WorldOptions["onCellReady"];
   private readonly onCellEvicted: WorldOptions["onCellEvicted"];
   private readonly gpu: GpuFieldResolver | undefined;
+  private readonly pool: CookBackend | undefined;
   private cookCounter = 0;
   private useCounter = 0;
   private totalCooked = 0;
@@ -309,6 +354,23 @@ export class World {
         );
       }
     }
+    // Exactly one binding form per level: bind (imperative, in-place) or
+    // bindPatches (serializable; poolable). Zero or both is ambiguous
+    // about which one a cook would honor, so it is refused with the fix.
+    levels.forEach((def, i) => {
+      const hasBind = typeof def.bind === "function";
+      const hasPatches = typeof def.bindPatches === "function";
+      if (hasBind && hasPatches) {
+        throw new WorldValidationError(
+          `level ${i} ("${def.name}") defines both bind and bindPatches; keep exactly one — bind mutates the graph in place (always cooks locally), bindPatches returns serializable patches (cooks on WorldOptions.pool when one is set, locally otherwise)`,
+        );
+      }
+      if (!hasBind && !hasPatches) {
+        throw new WorldValidationError(
+          `level ${i} ("${def.name}") defines neither bind nor bindPatches; add bind(graph, ctx) to wire cell context in place, or bindPatches(ctx) to return it as serializable param patches`,
+        );
+      }
+    });
     // cookOutputs must name declared outputs of the level's graph.
     levels.forEach((def, i) => {
       if (def.cookOutputs === undefined) return;
@@ -350,6 +412,7 @@ export class World {
     this.onCellReady = opts.onCellReady;
     this.onCellEvicted = opts.onCellEvicted;
     this.gpu = opts.gpu;
+    this.pool = opts.pool;
     this.levels = levels.map((def, index) => ({
       def,
       index,
@@ -446,6 +509,14 @@ export class World {
       }
       queue.sort((a, b) => a.distSq - b.distSq || coordCompare(a.coord, b.coord));
 
+      if (level.def.bindPatches !== undefined && this.pool !== undefined) {
+        // Pooled level: dispatch every affordable cell to the backend,
+        // then land results in queue (nearest-first) order — completion
+        // order is wall-clock and must not leak into storage, callback,
+        // or stats order.
+        pending += await this.cookLevelPooled(level, queue, this.pool, opts, start, cooked);
+        continue;
+      }
       for (const w of queue) {
         if (signal?.aborted) throw new CookCancelledError();
         if (
@@ -650,14 +721,12 @@ export class World {
       : { coord: pcoord, outputs: rec.outputs };
   }
 
-  /** Bind the cell context, cook the level graph, and store the outputs. */
-  private async cookCell(
+  /** Build the {@link CellContext} handed to a cell's bind/bindPatches. */
+  private cellContext(
     level: LevelState,
     coord: CellCoord,
     parent: ParentCellRef | undefined,
-    opts: UpdateOptions,
-    cooked: CellId[],
-  ): Promise<void> {
+  ): CellContext {
     const def = level.def;
     const idx = level.index;
     // Cell-invariant anchors, handed to bind alongside the per-cell seed:
@@ -711,6 +780,19 @@ export class World {
         ...(parent !== undefined ? { parent } : {}),
       };
     }
+    return ctx;
+  }
+
+  /** Bind the cell context, cook the level graph, and store the outputs. */
+  private async cookCell(
+    level: LevelState,
+    coord: CellCoord,
+    parent: ParentCellRef | undefined,
+    opts: UpdateOptions,
+    cooked: CellId[],
+  ): Promise<void> {
+    const def = level.def;
+    const ctx = this.cellContext(level, coord, parent);
     // A version change since the level's last baseline means user code
     // edited the graph mid-update (e.g. inside onCellReady): charge it
     // now, so cells cooked earlier this update recook next update instead
@@ -718,7 +800,19 @@ export class World {
     if (level.baselineVersion !== undefined && def.graph.version !== level.baselineVersion) {
       for (const rec of level.cells.values()) rec.stale = true;
     }
-    def.bind(def.graph, ctx);
+    if (def.bind !== undefined) {
+      def.bind(def.graph, ctx);
+    } else {
+      // bindPatches without a pool: the local fallback. The SAME
+      // application code the cook worker host runs (applyParamPatches),
+      // so the two paths cannot drift — a patched level cooks to the
+      // same bytes with and without WorldOptions.pool.
+      const { patches, seed } = normalizeBindPatches(
+        (def.bindPatches as NonNullable<LevelDef["bindPatches"]>)(ctx),
+      );
+      applyParamPatches(def.graph, patches, `level "${def.name}" bindPatches`);
+      if (seed !== undefined) def.graph.setSeed(seed);
+    }
     // Re-baseline after the runtime's own writes: only user edits leave
     // version and baseline disagreeing at the next check.
     level.baselineVersion = def.graph.version;
@@ -730,20 +824,100 @@ export class World {
       // means a CPU-only cook (byte-identical to pre-GPU behavior).
       gpu: opts.gpu ?? this.gpu,
     });
+    this.storeCell(level, coord, result.outputs, cooked);
+  }
 
+  /**
+   * Dispatch a pooled level's cook queue to the backend, then land the
+   * results in queue order. Dispatching is what the update budget and
+   * cook cap meter here (the cooks run off-thread); landing stores each
+   * cell, cascades staleness to its stored children, and fires
+   * `onCellReady` — in the same deterministic order a local cook loop
+   * would have. Returns the pending count.
+   */
+  private async cookLevelPooled(
+    level: LevelState,
+    queue: readonly WantedCell[],
+    pool: CookBackend,
+    opts: UpdateOptions,
+    start: number,
+    cooked: CellId[],
+  ): Promise<number> {
+    const { budgetMs, signal, maxCooksPerUpdate } = opts;
+    const def = level.def;
+    let pending = 0;
+    // bindPatches must not touch the graph, so the runtime writes nothing
+    // here: baseline now, and any version movement seen later is a user
+    // edit (charged by the level-start check next update).
+    level.baselineVersion = def.graph.version;
+    const dispatched: { coord: CellCoord; result: Promise<CellOutputs> }[] = [];
+    for (const w of queue) {
+      if (signal?.aborted) {
+        settleQuietly(dispatched);
+        throw new CookCancelledError();
+      }
+      if (
+        (maxCooksPerUpdate !== undefined && cooked.length + dispatched.length >= maxCooksPerUpdate) ||
+        (budgetMs !== undefined && performance.now() - start >= budgetMs)
+      ) {
+        pending++;
+        continue;
+      }
+      const parent = this.parentFor(level, w.coord);
+      if (parent === "missing") {
+        pending++;
+        continue;
+      }
+      const ctx = this.cellContext(level, w.coord, parent);
+      const { patches, seed } = normalizeBindPatches(
+        (def.bindPatches as NonNullable<LevelDef["bindPatches"]>)(ctx),
+      );
+      dispatched.push({
+        coord: w.coord,
+        result: pool.cookCell({
+          graph: def.graph,
+          patches,
+          ...(seed !== undefined ? { seed } : {}),
+          ...(def.cookOutputs !== undefined ? { outputs: def.cookOutputs } : {}),
+          ...(signal !== undefined ? { signal } : {}),
+        }),
+      });
+    }
+    for (let i = 0; i < dispatched.length; i++) {
+      let outputs: CellOutputs;
+      try {
+        outputs = await dispatched[i].result;
+      } catch (err) {
+        // Keep the later results from becoming unhandled rejections;
+        // their cells simply recook next update (nothing was stored).
+        settleQuietly(dispatched.slice(i + 1));
+        throw err;
+      }
+      this.storeCell(level, dispatched[i].coord, outputs, cooked);
+    }
+    return pending;
+  }
+
+  /** Store a cooked cell's outputs and run the post-cook bookkeeping. */
+  private storeCell(
+    level: LevelState,
+    coord: CellCoord,
+    outputs: CellOutputs,
+    cooked: CellId[],
+  ): void {
     const key = cellKey(coord);
     let rec = level.cells.get(key);
     if (rec === undefined) {
       rec = {
         coord,
-        outputs: result.outputs,
+        outputs,
         stale: false,
         cookedAt: ++this.cookCounter,
         lastUsed: ++this.useCounter,
       };
       level.cells.set(key, rec);
     } else {
-      rec.outputs = result.outputs;
+      rec.outputs = outputs;
       rec.stale = false;
       rec.cookedAt = ++this.cookCounter;
       rec.lastUsed = ++this.useCounter;
@@ -753,7 +927,7 @@ export class World {
     // here may change what stored children consumed: mark them stale. They
     // recook when next wanted (child levels are processed after this one,
     // so a same-update child recook already sees the new outputs).
-    const childLevel = this.levels[idx + 1];
+    const childLevel = this.levels[level.index + 1];
     if (childLevel !== undefined) {
       for (const childRec of childLevel.cells.values()) {
         const pc = this.parentCoordOf(childLevel, childRec.coord);
@@ -762,8 +936,8 @@ export class World {
     }
 
     this.totalCooked++;
-    cooked.push({ level: def.name, coord: rec.coord });
-    this.onCellReady?.(def.name, rec.coord, rec.outputs);
+    cooked.push({ level: level.def.name, coord: rec.coord });
+    this.onCellReady?.(level.def.name, rec.coord, rec.outputs);
   }
 
   private evict(level: LevelState, rec: CellRecord, evicted: CellId[]): void {

@@ -206,6 +206,19 @@ export function outputsDiff(a: CellOutputs, b: CellOutputs): string | null {
               return `${name}[${i}]: batch ${bi} transform[${t}] differs`;
             }
           }
+          if ((ba.colors === undefined) !== (bb.colors === undefined)) {
+            return `${name}[${i}]: batch ${bi} colors present on one side only`;
+          }
+          if (ba.colors !== undefined && bb.colors !== undefined) {
+            if (ba.colors.length !== bb.colors.length) {
+              return `${name}[${i}]: batch ${bi} colors length differs`;
+            }
+            for (let c = 0; c < ba.colors.length; c++) {
+              if (!Object.is(ba.colors[c], bb.colors[c])) {
+                return `${name}[${i}]: batch ${bi} colors[${c}] differs`;
+              }
+            }
+          }
         }
       }
     }
