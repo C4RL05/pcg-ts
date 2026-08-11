@@ -6,14 +6,6 @@ coverage/
 .DS_Store
 .test-results.json
 
-# Generated wholly from status.json by `npm run status`, so committing it
-# stored the same information twice and rewrote 124 KB per work unit — it
-# grew to the largest single path in the history. Nothing consumes it from
-# the web (Pages serves docs/, and no page links here): it is a local
-# dashboard. Run `npm run status` to rebuild it, or download the artifact
-# CI publishes for a given run.
-/status.html
-
 # `npm run preview` output: iteration frames plus their sidecar. These are
 # working artefacts of an authoring loop, not documentation assets — the
 # committed screenshots are the nine under docs/, produced by `npm run

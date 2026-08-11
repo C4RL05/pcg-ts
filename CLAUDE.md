@@ -91,9 +91,9 @@ Not public API:
   sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a
   repo script rather than a `pcg` subcommand
 - `npm run capture` — regenerate the committed demo screenshots
-- `npm run status` — rebuild the local `status.html` dashboard from
-  `status.json`. Generated output, not committed (gitignored); CI builds
-  it per run and uploads it as the `status-html` artifact
+- `npm run docs` — regenerate the catalogs under `docs/` (nodes,
+  primitives, examples, site). CI fails if these are stale
+- `npm run corpus:golden` — regenerate the example-corpus golden file
 
 ## Conventions
 
@@ -118,17 +118,18 @@ Not public API:
 
 ## Unattended build protocol
 
-- `PLAN.md` is the source of truth for phases and exit criteria;
-  `status.json` tracks live progress.
-- After each completed work unit: run tests, update `status.json`, and
-  commit (`phase(N): <summary>`). Do NOT commit `status.html` — it is
-  derived from `status.json` and gitignored. Run `npm run status` whenever
-  you want to read the dashboard locally.
+- `PLAN.md` is the source of truth for phases and exit criteria. Progress
+  is the git history — there is no separate tracker to update, and no
+  second place for it to disagree with what actually shipped.
+- After each completed work unit: run tests, then commit
+  (`phase(N): <summary>`). The commit message carries what a status entry
+  used to, so write it as the record: what changed and why, not just what.
 - A phase is complete only when its tests are green and (for nontrivial
-  phases) an independent verification
-  agent has re-derived correctness per the delegation rules below.
-- Never mark a task done in `status.json` without a passing test run to
-  back it.
+  phases) an independent verification agent has re-derived correctness per
+  the delegation rules below.
+- Never describe work as done without a passing test run to back it.
+- Blockers needing a user decision go to the user directly. Do not stall
+  silently waiting on one.
 
 # Subagent delegation and cost economy
 

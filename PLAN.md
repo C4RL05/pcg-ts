@@ -5,8 +5,8 @@ a domain-based attribute data model, a hierarchical real-time generation
 runtime, and deferred fields — with a standard node library, three.js interop,
 examples, and tests. Designed to be driven by AI agents as well as
 humans: self-describing node registry, stable JSON graph serialization,
-precise actionable errors, introspectable execution. Built phase by phase, unattended, with `status.html`
-regenerated and a commit after every phase (and after significant
+precise actionable errors, introspectable execution. Built phase by phase,
+unattended, with a commit after every phase (and after significant
 mid-phase milestones).
 
 Package name: `pcg-ts` (subpath exports `pcg-ts` and `pcg-ts/three`).
@@ -76,10 +76,8 @@ interface Field<N extends number = number> {
 - `package.json` (npm), strict `tsconfig.json`, vitest config, tsup config,
   vite config for `examples/`, `.gitignore`.
 - Subpath exports wired (`.`, `./three`), placeholder entry points compile.
-- `scripts/status.mjs`: reads `status.json` (+ latest vitest summary),
-  writes self-contained `status.html`. `npm run status` script.
-- Exit: `npm test` runs (empty suite passes), `npm run build` succeeds,
-  `npm run status` regenerates status.html. Commit.
+- Exit: `npm test` runs (empty suite passes), `npm run build` succeeds.
+  Commit.
 
 ### Phase 1 — Core data model (attribute domains)
 - `src/data`: AttributeSet with typed columns (f32/i32/u32/bool + string
@@ -153,14 +151,14 @@ interface Field<N extends number = number> {
   (compose fields, visualize as color/density).
 - README with API tour; agent-facing docs: `llms.txt` plus a node/API
   reference generated from registry metadata, written for LLM
-  consumption; final status.html; tag `v0.1.0`. Commit.
+  consumption; tag `v0.1.0`. Commit.
 
 ## Phases (v0.2) — backlog promoted 2026-08-05
 
 The post-v0.1 backlog (example-building friction + audit findings),
 grouped by subsystem into phases 8–12. Same protocol as v0.1: delegated
 implementation, independent adversarial audit per nontrivial phase,
-tests + status.html + commit after each phase.
+tests + commit after each phase.
 
 ### Phase 8 — Serialization completeness
 - Serializable subgraphs: register subgraphs via `standardNode` with an
@@ -218,7 +216,7 @@ tests + status.html + commit after each phase.
 
 The two schedulable stretch items, plus release polish. Same protocol:
 delegated implementation, independent adversarial audit per nontrivial
-phase, tests + status.html + commit after each phase.
+phase, tests + commit after each phase.
 
 ### Phase 13 — uv/raycast attribute transfer
 - Extend `transfer` beyond nearest: `uv` mapping (locate each
@@ -264,7 +262,7 @@ phase, tests + status.html + commit after each phase.
 The public-API gaps recorded while building the phase-14 editor
 strictly on the public surface. Same protocol: delegated
 implementation, independent adversarial audit per nontrivial phase,
-tests + status.html + commit after each phase.
+tests + commit after each phase.
 
 ### Phase 16 — Graph mutation and introspection
 - `Graph.removeNode(node)`: removes the node, all its connections, and
@@ -2172,7 +2170,7 @@ repo.
   subagent owning that phase's files; nontrivial phases get an independent
   verification agent before being marked complete.
 - After every phase (and significant mid-phase milestone): run full tests,
-  update `status.json`, regenerate `status.html`, commit `phase(N): ...`.
-- Blockers that need a user decision are recorded in status.json under
-  `blockers` and surfaced in status.html rather than stalling silently —
-  pick the most reasonable default, note it, and continue.
+  commit `phase(N): ...`. The commit history IS the progress record.
+- Blockers that need a user decision are raised with the user rather than
+  stalling silently — pick the most reasonable default, note it in the
+  commit message, and continue.

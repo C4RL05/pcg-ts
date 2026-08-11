@@ -65,30 +65,8 @@ jobs:
       # Regenerating them must be a no-op on a clean checkout; if it is
       # not, someone changed a source of truth and did not regenerate, and
       # the repo is shipping a doc that disagrees with the code.
-      #
-      # status.html is NOT in this list any more: it is no longer committed
-      # (see .gitignore), so it cannot go stale — the only copy that exists
-      # is the one built below from the status.json in this commit.
       - name: Generated artifacts are up to date
         run: |
           npm run docs
-          git diff --exit-code -- docs status.json \
+          git diff --exit-code -- docs \
             || { echo "::error::Generated files are stale. Run 'npm run docs' and commit the result."; exit 1; }
-
-      # Build the dashboard rather than store it. This still fails the run
-      # if status.json drifts into a shape the generator cannot render,
-      # which is the half of the old committed-artifact check that was
-      # actually load-bearing.
-      - name: Build status dashboard
-        run: npm run status
-
-      # One upload, not one per matrix leg: upload-artifact@v4 rejects a
-      # repeated artifact name within a run, and the page is identical on
-      # both since it derives only from the committed status.json.
-      - name: Upload status dashboard
-        if: matrix.node == 22
-        uses: actions/upload-artifact@v4
-        with:
-          name: status-html
-          path: status.html
-          if-no-files-found: error

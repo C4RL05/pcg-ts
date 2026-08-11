@@ -87,7 +87,6 @@
     "check": "tsc --noEmit",
     "examples": "vite --config examples/vite.config.ts",
     "examples:pages": "vite build --config examples/vite.config.ts --base=./ --outDir ../docs/examples --emptyOutDir",
-    "status": "node scripts/status.mjs",
     "capture": "node scripts/capture-demos.mjs",
     "preview": "node scripts/preview.mjs",
     "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:examples && npm run docs:site",
