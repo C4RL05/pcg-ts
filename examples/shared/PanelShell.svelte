@@ -5,10 +5,12 @@
    * bottom-sheet treatment. Extracted at the third copy (05, 08, 12),
    * which is what the comments in the first two asked for.
    *
-   * Only the shell lives here. Rows, sliders, selects and readouts stay in
-   * each panel: they differ per demo (label column widths, readout widths,
-   * segmented buttons), and Svelte scopes styles to the component that
-   * renders the markup, so control CSS belongs where the controls are.
+   * Only the shell lives here. Rows, sliders, selects and readouts are
+   * `Controls.svelte`'s, which renders them from a spec and carries their
+   * CSS with them — Svelte scopes styles to the component that renders
+   * the markup, so the styles could only follow the markup, and they did.
+   * A panel that still writes a row by hand (the rig's seed box) styles
+   * that row itself, for the same reason.
    *
    * The DOM contract the capture tooling depends on is unchanged: one
    * `.panel` element wrapping the whole card, with the demo's content as
