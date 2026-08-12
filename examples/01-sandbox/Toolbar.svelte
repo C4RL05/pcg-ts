@@ -118,6 +118,11 @@
     padding: 8px 12px;
     border-bottom: 1px solid #223047;
     flex: 0 0 auto;
+    /* Wraps at ANY width, not just on phones. A side dock is 420-640px
+       wide and the dock is `overflow: hidden` — without this the row runs
+       past the edge and the controls at its end are simply gone, which
+       included the buttons for getting back out of a side dock. */
+    flex-wrap: wrap;
   }
   .title {
     font-weight: 600;
@@ -181,7 +186,7 @@
     color: #eaf1fa;
   }
   .status {
-    flex: 1;
+    flex: 1 1 100%;
     min-width: 0;
     text-align: right;
     overflow: hidden;
