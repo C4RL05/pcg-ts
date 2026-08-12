@@ -1,6 +1,7 @@
 /**
- * The rig graph: a spline spine, component parts scattered along it, and
- * cables hanging off it. One pcg-ts graph, four branches, four spawners.
+ * The rig graph: a spline spine, component parts scattered along it,
+ * chains holding it up and cables hanging off it. One pcg-ts graph, five
+ * branches, five spawners.
  *
  * Kept apart from main.ts so the GENERATION reads on its own — the host
  * owns the renderer and the asset shapes and has nothing to say about
@@ -21,6 +22,7 @@ import {
   Graph,
   add,
   attribute,
+  component,
   cook,
   copyToPoints,
   connectPoints,
@@ -43,6 +45,7 @@ import {
   pathSegments,
   perlinNoise,
   pointLine,
+  position,
   pointsToPath,
   randomField,
   setAttribute,
@@ -104,6 +107,14 @@ export interface RigParams {
   scatterJitter: number;
   partSize: number;
   sizeJitter: number;
+  // suspension
+  /** Chains from the ceiling down to the spine. 0 leaves it floating. */
+  chainCount: number;
+  /** Height the chains rise to, in metres. */
+  ceilingHeight: number;
+  /** Links per chain. Each link is sized to its own segment, so this
+   *  sets how fine the chain is rather than how long. */
+  chainLinks: number;
   // cables
   danglerCount: number;
   /**
@@ -160,6 +171,9 @@ export const DEFAULT_PARAMS: RigParams = {
   scatterJitter: 0.5,
   partSize: 1,
   sizeJitter: 0.45,
+  chainCount: 7,
+  ceilingHeight: 13,
+  chainLinks: 22,
   danglerCount: 200,
   danglerBundle: 0.8,
   danglerBundleFreq: 7,
@@ -378,12 +392,100 @@ export function buildRigGraph(params: RigParams): Graph {
   // needs at least 2 samples to still be a path and throws otherwise, so
   // "0 danglers" has to mean no branch, not a branch with 0 in it. The
   // output simply is not declared, and cookRig tolerates that.
+  if (params.chainCount >= 2) buildChains(graph, params, spine);
   if (params.danglerCount >= 2) buildDanglers(graph, params, spine);
   if (params.drapeCount >= 3) buildDrapes(graph, params, spine);
 
   // The spine points, for the stats line.
   graph.output(spine, "out", "spinePoints");
   return graph;
+}
+
+/**
+ * Chains from the ceiling down to the spine — what the whole rig hangs
+ * from, and the one place a per-link roll actually matters.
+ *
+ * A chain link is a ring whose plane CONTAINS the chain direction, and
+ * consecutive links sit a quarter turn apart. Both fall out of aiming
+ * the torus rather than rolling it: `orientAlongVector` puts local +Z —
+ * a torus's axis — onto a HORIZONTAL direction, which leaves the ring's
+ * plane containing the vertical chain, and alternating that direction
+ * between +X and +Z gives the quarter turn. One geometry, one draw call,
+ * no second asset to keep in step.
+ */
+function buildChains(graph: Graph, params: RigParams, spine: NodeRef): void {
+  const links = Math.max(2, Math.round(params.chainLinks));
+  // A unit strand pointing UP; the anchor's scale stretches it to reach.
+  const strand = graph.add(pointLine, {
+    count: links + 1,
+    start: [0, 0, 0],
+    end: [0, 1, 0],
+    includeEnd: true,
+  });
+  const anchors = graph.add(pathResample, {
+    mode: "count",
+    count: Math.max(2, Math.round(params.chainCount)),
+  });
+  // Each chain reaches the SAME ceiling from a different height, so the
+  // stretch is per anchor: copyToPoints multiplies the target's scale
+  // into the source positions, and the strand is one unit long, so
+  // scale.y is the gap the chain has to span. The spine wanders, so this
+  // has to be read from the anchor's own Y rather than assumed.
+  const reach = graph.add(setAttribute, {
+    name: "scale",
+    domain: "point",
+    type: "f32",
+    tupleSize: 3,
+    value: vec(1, sub(params.ceilingHeight, component(position(), 1)), 1),
+  });
+  const copies = graph.add(copyToPoints);
+  const chainId = graph.add(setAttribute, {
+    name: "chainId",
+    domain: "point",
+    type: "i32",
+    tupleSize: 1,
+    value: floor(div(index(), links + 1)),
+  });
+  const chainPath = graph.add(pointsToPath, { closed: false, groupAttr: "chainId" });
+  const segments = graph.add(pathSegments, { axis: "+y", radius: 1 });
+  // Size each link to its own segment: chains span different gaps, so a
+  // fixed link size would leave gaps on the long ones and pile up on the
+  // short. pathSegments already wrote the segment length into scale.y —
+  // reading it back is exact, and setAttribute guards the aliasing.
+  const linkSize = graph.add(setAttribute, {
+    name: "scale",
+    domain: "point",
+    type: "f32",
+    tupleSize: 3,
+    value: (() => {
+      // 1.3 so consecutive links overlap and interlock rather than
+      // meeting exactly end to end, which reads as a dotted line.
+      const s = mul(1.3, component(attribute("scale", 3), 1));
+      return vec(s, s, s);
+    })(),
+  });
+  const alternate = graph.add(orientAlongVector, {
+    // index mod 2, without a modulo combinator: i - 2 * floor(i / 2).
+    direction: (() => {
+      const i = index();
+      const parity = sub(i, mul(2, floor(div(i, 2))));
+      return vec(sub(1, parity), 0, parity);
+    })(),
+    up: attribute("tangent", 3),
+    axis: "+z",
+  });
+  const spawn = graph.add(spawnInstances, { assetId: "chainLink" });
+  graph.connect(spine, "out", anchors, "in");
+  graph.connect(anchors, "out", reach, "in");
+  graph.connect(strand, "out", copies, "source");
+  graph.connect(reach, "out", copies, "target");
+  graph.connect(copies, "out", chainId, "in");
+  graph.connect(chainId, "out", chainPath, "in");
+  graph.connect(chainPath, "out", segments, "in");
+  graph.connect(segments, "out", linkSize, "in");
+  graph.connect(linkSize, "out", alternate, "in");
+  graph.connect(alternate, "out", spawn, "in");
+  graph.output(spawn, "instances", "chains");
 }
 
 /** One vertical strand per attachment point, curled toward its free end. */
@@ -630,7 +732,7 @@ export interface RigResult {
 }
 
 /** The graph's output names that carry instances, in draw order. */
-export const RIG_GROUPS = ["spine", "parts", "danglers", "drapes"] as const;
+export const RIG_GROUPS = ["chains", "spine", "parts", "danglers", "drapes"] as const;
 export type RigGroup = (typeof RIG_GROUPS)[number];
 
 /** Cook a rig graph and collect its batches by group. */

@@ -225,9 +225,9 @@
 
 <PanelShell title="11 · rig playground" width={PANEL_WIDTH} badge={cookFlag}>
   <p class="info">
-    One graph, four branches: a spline <b>spine</b> pushed around by noise, <b>components</b>
-    scattered along it in noise clusters, and two kinds of hanging <b>cable</b>. Every knob recooks
-    the whole rig; the same seed always rebuilds the same rig.
+    One graph, five branches: a spline <b>spine</b> pushed around by noise, <b>components</b>
+    scattered along it in noise clusters, <b>chains</b> holding it up, and two kinds of hanging
+    <b>cable</b>. Every knob recooks the whole rig; the same seed always rebuilds the same rig.
   </p>
 
   <div class="row">

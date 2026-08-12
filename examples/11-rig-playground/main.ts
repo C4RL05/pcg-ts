@@ -30,6 +30,7 @@ import {
   MeshNormalMaterial,
   PerspectiveCamera,
   Scene,
+  TorusGeometry,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -96,6 +97,10 @@ const GEOMETRY: Record<string, BufferGeometry> = {
   bar: new BoxGeometry(0.1, 0.17, 1.5),
   panel: new BoxGeometry(0.42, 0.3, 0.66),
   clamp: new CylinderGeometry(0.32, 0.32, 0.28, 12).rotateX(Math.PI / 2),
+  // A ring of unit DIAMETER, so scaling it by a chain segment's length
+  // makes the link span exactly that segment. Its axis is +z, which is
+  // what the chain branch aims horizontally to stand the ring upright.
+  chainLink: new TorusGeometry(0.5, 0.11, 5, 9),
 };
 
 /** Flat-mode colour per asset id — the only thing telling them apart. */
@@ -105,6 +110,7 @@ const FLAT_COLOUR: Record<string, number> = {
   bar: 0x46c0a0,
   panel: 0xd9b23c,
   clamp: 0x7a6ce0,
+  chainLink: 0xb0b8c4,
 };
 
 let shading: Shading = "normal";
@@ -138,6 +144,7 @@ let cooking = false;
 let error: string | undefined;
 let fpsText = "—";
 const visible: Record<RigGroup, boolean> = {
+  chains: true,
   spine: true,
   parts: true,
   danglers: true,

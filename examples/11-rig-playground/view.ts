@@ -90,6 +90,14 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    title: "suspension",
+    sliders: [
+      { key: "chainCount", label: "chains", min: 0, max: 40, step: 1 },
+      { key: "ceilingHeight", label: "ceiling", min: 4, max: 30, step: 0.5, unit: "m" },
+      { key: "chainLinks", label: "links per chain", min: 2, max: 80, step: 1 },
+    ],
+  },
+  {
     title: "cables",
     selects: [
       {
@@ -124,6 +132,7 @@ export const SECTIONS: readonly Section[] = [
 
 /** Group visibility labels, in draw order. */
 export const GROUP_LABEL: Record<RigGroup, string> = {
+  chains: "chains",
   spine: "spine",
   parts: "components",
   danglers: "danglers",
