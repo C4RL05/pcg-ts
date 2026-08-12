@@ -8,7 +8,7 @@
    * caches); the panel commits an edit to its view model only after the
    * controller accepted it.
    */
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import Canvas from "./Canvas.svelte";
   import Inspector from "./Inspector.svelte";
   import Modal from "./Modal.svelte";
@@ -100,6 +100,53 @@
    * narrow range collapses the dock, leaving it clears the collapse, so
    * rotating a phone never strands the dock in a stale state.
    */
+  /**
+   * Which edge the dock sits on. Persisted, because where you want the
+   * graph is a property of your screen rather than of the session.
+   */
+  type Dock = "bottom" | "left" | "right";
+  const DOCK_KEY = "pcg-sandbox-dock";
+  function readDock(): Dock {
+    try {
+      const v = localStorage.getItem(DOCK_KEY);
+      if (v === "left" || v === "right" || v === "bottom") return v;
+    } catch {
+      // Private mode and file:// can both refuse storage; the default is fine.
+    }
+    return "bottom";
+  }
+  let dock = $state<Dock>(readDock());
+  /** Measured, so the insets below track a clamped CSS width exactly. */
+  let dockWidth = $state(0);
+  function setDock(next: Dock): void {
+    dock = next;
+    try {
+      localStorage.setItem(DOCK_KEY, next);
+    } catch {
+      // Not worth telling anyone: the dock still moved.
+    }
+  }
+
+  /**
+   * A side dock would sit under the stats overlay (fixed top-left) and the
+   * knobs card (fixed top-right). Rather than teach either about this
+   * page, publish the space the dock has taken as custom properties both
+   * already offset by — they default to 0, so every other demo is
+   * unaffected.
+   */
+  $effect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--pcg-inset-left", dock === "left" ? `${dockWidth + 12}px` : "0px");
+    root.style.setProperty("--pcg-inset-right", dock === "right" ? `${dockWidth + 12}px` : "0px");
+    return () => {
+      root.style.removeProperty("--pcg-inset-left");
+      root.style.removeProperty("--pcg-inset-right");
+    };
+  });
+
+  /** Canvas component ref, for the toolbar's "fit" button. */
+  let canvas = $state<{ resetView: () => void } | undefined>();
+
   let dockCollapsed = $state(narrowScreen().matches);
   let paletteOpen = $state(false);
   let inspectorOpen = $state(false);
@@ -208,6 +255,17 @@
     selectedId = null;
     graphRev++;
     captureBaseline();
+    frameGraph();
+  }
+
+  /**
+   * Frame the whole graph after a load. The canvas pans and zooms rather
+   * than scrolling, so without this a graph wider than the dock opens
+   * with its tail off-screen and no scrollbar to say so. Deferred a tick:
+   * the fit measures the canvas, which has not laid out the new nodes yet.
+   */
+  function frameGraph(): void {
+    void tick().then(() => canvas?.resetView());
   }
 
   /**
@@ -383,6 +441,7 @@
 
   function relayout(): void {
     topoLayout(model.nodes, model.edges);
+    frameGraph();
   }
 
   function openExport(): void {
@@ -399,6 +458,7 @@
     importLabel = label;
     awaitingImportCook = true;
     graphRev++;
+    frameGraph();
     return null;
   }
 
@@ -461,7 +521,13 @@
   onReset={resetKnobs}
   {shareUrl} />
 
-<div class="editor" class:collapsed={dockCollapsed}>
+<div
+  class="editor"
+  class:collapsed={dockCollapsed}
+  class:dock-left={dock === "left"}
+  class:dock-right={dock === "right"}
+  bind:clientWidth={dockWidth}
+>
   <Toolbar
     seed={model.seed}
     {status}
@@ -472,6 +538,9 @@
     onExport={openExport}
     onImport={() => (modal = "import")}
     onLayout={relayout}
+    {dock}
+    onDock={setDock}
+    onFit={() => canvas?.resetView()}
     onToggle={() => (dockCollapsed = !dockCollapsed)}
   />
   {#if status && status.errors.length > 0}
@@ -485,6 +554,7 @@
     <Palette {groups} onAdd={addNode} open={paletteOpen} />
     <div class="canvas-wrap">
       <Canvas
+        bind:this={canvas}
         {model}
         {selectedId}
         onSelect={(id) => (selectedId = id)}
@@ -565,6 +635,24 @@
     backdrop-filter: blur(6px);
     overflow: hidden;
   }
+  /* Docked to a side the dock is full height and a clamped width; the
+     canvas keeps whatever is left, which is why the columns beside it
+     stay fixed-width and it does not. */
+  .editor.dock-left,
+  .editor.dock-right {
+    top: 12px;
+    bottom: 12px;
+    height: auto;
+    width: clamp(420px, 34vw, 640px);
+  }
+  .editor.dock-left {
+    left: 12px;
+    right: auto;
+  }
+  .editor.dock-right {
+    right: 12px;
+    left: auto;
+  }
   .body {
     display: flex;
     flex: 1;
@@ -573,14 +661,13 @@
        toolbar. Visually inert at desktop widths. */
     position: relative;
   }
+  /* No scrollbars: the canvas pans and zooms itself, and its grid moves
+     with the graph rather than sitting under it. */
   .canvas-wrap {
     flex: 1;
     min-width: 0;
-    overflow: auto;
-    background:
-      linear-gradient(rgba(34, 48, 71, 0.28) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(34, 48, 71, 0.28) 1px, transparent 1px);
-    background-size: 24px 24px;
+    min-height: 0;
+    overflow: hidden;
   }
   .cook-errors {
     max-height: 64px;

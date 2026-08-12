@@ -13,6 +13,9 @@
     onExport,
     onImport,
     onLayout,
+    dock,
+    onDock,
+    onFit,
     onToggle,
   }: {
     seed: number;
@@ -26,6 +29,11 @@
     onExport: () => void;
     onImport: () => void;
     onLayout: () => void;
+    /** Which edge the dock sits on. */
+    dock: "bottom" | "left" | "right";
+    onDock: (dock: "bottom" | "left" | "right") => void;
+    /** Frame every node in the canvas. */
+    onFit: () => void;
     /** Collapse/expand the dock; wired to the title on narrow screens. */
     onToggle: () => void;
   } = $props();
@@ -86,6 +94,17 @@
     <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
   </label>
   <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
+  <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
+  <span class="dock" role="group" aria-label="dock position">
+    {#each [["left", "◧"], ["bottom", "▤"], ["right", "◨"]] as [side, glyph] (side)}
+      <button
+        class="side"
+        class:on={dock === side}
+        aria-pressed={dock === side}
+        title="dock {side}"
+        onclick={() => onDock(side as "bottom" | "left" | "right")}>{glyph}</button>
+    {/each}
+  </span>
   <button onclick={onExport} title="serializeGraph → JSON">export</button>
   <button onclick={onImport} title="paste JSON → deserializeGraph">import</button>
   <span class="status" class:err={status !== null && status.errors.length > 0}>{statusText}</span>
@@ -146,6 +165,20 @@
   }
   button:hover {
     background: #24334c;
+  }
+  .dock {
+    display: flex;
+    gap: 2px;
+  }
+  .side {
+    padding: 3px 7px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .side.on {
+    background: #24344d;
+    border-color: #35507a;
+    color: #eaf1fa;
   }
   .status {
     flex: 1;

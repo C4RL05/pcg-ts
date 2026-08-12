@@ -4,6 +4,14 @@
    * the two drag gestures — moving a node body and pulling a wire from an
    * output pin onto an input pin. Wires commit through the host's
    * onConnect (which asks the real Graph); clicking an edge removes it.
+   *
+   * The view pans with the right button and zooms on the wheel. It is a
+   * transform on a group rather than a scrolled oversized SVG, which is
+   * what the canvas used to be: scrollbars cannot zoom, and an SVG sized
+   * to the content jumps under the cursor whenever a node is dragged past
+   * its edge. Every gesture works in GRAPH coordinates — `toGraph` undoes
+   * the view — so node positions stay in the model's own units and a
+   * saved graph does not remember where someone had scrolled to.
    */
   import NodeBox from "./NodeBox.svelte";
   import { NODE_W, nodeHeight, pinRowY } from "./layout.js";
@@ -28,6 +36,9 @@
   } = $props();
 
   let svgEl: SVGSVGElement | undefined = $state();
+  /** Pan in screen px, and scale. Purely a view: never written to the model. */
+  let view = $state({ x: 0, y: 0, z: 1 });
+  let panning: { px: number; py: number; ox: number; oy: number } | null = null;
   let dragNode = $state<{ id: string; offX: number; offY: number } | null>(null);
   let wire = $state<{
     from: string;
@@ -39,13 +50,60 @@
     hover: { to: string; toPin: string } | null;
   } | null>(null);
 
-  const width = $derived(Math.max(1400, ...model.nodes.map((n) => n.x + NODE_W + 140)));
-  const height = $derived(Math.max(520, ...model.nodes.map((n) => n.y + nodeHeight(n) + 90)));
+  const MIN_ZOOM = 0.2;
+  const MAX_ZOOM = 2.5;
 
-  function local(e: PointerEvent): { x: number; y: number } {
+  /** Pointer position in graph units — the space node x/y live in. */
+  function toGraph(e: { clientX: number; clientY: number }): { x: number; y: number } {
     if (!svgEl) return { x: 0, y: 0 };
     const r = svgEl.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    return { x: (e.clientX - r.left - view.x) / view.z, y: (e.clientY - r.top - view.y) / view.z };
+  }
+
+  /**
+   * Zoom about the pointer: the graph point under the cursor is the one
+   * that must not move, which is what makes a wheel feel like a lens
+   * rather than a scrollbar.
+   */
+  function onWheel(e: WheelEvent): void {
+    if (!svgEl) return;
+    e.preventDefault();
+    const r = svgEl.getBoundingClientRect();
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
+    const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.z * Math.exp(-e.deltaY * 0.0015)));
+    const k = next / view.z;
+    view.x = cx - (cx - view.x) * k;
+    view.y = cy - (cy - view.y) * k;
+    view.z = next;
+  }
+
+  function startPan(e: PointerEvent): void {
+    panning = { px: e.clientX, py: e.clientY, ox: view.x, oy: view.y };
+    svgEl?.setPointerCapture(e.pointerId);
+  }
+
+  /** Frame every node, so a pan that wandered off is one click from home. */
+  export function resetView(): void {
+    if (!svgEl || model.nodes.length === 0) {
+      view = { x: 0, y: 0, z: 1 };
+      return;
+    }
+    const r = svgEl.getBoundingClientRect();
+    const minX = Math.min(...model.nodes.map((n) => n.x));
+    const minY = Math.min(...model.nodes.map((n) => n.y));
+    const maxX = Math.max(...model.nodes.map((n) => n.x + NODE_W));
+    const maxY = Math.max(...model.nodes.map((n) => n.y + nodeHeight(n)));
+    const pad = 40;
+    const z = Math.min(
+      MAX_ZOOM,
+      Math.max(MIN_ZOOM, Math.min((r.width - pad * 2) / (maxX - minX), (r.height - pad * 2) / (maxY - minY))),
+    );
+    view = {
+      z,
+      x: (r.width - (maxX - minX) * z) / 2 - minX * z,
+      y: (r.height - (maxY - minY) * z) / 2 - minY * z,
+    };
   }
 
   function nodeById(id: string): NodeView | undefined {
@@ -73,30 +131,36 @@
   }
 
   function startBodyDrag(node: NodeView, e: PointerEvent): void {
-    const p = local(e);
+    const p = toGraph(e);
     dragNode = { id: node.id, offX: p.x - node.x, offY: p.y - node.y };
   }
 
   function startWire(node: NodeView, pinName: string, index: number, e: PointerEvent): void {
     const x = node.x + NODE_W;
     const y = node.y + pinRowY(index);
-    const p = local(e);
+    const p = toGraph(e);
     wire = { from: node.id, fromPin: pinName, x1: x, y1: y, x2: p.x, y2: p.y, hover: null };
   }
 
   function onPointerMove(e: PointerEvent): void {
+    if (panning) {
+      view.x = panning.ox + (e.clientX - panning.px);
+      view.y = panning.oy + (e.clientY - panning.py);
+      return;
+    }
     if (dragNode) {
-      const p = local(e);
+      const p = toGraph(e);
       onMove(dragNode.id, Math.max(4, p.x - dragNode.offX), Math.max(4, p.y - dragNode.offY));
     }
     if (wire) {
-      const p = local(e);
+      const p = toGraph(e);
       wire.x2 = p.x;
       wire.y2 = p.y;
     }
   }
 
   function onPointerUp(): void {
+    panning = null;
     if (wire) {
       if (wire.hover) {
         onConnect({ from: wire.from, fromPin: wire.fromPin, to: wire.hover.to, toPin: wire.hover.toPin });
@@ -111,15 +175,38 @@
 
 <svg
   bind:this={svgEl}
-  {width}
-  {height}
   class="canvas"
   role="application"
   aria-label="node graph canvas"
+  onwheel={onWheel}
+  oncontextmenu={(e) => e.preventDefault()}
   onpointerdown={(e) => {
-    if (e.target === svgEl) onSelect(null);
+    // Right button pans from anywhere, including over a node — otherwise
+    // a crowded graph has nowhere left to grab.
+    if (e.button === 2 || e.button === 1) {
+      e.preventDefault();
+      startPan(e);
+      return;
+    }
+    if (e.target === svgEl || (e.target as Element).classList?.contains("grid")) onSelect(null);
   }}
 >
+  <defs>
+    <!-- The grid is a pattern rather than a CSS background on the wrapper
+         so it pans and zooms WITH the graph: a static grid under a moving
+         canvas reads as the nodes sliding over glass. -->
+    <pattern
+      id="canvas-grid"
+      width="24"
+      height="24"
+      patternUnits="userSpaceOnUse"
+      patternTransform="translate({view.x} {view.y}) scale({view.z})"
+    >
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(34, 48, 71, 0.28)" stroke-width="1" />
+    </pattern>
+  </defs>
+  <rect class="grid" width="100%" height="100%" fill="url(#canvas-grid)" />
+  <g transform="translate({view.x} {view.y}) scale({view.z})">
   {#each model.edges as edge, i}
     {@const d = edgePath(edge)}
     {#if d}
@@ -158,11 +245,19 @@
       }}
     />
   {/each}
+  </g>
 </svg>
 
 <style>
   .canvas {
     display: block;
+    width: 100%;
+    height: 100%;
+    /* The right button pans, so the browser menu would fire on release of
+       every pan. `oncontextmenu` cancels it; this stops the drag being
+       read as a text selection on the way. */
+    user-select: none;
+    touch-action: none;
   }
   .edge-line {
     fill: none;
