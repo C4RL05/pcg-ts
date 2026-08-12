@@ -623,60 +623,10 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
   <section id="examples">
     <p class="eyebrow">Chapter 4</p>
     <h2>The examples tour</h2>
-    <p class="lead">Nine demos ship in <code>examples/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
+    <p class="lead">Six demos ship in <code>examples/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
+    <p>Each one needs a host to exist — a streamed world, a GPU comparison, a rig whose topology is a function of its params. The recipes that were only a graph are not demos any more: they are files in <code>examples/graphs/</code>, opened and edited in the sandbox. The scatter is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, and the forest is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code.</p>
 
-    <h3 id="ex-01">01 · Scatter basic — the minimal cook loop</h3>
-    <figure>
-      <img src="manual-assets/01-scatter-basic.jpg" width="2800" height="1720" loading="lazy" decoding="async"
-           alt="The scatter-basic demo: a control panel on the left shows seed 1, a density frequency of 0.080 and a debug-points toggle above live stats reading 1267 of 2600 instances, a 10.6 ms cook, 4 nodes cooked and 0 cached, with the density field's JSON spec — a remap wrapping a four-octave Perlin fBm at frequency 0.08 — printed below. The 3D viewport shows a dark ground plane scattered with over a thousand pale blue instanced boxes, visibly clumped and thinned by the noise field." />
-      <figcaption><b>01 · scatter basic</b> — 1267 of 2600 candidates survived the probabilistic density filter, and the exact JSON that produced the density field is printed in the panel.</figcaption>
-    </figure>
-    <p>The smallest complete pipeline: scatter uniformly in a box, write a <code>density</code> attribute from an fBm field built with <code>fieldFromJson</code>, drop points probabilistically against that density, spawn the survivors. It is the demo to read first because nothing is hidden — the field spec on screen is the literal parameter the graph cooks with, and re-entering the same seed reproduces the same scatter exactly.</p>
-    <p class="demo-links">
-      <span class="chip">Graph · cook · fieldFromJson</span>
-      <span class="chip">pointScatterInBounds · setAttribute · filterByDensity · spawnInstances</span>
-      <span class="chip">three: toInstancedMeshes · toPointsObject</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/">run it →</a>
-    </p>
-
-    <h3 id="ex-02">02 · Forest — sampling a surface, filtering by what you measured</h3>
-    <figure>
-      <img src="manual-assets/02-forest.jpg" width="1400" height="845" loading="lazy" decoding="async"
-           alt="The forest demo on the device-resident path. The panel offers a device-resident / CPU readback toggle and reports 2 live batches split 4,271 pine and 1,641 bush, 5,912 instances drawn, 2 buffers holding 369.5 KiB of matrices on device, the same 369.5 KiB of matrix uploads avoided, 0 B uploaded, 2 resident runs of 4 fused members, 8 device dispatches, no GPU fallbacks, and a 380.1 ms cook over 9 nodes, with the status line reading device-resident, no matrix readback. Below them a collapsed section is titled why the chain still breaks in three places. The viewport shows a wide dark-brown heightfield terrain seen from above and to the side, with bright green conifers of varying size covering the lower slopes and thinning out entirely on the steep faces and the high ridge." />
-      <figcaption><b>02 · forest</b> — 5912 trees placed from 9000 candidates: 4271 pine and 1641 bush, split by a per-point string attribute rather than by two graphs. Since v0.8 both species are composed on the GPU, one matrix buffer each, and drawn without a readback.</figcaption>
-    </figure>
-    <p>An fBm heightfield becomes a three.js <code>BufferGeometry</code>, crosses into the library through <code>fromBufferGeometry</code>, and is area-weighted sampled by <code>surfaceSample</code> — which emits a <code>normal</code> attribute as it goes. Height and slope are then written as attributes and used by <code>filterByAttribute</code> to keep trees off cliffs and above the treeline. The visible result is the point of the design: the filters read measurements the sampler already produced, so "no trees on steep ground" is a comparison, not a special case.</p>
-    <p>Species selection is where multi-asset spawning earns its keep. One string <code>setAttribute</code> picks pine or bush per point from a numeric selector, and <code>spawnInstances</code> splits the output into two batches by that attribute — one graph, one cook, two <code>InstancedMesh</code>es.</p>
-    <div class="note">
-      <span class="tag">A word on "GPU device"</span>
-      <p>This manual talks about a <b>GPU device</b> — a <code>GPUDevice</code>, WebGPU's own term — and not a device in the everyday sense of a phone or a laptop. <code>requestAdapter()</code> hands you a <code>GPUAdapter</code>, the physical GPU and its driver; <code>requestDevice()</code> then hands you a <code>GPUDevice</code>, a logical connection to it with its own queue, limits and resource ownership. Once that is on the table the shorthands are readable: <b>device-side</b> or <b>device-resident</b> means the bytes live in GPU memory reachable through that handle, <b>host</b> means the CPU and JS side, and a <b>readback</b> is copying GPU memory back to the host.</p>
-      <p>The precision earns its keep because <em>a <code>GPUBuffer</code> belongs to the device that created it</em>. Two different <code>GPUDevice</code> objects on the same physical GPU still cannot share a buffer — which is why the requirement in <a href="#gpu">chapter 6</a> is one <em>shared</em> <code>GPUDevice</code> behind both the field evaluator and the renderer, rather than the weaker "both use the GPU". The latter is true of two devices, and would still fail.</p>
-    </div>
-    <p>Since v0.8 that split also happens without a CPU round trip. Flip the toggle to <b>device-resident</b> and each species gets its own matrix buffer, composed in a WGSL kernel and drawn straight from the GPU — <code>matrices uploaded</code> sits at <code>0 B</code>. Flip back to <b>CPU readback</b> and the same bytes are composed in JS and uploaded instead. The batch counts do not move between the two: <code>4,271 / 1,641</code> either way, because the device path plans its grouping with the very same function the CPU spawner calls.</p>
-    <p>Since v0.9 this demo also opts into <code>acceptDerivedSpecs</code>, and the effect is visible in the readouts: it used to report <code>1</code> resident run of <code>1</code> member with three <code>derived-spec</code> fallbacks, and now reports <code>2</code> runs of <code>4</code> members with no field falling back at all. Its fields are written with the combinator API rather than as JSON, and until v0.9 that alone kept them off the device.</p>
-    <p>The fourth member is there because of <em>where a node is wired</em>, which is worth more than it sounds. Nothing about <code>scale</code> depends on filtering, but written the obvious way — stamp the size of the trees that survived — it sat between a filter and the string <code>setAttribute</code>, fusable with nothing on either side. A chain of one that is not a terminal forms no run, so it resolved per node with its own readback. Moving it <em>ahead</em> of the filters makes it member 3 of run 1, for the price of stamping ~9000 scales instead of ~5900. Note which way the numbers move: <code>device dispatches</code> goes <em>up</em> by one, because its apply kernel is now a step in the run, while a whole device-to-host round trip disappears. Dispatches are not the cost that matters.</p>
-    <p>Three chain breaks still survive, and none is about specs — which is why the panel is titled <b>why the chain still breaks in three places</b>. The two <code>filterByAttribute</code> nodes change the point count, and a run's members must share one element count, so they can never be members whatever their fields look like. <code>setAttribute("species")</code> writes a <em>string</em> column, which no resident node can produce. Making filters resident was surveyed and declined: it cannot coexist with the zero-readback spawner path in one run, and the saving it promised here was the one the reorder above already took. See <a href="#gpu">chapter 6</a>.</p>
-    <p class="demo-links">
-      <span class="chip">surfaceSample · setAttribute · filterByAttribute · spawnInstances</span>
-      <span class="chip">fields: position · component · sub · mul · ge · vec · randomField · fbm</span>
-      <span class="chip">three: fromBufferGeometry · toInstancedMeshes · createWebGpuInstanceAdapter</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/">run it →</a>
-    </p>
-
-    <h3 id="ex-03">03 · Spline fence — orientation from a tangent</h3>
-    <figure>
-      <img src="manual-assets/03-spline-fence.jpg" width="1454" height="783" loading="lazy" decoding="async"
-           alt="The spline-fence demo: the panel reports 57 posts, a fence length of 90.6 units and a 2.8 ms cook, at seed 1 and a post spacing of 1.6 units. The viewport shows a closed, irregular loop of wooden fence posts joined by two horizontal rails, standing on a faint dark blue grid plane. Every post's flat face is turned to follow the curve." />
-      <figcaption><b>03 · spline fence</b> — 57 posts along 90.6 units of curve, each rotated so its local axis follows the tangent the sampler emitted.</figcaption>
-    </figure>
-    <p>A Catmull-Rom curve enters through <code>fromCurve</code>; <code>splineSample</code> walks it by arc length at a chosen spacing and emits <code>tangent</code> and <code>curveU</code> per sample. <code>orientAlongVector</code> then turns that tangent attribute into the standard <code>rot</code> quaternion, with an up hint to fix roll. The whole "posts face along the fence" behaviour is one node reading one attribute — no per-instance matrix maths in application code, and zero directions simply keep their existing rotation instead of producing NaNs. <code>fromCurve</code> is the three.js route in; a saved graph with no application code behind it reaches for <code>pointsToPath</code> instead, which lays polyline topology over points a graph already made.</p>
-    <p class="demo-links">
-      <span class="chip">splineSample · orientAlongVector · spawnInstances · dataInput</span>
-      <span class="chip">three: fromCurve · toInstancedMeshes</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/03-spline-fence/">run it →</a>
-    </p>
-
-    <h3 id="ex-04">04 · Infinite world — hierarchical streaming</h3>
+<h3 id="ex-04">04 · Infinite world — hierarchical streaming</h3>
     <figure>
       <img src="manual-assets/04-infinite-world.jpg" width="1454" height="783" loading="lazy" decoding="async"
            alt="The infinite-world demo with the camera parked at the origin: the panel has a GPU per-node / CPU toggle set to GPU per-node, and reports a rock source of pointScatterInWorld, 154 live rock cells, 155 cooked against 0 evicted, 0 pending, 11124 instances, 0 resident runs of 0 fused members, 2 device dispatches and no GPU fallbacks — with derived specs, world-anchored, halo (4 u) and cell grid all ticked, at a 20 u cell size and a 140 u generation radius. A faint blue partition grid is drawn across a dark plain scattered with thousands of small pale rocks receding to the horizon; the rocks run straight over the grid lines with no seam and no change of size, and several huge dark faceted boulders stand as landmarks near and far." />
@@ -696,20 +646,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/">run it →</a>
     </p>
 
-    <h3 id="ex-05">05 · Fields playground — the grammar, live</h3>
-    <figure>
-      <img src="manual-assets/05-fields-playground.jpg" width="1454" height="783" loading="lazy" decoding="async"
-           alt="The fields-playground demo: on the left a stats panel reads 36864 elements and 49.5 ms to build and evaluate. In the centre a teal and sand coloured heightfield surface, displaced by four-octave Perlin fBm, floats against a dark background. On the right a control panel offers a noise-type dropdown set to fBm Perlin, a frequency of 0.35, 4 octaves, an output range of 0 to 1 and seed 1, above a code box showing the exact FieldSpec JSON: a remap wrapping an fbm over perlinNoise, with the fBm range -1.875 to 1.875 mapped into 0 to 1." />
-      <figcaption><b>05 · fields playground</b> — the panel is a spec editor: whatever JSON it prints is what <code>fieldFromJson</code> is being handed, evaluated over a 192×192 grid.</figcaption>
-    </figure>
-    <p>This demo has no node graph at all. It builds one field from JSON, evaluates it over a grid point cloud, and displaces the surface with the result — which makes it the fastest way to develop an intuition for what each noise family and each parameter actually does. Note the remap bounds in the screenshot: <code>-1.875, 1.875</code> is not a magic number, it is what <code>noiseOutputRange()</code> reports for four-octave Perlin fBm, read from the library rather than guessed.</p>
-    <p class="demo-links">
-      <span class="chip">fieldFromJson · evaluateField · createPointCloud</span>
-      <span class="chip">all five noise families · normalized output</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/05-fields-playground/">run it →</a>
-    </p>
-
-    <h3 id="ex-06">06 · Graph editor — the registry as a user interface</h3>
+<h3 id="ex-06">06 · Graph editor — the registry as a user interface</h3>
     <figure>
       <img src="manual-assets/06-graph-editor.jpg" width="1454" height="783" loading="lazy" decoding="async"
            alt="The graph-editor demo: a stats panel top-left reads 2 outputs, a 5.1 ms cook, 4 nodes cooked and 4 cached, 350 points and 350 instances, and an output hash of 26af8956. Behind it a 3D preview shows conifers scattered on a dark ground plane. The lower half is the editor: a toolbar carries the seed, layout, export and import, and repeats the same cook line; a left palette lists node types under category headings SOURCE and SAMPLER; a canvas shows four connected nodes — pointScatterInBounds, jitterPoints, orientAlongVector and spawnInstances — wired left to right, the spawn node exposing separate instances and points output pins; and the right-hand inspector has nothing selected, reading select a node to edit its params, pins connect left (in) to right (out)." />

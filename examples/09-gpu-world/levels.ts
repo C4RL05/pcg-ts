@@ -116,7 +116,7 @@ function leanSpec(seed: number): FieldSpec {
  * plans the grouping from the (necessarily host-resident) string column,
  * uploads a permutation, and the device composes one buffer and one
  * dispatch per asset, so a cell then arrives as N device batches instead
- * of one. `examples/02-forest` is that shape. A constant `assetId` keeps
+ * of one. `examples/graphs/examples-forest.json` is that shape. A constant `assetId` keeps
  * this level's per-cell accounting and its single bounding sphere as
  * simple as the rest of the page.
  */

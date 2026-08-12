@@ -37,35 +37,9 @@
     <h1><code>pcg-ts</code> examples</h1>
     <p class="sub">Deterministic procedural content generation — graphs, fields, spawners, and the
       hierarchical runtime, rendered with three.js. Every demo re-cooks live from its seed.</p>
-
-    <a class="card" href="01-scatter-basic/">
-      <span class="num">01</span>
-      <span class="body">
-        <span class="name">Scatter basic</span>
-        <div class="desc">Uniform scatter in bounds, density from a JSON fbm field, probabilistic
-          filtering, instanced boxes + debug points.</div>
-      </span>
-    </a>
-
-    <a class="card" href="02-forest/">
-      <span class="num">02</span>
-      <span class="body">
-        <span class="name">Forest</span>
-        <div class="desc">fbm heightfield terrain, surface sampling, slope/treeline filters, and
-          pine/bush instancing split by a per-point species attribute — with a device-resident
-          spawn that composes one matrix buffer per species on the GPU. Falls back to the CPU
-          path without WebGPU.</div>
-      </span>
-    </a>
-
-    <a class="card" href="03-spline-fence/">
-      <span class="num">03</span>
-      <span class="body">
-        <span class="name">Spline fence</span>
-        <div class="desc">Closed CatmullRom loop sampled by arc length; posts oriented from the
-          tangent attribute, rails as tubes along the curve.</div>
-      </span>
-    </a>
+    <p class="sub">Single-cook recipes are not demos any more — they are graphs in
+      <code>examples/graphs/</code>, opened in the sandbox. What is left here needs a host: streaming
+      worlds, a GPU comparison, and a rig whose topology is a function of its params.</p>
 
     <a class="card" href="04-infinite-world/">
       <span class="num">04</span>
@@ -78,21 +52,14 @@
       </span>
     </a>
 
-    <a class="card" href="05-fields-playground/">
-      <span class="num">05</span>
-      <span class="body">
-        <span class="name">Fields playground</span>
-        <div class="desc">Svelte panel composing noise fields as live FieldSpec JSON, visualized as
-          a colored heightmap surface.</div>
-      </span>
-    </a>
-
     <a class="card" href="06-graph-editor/">
       <span class="num">06</span>
       <span class="body">
-        <span class="name">Graph editor</span>
-        <div class="desc">Interactive node editor driven by the registry: palette, pin wiring with
-          real graph validation, schema-driven params, live cook, JSON round-trip.</div>
+        <span class="name">Sandbox — graph editor</span>
+        <div class="desc">Load any of the corpus graphs and edit it live: palette, pin wiring with
+          real graph validation, schema-driven params, a curated knobs panel, JSON round-trip, and
+          shareable links. The scatter, forest, fence and field demos that used to live here are
+          corpus graphs now — pick them from the graph menu.</div>
       </span>
     </a>
 
@@ -123,6 +90,17 @@
         <div class="desc">A streamed world drawn from instance matrices composed on the GPU and
           never read back — one shared device behind the field evaluator and a WebGPU renderer,
           with live readouts for retained device buffers and cell churn. Needs WebGPU.</div>
+      </span>
+    </a>
+
+    <a class="card" href="11-rig-playground/">
+      <span class="num">11</span>
+      <span class="body">
+        <span class="name">Rig playground</span>
+        <div class="desc">A suspended armature built live from the curve vocabulary: component parts
+          scattered in clusters along a spline and aimed radially around it, cables gathered into
+          bundles, and sagging chords between anchors. Unlit on purpose — normal shading reads volume
+          and overlap better than any lit render when the geometry is what you are judging.</div>
       </span>
     </a>
 

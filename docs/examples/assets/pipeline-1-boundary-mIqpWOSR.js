@@ -1,0 +1,163 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 40100,
+  "meta": {
+    "title": "staged pipeline 1/5 — the ground and the wall",
+    "description": "First step of a settlement-scale pipeline whose four stages are four files, each the previous file plus new nodes, connections and outputs — nothing removed, no param retuned, one shared seed. This stage ADDS the two things every later stage stands on: a subdivided plane pushed into rolling terrain by a noise field (\`terrain\`), and a 64-point ring displaced along its own radius and closed into a path with tangents written on it (\`boundary\`). Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.",
+    "tags": [
+      "pipeline",
+      "staged",
+      "terrain",
+      "path"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "ground",
+      "type": "meshPrimitive",
+      "params": {
+        "shape": "plane",
+        "size": [
+          260,
+          0,
+          260
+        ],
+        "orientation": "xz",
+        "subdivisions": [
+          24,
+          1,
+          24
+        ]
+      }
+    },
+    {
+      "id": "terrain",
+      "type": "subgraph",
+      "params": {
+        "amount": 20,
+        "frequency": 0.012,
+        "variant": 0
+      },
+      "ref": {
+        "name": "transform/displace-by-noise"
+      }
+    },
+    {
+      "id": "ring",
+      "type": "subgraph",
+      "params": {
+        "count": 64,
+        "size": [
+          78,
+          1,
+          78
+        ]
+      },
+      "ref": {
+        "name": "shape/ring"
+      }
+    },
+    {
+      "id": "wallShape",
+      "type": "transformPoints",
+      "params": {
+        "translate": {
+          "fn": "mul",
+          "args": [
+            {
+              "fn": "normalize",
+              "args": [
+                {
+                  "fn": "position"
+                }
+              ]
+            },
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "perlinNoise",
+                  "opts": {
+                    "frequency": 0.02,
+                    "normalized": true
+                  }
+                },
+                0,
+                1,
+                -8,
+                8
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wallPath",
+      "type": "pointsToPath",
+      "params": {
+        "closed": true
+      }
+    },
+    {
+      "id": "wall",
+      "type": "writeTangents",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        "ground",
+        "out"
+      ],
+      "to": [
+        "terrain",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "ring",
+        "out"
+      ],
+      "to": [
+        "wallShape",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "wallShape",
+        "out"
+      ],
+      "to": [
+        "wallPath",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "wallPath",
+        "out"
+      ],
+      "to": [
+        "wall",
+        "in"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "terrain",
+      "pin": "out",
+      "name": "terrain"
+    },
+    {
+      "id": "wall",
+      "pin": "out",
+      "name": "boundary"
+    }
+  ]
+}
+`;export{e as default};

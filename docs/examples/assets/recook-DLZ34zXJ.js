@@ -1,1 +1,0 @@
-function e(e){let t=!1,n=!1,r=()=>{if(t){n=!0;return}t=!0,e().catch(e=>console.error(`recook failed:`,e)).finally(()=>{t=!1,n&&(n=!1,r())})};return r}export{e as t};

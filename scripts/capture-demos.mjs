@@ -116,11 +116,7 @@ const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
  * width/height attributes in docs/manual.html.
  */
 const SIZES = {
-  "01-scatter-basic": { css: [1400, 860], out: [2800, 1720] },
-  "02-forest": { css: [1400, 845], out: [1400, 845] },
-  "03-spline-fence": { css: [1454, 783], out: [1454, 783] },
   "04-infinite-world": { css: [1454, 783], out: [1454, 783] },
-  "05-fields-playground": { css: [1454, 783], out: [1454, 783] },
   "06-graph-editor": { css: [1454, 783], out: [1454, 783] },
   "07-galaxy": { css: [1454, 783], out: [1454, 783] },
   "08-gpu-fields": { css: [1366, 900], out: [1366, 900] },
@@ -135,22 +131,6 @@ const SIZES = {
  */
 const DEMOS = [
   {
-    id: "01-scatter-basic",
-    ready: (s, has) => has(s["cook"]) && has(s["instances"]),
-  },
-  {
-    id: "02-forest",
-    ready: (s, has) =>
-      !!window.pcgForest &&
-      window.pcgForest.probe().mode !== null &&
-      has(s["status"]) &&
-      !/initialising|cooking/i.test(s["status"]),
-  },
-  {
-    id: "03-spline-fence",
-    ready: (s, has) => has(s["cook"]) && has(s["posts"]),
-  },
-  {
     id: "04-infinite-world",
     // The GPU adapter resolving triggers a full world rebuild, so "pending is
     // 0" only means anything once the adapter question has been answered.
@@ -164,10 +144,6 @@ const DEMOS = [
     // so the framing does not depend on how long the boot took.
     settleWait: () => !!window.__capRow("speed"),
     settle: () => setRangeByLabel("speed", 0),
-  },
-  {
-    id: "05-fields-playground",
-    ready: (s, has) => has(s["build + evaluate"]) && has(s["elements"]),
   },
   {
     id: "06-graph-editor",

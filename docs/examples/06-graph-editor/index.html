@@ -6,22 +6,27 @@
   <title>pcg-ts — 06 graph editor</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0d1117; overflow: hidden; }
-    /* Narrow screens keep one bottom sheet: the Svelte panel. The plain
-       overlay is desktop diagnostics. Breakpoint: NARROW_MEDIA_QUERY in
+    /* Narrow screens keep ONE bottom sheet, and here it is the editor
+       dock. The stats overlay is desktop diagnostics, and the knobs card
+       is a PanelShell — which becomes a second bottom sheet at this width
+       and would sit on top of the dock. Breakpoint: NARROW_MEDIA_QUERY in
        ../shared/mobile.ts. */
-    @media (max-width: 700px) { .pcg-overlay { display: none; } }
+    @media (max-width: 700px) { .pcg-overlay, .panel { display: none; } }
   </style>
-  <script type="module" crossorigin src="../assets/06-graph-editor-BnW4GIFQ.js"></script>
-  <link rel="modulepreload" crossorigin href="../assets/mobile-DHy7-48l.js">
-  <link rel="modulepreload" crossorigin href="../assets/instanced-BzV5h20G.js">
-  <link rel="modulepreload" crossorigin href="../assets/debug-CD6Hrwx0.js">
-  <link rel="modulepreload" crossorigin href="../assets/overlay-BIn9F4vJ.js">
-  <link rel="modulepreload" crossorigin href="../assets/recook-DLZ34zXJ.js">
-  <link rel="modulepreload" crossorigin href="../assets/three.module-y4_mSAvl.js">
-  <link rel="modulepreload" crossorigin href="../assets/OrbitControls-BNTKYhMD.js">
-  <link rel="modulepreload" crossorigin href="../assets/scene-DIS8Frfo.js">
-  <link rel="modulepreload" crossorigin href="../assets/disclose-version-BsFBMhAt.js">
-  <link rel="stylesheet" crossorigin href="../assets/06-graph-editor-D5MqA8pe.css">
+  <script type="module" crossorigin src="../assets/06-graph-editor-DeQq_Zw1.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/mobile-CAlugUcx.js">
+  <link rel="modulepreload" crossorigin href="../assets/three.core-BdLaVEE2.js">
+  <link rel="modulepreload" crossorigin href="../assets/instanced-bjMXnNfE.js">
+  <link rel="modulepreload" crossorigin href="../assets/debug-CjhpSKcZ.js">
+  <link rel="modulepreload" crossorigin href="../assets/preload-helper-HclGiUj8.js">
+  <link rel="modulepreload" crossorigin href="../assets/overlay-Brkm6ktz.js">
+  <link rel="modulepreload" crossorigin href="../assets/OrbitControls-DsnV9JXy.js">
+  <link rel="modulepreload" crossorigin href="../assets/scene-DVQazRvt.js">
+  <link rel="modulepreload" crossorigin href="../assets/PanelShell-BPrVX0EG.js">
+  <link rel="modulepreload" crossorigin href="../assets/Controls-B59XoSvt.js">
+  <link rel="stylesheet" crossorigin href="../assets/PanelShell-cwtB2CM2.css">
+  <link rel="stylesheet" crossorigin href="../assets/Controls-3QD7jnfa.css">
+  <link rel="stylesheet" crossorigin href="../assets/06-graph-editor-DSnUB0TK.css">
 </head>
 <body>
   <div id="editor"></div>

@@ -57,7 +57,7 @@ export const CORPUS_LAYOUT: FieldKernelLayout = {
     P: { type: "f32", tupleSize: 3 },
     density: { type: "f32", tupleSize: 1 },
     // Unit-length shading normal. Present so the corpus can carry the
-    // `examples/02-forest` slope field verbatim (it reads `normal`); the
+    // `examples/graphs/examples-forest.json` slope field verbatim (it reads `normal`); the
     // other suites' geometry gains one more f32x3 column, which nothing
     // pins.
     normal: { type: "f32", tupleSize: 3 },
@@ -262,7 +262,7 @@ export const EXTENDED_SPECS: Record<string, FieldSpecArg> = {
     ],
   },
 
-  // The four fields `examples/02-forest` drives its scatter with, as the
+  // The four fields `examples/graphs/examples-forest.json` drives its scatter with, as the
   // JSON the combinator expressions in that example derive. Shipped
   // demo expressions are the population most likely to reach the device
   // through a derived spec, so they are measured like any other family.
@@ -382,7 +382,7 @@ export const PARITY_CASES: ParityCase[] = [
   { name: "fbm worley", spec: EXTENDED_SPECS.fbmWorley, budget: 6 },
   // measured 9.77, 50.
   { name: "composite", spec: EXTENDED_SPECS.composite, budget: 12 },
-  // -- examples/02-forest, classified into the families above ---------------
+  // -- examples-forest, classified into the families above ------------------
   // attribute read (a component of P, no arithmetic): measured 0, 0.
   { name: "forest height", spec: EXTENDED_SPECS.forestHeight, exact: true, budget: 0 },
   // add/sub over an attribute read: measured 0, 0.
@@ -470,7 +470,7 @@ export const DERIVED_FIELDS: Record<string, () => Field> = {
       ]),
       add(mul(randomField("w"), 0.25), density()),
     ),
-  // examples/02-forest, verbatim (MAX_TREE_SCALE inlined as 1.5).
+  // examples-forest, verbatim (MAX_TREE_SCALE inlined as 1.5).
   "forest height": () => component(position(), 1),
   "forest slope": () => sub(1, component(attribute("normal", 3), 1)),
   "forest size": () => remap(randomField("size"), 0, 1, 0.6, 1.5),

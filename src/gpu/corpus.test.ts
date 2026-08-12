@@ -82,7 +82,7 @@ describe("code-authored twins of the parity corpus", () => {
 
   it("the corpus layout carries every attribute the twins read", () => {
     // `normal` was added to CORPUS_LAYOUT (and makeCorpusGeometry) so
-    // the 02-forest slope field could be carried verbatim; this pins
+    // the examples-forest slope field could be carried verbatim; this pins
     // that the layout is not quietly narrowed back.
     expect(Object.keys(CORPUS_LAYOUT.attributes).sort()).toEqual([
       "P",

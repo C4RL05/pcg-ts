@@ -2114,7 +2114,7 @@ chain.** `setAttribute` fuses in numeric point-domain mode only, so the
 idiomatic way to *compute* an asset key — `type: "string"` with a
 `values` list and a field-capable selector, the recipe earlier in this
 document — is not resident, and the chain breaks there. Where it feeds
-the spawner directly, as in that recipe and in `examples/02-forest`,
+the spawner directly, as in that recipe and in `examples/graphs/examples-forest.json`,
 the run holds only the spawner: report fusion depth honestly — one
 member, not four. Resident nodes sitting *between* the string write and
 the spawn still fuse with it, so the depth is whatever survives
@@ -2256,7 +2256,7 @@ that match the CPU bit for bit, leave `deviceInstances` off.
 above: a streamed `World` whose cells draw from matrices that never
 touch the CPU, with the binding's handle accounting and the evaluator
 pool's detached-buffer counters shown side by side.
-`examples/02-forest` is the multi-asset version — `assetAttr: "species"`
+`examples/graphs/examples-forest.json` is the multi-asset version — `assetAttr: "species"`
 on the device-resident path, with a CPU/resident toggle, the per-asset
 batch count, and a fusion readout that does not overstate depth.
 
@@ -2443,6 +2443,6 @@ against the CPU reference. `examples/09-gpu-world` covers the
 device-resident instancing surface: a streamed `World` drawing from
 matrices that never reach the CPU, with `poolStats.detachedBuffers`
 and the binding's own handle count shown together as a live leak meter.
-`examples/02-forest` covers the multi-asset shape: `assetAttr:
+`examples/graphs/examples-forest.json` covers the multi-asset shape: `assetAttr:
 "species"` on the device-resident path, one buffer per species, with a
 CPU/resident toggle and an honest fusion readout.

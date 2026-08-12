@@ -477,7 +477,8 @@ a direction attribute (a surface normal, a spline tangent) into the
 standard `rot` quaternion without leaving the graph. Since v0.8.0 such
 a spawn can be device-resident too — composed on the GPU and handed to
 the renderer without a CPU round trip — not just a CPU one. See
-`examples/02-forest` and `examples/03-spline-fence`.
+`examples/graphs/examples-forest.json` and
+`examples/graphs/basics-props-along-a-path.json`.
 
 **Per-instance colour, and why you have to ask for it.** Splitting into
 more asset ids is not the only variation channel. Point `spawnInstances`'
@@ -919,7 +920,7 @@ resident predicate excludes `type: "string"`. So the idiomatic way to
 *compute* an asset key — `setAttribute` with `type: "string"` and a
 field-capable selector over a `values` list — is not resident, and the
 chain breaks there. Where it feeds the spawner directly, as in the
-recipe above and in `examples/02-forest`, the run holds only the
+recipe above and in `examples/graphs/examples-forest.json`, the run holds only the
 spawner: one fused member, not four. Resident nodes sitting *between*
 the string write and the spawn still fuse with it, so the depth is
 whatever survives downstream of the break, and the chain in front of
@@ -1052,7 +1053,7 @@ a `World` whose cells render from instance matrices that never touch
 the CPU, showing the binding's live handle count and the evaluator
 pool's own detached-buffer accounting side by side — an independent
 second opinion on the lifetime story above. For the multi-asset shape,
-[`examples/02-forest`](./examples/02-forest) spawns with
+[`examples/graphs/examples-forest.json`](./examples/graphs/examples-forest.json) spawns with
 `assetAttr: "species"` and toggles between the CPU and device-resident
 paths, reporting the batch count and the fusion depth it actually
 achieves (one member — the spawn — for the reason above).
