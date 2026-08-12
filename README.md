@@ -1108,13 +1108,18 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-The `examples/` directory contains nine vite multi-page demos (scatter
-with density noise, forest instancing, spline sampling, infinite
-streaming world, field composition playground, a registry-driven
-node-graph editor, an infinite deterministic spiral galaxy with
-click-to-visit star systems, a million-point WebGPU cook comparing
-CPU, per-node GPU, and one fused device-resident run, and a streamed
-world drawing from device-resident instance transforms):
+The `examples/` directory contains six vite multi-page demos, each one
+something a serialized graph cannot be on its own: an infinite streaming
+world, an infinite deterministic spiral galaxy with click-to-visit star
+systems, a million-point WebGPU cook comparing CPU, per-node GPU and one
+fused device-resident run, a streamed world drawing from device-resident
+instance transforms, a suspended rig whose topology is a function of its
+params, and the sandbox — a registry-driven node-graph editor that opens
+any graph in `examples/graphs/`, edits it live and links to the result.
+
+A recipe that is only one cook of one graph is not a demo here; it is a
+file in `examples/graphs/`, cooked by `pcg cook`, rendered by `npm run
+preview`, and editable in the sandbox:
 
 ```sh
 npm run examples

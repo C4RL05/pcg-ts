@@ -67,7 +67,7 @@
     aria-expanded={!collapsed}
     onclick={onToggle}
     onkeydown={onTitleKeydown}
-  >06 · graph editor<span class="chevron" class:flip={collapsed}>▾</span></span>
+  >06 · sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
   <label class="graph">
     graph
     <select value={preset} onchange={(e) => onPreset(e.currentTarget.value)}>

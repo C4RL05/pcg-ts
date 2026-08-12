@@ -92,7 +92,7 @@ function render(items: readonly DataItem[]): void {
 // -- overlay (stats live here; controls live in the Svelte editor) ---------
 
 const overlay = createOverlay({
-  title: "06 · graph editor",
+  title: "06 · sandbox",
   info: "Load a graph from the corpus, then edit it: palette → canvas → inspector. Every edit mutates the live graph in place (add/connect/disconnect/removeNode), so untouched branches re-cook from cache — watch nodes cooked/cached after deleting a node. What is drawn is the graph's own declared outputs plus every unconnected output pin, so a node you just added shows up without wiring anything.",
 });
 const statFps = overlay.addStat("fps");
