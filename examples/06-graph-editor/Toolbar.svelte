@@ -1,11 +1,14 @@
 <script lang="ts">
-  /** Top strip: seed control, layout/export/import, and the live cook status line. */
+  /** Top strip: graph picker, seed control, layout/export/import, and the live cook status line. */
+  import { PRESET_GROUPS, PRESETS } from "../shared/presets.js";
   import type { CookStatus } from "./controller.js";
 
   let {
     seed,
     status,
     collapsed,
+    preset,
+    onPreset,
     onSeed,
     onExport,
     onImport,
@@ -16,6 +19,9 @@
     status: CookStatus | null;
     /** Whether the dock is collapsed to this bar (narrow screens only). */
     collapsed: boolean;
+    /** Loaded corpus graph, or "" for the built-in starter. */
+    preset: string;
+    onPreset: (name: string) => void;
     onSeed: (seed: number) => void;
     onExport: () => void;
     onImport: () => void;
@@ -23,6 +29,10 @@
     /** Collapse/expand the dock; wired to the title on narrow screens. */
     onToggle: () => void;
   } = $props();
+
+  const byGroup = $derived(
+    PRESET_GROUPS.map((group) => ({ group, items: PRESETS.filter((p) => p.group === group) })),
+  );
 
   const statusText = $derived(
     status === null
@@ -58,6 +68,19 @@
     onclick={onToggle}
     onkeydown={onTitleKeydown}
   >06 · graph editor<span class="chevron" class:flip={collapsed}>▾</span></span>
+  <label class="graph">
+    graph
+    <select value={preset} onchange={(e) => onPreset(e.currentTarget.value)}>
+      <option value="">starter graph</option>
+      {#each byGroup as { group, items } (group)}
+        <optgroup label={group}>
+          {#each items as p (p.name)}
+            <option value={p.name} title={p.description}>{p.title}</option>
+          {/each}
+        </optgroup>
+      {/each}
+    </select>
+  </label>
   <label>
     seed
     <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
@@ -97,6 +120,20 @@
     border: 1px solid #33405a;
     border-radius: 5px;
     font: 12px ui-monospace, monospace;
+  }
+  select {
+    max-width: 260px;
+    padding: 3px 6px;
+    background: #161d29;
+    color: #dbe4f0;
+    border: 1px solid #33405a;
+    border-radius: 5px;
+    font: 12px system-ui, sans-serif;
+  }
+  /* The picker is the bar's primary control, so it keeps its width while
+     the status line (flex: 1) absorbs the slack. */
+  .graph {
+    flex: 0 0 auto;
   }
   button {
     padding: 3px 12px;

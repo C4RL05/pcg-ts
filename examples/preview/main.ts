@@ -22,19 +22,8 @@
  * nine committed demo screenshots.
  */
 import "pcg-ts/primitives";
-import {
-  cook,
-  deserializeGraph,
-  isDeviceResidentInstances,
-  primitiveTypeCounts,
-  type DataItem,
-} from "pcg-ts";
-import {
-  toBufferGeometry,
-  toInstancedMeshes,
-  toLineGeometry,
-  toPointsObject,
-} from "pcg-ts/three";
+import { cook, deserializeGraph, type DataItem } from "pcg-ts";
+
 import {
   ACESFilmicToneMapping,
   Box3,
@@ -46,7 +35,6 @@ import {
   HemisphereLight,
   InstancedMesh,
   LineBasicMaterial,
-  LineSegments,
   Mesh,
   MeshStandardMaterial,
   Object3D,
@@ -59,7 +47,8 @@ import {
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { createPlaceholderAssets, resolveAssets } from "../shared/assets.js";
+import { createPlaceholderAssets } from "../shared/assets.js";
+import { drawItem, type DrawMaterials } from "../shared/draw.js";
 
 /** The job the harness injects; every field optional but `graph`. */
 interface PreviewJob {
@@ -234,111 +223,39 @@ interface ItemReport {
 }
 
 /**
- * Turn one cooked item into scene objects. A geometry is drawn as
- * whatever it actually carries — triangles, lines, or bare points —
- * rather than assumed to be one of them, because an arbitrary graph is
- * the input and guessing wrong renders an empty frame that looks like a
- * generation bug.
+ * This page's look. Daylight, because it is judged against outdoor
+ * reference imagery — see the header. What to DRAW is decided by
+ * `shared/draw.ts`, which the sandbox shares; only the materials and the
+ * shadow flags below are this page's own, and both are renderer work.
  */
+const PREVIEW_MATERIALS: DrawMaterials = {
+  mesh: (vertexColors) =>
+    new MeshStandardMaterial({ color: 0x9aa792, roughness: 0.95, metalness: 0, vertexColors }),
+  line: (vertexColors) => new LineBasicMaterial({ color: 0xffb454, vertexColors }),
+};
+
+/** Turn one cooked item into scene objects, and say what it drew. */
 function addItem(group: Group, output: string, item: DataItem, job: PreviewJob): ItemReport {
-  if (item.kind === "value") {
-    return { output, kind: "value", drew: [], skipped: "values have no scene representation" };
-  }
-  if (item.kind === "instances") {
-    if (isDeviceResidentInstances(item)) {
-      return { output, kind: "instances", drew: [], skipped: "device-resident batches" };
+  const { objects, report } = drawItem(item, {
+    assets,
+    materials: PREVIEW_MATERIALS,
+    points: job.points,
+    pointSize: 0.1,
+  });
+  for (const obj of objects) {
+    // InstancedMesh extends Mesh, so this covers both. Lines and points
+    // neither cast nor receive in three's shadow map, so flagging them
+    // would only claim something untrue.
+    if (obj instanceof Mesh) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
     }
-    const meshes = toInstancedMeshes(item.batches, resolveAssets(item.batches, assets));
-    let count = 0;
-    // Per asset rather than a total: a species mix is the thing a spawn
-    // graph is usually about, and "1200 instances" cannot show you that
-    // one species is missing.
-    const batches: Record<string, number> = {};
-    for (const mesh of meshes) {
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
-      count += mesh.count;
-      batches[mesh.name] = (batches[mesh.name] ?? 0) + mesh.count;
-    }
-    return { output, kind: "instances", drew: ["instances"], instances: count, batches };
-  }
-
-  const geo = item.geo;
-  const counts = primitiveTypeCounts(geo);
-  const untagged = geo.primitiveCount > 0 && Object.keys(counts).length === 0;
-  const drew: string[] = [];
-  const problems: string[] = [];
-
-  /**
-   * Run an exporter, swallowing its refusal ONLY when we were guessing.
-   *
-   * An untagged geometry is genuinely ambiguous — both exporters are
-   * offered it and at most one can be right — so a refusal there is the
-   * answer, not a fault. A geometry TAGGED with the kind we asked for is
-   * different: the only refusals left are a missing `P` and "every
-   * primitive touches a non-finite position", which is a field that
-   * divided by zero upstream. Swallowing that degrades silently to a
-   * point cloud and hides the one thing the author needs told.
-   */
-  const attempt = (what: string, run: () => void): void => {
-    try {
-      run();
-      drew.push(what);
-    } catch (err) {
-      if (!untagged) problems.push(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  if ((counts.poly ?? 0) > 0 || untagged) {
-    attempt("mesh", () => {
-      const exported = toBufferGeometry(geo);
-      const mesh = new Mesh(
-        exported,
-        new MeshStandardMaterial({
-          color: 0x9aa792,
-          roughness: 0.95,
-          metalness: 0,
-          // Asked of the EXPORTED geometry, not the pcg one. The
-          // exporter emits a colour buffer only for an f32 column of at
-          // least three components; taking "the graph has an attribute
-          // named color" as the answer sets vertexColors with no buffer
-          // behind it, and three renders the whole mesh solid black.
-          vertexColors: exported.hasAttribute("color"),
-        }),
-      );
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
-    });
-  }
-  if ((counts.polyline ?? 0) > 0 || (untagged && drew.length === 0)) {
-    attempt("lines", () => {
-      const exported = toLineGeometry(geo);
-      group.add(
-        new LineSegments(
-          exported,
-          new LineBasicMaterial({ color: 0xffb454, vertexColors: exported.hasAttribute("color") }),
-        ),
-      );
-    });
-  }
-  // Points are the fallback, not an addition: drawing a cloud over a mesh
-  // it belongs to buries the surface under its own vertices.
-  const suppressed = geo.pointCount > 0 && drew.length > 0 && job.points !== true;
-  if (geo.pointCount > 0 && !suppressed) {
-    group.add(toPointsObject(geo, { size: 0.1 }));
-    drew.push("points");
+    group.add(obj);
   }
   return {
+    ...report,
     output,
-    kind: "geometry",
-    drew,
-    points: geo.pointCount,
-    primitives: counts,
-    ...(untagged ? { untagged: true } : {}),
-    ...(suppressed ? { hint: "points not drawn because topology was; pass --points to add them" } : {}),
-    ...(problems.length > 0 ? { skipped: problems.join(" | ") } : {}),
+    ...(report.hint !== undefined ? { hint: `${report.hint}; pass --points to add them` } : {}),
   };
 }
 

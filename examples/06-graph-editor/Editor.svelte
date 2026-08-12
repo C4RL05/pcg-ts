@@ -15,6 +15,7 @@
   import Palette from "./Palette.svelte";
   import Toolbar from "./Toolbar.svelte";
   import { narrowScreen } from "../shared/mobile.js";
+  import { findPreset, loadPresetText } from "../shared/presets.js";
   import type { CookStatus, EditorController } from "./controller.js";
   import { topoLayout } from "./layout.js";
   import {
@@ -36,6 +37,10 @@
   let exportText = $state("");
   let hashBeforeImport = $state<string | null>(null);
   let awaitingImportCook = $state(false);
+  /** How the pending import got here, for its toast ("imported", a title). */
+  let importLabel = $state("imported");
+  /** Loaded corpus graph, or "" for the built-in starter. */
+  let preset = $state("");
 
   const groups = paletteGroups();
   const selectedNode = $derived(model.nodes.find((n) => n.id === selectedId) ?? null);
@@ -94,21 +99,76 @@
         if (before !== null) {
           showToast(
             s.hash === before
-              ? `imported: output hash ${s.hash} — identical to the pre-import cook`
-              : `imported: output hash ${s.hash} (was ${before})`,
+              ? `${importLabel}: output hash ${s.hash} — identical to the pre-import cook`
+              : `${importLabel}: output hash ${s.hash} (was ${before})`,
           );
         } else {
-          showToast(`imported: output hash ${s.hash}`);
+          showToast(`${importLabel}: output hash ${s.hash}`);
         }
       }
     });
+
+    // A `?graph=` in the URL wins over the starter, so a link opens the
+    // sandbox on the graph it names. An unknown name says so and falls
+    // back rather than leaving the canvas empty.
+    const wanted = new URLSearchParams(window.location.search).get("graph");
+    if (wanted !== null && wanted !== "") {
+      if (findPreset(wanted) === undefined) {
+        showToast(`no graph named "${wanted}" in the corpus — opened the starter instead`, "error");
+      } else {
+        void openPreset(wanted, { updateUrl: false });
+        return;
+      }
+    }
+    loadStarter();
+  });
+
+  function loadStarter(): void {
     const res = controller.importText(STARTER_GRAPH_TEXT);
     if ("error" in res) {
       showToast(res.error, "error");
-    } else {
-      model = res.structure;
+      return;
     }
-  });
+    model = res.structure;
+    selectedId = null;
+  }
+
+  /**
+   * Load one corpus graph through the same path a pasted import takes —
+   * deserializeGraph validates it, the mirror is rebuilt, and the
+   * structure comes back with a deterministic layout. A preset is not a
+   * special kind of graph; it is the import with the paste step removed.
+   */
+  async function openPreset(name: string, opts: { updateUrl: boolean }): Promise<void> {
+    if (name === "") {
+      preset = "";
+      loadStarter();
+      if (opts.updateUrl) syncUrl("");
+      return;
+    }
+    let text: string;
+    try {
+      text = await loadPresetText(name);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), "error");
+      return;
+    }
+    const err = applyImport(text, findPreset(name)?.title ?? name);
+    if (err !== null) {
+      showToast(err, "error");
+      return;
+    }
+    preset = name;
+    if (opts.updateUrl) syncUrl(name);
+  }
+
+  /** Keep the address bar on the loaded graph, so the tab is linkable. */
+  function syncUrl(name: string): void {
+    const url = new URL(window.location.href);
+    if (name === "") url.searchParams.delete("graph");
+    else url.searchParams.set("graph", name);
+    window.history.replaceState(null, "", url);
+  }
 
   // -- actions -------------------------------------------------------------
 
@@ -194,13 +254,27 @@
     modal = "export";
   }
 
-  function applyImport(text: string): string | null {
+  function applyImport(text: string, label = "imported"): string | null {
     hashBeforeImport = status?.hash ?? null;
     const res = controller.importText(text);
     if ("error" in res) return res.error;
     model = res.structure;
     selectedId = null;
+    importLabel = label;
     awaitingImportCook = true;
+    return null;
+  }
+
+  /**
+   * A pasted graph is nobody's preset any more, so the picker and the URL
+   * stop claiming it is one — otherwise a shared link would reopen the
+   * corpus graph rather than what the sender was actually looking at.
+   */
+  function applyPastedImport(text: string): string | null {
+    const err = applyImport(text);
+    if (err !== null) return err;
+    preset = "";
+    syncUrl("");
     return null;
   }
 
@@ -239,6 +313,8 @@
     seed={model.seed}
     {status}
     collapsed={dockCollapsed}
+    {preset}
+    onPreset={(name) => void openPreset(name, { updateUrl: true })}
     onSeed={setSeed}
     onExport={openExport}
     onImport={() => (modal = "import")}
@@ -312,7 +388,7 @@
     title="import — paste serialized graph JSON"
     initial=""
     mode="import"
-    onApply={applyImport}
+    onApply={applyPastedImport}
     onClose={() => (modal = null)}
   />
 {/if}

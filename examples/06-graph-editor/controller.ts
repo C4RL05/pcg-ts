@@ -21,17 +21,22 @@ import {
   fieldFromJson,
   fieldToJson,
   getNodeType,
+  getRegisteredSubgraph,
   isField,
+  resolveExposedParam,
   serializeGraph,
   subgraphNode,
   type DataItem,
+  type ExposedParam,
   type ExposedPin,
   type FieldSpec,
   type NodeHandle,
   type ParamSchema,
+  type ParamValue,
   type SerializedExposedPin,
   type SerializedGraph,
   type SerializedNode,
+  type SerializedSubgraph,
 } from "pcg-ts";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
@@ -352,22 +357,57 @@ export class EditorController {
     sn: SerializedNode,
   ): { inputs: PinView[]; outputs: PinView[] } {
     if (sn.type === "subgraph") {
-      const payload = sn.subgraph;
+      /**
+       * Two flavours, mutually exclusive in the format: a `ref` naming a
+       * registered subgraph, or an inline `subgraph` payload. This editor
+       * writes the inline kind, which is why it only ever read that one —
+       * but the corpus is almost entirely refs (primitives are
+       * registered, not embedded), so a graph picked from the menu is the
+       * case that never worked.
+       */
+      const payload: SerializedSubgraph | undefined =
+        sn.ref !== undefined ? getRegisteredSubgraph(sn.ref.name).subgraph : sn.subgraph;
       if (!payload) {
         // Unreachable: deserializeGraph validated the payload above.
-        throw new Error(`node "${sn.id}": subgraph node without a subgraph payload`);
+        throw new Error(`node "${sn.id}": subgraph node with neither a payload nor a ref`);
       }
       const toExposed = (e: SerializedExposedPin): ExposedPin => ({
         name: e.name,
         node: { id: e.node },
         pin: e.pin,
       });
+      const inner = deserializeGraph(payload.graph);
+      /**
+       * The exposed params have to be rebuilt alongside the pins. A node
+       * wrapped without their declarations has nowhere to put the values
+       * the file carries, so it silently cooks the primitive's own
+       * defaults — a ring at the wrong radius, and no error anywhere.
+       */
+      const exposed: ExposedParam[] = (payload.params ?? []).map((p) =>
+        resolveExposedParam(inner, {
+          name: p.name,
+          targets: p.targets.map((t) => ({ node: { id: t.node }, param: t.param })),
+          description: p.description,
+          default: p.default as ParamValue,
+          ...(p.min !== undefined ? { min: p.min } : {}),
+          ...(p.max !== undefined ? { max: p.max } : {}),
+        }),
+      );
       const def = subgraphNode(
-        deserializeGraph(payload.graph),
+        inner,
         payload.inputs.map(toExposed),
         payload.outputs.map(toExposed),
+        exposed,
       );
-      mirror.add(def, undefined, sn.id);
+      const params: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(sn.params ?? {})) {
+        const schema = exposed.find((e) => e.name === key)?.schema;
+        params[key] =
+          schema?.acceptsField === true && isPlainObject(value)
+            ? fieldFromJson(value as FieldSpec)
+            : copyPlain(value);
+      }
+      mirror.add(def, params, sn.id);
       const described = describeSubgraphPins(def);
       const toView = (p: { name: string; kind: string }): PinView => ({
         name: p.name,
