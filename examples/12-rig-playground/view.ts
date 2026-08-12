@@ -112,6 +112,7 @@ export const SECTIONS: readonly Section[] = [
       { key: "drapeCount", label: "drape anchors", min: 0, max: 120, step: 2 },
       { key: "drapeReach", label: "drape reach", min: 1, max: 20, step: 0.5, unit: "m" },
       { key: "drapeMinLength", label: "drop chords under", min: 0, max: 20, step: 0.25, unit: "m" },
+      { key: "drapeKeep", label: "hang fraction", min: 0, max: 1, step: 0.02 },
       { key: "drapeSlack", label: "slack", min: 0, max: 2, step: 0.05 },
       { key: "slackJitter", label: "slack variation", min: 0, max: 1, step: 0.05 },
       { key: "cableRadius", label: "cable radius", min: 0.005, max: 0.2, step: 0.005, unit: "m" },

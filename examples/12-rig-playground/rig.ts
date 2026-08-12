@@ -118,6 +118,12 @@ export interface RigParams {
   drapeReach: number;
   /** Chords shorter than this are dropped entirely, in metres. */
   drapeMinLength: number;
+  /**
+   * Fraction of the surviving chords actually hung, chosen per chord.
+   * 1 hangs every candidate, which is what makes a lattice; below that
+   * the same chords become an irregular scatter of swags.
+   */
+  drapeKeep: number;
   drapeSlack: number;
   /** How much the sag varies from chord to chord. */
   slackJitter: number;
@@ -153,11 +159,12 @@ export const DEFAULT_PARAMS: RigParams = {
   curlOctaves: 2,
   curlVariant: 0,
   drapeCount: 34,
-  drapeMode: "relativeNeighborhood",
-  drapeReach: 12,
-  drapeMinLength: 0,
-  drapeSlack: 0.55,
-  slackJitter: 0.35,
+  drapeMode: "radius",
+  drapeReach: 20,
+  drapeMinLength: 4,
+  drapeKeep: 0.16,
+  drapeSlack: 0.45,
+  slackJitter: 0.8,
   cableRadius: 0.035,
 };
 
@@ -478,7 +485,21 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
     radius: Math.max(params.drapeReach, spacing * 1.05),
     lengthAttr: "edgeLength",
   });
-  // pathResample carries the primitive edgeLength onto every sample and
+  // One random number per CHORD, written on the primitive domain. On any
+  // domain but `point`, randomField hashes the element index rather than
+  // a point identity — and connectPoints emits its edges in a canonical
+  // order fixed by the points themselves, so that index is stable and
+  // this value belongs to the chord rather than to the order it was
+  // built in. It rides the primitive domain down to the segments beside
+  // `edgeLength`, which is what lets a whole chord be kept or dropped.
+  const pick = graph.add(setAttribute, {
+    name: "chordPick",
+    domain: "primitive",
+    type: "f32",
+    tupleSize: 1,
+    value: randomField(`chord${Math.round(params.curlVariant)}`),
+  });
+  // pathResample carries the primitive attributes onto every sample and
   // writes curveU, so both halves of the parabola are readable as
   // fields on the points it just made.
   const drapeEven = graph.add(pathResample, { mode: "count", count: DRAPE_POINTS });
@@ -512,31 +533,45 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
   const drapeSpawn = graph.add(spawnInstances, { assetId: "tube" });
   graph.connect(spine, "out", drapeAnchors, "in");
   graph.connect(drapeAnchors, "out", chords, "in");
-  graph.connect(chords, "out", drapeEven, "in");
+  graph.connect(chords, "out", pick, "in");
+  graph.connect(pick, "out", drapeEven, "in");
   graph.connect(drapeEven, "out", sag, "in");
   graph.connect(sag, "out", drapeTube, "in");
 
-  // The length filter runs on the TUBE SEGMENTS, not on the chords —
-  // which sounds backwards and is the only place it fits. There is no
-  // filter in this library that selects primitives by an attribute
-  // (filterPrimitivesByBounds goes by bounds), and the point filters all
-  // destroy topology, which a chord still needs at that stage. By the
-  // time pathSegments has run the topology has served its purpose and
-  // the segments are just instance points — and each one carries the
-  // `edgeLength` of the chord it came from, having ridden the primitive
-  // domain the whole way down. Every segment of one chord shares that
-  // value, so a threshold takes whole chords and never half of one.
+  // Both chord filters run on the TUBE SEGMENTS, not on the chords —
+  // which sounds backwards and is the only place they fit. No filter in
+  // this library selects primitives by an attribute
+  // (filterPrimitivesByBounds goes by bounds), and every point filter
+  // destroys topology, which a chord still needs at that stage. Once
+  // pathSegments has run the topology has served its purpose and the
+  // segments are plain instance points — each carrying its chord's
+  // `edgeLength` and `chordPick`, having ridden the primitive domain the
+  // whole way down. Every segment of one chord shares those values, so a
+  // threshold takes whole chords and never half of one.
+  //
+  // Length alone thins the net but leaves what survives REGULAR: every
+  // pair over the threshold is hung, and a complete graph of long chords
+  // is a lattice. The random pick is what turns it into a scatter.
+  let tail: NodeRef = drapeTube;
   if (params.drapeMinLength > 0) {
     const long = graph.add(filterByAttribute, {
       attribute: "edgeLength",
       comparison: "ge",
       value: params.drapeMinLength,
     });
-    graph.connect(drapeTube, "out", long, "in");
-    graph.connect(long, "out", drapeSpawn, "in");
-  } else {
-    graph.connect(drapeTube, "out", drapeSpawn, "in");
+    graph.connect(tail, "out", long, "in");
+    tail = long;
   }
+  if (params.drapeKeep < 1) {
+    const some = graph.add(filterByAttribute, {
+      attribute: "chordPick",
+      comparison: "lt",
+      value: params.drapeKeep,
+    });
+    graph.connect(tail, "out", some, "in");
+    tail = some;
+  }
+  graph.connect(tail, "out", drapeSpawn, "in");
   graph.output(drapeSpawn, "instances", "drapes");
 }
 
