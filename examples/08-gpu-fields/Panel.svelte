@@ -7,7 +7,8 @@
    * hashes, `CookStats.gpu` counters including the resident-run ones,
    * and the CPU-vs-GPU deviation readout).
    */
-  import { narrowScreen } from "../shared/mobile.js";
+  import { untrack } from "svelte";
+  import PanelShell from "../shared/PanelShell.svelte";
   import {
     COOK_PATHS,
     COUNT_OPTIONS,
@@ -26,41 +27,25 @@
     initial,
   }: { host: PanelHost; bridge: PanelBridge; initial: PanelView } = $props();
 
-  let view = $state(initial);
-  bridge.publish = (v: PanelView) => {
-    view = v;
-  };
-
   /**
-   * On narrow screens the fixed side panel becomes a full-width bottom
-   * sheet, collapsed to its 48px title bar by default so the 3D content
-   * keeps the screen. The same treatment is duplicated in
-   * 05-fields-playground/Panel.svelte on purpose — two copies are cheaper
-   * than a shared component's indirection, but a third panel should
-   * trigger extraction. Entering the narrow range collapses, leaving it
-   * clears the collapse, so rotating a phone never strands the panel in a
-   * stale state.
+   * `initial` and `bridge` are setup-time reads, not tracked inputs: the
+   * host hands over one starting snapshot and one callback slot, then
+   * drives the panel through `publish` for the rest of the page's life.
+   * `untrack` states that intent where the compiler can see it — capture
+   * now, never resubscribe — instead of reading a prop reactively and
+   * discarding the reactivity.
    */
-  let collapsed = $state(narrowScreen().matches);
+  const initialView = untrack(() => initial);
 
-  $effect(() => {
-    const mql = narrowScreen();
-    const onChange = (e: MediaQueryListEvent): void => {
-      collapsed = e.matches;
+  let view = $state(initialView);
+  untrack(() => {
+    bridge.publish = (v: PanelView) => {
+      view = v;
     };
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
   });
 
-  function toggleCollapsed(): void {
-    collapsed = !collapsed;
-  }
-  function onTitleKeydown(e: KeyboardEvent): void {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      collapsed = !collapsed;
-    }
-  }
+  /** Desktop width of the card; the shell handles everything else. */
+  const PANEL_WIDTH = 356;
 
   function fmtCount(n: number): string {
     return n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1_000}k`;
@@ -87,7 +72,7 @@
     host.setPath(p);
   }
 
-  let seedInput = $state(initial.seed);
+  let seedInput = $state(initialView.seed);
   function commitSeed(): void {
     const v = Math.floor(Number(seedInput));
     if (Number.isFinite(v)) host.setSeed(v >>> 0);
@@ -116,23 +101,7 @@
   const tightMiB = TIGHT_RESIDENT_BYTES / (1024 * 1024);
 </script>
 
-<div class="panel" class:collapsed>
-  <!-- The title doubles as the bottom sheet's collapse toggle on narrow
-       screens; it stays a plain heading visually on desktop. Deliberately
-       not a <button>: the capture tooling clicks buttons by substring
-       (e.g. "cook all paths"), and the readiness probe scrapes
-       `.panel .stat` — which is why collapse clips via CSS instead of
-       {#if}-ing any content away. -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
-  <h1
-    role="button"
-    tabindex="0"
-    aria-expanded={!collapsed}
-    onclick={toggleCollapsed}
-    onkeydown={onTitleKeydown}
-  >
-    08 · gpu fields<span class="chevron">▾</span>
-  </h1>
+<PanelShell title="08 · gpu fields" width={PANEL_WIDTH}>
   <p class="info">
     <code>setAttribute(wobble) → jitterPoints → transformPoints → setAttribute(tint) →
     setAttribute(psize)</code> over a million-point scatter. All five are fusable node kinds in a
@@ -284,32 +253,12 @@
     fused chain's three constant <code>transformPoints</code> params ride the run's uniform rather
     than device columns, so they add no dispatch and no per-point memory.
   </p>
-</div>
+</PanelShell>
 
 <style>
-  .panel {
-    position: fixed;
-    top: 12px;
-    right: 12px;
-    z-index: 10;
-    width: 356px;
-    max-height: calc(100vh - 24px);
-    overflow-y: auto;
-    box-sizing: border-box;
-    padding: 14px 16px;
-    background: rgba(13, 17, 23, 0.9);
-    border: 1px solid #2a3548;
-    border-radius: 10px;
-    color: #dbe4f0;
-    font: 13px/1.45 system-ui, sans-serif;
-    backdrop-filter: blur(6px);
-  }
-  h1 {
-    margin: 0 0 2px;
-    font-size: 15px;
-    font-weight: 600;
-    color: #f0f4fa;
-  }
+  /* Chrome (the card, the title bar, the narrow-screen bottom sheet) lives
+     in ../shared/PanelShell.svelte; what follows styles this panel's own
+     controls only. */
   .info {
     margin: 0 0 10px;
     color: #8b98ab;
@@ -520,54 +469,5 @@
   }
   .note b {
     color: #8b98ab;
-  }
-  /* Desktop: the chevron does not exist. This rule must precede the media
-     block so the narrow-screen rule wins the cascade at equal specificity. */
-  .chevron {
-    display: none;
-  }
-  @media (max-width: 700px) {
-    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
-    .panel {
-      top: auto;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      width: auto;
-      z-index: 12;
-      max-height: 50vh;
-      max-height: 50dvh; /* dvh where supported; vh fallback above */
-      border-radius: 12px 12px 0 0;
-      border-width: 1px 0 0 0;
-      padding: 0 16px calc(10px + env(safe-area-inset-bottom));
-      transition: max-height 0.25s ease;
-      overscroll-behavior: contain;
-    }
-    .panel h1 {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      margin: 0 -16px;
-      padding: 13px 16px;
-      line-height: 22px; /* 13 + 22 + 13 = the 48px collapsed bar */
-      background: rgba(13, 17, 23, 0.96);
-      cursor: pointer;
-    }
-    .chevron {
-      display: inline-block;
-      float: right;
-      color: #8b98ab;
-      transition: transform 0.2s;
-    }
-    /* Collapse clips via max-height + overflow, never {#if}: the capture
-       tooling's readiness probe scrapes `.panel .stat` textContent and
-       needs the stats rendered whether the sheet is open or shut. */
-    .panel.collapsed {
-      max-height: calc(48px + env(safe-area-inset-bottom));
-      overflow: hidden;
-    }
-    .panel.collapsed .chevron {
-      transform: rotate(180deg);
-    }
   }
 </style>

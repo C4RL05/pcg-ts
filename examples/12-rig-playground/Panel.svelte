@@ -9,7 +9,8 @@
    * a new knob is a line in view.ts and this file never changes.
    */
   import { hashCombine } from "pcg-ts";
-  import { narrowScreen } from "../shared/mobile.js";
+  import { untrack } from "svelte";
+  import PanelShell from "../shared/PanelShell.svelte";
   import { PART_KINDS, RIG_GROUPS, type PartKind, type RigGroup, type RigParams } from "./rig.js";
   import {
     GROUP_LABEL,
@@ -29,7 +30,18 @@
     initial,
   }: { host: PanelHost; bridge: PanelBridge; initial: PanelView } = $props();
 
-  let view = $state(initial);
+  /**
+   * `initial` and `bridge` are setup-time reads, not tracked inputs: the
+   * host hands over one starting snapshot and one callback slot, then
+   * drives the panel through `publish` for the rest of the page's life.
+   * `untrack` states that intent where the compiler can see it — capture
+   * now, never resubscribe — instead of reading a prop reactively and
+   * discarding the reactivity. It is also what keeps the seeding below
+   * honest: every local control starts from this one frozen snapshot.
+   */
+  const initialView = untrack(() => initial);
+
+  let view = $state(initialView);
 
   /**
    * Control values are held locally instead of read straight off `view`.
@@ -42,15 +54,18 @@
    * back is already what the user set, so leaving it alone is both
    * correct and quiet.
    */
-  let params = $state<RigParams>({ ...initial.params, weights: { ...initial.params.weights } });
-  let seedInput = $state(initial.params.seed);
-  let shading = $state<Shading>(initial.shading);
-  let wireframe = $state(initial.wireframe);
-  let grid = $state(initial.grid);
-  let visible = $state<Record<RigGroup, boolean>>({ ...initial.visible });
+  let params = $state<RigParams>({
+    ...initialView.params,
+    weights: { ...initialView.params.weights },
+  });
+  let seedInput = $state(initialView.params.seed);
+  let shading = $state<Shading>(initialView.shading);
+  let wireframe = $state(initialView.wireframe);
+  let grid = $state(initialView.grid);
+  let visible = $state<Record<RigGroup, boolean>>({ ...initialView.visible });
 
   /** Previous snapshot, for the host-changed diff. Never read in markup. */
-  let last: PanelView = initial;
+  let last: PanelView = initialView;
 
   function adopt(v: PanelView): void {
     for (const section of SECTIONS) {
@@ -79,41 +94,15 @@
     last = v;
   }
 
-  bridge.publish = (v: PanelView) => {
-    view = v;
-    adopt(v);
-  };
-
-  /**
-   * On narrow screens the fixed side panel becomes a full-width bottom
-   * sheet, collapsed to its 48px title bar by default so the 3D content
-   * keeps the screen. The treatment is duplicated from
-   * 05-fields-playground and 08-gpu-fields, whose comments call for
-   * extraction at the third copy — this is that third copy, left
-   * duplicated on purpose so the extraction lands as its own change.
-   * Entering the narrow range collapses, leaving it clears the collapse,
-   * so rotating a phone never strands the panel in a stale state.
-   */
-  let collapsed = $state(narrowScreen().matches);
-
-  $effect(() => {
-    const mql = narrowScreen();
-    const onChange = (e: MediaQueryListEvent): void => {
-      collapsed = e.matches;
+  untrack(() => {
+    bridge.publish = (v: PanelView) => {
+      view = v;
+      adopt(v);
     };
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
   });
 
-  function toggleCollapsed(): void {
-    collapsed = !collapsed;
-  }
-  function onTitleKeydown(e: KeyboardEvent): void {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      collapsed = !collapsed;
-    }
-  }
+  /** Desktop width of the card; the shell handles everything else. */
+  const PANEL_WIDTH = 340;
 
   /** Highest weight a part kind can carry. 0 drops it from the mix. */
   const MAX_WEIGHT = 8;
@@ -229,23 +218,12 @@
   </div>
 {/snippet}
 
-<div class="panel" class:collapsed class:busy={view.cooking}>
-  <!-- The title doubles as the bottom sheet's collapse toggle on narrow
-       screens; it stays a plain heading visually on desktop. Deliberately
-       not a <button>: the capture tooling clicks buttons by substring, and
-       its readiness probe scrapes `.panel .stat` — which is why collapse
-       clips via CSS instead of {#if}-ing any content away. -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
-  <h1
-    role="button"
-    tabindex="0"
-    aria-expanded={!collapsed}
-    onclick={toggleCollapsed}
-    onkeydown={onTitleKeydown}
-  >
-    12 · rig playground{#if view.cooking}<span class="cooking">cooking…</span>{/if}<span
-      class="chevron">▾</span>
-  </h1>
+<!-- The cook flag rides in the shell's title bar, beside the title and
+     ahead of the chevron — written on one line so no whitespace text node
+     lands in front of the span's own 8px gap. -->
+{#snippet cookFlag()}{#if view.cooking}<span class="cooking">cooking…</span>{/if}{/snippet}
+
+<PanelShell title="12 · rig playground" width={PANEL_WIDTH} badge={cookFlag}>
   <p class="info">
     One graph, four branches: a spline <b>spine</b> pushed around by noise, <b>components</b>
     scattered along it in noise clusters, and two kinds of hanging <b>cable</b>. Every knob recooks
@@ -346,7 +324,10 @@
     </div>
   </div>
 
-  <div class="group stats">
+  <!-- `busy` fades the stats while a cook is in flight; it sits on this
+       block rather than on the panel so the rule stays scoped to the
+       component that renders the numbers. -->
+  <div class="group stats" class:busy={view.cooking}>
     <h2>stats</h2>
     <div class="stat"><span>fps</span><b>{view.fps}</b></div>
     <div class="stat"><span>instances</span><b>{fmtInt(view.total)}</b></div>
@@ -366,32 +347,12 @@
       <div class="error">{view.error}</div>
     {/if}
   </div>
-</div>
+</PanelShell>
 
 <style>
-  .panel {
-    position: fixed;
-    top: 12px;
-    right: 12px;
-    z-index: 10;
-    width: 340px;
-    max-height: calc(100vh - 24px);
-    overflow-y: auto;
-    box-sizing: border-box;
-    padding: 14px 16px;
-    background: rgba(13, 17, 23, 0.9);
-    border: 1px solid #2a3548;
-    border-radius: 10px;
-    color: #dbe4f0;
-    font: 13px/1.45 system-ui, sans-serif;
-    backdrop-filter: blur(6px);
-  }
-  h1 {
-    margin: 0 0 2px;
-    font-size: 15px;
-    font-weight: 600;
-    color: #f0f4fa;
-  }
+  /* Chrome (the card, the title bar, the narrow-screen bottom sheet) lives
+     in ../shared/PanelShell.svelte; what follows styles this panel's own
+     controls only. */
   h2 {
     margin: 0 0 4px;
     color: #cfe0f5;
@@ -525,7 +486,7 @@
   }
   /* A cook in flight fades the numbers it is about to replace, so a stale
      readout never reads as a settled one. */
-  .panel.busy .stats {
+  .stats.busy {
     opacity: 0.55;
   }
   .stat {
@@ -558,54 +519,5 @@
     color: #ff9ba3;
     font: 11px ui-monospace, monospace;
     white-space: pre-wrap;
-  }
-  /* Desktop: the chevron does not exist. This rule must precede the media
-     block so the narrow-screen rule wins the cascade at equal specificity. */
-  .chevron {
-    display: none;
-  }
-  @media (max-width: 700px) {
-    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
-    .panel {
-      top: auto;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      width: auto;
-      z-index: 12;
-      max-height: 50vh;
-      max-height: 50dvh; /* dvh where supported; vh fallback above */
-      border-radius: 12px 12px 0 0;
-      border-width: 1px 0 0 0;
-      padding: 0 16px calc(10px + env(safe-area-inset-bottom));
-      transition: max-height 0.25s ease;
-      overscroll-behavior: contain;
-    }
-    .panel h1 {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      margin: 0 -16px;
-      padding: 13px 16px;
-      line-height: 22px; /* 13 + 22 + 13 = the 48px collapsed bar */
-      background: rgba(13, 17, 23, 0.96);
-      cursor: pointer;
-    }
-    .chevron {
-      display: inline-block;
-      float: right;
-      color: #8b98ab;
-      transition: transform 0.2s;
-    }
-    /* Collapse clips via max-height + overflow, never {#if}: the capture
-       tooling's readiness probe scrapes `.panel .stat` textContent and
-       needs the stats rendered whether the sheet is open or shut. */
-    .panel.collapsed {
-      max-height: calc(48px + env(safe-area-inset-bottom));
-      overflow: hidden;
-    }
-    .panel.collapsed .chevron {
-      transform: rotate(180deg);
-    }
   }
 </style>
