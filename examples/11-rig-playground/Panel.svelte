@@ -11,7 +11,7 @@
   import { hashCombine } from "pcg-ts";
   import { untrack } from "svelte";
   import PanelShell from "../shared/PanelShell.svelte";
-  import { PART_KINDS, RIG_GROUPS, type PartKind, type RigGroup, type RigParams } from "./rig.js";
+  import { DEFAULT_PARAMS, PART_KINDS, RIG_GROUPS, type PartKind, type RigGroup, type RigParams } from "./rig.js";
   import {
     DISPLAY_SLIDERS,
     GROUP_LABEL,
@@ -126,6 +126,69 @@
 
   const mixHasHome = SECTIONS.some((s) => s.title === MIX_SECTION);
 
+  /**
+   * Tabs, because the knobs outgrew one scroll: five generation groups
+   * plus display is roughly fifty controls, and hunting for one of them
+   * in a single column is the whole problem.
+   *
+   * Only this panel has them. 05 and 08 have a handful of controls each
+   * and would gain nothing, so the tab bar stays local rather than going
+   * into the shared shell — the same rule that kept the shell waiting
+   * for a third panel before it was extracted.
+   *
+   * Stats sit OUTSIDE the tabs: they are the readout you check while
+   * turning a knob, so hiding them behind a tab would mean losing sight
+   * of the thing a knob is meant to change.
+   */
+  const TABS: readonly string[] = [...SECTIONS.map((s) => s.title), "display"];
+  let tab = $state(TABS[0]);
+
+  /**
+   * The current settings as a PATCH — only what differs from the
+   * defaults, plus the seed. A full dump would be eighty lines of mostly
+   * defaults; a patch is short enough to paste into a conversation and
+   * is exactly the shape window.__rigSet and the capture script's
+   * --params flag already take, so a copied setting can be replayed
+   * without editing it.
+   */
+  const patch = $derived.by(() => {
+    const out: Record<string, unknown> = { seed: params.seed };
+    for (const key of Object.keys(DEFAULT_PARAMS) as (keyof RigParams)[]) {
+      if (key === "seed" || key === "weights") continue;
+      if (params[key] !== DEFAULT_PARAMS[key]) out[key] = params[key];
+    }
+    const w: Record<string, number> = {};
+    for (const kind of PART_KINDS) {
+      if (params.weights[kind] !== DEFAULT_PARAMS.weights[kind]) w[kind] = params.weights[kind];
+    }
+    if (Object.keys(w).length > 0) out.weights = { ...params.weights };
+    const d: Record<string, number> = {};
+    for (const spec of DISPLAY_SLIDERS) {
+      if (display[spec.key] !== initialView.display[spec.key]) d[spec.key] = display[spec.key];
+    }
+    if (Object.keys(d).length > 0) out.display = d;
+    return JSON.stringify(out, null, 2);
+  });
+
+  let copyState = $state<"idle" | "done" | "manual">("idle");
+  async function copyPatch(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(patch);
+      copyState = "done";
+    } catch {
+      // The clipboard can refuse — an insecure context, or a permission
+      // the page was never granted. Silently doing nothing would look
+      // like a broken button, so fall back to showing the JSON where it
+      // can be selected by hand and say that is what happened.
+      tab = "display";
+      copyState = "manual";
+    }
+    setTimeout(() => (copyState = "idle"), 1600);
+  }
+  const copyLabel = $derived(
+    copyState === "done" ? "copied!" : copyState === "manual" ? "select it below ↓" : "copy params",
+  );
+
   /** Decimals to show, read off the step so the readout never over-reports. */
   function decimals(step: number): number {
     if (step >= 1) return 0;
@@ -239,8 +302,9 @@
 <PanelShell title="11 · rig playground" width={PANEL_WIDTH} badge={cookFlag}>
   <p class="info">
     One graph: a box <b>truss</b> along a spline pushed around by noise, <b>components</b>
-    scattered over it in noise clusters, <b>chains</b> holding it up, and two kinds of hanging
-    <b>cable</b>. Every knob recooks the whole rig; the same seed always rebuilds the same rig.
+    scattered over it in noise clusters, <b>chains</b> holding it up, cables <b>wrapped</b> around
+    it, and two kinds hanging off it. Every knob recooks the whole rig; the same seed always
+    rebuilds the same rig.
   </p>
 
   <div class="row">
@@ -249,9 +313,24 @@
     <button class="wide" onclick={randomizeSeed}>randomize</button>
   </div>
 
+  <div class="row">
+    <span>settings</span>
+    <button class="wide" onclick={copyPatch}>{copyLabel}</button>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="controls">
+    {#each TABS as name (name)}
+      <button
+        class="tab"
+        class:on={tab === name}
+        role="tab"
+        aria-selected={tab === name}
+        onclick={() => (tab = name)}>{name}</button>
+    {/each}
+  </div>
+
   {#each SECTIONS as section (section.title)}
-    <div class="group">
-      <h2>{section.title}</h2>
+    <div class="group" hidden={tab !== section.title}>
 
       {#if section.title === MIX_SECTION}{@render mix()}{/if}
 
@@ -286,14 +365,19 @@
   {/each}
 
   {#if !mixHasHome}
-    <div class="group">
+    <div class="group" hidden={tab !== MIX_SECTION}>
       <h2>mix</h2>
       {@render mix()}
     </div>
   {/if}
 
-  <div class="group">
+  <div class="group" hidden={tab !== "display"}>
+    <h2>settings</h2>
+    <p class="hint">Everything that differs from the defaults. Paste it back to replay a rig.</p>
+    <pre class="patch">{patch}</pre>
+
     <h2>display</h2>
+
 
     <label class="row">
       <span>shading</span>
@@ -407,6 +491,72 @@
     margin-top: 10px;
     padding-top: 8px;
     border-top: 1px solid #223047;
+  }
+
+  /* The tab bar sits directly above the groups, so the group that
+     follows it drops its own rule — two lines a few pixels apart read
+     as a mistake. */
+  .tabs + .group {
+    border-top: none;
+    padding-top: 2px;
+    margin-top: 4px;
+  }
+
+  .patch {
+    margin: 4px 0 8px;
+    padding: 6px 8px;
+    max-height: 150px;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.45;
+    color: #9fd0b0;
+    background: #0e1621;
+    border: 1px solid #223047;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .hint {
+    margin: 2px 0 0;
+    font-size: 11px;
+    color: #7d8ea6;
+  }
+
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #223047;
+  }
+
+  .tab {
+    flex: 1 1 auto;
+    padding: 4px 7px;
+    font: inherit;
+    font-size: 11px;
+    color: #8fa3bf;
+    background: #131c2b;
+    border: 1px solid #223047;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .tab:hover {
+    color: #d6e2f2;
+  }
+
+  .tab.on {
+    color: #eaf1fa;
+    background: #24344d;
+    border-color: #35507a;
+  }
+
+  .tab:focus-visible {
+    outline: 2px solid #4d7fd1;
+    outline-offset: 1px;
   }
   .row {
     display: flex;
