@@ -78,7 +78,7 @@ export const SECTIONS: readonly Section[] = [
   {
     title: "components",
     sliders: [
-      { key: "partDensity", label: "density", min: 20, max: 900, step: 10 },
+      { key: "partDensity", label: "density", min: 20, max: 3000, step: 20 },
       { key: "clusterFreq", label: "cluster noise freq", min: 0.5, max: 40, step: 0.5 },
       { key: "clusterOctaves", label: "cluster octaves", min: 1, max: 6, step: 1 },
       { key: "clusterVariant", label: "cluster variant", min: 0, max: 20, step: 1 },
@@ -102,7 +102,9 @@ export const SECTIONS: readonly Section[] = [
       },
     ],
     sliders: [
-      { key: "danglerCount", label: "danglers", min: 0, max: 400, step: 5 },
+      { key: "danglerCount", label: "danglers", min: 0, max: 600, step: 5 },
+      { key: "danglerBundle", label: "bundling", min: 0, max: 1, step: 0.02 },
+      { key: "danglerBundleFreq", label: "bundle count", min: 1, max: 30, step: 1 },
       { key: "danglerLength", label: "drop", min: 0.2, max: 10, step: 0.1, unit: "m" },
       { key: "dropVariation", label: "drop variation", min: 0, max: 0.95, step: 0.05 },
       { key: "danglerCurl", label: "curl", min: 0, max: 3, step: 0.05, unit: "m" },

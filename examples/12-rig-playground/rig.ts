@@ -105,6 +105,14 @@ export interface RigParams {
   sizeJitter: number;
   // cables
   danglerCount: number;
+  /**
+   * How far the anchors slide toward their bundle's centre. 0 is a
+   * regular fringe; 1 collapses each bundle onto a single point. Nothing
+   * is removed, so the cable count is exactly `danglerCount` throughout.
+   */
+  danglerBundle: number;
+  /** How many bundles along the curve. */
+  danglerBundleFreq: number;
   danglerLength: number;
   /** How short the shortest dangler is, as a fraction of the longest. */
   dropVariation: number;
@@ -142,16 +150,18 @@ export const DEFAULT_PARAMS: RigParams = {
   spineRadius: 0.22,
   spineSamples: 130,
   weights: { rod: 4, bar: 2, panel: 1, clamp: 2 },
-  partDensity: 320,
-  clusterFreq: 9,
+  partDensity: 900,
+  clusterFreq: 14,
   clusterOctaves: 2,
   clusterVariant: 0,
-  clusterThreshold: 0.52,
+  clusterThreshold: 0.46,
   radialSpread: 1,
   scatterJitter: 0.5,
   partSize: 1,
   sizeJitter: 0.45,
-  danglerCount: 150,
+  danglerCount: 200,
+  danglerBundle: 0.8,
+  danglerBundleFreq: 7,
   danglerLength: 3.2,
   dropVariation: 0.45,
   danglerCurl: 0.5,
@@ -395,7 +405,42 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
     tupleSize: 1,
     value: fraction(),
   });
-  const anchors = graph.add(pathResample, { mode: "count", count: params.danglerCount });
+  // Bundling GATHERS the anchors instead of deleting some of them: each
+  // one slides along the curve toward the middle of its own bundle, so
+  // the cables leave in fat clumps with bare runs between.
+  //
+  // Thinning by a noise threshold was the first attempt and was worse in
+  // two ways that only showed up when measured. The cable count did not
+  // hold still — normalized fbm is bell-shaped, not uniform, so the
+  // fraction surviving a rising cut collapses rather than falling with
+  // it, and no fixed oversample cancels that. Worse, a high enough cut
+  // removes EVERY anchor, and an empty cloud reaches pointsToPath as a
+  // path with no points and throws — a crash reachable by dragging a
+  // slider. Sliding points cannot delete one, so the count is exactly
+  // what the slider says and the failure cannot happen.
+  //
+  // The slide is along the TANGENT by the arc-length difference, rather
+  // than a re-evaluation of the curve at the new parameter, which the
+  // library has no node for. Over a bundle's width the spine is nearly
+  // straight, so the two agree closely and the anchors stay on it.
+  const bundle = Math.min(1, Math.max(0, params.danglerBundle));
+  const anchors = graph.add(pathResample, {
+    mode: "count",
+    count: Math.max(2, Math.round(params.danglerCount)),
+  });
+  const bundling = graph.add(transformPoints, {
+    translate: (() => {
+      if (bundle <= 0) return [0, 0, 0];
+      const u = attribute("curveU", 1);
+      const bins = Math.max(1, params.danglerBundleFreq);
+      // The centre of the bin this anchor falls in, back in curve units.
+      const centre = div(add(floor(mul(u, bins)), 0.5), bins);
+      // Curve units to metres. The wander makes the spine longer than
+      // its span; a fixed allowance is close enough for a gather.
+      const arc = params.span * 1.15;
+      return mul(mul(sub(centre, u), arc * bundle), attribute("tangent", 3));
+    })(),
+  });
   // The attachment's SCALE is the strand's length: copyToPoints applies
   // the target's scale to the source positions, and the unit strand is
   // 1 long, so scale.y IS the drop in metres. Its rot is left identity
@@ -451,7 +496,8 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
   const danglerSpawn = graph.add(spawnInstances, { assetId: "tube" });
   graph.connect(strand, "out", strandU, "in");
   graph.connect(spine, "out", anchors, "in");
-  graph.connect(anchors, "out", drop, "in");
+  graph.connect(anchors, "out", bundling, "in");
+  graph.connect(bundling, "out", drop, "in");
   graph.connect(strandU, "out", copies, "source");
   graph.connect(drop, "out", copies, "target");
   graph.connect(copies, "out", cableId, "in");
