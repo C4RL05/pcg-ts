@@ -132,6 +132,31 @@ export const SECTIONS: readonly Section[] = [
   },
 ];
 
+/**
+ * Numbers that change how an asset's GEOMETRY IS BUILT rather than where
+ * the graph puts it. They live apart from RigParams because they never
+ * reach the graph: turning one rebuilds the asset map and re-instances
+ * the meshes, and the cook is untouched.
+ */
+export type DisplayKey = "linkWidth" | "linkThickness";
+
+export interface DisplaySliderSpec {
+  key: DisplayKey;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+}
+
+export const DISPLAY_SLIDERS: readonly DisplaySliderSpec[] = [
+  // Both are fractions of a link's LENGTH, which is itself set by the
+  // chain segment it spans — so a link keeps its proportions whatever
+  // the chain length or link count.
+  { key: "linkWidth", label: "link width", min: 0.2, max: 1, step: 0.02 },
+  { key: "linkThickness", label: "link thickness", min: 0.01, max: 0.2, step: 0.005 },
+];
+
 /** Group visibility labels, in draw order. */
 export const GROUP_LABEL: Record<RigGroup, string> = {
   chains: "chains",
@@ -148,6 +173,7 @@ export interface PanelView {
   wireframe: boolean;
   grid: boolean;
   visible: Record<RigGroup, boolean>;
+  display: Record<DisplayKey, number>;
   cooking: boolean;
   fps: string;
   /** Instances per group, plus `spinePoints`. */
@@ -170,6 +196,7 @@ export interface PanelHost {
   setWireframe(on: boolean): void;
   setGrid(on: boolean): void;
   setVisible(group: RigGroup, on: boolean): void;
+  setDisplayNumber(key: DisplayKey, value: number): void;
 }
 
 /** The panel assigns `publish` on mount; the host calls it to update. */

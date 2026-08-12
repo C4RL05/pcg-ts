@@ -52,7 +52,14 @@ import {
   type RigParams,
   type RigResult,
 } from "./rig.js";
-import type { EnumParam, NumericParam, PanelBridge, PanelView, Shading } from "./view.js";
+import type {
+  DisplayKey,
+  EnumParam,
+  NumericParam,
+  PanelBridge,
+  PanelView,
+  Shading,
+} from "./view.js";
 
 // -- scene ------------------------------------------------------------------
 
@@ -139,10 +146,29 @@ class StadiumCurve extends Curve<Vector3> {
   }
 }
 
-/** Width of a chain link across its short axis, as a fraction of length. */
-const LINK_WIDTH = 0.62;
-/** Section radius of the bar the link is bent from. */
-const LINK_THICKNESS = 0.085;
+/**
+ * Link proportions, live. Both are fractions of a link's LENGTH, which
+ * the graph sets from the chain segment it spans, so a link keeps its
+ * shape whatever the chain length or link count.
+ */
+const display: Record<DisplayKey, number> = { linkWidth: 0.62, linkThickness: 0.085 };
+
+/** Build the link outline and sweep a tube around it. */
+function buildChainLink(): BufferGeometry {
+  const width = display.linkWidth;
+  // The hole closes once the section is as fat as the cap, and past that
+  // the tube turns itself inside out. Clamped rather than left to the
+  // slider, because the two ranges are independent and their product is
+  // what has to stay sane.
+  const thickness = Math.min(display.linkThickness, width * 0.42);
+  return new TubeGeometry(
+    new StadiumCurve(Math.max(0, (1 - width) / 2), width / 2),
+    26,
+    thickness,
+    5,
+    true,
+  );
+}
 
 const GEOMETRY: Record<string, BufferGeometry> = {
   tube: new CylinderGeometry(1, 1, 1, 8),
@@ -151,15 +177,10 @@ const GEOMETRY: Record<string, BufferGeometry> = {
   panel: new BoxGeometry(0.42, 0.3, 0.66),
   clamp: new CylinderGeometry(0.32, 0.32, 0.28, 12).rotateX(Math.PI / 2),
   // An oblong link of unit LENGTH along Y, so scaling it by a chain
-  // segment's length makes it span exactly that segment. The cap radius
-  // is half the width, and the straight run is what is left over.
-  chainLink: new TubeGeometry(
-    new StadiumCurve(Math.max(0, (1 - LINK_WIDTH) / 2), LINK_WIDTH / 2),
-    26,
-    LINK_THICKNESS,
-    5,
-    true,
-  ),
+  // segment's length makes it span exactly that segment. Rebuilt when
+  // its proportions change, which is why it is the one entry here that
+  // is not a constant.
+  chainLink: buildChainLink(),
 };
 
 /** Flat-mode colour per asset id — the only thing telling them apart. */
@@ -226,6 +247,7 @@ function view(): PanelView {
     wireframe,
     grid: grid.visible,
     visible: { ...visible },
+    display: { ...display },
     cooking,
     fps: fpsText,
     counts,
@@ -343,6 +365,17 @@ const host = {
     rebuildMeshes();
     publish();
   },
+  setDisplayNumber(key: DisplayKey, value: number) {
+    display[key] = value;
+    // Drop the meshes BEFORE disposing the geometry they were sharing:
+    // toInstancedMeshes shares geometry by reference and never disposes
+    // it, so the host owns this one and has to free the old shape itself.
+    clearMeshes();
+    GEOMETRY.chainLink.dispose();
+    GEOMETRY.chainLink = buildChainLink();
+    rebuildMeshes();
+    publish();
+  },
 };
 
 const target = document.getElementById("panel");
@@ -358,6 +391,7 @@ declare global {
     __rigChrome?: (show: boolean) => void;
     __rigView?: (name: string) => void;
     __rigSet?: (patch: Partial<RigParams>) => void;
+    __rigDisplay?: (patch: Partial<Record<DisplayKey, number>>) => void;
   }
 }
 window.__rigReady = () => !cooking && lastResult !== undefined;
@@ -366,6 +400,12 @@ window.__rigReady = () => !cooking && lastResult !== undefined;
  * time; this is for scripted comparisons, where the whole point is that
  * two frames differ by exactly the fields named here and nothing else.
  */
+/** The display-side twin of __rigSet: rebuilds geometry, never cooks. */
+window.__rigDisplay = (patch: Partial<Record<DisplayKey, number>>) => {
+  for (const [key, value] of Object.entries(patch)) {
+    if (typeof value === "number") host.setDisplayNumber(key as DisplayKey, value);
+  }
+};
 window.__rigSet = (patch: Partial<RigParams>) => {
   params = { ...params, ...patch, weights: { ...params.weights, ...(patch.weights ?? {}) } };
   rebuildGraph();

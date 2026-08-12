@@ -13,6 +13,7 @@
   import PanelShell from "../shared/PanelShell.svelte";
   import { PART_KINDS, RIG_GROUPS, type PartKind, type RigGroup, type RigParams } from "./rig.js";
   import {
+    DISPLAY_SLIDERS,
     GROUP_LABEL,
     SECTIONS,
     SHADING_LABEL,
@@ -62,6 +63,7 @@
   let shading = $state<Shading>(initialView.shading);
   let wireframe = $state(initialView.wireframe);
   let grid = $state(initialView.grid);
+  let display = $state<Record<DisplayKey, number>>({ ...initialView.display });
   let visible = $state<Record<RigGroup, boolean>>({ ...initialView.visible });
 
   /** Previous snapshot, for the host-changed diff. Never read in markup. */
@@ -84,6 +86,9 @@
       if (v.params.weights[kind] !== last.params.weights[kind]) {
         params.weights[kind] = v.params.weights[kind];
       }
+    }
+    for (const spec of DISPLAY_SLIDERS) {
+      if (v.display[spec.key] !== last.display[spec.key]) display[spec.key] = v.display[spec.key];
     }
     if (v.shading !== last.shading) shading = v.shading;
     if (v.wireframe !== last.wireframe) wireframe = v.wireframe;
@@ -180,6 +185,14 @@
     wireframe = on;
     host.setWireframe(on);
   }
+  /** Geometry proportions: no drag phase to coalesce, so commit live. */
+  function applyDisplay(spec: DisplaySliderSpec, raw: string): void {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    display[spec.key] = value;
+    host.setDisplayNumber(spec.key, value);
+  }
+
   function applyGrid(on: boolean): void {
     grid = on;
     host.setGrid(on);
@@ -307,6 +320,20 @@
         <span>grid</span>
       </label>
     </div>
+
+    {#each DISPLAY_SLIDERS as spec (spec.key)}
+      <label class="row">
+        <span>{spec.label}</span>
+        <input
+          type="range"
+          min={spec.min}
+          max={spec.max}
+          step={spec.step}
+          value={display[spec.key]}
+          oninput={(e) => applyDisplay(spec, e.currentTarget.value)} />
+        <em>{display[spec.key].toFixed(spec.step < 0.01 ? 3 : 2)}{spec.unit ?? ""}</em>
+      </label>
+    {/each}
 
     <div class="row stack">
       <span>show</span>
