@@ -242,6 +242,7 @@ const visible: Record<RigGroup, boolean> = {
   truss: true,
   braces: true,
   frames: true,
+  wraps: true,
   parts: true,
   danglers: true,
   drapes: true,

@@ -34,6 +34,7 @@ import {
   floor,
   fraction,
   hashCombine,
+  hashFloat,
   index,
   jitterPoints,
   lerp,
@@ -131,6 +132,21 @@ export interface RigParams {
   /** Links per chain. Each link is sized to its own segment, so this
    *  sets how fine the chain is rather than how long. */
   chainLinks: number;
+  // cables wrapped around the truss
+  /** How many cables snake along the truss. 0 leaves it bare. */
+  wrapCount: number;
+  /** Points along one wrap. A spiral with too few reads as a polygon. */
+  wrapSegments: number;
+  /** Radius of the tightest wrap, as a multiple of the corner radius. */
+  wrapRadius: number;
+  /** How much looser the loosest wrap is than the tightest. */
+  wrapSlack: number;
+  /** Fewest and most turns a wrap makes over the whole run. */
+  wrapTurnsMin: number;
+  wrapTurnsMax: number;
+  /** Noise pushed into the radius, in metres. This is the mess. */
+  wrapWobble: number;
+  wrapVariant: number;
   // cables
   danglerCount: number;
   /**
@@ -199,6 +215,14 @@ export const DEFAULT_PARAMS: RigParams = {
   chainCount: 7,
   ceilingHeight: 13,
   chainLinks: 34,
+  wrapCount: 16,
+  wrapSegments: 150,
+  wrapRadius: 1.1,
+  wrapSlack: 0.55,
+  wrapTurnsMin: 0.4,
+  wrapTurnsMax: 3.5,
+  wrapWobble: 0.14,
+  wrapVariant: 0,
   danglerCount: 200,
   danglerBundle: 0.8,
   danglerBundleFreq: 7,
@@ -451,6 +475,7 @@ export function buildRigGraph(params: RigParams): Graph {
   // needs at least 2 samples to still be a path and throws otherwise, so
   // "0 danglers" has to mean no branch, not a branch with 0 in it. The
   // output simply is not declared, and cookRig tolerates that.
+  if (params.wrapCount >= 1) buildWraps(graph, params, spine);
   if (params.chainCount >= 2) buildChains(graph, params, spine);
   if (params.danglerCount >= 2) buildDanglers(graph, params, spine);
   if (params.drapeCount >= 3) buildDrapes(graph, params, spine);
@@ -596,6 +621,77 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
     graph.connect(solid, "out", spawn, "in");
     graph.output(spawn, "instances", "frames");
   }
+}
+
+/**
+ * Cables snaking along the truss, each orbiting it as it goes.
+ *
+ * A wrap is the spine curve again, displaced by
+ * `r(u) * (cos t(u) * curveNormal + sin t(u) * curveBinormal)` — the
+ * same move the truss chords make, except the angle ADVANCES with `u`
+ * instead of holding still, which turns a parallel chord into a helix.
+ * Per cable, three numbers decide the character and all three are drawn
+ * in TypeScript rather than as fields, because they are constant along
+ * one cable: where it starts, how many turns it makes over the run, and
+ * how far out it rides. A cable at 0.4 turns lies almost straight along
+ * a face; one at 5 winds tightly round and round.
+ *
+ * The mess is a noise pushed into the RADIUS rather than into the
+ * position. Displacing position moves a cable off the structure in a
+ * way that reads as floating; varying the radius makes it lift off the
+ * truss and settle back onto it, which is what a real cable does when
+ * it is neither tied down nor hanging free.
+ */
+function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
+  const count = Math.max(1, Math.round(params.wrapCount));
+  const h = trussCornerRadius(params);
+  const cells = graph.add(pathResample, {
+    mode: "count",
+    count: Math.max(2, Math.round(params.wrapSegments)),
+  });
+  const frame = graph.add(writeCurveFrame, {});
+  graph.connect(spine, "out", cells, "in");
+  graph.connect(cells, "out", frame, "in");
+
+  const N = attribute("curveNormal", 3);
+  const B = attribute("curveBinormal", 3);
+  const u = attribute("curveU", 1);
+  const merged = graph.add(mergePoints);
+
+  for (let c = 0; c < count; c++) {
+    const salt = hashCombine(hashCombine(params.seed, 811), c + Math.round(params.wrapVariant) * 977);
+    const phase = hashFloat(salt) * Math.PI * 2;
+    const turns =
+      params.wrapTurnsMin +
+      hashFloat(hashCombine(salt, 1)) * (params.wrapTurnsMax - params.wrapTurnsMin);
+    // Squared, so most cables hug the truss and a few swing wide —
+    // uniform slack spreads them into an even shell instead of a tangle.
+    const spread = hashFloat(hashCombine(salt, 2)) ** 2;
+    const base = h * (params.wrapRadius + spread * params.wrapSlack);
+    const theta = add(phase, mul(turns * Math.PI * 2, u));
+    const radius = add(
+      base,
+      mul(
+        params.wrapWobble,
+        fbm(perlinNoise, {
+          seed: hashCombine(salt, 3),
+          frequency: 0.35,
+          octaves: 2,
+        }),
+      ),
+    );
+    const move = graph.add(transformPoints, {
+      translate: add(mul(mul(radius, cos(theta)), N), mul(mul(radius, sin(theta)), B)),
+    });
+    const solid = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius });
+    graph.connect(frame, "out", move, "in");
+    graph.connect(move, "out", solid, "in");
+    graph.connect(solid, "out", merged, "in");
+  }
+
+  const spawn = graph.add(spawnInstances, { assetId: "tube" });
+  graph.connect(merged, "out", spawn, "in");
+  graph.output(spawn, "instances", "wraps");
 }
 
 /**
@@ -936,7 +1032,7 @@ export interface RigResult {
 }
 
 /** The graph's output names that carry instances, in draw order. */
-export const RIG_GROUPS = ["chains", "truss", "braces", "frames", "parts", "danglers", "drapes"] as const;
+export const RIG_GROUPS = ["chains", "truss", "braces", "frames", "wraps", "parts", "danglers", "drapes"] as const;
 export type RigGroup = (typeof RIG_GROUPS)[number];
 
 /** Cook a rig graph and collect its batches by group. */

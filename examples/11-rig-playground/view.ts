@@ -108,6 +108,19 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
+    title: "wraps",
+    sliders: [
+      { key: "wrapCount", label: "cables", min: 0, max: 120, step: 1 },
+      { key: "wrapRadius", label: "tightest", min: 0.6, max: 3, step: 0.05, unit: "×corner" },
+      { key: "wrapSlack", label: "loosest extra", min: 0, max: 6, step: 0.1, unit: "×corner" },
+      { key: "wrapTurnsMin", label: "turns min", min: 0, max: 8, step: 0.1 },
+      { key: "wrapTurnsMax", label: "turns max", min: 0, max: 20, step: 0.5 },
+      { key: "wrapWobble", label: "wobble", min: 0, max: 2, step: 0.05, unit: "m" },
+      { key: "wrapSegments", label: "wrap segments", min: 8, max: 400, step: 2 },
+      { key: "wrapVariant", label: "wrap variant", min: 0, max: 20, step: 1 },
+    ],
+  },
+  {
     title: "cables",
     selects: [
       {
@@ -173,6 +186,7 @@ export const GROUP_LABEL: Record<RigGroup, string> = {
   truss: "chords",
   braces: "braces",
   frames: "frames",
+  wraps: "wraps",
   parts: "components",
   danglers: "danglers",
   drapes: "drapes",
