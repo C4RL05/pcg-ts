@@ -154,9 +154,15 @@ class StadiumCurve extends Curve<Vector3> {
  */
 const display: Record<DisplayKey, number> = { linkWidth: 0.62, linkThickness: 0.085 };
 
-/** A hoop clearing the truss's corners, which sit at half its diagonal. */
-function buildClamp(trussWidth: number): BufferGeometry {
-  return new TorusGeometry(((trussWidth / 2) * Math.SQRT2) * 1.18, 0.055, 5, 14);
+/**
+ * A collar gripping ONE chord. It was briefly a hoop around the whole
+ * section, which was right while components sat on the truss axis and
+ * wrong the moment they moved out to the chords — an off-centre hoop
+ * encircles nothing. Sized from the chord it clamps, and its axis is +Z,
+ * which is already the direction a chord runs, so it needs no rotation.
+ */
+function buildClamp(chordRadius: number): BufferGeometry {
+  return new TorusGeometry(chordRadius * 2.1, chordRadius * 0.8, 5, 12);
 }
 
 /** Build the link outline and sweep a tube around it. */
@@ -181,12 +187,9 @@ const GEOMETRY: Record<string, BufferGeometry> = {
   rod: new CylinderGeometry(0.045, 0.03, 1.6, 6).translate(0, 0.8, 0),
   bar: new BoxGeometry(0.1, 0.17, 1.5),
   panel: new BoxGeometry(0.42, 0.3, 0.66),
-  // A hoop that encircles the whole truss section rather than a collar
-  // gripping a pipe: the spine is a box now, and a disc sized for the
-  // old tube just floated inside it collaring nothing. A torus is built
-  // around +Z, which is already the axis the components run along, so it
-  // needs no rotation — and it is rebuilt when the truss changes width.
-  clamp: buildClamp(DEFAULT_PARAMS.trussWidth),
+  // A collar around one chord — see buildClamp for why it tracks the
+  // chord rather than the section.
+  clamp: buildClamp(DEFAULT_PARAMS.trussChord),
   // An oblong link of unit LENGTH along Y, so scaling it by a chain
   // segment's length makes it span exactly that segment. Rebuilt when
   // its proportions change, which is why it is the one entry here that
@@ -293,18 +296,18 @@ function clearMeshes(): void {
 }
 
 /** Rebuild the scene objects from the last cook. No cooking happens here. */
-/** Truss width the current clamp hoop was built for. */
-let clampWidth = DEFAULT_PARAMS.trussWidth;
+/** Chord radius the current clamp collar was built for. */
+let clampChord = DEFAULT_PARAMS.trussChord;
 
 function rebuildMeshes(): void {
   clearMeshes();
   // After clearMeshes, never before: the meshes were sharing this buffer
   // and toInstancedMeshes never disposes geometry, so it is the host's to
   // free and only once nothing is drawing it.
-  if (clampWidth !== params.trussWidth) {
-    clampWidth = params.trussWidth;
+  if (clampChord !== params.trussChord) {
+    clampChord = params.trussChord;
     GEOMETRY.clamp.dispose();
-    GEOMETRY.clamp = buildClamp(clampWidth);
+    GEOMETRY.clamp = buildClamp(clampChord);
   }
   if (!lastResult) return;
   const assets = buildAssets();

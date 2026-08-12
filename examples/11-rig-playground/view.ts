@@ -94,6 +94,7 @@ export const SECTIONS: readonly Section[] = [
       { key: "clusterThreshold", label: "cluster cut", min: 0, max: 1, step: 0.01 },
       { key: "radialSpread", label: "radial fan", min: 0, max: 1, step: 0.02, unit: "turn" },
       { key: "scatterJitter", label: "scatter", min: 0, max: 4, step: 0.05, unit: "×gap" },
+      { key: "partMount", label: "mount to chord", min: 0, max: 1.4, step: 0.05 },
       { key: "partSize", label: "size", min: 0.2, max: 3, step: 0.05, unit: "x" },
       { key: "sizeJitter", label: "size jitter", min: 0, max: 0.9, step: 0.05 },
     ],

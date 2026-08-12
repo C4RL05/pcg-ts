@@ -116,6 +116,11 @@ export interface RigParams {
   radialSpread: number;
   /** Scatter off the even resample, as a fraction of the sample spacing. */
   scatterJitter: number;
+  /**
+   * How far out toward a chord each component is mounted, as a fraction
+   * of the corner radius. 0 leaves everything on the truss axis.
+   */
+  partMount: number;
   partSize: number;
   sizeJitter: number;
   // suspension
@@ -188,6 +193,7 @@ export const DEFAULT_PARAMS: RigParams = {
   clusterThreshold: 0.46,
   radialSpread: 1,
   scatterJitter: 0.5,
+  partMount: 1,
   partSize: 1,
   sizeJitter: 0.45,
   chainCount: 7,
@@ -221,6 +227,16 @@ export const DEFAULT_PARAMS: RigParams = {
  */
 function noiseSeed(params: RigParams, salt: number, variant: number): number {
   return hashCombine(params.seed, hashCombine(salt, Math.round(variant)));
+}
+
+/**
+ * Distance from the truss axis out to a chord. The corners sit at 45,
+ * 135, 225 and 315 degrees, so it is half the DIAGONAL of the section
+ * and not half the side. Shared, because the truss and anything mounted
+ * to it disagreeing by a hair puts every fixture inside the tube.
+ */
+function trussCornerRadius(params: RigParams): number {
+  return (params.trussWidth / 2) * Math.SQRT2;
 }
 
 /** Corners the wander is built from, before the arc-length evening. */
@@ -362,7 +378,39 @@ export function buildRigGraph(params: RigParams): Graph {
   // angle `a` in the plane perpendicular to the tangent. A constant
   // world up cannot express it, which is the whole reason `up` is
   // field-capable and writeCurveFrame exists.
-  const angle = mul(randomField("radial"), Math.PI * 2 * params.radialSpread);
+  // The fan angle is STORED before anything moves, and read back from
+  // the attribute afterwards. randomField keys on point IDENTITY — the
+  // stored position bits together with the seed — so drawing it a second
+  // time AFTER the mount below has moved the point yields a DIFFERENT
+  // number, and the chord a fixture sits on would disagree with the way
+  // it points. One draw, one column, read twice.
+  const angleAttr = graph.add(setAttribute, {
+    name: "radialAngle",
+    domain: "point",
+    type: "f32",
+    tupleSize: 1,
+    value: mul(randomField("radial"), Math.PI * 2 * params.radialSpread),
+  });
+  const angle = attribute("radialAngle", 1);
+
+  // Mount to the nearest CHORD rather than to the axis: snap the fan
+  // angle to the closest corner and step out there. The fixture still
+  // points along its own fan angle, so it fans as before — it just
+  // leaves from the tube it would really be clamped to.
+  const mount = graph.add(transformPoints, {
+    translate: (() => {
+      const reach = trussCornerRadius(params) * params.partMount;
+      // round(x) as floor(x + 0.5); the corners are a quarter turn apart
+      // starting at an eighth.
+      const k = floor(add(div(sub(angle, Math.PI / 4), Math.PI / 2), 0.5));
+      const corner = add(mul(Math.PI / 2, k), Math.PI / 4);
+      return add(
+        mul(mul(reach, cos(corner)), attribute("curveNormal", 3)),
+        mul(mul(reach, sin(corner)), attribute("curveBinormal", 3)),
+      );
+    })(),
+  });
+
   const orient = graph.add(orientAlongVector, {
     direction: attribute("tangent", 3),
     up: add(
@@ -390,7 +438,9 @@ export function buildRigGraph(params: RigParams): Graph {
   graph.connect(frame, "out", density, "in");
   graph.connect(density, "out", cluster, "in");
   graph.connect(cluster, "out", scatter, "in");
-  graph.connect(scatter, "out", part, "in");
+  graph.connect(scatter, "out", angleAttr, "in");
+  graph.connect(angleAttr, "out", mount, "in");
+  graph.connect(mount, "out", part, "in");
   graph.connect(part, "out", orient, "in");
   graph.connect(orient, "out", size, "in");
   graph.connect(size, "out", partSpawn, "in");
@@ -434,7 +484,7 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
   const stations = Math.max(2, Math.round(params.trussStations));
   // Corners sit at 45, 135, 225 and 315 degrees, so the distance from
   // the axis is half the DIAGONAL, not half the side.
-  const h = (params.trussWidth / 2) * Math.SQRT2;
+  const h = trussCornerRadius(params);
   const cells = graph.add(pathResample, { mode: "count", count: stations });
   const frame = graph.add(writeCurveFrame, {});
   graph.connect(spine, "out", cells, "in");
