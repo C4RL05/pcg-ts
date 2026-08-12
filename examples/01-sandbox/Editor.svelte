@@ -10,11 +10,11 @@
    */
   import { onMount, tick, untrack } from "svelte";
   import Canvas from "./Canvas.svelte";
+  import Details from "./Details.svelte";
   import Inspector from "./Inspector.svelte";
   import Modal from "./Modal.svelte";
   import Palette from "./Palette.svelte";
   import Toolbar from "./Toolbar.svelte";
-  import Knobs from "./Knobs.svelte";
   import { narrowScreen } from "../shared/mobile.js";
   import {
     knobValues,
@@ -595,7 +595,7 @@
         onDeleteNode={deleteNode}
       />
     </div>
-    <Knobs
+    <Details
       {controller}
       rev={paramsRev}
       spec={panelSpec}
