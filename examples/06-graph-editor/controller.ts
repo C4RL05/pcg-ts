@@ -38,6 +38,7 @@ import {
   type SerializedNode,
   type SerializedSubgraph,
 } from "pcg-ts";
+import type { Knob } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
 import {
@@ -283,6 +284,40 @@ export class EditorController {
     });
   }
 
+  /**
+   * Every exposed param of every subgraph node, in node insertion order —
+   * the graph's own knobs, which is what a curated panel is built from.
+   * Standard nodes are deliberately absent: their params are the wiring,
+   * while an exposed param is something a primitive's author decided was
+   * worth turning.
+   */
+  knobs(): Knob[] {
+    const out: Knob[] = [];
+    for (const n of this.mirror.describe().nodes) {
+      const view = this.subgraphs.get(n.id);
+      if (view === undefined) continue;
+      let rec: Readonly<Record<string, unknown>>;
+      try {
+        rec = this.mirror.getParams({ id: n.id } as NodeHandle<Record<string, unknown>>);
+      } catch {
+        continue; // node vanished between describe() and read
+      }
+      for (const p of view.params) {
+        const value = rec[p.name];
+        out.push({
+          key: `${n.id}.${p.name}`,
+          node: n.id,
+          nodeLabel: view.ref ?? "",
+          name: p.name,
+          schema: p.schema,
+          value: copyPlain(value),
+          isField: isField(value),
+        });
+      }
+    }
+    return out;
+  }
+
   /** Set a plain (non-field) param on the live graph. */
   setPlainParam(id: string, key: string, value: unknown): void {
     try {
@@ -359,7 +394,15 @@ export class EditorController {
         const view = this.addImportedNode(mirror, sn, subgraphs);
         pins.set(sn.id, view);
         const copy = copyPinViews(view);
-        nodes.push({ id: sn.id, type: sn.type, x: 0, y: 0, inputs: copy.inputs, outputs: copy.outputs });
+        nodes.push({
+          id: sn.id,
+          type: sn.type,
+          ...(sn.ref !== undefined ? { label: sn.ref.name } : {}),
+          x: 0,
+          y: 0,
+          inputs: copy.inputs,
+          outputs: copy.outputs,
+        });
       }
       for (const c of json.connections ?? []) {
         mirror.connect({ id: c.from[0] }, c.from[1], { id: c.to[0] }, c.to[1]);

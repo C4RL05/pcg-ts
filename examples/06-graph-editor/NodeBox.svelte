@@ -49,7 +49,7 @@
     }}
   />
   <line class="sep" x1="0" y1={HEADER_H} x2={NODE_W} y2={HEADER_H} />
-  <text class="title" x="9" y="13">{node.type}</text>
+  <text class="title" x="9" y="13">{node.label ?? node.type}</text>
   <text class="nodeid" x="9" y="25">{node.id}</text>
   <text
     class="close"

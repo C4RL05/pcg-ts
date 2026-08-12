@@ -26,15 +26,29 @@ export type ControlValue =
   | number
   | string
   | boolean
+  | readonly number[]
   | Record<string, number>
   | Record<string, boolean>;
 
-/** Keys of `P` whose value type is assignable to `T`. */
-type KeysOfType<P, T> = { [K in keyof P]-?: P[K] extends T ? K : never }[keyof P] & string;
+/**
+ * Keys of `P` whose value type is assignable to `T`.
+ *
+ * An open record (`Record<string, ControlValue>`, which is what a panel
+ * built from a graph's own params at runtime has to be) would filter to
+ * `never`, because its one key type maps to the whole union. Detect that
+ * case — `string extends keyof P` holds only for a string index
+ * signature — and let any key through. A panel typed against a real
+ * params interface keeps the precise union, and with it the check that a
+ * slider is not pointed at a string.
+ */
+type KeysOfType<P, T> = string extends keyof P
+  ? string
+  : { [K in keyof P]-?: P[K] extends T ? K : never }[keyof P] & string;
 
 export type NumberKey<P> = KeysOfType<P, number>;
 export type ChoiceKey<P> = KeysOfType<P, string>;
 export type FlagKey<P> = KeysOfType<P, boolean>;
+export type VectorKey<P> = KeysOfType<P, readonly number[]>;
 export type NumberMapKey<P> = KeysOfType<P, Record<string, number>>;
 export type FlagMapKey<P> = KeysOfType<P, Record<string, boolean>>;
 
@@ -53,6 +67,40 @@ export interface SliderControl<P> {
    * it on for knobs whose effect is cheap enough to follow the thumb.
    */
   live?: boolean;
+}
+
+/**
+ * A single numeric box. The unbounded sibling of {@link SliderControl},
+ * and the one a schema-derived panel reaches for most: of the 126 params
+ * the shipped primitives expose, seven declare both a min and a max, so
+ * "drag between two ends" is the exception. Supplying a range in a panel
+ * spec is what promotes one to a slider.
+ */
+export interface NumberControl<P> {
+  kind: "number";
+  key: NumberKey<P>;
+  label: string;
+  min?: number;
+  max?: number;
+  /** Absent means "any" — a float box with no quantisation. */
+  step?: number;
+  unit?: string;
+}
+
+export interface TextControl<P> {
+  kind: "text";
+  key: ChoiceKey<P>;
+  label: string;
+}
+
+/** 2–4 numeric components living in one array-valued key (a vec3 param). */
+export interface VectorControl<P> {
+  kind: "vector";
+  key: VectorKey<P>;
+  label: string;
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 export interface SelectControl<P> {
@@ -99,6 +147,9 @@ export interface NumberGridControl<P> {
 
 export type Control<P> =
   | SliderControl<P>
+  | NumberControl<P>
+  | TextControl<P>
+  | VectorControl<P>
   | SelectControl<P>
   | FlagsControl<P>
   | FlagGridControl<P>
@@ -122,6 +173,15 @@ export interface ControlSection<P> {
  */
 export type ControlCommit<P> =
   | { kind: "slider"; control: SliderControl<P>; key: NumberKey<P>; value: number }
+  | { kind: "number"; control: NumberControl<P>; key: NumberKey<P>; value: number }
+  | { kind: "text"; control: TextControl<P>; key: ChoiceKey<P>; value: string }
+  | {
+      kind: "vector";
+      control: VectorControl<P>;
+      key: VectorKey<P>;
+      /** The whole vector, not the edited component. */
+      value: readonly number[];
+    }
   | { kind: "select"; control: SelectControl<P>; key: ChoiceKey<P>; value: string }
   | { kind: "flag"; control: FlagsControl<P>; key: FlagKey<P>; value: boolean }
   | {
@@ -158,11 +218,11 @@ export function applyCommit<P extends Record<string, unknown>>(
   record[commit.key] = commit.value;
 }
 
-/** Shallow copy, one level into the record-valued keys. */
+/** Shallow copy, one level into the record- and array-valued keys. */
 export function snapshotValues<P extends Record<string, unknown>>(values: P): P {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(values)) {
-    out[key] = isRecord(value) ? { ...value } : value;
+    out[key] = Array.isArray(value) ? [...value] : isRecord(value) ? { ...value } : value;
   }
   return out as P;
 }
@@ -188,7 +248,17 @@ export function adoptChanged<P extends Record<string, unknown>>(
   const local = values as Record<string, unknown>;
   const before = previous as Record<string, unknown>;
   for (const [key, value] of Object.entries(next)) {
-    if (isRecord(value)) {
+    if (Array.isArray(value)) {
+      // Compared elementwise: a host that rebuilds its vectors every
+      // publish hands over a fresh array each time, and identity would
+      // read every one of them as a change and stomp what the user typed.
+      const seen = before[key];
+      const same =
+        Array.isArray(seen) &&
+        seen.length === value.length &&
+        value.every((v, i) => Object.is(v, seen[i]));
+      if (!same) local[key] = [...value];
+    } else if (isRecord(value)) {
       // A grid's record is compared per item, so a host change to one
       // member does not drag its siblings back from under the user.
       const current = local[key];

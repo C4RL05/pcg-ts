@@ -28,9 +28,12 @@
     type FlagGridControl,
     type FlagsControl,
     type FlagKey,
+    type NumberControl,
     type NumberGridControl,
     type SelectControl,
     type SliderControl,
+    type TextControl,
+    type VectorControl,
   } from "./controls.js";
 
   let {
@@ -74,6 +77,8 @@
     isRecord(values[key]) ? (values[key] as Record<string, number>) : {};
   const asFlags = (key: string): Record<string, boolean> =>
     isRecord(values[key]) ? (values[key] as Record<string, boolean>) : {};
+  const asVector = (key: string): number[] =>
+    Array.isArray(values[key]) ? (values[key] as number[]) : [];
 
   /**
    * A drag moves the readout; the host hears about it on release, so one
@@ -86,6 +91,42 @@
     const commit: ControlCommit<P> = { kind: "slider", control, key: control.key, value };
     onInput(commit);
     if (settled || control.live === true) onCommit(commit);
+  }
+
+  function typeNumber(control: NumberControl<P>, raw: string): void {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    const value = clampToRange(
+      parsed,
+      control.min ?? -Infinity,
+      control.max ?? Infinity,
+      control.step ?? 0,
+    );
+    const commit: ControlCommit<P> = { kind: "number", control, key: control.key, value };
+    onInput(commit);
+    onCommit(commit);
+  }
+
+  function typeText(control: TextControl<P>, value: string): void {
+    const commit: ControlCommit<P> = { kind: "text", control, key: control.key, value };
+    onInput(commit);
+    onCommit(commit);
+  }
+
+  /** One component changes; the commit carries the whole vector. */
+  function typeVector(control: VectorControl<P>, index: number, raw: string): void {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    const value = [...asVector(control.key)];
+    value[index] = clampToRange(
+      parsed,
+      control.min ?? -Infinity,
+      control.max ?? Infinity,
+      control.step ?? 0,
+    );
+    const commit: ControlCommit<P> = { kind: "vector", control, key: control.key, value };
+    onInput(commit);
+    onCommit(commit);
   }
 
   function choose(control: SelectControl<P>, value: string): void {
@@ -136,6 +177,13 @@
 
 {#each sections as section (section.title)}
   <div class="group" hidden={tabbed && tab !== section.title}>
+    <!-- Untabbed, the title has nowhere else to go: the tab bar is what
+         normally carries it, so without one a section would be an
+         unlabelled run of rows. A panel that wants no heading gives the
+         section an empty title. -->
+    {#if !tabbed && section.title !== ""}
+      <h2>{section.title}</h2>
+    {/if}
     {@render extra?.(section.title)}
 
     {#each section.controls as control, index (idOf(control, index))}
@@ -152,6 +200,44 @@
             onchange={(e) => slide(control, e.currentTarget.value, true)} />
           <em>{formatNumber(asNumber(control.key), control.step, control.unit)}</em>
         </label>
+      {:else if control.kind === "number"}
+        <label class="row">
+          <span>{control.label}</span>
+          <input
+            class="num"
+            type="number"
+            min={control.min}
+            max={control.max}
+            step={control.step ?? "any"}
+            value={asNumber(control.key)}
+            onchange={(e) => typeNumber(control, e.currentTarget.value)} />
+          {#if control.unit !== undefined}<em class="unit">{control.unit}</em>{/if}
+        </label>
+      {:else if control.kind === "text"}
+        <label class="row">
+          <span>{control.label}</span>
+          <input
+            class="num"
+            type="text"
+            value={asString(control.key)}
+            onchange={(e) => typeText(control, e.currentTarget.value)} />
+        </label>
+      {:else if control.kind === "vector"}
+        <div class="row">
+          <span>{control.label}</span>
+          <div class="vec">
+            {#each asVector(control.key) as component, i (i)}
+              <input
+                class="num"
+                type="number"
+                min={control.min}
+                max={control.max}
+                step={control.step ?? "any"}
+                value={component}
+                onchange={(e) => typeVector(control, i, e.currentTarget.value)} />
+            {/each}
+          </div>
+        </div>
       {:else if control.kind === "select"}
         <label class="row">
           <span>{control.label}</span>
@@ -220,6 +306,14 @@
     margin-top: 10px;
     padding-top: 8px;
     border-top: 1px solid #223047;
+  }
+  h2 {
+    margin: 0 0 4px;
+    color: #cfe0f5;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
   /* The tab bar sits directly above the groups, so the group that
      follows it drops its own rule — two lines a few pixels apart read
@@ -299,6 +393,22 @@
   }
   .num {
     font-family: ui-monospace, monospace;
+  }
+  /* A unit beside a typed box, where a slider would put its readout. It
+     is a suffix, not a value, so it does not reserve the readout column's
+     width. */
+  .row > em.unit {
+    flex: 0 0 auto;
+    text-align: left;
+  }
+  .vec {
+    display: flex;
+    flex: 1;
+    gap: 4px;
+    min-width: 0;
+  }
+  .vec .num {
+    min-width: 0;
   }
   .grid {
     margin: 6px 0 10px;

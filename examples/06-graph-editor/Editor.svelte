@@ -14,7 +14,9 @@
   import Modal from "./Modal.svelte";
   import Palette from "./Palette.svelte";
   import Toolbar from "./Toolbar.svelte";
+  import Knobs from "./Knobs.svelte";
   import { narrowScreen } from "../shared/mobile.js";
+  import { loadPanelSpec, type GraphPanelSpec } from "../shared/graphUi.js";
   import { findPreset, loadPresetText } from "../shared/presets.js";
   import type { CookStatus, EditorController } from "./controller.js";
   import { topoLayout } from "./layout.js";
@@ -28,6 +30,14 @@
 
   let { controller }: { controller: EditorController } = $props();
 
+  /**
+   * What the page opens on when the URL names nothing. A corpus graph
+   * that ships a panel spec, so the first thing on screen is a scene with
+   * knobs that turn it — the starter graph is four plain nodes and
+   * exposes none.
+   */
+  const DEFAULT_PRESET = "basics-compose-primitives";
+
   let model = $state<StructureModel>({ seed: 1, nodes: [], edges: [] });
   let selectedId = $state<string | null>(null);
   let status = $state<CookStatus | null>(null);
@@ -39,8 +49,28 @@
   let awaitingImportCook = $state(false);
   /** How the pending import got here, for its toast ("imported", a title). */
   let importLabel = $state("imported");
+  /**
+   * Why the pending import is a FALLBACK. The load that follows a bad
+   * `?graph=` publishes its own cheerful hash toast a moment later, which
+   * would bury the reason the link did not work; this makes the failure
+   * the message that survives, since it is the one worth reading.
+   */
+  let importError = $state<string | null>(null);
   /** Loaded corpus graph, or "" for the built-in starter. */
   let preset = $state("");
+  /** The loaded graph's panel spec, when it ships one. */
+  let panelSpec = $state<GraphPanelSpec | undefined>(undefined);
+  /**
+   * Bumped by anything that changes what the knobs panel should show —
+   * a different graph, a node added or deleted, a param written from
+   * either view. Both counters only ever increase, so their sum is a
+   * change signal without either having to know about the other.
+   */
+  let graphRev = $state(0);
+  const knobRev = $derived(graphRev + paramsRev);
+  const graphTitle = $derived(
+    preset === "" ? "starter graph" : (findPreset(preset)?.title ?? preset),
+  );
 
   const groups = paletteGroups();
   const selectedNode = $derived(model.nodes.find((n) => n.id === selectedId) ?? null);
@@ -95,6 +125,11 @@
       status = s;
       if (awaitingImportCook) {
         awaitingImportCook = false;
+        if (importError !== null) {
+          showToast(importError, "error");
+          importError = null;
+          return;
+        }
         const before = hashBeforeImport;
         if (before !== null) {
           showToast(
@@ -108,17 +143,24 @@
       }
     });
 
-    // A `?graph=` in the URL wins over the starter, so a link opens the
-    // sandbox on the graph it names. An unknown name says so and falls
-    // back rather than leaving the canvas empty.
+    // A `?graph=` in the URL wins, so a link opens the sandbox on the
+    // graph it names. An unknown name says so and falls back rather than
+    // leaving the canvas empty.
     const wanted = new URLSearchParams(window.location.search).get("graph");
     if (wanted !== null && wanted !== "") {
       if (findPreset(wanted) === undefined) {
-        showToast(`no graph named "${wanted}" in the corpus — opened the starter instead`, "error");
+        importError = `no graph named "${wanted}" in the corpus — opened the default instead`;
       } else {
         void openPreset(wanted, { updateUrl: false });
         return;
       }
+    }
+    // Otherwise a real graph with real knobs, not the empty-ish starter:
+    // landing on something already working is most of what makes a
+    // sandbox one. The starter stays in the picker.
+    if (findPreset(DEFAULT_PRESET) !== undefined) {
+      void openPreset(DEFAULT_PRESET, { updateUrl: false });
+      return;
     }
     loadStarter();
   });
@@ -131,6 +173,7 @@
     }
     model = res.structure;
     selectedId = null;
+    graphRev++;
   }
 
   /**
@@ -142,13 +185,16 @@
   async function openPreset(name: string, opts: { updateUrl: boolean }): Promise<void> {
     if (name === "") {
       preset = "";
+      panelSpec = undefined;
       loadStarter();
       if (opts.updateUrl) syncUrl("");
       return;
     }
     let text: string;
+    let spec: GraphPanelSpec | undefined;
     try {
       text = await loadPresetText(name);
+      spec = await loadPanelSpec(name);
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err), "error");
       return;
@@ -159,6 +205,7 @@
       return;
     }
     preset = name;
+    panelSpec = spec;
     if (opts.updateUrl) syncUrl(name);
   }
 
@@ -190,6 +237,7 @@
       outputs: res.outputs,
     });
     selectedId = id;
+    graphRev++;
     // On narrow screens the palette is a drawer covering the canvas; close
     // it after a successful add so the new node is visible. No-op on
     // desktop, where `open` has no styled effect.
@@ -238,6 +286,7 @@
     model.nodes = model.nodes.filter((n) => n.id !== id);
     model.edges = model.edges.filter((e) => e.from !== id && e.to !== id);
     if (selectedId === id) selectedId = null;
+    graphRev++;
   }
 
   function setSeed(seed: number): void {
@@ -262,6 +311,7 @@
     selectedId = null;
     importLabel = label;
     awaitingImportCook = true;
+    graphRev++;
     return null;
   }
 
@@ -274,6 +324,7 @@
     const err = applyImport(text);
     if (err !== null) return err;
     preset = "";
+    panelSpec = undefined;
     syncUrl("");
     return null;
   }
@@ -307,6 +358,15 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} />
+
+<!-- Over the viewport, not in the dock: these are the knobs of the thing
+     on screen, and the dock is about how it is wired. -->
+<Knobs
+  {controller}
+  rev={knobRev}
+  spec={panelSpec}
+  title={graphTitle}
+  onEdit={() => paramsRev++} />
 
 <div class="editor" class:collapsed={dockCollapsed}>
   <Toolbar

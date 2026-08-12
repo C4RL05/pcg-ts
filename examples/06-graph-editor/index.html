@@ -6,10 +6,12 @@
   <title>pcg-ts — 06 graph editor</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0d1117; overflow: hidden; }
-    /* Narrow screens keep one bottom sheet: the Svelte panel. The plain
-       overlay is desktop diagnostics. Breakpoint: NARROW_MEDIA_QUERY in
+    /* Narrow screens keep ONE bottom sheet, and here it is the editor
+       dock. The stats overlay is desktop diagnostics, and the knobs card
+       is a PanelShell — which becomes a second bottom sheet at this width
+       and would sit on top of the dock. Breakpoint: NARROW_MEDIA_QUERY in
        ../shared/mobile.ts. */
-    @media (max-width: 700px) { .pcg-overlay { display: none; } }
+    @media (max-width: 700px) { .pcg-overlay, .panel { display: none; } }
   </style>
 </head>
 <body>

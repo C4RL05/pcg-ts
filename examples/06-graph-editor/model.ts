@@ -18,6 +18,13 @@ export interface PinView {
 export interface NodeView {
   id: string;
   type: string;
+  /**
+   * What the box is titled with, when that differs from `type` — a
+   * subgraph node shows the primitive it references, because "subgraph"
+   * is true of every one of them and so identifies none. `type` stays the
+   * registered type name, since that is what the registry is keyed by.
+   */
+  label?: string;
   x: number;
   y: number;
   inputs: PinView[];
