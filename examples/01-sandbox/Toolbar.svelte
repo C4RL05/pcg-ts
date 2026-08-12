@@ -30,8 +30,8 @@
     onImport: () => void;
     onLayout: () => void;
     /** Which edge the dock sits on. */
-    dock: "bottom" | "left" | "right";
-    onDock: (dock: "bottom" | "left" | "right") => void;
+    dock: "bottom" | "left" | "right" | "full";
+    onDock: (dock: "bottom" | "left" | "right" | "full") => void;
     /** Frame every node in the canvas. */
     onFit: () => void;
     /** Collapse/expand the dock; wired to the title on narrow screens. */
@@ -96,13 +96,13 @@
   <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
   <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
   <span class="dock" role="group" aria-label="dock position">
-    {#each [["left", "◧"], ["bottom", "▤"], ["right", "◨"]] as [side, glyph] (side)}
+    {#each [["left", "◧"], ["bottom", "▤"], ["right", "◨"], ["full", "⛶"]] as [side, glyph] (side)}
       <button
         class="side"
         class:on={dock === side}
         aria-pressed={dock === side}
         title="dock {side}"
-        onclick={() => onDock(side as "bottom" | "left" | "right")}>{glyph}</button>
+        onclick={() => onDock(side as "bottom" | "left" | "right" | "full")}>{glyph}</button>
     {/each}
   </span>
   <button onclick={onExport} title="serializeGraph → JSON">export</button>

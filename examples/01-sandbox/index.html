@@ -12,6 +12,11 @@
        and would sit on top of the dock. Breakpoint: NARROW_MEDIA_QUERY in
        ../shared/mobile.ts. */
     @media (max-width: 700px) { .pcg-overlay, .panel { display: none; } }
+    /* Full-screen dock: the canvas is translucent so the cooked result
+       stays visible behind the nodes — and so would these two cards,
+       as unreadable ghost text. The editor sets the class. */
+    html.pcg-dock-full .pcg-overlay,
+    html.pcg-dock-full .panel { display: none; }
   </style>
 </head>
 <body>

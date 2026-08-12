@@ -12,8 +12,13 @@
        and would sit on top of the dock. Breakpoint: NARROW_MEDIA_QUERY in
        ../shared/mobile.ts. */
     @media (max-width: 700px) { .pcg-overlay, .panel { display: none; } }
+    /* Full-screen dock: the canvas is translucent so the cooked result
+       stays visible behind the nodes — and so would these two cards,
+       as unreadable ghost text. The editor sets the class. */
+    html.pcg-dock-full .pcg-overlay,
+    html.pcg-dock-full .panel { display: none; }
   </style>
-  <script type="module" crossorigin src="../assets/01-sandbox-DPWK54Ur.js"></script>
+  <script type="module" crossorigin src="../assets/01-sandbox-CShxLgry.js"></script>
   <link rel="modulepreload" crossorigin href="../assets/mobile-BAPbsnLk.js">
   <link rel="modulepreload" crossorigin href="../assets/PanelShell-C9P_2C7j.js">
   <link rel="modulepreload" crossorigin href="../assets/three.core-BdLaVEE2.js">
@@ -26,7 +31,7 @@
   <link rel="modulepreload" crossorigin href="../assets/Controls-Dk9L35Yl.js">
   <link rel="stylesheet" crossorigin href="../assets/PanelShell-CXOdxzxk.css">
   <link rel="stylesheet" crossorigin href="../assets/Controls-3QD7jnfa.css">
-  <link rel="stylesheet" crossorigin href="../assets/01-sandbox-B1I4QUVX.css">
+  <link rel="stylesheet" crossorigin href="../assets/01-sandbox-DwvJMbCc.css">
 </head>
 <body>
   <div id="editor"></div>

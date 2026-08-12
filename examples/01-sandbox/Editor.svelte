@@ -104,12 +104,12 @@
    * Which edge the dock sits on. Persisted, because where you want the
    * graph is a property of your screen rather than of the session.
    */
-  type Dock = "bottom" | "left" | "right";
+  type Dock = "bottom" | "left" | "right" | "full";
   const DOCK_KEY = "pcg-sandbox-dock";
   function readDock(): Dock {
     try {
       const v = localStorage.getItem(DOCK_KEY);
-      if (v === "left" || v === "right" || v === "bottom") return v;
+      if (v === "left" || v === "right" || v === "bottom" || v === "full") return v;
     } catch {
       // Private mode and file:// can both refuse storage; the default is fine.
     }
@@ -119,7 +119,13 @@
   /** Measured, so the insets below track a clamped CSS width exactly. */
   let dockWidth = $state(0);
   function setDock(next: Dock): void {
+    if (next === dock) return;
     dock = next;
+    // Moving the dock changes the canvas geometry completely — a bottom
+    // strip and a full screen frame nothing alike — so the view is
+    // refitted. Someone reaching for full screen is usually reaching for
+    // "show me more of this", which is what fit means.
+    frameGraph();
     try {
       localStorage.setItem(DOCK_KEY, next);
     } catch {
@@ -138,9 +144,15 @@
     const root = document.documentElement;
     root.style.setProperty("--pcg-inset-left", dock === "left" ? `${dockWidth + 12}px` : "0px");
     root.style.setProperty("--pcg-inset-right", dock === "right" ? `${dockWidth + 12}px` : "0px");
+    // Full screen hides them rather than stacking them: the canvas is
+    // translucent so the cooked result shows through, and anything else
+    // behind it shows through too — the two cards came out as ghost text
+    // under the nodes. The page's own stylesheet does the hiding.
+    root.classList.toggle("pcg-dock-full", dock === "full");
     return () => {
       root.style.removeProperty("--pcg-inset-left");
       root.style.removeProperty("--pcg-inset-right");
+      root.classList.remove("pcg-dock-full");
     };
   });
 
@@ -526,6 +538,7 @@
   class:collapsed={dockCollapsed}
   class:dock-left={dock === "left"}
   class:dock-right={dock === "right"}
+  class:dock-full={dock === "full"}
   bind:clientWidth={dockWidth}
 >
   <Toolbar
@@ -652,6 +665,42 @@
   .editor.dock-right {
     right: 12px;
     left: auto;
+  }
+  /**
+   * Full screen, for surgery on a graph too big for a strip. The chrome
+   * keeps its own solid backing while the canvas goes translucent, so the
+   * cooked result stays visible behind the nodes — losing sight of what
+   * the graph makes is the one thing a full-screen editor must not cost,
+   * since watching it react is the reason to be here at all.
+   */
+  .editor.dock-full {
+    inset: 12px;
+    /* Over the stats card and the knobs card, not under them. Raising
+       THEM instead was the first attempt and it put them on top of this
+       editor's own toolbar, palette and inspector — the chrome you are
+       in this mode to use. The result stays visible through the canvas;
+       the readouts are one dock button away. */
+    z-index: 12;
+    width: auto;
+    height: auto;
+    background: transparent;
+    border-color: transparent;
+    backdrop-filter: none;
+  }
+  .editor.dock-full .canvas-wrap {
+    background: rgba(13, 17, 23, 0.55);
+  }
+  /* The children own their own backgrounds only in this mode, and they
+     are separate components — hence :global, scoped under .dock-full so
+     it cannot leak to the other three. */
+  .editor.dock-full :global(.toolbar),
+  .editor.dock-full :global(.palette),
+  .editor.dock-full :global(.inspector) {
+    background: rgba(13, 17, 23, 0.94);
+    backdrop-filter: blur(6px);
+  }
+  .editor.dock-full :global(.toolbar) {
+    border-radius: 10px 10px 0 0;
   }
   .body {
     display: flex;
