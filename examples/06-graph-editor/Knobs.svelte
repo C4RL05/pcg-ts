@@ -149,7 +149,7 @@
       {:else}
         Derived from the graph's exposed params, grouped by the node that exposes each one.
       {/if}
-      Every edit is a <code>setParam</code> on the wrapping node, then a recook.
+      Every edit is a <code>setParam</code> on the node that holds it, then a recook.
     </p>
     <Controls
       sections={panel.sections}

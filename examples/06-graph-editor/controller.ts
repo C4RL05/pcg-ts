@@ -285,33 +285,58 @@ export class EditorController {
   }
 
   /**
-   * Every exposed param of every subgraph node, in node insertion order —
-   * the graph's own knobs, which is what a curated panel is built from.
-   * Standard nodes are deliberately absent: their params are the wiring,
-   * while an exposed param is something a primitive's author decided was
-   * worth turning.
+   * Every param of every node, in node insertion order.
+   *
+   * `exposed` separates the two kinds. A subgraph's exposed params are
+   * knobs by construction — someone decided each was worth turning and
+   * gave it a name at the primitive's level of abstraction — so a panel
+   * with nothing else to go on shows exactly those. A standard node's
+   * params are mostly wiring, and showing all of them by default would
+   * bury the handful that matter; but a panel spec naming one knows what
+   * it is asking for, so it gets it.
+   *
+   * `items` params are omitted throughout: they are runtime-injected
+   * DataItems, never serialized and never authored.
    */
   knobs(): Knob[] {
     const out: Knob[] = [];
     for (const n of this.mirror.describe().nodes) {
       const view = this.subgraphs.get(n.id);
-      if (view === undefined) continue;
       let rec: Readonly<Record<string, unknown>>;
       try {
         rec = this.mirror.getParams({ id: n.id } as NodeHandle<Record<string, unknown>>);
       } catch {
         continue; // node vanished between describe() and read
       }
-      for (const p of view.params) {
-        const value = rec[p.name];
+      let entries: { name: string; schema: ParamSchema }[];
+      if (view !== undefined) {
+        entries = view.params.map((p) => ({ name: p.name, schema: p.schema }));
+      } else {
+        // An ad-hoc def can report a type string the registry never saw;
+        // `describe()` promises no lookup will succeed.
+        const type = n.defType;
+        if (type === undefined) continue;
+        try {
+          entries = Object.entries(getNodeType(type).info.params).map(([name, schema]) => ({
+            name,
+            schema,
+          }));
+        } catch {
+          continue;
+        }
+      }
+      for (const { name, schema } of entries) {
+        if (schema.type === "items") continue;
+        const value = rec[name];
         out.push({
-          key: `${n.id}.${p.name}`,
+          key: `${n.id}.${name}`,
           node: n.id,
-          nodeLabel: view.ref ?? "",
-          name: p.name,
-          schema: p.schema,
+          nodeLabel: view?.ref ?? n.defType ?? "",
+          name,
+          schema,
           value: copyPlain(value),
           isField: isField(value),
+          exposed: view !== undefined,
         });
       }
     }

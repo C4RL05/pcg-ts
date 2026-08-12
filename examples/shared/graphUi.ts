@@ -1,11 +1,13 @@
 /// <reference types="vite/client" />
 /**
- * Turn a graph's exposed params into a control panel.
+ * Turn a graph's params into a control panel.
  *
  * A loaded graph already carries its knobs: every subgraph node exposes
  * named params with a resolved {@link ParamSchema}, and that schema says
  * enough to render a widget — type, bounds, enum values, description. So
- * the panel needs no authoring to exist at all.
+ * the panel needs no authoring to exist at all, and with none it shows
+ * exactly those. A spec may additionally name any standard node's params,
+ * which is how a graph built from plain nodes gets a panel.
  *
  * WHAT AUTHORING BUYS. Of the 126 params the shipped primitives expose,
  * seven declare both a min and a max. A panel derived from schemas alone
@@ -72,7 +74,7 @@ export function hasPanelSpec(name: string): boolean {
   return PANELS[`../graphs/panels/${name}.json`] !== undefined;
 }
 
-/** One exposed param of one subgraph node, as the controller reports it. */
+/** One param of one node, as the controller reports it. */
 export interface Knob {
   /** `"<nodeId>.<paramName>"` — unique within a graph, and the spec's handle. */
   readonly key: string;
@@ -84,6 +86,11 @@ export interface Knob {
   readonly value: unknown;
   /** Holds a Field, so no constant widget can represent it. */
   readonly isField: boolean;
+  /**
+   * A subgraph's exposed param — a knob by construction. Standard-node
+   * params are not, and appear only when a panel spec names one.
+   */
+  readonly exposed: boolean;
 }
 
 /** The flat record the renderer edits, keyed by {@link Knob.key}. */
@@ -295,6 +302,9 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
   const grouped = new Map<string, Control<KnobValues>[]>();
   const titles = new Map<string, string>();
   for (const knob of knobs) {
+    // With no spec to curate, only the params a primitive's author chose
+    // to expose. Every param of every node would bury them.
+    if (!knob.exposed) continue;
     if (!admit(knob)) continue;
     const control = controlFor(knob);
     if (control === undefined) {
