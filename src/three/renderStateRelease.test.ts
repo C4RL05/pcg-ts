@@ -118,7 +118,8 @@ describe("why materials are cloned per mesh (three keys instanced render state p
         "WGSLNodeBuilder.js",
         "buffer uniform names are no longer minted as 'NodeBuffer_' + id. If three now names " +
           "them stably, identical meshes may share programs — the leak fix still holds, but the " +
-          "per-mesh program cost analysis in PLAN.md phase 47 is stale",
+          "per-mesh program cost analysis behind it is stale (see the phase 47 commits: " +
+          "git log --grep 'phase(47)')",
       ),
     ).toContain("uniformNode.name = name ? name : 'NodeBuffer_' + uniformNode.id");
   });

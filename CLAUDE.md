@@ -118,9 +118,11 @@ Not public API:
 
 ## Unattended build protocol
 
-- `PLAN.md` is the source of truth for phases and exit criteria. Progress
-  is the git history — there is no separate tracker to update, and no
-  second place for it to disagree with what actually shipped.
+- `PLAN.md` holds what is still ahead (Backlog) and what was decided
+  against, with the measurements behind those decisions (Stretch). It is
+  no longer a build log: the phase plan it used to carry is finished, and
+  the git history is the record of what shipped — there is no separate
+  tracker to update, and no second place for it to disagree.
 - After each completed work unit: run tests, then commit
   (`phase(N): <summary>`). The commit message carries what a status entry
   used to, so write it as the record: what changed and why, not just what.
