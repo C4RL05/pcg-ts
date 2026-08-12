@@ -1,18 +1,18 @@
 <script lang="ts">
   /**
-   * The details of the loaded graph — its knobs, as a column of the editor
-   * overlay. Named for what it shows rather than for the widgets: this is
-   * the panel you read to learn what a graph is FOR, and the node
-   * inspector next to it is the one you open to edit a single node.
+   * The loaded graph at a glance — its title, what it is for, and the
+   * knobs worth turning — as a column of the editor overlay. Named for
+   * the job rather than for the widgets, because it is half prose: this
+   * is the panel you READ to learn what a graph does, and the node
+   * inspector beside it is the one you OPEN to edit a single node.
    *
-   * (`Knob` stays the word for one tunable param, in `shared/graphUi.ts`.
-   * "Detail" is a domain name in this library — point / vertex /
-   * primitive / detail — so it names a panel here and nothing else.)
+   * `Knob` stays the word for one tunable param (`shared/graphUi.ts`) —
+   * the data, not the column.
    *
-   * It used to be a
-   * floating card, which worked until the overlay went full-bleed and
-   * translucent: anything behind that canvas shows through it, and a card
-   * of controls came out as ghost text under the nodes. In the column it
+   * It used to be a floating card, which worked until the overlay went
+   * full-bleed and translucent: anything behind that canvas shows through
+   * it, and a card of controls came out as ghost text under the nodes.
+   * In the column it
    * is legible, it scrolls with its own bar, and the scene is still right
    * there behind the overlay. Rendered by the shared spec-driven
    * renderer, which is what that renderer was generalised for.
@@ -155,7 +155,7 @@
   const copyLink = (): Promise<CopyState> => copier.copy(shareUrl(patch), () => (showPatch = true));
 </script>
 
-<div class="details">
+<div class="overview">
   <h2 class="graph-title">{title}</h2>
   {#if panel.sections.length === 0}
     <p class="note">
@@ -221,7 +221,7 @@
 </div>
 
 <style>
-  .details {
+  .overview {
     flex: 0 0 296px;
     min-height: 0;
     overflow-y: auto;

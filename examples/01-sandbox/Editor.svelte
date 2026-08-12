@@ -10,9 +10,9 @@
    */
   import { onMount, tick, untrack } from "svelte";
   import Canvas from "./Canvas.svelte";
-  import Details from "./Details.svelte";
   import Inspector from "./Inspector.svelte";
   import Modal from "./Modal.svelte";
+  import Overview from "./Overview.svelte";
   import Palette from "./Palette.svelte";
   import Toolbar from "./Toolbar.svelte";
   import { narrowScreen } from "../shared/mobile.js";
@@ -595,7 +595,7 @@
         onDeleteNode={deleteNode}
       />
     </div>
-    <Details
+    <Overview
       {controller}
       rev={paramsRev}
       spec={panelSpec}
