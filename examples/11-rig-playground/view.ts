@@ -71,8 +71,16 @@ export const SECTIONS: readonly Section[] = [
       { key: "wanderFreq", label: "wander noise freq", min: 0.005, max: 0.3, step: 0.005 },
       { key: "wanderOctaves", label: "wander octaves", min: 1, max: 6, step: 1 },
       { key: "wanderVariant", label: "wander variant", min: 0, max: 20, step: 1 },
-      { key: "spineRadius", label: "radius", min: 0.04, max: 0.6, step: 0.01, unit: "m" },
       { key: "spineSamples", label: "samples", min: 20, max: 400, step: 5 },
+    ],
+  },
+  {
+    title: "truss",
+    sliders: [
+      { key: "trussWidth", label: "width", min: 0.2, max: 3, step: 0.05, unit: "m" },
+      { key: "trussStations", label: "bays", min: 2, max: 160, step: 1 },
+      { key: "trussChord", label: "chord radius", min: 0.01, max: 0.2, step: 0.005, unit: "m" },
+      { key: "trussBrace", label: "brace radius", min: 0.005, max: 0.12, step: 0.005, unit: "m" },
     ],
   },
   {
@@ -160,7 +168,8 @@ export const DISPLAY_SLIDERS: readonly DisplaySliderSpec[] = [
 /** Group visibility labels, in draw order. */
 export const GROUP_LABEL: Record<RigGroup, string> = {
   chains: "chains",
-  spine: "spine",
+  truss: "chords",
+  braces: "braces",
   parts: "components",
   danglers: "danglers",
   drapes: "drapes",

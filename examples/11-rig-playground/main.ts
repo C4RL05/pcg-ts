@@ -225,7 +225,8 @@ let error: string | undefined;
 let fpsText = "—";
 const visible: Record<RigGroup, boolean> = {
   chains: true,
-  spine: true,
+  truss: true,
+  braces: true,
   parts: true,
   danglers: true,
   drapes: true,

@@ -1,7 +1,6 @@
 /**
- * The rig graph: a spline spine, component parts scattered along it,
- * chains holding it up and cables hanging off it. One pcg-ts graph, five
- * branches, five spawners.
+ * The rig graph: a box truss along a spline, component parts scattered
+ * over it, chains holding it up and cables hanging off it.
  *
  * Kept apart from main.ts so the GENERATION reads on its own — the host
  * owns the renderer and the asset shapes and has nothing to say about
@@ -38,6 +37,7 @@ import {
   index,
   jitterPoints,
   lerp,
+  mergePoints,
   mul,
   orientAlongVector,
   pathPointAt,
@@ -55,6 +55,7 @@ import {
   transformPoints,
   vec,
   writeCurveFrame,
+  type FieldLike,
   type InstanceBatch,
   type InstancesItem,
 } from "pcg-ts";
@@ -89,8 +90,16 @@ export interface RigParams {
   wanderFreq: number;
   wanderOctaves: number;
   wanderVariant: number;
-  spineRadius: number;
   spineSamples: number;
+  // truss — the spine is a box truss, not a pipe
+  /** Side of the square section, in metres. */
+  trussWidth: number;
+  /** Bays along the spine. One station per bay boundary. */
+  trussStations: number;
+  /** Tube radius of the four corner chords. */
+  trussChord: number;
+  /** Tube radius of the diagonal bracing — thinner than the chords. */
+  trussBrace: number;
   // components
   weights: Record<PartKind, number>;
   partDensity: number;
@@ -163,8 +172,11 @@ export const DEFAULT_PARAMS: RigParams = {
   wanderFreq: 0.035,
   wanderOctaves: 3,
   wanderVariant: 0,
-  spineRadius: 0.22,
   spineSamples: 130,
+  trussWidth: 0.85,
+  trussStations: 46,
+  trussChord: 0.055,
+  trussBrace: 0.03,
   weights: { rod: 4, bar: 2, panel: 1, clamp: 2 },
   partDensity: 900,
   clusterFreq: 14,
@@ -280,18 +292,10 @@ export function buildRigGraph(params: RigParams): Graph {
   // is steep, so the spacing is evened out again before anything is
   // placed along it — otherwise everything bunches on the straight runs.
   const spine = graph.add(pathResample, { mode: "count", count: params.spineSamples });
-  const spineTube = graph.add(pathSegments, {
-    axis: "+y",
-    radius: params.spineRadius,
-    extend: params.spineRadius,
-  });
-  const spineSpawn = graph.add(spawnInstances, { assetId: "tube" });
   graph.connect(line, "out", wander, "in");
   graph.connect(wander, "out", spinePath, "in");
   graph.connect(spinePath, "out", spine, "in");
-  graph.connect(spine, "out", spineTube, "in");
-  graph.connect(spineTube, "out", spineSpawn, "in");
-  graph.output(spineSpawn, "instances", "spine");
+  buildTruss(graph, params, spine);
 
   // -- components -----------------------------------------------------
   // Dense even samples, thinned by a noise field read along the curve
@@ -401,6 +405,78 @@ export function buildRigGraph(params: RigParams): Graph {
   // The spine points, for the stats line.
   graph.output(spine, "out", "spinePoints");
   return graph;
+}
+
+/**
+ * The spine as a BOX TRUSS rather than a pipe: four chords running
+ * parallel to the curve at the corners of a square section, with thinner
+ * diagonal bracing zigzagging across each of the four faces so every bay
+ * is triangulated.
+ *
+ * Every member is the same one move — take the framed spine and push it
+ * sideways by `h * (cos a * curveNormal + sin a * curveBinormal)`, the
+ * unit vector at angle `a` in the plane perpendicular to the tangent.
+ * transformPoints preserves topology, so a displaced path is still a
+ * path and goes straight to pathSegments. This is the whole reason the
+ * frame exists: without a normal carried ALONG the curve there is no
+ * stable "corner 1" to run a chord down, and the section would spin.
+ *
+ * A chord holds its angle; a brace alternates between two adjacent
+ * corners as it advances, which is what makes the triangles. That
+ * alternation is station parity, and because parity is 0 or 1 the two
+ * angles can be reached by lerping their cosines and sines rather than
+ * by evaluating trigonometry per point.
+ */
+function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
+  const stations = Math.max(2, Math.round(params.trussStations));
+  // Corners sit at 45, 135, 225 and 315 degrees, so the distance from
+  // the axis is half the DIAGONAL, not half the side.
+  const h = (params.trussWidth / 2) * Math.SQRT2;
+  const cells = graph.add(pathResample, { mode: "count", count: stations });
+  const frame = graph.add(writeCurveFrame, {});
+  graph.connect(spine, "out", cells, "in");
+  graph.connect(cells, "out", frame, "in");
+
+  const N = attribute("curveNormal", 3);
+  const B = attribute("curveBinormal", 3);
+  /** Station index parity, without a modulo combinator. */
+  const parity = (() => {
+    const i = index();
+    return sub(i, mul(2, floor(div(i, 2))));
+  })();
+
+  /** One member: displace the framed spine, then make it solid. */
+  const member = (translate: FieldLike, radius: number, into: NodeRef): void => {
+    const move = graph.add(transformPoints, { translate });
+    const solid = graph.add(pathSegments, { axis: "+y", radius, extend: radius });
+    graph.connect(frame, "out", move, "in");
+    graph.connect(move, "out", solid, "in");
+    graph.connect(solid, "out", into, "in");
+  };
+
+  const chords = graph.add(mergePoints);
+  const braces = graph.add(mergePoints);
+  for (let c = 0; c < 4; c++) {
+    const a = Math.PI / 4 + (c * Math.PI) / 2;
+    // A chord's angle is constant, so its sine and cosine are numbers and
+    // no field arithmetic is needed at all.
+    member(add(mul(h * Math.cos(a), N), mul(h * Math.sin(a), B)), params.trussChord, chords);
+
+    // A brace runs between corner c and corner c + 1, swapping every
+    // station. At parity 1 the angle advances a quarter turn, which
+    // takes cos to -sin and sin to cos — so lerping between those pairs
+    // lands exactly on the two corners.
+    const cosA = lerp(Math.cos(a), -Math.sin(a), parity);
+    const sinA = lerp(Math.sin(a), Math.cos(a), parity);
+    member(add(mul(mul(h, cosA), N), mul(mul(h, sinA), B)), params.trussBrace, braces);
+  }
+
+  const chordSpawn = graph.add(spawnInstances, { assetId: "tube" });
+  const braceSpawn = graph.add(spawnInstances, { assetId: "tube" });
+  graph.connect(chords, "out", chordSpawn, "in");
+  graph.connect(braces, "out", braceSpawn, "in");
+  graph.output(chordSpawn, "instances", "truss");
+  graph.output(braceSpawn, "instances", "braces");
 }
 
 /**
@@ -741,7 +817,7 @@ export interface RigResult {
 }
 
 /** The graph's output names that carry instances, in draw order. */
-export const RIG_GROUPS = ["chains", "spine", "parts", "danglers", "drapes"] as const;
+export const RIG_GROUPS = ["chains", "truss", "braces", "parts", "danglers", "drapes"] as const;
 export type RigGroup = (typeof RIG_GROUPS)[number];
 
 /** Cook a rig graph and collect its batches by group. */

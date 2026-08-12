@@ -238,8 +238,8 @@
 
 <PanelShell title="11 · rig playground" width={PANEL_WIDTH} badge={cookFlag}>
   <p class="info">
-    One graph, five branches: a spline <b>spine</b> pushed around by noise, <b>components</b>
-    scattered along it in noise clusters, <b>chains</b> holding it up, and two kinds of hanging
+    One graph: a box <b>truss</b> along a spline pushed around by noise, <b>components</b>
+    scattered over it in noise clusters, <b>chains</b> holding it up, and two kinds of hanging
     <b>cable</b>. Every knob recooks the whole rig; the same seed always rebuilds the same rig.
   </p>
 
