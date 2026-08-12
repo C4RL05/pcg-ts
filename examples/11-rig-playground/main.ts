@@ -20,6 +20,7 @@ import { toInstancedMeshes, type AssetMap, type InstancedAsset } from "pcg-ts/th
 import {
   BoxGeometry,
   BufferGeometry,
+  Curve,
   Color,
   CylinderGeometry,
   GridHelper,
@@ -30,7 +31,8 @@ import {
   MeshNormalMaterial,
   PerspectiveCamera,
   Scene,
-  TorusGeometry,
+  TubeGeometry,
+  Vector3,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -91,16 +93,73 @@ scene.add(rigGroup);
 //   (the bar, the collar). The rod is based at the origin rather than
 //   centred, so it emerges from the spine instead of skewering it.
 
+/**
+ * The closed outline of a chain link: two semicircular caps joined by
+ * straight sides — a stadium. Real links are oblong rather than round,
+ * and the difference is what makes a chain read as a chain instead of a
+ * string of rings, because the quarter-turn alternation only shows on a
+ * shape that has a long axis at all.
+ *
+ * Long axis is LOCAL Y and the outline sits in the XY plane, which is
+ * not arbitrary: the chain branch aims local +Z along a horizontal
+ * direction with the chain's tangent as the up hint, and for a ±z axis
+ * `orientAlongVector` puts local +Y on that hint. So local +Y is the
+ * chain direction and local +Z is the ring's axis.
+ *
+ * Length is 1 so a uniform scale by a segment's length makes the link
+ * span exactly that segment — the same contract the torus had.
+ */
+class StadiumCurve extends Curve<Vector3> {
+  /** Half the straight run, and the cap radius (half the width). */
+  constructor(
+    private readonly half: number,
+    private readonly r: number,
+  ) {
+    super();
+  }
+
+  getPoint(t: number, target = new Vector3()): Vector3 {
+    const straight = this.half * 2;
+    const cap = Math.PI * this.r;
+    const total = 2 * straight + 2 * cap;
+    // Walk the perimeter by LENGTH rather than by equal angle steps, so
+    // the tube's segments stay evenly spaced around the corners.
+    let s = t * total;
+    if (s < straight) return target.set(this.r, -this.half + s, 0);
+    s -= straight;
+    if (s < cap) {
+      const a = s / this.r; // 0 at +x, PI at -x, over the top cap
+      return target.set(Math.cos(a) * this.r, this.half + Math.sin(a) * this.r, 0);
+    }
+    s -= cap;
+    if (s < straight) return target.set(-this.r, this.half - s, 0);
+    s -= straight;
+    const a = s / this.r;
+    return target.set(-Math.cos(a) * this.r, -this.half - Math.sin(a) * this.r, 0);
+  }
+}
+
+/** Width of a chain link across its short axis, as a fraction of length. */
+const LINK_WIDTH = 0.62;
+/** Section radius of the bar the link is bent from. */
+const LINK_THICKNESS = 0.085;
+
 const GEOMETRY: Record<string, BufferGeometry> = {
   tube: new CylinderGeometry(1, 1, 1, 8),
   rod: new CylinderGeometry(0.045, 0.03, 1.6, 6).translate(0, 0.8, 0),
   bar: new BoxGeometry(0.1, 0.17, 1.5),
   panel: new BoxGeometry(0.42, 0.3, 0.66),
   clamp: new CylinderGeometry(0.32, 0.32, 0.28, 12).rotateX(Math.PI / 2),
-  // A ring of unit DIAMETER, so scaling it by a chain segment's length
-  // makes the link span exactly that segment. Its axis is +z, which is
-  // what the chain branch aims horizontally to stand the ring upright.
-  chainLink: new TorusGeometry(0.5, 0.11, 5, 9),
+  // An oblong link of unit LENGTH along Y, so scaling it by a chain
+  // segment's length makes it span exactly that segment. The cap radius
+  // is half the width, and the straight run is what is left over.
+  chainLink: new TubeGeometry(
+    new StadiumCurve(Math.max(0, (1 - LINK_WIDTH) / 2), LINK_WIDTH / 2),
+    26,
+    LINK_THICKNESS,
+    5,
+    true,
+  ),
 };
 
 /** Flat-mode colour per asset id — the only thing telling them apart. */
