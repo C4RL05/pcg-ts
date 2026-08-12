@@ -12,6 +12,9 @@
    * its edge. Every gesture works in GRAPH coordinates — `toGraph` undoes
    * the view — so node positions stay in the model's own units and a
    * saved graph does not remember where someone had scrolled to.
+   *
+   * The canvas has no ground of its own: it is drawn over the render, and
+   * a grid on top of a scene reads as a screen door rather than as depth.
    */
   import NodeBox from "./NodeBox.svelte";
   import { NODE_W, nodeHeight, pinRowY } from "./layout.js";
@@ -204,24 +207,9 @@
       startPan(e);
       return;
     }
-    if (e.target === svgEl || (e.target as Element).classList?.contains("grid")) onSelect(null);
+    if (e.target === svgEl) onSelect(null);
   }}
 >
-  <defs>
-    <!-- The grid is a pattern rather than a CSS background on the wrapper
-         so it pans and zooms WITH the graph: a static grid under a moving
-         canvas reads as the nodes sliding over glass. -->
-    <pattern
-      id="canvas-grid"
-      width="24"
-      height="24"
-      patternUnits="userSpaceOnUse"
-      patternTransform="translate({view.x} {view.y}) scale({view.z})"
-    >
-      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(34, 48, 71, 0.28)" stroke-width="1" />
-    </pattern>
-  </defs>
-  <rect class="grid" width="100%" height="100%" fill="url(#canvas-grid)" />
   <g transform="translate({view.x} {view.y}) scale({view.z})">
   {#each model.edges as edge, i}
     {@const d = edgePath(edge)}

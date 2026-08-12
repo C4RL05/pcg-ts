@@ -49,16 +49,14 @@
   });
 
   /**
-   * What is on screen, cycled by Tab. Four states rather than a boolean
-   * because the useful question is not "graph or no graph" but how much
-   * of the scene you want behind it: all of it while you place nodes
-   * against what they make, half of it when the scene is too bright to
-   * read a graph over, none of it when the graph IS the work.
+   * What is on screen, cycled by the space bar. Three states rather than
+   * a boolean because the useful question is not "graph or no graph" but
+   * whether the scene is behind it: all of it while you place nodes
+   * against what they make, none of it when the graph IS the work.
    */
   const VIEWS = [
     { id: "scene", label: "scene", scrim: 0, graph: false, canvas: false },
     { id: "both", label: "scene + graph", scrim: 0, graph: true, canvas: false },
-    { id: "dim", label: "graph · dimmed scene", scrim: 0.5, graph: true, canvas: true },
     { id: "graph", label: "graph only", scrim: 1, graph: true, canvas: true },
   ] as const;
   let viewIndex = $state(1);
@@ -490,14 +488,14 @@
   function onKeydown(e: KeyboardEvent): void {
     const target = e.target as HTMLElement | null;
     /**
-     * Tab cycles the view; shift-Tab walks it back. It is the one key
-     * this page takes from the browser, and it is taken deliberately:
-     * a live view has to be switchable without looking away from it.
-     * Text fields keep Tab, so nothing typed into is ever a trap, and a
-     * modal keeps it too.
+     * The space bar cycles the view; shift-space walks it back. A live
+     * view has to be switchable without looking away from it, and space
+     * is the key nothing else on this page wants — except a focused
+     * button, which space is supposed to press, and a text field, where
+     * it is a character. Both keep it; a modal keeps it too.
      */
-    if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      if (modal !== null || isTyping(target)) return;
+    if (e.key === " " && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (modal !== null || isTyping(target) || target?.tagName === "BUTTON") return;
       e.preventDefault();
       cycleView(e.shiftKey ? -1 : 1);
       return;
@@ -676,8 +674,7 @@
        toolbar. Visually inert at desktop widths. */
     position: relative;
   }
-  /* No scrollbars: the canvas pans and zooms itself, and its grid moves
-     with the graph rather than sitting under it. */
+  /* No scrollbars: the canvas pans and zooms itself. */
   .canvas-wrap {
     flex: 1;
     min-width: 0;
