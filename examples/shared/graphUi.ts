@@ -100,6 +100,43 @@ export interface KnobPanel {
   readonly authored: boolean;
 }
 
+/**
+ * A knob patch: what a graph's knobs were changed TO, keyed the same way
+ * the panel keys them, plus `seed` when that moved.
+ *
+ * The baseline is the graph AS LOADED, not the primitives' schema
+ * defaults. That is what makes a patch replayable by name: "open this
+ * corpus graph, then turn these" is a complete instruction, where "these
+ * differ from the primitive's defaults" would silently also undo whatever
+ * the graph's author had tuned.
+ *
+ * Knob keys always contain a dot (`<nodeId>.<param>`), so the bare `seed`
+ * key cannot collide with one.
+ */
+export type KnobPatch = Record<string, ControlValue>;
+
+/** Whether two control values are the same, comparing vectors elementwise. */
+function sameValue(a: ControlValue | undefined, b: ControlValue | undefined): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  }
+  return Object.is(a, b);
+}
+
+/** Everything in `values` that differs from `baseline`. */
+export function knobPatch(
+  values: KnobValues,
+  baseline: KnobValues,
+  seed?: { current: number; loaded: number },
+): KnobPatch {
+  const patch: KnobPatch = {};
+  if (seed !== undefined && seed.current !== seed.loaded) patch.seed = seed.current;
+  for (const [key, value] of Object.entries(values)) {
+    if (!sameValue(value, baseline[key])) patch[key] = value;
+  }
+  return patch;
+}
+
 /** Step for a slider spanning [min, max]: ~200 stops, rounded to a decade. */
 function stepFor(schema: ParamSchema, min: number, max: number): number {
   if (schema.type === "i32" || schema.type === "u32") return 1;
@@ -180,6 +217,22 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
       // row-editing work the node inspector already does properly.
       return undefined;
   }
+}
+
+/**
+ * Every knob's current value, whether or not a panel spec shows it.
+ * The patch is computed against this rather than against the panel's own
+ * values: a knob edited in the node inspector, or one the spec chose not
+ * to surface, is still part of what the graph currently is.
+ */
+export function knobValues(knobs: readonly Knob[]): KnobValues {
+  const values: KnobValues = {};
+  for (const knob of knobs) {
+    if (knob.isField) continue;
+    const value = valueOf(knob);
+    if (value !== undefined) values[knob.key] = value;
+  }
+  return values;
 }
 
 function valueOf(knob: Knob): ControlValue | undefined {

@@ -16,7 +16,14 @@
   import Toolbar from "./Toolbar.svelte";
   import Knobs from "./Knobs.svelte";
   import { narrowScreen } from "../shared/mobile.js";
-  import { loadPanelSpec, type GraphPanelSpec } from "../shared/graphUi.js";
+  import {
+    knobPatch,
+    knobValues,
+    loadPanelSpec,
+    type GraphPanelSpec,
+    type KnobPatch,
+    type KnobValues,
+  } from "../shared/graphUi.js";
   import { findPreset, loadPresetText } from "../shared/presets.js";
   import type { CookStatus, EditorController } from "./controller.js";
   import { topoLayout } from "./layout.js";
@@ -68,6 +75,15 @@
    */
   let graphRev = $state(0);
   const knobRev = $derived(graphRev + paramsRev);
+  /**
+   * The knob values the graph loaded with, and the seed it loaded with.
+   * A patch is what has moved SINCE — see knobPatch in graphUi.ts for why
+   * the baseline is the loaded graph rather than the primitives' defaults.
+   */
+  let baseline = $state<KnobValues>({});
+  let loadedSeed = $state(0);
+  /** A patch carried in the URL, applied once the graph it names is in. */
+  let pendingPatch: KnobPatch | null = null;
   const graphTitle = $derived(
     preset === "" ? "starter graph" : (findPreset(preset)?.title ?? preset),
   );
@@ -146,7 +162,24 @@
     // A `?graph=` in the URL wins, so a link opens the sandbox on the
     // graph it names. An unknown name says so and falls back rather than
     // leaving the canvas empty.
-    const wanted = new URLSearchParams(window.location.search).get("graph");
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("p");
+    if (raw !== null && raw !== "") {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("expected a JSON object of knob values");
+        }
+        pendingPatch = parsed as KnobPatch;
+      } catch (err) {
+        // Held, not shown: the graph has not loaded yet, and its own
+        // toast would bury this one a moment later.
+        importError = `settings in the link could not be read (${
+          err instanceof Error ? err.message : String(err)
+        })`;
+      }
+    }
+    const wanted = params.get("graph");
     if (wanted !== null && wanted !== "") {
       if (findPreset(wanted) === undefined) {
         importError = `no graph named "${wanted}" in the corpus — opened the default instead`;
@@ -174,6 +207,17 @@
     model = res.structure;
     selectedId = null;
     graphRev++;
+    captureBaseline();
+  }
+
+  /**
+   * The graph as loaded becomes the thing a patch is measured against.
+   * Called after every load, so switching graphs never leaves a patch
+   * describing the previous one.
+   */
+  function captureBaseline(): void {
+    baseline = knobValues(controller.knobs());
+    loadedSeed = model.seed;
   }
 
   /**
@@ -206,7 +250,50 @@
     }
     preset = name;
     panelSpec = spec;
+    captureBaseline();
+    if (pendingPatch !== null) {
+      const patch = pendingPatch;
+      pendingPatch = null;
+      applyPatch(patch, "link");
+    }
     if (opts.updateUrl) syncUrl(name);
+  }
+
+  /**
+   * Apply a patch and report what did not land. `applied` edits schedule
+   * one cook between them, so a twelve-knob link is still one recook.
+   */
+  function applyPatch(patch: KnobPatch, source: "link" | "reset"): void {
+    const { applied, problems } = controller.applyKnobPatch(patch);
+    if (patch.seed !== undefined && typeof patch.seed === "number") model.seed = patch.seed >>> 0;
+    paramsRev++;
+    if (problems.length === 0) return;
+    const message = `${source === "link" ? "shared settings" : "reset"}: applied ${applied}, could not apply ${problems.length} — ${problems.join("; ")}`;
+    // A patch from a link lands mid-import, and the import's own hash
+    // toast is still to come — hand the message to that, or it is shown
+    // and buried within the same second.
+    if (awaitingImportCook) importError = message;
+    else showToast(message, "error");
+  }
+
+  /**
+   * Put every knob — and the seed — back to what the graph loaded with.
+   * The seed has to be in here explicitly: it is part of what a patch
+   * reports, so leaving it out would make "reset" land on a state that
+   * still reads as changed.
+   */
+  function resetKnobs(): void {
+    applyPatch({ ...baseline, seed: loadedSeed }, "reset");
+  }
+
+  /** The link that reopens what is on screen: the graph, plus the patch. */
+  function shareUrl(patch: KnobPatch): string {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("graph");
+    url.searchParams.delete("p");
+    if (preset !== "") url.searchParams.set("graph", preset);
+    if (Object.keys(patch).length > 0) url.searchParams.set("p", JSON.stringify(patch));
+    return url.toString();
   }
 
   /** Keep the address bar on the loaded graph, so the tab is linkable. */
@@ -325,6 +412,7 @@
     if (err !== null) return err;
     preset = "";
     panelSpec = undefined;
+    captureBaseline();
     syncUrl("");
     return null;
   }
@@ -366,7 +454,12 @@
   rev={knobRev}
   spec={panelSpec}
   title={graphTitle}
-  onEdit={() => paramsRev++} />
+  {baseline}
+  seed={model.seed}
+  {loadedSeed}
+  onEdit={() => paramsRev++}
+  onReset={resetKnobs}
+  {shareUrl} />
 
 <div class="editor" class:collapsed={dockCollapsed}>
   <Toolbar

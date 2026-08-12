@@ -38,7 +38,7 @@ import {
   type SerializedNode,
   type SerializedSubgraph,
 } from "pcg-ts";
-import type { Knob } from "../shared/graphUi.js";
+import type { Knob, KnobPatch } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
 import {
@@ -316,6 +316,49 @@ export class EditorController {
       }
     }
     return out;
+  }
+
+  /**
+   * Apply a knob patch to the live graph, reporting what it could not do
+   * rather than refusing the whole patch. A shared link naming one knob
+   * that has since been renamed should still open the graph with the rest
+   * of the settings applied and say which one it dropped — the failure
+   * mode a link outlives its graph by.
+   */
+  applyKnobPatch(patch: KnobPatch): { applied: number; problems: string[] } {
+    const known = new Map(this.knobs().map((k) => [k.key, k]));
+    const problems: string[] = [];
+    let applied = 0;
+    for (const [key, value] of Object.entries(patch)) {
+      if (key === "seed") {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          this.setSeed(value >>> 0);
+          applied++;
+        } else {
+          problems.push(`seed: expected a number, got ${JSON.stringify(value)}`);
+        }
+        continue;
+      }
+      const knob = known.get(key);
+      if (knob === undefined) {
+        problems.push(`${key}: this graph exposes no such knob`);
+        continue;
+      }
+      try {
+        // Straight to the mirror rather than through setPlainParam: that
+        // one swallows a rejection, and here the rejection is the report.
+        this.mirror.setParam(
+          { id: knob.node } as NodeHandle<Record<string, unknown>>,
+          knob.name,
+          copyPlain(value),
+        );
+        applied++;
+      } catch (err) {
+        problems.push(`${key}: ${errorMessage(err)}`);
+      }
+    }
+    if (applied > 0) this.scheduleCook();
+    return { applied, problems };
   }
 
   /** Set a plain (non-field) param on the live graph. */
