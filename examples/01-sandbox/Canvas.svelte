@@ -28,7 +28,6 @@
     onConnect,
     onDeleteEdge,
     onDeleteNode,
-    interactive = true,
   }: {
     model: StructureModel;
     selectedId: string | null;
@@ -37,12 +36,6 @@
     onConnect: (edge: EdgeView) => void;
     onDeleteEdge: (index: number) => void;
     onDeleteNode: (id: string) => void;
-    /**
-     * Whether this canvas owns the view gestures. When it does not, the
-     * wheel and the right button belong to the scene behind — see the
-     * note on `.canvas.inert` below.
-     */
-    interactive?: boolean;
   } = $props();
 
   let svgEl: SVGSVGElement | undefined = $state();
@@ -76,7 +69,7 @@
    * rather than a scrollbar.
    */
   function onWheel(e: WheelEvent): void {
-    if (!svgEl || !interactive) return;
+    if (!svgEl) return;
     e.preventDefault();
     const r = svgEl.getBoundingClientRect();
     const cx = e.clientX - r.left;
@@ -194,7 +187,6 @@
 <svg
   bind:this={svgEl}
   class="canvas"
-  class:inert={!interactive}
   role="application"
   aria-label="node graph canvas"
   onwheel={onWheel}
@@ -202,7 +194,7 @@
   onpointerdown={(e) => {
     // Right button pans from anywhere, including over a node — otherwise
     // a crowded graph has nowhere left to grab.
-    if ((e.button === 2 || e.button === 1) && interactive) {
+    if (e.button === 2 || e.button === 1) {
       e.preventDefault();
       startPan(e);
       return;
@@ -253,25 +245,6 @@
 </svg>
 
 <style>
-  /**
-   * Inert means the SVG ITSELF stops hit-testing, so the wheel and the
-   * right button fall through to the renderer behind it and fly the
-   * scene. The nodes and wires opt back in, because losing the ability
-   * to select or drag one was never the point — only the two gestures
-   * that both the graph and the scene read as "move the view".
-   *
-   * pointer-events inherits in SVG, hence one rule off and a short list
-   * back on rather than a rule per shape.
-   */
-  .canvas.inert {
-    pointer-events: none;
-  }
-  .canvas.inert :global(.body),
-  .canvas.inert :global(.pin-hit),
-  .canvas.inert :global(.close),
-  .canvas.inert :global(.edge-hit) {
-    pointer-events: auto;
-  }
   .canvas {
     display: block;
     width: 100%;

@@ -55,9 +55,9 @@
    * against what they make, none of it when the graph IS the work.
    */
   const VIEWS = [
-    { id: "scene", label: "scene", scrim: 0, graph: false, canvas: false },
-    { id: "both", label: "scene + graph", scrim: 0, graph: true, canvas: false },
-    { id: "graph", label: "graph only", scrim: 1, graph: true, canvas: true },
+    { id: "scene", label: "scene", scrim: 0, graph: false },
+    { id: "both", label: "scene + graph", scrim: 0, graph: true },
+    { id: "graph", label: "graph only", scrim: 1, graph: true },
   ] as const;
   let viewIndex = $state(1);
   const view = $derived(VIEWS[viewIndex]);
@@ -546,7 +546,6 @@
     <div class="canvas-wrap">
       <Canvas
         bind:this={canvas}
-        interactive={view.canvas}
         {model}
         {selectedId}
         onSelect={(id) => (selectedId = id)}
@@ -644,18 +643,16 @@
   }
   /**
    * WHO OWNS THE WHEEL AND THE RIGHT BUTTON. Both gestures mean "move the
-   * view" to the graph AND to the scene's orbit controls, and the graph
-   * canvas covers the render completely — so one of them has to yield,
-   * and which is what separates the two lit states.
+   * view" to the graph and to the scene's orbit controls, and the overlay
+   * covers the render completely — so whenever the graph is up it takes
+   * them, and the scene is flown from the view where the graph is not.
    *
-   * `scene + graph` is a heads-up state: the graph is drawn over a scene
-   * you are still flying, so the canvas is click-through and the wheel
-   * and right button reach the render. The dimmed states are the working
-   * ones and the canvas takes them back.
-   *
-   * The chrome — toolbar, palette, knobs, inspector — never goes inert,
-   * so a knob can be turned while the scene is being orbited, which is
-   * the pairing worth having.
+   * An earlier version tried to split them by state, making the SVG
+   * click-through so the render could be orbited underneath. It did not
+   * work: the canvas wrapper and `.body` still took the events, so they
+   * reached neither the graph nor the scene. Splitting input by state
+   * would mean making a hole through three elements, for a pairing one
+   * press of the space bar already gives.
    */
 
   .scrim {
