@@ -1,0 +1,45 @@
+{
+  "_comment": "Panel spec \u2014 presentation only; the graph cooks identically without it. See examples/shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "surface",
+      "controls": [
+        {
+          "param": "rock.shape",
+          "label": "shape"
+        },
+        {
+          "param": "rock.size",
+          "label": "size"
+        },
+        {
+          "param": "rock.subdivisions",
+          "label": "subdivisions"
+        }
+      ]
+    },
+    {
+      "title": "sampling",
+      "controls": [
+        {
+          "param": "onSurface.count",
+          "label": "points",
+          "min": 50,
+          "max": 4000,
+          "step": 50
+        },
+        {
+          "param": "onSurface.densityField",
+          "label": "density",
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "param": "onSurface.seed",
+          "label": "seed"
+        }
+      ]
+    }
+  ]
+}

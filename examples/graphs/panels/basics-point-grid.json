@@ -1,0 +1,32 @@
+{
+  "_comment": "Panel spec \u2014 presentation only; the graph cooks identically without it. See examples/shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "grid",
+      "controls": [
+        {
+          "param": "grid.countX",
+          "label": "columns",
+          "min": 1,
+          "max": 60,
+          "step": 1
+        },
+        {
+          "param": "grid.countZ",
+          "label": "rows",
+          "min": 1,
+          "max": 60,
+          "step": 1
+        },
+        {
+          "param": "grid.spacing",
+          "label": "spacing"
+        },
+        {
+          "param": "grid.origin",
+          "label": "origin"
+        }
+      ]
+    }
+  ]
+}
