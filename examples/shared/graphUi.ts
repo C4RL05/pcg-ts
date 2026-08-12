@@ -24,9 +24,9 @@
  * without rewriting it.
  *
  * They live in `examples/graphs/panels/`, NOT beside the graphs: the
- * corpus loader (`src/docs/examples.ts`) takes every `basics-*.json` in
- * `examples/graphs/` as a graph and would try to deserialize a panel
- * spec as one.
+ * corpus loader (`src/docs/examples.ts`) takes every file in
+ * `examples/graphs/` whose name starts with a corpus prefix as a graph,
+ * and would try to deserialize a panel spec as one.
  */
 import type { ParamSchema } from "pcg-ts";
 import type { Control, ControlSection, ControlValue } from "./controls.js";
@@ -67,11 +67,6 @@ export async function loadPanelSpec(name: string): Promise<GraphPanelSpec | unde
     throw new Error(`panel spec "${name}": expected an object with a "sections" array`);
   }
   return parsed as GraphPanelSpec;
-}
-
-/** Which corpus graphs ship a panel spec. */
-export function hasPanelSpec(name: string): boolean {
-  return PANELS[`../graphs/panels/${name}.json`] !== undefined;
 }
 
 /** One param of one node, as the controller reports it. */

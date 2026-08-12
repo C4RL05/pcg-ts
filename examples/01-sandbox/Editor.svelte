@@ -17,7 +17,6 @@
   import Knobs from "./Knobs.svelte";
   import { narrowScreen } from "../shared/mobile.js";
   import {
-    knobPatch,
     knobValues,
     loadPanelSpec,
     type GraphPanelSpec,
@@ -100,14 +99,9 @@
   let preset = $state("");
   /** The loaded graph's panel spec, when it ships one. */
   let panelSpec = $state<GraphPanelSpec | undefined>(undefined);
-  /**
-   * Bumped by anything that changes what the knobs panel should show —
-   * a different graph, a node added or deleted, a param written from
-   * either view. Both counters only ever increase, so their sum is a
-   * change signal without either having to know about the other.
-   */
-  let graphRev = $state(0);
-  const knobRev = $derived(graphRev + paramsRev);
+  // `paramsRev` above is the one revision counter: anything that changes
+  // what either param view should show bumps it — a different graph, a
+  // node added or deleted, a param written from either side.
   /**
    * The knob values the graph loaded with, and the seed it loaded with.
    * A patch is what has moved SINCE — see knobPatch in graphUi.ts for why
@@ -247,7 +241,7 @@
     }
     model = res.structure;
     selectedId = null;
-    graphRev++;
+    paramsRev++;
     captureBaseline();
     frameGraph();
   }
@@ -376,7 +370,7 @@
       outputs: res.outputs,
     });
     selectedId = id;
-    graphRev++;
+    paramsRev++;
     // On narrow screens the palette is a drawer covering the canvas; close
     // it after a successful add so the new node is visible. No-op on
     // desktop, where `open` has no styled effect.
@@ -425,7 +419,7 @@
     model.nodes = model.nodes.filter((n) => n.id !== id);
     model.edges = model.edges.filter((e) => e.from !== id && e.to !== id);
     if (selectedId === id) selectedId = null;
-    graphRev++;
+    paramsRev++;
   }
 
   function setSeed(seed: number): void {
@@ -451,7 +445,7 @@
     selectedId = null;
     importLabel = label;
     awaitingImportCook = true;
-    graphRev++;
+    paramsRev++;
     frameGraph();
     return null;
   }
@@ -511,8 +505,6 @@
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (modal !== null) return;
     if (isTyping(target)) return;
-    const t = target;
-    void t;
     if (selectedId !== null) {
       e.preventDefault();
       deleteNode(selectedId);
@@ -568,7 +560,7 @@
     </div>
     <Knobs
       {controller}
-      rev={knobRev}
+      rev={paramsRev}
       spec={panelSpec}
       title={graphTitle}
       {baseline}

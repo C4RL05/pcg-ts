@@ -21,6 +21,15 @@ interface PresetMeta {
   readonly description?: string;
 }
 
+/**
+ * The same families `CORPUS_PREFIXES` (src/docs/examples.ts) admits to the
+ * catalog and the golden. Stated twice is one rule too many, but a page
+ * cannot import from `src/docs` — so the list is duplicated with a name
+ * that says where the original lives, and a graph outside it stays out of
+ * both the catalog AND the picker rather than only one.
+ */
+const CORPUS_PREFIXES = ["basics-", "examples-", "pipeline-"];
+
 const META = import.meta.glob<PresetMeta>("../graphs/*.json", { eager: true, import: "meta" });
 const BODY = import.meta.glob("../graphs/*.json", { query: "?raw", import: "default" });
 
@@ -45,6 +54,7 @@ export interface Preset {
  * that is hard to label is exactly the one worth being able to open.
  */
 export const PRESETS: readonly Preset[] = Object.keys(META)
+  .filter((key) => CORPUS_PREFIXES.some((p) => nameOf(key).startsWith(p)))
   .sort()
   .map((key) => {
     const name = nameOf(key);

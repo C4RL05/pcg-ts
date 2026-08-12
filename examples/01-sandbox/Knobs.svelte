@@ -14,7 +14,14 @@
    * call the inspector makes — so the two views of a knob cannot drift.
    */
   import Controls from "../shared/Controls.svelte";
-  import { applyCommit, type ControlCommit } from "../shared/controls.js";
+  import { untrack } from "svelte";
+  import { copyLabel, createCopier, type CopyState } from "../shared/copy.js";
+  import {
+    adoptChanged,
+    applyCommit,
+    snapshotValues,
+    type ControlCommit,
+  } from "../shared/controls.js";
   import {
     buildKnobPanel,
     knobPatch,
@@ -54,31 +61,51 @@
   } = $props();
 
   /**
+   * ONE walk of the graph per rev. `knobs()` rebuilds a description of
+   * every node and a record per param, so the panel, the routing table
+   * and the patch all read this rather than asking again — three walks of
+   * a forty-node graph per keystroke was the cost of asking three times.
+   */
+  const knobs = $derived.by(() => {
+    void rev;
+    return controller.knobs();
+  });
+
+  /**
    * Rebuilt from the live graph on every rev rather than kept as local
    * state: unlike the demo panels, this one's SHAPE changes under it — a
    * different graph has different knobs — so there is nothing stable to
-   * hold. Every edit bumps rev, so the values here are the graph's.
+   * hold.
    */
-  const panel = $derived.by(() => {
-    void rev;
-    return buildKnobPanel(controller.knobs(), spec);
-  });
+  const panel = $derived(buildKnobPanel(knobs, spec));
 
   /** Key → the node and param it writes, so no key has to be re-split. */
-  const targets = $derived(
-    new Map(controller.knobs().map((k) => [k.key, { node: k.node, name: k.name }])),
-  );
+  const targets = $derived(new Map(knobs.map((k) => [k.key, { node: k.node, name: k.name }])));
 
+  /**
+   * Merged rather than replaced. Swapping the whole record in invalidates
+   * every row's read of it, so one slider commit re-rendered every row of
+   * every section; `adoptChanged` copies across only what the graph
+   * actually moved. A different graph has different keys, so that case
+   * still takes the wholesale swap.
+   */
   let values = $state<KnobValues>({});
-  let shown = -1;
+  let previous: KnobValues = {};
   $effect(() => {
-    // A fresh values object per rebuild; `panel.values` is already a copy
-    // of what the graph holds.
-    if (shown !== rev) {
-      shown = rev;
-      values = panel.values;
-    }
+    const next = panel.values;
+    untrack(() => {
+      if (sameShape(values, next)) previous = adoptChanged(values, next, previous);
+      else {
+        values = next;
+        previous = snapshotValues(next);
+      }
+    });
   });
+
+  const sameShape = (a: KnobValues, b: KnobValues): boolean => {
+    const ka = Object.keys(a);
+    return ka.length === Object.keys(b).length && ka.every((k) => k in b);
+  };
 
   let tab = $state("");
   $effect(() => {
@@ -103,36 +130,20 @@
    * than from this panel's own values, so a knob turned in the node
    * inspector, or one the spec chose not to surface, is still in it.
    */
-  const patch = $derived.by(() => {
-    void rev;
-    return knobPatch(knobValues(controller.knobs()), baseline, { current: seed, loaded: loadedSeed });
-  });
+  const patch = $derived(
+    knobPatch(knobValues(knobs), baseline, { current: seed, loaded: loadedSeed }),
+  );
   const patchText = $derived(JSON.stringify(patch, null, 2));
   const changed = $derived(Object.keys(patch).length);
 
-  let copyState = $state<"idle" | "done" | "manual">("idle");
+  /** Whether the link and the patch are revealed below the buttons. */
   let showPatch = $state(false);
-  async function copyLink(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(shareUrl(patch));
-      copyState = "done";
-    } catch {
-      // The clipboard can refuse — an insecure context, or a permission
-      // the page was never granted. Silently doing nothing would look
-      // like a broken button, so show the link where it can be selected
-      // by hand and say that is what happened.
-      showPatch = true;
-      copyState = "manual";
-    }
-    setTimeout(() => (copyState = "idle"), 1600);
-  }
-  function selectAll(e: FocusEvent): void {
-    (e.currentTarget as HTMLInputElement).select();
-  }
 
-  const copyLabel = $derived(
-    copyState === "done" ? "copied!" : copyState === "manual" ? "select it below ↓" : "copy link",
-  );
+  let copyState = $state<CopyState>("idle");
+  const copier = createCopier((next) => (copyState = next));
+  const label = $derived(copyLabel(copyState, "copy link"));
+  /** A refused clipboard reveals the link, which is the point of the button. */
+  const copyLink = (): Promise<CopyState> => copier.copy(shareUrl(patch), () => (showPatch = true));
 </script>
 
 <div class="knobs">
@@ -161,7 +172,7 @@
 
   {#if panel.sections.length > 0}
     <div class="share">
-      <button onclick={copyLink}>{copyLabel}</button>
+      <button onclick={copyLink}>{label}</button>
       <button disabled={changed === 0} onclick={onReset}>reset</button>
       <button
         class="link"

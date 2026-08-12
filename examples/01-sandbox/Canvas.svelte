@@ -113,8 +113,16 @@
     };
   }
 
+  /**
+   * Indexed rather than scanned. Every edge's path is recomputed on every
+   * pointermove of a node drag, and each lookup used to walk the reactive
+   * node array — one signal read per node per edge per event. The map
+   * reads only `id`, so dragging (which moves x/y) does not rebuild it.
+   */
+  const byId = $derived(new Map(model.nodes.map((n) => [n.id, n])));
+
   function nodeById(id: string): NodeView | undefined {
-    return model.nodes.find((n) => n.id === id);
+    return byId.get(id);
   }
 
   function pinPos(id: string, pinName: string, side: "in" | "out"): { x: number; y: number } | null {

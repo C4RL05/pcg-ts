@@ -1,6 +1,6 @@
 import{n as e,t}from"./mobile-BAPbsnLk.js";var n=!1;function r(){if(n)return;n=!0;let e=document.createElement(`style`);e.textContent=`
 .pcg-overlay {
-  position: fixed; top: 12px; left: calc(12px + var(--pcg-inset-left, 0px)); z-index: 10;
+  position: fixed; top: 12px; left: 12px; z-index: 10;
   width: 300px; max-height: calc(100vh - 24px); overflow-y: auto;
   padding: 14px 16px; box-sizing: border-box;
   background: rgba(13, 17, 23, 0.88);

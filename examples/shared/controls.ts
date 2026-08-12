@@ -306,18 +306,3 @@ export function clampToRange(raw: number, min: number, max: number, step: number
   const rounded = step >= 1 ? Math.round(raw) : raw;
   return Math.min(max, Math.max(min, rounded));
 }
-
-/** Every key a section list binds, in declaration order. */
-export function controlKeys<P>(sections: readonly ControlSection<P>[]): string[] {
-  const keys: string[] = [];
-  for (const section of sections) {
-    for (const control of section.controls) {
-      if (control.kind === "flags") {
-        for (const item of control.items) keys.push(item.key);
-      } else {
-        keys.push(control.key);
-      }
-    }
-  }
-  return keys;
-}

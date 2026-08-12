@@ -89,9 +89,7 @@
   .panel {
     position: fixed;
     top: 12px;
-    /* Offset by anything docked against the right edge — see the sandbox
-       editor. Unset everywhere else, so this reads as a plain 12px. */
-    right: calc(12px + var(--pcg-inset-right, 0px));
+    right: 12px;
     z-index: 10;
     width: var(--panel-width);
     max-height: calc(100vh - 24px);

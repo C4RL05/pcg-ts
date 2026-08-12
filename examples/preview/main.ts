@@ -49,6 +49,7 @@ import {
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createPlaceholderAssets } from "../shared/assets.js";
 import { drawItem, type DrawMaterials } from "../shared/draw.js";
+import { loadPresetText } from "../shared/presets.js";
 
 /** The job the harness injects; every field optional but `graph`. */
 interface PreviewJob {
@@ -219,6 +220,7 @@ interface ItemReport {
   /** The topology carried no `primtype`, so its kind was inferred. */
   readonly untagged?: boolean;
   readonly hint?: string;
+  readonly pointsSuppressed?: boolean;
   readonly skipped?: string;
 }
 
@@ -255,7 +257,9 @@ function addItem(group: Group, output: string, item: DataItem, job: PreviewJob):
   return {
     ...report,
     output,
-    ...(report.hint !== undefined ? { hint: `${report.hint}; pass --points to add them` } : {}),
+    ...(report.pointsSuppressed === true
+      ? { hint: "points not drawn because topology was; pass --points to add them" }
+      : {}),
   };
 }
 
@@ -271,16 +275,14 @@ async function main(): Promise<void> {
           "By hand, open /preview/?graph=<name> to load examples/graphs/<name>.json.",
       );
     }
-    const corpus = import.meta.glob("../graphs/*.json", { query: "?raw", import: "default" });
-    const key = `../graphs/${name}.json`;
-    const load = corpus[key];
-    if (load === undefined) {
-      const known = Object.keys(corpus)
-        .map((k) => k.slice("../graphs/".length, -".json".length))
-        .join(", ");
-      fail(`preview: no graph named "${name}" in examples/graphs. Known: ${known}`);
+    // The corpus loader is shared with the sandbox's graph picker, so
+    // "which graphs exist" and the message for a name that is not one of
+    // them are stated once.
+    try {
+      job = { graph: JSON.parse(await loadPresetText(name)) };
+    } catch (err) {
+      fail(`preview: ${err instanceof Error ? err.message : String(err)}`);
     }
-    job = { graph: JSON.parse((await load()) as string) };
   }
 
   let report: Record<string, unknown>;

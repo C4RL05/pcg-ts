@@ -85,6 +85,15 @@ export const GROUP_LABEL: Record<RigGroup, string> = {
  * The last section is `display`, which is why the panel can render this
  * one list as its whole tab strip: a tab is a section title.
  */
+/**
+ * The display section's title, which is also a KEY: the panel filters its
+ * `extra` snippet on it and steers the tab there when the clipboard
+ * refuses. Renaming the string in one place and not the others silently
+ * drops the settings block and sends the fallback to a tab that is not
+ * there, with no type error to catch it.
+ */
+export const DISPLAY_SECTION = "display";
+
 export const CONTROL_SECTIONS: readonly ControlSection<RigControls>[] = [
   {
     title: "spine",
@@ -187,7 +196,7 @@ export const CONTROL_SECTIONS: readonly ControlSection<RigControls>[] = [
     ],
   },
   {
-    title: "display",
+    title: DISPLAY_SECTION,
     controls: [
       {
         kind: "select",

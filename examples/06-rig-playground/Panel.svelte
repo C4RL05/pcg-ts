@@ -13,6 +13,7 @@
    */
   import { hashCombine } from "pcg-ts";
   import { untrack } from "svelte";
+  import { copyLabel, createCopier, type CopyState } from "../shared/copy.js";
   import Controls from "../shared/Controls.svelte";
   import {
     adoptChanged,
@@ -32,6 +33,7 @@
   import {
     CONTROL_SECTIONS,
     DISPLAY_KEYS,
+    DISPLAY_SECTION,
     GROUP_LABEL,
     type DisplayKey,
     type EnumParam,
@@ -178,24 +180,10 @@
     return JSON.stringify(out, null, 2);
   });
 
-  let copyState = $state<"idle" | "done" | "manual">("idle");
-  async function copyPatch(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(patch);
-      copyState = "done";
-    } catch {
-      // The clipboard can refuse — an insecure context, or a permission
-      // the page was never granted. Silently doing nothing would look
-      // like a broken button, so fall back to showing the JSON where it
-      // can be selected by hand and say that is what happened.
-      tab = "display";
-      copyState = "manual";
-    }
-    setTimeout(() => (copyState = "idle"), 1600);
-  }
-  const copyLabel = $derived(
-    copyState === "done" ? "copied!" : copyState === "manual" ? "select it below ↓" : "copy params",
-  );
+  let copyState = $state<CopyState>("idle");
+  const copier = createCopier((next) => (copyState = next));
+  const copyPatch = (): Promise<CopyState> => copier.copy(patch, () => (tab = DISPLAY_SECTION));
+  const label = $derived(copyLabel(copyState, "copy params"));
 
   function fmtInt(n: number): string {
     return n.toLocaleString();
@@ -228,7 +216,7 @@
 <!-- The settings block heads the display tab. It is not a control, so it
      arrives through the renderer's `extra` slot rather than the spec. -->
 {#snippet extra(section: string)}
-  {#if section === "display"}
+  {#if section === DISPLAY_SECTION}
     <h2>settings</h2>
     <p class="hint">Everything that differs from the defaults. Paste it back to replay a rig.</p>
     <pre class="patch">{patch}</pre>
@@ -252,7 +240,7 @@
 
   <div class="row">
     <span>settings</span>
-    <button class="wide" onclick={copyPatch}>{copyLabel}</button>
+    <button class="wide" onclick={copyPatch}>{label}</button>
   </div>
 
   <Controls

@@ -59,7 +59,12 @@ export interface DrawReport {
   batches?: Record<string, number>;
   /** The geometry has primitives but none carry a type tag. */
   untagged?: boolean;
-  hint?: string;
+  /**
+   * Points existed but were not drawn, because topology was. A fact
+   * rather than a sentence: how to change it is the caller's knowledge —
+   * a CLI flag on one page, nothing on another.
+   */
+  pointsSuppressed?: boolean;
   skipped?: string;
 }
 
@@ -153,7 +158,7 @@ export function drawItem(item: DataItem, opts: DrawOptions): Drawn {
       points: geo.pointCount,
       primitives: counts,
       ...(untagged ? { untagged: true } : {}),
-      ...(suppressed ? { hint: "points not drawn because topology was" } : {}),
+      ...(suppressed ? { pointsSuppressed: true } : {}),
       ...(problems.length > 0 ? { skipped: problems.join(" | ") } : {}),
     },
   };
