@@ -81,6 +81,7 @@ export const SECTIONS: readonly Section[] = [
       { key: "trussStations", label: "bays", min: 2, max: 160, step: 1 },
       { key: "trussChord", label: "chord radius", min: 0.01, max: 0.2, step: 0.005, unit: "m" },
       { key: "trussBrace", label: "brace radius", min: 0.005, max: 0.12, step: 0.005, unit: "m" },
+      { key: "trussFrameEvery", label: "frame every", min: 0, max: 20, step: 1, unit: " bays" },
     ],
   },
   {
@@ -170,6 +171,7 @@ export const GROUP_LABEL: Record<RigGroup, string> = {
   chains: "chains",
   truss: "chords",
   braces: "braces",
+  frames: "frames",
   parts: "components",
   danglers: "danglers",
   drapes: "drapes",

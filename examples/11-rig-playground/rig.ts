@@ -100,6 +100,8 @@ export interface RigParams {
   trussChord: number;
   /** Tube radius of the diagonal bracing — thinner than the chords. */
   trussBrace: number;
+  /** Square cross-section frames every N bays. 0 leaves them out. */
+  trussFrameEvery: number;
   // components
   weights: Record<PartKind, number>;
   partDensity: number;
@@ -177,6 +179,7 @@ export const DEFAULT_PARAMS: RigParams = {
   trussStations: 46,
   trussChord: 0.055,
   trussBrace: 0.03,
+  trussFrameEvery: 4,
   weights: { rod: 4, bar: 2, panel: 1, clamp: 2 },
   partDensity: 900,
   clusterFreq: 14,
@@ -446,21 +449,30 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
   })();
 
   /** One member: displace the framed spine, then make it solid. */
-  const member = (translate: FieldLike, radius: number, into: NodeRef): void => {
+  const member = (translate: FieldLike, radius: number, into: NodeRef): NodeRef => {
     const move = graph.add(transformPoints, { translate });
     const solid = graph.add(pathSegments, { axis: "+y", radius, extend: radius });
     graph.connect(frame, "out", move, "in");
     graph.connect(move, "out", solid, "in");
     graph.connect(solid, "out", into, "in");
+    return move;
   };
 
   const chords = graph.add(mergePoints);
   const braces = graph.add(mergePoints);
+  // The four chords again, as POINTS this time. Ringing the corners at
+  // one station needs the corners, not the tubes between them.
+  const corners = graph.add(mergePoints);
   for (let c = 0; c < 4; c++) {
     const a = Math.PI / 4 + (c * Math.PI) / 2;
     // A chord's angle is constant, so its sine and cosine are numbers and
     // no field arithmetic is needed at all.
-    member(add(mul(h * Math.cos(a), N), mul(h * Math.sin(a), B)), params.trussChord, chords);
+    const chord = member(
+      add(mul(h * Math.cos(a), N), mul(h * Math.sin(a), B)),
+      params.trussChord,
+      chords,
+    );
+    graph.connect(chord, "out", corners, "in");
 
     // A brace runs between corner c and corner c + 1, swapping every
     // station. At parity 1 the angle advances a quarter turn, which
@@ -477,6 +489,63 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
   graph.connect(braces, "out", braceSpawn, "in");
   graph.output(chordSpawn, "instances", "truss");
   graph.output(braceSpawn, "instances", "braces");
+
+  // -- cross-section frames -------------------------------------------
+  // A square ring joining the four chords, every `trussFrameEvery` bays.
+  //
+  // The ring is a REGROUPING of points that already exist rather than
+  // new geometry. mergePoints concatenated the four chords in connection
+  // order, so a point's index is chord * stations + station: the station
+  // is the index modulo the station count, and grouping by it collects
+  // one point from each chord — in ascending chord order, which walks
+  // the square rather than crossing it.
+  const every = Math.max(1, Math.round(params.trussFrameEvery));
+  if (params.trussFrameEvery > 0) {
+    const stationId = graph.add(setAttribute, {
+      name: "stationId",
+      domain: "point",
+      type: "i32",
+      tupleSize: 1,
+      value: (() => {
+        const i = index();
+        return sub(i, mul(stations, floor(div(i, stations))));
+      })(),
+    });
+    // Frames at every station read as a solid tube rather than a truss,
+    // so most stations are dropped. The keep test is a modulo written as
+    // a remainder, thresholded — filterByAttribute compares against a
+    // constant and has no modulo of its own.
+    const phase = graph.add(setAttribute, {
+      name: "framePhase",
+      domain: "point",
+      type: "f32",
+      tupleSize: 1,
+      value: (() => {
+        const k = attribute("stationId", 1);
+        return sub(k, mul(every, floor(div(k, every))));
+      })(),
+    });
+    const keep = graph.add(filterByAttribute, {
+      attribute: "framePhase",
+      comparison: "lt",
+      value: 0.5,
+    });
+    // Closed, so the fourth corner joins back to the first.
+    const ring = graph.add(pointsToPath, { closed: true, groupAttr: "stationId" });
+    const solid = graph.add(pathSegments, {
+      axis: "+y",
+      radius: params.trussBrace,
+      extend: params.trussBrace,
+    });
+    const spawn = graph.add(spawnInstances, { assetId: "tube" });
+    graph.connect(corners, "out", stationId, "in");
+    graph.connect(stationId, "out", phase, "in");
+    graph.connect(phase, "out", keep, "in");
+    graph.connect(keep, "out", ring, "in");
+    graph.connect(ring, "out", solid, "in");
+    graph.connect(solid, "out", spawn, "in");
+    graph.output(spawn, "instances", "frames");
+  }
 }
 
 /**
@@ -817,7 +886,7 @@ export interface RigResult {
 }
 
 /** The graph's output names that carry instances, in draw order. */
-export const RIG_GROUPS = ["chains", "truss", "braces", "parts", "danglers", "drapes"] as const;
+export const RIG_GROUPS = ["chains", "truss", "braces", "frames", "parts", "danglers", "drapes"] as const;
 export type RigGroup = (typeof RIG_GROUPS)[number];
 
 /** Cook a rig graph and collect its batches by group. */

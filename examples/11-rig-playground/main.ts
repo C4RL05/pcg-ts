@@ -31,6 +31,7 @@ import {
   MeshNormalMaterial,
   PerspectiveCamera,
   Scene,
+  TorusGeometry,
   TubeGeometry,
   Vector3,
   WebGLRenderer,
@@ -153,6 +154,11 @@ class StadiumCurve extends Curve<Vector3> {
  */
 const display: Record<DisplayKey, number> = { linkWidth: 0.62, linkThickness: 0.085 };
 
+/** A hoop clearing the truss's corners, which sit at half its diagonal. */
+function buildClamp(trussWidth: number): BufferGeometry {
+  return new TorusGeometry(((trussWidth / 2) * Math.SQRT2) * 1.18, 0.055, 5, 14);
+}
+
 /** Build the link outline and sweep a tube around it. */
 function buildChainLink(): BufferGeometry {
   const width = display.linkWidth;
@@ -175,7 +181,12 @@ const GEOMETRY: Record<string, BufferGeometry> = {
   rod: new CylinderGeometry(0.045, 0.03, 1.6, 6).translate(0, 0.8, 0),
   bar: new BoxGeometry(0.1, 0.17, 1.5),
   panel: new BoxGeometry(0.42, 0.3, 0.66),
-  clamp: new CylinderGeometry(0.32, 0.32, 0.28, 12).rotateX(Math.PI / 2),
+  // A hoop that encircles the whole truss section rather than a collar
+  // gripping a pipe: the spine is a box now, and a disc sized for the
+  // old tube just floated inside it collaring nothing. A torus is built
+  // around +Z, which is already the axis the components run along, so it
+  // needs no rotation — and it is rebuilt when the truss changes width.
+  clamp: buildClamp(DEFAULT_PARAMS.trussWidth),
   // An oblong link of unit LENGTH along Y, so scaling it by a chain
   // segment's length makes it span exactly that segment. Rebuilt when
   // its proportions change, which is why it is the one entry here that
@@ -227,6 +238,7 @@ const visible: Record<RigGroup, boolean> = {
   chains: true,
   truss: true,
   braces: true,
+  frames: true,
   parts: true,
   danglers: true,
   drapes: true,
@@ -281,8 +293,19 @@ function clearMeshes(): void {
 }
 
 /** Rebuild the scene objects from the last cook. No cooking happens here. */
+/** Truss width the current clamp hoop was built for. */
+let clampWidth = DEFAULT_PARAMS.trussWidth;
+
 function rebuildMeshes(): void {
   clearMeshes();
+  // After clearMeshes, never before: the meshes were sharing this buffer
+  // and toInstancedMeshes never disposes geometry, so it is the host's to
+  // free and only once nothing is drawing it.
+  if (clampWidth !== params.trussWidth) {
+    clampWidth = params.trussWidth;
+    GEOMETRY.clamp.dispose();
+    GEOMETRY.clamp = buildClamp(clampWidth);
+  }
   if (!lastResult) return;
   const assets = buildAssets();
   const partsEmpty = noPartsEnabled(params.weights);
