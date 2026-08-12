@@ -680,6 +680,42 @@
     }
   },
   {
+    "type": "pathPointAt",
+    "description": "Moves every point of every polyline to the position at a given parameter ALONG ITS OWN polyline, and writes the unit `tangent` and `curveU` it finds there. Points, attributes and topology all survive — this slides points along the curve they already sit on rather than building new ones, so a path stays the same path and only its parameterization changes. This is the evaluate-at-parameter the library otherwise lacks: pathResample and splineSample can only step a whole curve at even intervals, so 'where is this curve at u = 0.37' had no answer, and anything that needed one had to approximate by stepping along the tangent and hoping the curve was straight enough. mode 'fraction' reads the parameter as 0..1 of that polyline's arc length; mode 'distance' reads it as world units from the start. Both CLAMP out of range rather than wrapping or erroring — a parameter is usually computed, and a clamp is what keeps a point on the curve. The parameter is field-capable and resolves on the INPUT points BEFORE anything moves, so a field reading `curveU` sees where each point started and can be written as an offset from it: lerp(curveU, target, amount) slides each point partway toward a target. A point in several polylines is placed by the LAST one in primitive order, matching writeTangents, and a point in none is left exactly where it is with a zero tangent and curveU 0 — as is every point of a polyline whose length is zero, since it has no parameter to speak of. Because points can slide past each other, a path whose parameters are not monotonic comes back folded; that is the caller's to avoid, and it is legal geometry either way.",
+    "category": "point op",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "mode": {
+        "type": "enum",
+        "default": "fraction",
+        "description": "How the parameter is read: 'fraction' is 0..1 of the polyline's own arc length, so the same value means the same relative place on curves of different lengths; 'distance' is world units from the polyline's start. Both clamp to the ends.",
+        "enum": [
+          "fraction",
+          "distance"
+        ]
+      },
+      "parameter": {
+        "type": "f32",
+        "default": 0.5,
+        "description": "Where along the polyline to place the point, read according to `mode`. Field-capable, resolved on the INPUT points before any of them move — so it can read `curveU` and express a move relative to where the point already is (for example lerp(attribute('curveU'), target, amount)), which is the usual way to use this node. Values outside the range clamp.",
+        "acceptsField": true
+      }
+    }
+  },
+  {
     "type": "pathResample",
     "description": "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
     "category": "sampler",

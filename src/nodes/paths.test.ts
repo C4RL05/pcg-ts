@@ -6,7 +6,7 @@ import {
   createPolyline,
   setPolylineTopology,
 } from "../data/index.js";
-import { attribute } from "../fields/index.js";
+import { attribute, lerp } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import { dataInput } from "../runtime/index.js";
 import {
@@ -16,6 +16,7 @@ import {
   filterByDensity,
   orientAlongVector,
   partitionByAttribute,
+  pathPointAt,
   pathResample,
   pathSegments,
   pointScatterInBounds,
@@ -782,6 +783,160 @@ describe("pathSegments", () => {
     // 9 samples along a 4-long row: 8 segments of 0.5.
     expect(geo.pointCount).toBe(8);
     expect(tuplesOf(geo, "scale").map((s) => s[1])).toEqual(new Array(8).fill(0.5));
+  });
+});
+
+describe("pathPointAt", () => {
+  /** An L: 2 along +X then 4 along +Y, so arc length is 6. */
+  function ell(): Geometry {
+    return createPolyline([0, 0, 0, 2, 0, 0, 2, 4, 0]);
+  }
+
+  async function placed(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(pathPointAt, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  it("places every point at the same fraction of its own path", async () => {
+    // 0.5 of 6 is arc 3, which is 1 unit up the second segment.
+    const geo = await placed({ mode: "fraction", parameter: 0.5 }, ell());
+    for (const p of positionsOf(geo)) {
+      expect(p[0]).toBeCloseTo(2, 6);
+      expect(p[1]).toBeCloseTo(1, 6);
+      expect(p[2]).toBeCloseTo(0, 6);
+    }
+    // ...and reports where it landed.
+    const u = geo.attrs.point.require("curveU");
+    for (let i = 0; i < geo.pointCount; i++) expect(u.get(i)).toBeCloseTo(0.5, 6);
+    const t = geo.attrs.point.require("tangent");
+    expect(t.getTuple(0)).toEqual([0, 1, 0]);
+  });
+
+  it("reads distance in world units, independently of the path's length", async () => {
+    const geo = await placed({ mode: "distance", parameter: 2.5 }, ell());
+    const p = positionsOf(geo)[0];
+    expect(p[0]).toBeCloseTo(2, 6);
+    expect(p[1]).toBeCloseTo(0.5, 6);
+  });
+
+  it("clamps out-of-range parameters onto the ends", async () => {
+    const lo = positionsOf(await placed({ parameter: -3 }, ell()))[0];
+    const hi = positionsOf(await placed({ parameter: 9 }, ell()))[0];
+    expect(lo).toEqual([0, 0, 0]);
+    expect(hi[0]).toBeCloseTo(2, 6);
+    expect(hi[1]).toBeCloseTo(4, 6);
+  });
+
+  it("is the exact answer the tangent-step approximation only estimates", async () => {
+    // The point of the node. A quarter circle: stepping along the
+    // tangent by the arc-length difference leaves the curve, evaluating
+    // at the parameter does not.
+    const pos: number[] = [];
+    const n = 33;
+    for (let i = 0; i < n; i++) {
+      const a = (i / (n - 1)) * (Math.PI / 2);
+      pos.push(Math.cos(a) * 4, Math.sin(a) * 4, 0);
+    }
+    const geo = await placed({ mode: "fraction", parameter: 0.5 }, createPolyline(pos));
+    for (const p of positionsOf(geo)) {
+      // Still on the circle of radius 4, to within the chord error of a
+      // 33-point discretisation.
+      expect(Math.hypot(p[0], p[1])).toBeCloseTo(4, 2);
+    }
+  });
+
+  it("slides each point partway toward a target, reading its own curveU", async () => {
+    // The idiom the description names: a field over curveU expresses a
+    // move RELATIVE to where each point already sits.
+    const even = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 5 },
+          { in: [makeGeometryItem(createPolyline([0, 0, 0, 8, 0, 0]))] },
+        )
+      ).out,
+    );
+    const before = positionsOf(even).map((p) => p[0]);
+    expect(before).toEqual([0, 2, 4, 6, 8]);
+    // Halfway toward u = 0.5, i.e. x = 4.
+    const geo = await placed(
+      { mode: "fraction", parameter: lerp(attribute("curveU", 1), 0.5, 0.5) },
+      even,
+    );
+    expect(positionsOf(geo).map((p) => Math.round(p[0] * 1000) / 1000)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it("keeps the points, their attributes and the topology", async () => {
+    const src = withAttr(ell(), "tag", [7, 8, 9]);
+    const geo = await placed({ parameter: 0.25 }, src);
+    expect(geo.pointCount).toBe(3);
+    expect(topologyOf(geo)).toEqual(topologyOf(src));
+    const tag = geo.attrs.point.require("tag");
+    expect([tag.get(0), tag.get(1), tag.get(2)]).toEqual([7, 8, 9]);
+    // Purity: the input is a cached upstream object and must not move.
+    expect(positionsOf(src)).toEqual([
+      [0, 0, 0],
+      [2, 0, 0],
+      [2, 4, 0],
+    ]);
+  });
+
+  it("leaves a point no polyline reaches exactly where it was", async () => {
+    const geo = createPointCloud(4);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [4, 0, 0]);
+    P.setTuple(2, [8, 0, 0]);
+    P.setTuple(3, [9, 9, 9]);
+    setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+    const out = await placed({ parameter: 0 }, geo);
+    expect(positionsOf(out)[3]).toEqual([9, 9, 9]);
+    expect(out.attrs.point.require("tangent").getTuple(3)).toEqual([0, 0, 0]);
+    expect(out.attrs.point.require("curveU").get(3)).toBe(0);
+  });
+
+  it("leaves a zero-length polyline alone rather than dividing by it", async () => {
+    const out = await placed({ parameter: 0.5 }, createPolyline([1, 1, 1, 1, 1, 1]));
+    expect(positionsOf(out)).toEqual([
+      [1, 1, 1],
+      [1, 1, 1],
+    ]);
+    expect(out.attrs.point.require("curveU").get(0)).toBe(0);
+  });
+
+  it("reports a bad mode before it looks at the geometry", async () => {
+    const msg = await rejection(
+      runNode(pathPointAt, { mode: "along" }, { in: [makeGeometryItem(createPointCloud(0))] }),
+    );
+    expect(msg).toContain('pathPointAt: unknown mode "along"');
+    expect(msg).toContain("fraction, distance");
+  });
+
+  it("refuses to delete a differently shaped column it would write", async () => {
+    const src = withAttr(ell(), "curveU", [1, 2, 3]);
+    const wide = createPolyline([0, 0, 0, 1, 0, 0]);
+    wide.attrs.point.add("tangent", "f32", 1, 0);
+    const msg = await rejection(runNode(pathPointAt, {}, { in: [makeGeometryItem(wide)] }));
+    expect(msg).toContain("pathPointAt");
+    expect(msg).toContain("tangent");
+    expect(msg).toContain("removeAttribute");
+    // A same-shaped column is reset, not refused.
+    await expect(placed({ parameter: 0.5 }, src)).resolves.toBeDefined();
+  });
+
+  it("is deterministic across fresh runs and stable when run twice", async () => {
+    const src = twoPaths();
+    const run = async () => snapshotGeometry(await placed({ parameter: 0.3 }, src));
+    expect(await run()).toEqual(await run());
+  });
+
+  it("parameterizes each path on its own length", async () => {
+    // twoPaths is a 1-long segment and a 4-long one: the same fraction
+    // is a different distance on each, which is what 'fraction' means.
+    const geo = await placed({ mode: "fraction", parameter: 0.5 }, twoPaths());
+    const xs = positionsOf(geo).map((p) => p[0]);
+    expect(xs[0]).toBeCloseTo(0.5, 6);
+    expect(xs[2]).toBeCloseTo(12, 6);
   });
 });
 

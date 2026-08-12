@@ -389,6 +389,7 @@ describe("category metadata", () => {
       orientAlongVector: "point op",
       setBounds: "point op",
       pointsToPath: "point op",
+      pathPointAt: "point op",
       connectPoints: "point op",
       filterByDensity: "filter",
       filterByBounds: "filter",

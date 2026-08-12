@@ -50,6 +50,7 @@ import {
   jitterPoints,
   listNodeTypes,
   orientAlongVector,
+  pathPointAt,
   pathSegments,
   setAttribute,
   surfaceSample,
@@ -188,6 +189,22 @@ const ADOPTERS: AdopterFixture[] = [
       const din = g.add(dataInput);
       g.setParam(din, "items", [makeGeometryItem(unitSquare())]);
       const n = g.add(surfaceSample, { count: 64, densityField: value as never });
+      g.connect(din, "out", n, "in");
+      g.output(n, "out", "out");
+      return { g, id: n.id };
+    },
+  },
+  {
+    type: "pathPointAt",
+    build: (value) => {
+      const g = new Graph(7);
+      const din = g.add(dataInput);
+      // A path, not a cloud: this adopter resolves `parameter` on the
+      // points of the polyline it slides them along.
+      g.setParam(din, "items", [
+        makeGeometryItem(createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 2, 1, 0])),
+      ]);
+      const n = g.add(pathPointAt, { parameter: value as never });
       g.connect(din, "out", n, "in");
       g.output(n, "out", "out");
       return { g, id: n.id };

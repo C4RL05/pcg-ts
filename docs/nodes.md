@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-40 node types, grouped by `category` (node sections below are alphabetical):
+41 node types, grouped by `category` (node sections below are alphabetical):
 
 **attribute**
 
@@ -43,6 +43,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 - [jitterPoints](#jitterpoints) — Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point IDENTITY, axis).
 - [mergePoints](#mergepoints) — Concatenates the points of every connected geometry, in connection order, into one point cloud.
 - [orientAlongVector](#orientalongvector) — Sets the standard rot point attribute (f32 tuple 4 quaternion, [x, y, z, w]) so the chosen local axis points along `direction`, with `up` fixing the roll.
+- [pathPointAt](#pathpointat) — Moves every point of every polyline to the position at a given parameter ALONG ITS OWN polyline, and writes the unit `tangent` and `curveU` it finds there.
 - [pointsToPath](#pointstopath) — Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph.
 - [setBounds](#setbounds) — Sets the standard per-point bounds attributes: writes boundsMin and boundsMax (f32 tuple 3, world units) on every point, creating the attributes when missing.
 - [transformPoints](#transformpoints) — Transforms every point: P' = R * (scale * P) + translate, with R from rotateEuler (degrees, extrinsic XYZ order — world X applied first, then world Y, then world Z; equivalent to intrinsic ZYX, three.js Euler order 'ZYX').
@@ -338,6 +339,23 @@ Splits the input into one point cloud per distinct value of an i32, u32, or stri
 | Param | Type | Default | Range | Enum | Field | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `name` | string | `"name"` |  |  |  | Point attribute to partition by. Must be i32, u32, or string with tuple size 1. |
+
+## pathPointAt
+
+Moves every point of every polyline to the position at a given parameter ALONG ITS OWN polyline, and writes the unit `tangent` and `curveU` it finds there. Points, attributes and topology all survive — this slides points along the curve they already sit on rather than building new ones, so a path stays the same path and only its parameterization changes. This is the evaluate-at-parameter the library otherwise lacks: pathResample and splineSample can only step a whole curve at even intervals, so 'where is this curve at u = 0.37' had no answer, and anything that needed one had to approximate by stepping along the tangent and hoping the curve was straight enough. mode 'fraction' reads the parameter as 0..1 of that polyline's arc length; mode 'distance' reads it as world units from the start. Both CLAMP out of range rather than wrapping or erroring — a parameter is usually computed, and a clamp is what keeps a point on the curve. The parameter is field-capable and resolves on the INPUT points BEFORE anything moves, so a field reading `curveU` sees where each point started and can be written as an offset from it: lerp(curveU, target, amount) slides each point partway toward a target. A point in several polylines is placed by the LAST one in primitive order, matching writeTangents, and a point in none is left exactly where it is with a zero tangent and curveU 0 — as is every point of a polyline whose length is zero, since it has no parameter to speak of. Because points can slide past each other, a path whose parameters are not monotonic comes back folded; that is the caller's to avoid, and it is legal geometry either way.
+
+**Category:** point op
+
+**Inputs:** `in` (geometry)
+
+**Outputs:** `out` (geometry)
+
+**Params:**
+
+| Param | Type | Default | Range | Enum | Field | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `mode` | enum | `"fraction"` |  | `fraction`, `distance` |  | How the parameter is read: 'fraction' is 0..1 of the polyline's own arc length, so the same value means the same relative place on curves of different lengths; 'distance' is world units from the polyline's start. Both clamp to the ends. |
+| `parameter` | f32 | `0.5` |  |  | yes | Where along the polyline to place the point, read according to `mode`. Field-capable, resolved on the INPUT points before any of them move — so it can read `curveU` and express a move relative to where the point already is (for example lerp(attribute('curveU'), target, amount)), which is the usual way to use this node. Values outside the range clamp. |
 
 ## pathResample
 

@@ -38,6 +38,7 @@ import {
   lerp,
   mul,
   orientAlongVector,
+  pathPointAt,
   pathResample,
   pathSegments,
   perlinNoise,
@@ -419,26 +420,26 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
   // slider. Sliding points cannot delete one, so the count is exactly
   // what the slider says and the failure cannot happen.
   //
-  // The slide is along the TANGENT by the arc-length difference, rather
-  // than a re-evaluation of the curve at the new parameter, which the
-  // library has no node for. Over a bundle's width the spine is nearly
-  // straight, so the two agree closely and the anchors stay on it.
+  // The slide is a re-evaluation of the curve at the new parameter, so
+  // the anchors land ON the spine however hard it bends. This used to
+  // step along the tangent by the arc-length difference and accept the
+  // error, which is what pathPointAt was added to stop doing.
   const bundle = Math.min(1, Math.max(0, params.danglerBundle));
   const anchors = graph.add(pathResample, {
     mode: "count",
     count: Math.max(2, Math.round(params.danglerCount)),
   });
-  const bundling = graph.add(transformPoints, {
-    translate: (() => {
-      if (bundle <= 0) return [0, 0, 0];
+  const bundling = graph.add(pathPointAt, {
+    mode: "fraction",
+    // Each anchor slides `bundle` of the way from where it is to the
+    // centre of its own bin — the idiom pathPointAt's `parameter` is
+    // built for, a move expressed relative to the point's own curveU.
+    parameter: (() => {
       const u = attribute("curveU", 1);
-      const bins = Math.max(1, params.danglerBundleFreq);
-      // The centre of the bin this anchor falls in, back in curve units.
+      if (bundle <= 0) return u;
+      const bins = Math.max(1, Math.round(params.danglerBundleFreq));
       const centre = div(add(floor(mul(u, bins)), 0.5), bins);
-      // Curve units to metres. The wander makes the spine longer than
-      // its span; a fixed allowance is close enough for a gather.
-      const arc = params.span * 1.15;
-      return mul(mul(sub(centre, u), arc * bundle), attribute("tangent", 3));
+      return lerp(u, centre, bundle);
     })(),
   });
   // The attachment's SCALE is the strand's length: copyToPoints applies

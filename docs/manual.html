@@ -886,12 +886,12 @@ graph.<span class="n">setParam</span>(density, <span class="s">"value"</span>, <
     <p>There are three registries, and an agent should know all three before emitting anything: <code>listNodeTypes()</code> for node types, <code>listFieldFns()</code> for the field-expression vocabulary, and <code>listSubgraphs()</code> for the named primitives — the ready-made recipes a graph can reference by name instead of rebuilding. Each has a generated twin on disk and a <code>pcg</code> subcommand that prints the same thing from a shell.</p>
 
     <h3>listNodeTypes()</h3>
-    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 40 types in the standard library, all categorized.</p>
+    <p>Returns every registered node type. Each entry has exactly these keys: <code>type</code>, <code>description</code>, <code>category</code>, <code>inputs</code>, <code>outputs</code>, <code>params</code>. There are 41 types in the standard library, all categorized.</p>
 
     <div class="codeblock"><pre><code><span class="k">import</span> { listNodeTypes } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
 <span class="k">const</span> types = <span class="n">listNodeTypes</span>();
-types.length;                                <span class="c">// 40</span>
+types.length;                                <span class="c">// 41</span>
 <span class="k">const</span> jitter = types.<span class="n">find</span>(t => t.type === <span class="s">"jitterPoints"</span>);</code></pre></div>
 
     <p class="code-label">The entry, verbatim</p>
@@ -976,7 +976,7 @@ all.<span class="n">find</span>(s => s.name === <span class="s">"fill/scatter-ev
     <h3>The same catalogs, from a shell</h3>
     <p>Two of those registries are also commands. The <code>pcg</code> CLI is the library's other front door — <code>npx pcg …</code> when the package is installed, <code>node bin/pcg.mjs …</code> from a clone — and its discovery commands read the same registries this chapter has been calling:</p>
     <div class="codeblock"><pre><code><span class="c"># the whole registry, grouped by category</span>
-pcg nodes                      <span class="c"># -> "40 node types, by category"</span>
+pcg nodes                      <span class="c"># -> "41 node types, by category"</span>
 
 <span class="c"># one type: its pins and its full param table, with ranges, enums and</span>
 <span class="c"># which params accept a field</span>
@@ -998,7 +998,7 @@ pcg nodes pointGrid --json</code></pre></div>
     <table>
       <thead><tr><th>Prose</th><th>Machine-readable</th><th>What it indexes</th></tr></thead>
       <tbody>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 40 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 41 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">docs/examples.json</a></td><td>The example corpus: 37 graphs under <code>examples/graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
       </tbody>
