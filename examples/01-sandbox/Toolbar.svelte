@@ -13,9 +13,10 @@
     onExport,
     onImport,
     onLayout,
-    dock,
-    onDock,
+    viewLabel,
+    onCycleView,
     onFit,
+    host,
     onToggle,
   }: {
     seed: number;
@@ -29,9 +30,11 @@
     onExport: () => void;
     onImport: () => void;
     onLayout: () => void;
-    /** Which edge the dock sits on. */
-    dock: "bottom" | "left" | "right" | "full";
-    onDock: (dock: "bottom" | "left" | "right" | "full") => void;
+    /** Name of the current view, and the control that cycles it. */
+    viewLabel: string;
+    onCycleView: () => void;
+    /** Readouts the host owns rather than the cook: frame rate, what drew. */
+    host: { fps: string; drew: string };
     /** Frame every node in the canvas. */
     onFit: () => void;
     /** Collapse/expand the dock; wired to the title on narrow screens. */
@@ -42,11 +45,17 @@
     PRESET_GROUPS.map((group) => ({ group, items: PRESETS.filter((p) => p.group === group) })),
   );
 
+  /**
+   * One line rather than the floating stats card the page used to carry.
+   * Everything on it was already here except the frame rate and what the
+   * outputs drew, and a card that has to be hidden whenever the graph is
+   * up is a card in the wrong place.
+   */
   const statusText = $derived(
     status === null
       ? "cooking…"
-      : `cook ${status.elapsedMs.toFixed(1)} ms · ${status.cooked} cooked / ${status.cached} cached · ` +
-          `${status.points} pts · ${status.instances} inst · hash ${status.hash}` +
+      : `${host.fps} fps · cook ${status.elapsedMs.toFixed(1)} ms · ${status.cooked} cooked / ${status.cached} cached · ` +
+          `${status.outputs} out · ${status.points} pts · ${status.instances} inst · ${host.drew} · hash ${status.hash}` +
           (status.errors.length > 0 ? ` · ${status.errors.length} error(s)` : ""),
   );
 
@@ -95,16 +104,8 @@
   </label>
   <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
   <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
-  <span class="dock" role="group" aria-label="dock position">
-    {#each [["left", "◧"], ["bottom", "▤"], ["right", "◨"], ["full", "⛶"]] as [side, glyph] (side)}
-      <button
-        class="side"
-        class:on={dock === side}
-        aria-pressed={dock === side}
-        title="dock {side}"
-        onclick={() => onDock(side as "bottom" | "left" | "right" | "full")}>{glyph}</button>
-    {/each}
-  </span>
+  <button class="view" onclick={onCycleView} title="cycle the view (Tab, shift-Tab to go back)"
+    >view · {viewLabel}</button>
   <button onclick={onExport} title="serializeGraph → JSON">export</button>
   <button onclick={onImport} title="paste JSON → deserializeGraph">import</button>
   <span class="status" class:err={status !== null && status.errors.length > 0}>{statusText}</span>
@@ -171,19 +172,13 @@
   button:hover {
     background: #24334c;
   }
-  .dock {
-    display: flex;
-    gap: 2px;
+  .view {
+    color: #b8f5c8;
+    border-color: #2f4a3c;
+    background: #16241d;
   }
-  .side {
-    padding: 3px 7px;
-    font-size: 13px;
-    line-height: 1;
-  }
-  .side.on {
-    background: #24344d;
-    border-color: #35507a;
-    color: #eaf1fa;
+  .view:hover {
+    background: #1d3126;
   }
   .status {
     flex: 1 1 100%;

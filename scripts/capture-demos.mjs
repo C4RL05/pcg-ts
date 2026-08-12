@@ -132,11 +132,12 @@ const SIZES = {
 const DEMOS = [
   {
     id: "01-sandbox",
-    // The starter graph is cooked behind a 150 ms debounce; the toolbar reads
-    // "cooking…" until the first cook lands.
-    ready: (s, has) => {
+    // The graph is cooked behind a 150 ms debounce; the toolbar reads
+    // "cooking…" until the first cook lands. There is no stats card to
+    // scrape any more — the status line carries the readouts.
+    ready: () => {
       const status = document.querySelector(".toolbar .status");
-      return !!status && /^cook\s/.test(status.textContent || "") && has(s["output hash"]);
+      return !!status && /hash [0-9a-f]{8}/.test(status.textContent || "");
     },
   },
   {

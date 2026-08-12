@@ -6,32 +6,21 @@
   <title>pcg-ts — 01 sandbox</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0d1117; overflow: hidden; }
-    /* Narrow screens keep ONE bottom sheet, and here it is the editor
-       dock. The stats overlay is desktop diagnostics, and the knobs card
-       is a PanelShell — which becomes a second bottom sheet at this width
-       and would sit on top of the dock. Breakpoint: NARROW_MEDIA_QUERY in
-       ../shared/mobile.ts. */
-    @media (max-width: 700px) { .pcg-overlay, .panel { display: none; } }
-    /* Full-screen dock: the canvas is translucent so the cooked result
-       stays visible behind the nodes — and so would these two cards,
-       as unreadable ghost text. The editor sets the class. */
-    html.pcg-dock-full .pcg-overlay,
-    html.pcg-dock-full .panel { display: none; }
+    /* The editor is a full-bleed overlay now, so there is nothing
+       floating over the scene to hide at any width. */
   </style>
-  <script type="module" crossorigin src="../assets/01-sandbox-CShxLgry.js"></script>
+  <script type="module" crossorigin src="../assets/01-sandbox-nPmdZ9zH.js"></script>
   <link rel="modulepreload" crossorigin href="../assets/mobile-BAPbsnLk.js">
-  <link rel="modulepreload" crossorigin href="../assets/PanelShell-C9P_2C7j.js">
+  <link rel="modulepreload" crossorigin href="../assets/disclose-version-BfxSBkoW.js">
   <link rel="modulepreload" crossorigin href="../assets/three.core-BdLaVEE2.js">
-  <link rel="modulepreload" crossorigin href="../assets/overlay-Bia06VU3.js">
   <link rel="modulepreload" crossorigin href="../assets/OrbitControls-DsnV9JXy.js">
   <link rel="modulepreload" crossorigin href="../assets/scene-DVQazRvt.js">
   <link rel="modulepreload" crossorigin href="../assets/instanced-bjMXnNfE.js">
   <link rel="modulepreload" crossorigin href="../assets/debug-Drq75VmK.js">
   <link rel="modulepreload" crossorigin href="../assets/preload-helper-HclGiUj8.js">
-  <link rel="modulepreload" crossorigin href="../assets/Controls-Dk9L35Yl.js">
-  <link rel="stylesheet" crossorigin href="../assets/PanelShell-CXOdxzxk.css">
+  <link rel="modulepreload" crossorigin href="../assets/Controls-FfVyn9Iq.js">
   <link rel="stylesheet" crossorigin href="../assets/Controls-3QD7jnfa.css">
-  <link rel="stylesheet" crossorigin href="../assets/01-sandbox-DwvJMbCc.css">
+  <link rel="stylesheet" crossorigin href="../assets/01-sandbox-D9UzBxLv.css">
 </head>
 <body>
   <div id="editor"></div>

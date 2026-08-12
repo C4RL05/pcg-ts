@@ -28,7 +28,6 @@ import {
   type Object3D,
 } from "three";
 import { createFpsMeter } from "../shared/fps.js";
-import { createOverlay } from "../shared/overlay.js";
 import { createScene } from "../shared/scene.js";
 import { createPlaceholderAssets } from "../shared/assets.js";
 import { disposeDrawn, drawItem, type DrawMaterials } from "../shared/draw.js";
@@ -89,33 +88,23 @@ function render(items: readonly DataItem[]): void {
       : [...tally].map(([what, n]) => (n > 1 ? `${n}× ${what}` : what)).join(" · ");
 }
 
-// -- overlay (stats live here; controls live in the Svelte editor) ---------
+// -- readouts --------------------------------------------------------------
 
-const overlay = createOverlay({
-  title: "01 · sandbox",
-  info: "Load a graph from the corpus, then edit it: palette → canvas → inspector. Every edit mutates the live graph in place (add/connect/disconnect/removeNode), so untouched branches re-cook from cache — watch nodes cooked/cached after deleting a node. What is drawn is the graph's own declared outputs plus every unconnected output pin, so a node you just added shows up without wiring anything.",
-});
-const statFps = overlay.addStat("fps");
-const statOutputs = overlay.addStat("outputs");
-const statCook = overlay.addStat("cook");
-const statNodes = overlay.addStat("nodes cooked/cached");
-const statPayload = overlay.addStat("points / instances");
-// What the outputs turned into on screen. Worth a line now that any
-// corpus graph can be loaded: a graph whose output is a mesh and a graph
-// whose output is a point cloud have the same points/instances readout.
-const statDrew = overlay.addStat("drew");
-const statHash = overlay.addStat("output hash");
-const errorsPre = overlay.addCollapsible("cook errors", false);
-errorsPre.textContent = "(none)";
+/**
+ * There is no stats card any more. The editor is a full-bleed overlay
+ * over the render, and anything floating over the scene shows through
+ * its translucent canvas as ghost text — so the numbers live in the
+ * toolbar's status line, which already carried most of them. These two
+ * are the host's own (the cook does not know the frame rate, and what an
+ * output DREW is a renderer question), pushed in through the bridge.
+ */
+const bridge: { publish?: (s: { fps: string; drew: string }) => void } = {};
+let fpsText = "–";
+const publish = (): void => bridge.publish?.({ fps: fpsText, drew: drewSummary });
 
 function status(s: CookStatus): void {
-  statOutputs(String(s.outputs));
-  statCook(`${s.elapsedMs.toFixed(1)} ms`);
-  statNodes(`${s.cooked} / ${s.cached}`);
-  statPayload(`${s.points} / ${s.instances}`);
-  statDrew(drewSummary);
-  statHash(s.hash);
-  errorsPre.textContent = s.errors.length > 0 ? s.errors.join("\n\n") : "(none)";
+  void s; // the editor already has it from the controller; this just refreshes ours
+  publish();
 }
 
 // -- editor ----------------------------------------------------------------
@@ -124,7 +113,11 @@ const controller = new EditorController({ render, status });
 
 const target = document.getElementById("editor");
 if (!target) throw new Error("missing #editor element");
-mount(Editor, { target, props: { controller } });
+mount(Editor, { target, props: { controller, bridge } });
+publish();
 
-const fps = createFpsMeter((v) => statFps(v));
+const fps = createFpsMeter((v) => {
+  fpsText = v;
+  publish();
+});
 start(() => fps());

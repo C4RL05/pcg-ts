@@ -1,18 +1,18 @@
 <script lang="ts">
   /**
-   * The graph's knobs, as a card over the viewport rather than a fourth
-   * column in the dock — this is the control surface a visitor reaches
-   * for first, and it belongs beside the thing it changes, not beside the
-   * wiring. It wears the same shell as the other demos' panels and is
-   * rendered by the same spec-driven renderer, which is what that
-   * renderer was generalised for.
+   * The graph's knobs, as a column of the editor overlay. It used to be a
+   * floating card, which worked until the overlay went full-bleed and
+   * translucent: anything behind that canvas shows through it, and a card
+   * of controls came out as ghost text under the nodes. In the column it
+   * is legible, it scrolls with its own bar, and the scene is still right
+   * there behind the overlay. Rendered by the shared spec-driven
+   * renderer, which is what that renderer was generalised for.
    *
    * The rows are the exposed params of the graph's subgraph nodes, laid
    * out by a panel spec when the graph ships one and grouped by node when
    * it does not. Writing one is `setParam` on the wrapping node, the same
    * call the inspector makes — so the two views of a knob cannot drift.
    */
-  import PanelShell from "../shared/PanelShell.svelte";
   import Controls from "../shared/Controls.svelte";
   import { applyCommit, type ControlCommit } from "../shared/controls.js";
   import {
@@ -52,8 +52,6 @@
     onReset: () => void;
     shareUrl: (patch: KnobPatch) => string;
   } = $props();
-
-  const PANEL_WIDTH = 300;
 
   /**
    * Rebuilt from the live graph on every rev rather than kept as local
@@ -137,7 +135,8 @@
   );
 </script>
 
-<PanelShell {title} width={PANEL_WIDTH}>
+<div class="knobs">
+  <h2 class="graph-title">{title}</h2>
   {#if panel.sections.length === 0}
     <p class="note">
       This graph exposes no knobs. Params live on its nodes — select one on the canvas to edit it.
@@ -199,9 +198,26 @@
       {/each}
     </details>
   {/if}
-</PanelShell>
+</div>
 
 <style>
+  .knobs {
+    flex: 0 0 296px;
+    min-height: 0;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    background: rgba(13, 17, 23, 0.94);
+    border-left: 1px solid #223047;
+    backdrop-filter: blur(6px);
+  }
+  .graph-title {
+    margin: 0 0 4px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #f0f4fa;
+    line-height: 1.3;
+  }
   .note {
     margin: 0 0 6px;
     color: #8b98ab;

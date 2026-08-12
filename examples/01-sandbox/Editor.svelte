@@ -8,7 +8,7 @@
    * caches); the panel commits an edit to its view model only after the
    * controller accepted it.
    */
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import Canvas from "./Canvas.svelte";
   import Inspector from "./Inspector.svelte";
   import Modal from "./Modal.svelte";
@@ -35,7 +35,40 @@
     type StructureModel,
   } from "./model.js";
 
-  let { controller }: { controller: EditorController } = $props();
+  let {
+    controller,
+    bridge,
+  }: {
+    controller: EditorController;
+    /** The host publishes readouts it owns (fps, what was drawn) here. */
+    bridge: { publish?: (s: { fps: string; drew: string }) => void };
+  } = $props();
+
+  let host = $state({ fps: "–", drew: "–" });
+  untrack(() => {
+    bridge.publish = (s) => (host = s);
+  });
+
+  /**
+   * What is on screen, cycled by Tab. Four states rather than a boolean
+   * because the useful question is not "graph or no graph" but how much
+   * of the scene you want behind it: all of it while you place nodes
+   * against what they make, half of it when the scene is too bright to
+   * read a graph over, none of it when the graph IS the work.
+   */
+  const VIEWS = [
+    { id: "scene", label: "scene", scrim: 0, graph: false, canvas: false },
+    { id: "both", label: "scene + graph", scrim: 0, graph: true, canvas: false },
+    { id: "dim", label: "graph · dimmed scene", scrim: 0.5, graph: true, canvas: true },
+    { id: "graph", label: "graph only", scrim: 1, graph: true, canvas: true },
+  ] as const;
+  let viewIndex = $state(1);
+  const view = $derived(VIEWS[viewIndex]);
+  /** Step is always ±1 — never wired straight to a click, whose event
+      argument would land here as the step and make the index NaN. */
+  function cycleView(step: 1 | -1 = 1): void {
+    viewIndex = (viewIndex + step + VIEWS.length) % VIEWS.length;
+  }
 
   /**
    * What the page opens on when the URL names nothing. A corpus graph
@@ -92,81 +125,30 @@
   const selectedNode = $derived(model.nodes.find((n) => n.id === selectedId) ?? null);
 
   /**
-   * Narrow-screen treatment (viewing-grade, not a mobile editor): the dock
-   * becomes a full-width bottom sheet collapsed to the toolbar's first
-   * row, and the palette/inspector columns become slide-over drawers so
-   * the node canvas gets the full width. All of it is media-query-gated —
-   * at desktop widths these flags exist but style nothing. Entering the
-   * narrow range collapses the dock, leaving it clears the collapse, so
-   * rotating a phone never strands the dock in a stale state.
+   * Narrow-screen treatment (viewing-grade, not a mobile editor): the
+   * overlay collapses to the toolbar's first row, and the palette and
+   * param columns become slide-over drawers so the node canvas gets the
+   * full width. All of it is media-query-gated — at desktop widths these
+   * flags exist but style nothing. Entering the narrow range collapses,
+   * leaving it clears the collapse, so rotating a phone never strands the
+   * overlay in a stale state.
    */
-  /**
-   * Which edge the dock sits on. Persisted, because where you want the
-   * graph is a property of your screen rather than of the session.
-   */
-  type Dock = "bottom" | "left" | "right" | "full";
-  const DOCK_KEY = "pcg-sandbox-dock";
-  function readDock(): Dock {
-    try {
-      const v = localStorage.getItem(DOCK_KEY);
-      if (v === "left" || v === "right" || v === "bottom" || v === "full") return v;
-    } catch {
-      // Private mode and file:// can both refuse storage; the default is fine.
-    }
-    return "bottom";
-  }
-  let dock = $state<Dock>(readDock());
-  /** Measured, so the insets below track a clamped CSS width exactly. */
-  let dockWidth = $state(0);
-  function setDock(next: Dock): void {
-    if (next === dock) return;
-    dock = next;
-    // Moving the dock changes the canvas geometry completely — a bottom
-    // strip and a full screen frame nothing alike — so the view is
-    // refitted. Someone reaching for full screen is usually reaching for
-    // "show me more of this", which is what fit means.
-    frameGraph();
-    try {
-      localStorage.setItem(DOCK_KEY, next);
-    } catch {
-      // Not worth telling anyone: the dock still moved.
-    }
-  }
-
-  /**
-   * A side dock would sit under the stats overlay (fixed top-left) and the
-   * knobs card (fixed top-right). Rather than teach either about this
-   * page, publish the space the dock has taken as custom properties both
-   * already offset by — they default to 0, so every other demo is
-   * unaffected.
-   */
-  $effect(() => {
-    const root = document.documentElement;
-    root.style.setProperty("--pcg-inset-left", dock === "left" ? `${dockWidth + 12}px` : "0px");
-    root.style.setProperty("--pcg-inset-right", dock === "right" ? `${dockWidth + 12}px` : "0px");
-    // Full screen hides them rather than stacking them: the canvas is
-    // translucent so the cooked result shows through, and anything else
-    // behind it shows through too — the two cards came out as ghost text
-    // under the nodes. The page's own stylesheet does the hiding.
-    root.classList.toggle("pcg-dock-full", dock === "full");
-    return () => {
-      root.style.removeProperty("--pcg-inset-left");
-      root.style.removeProperty("--pcg-inset-right");
-      root.classList.remove("pcg-dock-full");
-    };
-  });
-
   /** Canvas component ref, for the toolbar's "fit" button. */
   let canvas = $state<{ resetView: () => void } | undefined>();
 
-  let dockCollapsed = $state(narrowScreen().matches);
+  /** Refit when the overlay appears: it was not measurable while hidden. */
+  $effect(() => {
+    if (view.graph) frameGraph();
+  });
+
+  let collapsed = $state(narrowScreen().matches);
   let paletteOpen = $state(false);
   let inspectorOpen = $state(false);
 
   $effect(() => {
     const mql = narrowScreen();
     const onChange = (e: MediaQueryListEvent): void => {
-      dockCollapsed = e.matches;
+      collapsed = e.matches;
       // Leaving the narrow range also resets the drawers, so one left open
       // does not silently reappear the next time the range is entered.
       if (!e.matches) {
@@ -272,7 +254,7 @@
 
   /**
    * Frame the whole graph after a load. The canvas pans and zooms rather
-   * than scrolling, so without this a graph wider than the dock opens
+   * than scrolling, so without this a graph wider than the view opens
    * with its tail off-screen and no scrollbar to say so. Deferred a tick:
    * the fit measures the canvas, which has not laid out the new nodes yet.
    */
@@ -500,16 +482,37 @@
     return err;
   }
 
+  /** Somewhere a keystroke means a character, not a command. */
+  function isTyping(t: HTMLElement | null): boolean {
+    return (
+      t !== null &&
+      (t.tagName === "INPUT" ||
+        t.tagName === "TEXTAREA" ||
+        t.tagName === "SELECT" ||
+        t.isContentEditable)
+    );
+  }
+
   function onKeydown(e: KeyboardEvent): void {
-    if (e.key !== "Delete" && e.key !== "Backspace") return;
-    if (modal !== null) return;
-    const t = e.target as HTMLElement | null;
-    if (
-      t &&
-      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
-    ) {
+    const target = e.target as HTMLElement | null;
+    /**
+     * Tab cycles the view; shift-Tab walks it back. It is the one key
+     * this page takes from the browser, and it is taken deliberately:
+     * a live view has to be switchable without looking away from it.
+     * Text fields keep Tab, so nothing typed into is ever a trap, and a
+     * modal keeps it too.
+     */
+    if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (modal !== null || isTyping(target)) return;
+      e.preventDefault();
+      cycleView(e.shiftKey ? -1 : 1);
       return;
     }
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    if (modal !== null) return;
+    if (isTyping(target)) return;
+    const t = target;
+    void t;
     if (selectedId !== null) {
       e.preventDefault();
       deleteNode(selectedId);
@@ -519,42 +522,27 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- Over the viewport, not in the dock: these are the knobs of the thing
-     on screen, and the dock is about how it is wired. -->
-<Knobs
-  {controller}
-  rev={knobRev}
-  spec={panelSpec}
-  title={graphTitle}
-  {baseline}
-  seed={model.seed}
-  {loadedSeed}
-  onEdit={() => paramsRev++}
-  onReset={resetKnobs}
-  {shareUrl} />
+<!-- Behind the overlay, in front of the scene: how much of the render
+     shows through is a property of the VIEW, not of the graph, so it is
+     one element rather than an opacity smeared over the editor's parts. -->
+<div class="scrim" style="opacity: {view.scrim}" aria-hidden="true"></div>
 
-<div
-  class="editor"
-  class:collapsed={dockCollapsed}
-  class:dock-left={dock === "left"}
-  class:dock-right={dock === "right"}
-  class:dock-full={dock === "full"}
-  bind:clientWidth={dockWidth}
->
+<div class="editor" class:collapsed hidden={!view.graph}>
   <Toolbar
     seed={model.seed}
     {status}
-    collapsed={dockCollapsed}
+    {collapsed}
     {preset}
     onPreset={(name) => void openPreset(name, { updateUrl: true })}
     onSeed={setSeed}
     onExport={openExport}
     onImport={() => (modal = "import")}
     onLayout={relayout}
-    {dock}
-    onDock={setDock}
     onFit={() => canvas?.resetView()}
-    onToggle={() => (dockCollapsed = !dockCollapsed)}
+    viewLabel={view.label}
+    onCycleView={() => cycleView()}
+    {host}
+    onToggle={() => (collapsed = !collapsed)}
   />
   {#if status && status.errors.length > 0}
     <div class="cook-errors">
@@ -568,6 +556,7 @@
     <div class="canvas-wrap">
       <Canvas
         bind:this={canvas}
+        interactive={view.canvas}
         {model}
         {selectedId}
         onSelect={(id) => (selectedId = id)}
@@ -577,6 +566,17 @@
         onDeleteNode={deleteNode}
       />
     </div>
+    <Knobs
+      {controller}
+      rev={knobRev}
+      spec={panelSpec}
+      title={graphTitle}
+      {baseline}
+      seed={model.seed}
+      {loadedSeed}
+      onEdit={() => paramsRev++}
+      onReset={resetKnobs}
+      {shareUrl} />
     <Inspector
       {controller}
       node={selectedNode}
@@ -630,77 +630,51 @@
 {/if}
 
 <style>
+  /**
+   * A full-bleed overlay over the live render rather than a panel beside
+   * it. Its parts carry their own backing; the space between them is the
+   * scene, dimmed by the scrim to whatever the current view asks for.
+   */
   .editor {
     position: fixed;
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    height: 46vh;
-    min-height: 320px;
+    inset: 0;
     z-index: 10;
     display: flex;
     flex-direction: column;
-    background: rgba(13, 17, 23, 0.92);
-    border: 1px solid #2a3548;
-    border-radius: 10px;
     color: #dbe4f0;
     font: 13px/1.45 system-ui, sans-serif;
-    backdrop-filter: blur(6px);
-    overflow: hidden;
+    pointer-events: none;
   }
-  /* Docked to a side the dock is full height and a clamped width; the
-     canvas keeps whatever is left, which is why the columns beside it
-     stay fixed-width and it does not. */
-  .editor.dock-left,
-  .editor.dock-right {
-    top: 12px;
-    bottom: 12px;
-    height: auto;
-    width: clamp(420px, 34vw, 640px);
+  .editor[hidden] {
+    display: none;
   }
-  .editor.dock-left {
-    left: 12px;
-    right: auto;
-  }
-  .editor.dock-right {
-    right: 12px;
-    left: auto;
+  /* Only the parts take the pointer; the overlay itself is a frame. */
+  .editor > :global(*) {
+    pointer-events: auto;
   }
   /**
-   * Full screen, for surgery on a graph too big for a strip. The chrome
-   * keeps its own solid backing while the canvas goes translucent, so the
-   * cooked result stays visible behind the nodes — losing sight of what
-   * the graph makes is the one thing a full-screen editor must not cost,
-   * since watching it react is the reason to be here at all.
+   * WHO OWNS THE WHEEL AND THE RIGHT BUTTON. Both gestures mean "move the
+   * view" to the graph AND to the scene's orbit controls, and the graph
+   * canvas covers the render completely — so one of them has to yield,
+   * and which is what separates the two lit states.
+   *
+   * `scene + graph` is a heads-up state: the graph is drawn over a scene
+   * you are still flying, so the canvas is click-through and the wheel
+   * and right button reach the render. The dimmed states are the working
+   * ones and the canvas takes them back.
+   *
+   * The chrome — toolbar, palette, knobs, inspector — never goes inert,
+   * so a knob can be turned while the scene is being orbited, which is
+   * the pairing worth having.
    */
-  .editor.dock-full {
-    inset: 12px;
-    /* Over the stats card and the knobs card, not under them. Raising
-       THEM instead was the first attempt and it put them on top of this
-       editor's own toolbar, palette and inspector — the chrome you are
-       in this mode to use. The result stays visible through the canvas;
-       the readouts are one dock button away. */
-    z-index: 12;
-    width: auto;
-    height: auto;
-    background: transparent;
-    border-color: transparent;
-    backdrop-filter: none;
-  }
-  .editor.dock-full .canvas-wrap {
-    background: rgba(13, 17, 23, 0.55);
-  }
-  /* The children own their own backgrounds only in this mode, and they
-     are separate components — hence :global, scoped under .dock-full so
-     it cannot leak to the other three. */
-  .editor.dock-full :global(.toolbar),
-  .editor.dock-full :global(.palette),
-  .editor.dock-full :global(.inspector) {
-    background: rgba(13, 17, 23, 0.94);
-    backdrop-filter: blur(6px);
-  }
-  .editor.dock-full :global(.toolbar) {
-    border-radius: 10px 10px 0 0;
+
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 9;
+    background: #05070b;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
   }
   .body {
     display: flex;
@@ -802,7 +776,7 @@
       border-right: none;
       border-radius: 6px 0 0 6px;
     }
-    /* The collapsed dock is a title bar only; the tabs would otherwise
+    /* The collapsed overlay is a title bar only; the tabs would otherwise
        poke into it, because .body still has a few clipped pixels and the
        tabs anchor to its vertical center. */
     .editor.collapsed .drawer-tab {
