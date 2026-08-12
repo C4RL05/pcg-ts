@@ -1548,6 +1548,64 @@
     ]
   },
   {
+    "name": "place/radial-on-curve",
+    "hash": "2303e7dd3922f1e6",
+    "title": "Place points along a curve and aim them radially",
+    "description": "Places points at even arc-length steps along every path of the supplied `curve`, then rolls each one to a random angle AROUND the curve — spikes on a mace, bristles on a brush, brackets round a mast, leaves up a stem, buds on a branch. It is deliberately distinct from `place/along-curve`, which spaces points the same way but aims them ALONG the tangent with a CONSTANT world `up`: that fixes every asset in the same world orientation, and it flips them a half turn wherever the curve turns over. Here the up hint is per point — cos(a) * `curveNormal` + sin(a) * `curveBinormal`, the unit vector at a random angle a in the plane perpendicular to the tangent, taken from the rotation-minimizing frame `write/curve-frame` describes — so the assets fan out around the path and the fan follows the path however it bends. A constant up simply cannot express that, which is the whole reason to reach for this one. GEOMETRY: the asset's local +z runs along the curve and its local +y is the radial direction, so a prop that must stick OUT of the path wants its length on +y. The points are NEW: they carry `P`, the unit `tangent`, `curveU`, `curveNormal`, `curveBinormal` and `rot`, plus the standard attributes at their defaults, and nothing written on the curve's own POINTS survives — use `write/curve-frame` and an `orientAlongVector` of your own if it must. Every PRIMITIVE attribute does survive, since a sample inherits the polyline it was taken from. PRECONDITION: `curve` must carry polyline topology and must not have been through anything that can REMOVE points — the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy it, and `filterByAttribute` does so even when its predicate keeps every point. VARIATION: yes — the angle is drawn from the evaluation context, so two instances in one graph fan differently on their own; there is no seed knob, so an explicit re-roll means a different `spread`. A CLOSED path does not come back seamless: the frame is transported around the loop and returns rotated by that curve's residual angle, so the fan does not line up across the seam. The output is still a path and can be resampled again.",
+    "tags": [
+      "place",
+      "curve",
+      "path",
+      "instancing"
+    ],
+    "nodes": 5,
+    "inputs": [
+      {
+        "name": "curve",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "count",
+        "schema": {
+          "type": "i32",
+          "default": 24,
+          "description": "Points per path: exactly this many come out whatever the path's length, evenly spaced at length / (count - 1), and both ends are always occupied. At least 2 (3 on a closed path). For a fixed pitch in world units instead, resample with `place/along-curve` in 'spacing' mode first and feed the result in here.",
+          "min": 2
+        },
+        "targets": [
+          {
+            "node": "resample",
+            "param": "count"
+          }
+        ]
+      },
+      {
+        "name": "spread",
+        "schema": {
+          "type": "f32",
+          "default": 1,
+          "description": "How much of a full turn around the curve the fan covers, as a fraction: 1 spreads uniformly over the whole circle, 0.25 over a quarter turn, and 0 aims every point the same way — straight along the transported `curveNormal`, which is a smooth ribbon rather than a fan, and the one setting that does NOT vary between two instances. The angle is drawn uniformly over 0..spread turns, so it is one-sided: the fan opens from the normal in one direction only, and a spread of 0.5 covers a half turn from it rather than a quarter turn either side. Values above 1 wrap and buy nothing.",
+          "acceptsField": true,
+          "min": 0
+        },
+        "targets": [
+          {
+            "node": "spreadAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "shape/disc",
     "hash": "80a61364563e287a",
     "title": "Points scattered uniformly inside a circle",
@@ -2303,6 +2361,66 @@
     ]
   },
   {
+    "name": "transform/gather-on-path",
+    "hash": "474dfa9bf777d7e2",
+    "title": "Gather a path's own points into clumps along it",
+    "description": "Slides every point of a path along the curve it already sits on, toward the centre of its own bin, so an even distribution becomes clumps with bare runs between them — hedgerows, rock piles, bundled cables, knots in a crowd. Nothing is created or deleted: the count, the attributes and the polyline topology all survive, and each point is RE-EVALUATED on the curve rather than stepped along its tangent, so it stays exactly on the path however hard the path bends. Each point's target is the centre of the bin its own `curveU` falls into — `bins` equal bins per path — and `amount` is how far of the way there it travels, so 0 changes nothing and 1 collapses every bin onto a single spot. PRECONDITION: the input must carry `curveU` (f32, tuple 1) as well as polyline topology, so it has to have come from a sampler that writes one — `pathResample`, `splineSample`, `place/along-curve`, `place/radial-on-curve` or `shape/path-meander`. A path built straight out of `pointsToPath` has no parameterization to gather along, and the cook fails naming `curveU` rather than guessing one. The point sitting exactly at the end of a path does not move: its bin centre lies past the end and clamps back onto it. `curveU` and `tangent` are rewritten to where each point LANDS, so a second gather bins the new positions and not the old ones. Fully deterministic: two instances with the same params clump identically, and there is no seed — the clumps are where the bins are, not where a draw put them. Reads and writes `P`; every other attribute arrives untouched.",
+    "tags": [
+      "transform",
+      "curve",
+      "path",
+      "spacing"
+    ],
+    "nodes": 4,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "amount",
+        "schema": {
+          "type": "f32",
+          "default": 0.7,
+          "description": "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other.",
+          "acceptsField": true,
+          "min": 0,
+          "max": 1
+        },
+        "targets": [
+          {
+            "node": "amountAttr",
+            "param": "value"
+          }
+        ]
+      },
+      {
+        "name": "bins",
+        "schema": {
+          "type": "f32",
+          "default": 6,
+          "description": "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. The schema admits a field because the slot underneath it does, but keep it CONSTANT: a per-point bin count gives neighbouring points different bins, which stop partitioning the path and send them to targets that do not line up.",
+          "acceptsField": true,
+          "min": 1
+        },
+        "targets": [
+          {
+            "node": "binsAttr",
+            "param": "value"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "transform/relax-spacing",
     "hash": "00d0b320600b2385",
     "title": "Even out spacing without deleting anything",
@@ -2434,6 +2552,75 @@
           {
             "node": "fit",
             "param": "name"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "write/curve-frame",
+    "hash": "01aa13cf72e15dd8",
+    "title": "Write a smoothly carried frame along a path",
+    "description": "Writes a full orthonormal frame at every point of a path — `tangent`, `curveNormal` and `curveBinormal` (f32, tuple 3) — with the normal CARRIED along the curve by rotation-minimizing transport rather than rebuilt from a world axis at each point. That is the thing a constant `up` cannot do: as a curve turns over, a tangent passing through the up vector flips the roll a half turn and everything placed there snaps round with it. Feed `curveNormal` back into `orientAlongVector`'s `up` — field-capable for exactly this — and the roll varies smoothly however the curve bends; combine the normal and the binormal with cos and sin of an angle to aim anything RADIALLY around the path, which is what `place/radial-on-curve` does. It sits beside `write/orient-along-path`: that one turns the points to face ALONG the curve, this one hands over the two perpendicular axes as well and writes no `rot` at all. The points, their attributes and the topology all arrive and leave untouched. PRECONDITION: the input must carry polyline topology; a point on no polyline gets [0,0,0] on all three columns. ORDER: run it AFTER any resample — `pathResample` and `splineSample` build NEW points and do not carry the input's point attributes, so a frame written before one is silently dropped there — and BEFORE anything that can remove points, since the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy the topology it needs. THE FRAME IS NOT LOCAL: a point's normal depends on every point before it along its own path, so a curve that arrives split across two cook cells gets two unrelated frames, and a CLOSED path does not come back seamless — transport around a loop returns rotated by that curve's own residual angle, either side of the seam differs, and no local rule can fix it. Fully deterministic: two instances write identical frames. Writes `tangent`, `curveNormal` and `curveBinormal`; `P` and the count are untouched.",
+    "tags": [
+      "write",
+      "curve",
+      "path",
+      "instancing"
+    ],
+    "nodes": 1,
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry"
+      }
+    ],
+    "params": [
+      {
+        "name": "binormalName",
+        "schema": {
+          "type": "string",
+          "default": "curveBinormal",
+          "description": "Attribute the binormal — tangent cross normal, the frame's third axis — is written to. It ships as a column rather than being recomputed downstream, because recomputing it from two f32 columns is where a frame stops being exactly orthonormal."
+        },
+        "targets": [
+          {
+            "node": "frame",
+            "param": "binormalName"
+          }
+        ]
+      },
+      {
+        "name": "normalName",
+        "schema": {
+          "type": "string",
+          "default": "curveNormal",
+          "description": "Attribute the transported normal is written to. Do NOT rename it to 'normal': `surfaceSample` writes a surface `normal` of the very same shape (f32, tuple 3), and a matching shape is exactly the case an attribute writer ACCEPTS — so a graph that samples a surface and frames a curve would have one silently overwrite the other."
+        },
+        "targets": [
+          {
+            "node": "frame",
+            "param": "normalName"
+          }
+        ]
+      },
+      {
+        "name": "tangentName",
+        "schema": {
+          "type": "string",
+          "default": "tangent",
+          "description": "Attribute the unit tangent is written to. The default 'tangent' is what `pathResample` and `splineSample` emit and what an `orientAlongVector` direction field reads, so leave it alone unless two frames have to coexist on one cloud."
+        },
+        "targets": [
+          {
+            "node": "frame",
+            "param": "tangentName"
           }
         ]
       }

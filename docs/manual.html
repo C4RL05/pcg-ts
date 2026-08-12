@@ -963,13 +963,13 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
  <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>listSubgraphs()</h3>
-    <p>The third registry, and the one an agent gains most from: the <strong>named primitives</strong>. A primitive is a registered subgraph — a tested recipe with exposed params — that a graph references by name rather than rebuilding out of node types. 34 named primitives ship with the library, and <code>listSubgraphs()</code> returns them as <code>{ name, subgraph, hash, meta }</code>: the canonical payload, its content hash, and a <code>meta</code> block whose <code>title</code> and <code>description</code> say what the recipe is for and how its knobs behave.</p>
+    <p>The third registry, and the one an agent gains most from: the <strong>named primitives</strong>. A primitive is a registered subgraph — a tested recipe with exposed params — that a graph references by name rather than rebuilding out of node types. 37 named primitives ship with the library, and <code>listSubgraphs()</code> returns them as <code>{ name, subgraph, hash, meta }</code>: the canonical payload, its content hash, and a <code>meta</code> block whose <code>title</code> and <code>description</code> say what the recipe is for and how its knobs behave.</p>
     <p>One thing about it is unlike the other two registries and will otherwise cost you an afternoon. <strong>Primitives register on import of their own subpath</strong>, so <code>listSubgraphs()</code> returns an empty array until something imports it:</p>
     <div class="codeblock"><pre><code><span class="k">import</span> <span class="s">"pcg-ts/primitives"</span>;              <span class="c">// registers the whole catalog, as a side effect</span>
 <span class="k">import</span> { listSubgraphs } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
 <span class="k">const</span> all = <span class="n">listSubgraphs</span>();
-all.length;                            <span class="c">// 34</span>
+all.length;                            <span class="c">// 37</span>
 all.<span class="n">find</span>(s => s.name === <span class="s">"fill/scatter-even"</span>).hash;   <span class="c">// "3a0d277f9d3b1840"</span></code></pre></div>
     <p>That is a cost boundary rather than an oversight: <code>import "pcg-ts"</code> keeps costing nothing, and the catalog sits behind a subpath nobody pays for unless they want it. The <code>pcg</code> CLI imports it for you, which is why <code>pcg run fill/scatter-even</code> works on a clean install. Names are <code>&lt;family&gt;/&lt;kebab-case&gt;</code> over a closed set of seven families — <code>shape</code>, <code>fill</code>, <code>transform</code>, <code>compose</code>, <code>filter</code>, <code>place</code>, <code>write</code> — and the family is a promise about the pin shape. Node types are camelCase with no separator, so a name containing <code>/</code> can never be mistaken for a <code>type</code>. Chapter 9 covers how a graph references one.</p>
 
@@ -1000,7 +1000,7 @@ pcg nodes pointGrid --json</code></pre></div>
       <tbody>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 41 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">docs/examples.json</a></td><td>The example corpus: 37 graphs under <code>examples/graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">docs/examples.json</a></td><td>The example corpus: 40 graphs under <code>examples/graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
       </tbody>
     </table>
     </div>
@@ -1440,7 +1440,7 @@ cmp a.json b.json</code></pre></div>
     <p>Look up what you are about to type rather than recalling it. From a shell that is two commands, and the answers are the same registries chapter 8 describes:</p>
     <div class="codeblock"><pre><code>pcg nodes pointScatterInBounds   <span class="c"># pins, and every param with its range</span>
 pcg fields fbm                   <span class="c"># the field fn's allowed keys and usage line</span></code></pre></div>
-    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/examples.md</code> indexes 37 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
+    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/examples.md</code> indexes 40 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
 
     <h3>2 · Emit</h3>
     <p>Write the document to a file. Use the chapter 9 example verbatim — four nodes, three connections, two outputs — saved as <code>g.json</code>. From here on the file on disk is the artifact; every command below reads it and none of them modifies it.</p>

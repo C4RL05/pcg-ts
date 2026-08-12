@@ -160,6 +160,32 @@ function curve(id: string): Source {
   };
 }
 
+/** How many points {@link sampledCurve} puts on {@link curve}. */
+const SAMPLED_CURVE_POINTS = 24;
+
+/**
+ * The same straight path, RESAMPLED — so it carries the `curveU` a bare
+ * `pointsToPath` never writes. `transform/gather-on-path` reads that
+ * parameterization to know where each point already is, and the raw
+ * `curve` fixture deliberately has none: a primitive that needs one has
+ * to say so, and this is what saying so costs a caller.
+ */
+function sampledCurve(id: string): Source {
+  const base = curve(`${id}_path`);
+  return {
+    nodes: [
+      ...base.nodes,
+      {
+        id,
+        type: "pathResample",
+        params: { mode: "count", count: SAMPLED_CURVE_POINTS, spacing: 1 },
+      },
+    ],
+    connections: [...(base.connections ?? []), { from: base.out, to: [id, "in"] }],
+    out: [id, "out"],
+  };
+}
+
 /** Points carrying the flat per-triangle `normal` `surfaceSample` writes. */
 function pointsWithNormal(id: string): Source {
   const base = mesh(`${id}_mesh`);
@@ -196,6 +222,7 @@ const FIXTURES: Record<string, Record<string, (id: string) => Source>> = {
   "transform/displace-by-noise": { in: points },
   "transform/snap-to-grid": { in: points },
   "transform/relax-spacing": { in: points },
+  "transform/gather-on-path": { in: sampledCurve },
 
   "compose/merge-tagged": { a: points, b: fewPoints },
   "compose/scatter-copies": { source: fewPoints, target: points },
@@ -212,6 +239,7 @@ const FIXTURES: Record<string, Record<string, (id: string) => Source>> = {
   "place/drop-to-surface": { points: pointsAbove, surface: mesh },
   "place/align-to-surface": { points: pointsAbove, surface: meshWithNormal },
   "place/along-curve": { curve },
+  "place/radial-on-curve": { curve },
 
   "write/height-slope": { in: pointsWithNormal },
   "write/density-from-noise": { in: points },
@@ -221,6 +249,7 @@ const FIXTURES: Record<string, Record<string, (id: string) => Source>> = {
   "write/local-density": { in: points },
   "write/instances-by-species": { in: points },
   "write/orient-along-path": { in: curve },
+  "write/curve-frame": { in: curve },
 };
 
 /**
@@ -1113,6 +1142,22 @@ function segmentLengths(g: ReturnType<typeof geo>): number[] {
   return out;
 }
 
+/** The dot product of two tuple-3 point attributes at one point. */
+function frameDot(g: ReturnType<typeof geo>, a: string, b: string, i: number): number {
+  const A = g.attrs.point.require(a);
+  const B = g.attrs.point.require(b);
+  return A.get(i, 0) * B.get(i, 0) + A.get(i, 1) * B.get(i, 1) + A.get(i, 2) * B.get(i, 2);
+}
+
+/** Every distinct value of one attribute component, rounded to `places`. */
+function distinct(g: ReturnType<typeof geo>, name: string, comp: number, places = 3): number[] {
+  const a = g.attrs.point.require(name);
+  const seen = new Set<number>();
+  const scale = 10 ** places;
+  for (let i = 0; i < g.pointCount; i++) seen.add(Math.round(a.get(i, comp) * scale) / scale);
+  return [...seen].sort((x, y) => x - y);
+}
+
 describe("the curve set", () => {
   it("the `curve` tag means the output really is a path", async () => {
     // The tag an agent chains by. `shape/ring` and `shape/spiral` carried
@@ -1338,6 +1383,78 @@ describe("the curve set", () => {
         6,
       );
     }
+  });
+
+  it("curve-frame writes three perpendicular unit axes and moves nothing", async () => {
+    const g = geo(await cookOne("write/curve-frame"));
+    expect(g.pointCount).toBe(CURVE_POINTS); // nothing resampled
+    expect(g.primitiveCount).toBe(1); // and it is still a path
+    const P = g.attrs.point.require("P");
+    for (let i = 0; i < g.pointCount; i++) {
+      expect(P.get(i, 0)).toBeCloseTo(-CURVE_HALF_LENGTH + i * 5, 4);
+    }
+    // Orthonormal by construction rather than nearly so — the claim the
+    // binormal ships as a column to keep true.
+    for (const name of ["tangent", "curveNormal", "curveBinormal"]) {
+      const a = g.attrs.point.require(name);
+      for (let i = 0; i < g.pointCount; i++) {
+        expect(Math.hypot(a.get(i, 0), a.get(i, 1), a.get(i, 2)), `${name} is not unit`).toBeCloseTo(1, 5);
+      }
+    }
+    for (let i = 0; i < g.pointCount; i++) {
+      expect(frameDot(g, "tangent", "curveNormal", i)).toBeCloseTo(0, 5);
+      expect(frameDot(g, "tangent", "curveBinormal", i)).toBeCloseTo(0, 5);
+      expect(frameDot(g, "curveNormal", "curveBinormal", i)).toBeCloseTo(0, 5);
+    }
+    // The name knobs really move the columns, which is what makes the
+    // description's warning about calling one of them 'normal' actionable.
+    const renamed = geo(await cookOne("write/curve-frame", { normalName: "spineNormal" }));
+    expect(renamed.attrs.point.names()).toContain("spineNormal");
+    expect(renamed.attrs.point.names()).not.toContain("curveNormal");
+  });
+
+  it("gather-on-path clumps onto its bin centres without losing a point", async () => {
+    const even = geo(await cookOne("transform/gather-on-path", { amount: 0 }));
+    const clumped = geo(await cookOne("transform/gather-on-path", { bins: 4, amount: 1 }));
+    // The family contract: P changes, the count does not.
+    expect(even.pointCount).toBe(SAMPLED_CURVE_POINTS);
+    expect(clumped.pointCount).toBe(SAMPLED_CURVE_POINTS);
+    expect(clumped.primitiveCount).toBe(1); // and it is still a path
+    for (const scratch of ["__bins", "__gather"]) {
+      expect(clumped.attrs.point.names(), `left ${scratch} behind`).not.toContain(scratch);
+    }
+    // amount 0 is the identity: the resample's own even spacing survives.
+    const E = even.attrs.point.require("P");
+    const step = (2 * CURVE_HALF_LENGTH) / (SAMPLED_CURVE_POINTS - 1);
+    for (let i = 0; i < even.pointCount; i++) {
+      expect(E.get(i, 0)).toBeCloseTo(-CURVE_HALF_LENGTH + i * step, 4);
+    }
+    // amount 1 collapses each bin onto its centre: four clumps at
+    // (i + 0.5) / 4 of a 40-unit curve, plus the far endpoint, whose own
+    // bin centre lies past the end and clamps back onto it.
+    expect(distinct(clumped, "P", 0)).toEqual([-15, -5, 5, 15, 20]);
+    // ...and the parameterization follows the points rather than the
+    // places they came from, so a second gather bins the new positions.
+    expect(distinct(clumped, "curveU", 0)).toEqual([0.125, 0.375, 0.625, 0.875, 1]);
+  });
+
+  it("radial-on-curve fans the roll around the curve where along-curve cannot", async () => {
+    const fan = geo(await cookOne("place/radial-on-curve", { count: 12 }));
+    expect(fan.pointCount).toBe(12);
+    expect(fan.primitiveCount).toBe(1); // still a path, still resamplable
+    expect(fan.attrs.point.names()).not.toContain("__spread");
+    for (const name of ["tangent", "curveU", "curveNormal", "curveBinormal", "rot"]) {
+      expect(fan.attrs.point.names()).toContain(name);
+    }
+    // The whole claim, on a STRAIGHT curve where a constant up cannot be
+    // blamed for the difference: every tangent is +X, so place/along-curve
+    // gives all twelve points the same rot and this one gives them twelve.
+    expect(distinct(fan, "rot", 3, 6).length).toBeGreaterThan(6);
+    const along = geo(await cookOne("place/along-curve", { count: 12 }));
+    expect(distinct(along, "rot", 3, 6)).toHaveLength(1);
+    // spread 0 closes the fan back down to one roll — the ribbon case.
+    const ribbon = geo(await cookOne("place/radial-on-curve", { count: 12, spread: 0 }));
+    expect(distinct(ribbon, "rot", 3, 6)).toHaveLength(1);
   });
 
   it("by-distance-to-curve bands around the curve, and the densification matters", async () => {

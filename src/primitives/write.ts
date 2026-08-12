@@ -235,6 +235,47 @@ export function registerWritePrimitives(): void {
     ],
   });
 
+  definePrimitive("write/curve-frame", {
+    title: "Write a smoothly carried frame along a path",
+    description:
+      "Writes a full orthonormal frame at every point of a path — `tangent`, `curveNormal` and `curveBinormal` (f32, tuple 3) — with the normal CARRIED along the curve by rotation-minimizing transport rather than rebuilt from a world axis at each point. That is the thing a constant `up` cannot do: as a curve turns over, a tangent passing through the up vector flips the roll a half turn and everything placed there snaps round with it. Feed `curveNormal` back into `orientAlongVector`'s `up` — field-capable for exactly this — and the roll varies smoothly however the curve bends; combine the normal and the binormal with cos and sin of an angle to aim anything RADIALLY around the path, which is what `place/radial-on-curve` does. It sits beside `write/orient-along-path`: that one turns the points to face ALONG the curve, this one hands over the two perpendicular axes as well and writes no `rot` at all. The points, their attributes and the topology all arrive and leave untouched. PRECONDITION: the input must carry polyline topology; a point on no polyline gets [0,0,0] on all three columns. ORDER: run it AFTER any resample — `pathResample` and `splineSample` build NEW points and do not carry the input's point attributes, so a frame written before one is silently dropped there — and BEFORE anything that can remove points, since the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy the topology it needs. THE FRAME IS NOT LOCAL: a point's normal depends on every point before it along its own path, so a curve that arrives split across two cook cells gets two unrelated frames, and a CLOSED path does not come back seamless — transport around a loop returns rotated by that curve's own residual angle, either side of the seam differs, and no local rule can fix it. Fully deterministic: two instances write identical frames. Writes `tangent`, `curveNormal` and `curveBinormal`; `P` and the count are untouched.",
+    tags: ["curve", "path", "instancing"],
+    nodes: [
+      {
+        id: "frame",
+        type: "writeCurveFrame",
+        params: {
+          tangentName: "tangent",
+          normalName: "curveNormal",
+          binormalName: "curveBinormal",
+        },
+      },
+    ],
+    connections: [],
+    inputs: [{ name: "in", node: "frame", pin: "in" }],
+    outputs: [{ name: "out", node: "frame", pin: "out" }],
+    params: [
+      {
+        name: "tangentName",
+        targets: [{ node: "frame", param: "tangentName" }],
+        description:
+          "Attribute the unit tangent is written to. The default 'tangent' is what `pathResample` and `splineSample` emit and what an `orientAlongVector` direction field reads, so leave it alone unless two frames have to coexist on one cloud.",
+      },
+      {
+        name: "normalName",
+        targets: [{ node: "frame", param: "normalName" }],
+        description:
+          "Attribute the transported normal is written to. Do NOT rename it to 'normal': `surfaceSample` writes a surface `normal` of the very same shape (f32, tuple 3), and a matching shape is exactly the case an attribute writer ACCEPTS — so a graph that samples a surface and frames a curve would have one silently overwrite the other.",
+      },
+      {
+        name: "binormalName",
+        targets: [{ node: "frame", param: "binormalName" }],
+        description:
+          "Attribute the binormal — tangent cross normal, the frame's third axis — is written to. It ships as a column rather than being recomputed downstream, because recomputing it from two f32 columns is where a frame stops being exactly orthonormal.",
+      },
+    ],
+  });
+
   definePrimitive("write/color-from-attribute", {
     title: "Turn a scalar attribute into a colour gradient",
     description:

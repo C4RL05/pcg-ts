@@ -401,7 +401,7 @@
     <div class="stats">
       <div class="stat"><b>2,841</b><span>tests, all green</span></div>
       <div class="stat"><b>41</b><span>registered node types</span></div>
-      <div class="stat"><b>34</b><span>named primitives</span></div>
+      <div class="stat"><b>37</b><span>named primitives</span></div>
       <div class="stat"><b>42</b><span>field-grammar functions</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
       <div class="stat"><b><!--pcg:version-minor-->v0.15<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
@@ -463,7 +463,7 @@ flowchart TB
   end
   subgraph L5["authoring"]
     direction LR
-    PRIMS["src/primitives — 34 named recipes"]
+    PRIMS["src/primitives — 37 named recipes"]
     CLI["src/cli — pcg: validate · cook · inspect · render"]
   end
   THREE["src/three — optional adapter, the only module importing three"]
@@ -542,7 +542,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <ul class="features">
       <li><b>Self-describing registry</b> — every node type exposes pins, param schemas, defaults, and prose descriptions at runtime; the node reference is generated from it, never hand-written.</li>
       <li><b>A command line that closes the loop</b> — <code>pcg nodes</code>, <code>fields</code>, <code>validate</code>, <code>cook</code>, <code>inspect</code>, <code>render</code>. <code>--json</code> picks a rendering of the same result rather than a separate code path, exit codes are 0 / 1 (failure) / 2 (misuse), and <code>render</code> writes a deterministic top-down SVG that diffs in git.</li>
-      <li><b>A vocabulary to reference, not rebuild</b> — 34 named primitives ship as <code>pcg-ts/primitives</code>, cited from JSON as <code>ref: { name, hash? }</code>. A name-only ref upgrades freely; a pinned one hard-errors on mismatch. No mode warns, and no mode cooks a near-miss.</li>
+      <li><b>A vocabulary to reference, not rebuild</b> — 37 named primitives ship as <code>pcg-ts/primitives</code>, cited from JSON as <code>ref: { name, hash? }</code>. A name-only ref upgrades freely; a pinned one hard-errors on mismatch. No mode warns, and no mode cooks a near-miss.</li>
       <li><b>Stable JSON everywhere</b> — graphs, subgraphs, and field expressions serialize to a versioned format that round-trips to byte-identical cooks; serialized form is stable across cooks.</li>
       <li><b>Errors that state the fix</b> — validation names the offending node, pin, or param and lists the valid alternatives. Error messages are part of the API surface.</li>
       <li><b>Introspectable execution</b> — cook stats report what cooked, what was cached, and how long it took; determinism makes every run reproducible.</li>
@@ -555,7 +555,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <p class="eyebrow">Examples</p>
     <h2>Nine demos, live in your browser</h2>
     <p>Each one is the real library cooking real graphs — click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/examples/">demo index</a>.</p>
-    <p>Behind them sits a corpus of 37 single-concept graphs that are data rather than pages: <code>pcg cook examples/graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Eight of them are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones.</p>
+    <p>Behind them sits a corpus of 40 single-concept graphs that are data rather than pages: <code>pcg cook examples/graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Eight of them are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones.</p>
     <div class="examples">
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/01-scatter-basic/"><img src="./thumbs/01-scatter-basic.jpg" width="640" height="345" loading="lazy" decoding="async" alt="Small points scattered across a dark plane and thinned by a noise field, leaving visible clearings, with a stats panel showing the surviving count and cook time."><span class="meta"><b>01 · scatter</b><span>plane + density noise, the minimal cook loop</span></span></a>
       <a class="example" href="https://c4rl05.github.io/pcg-ts/examples/02-forest/"><img src="./thumbs/02-forest.jpg" width="640" height="345" loading="lazy" decoding="async" alt="A hilly dark-brown terrain covered in thousands of bright green conifers, thinning out on steep slopes, beside a panel showing 4,246 pine and 1,666 bush composed on the GPU across 2 resident runs of 4 fused members, with 0 B of matrices uploaded."><span class="meta"><b>02 · forest</b><span>terrain sampling, slope/altitude filters, and multi-asset instancing — both species composed on the GPU, one buffer each, no readback</span></span></a>

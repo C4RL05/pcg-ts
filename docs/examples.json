@@ -187,6 +187,34 @@
     ]
   },
   {
+    "file": "basics-gather-on-path.json",
+    "path": "examples/graphs/basics-gather-on-path.json",
+    "title": "gather evenly spaced points into clumps along a curve",
+    "description": "`pathPointAt` answers the question the library could not: where is this curve at u = 0.37. Resampling steps a whole curve at even intervals, so anything needing one arbitrary parameter had to walk along the tangent and accept leaving the curve wherever it bent. This node moves each point to a parameter along ITS OWN polyline, keeping the points, their attributes and the topology — it slides points along the curve they already sit on, so the path stays the same path and only its parameterization changes. The parameter is field-capable and resolves BEFORE anything moves, which is what lets it read `curveU` and express a move relative to where the point already is. `transform/gather-on-path` is that idiom packaged: each point slides `amount` of the way toward the centre of its own bin, so an even distribution becomes clumps with bare runs between, and because nothing is removed the count is exactly what arrived. It needs `curveU` on its input, which pathResample, splineSample and the shape/path-* primitives write and a bare pointsToPath does not.",
+    "tags": [
+      "basics",
+      "curve",
+      "path",
+      "spacing"
+    ],
+    "seed": 1043,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "subgraph"
+    ],
+    "primitives": [
+      "shape/path-meander",
+      "transform/gather-on-path"
+    ],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "bundles",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-jitter-points.json",
     "path": "examples/graphs/basics-jitter-points.json",
     "title": "break up a lattice with deterministic jitter",
@@ -402,6 +430,40 @@
     ]
   },
   {
+    "file": "basics-path-segments.json",
+    "path": "examples/graphs/basics-path-segments.json",
+    "title": "draw a curve as solid geometry",
+    "description": "A path cannot be drawn. There is no sweep, extrude, loft or revolve in this library, `meshPrimitive` builds planes and boxes, and the polyline converter emits lines a pixel wide — so a tube here is not a surface, it is a run of instanced assets. `pathSegments` emits ONE point per polyline segment: positioned at the segment's midpoint, `rot` turning the chosen local axis onto the segment, and `scale` carrying the segment's length on that axis with `radius` on the other two. Spawn a unit cylinder — radius 1, height 1 — on those points and each one lands exactly on its segment, so a whole tangle of cable costs a single draw call. The default axis is `+y` rather than orientAlongVector's `+z` because the assets this feeds are cylinders and capsules, which three.js builds along Y. `extend` adds to both ends, closing the wedge consecutive segments leave on the outside of a bend. The OUTPUT IS A PLAIN CLOUD: the points are midpoints, not the curve, so re-pathing them describes the midpoints.",
+    "tags": [
+      "basics",
+      "curve",
+      "path",
+      "instancing"
+    ],
+    "seed": 1041,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pathSegments",
+      "spawnInstances",
+      "subgraph"
+    ],
+    "primitives": [
+      "shape/path-meander"
+    ],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
+      },
+      {
+        "name": "points",
+        "node": "tubes",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-paths-by-group.json",
     "path": "examples/graphs/basics-paths-by-group.json",
     "title": "cut one cloud into several separate paths",
@@ -560,6 +622,41 @@
         "name": "instances",
         "node": "spawn",
         "pin": "instances"
+      }
+    ]
+  },
+  {
+    "file": "basics-radial-on-curve.json",
+    "path": "examples/graphs/basics-radial-on-curve.json",
+    "title": "aim things radially around a curve",
+    "description": "`orientAlongVector` fixes the roll around a direction with an `up` hint, and a CONSTANT up cannot follow a curve that turns over: as the tangent passes through the up vector the roll flips a half turn, and everything placed along the curve snaps round with it. `place/radial-on-curve` solves that the only way it can be solved — with a per-point up carried ALONG the curve. `writeCurveFrame` seeds a normal perpendicular to the first tangent and transports it point to point by double reflection, the rotation that moves it least at each step, giving `curveNormal` and `curveBinormal` beside the tangent. The fan is then cos(a) * curveNormal + sin(a) * curveBinormal — the unit vector at angle `a` in the plane perpendicular to the tangent — fed back in as `up`, which is field-capable for exactly this. `spread` is how much of the turn the fan covers, measured from the normal: 0 lines everything up on one side, 1 is a complete fan. Compare `place/along-curve`, which aims along the tangent and gives every copy the same roll.",
+    "tags": [
+      "basics",
+      "curve",
+      "path",
+      "instancing",
+      "orientation"
+    ],
+    "seed": 1042,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "spawnInstances",
+      "subgraph"
+    ],
+    "primitives": [
+      "place/radial-on-curve",
+      "shape/path-meander"
+    ],
+    "outputs": [
+      {
+        "name": "instances",
+        "node": "spawn",
+        "pin": "instances"
+      },
+      {
+        "name": "points",
+        "node": "fan",
+        "pin": "out"
       }
     ]
   },

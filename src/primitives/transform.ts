@@ -9,8 +9,25 @@
  * moves points by a DELTA at scale 1 — `translate = target - position()` —
  * which leaves `scale` and `rot` exactly as they arrived.
  */
-import { attr, call, position, tunableFbm, vec } from "./expr.js";
+import { type Spec, attr, call, position, tunableFbm, vec } from "./expr.js";
 import { definePrimitive } from "./define.js";
+
+/**
+ * Where a point of a path is heading when it gathers: the centre of the
+ * bin its own `curveU` falls in.
+ *
+ * The two knobs live in ATTRIBUTES rather than in this expression, and
+ * that is forced rather than stylistic — an exposed subgraph param is
+ * pure fan-out into an inner param slot, and there is no slot inside a
+ * field spec. `setAttribute` writes the scalar, the field reads it back,
+ * and `removeAttribute` takes it away again; see `noisePosition` in
+ * expr.ts, which exists for the same reason.
+ */
+const BIN_CENTRE: Spec = call(
+  "div",
+  call("add", call("floor", call("mul", attr("curveU", 1), attr("__bins"))), 0.5),
+  attr("__bins"),
+);
 
 /** Register every `transform/*` primitive. Call once, from the family index. */
 export function registerTransformPrimitives(): void {
@@ -130,6 +147,68 @@ export function registerTransformPrimitives(): void {
         name: "cellSize",
         targets: [{ node: "cellAttr", param: "value" }],
         description: "Grid pitch in world units, the same on all three axes. Must be greater than 0.",
+        acceptsField: true,
+      },
+    ],
+  });
+
+  definePrimitive("transform/gather-on-path", {
+    title: "Gather a path's own points into clumps along it",
+    description:
+      "Slides every point of a path along the curve it already sits on, toward the centre of its own bin, so an even distribution becomes clumps with bare runs between them — hedgerows, rock piles, bundled cables, knots in a crowd. Nothing is created or deleted: the count, the attributes and the polyline topology all survive, and each point is RE-EVALUATED on the curve rather than stepped along its tangent, so it stays exactly on the path however hard the path bends. Each point's target is the centre of the bin its own `curveU` falls into — `bins` equal bins per path — and `amount` is how far of the way there it travels, so 0 changes nothing and 1 collapses every bin onto a single spot. PRECONDITION: the input must carry `curveU` (f32, tuple 1) as well as polyline topology, so it has to have come from a sampler that writes one — `pathResample`, `splineSample`, `place/along-curve`, `place/radial-on-curve` or `shape/path-meander`. A path built straight out of `pointsToPath` has no parameterization to gather along, and the cook fails naming `curveU` rather than guessing one. The point sitting exactly at the end of a path does not move: its bin centre lies past the end and clamps back onto it. `curveU` and `tangent` are rewritten to where each point LANDS, so a second gather bins the new positions and not the old ones. Fully deterministic: two instances with the same params clump identically, and there is no seed — the clumps are where the bins are, not where a draw put them. Reads and writes `P`; every other attribute arrives untouched.",
+    tags: ["curve", "path", "spacing"],
+    nodes: [
+      {
+        id: "binsAttr",
+        type: "setAttribute",
+        params: { name: "__bins", domain: "point", type: "f32", tupleSize: 1, value: 6 },
+      },
+      {
+        id: "amountAttr",
+        type: "setAttribute",
+        params: { name: "__gather", domain: "point", type: "f32", tupleSize: 1, value: 0.7 },
+      },
+      {
+        id: "slide",
+        type: "pathPointAt",
+        params: {
+          mode: "fraction",
+          // The idiom `parameter` is built for: it resolves on the INPUT
+          // points before any of them move, so `curveU` still reads where
+          // this point started and the move can be expressed relative to
+          // it. A target alone would place every point of a bin on top of
+          // its neighbours; the lerp is what makes `amount` a dial.
+          parameter: call("lerp", attr("curveU", 1), BIN_CENTRE, attr("__gather")),
+        },
+      },
+      {
+        id: "cleanup",
+        type: "removeAttribute",
+        params: { names: ["__bins", "__gather"], domain: "point", strict: true },
+      },
+    ],
+    connections: [
+      { from: ["binsAttr", "out"], to: ["amountAttr", "in"] },
+      { from: ["amountAttr", "out"], to: ["slide", "in"] },
+      { from: ["slide", "out"], to: ["cleanup", "in"] },
+    ],
+    inputs: [{ name: "in", node: "binsAttr", pin: "in" }],
+    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    params: [
+      {
+        name: "bins",
+        targets: [{ node: "binsAttr", param: "value" }],
+        description:
+          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. The schema admits a field because the slot underneath it does, but keep it CONSTANT: a per-point bin count gives neighbouring points different bins, which stop partitioning the path and send them to targets that do not line up.",
+        min: 1,
+      },
+      {
+        name: "amount",
+        targets: [{ node: "amountAttr", param: "value" }],
+        description:
+          "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other.",
+        min: 0,
+        max: 1,
         acceptsField: true,
       },
     ],

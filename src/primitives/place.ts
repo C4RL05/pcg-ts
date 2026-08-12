@@ -14,8 +14,39 @@
  * the curve side, and `pointsToPath` (and `shape/path-loop` over it) is
  * what brings it back.
  */
-import { attr } from "./expr.js";
+import { TAU, type Spec, attr, call, randomField } from "./expr.js";
 import { definePrimitive } from "./define.js";
+
+/**
+ * A random angle around the curve, in radians, scaled by the `__spread`
+ * attribute the recipe below writes.
+ *
+ * The scalar has to travel as an ATTRIBUTE: an exposed subgraph param is
+ * fan-out into an inner param slot, and there is no slot anywhere inside
+ * a field spec — so a `spread` knob could not otherwise reach the one
+ * place it means anything. Same reason `expr.ts`'s `noisePosition` reads
+ * its frequency back out of a column.
+ */
+const RADIAL_ANGLE: Spec = call(
+  "mul",
+  randomField("radial"),
+  call("mul", TAU, attr("__spread")),
+);
+
+/**
+ * The unit vector at {@link RADIAL_ANGLE} in the plane perpendicular to
+ * the tangent, fed to `orientAlongVector` as a per-point `up`.
+ *
+ * `cos(a) * curveNormal + sin(a) * curveBinormal` is the whole idea: for
+ * axis '+z' the `up` hint IS the roll, so aiming the fan needs no change
+ * to the direction at all. A constant world up cannot express this, which
+ * is why `up` is field-capable and why `writeCurveFrame` exists.
+ */
+const RADIAL_UP: Spec = call(
+  "add",
+  call("mul", call("cos", RADIAL_ANGLE), attr("curveNormal", 3)),
+  call("mul", call("sin", RADIAL_ANGLE), attr("curveBinormal", 3)),
+);
 
 /** Register every `place/*` primitive. Call once, from the family index. */
 export function registerPlacePrimitives(): void {
@@ -227,6 +258,68 @@ export function registerPlacePrimitives(): void {
         name: "up",
         targets: [{ node: "orient", param: "up" }],
         description: "Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground.",
+      },
+    ],
+  });
+
+  definePrimitive("place/radial-on-curve", {
+    title: "Place points along a curve and aim them radially",
+    description:
+      "Places points at even arc-length steps along every path of the supplied `curve`, then rolls each one to a random angle AROUND the curve — spikes on a mace, bristles on a brush, brackets round a mast, leaves up a stem, buds on a branch. It is deliberately distinct from `place/along-curve`, which spaces points the same way but aims them ALONG the tangent with a CONSTANT world `up`: that fixes every asset in the same world orientation, and it flips them a half turn wherever the curve turns over. Here the up hint is per point — cos(a) * `curveNormal` + sin(a) * `curveBinormal`, the unit vector at a random angle a in the plane perpendicular to the tangent, taken from the rotation-minimizing frame `write/curve-frame` describes — so the assets fan out around the path and the fan follows the path however it bends. A constant up simply cannot express that, which is the whole reason to reach for this one. GEOMETRY: the asset's local +z runs along the curve and its local +y is the radial direction, so a prop that must stick OUT of the path wants its length on +y. The points are NEW: they carry `P`, the unit `tangent`, `curveU`, `curveNormal`, `curveBinormal` and `rot`, plus the standard attributes at their defaults, and nothing written on the curve's own POINTS survives — use `write/curve-frame` and an `orientAlongVector` of your own if it must. Every PRIMITIVE attribute does survive, since a sample inherits the polyline it was taken from. PRECONDITION: `curve` must carry polyline topology and must not have been through anything that can REMOVE points — the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy it, and `filterByAttribute` does so even when its predicate keeps every point. VARIATION: yes — the angle is drawn from the evaluation context, so two instances in one graph fan differently on their own; there is no seed knob, so an explicit re-roll means a different `spread`. A CLOSED path does not come back seamless: the frame is transported around the loop and returns rotated by that curve's residual angle, so the fan does not line up across the seam. The output is still a path and can be resampled again.",
+    tags: ["curve", "path", "instancing"],
+    nodes: [
+      { id: "resample", type: "pathResample", params: { mode: "count", count: 24, spacing: 1 } },
+      // AFTER the resample, never before: pathResample builds new points
+      // and does not carry the input's point attributes, so a frame
+      // written upstream would be dropped right here.
+      {
+        id: "frame",
+        type: "writeCurveFrame",
+        params: {
+          tangentName: "tangent",
+          normalName: "curveNormal",
+          binormalName: "curveBinormal",
+        },
+      },
+      {
+        id: "spreadAttr",
+        type: "setAttribute",
+        params: { name: "__spread", domain: "point", type: "f32", tupleSize: 1, value: 1 },
+      },
+      {
+        id: "orient",
+        type: "orientAlongVector",
+        params: { direction: attr("tangent", 3), up: RADIAL_UP, axis: "+z" },
+      },
+      {
+        id: "cleanup",
+        type: "removeAttribute",
+        params: { names: ["__spread"], domain: "point", strict: true },
+      },
+    ],
+    connections: [
+      { from: ["resample", "out"], to: ["frame", "in"] },
+      { from: ["frame", "out"], to: ["spreadAttr", "in"] },
+      { from: ["spreadAttr", "out"], to: ["orient", "in"] },
+      { from: ["orient", "out"], to: ["cleanup", "in"] },
+    ],
+    inputs: [{ name: "curve", node: "resample", pin: "in" }],
+    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    params: [
+      {
+        name: "count",
+        targets: [{ node: "resample", param: "count" }],
+        description:
+          "Points per path: exactly this many come out whatever the path's length, evenly spaced at length / (count - 1), and both ends are always occupied. At least 2 (3 on a closed path). For a fixed pitch in world units instead, resample with `place/along-curve` in 'spacing' mode first and feed the result in here.",
+        min: 2,
+      },
+      {
+        name: "spread",
+        targets: [{ node: "spreadAttr", param: "value" }],
+        description:
+          "How much of a full turn around the curve the fan covers, as a fraction: 1 spreads uniformly over the whole circle, 0.25 over a quarter turn, and 0 aims every point the same way — straight along the transported `curveNormal`, which is a smooth ribbon rather than a fan, and the one setting that does NOT vary between two instances. The angle is drawn uniformly over 0..spread turns, so it is one-sided: the fan opens from the normal in one direction only, and a spread of 0.5 covers a half turn from it rather than a quarter turn either side. Values above 1 wrap and buy nothing.",
+        min: 0,
+        acceptsField: true,
       },
     ],
   });

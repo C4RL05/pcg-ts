@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-37 examples, alphabetical by file:
+40 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -13,6 +13,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-filter-by-attribute.json](#basics-filter-by-attributejson) — keep points by an attribute comparison
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
 - [basics-filter-by-expression.json](#basics-filter-by-expressionjson) — keep points with a predicate expression
+- [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
 - [basics-mesh-primitive.json](#basics-mesh-primitivejson) — build a mesh a saved graph can cook
@@ -21,12 +22,14 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-orient-along-vector.json](#basics-orient-along-vectorjson) — turn each point to face a direction
 - [basics-partition-by-attribute.json](#basics-partition-by-attributejson) — split one cloud into labelled groups
 - [basics-path-resample.json](#basics-path-resamplejson) — even out the spacing along a path
+- [basics-path-segments.json](#basics-path-segmentsjson) — draw a curve as solid geometry
 - [basics-paths-by-group.json](#basics-paths-by-groupjson) — cut one cloud into several separate paths
 - [basics-point-grid.json](#basics-point-gridjson) — place points on a regular grid
 - [basics-points-to-path.json](#basics-points-to-pathjson) — build a path from a point cloud
 - [basics-primitive-ref.json](#basics-primitive-refjson) — reference a shipped primitive by name
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
 - [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
+- [basics-radial-on-curve.json](#basics-radial-on-curvejson) — aim things radially around a curve
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
 - [basics-spawn-by-species.json](#basics-spawn-by-speciesjson) — spawn a different asset per point
@@ -169,6 +172,24 @@ Cook it: `pcg cook examples/graphs/basics-filter-by-density.json --stats`
 **Outputs:** `points` (from `keep`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-filter-by-expression.json --stats`
+
+## basics-gather-on-path.json
+
+**gather evenly spaced points into clumps along a curve**
+
+`pathPointAt` answers the question the library could not: where is this curve at u = 0.37. Resampling steps a whole curve at even intervals, so anything needing one arbitrary parameter had to walk along the tangent and accept leaving the curve wherever it bent. This node moves each point to a parameter along ITS OWN polyline, keeping the points, their attributes and the topology — it slides points along the curve they already sit on, so the path stays the same path and only its parameterization changes. The parameter is field-capable and resolves BEFORE anything moves, which is what lets it read `curveU` and express a move relative to where the point already is. `transform/gather-on-path` is that idiom packaged: each point slides `amount` of the way toward the centre of its own bin, so an even distribution becomes clumps with bare runs between, and because nothing is removed the count is exactly what arrived. It needs `curveU` on its input, which pathResample, splineSample and the shape/path-* primitives write and a bare pointsToPath does not.
+
+**Tags:** `basics`, `curve`, `path`, `spacing`
+
+**Seed:** 1043
+
+**Node types:** `subgraph`
+
+**Primitives:** `shape/path-meander`, `transform/gather-on-path`
+
+**Outputs:** `points` (from `bundles`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-gather-on-path.json --stats`
 
 ## basics-jitter-points.json
 
@@ -314,6 +335,24 @@ Cook it: `pcg cook examples/graphs/basics-partition-by-attribute.json --stats`
 
 Cook it: `pcg cook examples/graphs/basics-path-resample.json --stats`
 
+## basics-path-segments.json
+
+**draw a curve as solid geometry**
+
+A path cannot be drawn. There is no sweep, extrude, loft or revolve in this library, `meshPrimitive` builds planes and boxes, and the polyline converter emits lines a pixel wide — so a tube here is not a surface, it is a run of instanced assets. `pathSegments` emits ONE point per polyline segment: positioned at the segment's midpoint, `rot` turning the chosen local axis onto the segment, and `scale` carrying the segment's length on that axis with `radius` on the other two. Spawn a unit cylinder — radius 1, height 1 — on those points and each one lands exactly on its segment, so a whole tangle of cable costs a single draw call. The default axis is `+y` rather than orientAlongVector's `+z` because the assets this feeds are cylinders and capsules, which three.js builds along Y. `extend` adds to both ends, closing the wedge consecutive segments leave on the outside of a bend. The OUTPUT IS A PLAIN CLOUD: the points are midpoints, not the curve, so re-pathing them describes the midpoints.
+
+**Tags:** `basics`, `curve`, `path`, `instancing`
+
+**Seed:** 1041
+
+**Node types:** `pathSegments`, `spawnInstances`, `subgraph`
+
+**Primitives:** `shape/path-meander`
+
+**Outputs:** `instances` (from `spawn`.`instances`), `points` (from `tubes`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-path-segments.json --stats`
+
 ## basics-paths-by-group.json
 
 **cut one cloud into several separate paths**
@@ -421,6 +460,24 @@ Two primitives cover the whole road-and-lamp-posts shape: `shape/path-meander` i
 **Outputs:** `instances` (from `spawn`.`instances`)
 
 Cook it: `pcg cook examples/graphs/basics-props-along-a-path.json --stats`
+
+## basics-radial-on-curve.json
+
+**aim things radially around a curve**
+
+`orientAlongVector` fixes the roll around a direction with an `up` hint, and a CONSTANT up cannot follow a curve that turns over: as the tangent passes through the up vector the roll flips a half turn, and everything placed along the curve snaps round with it. `place/radial-on-curve` solves that the only way it can be solved — with a per-point up carried ALONG the curve. `writeCurveFrame` seeds a normal perpendicular to the first tangent and transports it point to point by double reflection, the rotation that moves it least at each step, giving `curveNormal` and `curveBinormal` beside the tangent. The fan is then cos(a) * curveNormal + sin(a) * curveBinormal — the unit vector at angle `a` in the plane perpendicular to the tangent — fed back in as `up`, which is field-capable for exactly this. `spread` is how much of the turn the fan covers, measured from the normal: 0 lines everything up on one side, 1 is a complete fan. Compare `place/along-curve`, which aims along the tangent and gives every copy the same roll.
+
+**Tags:** `basics`, `curve`, `path`, `instancing`, `orientation`
+
+**Seed:** 1042
+
+**Node types:** `spawnInstances`, `subgraph`
+
+**Primitives:** `place/radial-on-curve`, `shape/path-meander`
+
+**Outputs:** `instances` (from `spawn`.`instances`), `points` (from `fan`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-radial-on-curve.json --stats`
 
 ## basics-scatter-in-bounds.json
 
