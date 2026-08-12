@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-40 examples, alphabetical by file:
+41 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -38,6 +38,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-surface-sample.json](#basics-surface-samplejson) — scatter points over a mesh surface
 - [basics-transfer-attribute.json](#basics-transfer-attributejson) — read a value off a surface below each point
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
+- [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
 - [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/5, edited — hand-placed plots that win on priority
@@ -622,6 +623,24 @@ Cook it: `pcg cook examples/graphs/basics-transfer-attribute.json --stats`
 **Outputs:** `points` (from `place`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-transform-points.json --stats`
+
+## examples-forest.json
+
+**plant a hillside, thinned by slope and treeline**
+
+The forest recipe as one serialized graph. A displaced plane is the terrain; `surfaceSample` scatters candidates over it carrying the flat per-triangle `normal`; two attributes derived from that geometry — `height` from the point's own Y, `slope` as `1 - normal.y` — become the two `filterByAttribute` gates that decide where a tree is allowed. Scale is stamped BEFORE the filters, since it depends on nothing they decide. The last attribute is a string: `species` selects into `values` per point, mixing roughly three pines to one bush, and the spawner splits by it.
+
+**Tags:** `examples`, `terrain`, `placement`, `filter`, `spawner`
+
+**Seed:** 2402
+
+**Node types:** `filterByAttribute`, `meshPrimitive`, `setAttribute`, `spawnInstances`, `subgraph`, `surfaceSample`
+
+**Primitives:** `transform/displace-by-noise`
+
+**Outputs:** `terrain` (from `terrain`.`out`), `instances` (from `spawn`.`instances`)
+
+Cook it: `pcg cook examples/graphs/examples-forest.json --stats`
 
 ## pipeline-1-boundary.json
 

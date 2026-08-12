@@ -41,7 +41,7 @@ export const CORPUS_DIR = "examples/graphs";
  * prefix is the one edit that admits a family, and there is still no
  * hand-maintained list of files anywhere.
  */
-export const CORPUS_PREFIXES: readonly string[] = ["basics-", "pipeline-"];
+export const CORPUS_PREFIXES: readonly string[] = ["basics-", "examples-", "pipeline-"];
 
 /** One rendered index: the bytes of each generated file. */
 export interface ExampleIndex {

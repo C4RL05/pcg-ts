@@ -1347,6 +1347,61 @@
         ]
       }
     },
+    "examples-forest.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 1806,
+            "batches": [
+              {
+                "assetId": "pine",
+                "count": 1291
+              },
+              {
+                "assetId": "bush",
+                "count": 515
+              }
+            ]
+          }
+        ],
+        "terrain": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 4225,
+              "vertex": 24576,
+              "primitive": 8192,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -100,
+                -12.3964,
+                -100
+              ],
+              "max": [
+                100,
+                11.2526,
+                100
+              ]
+            }
+          }
+        ]
+      }
+    },
     "pipeline-1-boundary.json": {
       "outputs": {
         "boundary": [

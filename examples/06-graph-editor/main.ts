@@ -93,7 +93,7 @@ function render(items: readonly DataItem[]): void {
 
 const overlay = createOverlay({
   title: "06 · graph editor",
-  info: "Load a graph from the corpus, then edit it: palette → canvas → inspector. Every edit mutates the live graph in place (add/connect/disconnect/removeNode), so untouched branches re-cook from cache — watch nodes cooked/cached after deleting a node. Unconnected output pins are the declared outputs.",
+  info: "Load a graph from the corpus, then edit it: palette → canvas → inspector. Every edit mutates the live graph in place (add/connect/disconnect/removeNode), so untouched branches re-cook from cache — watch nodes cooked/cached after deleting a node. What is drawn is the graph's own declared outputs plus every unconnected output pin, so a node you just added shows up without wiring anything.",
 });
 const statFps = overlay.addStat("fps");
 const statOutputs = overlay.addStat("outputs");

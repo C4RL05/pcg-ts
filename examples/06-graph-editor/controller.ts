@@ -6,8 +6,9 @@
  * branches survive every structural edit (the cook stats prove it).
  * Params live on the graph itself (getParams/setParam; field-capable
  * entries may hold Fields), subgraph pins come from describeSubgraphPins,
- * and declared outputs follow the auto policy (every unconnected output
- * pin) via output/removeOutput deltas. Import validates and rebuilds via
+ * and declared outputs are the file's own plus the auto policy (every
+ * unconnected output pin), applied via output/removeOutput deltas.
+ * Import validates and rebuilds via
  * deserializeGraph — the one place a fresh graph replaces the mirror —
  * and export reads serializeGraph. Cooks are debounced and run per
  * declared output so one failing branch doesn't blank the rest of the
@@ -134,6 +135,12 @@ export class EditorController {
    * inspector has nothing to render and the node reads as opaque.
    */
   private readonly subgraphs = new Map<string, SubgraphView>();
+  /**
+   * Outputs the LOADED FILE declared, by output name. Kept because the
+   * auto policy cannot re-derive them: it declares unconnected pins, and
+   * a file is free to declare a pin that feeds something.
+   */
+  private imported = new Map<string, { id: string; pin: string }>();
   /** Declared output names in canonical (node insertion) order. */
   private outputNames: string[] = [];
   /** Bumped on every structural edit, so a stale cook pass abandons itself. */
@@ -483,6 +490,9 @@ export class EditorController {
     for (const [id, view] of pins) this.pins.set(id, view);
     this.subgraphs.clear();
     for (const [id, view] of subgraphs) this.subgraphs.set(id, view);
+    this.imported = new Map(
+      (json.outputs ?? []).map((o) => [o.name, { id: o.id, pin: o.pin }] as const),
+    );
     this.afterStructuralEdit();
     const edges = (json.connections ?? []).map((c) => ({
       from: c.from[0],
@@ -604,21 +614,35 @@ export class EditorController {
     const d = this.mirror.describe();
     const connected = (id: string, pin: string): boolean =>
       d.connections.some((c) => c.from[0] === id && c.from[1] === pin);
-    const desired = new Map<string, { id: string; pin: string }>();
+    /**
+     * Keyed by PIN, not by output name. The file may call `spawn`'s
+     * instances pin "instances" while the auto policy would call it
+     * "spawn.instances" — two names for one pin, and declaring both
+     * cooks and draws it twice. The file's name wins, so an export
+     * round-trips to the names its author chose.
+     */
+    const desired = new Map<string, { id: string; pin: string; name: string }>();
+    for (const [name, { id, pin }] of this.imported) {
+      if (this.pins.get(id)?.outputs.some((p) => p.name === pin) !== true) continue;
+      desired.set(`${id}.${pin}`, { id, pin, name });
+    }
     for (const n of d.nodes) {
       for (const p of this.pins.get(n.id)?.outputs ?? []) {
-        if (!connected(n.id, p.name)) desired.set(`${n.id}.${p.name}`, { id: n.id, pin: p.name });
+        const key = `${n.id}.${p.name}`;
+        if (connected(n.id, p.name) || desired.has(key)) continue;
+        desired.set(key, { id: n.id, pin: p.name, name: key });
       }
     }
+    const names = new Map([...desired.values()].map((o) => [o.name, o] as const));
     const have = new Set<string>();
     for (const o of d.outputs) {
-      if (desired.has(o.name)) have.add(o.name);
+      if (names.has(o.name)) have.add(o.name);
       else this.mirror.removeOutput(o.name);
     }
-    for (const [name, { id, pin }] of desired) {
+    for (const [name, { id, pin }] of names) {
       if (!have.has(name)) this.mirror.output({ id }, pin, name);
     }
-    this.outputNames = [...desired.keys()];
+    this.outputNames = [...names.keys()];
   }
 
   private scheduleCook(): void {

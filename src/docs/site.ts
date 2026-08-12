@@ -319,9 +319,12 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
   },
   {
     page: "index.html",
-    label: "single-concept corpus graphs",
+    label: "corpus graphs",
     source: "docs/examples.json entries",
-    pattern: /corpus of ([\d,]+) single-concept graphs/g,
+    // Was "corpus of N single-concept graphs". The corpus grew a family
+    // that is not single-concept — composed scenes under `examples-` —
+    // so the adjective moved into the sentence that follows it.
+    pattern: /corpus of ([\d,]+) graphs/g,
   },
   {
     page: "manual.html",

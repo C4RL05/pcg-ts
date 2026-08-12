@@ -1,0 +1,342 @@
+{
+ "formatVersion": 1,
+ "seed": 2402,
+ "meta": {
+  "title": "plant a hillside, thinned by slope and treeline",
+  "description": "The forest recipe as one serialized graph. A displaced plane is the terrain; `surfaceSample` scatters candidates over it carrying the flat per-triangle `normal`; two attributes derived from that geometry \u2014 `height` from the point's own Y, `slope` as `1 - normal.y` \u2014 become the two `filterByAttribute` gates that decide where a tree is allowed. Scale is stamped BEFORE the filters, since it depends on nothing they decide. The last attribute is a string: `species` selects into `values` per point, mixing roughly three pines to one bush, and the spawner splits by it.",
+  "tags": [
+   "examples",
+   "terrain",
+   "placement",
+   "filter",
+   "spawner"
+  ]
+ },
+ "nodes": [
+  {
+   "id": "ground",
+   "type": "meshPrimitive",
+   "params": {
+    "shape": "plane",
+    "size": [
+     200,
+     0,
+     200
+    ],
+    "orientation": "xz",
+    "subdivisions": [
+     64,
+     1,
+     64
+    ]
+   }
+  },
+  {
+   "id": "terrain",
+   "type": "subgraph",
+   "ref": {
+    "name": "transform/displace-by-noise"
+   },
+   "params": {
+    "amount": 30,
+    "frequency": 0.03,
+    "variant": 0
+   }
+  },
+  {
+   "id": "scatter",
+   "type": "surfaceSample",
+   "params": {
+    "count": 2500
+   }
+  },
+  {
+   "id": "height",
+   "type": "setAttribute",
+   "params": {
+    "name": "height",
+    "tupleSize": 1,
+    "value": {
+     "fn": "component",
+     "args": [
+      {
+       "fn": "position"
+      }
+     ],
+     "index": 1
+    }
+   }
+  },
+  {
+   "id": "slope",
+   "type": "setAttribute",
+   "params": {
+    "name": "slope",
+    "tupleSize": 1,
+    "value": {
+     "fn": "sub",
+     "args": [
+      {
+       "fn": "constant",
+       "value": 1
+      },
+      {
+       "fn": "component",
+       "args": [
+        {
+         "fn": "attribute",
+         "name": "normal",
+         "tupleSize": 3
+        }
+       ],
+       "index": 1
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "size",
+   "type": "setAttribute",
+   "params": {
+    "name": "scale",
+    "tupleSize": 3,
+    "value": {
+     "fn": "vec",
+     "args": [
+      {
+       "fn": "remap",
+       "args": [
+        {
+         "fn": "randomField",
+         "key": "size"
+        },
+        {
+         "fn": "constant",
+         "value": 0
+        },
+        {
+         "fn": "constant",
+         "value": 1
+        },
+        {
+         "fn": "constant",
+         "value": 0.6
+        },
+        {
+         "fn": "constant",
+         "value": 1.5
+        }
+       ]
+      },
+      {
+       "fn": "remap",
+       "args": [
+        {
+         "fn": "randomField",
+         "key": "size"
+        },
+        {
+         "fn": "constant",
+         "value": 0
+        },
+        {
+         "fn": "constant",
+         "value": 1
+        },
+        {
+         "fn": "constant",
+         "value": 0.6
+        },
+        {
+         "fn": "constant",
+         "value": 1.5
+        }
+       ]
+      },
+      {
+       "fn": "remap",
+       "args": [
+        {
+         "fn": "randomField",
+         "key": "size"
+        },
+        {
+         "fn": "constant",
+         "value": 0
+        },
+        {
+         "fn": "constant",
+         "value": 1
+        },
+        {
+         "fn": "constant",
+         "value": 0.6
+        },
+        {
+         "fn": "constant",
+         "value": 1.5
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "gentle",
+   "type": "filterByAttribute",
+   "params": {
+    "attribute": "slope",
+    "comparison": "le",
+    "value": 0.28
+   }
+  },
+  {
+   "id": "treeline",
+   "type": "filterByAttribute",
+   "params": {
+    "attribute": "height",
+    "comparison": "le",
+    "value": 5
+   }
+  },
+  {
+   "id": "species",
+   "type": "setAttribute",
+   "params": {
+    "name": "species",
+    "type": "string",
+    "values": [
+     "pine",
+     "bush"
+    ],
+    "value": {
+     "fn": "ge",
+     "args": [
+      {
+       "fn": "randomField",
+       "key": "species"
+      },
+      {
+       "fn": "constant",
+       "value": 0.72
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "spawn",
+   "type": "spawnInstances",
+   "params": {
+    "assetId": "pine",
+    "assetAttr": "species"
+   }
+  }
+ ],
+ "connections": [
+  {
+   "from": [
+    "ground",
+    "out"
+   ],
+   "to": [
+    "terrain",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "terrain",
+    "out"
+   ],
+   "to": [
+    "scatter",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "scatter",
+    "out"
+   ],
+   "to": [
+    "height",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "height",
+    "out"
+   ],
+   "to": [
+    "slope",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "slope",
+    "out"
+   ],
+   "to": [
+    "size",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "size",
+    "out"
+   ],
+   "to": [
+    "gentle",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "gentle",
+    "out"
+   ],
+   "to": [
+    "treeline",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "treeline",
+    "out"
+   ],
+   "to": [
+    "species",
+    "in"
+   ]
+  },
+  {
+   "from": [
+    "species",
+    "out"
+   ],
+   "to": [
+    "spawn",
+    "in"
+   ]
+  }
+ ],
+ "outputs": [
+  {
+   "id": "terrain",
+   "pin": "out",
+   "name": "terrain"
+  },
+  {
+   "id": "spawn",
+   "pin": "instances",
+   "name": "instances"
+  }
+ ]
+}
