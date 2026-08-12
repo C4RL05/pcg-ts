@@ -126,6 +126,8 @@ export interface RigParams {
   /** How many bundles along the curve. */
   danglerBundleFreq: number;
   danglerLength: number;
+  /** Segments down one dangler. More is a smoother curl, more instances. */
+  danglerSegments: number;
   /** How short the shortest dangler is, as a fraction of the longest. */
   dropVariation: number;
   danglerCurl: number;
@@ -145,6 +147,8 @@ export interface RigParams {
    */
   drapeKeep: number;
   drapeSlack: number;
+  /** Segments across one drape. Too few and the sag reads as a tent. */
+  drapeSegments: number;
   /** How much the sag varies from chord to chord. */
   slackJitter: number;
   cableRadius: number;
@@ -173,11 +177,12 @@ export const DEFAULT_PARAMS: RigParams = {
   sizeJitter: 0.45,
   chainCount: 7,
   ceilingHeight: 13,
-  chainLinks: 22,
+  chainLinks: 34,
   danglerCount: 200,
   danglerBundle: 0.8,
   danglerBundleFreq: 7,
   danglerLength: 3.2,
+  danglerSegments: 16,
   dropVariation: 0.45,
   danglerCurl: 0.5,
   curlFreq: 0.5,
@@ -189,6 +194,7 @@ export const DEFAULT_PARAMS: RigParams = {
   drapeMinLength: 4,
   drapeKeep: 0.16,
   drapeSlack: 0.45,
+  drapeSegments: 22,
   slackJitter: 0.8,
   cableRadius: 0.035,
 };
@@ -204,10 +210,6 @@ function noiseSeed(params: RigParams, salt: number, variant: number): number {
 
 /** Corners the wander is built from, before the arc-length evening. */
 const SPINE_CORNERS = 97;
-/** Points down one hanging cable. More = smoother curl, more instances. */
-const DANGLER_POINTS = 9;
-/** Samples across one drape, so its sag reads as a curve and not a tent. */
-const DRAPE_POINTS = 11;
 
 /**
  * The `values` list for the part selector, weighted BY REPETITION —
@@ -490,13 +492,17 @@ function buildChains(graph: Graph, params: RigParams, spine: NodeRef): void {
 
 /** One vertical strand per attachment point, curled toward its free end. */
 function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
+  // Points, not segments: a strand of N segments walks N + 1 points, and
+  // the group id below divides by the POINT count. The two are derived
+  // from one number here precisely so they cannot drift apart.
+  const points = Math.max(2, Math.round(params.danglerSegments) + 1);
   // One vertical strand per attachment point. copyToPoints is
   // target-major (output index is t * sourceCount + s) and tiles the
   // SOURCE attributes onto every copy, which is what makes both of the
   // tricks below work: cableU rides along from the source, and the
   // per-cable group id falls straight out of the point index.
   const strand = graph.add(pointLine, {
-    count: DANGLER_POINTS,
+    count: points,
     start: [0, 0, 0],
     end: [0, -1, 0],
     includeEnd: true,
@@ -569,7 +575,7 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
     domain: "point",
     type: "i32",
     tupleSize: 1,
-    value: floor(div(index(), DANGLER_POINTS)),
+    value: floor(div(index(), points)),
   });
   // The curl grows toward the free end: at the anchor cableU is 0 and
   // the cable is where it was attached, at the tip it is 1 and free.
@@ -651,7 +657,10 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
   // pathResample carries the primitive attributes onto every sample and
   // writes curveU, so both halves of the parabola are readable as
   // fields on the points it just made.
-  const drapeEven = graph.add(pathResample, { mode: "count", count: DRAPE_POINTS });
+  const drapeEven = graph.add(pathResample, {
+    mode: "count",
+    count: Math.max(2, Math.round(params.drapeSegments) + 1),
+  });
   const sag = graph.add(transformPoints, {
     translate: (() => {
       const u = attribute("curveU", 1);

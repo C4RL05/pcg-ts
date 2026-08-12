@@ -320,7 +320,7 @@ window.__rigChrome = (show: boolean) => {
 const VIEWS: Record<string, { eye: [number, number, number]; look: [number, number, number] }> = {
   hero: { eye: [19, 9, 26], look: [0, 5, 0] },
   under: { eye: [2, 1.7, 7], look: [0, 7, -2] },
-  detail: { eye: [-7, 4.5, 7], look: [-10, 6.5, 0] },
+  detail: { eye: [-9, 5.2, 12], look: [-13, 7.2, 2] },
   side: { eye: [0, 7, 34], look: [0, 6, 0] },
 };
 window.__rigView = (name: string) => {
