@@ -59,6 +59,17 @@
     { id: "both", label: "scene + graph", scrim: 0, graph: true },
     { id: "graph", label: "graph only", scrim: 1, graph: true },
   ] as const;
+
+  /**
+   * Shift hands the mouse to the render while both are on screen. The
+   * graph keeps it otherwise, which is the common case; holding a key is
+   * how you reach past it to fly the scene without leaving the view.
+   *
+   * Only in `scene + graph`: with the scene covered there is nothing
+   * behind the canvas to reach.
+   */
+  let shiftHeld = $state(false);
+  const sceneHasPointer = $derived(shiftHeld && view.id === "both");
   let viewIndex = $state(1);
   const view = $derived(VIEWS[viewIndex]);
   /** Step is always ±1 — never wired straight to a click, whose event
@@ -525,9 +536,19 @@
   }
 </script>
 
+<!-- Shift is read off every event that carries it rather than tracked as
+     a keypress alone: a window that gains focus with the key already down
+     never sees its keydown, and a lost keyup would otherwise leave the
+     canvas dead until the next press. -->
 <svelte:window
-  onkeydown={onKeydown}
+  onkeydown={(e) => {
+    shiftHeld = e.shiftKey;
+    onKeydown(e);
+  }}
+  onkeyup={(e) => (shiftHeld = e.shiftKey)}
+  onblur={() => (shiftHeld = false)}
   onpointermove={(e) => {
+    shiftHeld = e.shiftKey;
     pointer.x = e.clientX;
     pointer.y = e.clientY;
   }} />
@@ -562,7 +583,7 @@
     </div>
   {/if}
   <div class="body">
-    <div class="canvas-wrap">
+    <div class="canvas-wrap" class:through={sceneHasPointer}>
       <Canvas
         bind:this={canvas}
         {model}
@@ -653,9 +674,24 @@
   .editor[hidden] {
     display: none;
   }
-  /* Only the parts take the pointer; the overlay itself is a frame. */
+  /* Only the parts take the pointer; the overlay itself is a frame, and
+     so is the row inside it — otherwise the row would swallow whatever
+     the canvas declined, which is exactly what an earlier attempt at
+     click-through got wrong. */
   .editor > :global(*) {
     pointer-events: auto;
+  }
+  .body {
+    pointer-events: none;
+  }
+  .body > :global(*) {
+    pointer-events: auto;
+  }
+  /* Shift held, scene visible: the canvas and its wrapper both stand
+     aside so the wheel and the buttons reach the renderer beneath. The
+     columns beside it never do, so a knob is still turnable mid-flight. */
+  .canvas-wrap.through {
+    pointer-events: none;
   }
   /**
    * WHO OWNS THE WHEEL AND THE RIGHT BUTTON. Both gestures mean "move the

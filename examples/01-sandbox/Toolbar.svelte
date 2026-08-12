@@ -104,7 +104,7 @@
   </label>
   <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
   <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
-  <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back)"
+  <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back) — hold shift to fly the scene through the graph"
     >view · {viewLabel}</button>
   <button onclick={onExport} title="serializeGraph → JSON">export</button>
   <button onclick={onImport} title="paste JSON → deserializeGraph">import</button>
