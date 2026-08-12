@@ -125,8 +125,22 @@
    * leaving it clears the collapse, so rotating a phone never strands the
    * overlay in a stale state.
    */
-  /** Canvas component ref, for the toolbar's "fit" button. */
-  let canvas = $state<{ resetView: () => void } | undefined>();
+  /** Canvas component ref, for the toolbar's "fit" button and node placement. */
+  let canvas = $state<
+    | {
+        resetView: () => void;
+        graphPointAt: (x: number, y: number) => { x: number; y: number };
+      }
+    | undefined
+  >();
+
+  /**
+   * Where the node menu is open, in client px, or null. It is summoned at
+   * the pointer, so the last position is tracked rather than asked for —
+   * a keystroke carries no coordinates.
+   */
+  let menuAt = $state<{ x: number; y: number } | null>(null);
+  let pointer = { x: 0, y: 0 };
 
   /** Refit when the overlay appears: it was not measurable while hidden. */
   $effect(() => {
@@ -134,7 +148,6 @@
   });
 
   let collapsed = $state(narrowScreen().matches);
-  let paletteOpen = $state(false);
   let inspectorOpen = $state(false);
 
   $effect(() => {
@@ -143,23 +156,14 @@
       collapsed = e.matches;
       // Leaving the narrow range also resets the drawers, so one left open
       // does not silently reappear the next time the range is entered.
-      if (!e.matches) {
-        paletteOpen = false;
-        inspectorOpen = false;
-      }
+      if (!e.matches) inspectorOpen = false;
     };
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   });
 
-  // Opening one drawer closes the other so they never stack over the canvas.
-  function togglePalette(): void {
-    paletteOpen = !paletteOpen;
-    if (paletteOpen) inspectorOpen = false;
-  }
   function toggleInspector(): void {
     inspectorOpen = !inspectorOpen;
-    if (inspectorOpen) paletteOpen = false;
   }
 
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -358,21 +362,20 @@
       showToast(res.error, "error");
       return;
     }
+    // Where the menu was summoned, in graph units: a node appears under
+    // the pointer that asked for it rather than at a corner.
     const n = model.nodes.length;
+    const spot = menuAt !== null ? canvas?.graphPointAt(menuAt.x, menuAt.y) : undefined;
     model.nodes.push({
       id,
       type,
-      x: 48 + (n % 4) * 36,
-      y: 40 + (n % 6) * 32,
+      x: spot ? Math.round(spot.x) : 48 + (n % 4) * 36,
+      y: spot ? Math.round(spot.y) : 40 + (n % 6) * 32,
       inputs: res.inputs,
       outputs: res.outputs,
     });
     selectedId = id;
     paramsRev++;
-    // On narrow screens the palette is a drawer covering the canvas; close
-    // it after a successful add so the new node is visible. No-op on
-    // desktop, where `open` has no styled effect.
-    paletteOpen = false;
   }
 
   function moveNode(id: string, x: number, y: number): void {
@@ -500,6 +503,18 @@
       cycleView(e.shiftKey ? -1 : 1);
       return;
     }
+    /**
+     * Tab summons the node menu at the pointer, and closes it again. It
+     * only means that while the graph is up — with the scene alone on
+     * screen there is nothing to add a node to, and Tab goes back to
+     * being the browser's.
+     */
+    if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (modal !== null || isTyping(target) || !view.graph) return;
+      e.preventDefault();
+      menuAt = menuAt === null ? { ...pointer } : null;
+      return;
+    }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (modal !== null) return;
     if (isTyping(target)) return;
@@ -510,7 +525,12 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window
+  onkeydown={onKeydown}
+  onpointermove={(e) => {
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
+  }} />
 
 <!-- Behind the overlay, in front of the scene: how much of the render
      shows through is a property of the VIEW, not of the graph, so it is
@@ -542,7 +562,6 @@
     </div>
   {/if}
   <div class="body">
-    <Palette {groups} onAdd={addNode} open={paletteOpen} />
     <div class="canvas-wrap">
       <Canvas
         bind:this={canvas}
@@ -575,18 +594,10 @@
       onFieldApply={onFieldParam}
       onDelete={deleteNode}
     />
-    <!-- Narrow-screen drawer toggles, floating over the canvas edges.
-         display: none outside the media query. The labels "nodes" and
-         "params" are chosen to dodge the capture tooling's
+    <!-- Narrow-screen drawer toggle for the param columns, floating over
+         the canvas edge. display: none outside the media query. The label
+         "params" is chosen to dodge the capture tooling's
          click-button-by-substring needles. -->
-    <button
-      class="drawer-tab left"
-      aria-label="toggle the node palette drawer"
-      aria-expanded={paletteOpen}
-      onclick={togglePalette}
-    >
-      nodes
-    </button>
     <button
       class="drawer-tab right"
       aria-label="toggle the param inspector drawer"
@@ -596,6 +607,11 @@
       params
     </button>
   </div>
+  <Palette
+    {groups}
+    at={menuAt}
+    onAdd={addNode}
+    onDismiss={() => (menuAt = null)} />
   {#if toast}
     <div class="toast {toast.kind}">{toast.text}</div>
   {/if}
@@ -751,11 +767,6 @@
       border: 1px solid #33405a;
       font: 11px system-ui, sans-serif;
       cursor: pointer;
-    }
-    .drawer-tab.left {
-      left: 0;
-      border-left: none;
-      border-radius: 0 6px 6px 0;
     }
     .drawer-tab.right {
       right: 0;

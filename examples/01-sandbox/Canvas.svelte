@@ -86,6 +86,11 @@
     svgEl?.setPointerCapture(e.pointerId);
   }
 
+  /** Client px → graph units, for whoever needs to place something there. */
+  export function graphPointAt(clientX: number, clientY: number): { x: number; y: number } {
+    return toGraph({ clientX, clientY });
+  }
+
   /** Frame every node, so a pan that wandered off is one click from home. */
   export function resetView(): void {
     if (!svgEl || model.nodes.length === 0) {
