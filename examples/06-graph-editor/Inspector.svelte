@@ -37,7 +37,9 @@
     void paramsRev; // re-derive after any param edit
     return node ? controller.paramViews(node.id, node.type) : [];
   });
-  const description = $derived(node ? controller.typeDescription(node.type) : "");
+  const info = $derived(
+    node ? controller.describeNode(node.id, node.type) : { label: "", description: "" },
+  );
 
   const asNumbers = (v: unknown): number[] =>
     Array.isArray(v) ? v.map((x) => Number(x)) : typeof v === "number" ? [v] : [];
@@ -113,16 +115,16 @@
     {#key node.id}
       <div class="head">
         <div>
-          <div class="type">{node.type}</div>
+          <div class="type">{info.label}</div>
           <div class="id">{node.id}</div>
         </div>
         <button class="danger" onclick={() => node && onDelete(node.id)}>delete</button>
       </div>
-      <p class="desc">{description}</p>
+      <p class="desc">{info.description}</p>
       {#if node.type === "subgraph"}
         <div class="hint">
-          opaque composite (imported): its inner graph travels in the serialized payload and is not
-          editable here
+          composite: its inner graph is not editable here, but the params it exposes are — each one
+          writes into the inner nodes it was declared over
         </div>
       {/if}
       {#each views as view (view.key)}

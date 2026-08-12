@@ -72,6 +72,16 @@ export interface ParamView {
   readonly specText: string | null;
 }
 
+/** What one subgraph node exposes, resolved from its payload at import. */
+export interface SubgraphView {
+  /** Exposed params, in declaration order — the node's whole param surface. */
+  readonly params: readonly ExposedParam[];
+  /** Registered name for a `ref` node ("shape/ring"); absent when inline. */
+  readonly ref?: string;
+  /** The primitive's own description, for the inspector's help line. */
+  readonly description: string;
+}
+
 /** One structural edge, as the canvas reports it. */
 export interface EdgeRef {
   readonly from: string;
@@ -115,6 +125,14 @@ export class EditorController {
   private mirror = new Graph(0);
   /** Node id → pin views (registry pins; describeSubgraphPins for subgraphs). */
   private readonly pins = new Map<string, { inputs: PinView[]; outputs: PinView[] }>();
+  /**
+   * Node id → what a subgraph node exposes. Kept because a subgraph's
+   * param schemas do NOT live in the node-type registry the way a
+   * standard node's do: they are resolved from the payload at wrap time,
+   * so the only copy is the one built during import. Without it the
+   * inspector has nothing to render and the node reads as opaque.
+   */
+  private readonly subgraphs = new Map<string, SubgraphView>();
   /** Declared output names in canonical (node insertion) order. */
   private outputNames: string[] = [];
   /** Bumped on every structural edit, so a stale cook pass abandons itself. */
@@ -133,9 +151,17 @@ export class EditorController {
     this.listener = cb;
   }
 
-  /** Registry description for a node type (used as inspector help text). */
-  typeDescription(type: string): string {
-    return getNodeType(type).info.description;
+  /**
+   * How the inspector heads a node. A subgraph node answers with the
+   * primitive it references rather than the bare word "subgraph", which
+   * is true of every subgraph node and therefore tells you nothing.
+   */
+  describeNode(id: string, type: string): { label: string; description: string } {
+    if (type === "subgraph") {
+      const view = this.subgraphs.get(id);
+      return { label: view?.ref ?? "subgraph", description: view?.description ?? "" };
+    }
+    return { label: type, description: getNodeType(type).info.description };
   }
 
   // -- structure -----------------------------------------------------------
@@ -209,6 +235,7 @@ export class EditorController {
       return errorMessage(err);
     }
     this.pins.delete(id);
+    this.subgraphs.delete(id);
     this.afterStructuralEdit();
     return null;
   }
@@ -226,8 +253,12 @@ export class EditorController {
    * become spec text.
    */
   paramViews(id: string, type: string): ParamView[] {
-    if (type === "subgraph") return [];
-    const schemas = getNodeType(type).info.params;
+    // A subgraph's schemas are not in the node-type registry — they were
+    // resolved from its payload at import and kept in `subgraphs`.
+    const schemas: Readonly<Record<string, ParamSchema>> =
+      type === "subgraph"
+        ? Object.fromEntries((this.subgraphs.get(id)?.params ?? []).map((p) => [p.name, p.schema]))
+        : getNodeType(type).info.params;
     let rec: Readonly<Record<string, unknown>>;
     try {
       rec = this.mirror.getParams({ id } as NodeHandle<Record<string, unknown>>);
@@ -321,10 +352,11 @@ export class EditorController {
     const json = parsed as SerializedGraph;
     const mirror = new Graph(json.seed >>> 0);
     const pins = new Map<string, { inputs: PinView[]; outputs: PinView[] }>();
+    const subgraphs = new Map<string, SubgraphView>();
     const nodes: NodeView[] = [];
     try {
       for (const sn of json.nodes) {
-        const view = this.addImportedNode(mirror, sn);
+        const view = this.addImportedNode(mirror, sn, subgraphs);
         pins.set(sn.id, view);
         const copy = copyPinViews(view);
         nodes.push({ id: sn.id, type: sn.type, x: 0, y: 0, inputs: copy.inputs, outputs: copy.outputs });
@@ -338,6 +370,8 @@ export class EditorController {
     this.mirror = mirror;
     this.pins.clear();
     for (const [id, view] of pins) this.pins.set(id, view);
+    this.subgraphs.clear();
+    for (const [id, view] of subgraphs) this.subgraphs.set(id, view);
     this.afterStructuralEdit();
     const edges = (json.connections ?? []).map((c) => ({
       from: c.from[0],
@@ -355,6 +389,7 @@ export class EditorController {
   private addImportedNode(
     mirror: Graph,
     sn: SerializedNode,
+    subgraphs: Map<string, SubgraphView>,
   ): { inputs: PinView[]; outputs: PinView[] } {
     if (sn.type === "subgraph") {
       /**
@@ -408,6 +443,14 @@ export class EditorController {
             : copyPlain(value);
       }
       mirror.add(def, params, sn.id);
+      subgraphs.set(sn.id, {
+        params: exposed,
+        ...(sn.ref !== undefined ? { ref: sn.ref.name } : {}),
+        description:
+          (sn.ref !== undefined ? getRegisteredSubgraph(sn.ref.name).meta?.description : undefined) ??
+          payload.graph.meta?.description ??
+          "",
+      });
       const described = describeSubgraphPins(def);
       const toView = (p: { name: string; kind: string }): PinView => ({
         name: p.name,
