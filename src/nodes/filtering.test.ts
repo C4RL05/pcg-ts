@@ -1118,7 +1118,7 @@ describe("selfPrune", () => {
   // mode: the greedy packs, the local maximum partitions.
   //
   // The gap this suite exists for was found by MEASUREMENT, migrating
-  // examples/04-infinite-world: cooked in cells of 20 and of 40, a greedy
+  // examples/02-infinite-world: cooked in cells of 20 and of 40, a greedy
   // selfPrune produced different survivor sets and left a seam pair closer
   // than minDistance. It is structural rather than a tuning problem — a
   // greedy point survives because its neighbour did not, which happened

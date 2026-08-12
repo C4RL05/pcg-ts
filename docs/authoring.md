@@ -5,7 +5,7 @@ How to author pcg-ts graphs as JSON (the interchange format used by
 live in [nodes.md](./nodes.md) (generated; machine-readable twin:
 [nodes.json](./nodes.json)); at runtime the same metadata comes from
 `listNodeTypes()`. For authoring this format interactively, the
-`06-graph-editor` example (`npm run examples`) is a node editor built on
+`01-sandbox` example (`npm run examples`) is a node editor built on
 the same metadata: registry palette (grouped by node `category`),
 connections checked by the live graph's validation, schema-driven param
 forms, live cook, JSON import/export, and in-place edits through the
@@ -708,7 +708,7 @@ correct.
 ## Editing live graphs
 
 JSON is the interchange format, not the only way to change a graph. A
-tool that keeps one live `Graph` (as the `06-graph-editor` example does)
+tool that keeps one live `Graph` (as the `01-sandbox` example does)
 edits it in place with the mutation API and reads it back with the
 introspection API — preserving node caches that a rebuild through
 `deserializeGraph` would discard:
@@ -1888,7 +1888,7 @@ That is by design, not a bug; benchmark from cold caches.
 
 **Cost model.** A *constant* param — a plain number or number tuple —
 costs a 16-byte uniform slot and no dispatch; only field-valued params
-materialize an `n`-element column. In the `examples/08-gpu-fields`
+materialize an `n`-element column. In the `examples/04-gpu-fields`
 chain (five members: `setAttribute` → `jitterPoints` →
 `transformPoints` → `setAttribute` → `setAttribute`) that is 120 bytes
 per point and 9 member kernels, down from 212 bytes and 12 kernels
@@ -2252,7 +2252,7 @@ leaves the cook and goes to the renderer, never into a seed, an index,
 or a later cook. What it *does* mean: if you need instance matrices
 that match the CPU bit for bit, leave `deviceInstances` off.
 
-`examples/09-gpu-world` is the worked end-to-end version of all of the
+`examples/05-gpu-world` is the worked end-to-end version of all of the
 above: a streamed `World` whose cells draw from matrices that never
 touch the CPU, with the binding's handle accounting and the evaluator
 pool's detached-buffer counters shown side by side.
@@ -2434,12 +2434,12 @@ a 256-byte floor — and
 its bind-layout plan directly, and `supportedGpuFieldFns()` lists the
 compilable fns.
 
-The `examples/08-gpu-fields` demo shows the whole surface at once: one
+The `examples/04-gpu-fields` demo shows the whole surface at once: one
 five-node fusable chain over a million points cooked three ways — CPU,
 GPU per-node (a resolver whose `planRun` returns null), and one fused
 device-resident run — with per-path cold-cache wall times, the full
 counter set, per-path output hashes, and a live deviation readout
-against the CPU reference. `examples/09-gpu-world` covers the
+against the CPU reference. `examples/05-gpu-world` covers the
 device-resident instancing surface: a streamed `World` drawing from
 matrices that never reach the CPU, with `poolStats.detachedBuffers`
 and the binding's own handle count shown together as a live leak meter.

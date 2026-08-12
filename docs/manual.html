@@ -314,8 +314,8 @@
   <ol>
     <li><a href="#discovery">8 · Capability discovery</a></li>
     <li><a href="#json">9 · Graphs as JSON</a></li>
-    <li><a href="#grammar">10 · The field grammar</a></li>
-    <li><a href="#errors">11 · Errors as an API</a></li>
+    <li><a href="#grammar">07 · The field grammar</a></li>
+    <li><a href="#errors">06 · Errors as an API</a></li>
     <li><a href="#introspection">12 · Introspection &amp; mutation</a></li>
     <li><a href="#contract">13 · Determinism as a contract</a></li>
     <li><a href="#loop">14 · A worked agent loop</a></li>
@@ -624,13 +624,27 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="eyebrow">Chapter 4</p>
     <h2>The examples tour</h2>
     <p class="lead">Six demos ship in <code>examples/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
-    <p>Each one needs a host to exist — a streamed world, a GPU comparison, a rig whose topology is a function of its params. The recipes that were only a graph are not demos any more: they are files in <code>examples/graphs/</code>, opened and edited in the sandbox. The scatter is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, and the forest is <a href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code.</p>
+    <p>Each one needs a host to exist — a streamed world, a GPU comparison, a rig whose topology is a function of its params. The recipes that were only a graph are not demos any more: they are files in <code>examples/graphs/</code>, opened and edited in the sandbox. The scatter is <a href="https://c4rl05.github.io/pcg-ts/examples/01-sandbox/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/examples/01-sandbox/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/examples/01-sandbox/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, and the forest is <a href="https://c4rl05.github.io/pcg-ts/examples/01-sandbox/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code.</p>
 
-<h3 id="ex-04">04 · Infinite world — hierarchical streaming</h3>
+    <h3 id="ex-01">01 · Sandbox — the registry as a user interface</h3>
     <figure>
-      <img src="manual-assets/04-infinite-world.jpg" width="1454" height="783" loading="lazy" decoding="async"
+      <img src="manual-assets/01-sandbox.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The graph-editor demo: a stats panel top-left reads 2 outputs, a 5.1 ms cook, 4 nodes cooked and 4 cached, 350 points and 350 instances, and an output hash of 26af8956. Behind it a 3D preview shows conifers scattered on a dark ground plane. The lower half is the editor: a toolbar carries the seed, layout, export and import, and repeats the same cook line; a left palette lists node types under category headings SOURCE and SAMPLER; a canvas shows four connected nodes — pointScatterInBounds, jitterPoints, orientAlongVector and spawnInstances — wired left to right, the spawn node exposing separate instances and points output pins; and the right-hand inspector has nothing selected, reading select a node to edit its params, pins connect left (in) to right (out)." />
+      <figcaption><b>01 · graph editor</b> — the palette's category headings and every pin name on the canvas are read from the registry at runtime, and so are the parameters, type badges and prose the inspector shows once a node is selected. Nothing about the node types is hard-coded in the app.</figcaption>
+    </figure>
+    <p>The editor is the strongest existence proof the library has: it is built entirely on the same public API this manual documents. The palette groups by <code>category</code> from <code>listNodeTypes()</code>; the inspector renders each parameter from its schema, including whether it accepts a field; the description text under the node name is the registry's own prose. Import and export are <code>deserializeGraph</code> and <code>serializeGraph</code> verbatim.</p>
+    <p class="demo-links">
+      <span class="chip">listNodeTypes · getNodeType · describeSubgraphPins · isField</span>
+      <span class="chip">serializeGraph · deserializeGraph · fieldFromJson · fieldToJson</span>
+      <span class="chip">mutation API: add · connect · disconnect · removeNode</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/01-sandbox/">run it →</a>
+    </p>
+
+    <h3 id="ex-02">02 · Infinite world — hierarchical streaming</h3>
+    <figure>
+      <img src="manual-assets/02-infinite-world.jpg" width="1454" height="783" loading="lazy" decoding="async"
            alt="The infinite-world demo with the camera parked at the origin: the panel has a GPU per-node / CPU toggle set to GPU per-node, and reports a rock source of pointScatterInWorld, 154 live rock cells, 155 cooked against 0 evicted, 0 pending, 11124 instances, 0 resident runs of 0 fused members, 2 device dispatches and no GPU fallbacks — with derived specs, world-anchored, halo (4 u) and cell grid all ticked, at a 20 u cell size and a 140 u generation radius. A faint blue partition grid is drawn across a dark plain scattered with thousands of small pale rocks receding to the horizon; the rocks run straight over the grid lines with no seam and no change of size, and several huge dark faceted boulders stand as landmarks near and far." />
-      <figcaption><b>04 · infinite world</b> — 154 live cells and 11,124 instances, nothing pending. The blue grid is the partition: rocks cross it without a seam, and their sizes agree across it because the neighbour count is measured over a haloed query.</figcaption>
+      <figcaption><b>02 · infinite world</b> — 154 live cells and 11,124 instances, nothing pending. The blue grid is the partition: rocks cross it without a seam, and their sizes agree across it because the neighbour count is measured over a haloed query.</figcaption>
     </figure>
     <p>Two levels: an unbounded level holding the landmark boulders (one global cell, no radius), and a bounded level of small rocks that streams around the camera. The counters tell the streaming story directly — cells cooked, cells evicted, and a pending queue that stays at zero because <code>update</code> is called with a millisecond budget every frame. The screenshot catches it at rest, with the camera parked and nothing yet outside the radius: <code>155</code> cooked against <code>0</code> evicted. Fly, and the eviction counter starts moving while the live count holds steady.</p>
     <p>Fly out to the edge of the generation radius and back, or drag the radius slider while moving, and the same rocks return in the same places. That is the order- and path-independence guarantee being exercised rather than asserted: the cell content never depended on the route.</p>
@@ -643,28 +657,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">pointNeighborhood · setAttribute · filterByDensity · spawnInstances</span>
       <span class="chip">gpu: GpuFieldEvaluator · acceptDerivedSpecs · CookStats.gpu</span>
       <span class="chip">three: WorldThreeBinding</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/04-infinite-world/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/02-infinite-world/">run it →</a>
     </p>
 
-<h3 id="ex-06">06 · Graph editor — the registry as a user interface</h3>
+    <h3 id="ex-03">03 · Galaxy — determinism at scale</h3>
     <figure>
-      <img src="manual-assets/06-graph-editor.jpg" width="1454" height="783" loading="lazy" decoding="async"
-           alt="The graph-editor demo: a stats panel top-left reads 2 outputs, a 5.1 ms cook, 4 nodes cooked and 4 cached, 350 points and 350 instances, and an output hash of 26af8956. Behind it a 3D preview shows conifers scattered on a dark ground plane. The lower half is the editor: a toolbar carries the seed, layout, export and import, and repeats the same cook line; a left palette lists node types under category headings SOURCE and SAMPLER; a canvas shows four connected nodes — pointScatterInBounds, jitterPoints, orientAlongVector and spawnInstances — wired left to right, the spawn node exposing separate instances and points output pins; and the right-hand inspector has nothing selected, reading select a node to edit its params, pins connect left (in) to right (out)." />
-      <figcaption><b>06 · graph editor</b> — the palette's category headings and every pin name on the canvas are read from the registry at runtime, and so are the parameters, type badges and prose the inspector shows once a node is selected. Nothing about the node types is hard-coded in the app.</figcaption>
-    </figure>
-    <p>The editor is the strongest existence proof the library has: it is built entirely on the same public API this manual documents. The palette groups by <code>category</code> from <code>listNodeTypes()</code>; the inspector renders each parameter from its schema, including whether it accepts a field; the description text under the node name is the registry's own prose. Import and export are <code>deserializeGraph</code> and <code>serializeGraph</code> verbatim.</p>
-    <p class="demo-links">
-      <span class="chip">listNodeTypes · getNodeType · describeSubgraphPins · isField</span>
-      <span class="chip">serializeGraph · deserializeGraph · fieldFromJson · fieldToJson</span>
-      <span class="chip">mutation API: add · connect · disconnect · removeNode</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/06-graph-editor/">run it →</a>
-    </p>
-
-    <h3 id="ex-07">07 · Galaxy — determinism at scale</h3>
-    <figure>
-      <img src="manual-assets/07-galaxy.jpg" width="1454" height="783" loading="lazy" decoding="async"
+      <img src="manual-assets/03-galaxy.jpg" width="1454" height="783" loading="lazy" decoding="async"
            alt="The galaxy demo: the panel reports seed 42, a 420-unit generation radius, brightness 1.3, a fly speed of 140 units per second, a galaxy named Artor with 5 arms and radius 952, 29,372 stars across 55 star cells, 56 cooked against 0 evicted, 0 pending, a 6.4 ms last update, and a camera position of -409, 380, 426. The viewport shows tens of thousands of coloured star points spread across a black sky, densest in a glowing pale core just left of centre and thinning outward into scattered arms." />
-      <figcaption><b>07 · galaxy</b> — 29,372 stars live across 55 streamed cells; the last streaming update cost 6.4 ms. Seed 42 always produces this galaxy, named Artor, with five arms.</figcaption>
+      <figcaption><b>03 · galaxy</b> — 29,372 stars live across 55 streamed cells; the last streaming update cost 6.4 ms. Seed 42 always produces this galaxy, named Artor, with five arms.</figcaption>
     </figure>
     <p>An unbounded halo and dust level above 100-unit star cells that stream around a free-flying camera. Everything is derived from the seed: the morphology (arm count, twist, bulge, palette), every star position and colour, and — one level further down — every planet of every star you click. The demo is really an argument about scope. A seed is a complete, shareable address for a universe, because nothing in it was ever a function of anything but the seed and the coordinate.</p>
     <p>It also shows off the field grammar under load, composing <code>atan2</code>, <code>ramp</code>, <code>length</code>, trigonometry and simplex noise into the spiral density that decides where stars exist at all.</p>
@@ -672,14 +672,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">World · unbounded + bounded levels · per-cell seeding</span>
       <span class="chip">fields: atan2 · ramp · length · cos · clamp · gt · component · simplexNoise</span>
       <span class="chip">Pcg32 · hashCombine · transformPoints</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/07-galaxy/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/03-galaxy/">run it →</a>
     </p>
 
-    <h3 id="ex-08">08 · GPU fields — one chain, cooked three ways</h3>
+    <h3 id="ex-04">04 · GPU fields — one chain, cooked three ways</h3>
     <figure>
-      <img src="manual-assets/08-gpu-fields.jpg" width="1366" height="900" loading="lazy" decoding="async"
+      <img src="manual-assets/04-gpu-fields.jpg" width="1366" height="900" loading="lazy" decoding="async"
            alt="The gpu-fields demo after cooking all three paths cold at one million points. The right-hand panel shows results: CPU 12257.9 ms with hash 2d2c4751; GPU per-node 540.8 ms, ×22.7 versus CPU, hash 402b3a71; GPU fused 560.9 ms, ×21.9 versus CPU, hash 402b3a71 — the two device paths landing on the same hash and within twenty-one milliseconds of each other, each path cooking 6 nodes with 0 cached. Below, counters taken from the fused run read adapter nvidia blackwell, 1,000,000 points, 1 resident run over 2 fused nodes, 1 readback saved, 6 member-kernel dispatches, 0 pipelines compiled against 6 cache hits, a gpu fallback of run-partially-fused ×1, and a maximum CPU-to-GPU-fused deviation of 6.26e-7, or 6.6 range-ULP, measured over 16,384 points. The left of the screen renders the million-point cloud as a dense blue-green nebula." />
-      <figcaption><b>08 · gpu fields</b> — the same five-node chain over a million points: CPU 12,258 ms, GPU per-node 541 ms, GPU fused 561 ms. In this run the fused path kept part of the chain resident — <code>resident runs / fused nodes</code> reads <code>1 / 2</code> and <code>gpu fallbacks</code> reads <code>run-partially-fused ×1</code> — while the members ahead of that run cooked node by node, and the two device paths returned the same hash.</figcaption>
+      <figcaption><b>04 · gpu fields</b> — the same five-node chain over a million points: CPU 12,258 ms, GPU per-node 541 ms, GPU fused 561 ms. In this run the fused path kept part of the chain resident — <code>resident runs / fused nodes</code> reads <code>1 / 2</code> and <code>gpu fallbacks</code> reads <code>run-partially-fused ×1</code> — while the members ahead of that run cooked node by node, and the two device paths returned the same hash.</figcaption>
     </figure>
     <p>Five field-driven nodes in a straight line — <code>setAttribute</code> → <code>jitterPoints</code> → <code>transformPoints</code> → <code>setAttribute</code> → <code>setAttribute</code> — over a million points. All five are fusable kinds, so when the fused path plans a run the whole chain becomes a single device-resident run: attribute columns stay in storage buffers between member kernels and only the terminal reads back. The counters report that plan rather than assume it — <code>resident runs / fused nodes</code>, <code>readbacks saved</code>, and a dispatch count that means member kernels, not <code>dispatchWorkgroups</code> calls. In the capture above the whole chain did not plan, but its tail did: one member was rejected, the planner retried the suffix after it, and <code>resident runs / fused nodes</code> reads <code>1 / 2</code> with <code>1</code> readback saved. <code>gpu fallbacks</code> reads <code>run-partially-fused ×1</code>, which is the counter for exactly that — a partial success rather than a lost run — and the members ahead of the fused tail cooked node by node, which is why the fused path's wall time barely differs from the per-node path's and both return the same hash.</p>
     <p>The CPU and device hashes differ, and the demo says so rather than hiding it. That much is the determinism contract working as designed — <a href="#gpu">chapter 6</a> sets out the shape of the difference. The panel prints the measured deviation alongside the timings for the same reason: on this run <code>6.26e-7</code>, or 6.6 range-ULP over the 16,384 points it compares, comfortably inside the twenty-four range-ULP chapter 6 budgets for the noise families and a shade tighter than the <code>8.05e-7</code>, or 8.4 range-ULP, an earlier capture of the same measurement reported. There is no finding in that row, and there is not meant to be one. Printing it on every run is what would make a real drift visible the day it appeared.</p>
@@ -690,16 +690,16 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="demo-links">
       <span class="chip">gpu: GpuFieldEvaluator · CookOptions.gpu · CookStats.gpu</span>
       <span class="chip">setAttribute · jitterPoints · transformPoints · fieldFromJson</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/08-gpu-fields/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/04-gpu-fields/">run it →</a>
     </p>
 
-    <h3 id="ex-09">09 · GPU world — matrices that never reach the CPU</h3>
+    <h3 id="ex-05">05 · GPU world — matrices that never reach the CPU</h3>
     <figure>
-      <img src="manual-assets/09-gpu-world.jpg" width="1079" height="791" loading="lazy" decoding="async"
+      <img src="manual-assets/05-gpu-world.jpg" width="1079" height="791" loading="lazy" decoding="async"
            alt="The gpu-world demo running the device-resident path with the camera at rest. The left panel offers a two-way toggle, device-resident selected over CPU readback, above sliders for seed 1, speed 0 u/s, gen radius 150 u and per cell 140, with autopilot unchecked. The counters below read renderer nvidia blackwell webgpu, 120 live cells, 120 cells cooked and 0 evicted, a churn of 0.0 cooked and 0.0 evicted per second, 16,800 instances drawn, 120 buffers holding 1.0 MiB of matrices on device, the same 120 buffers and 1.0 MiB of readbacks avoided, and 0 buffers and 0 B of matrices uploaded. The status line reads device-resident, no matrix readback. The right of the screen renders a dense field of tall teal spires receding to the horizon." />
-      <figcaption><b>09 · gpu world</b> — a streamed world drawing 16,800 instances across 120 live cells, from 1.0 MiB of matrices that were composed on the GPU and never read back. The <code>matrices uploaded</code> row stays at <code>0 B</code> for as long as the device path is selected.</figcaption>
+      <figcaption><b>05 · gpu world</b> — a streamed world drawing 16,800 instances across 120 live cells, from 1.0 MiB of matrices that were composed on the GPU and never read back. The <code>matrices uploaded</code> row stays at <code>0 B</code> for as long as the device path is selected.</figcaption>
     </figure>
-    <p>Where <a href="#ex-08">08</a> keeps <em>attribute columns</em> device-side between fused kernels, this one keeps the <em>result</em> device-side as well. <code>spawnInstances</code> acts as the terminal of a resident run: the transform, scale and rotation columns stay in storage buffers, a WGSL kernel composes them into column-major 4×4 matrices, and the batch hands back an opaque buffer handle instead of a <code>Float32Array</code>. A renderer sharing the same <code>GPUDevice</code> adopts that buffer as a storage instance attribute, so the matrices go from compute kernel to draw call without ever existing in JS.</p>
+    <p>Where <a href="#ex-04">08</a> keeps <em>attribute columns</em> device-side between fused kernels, this one keeps the <em>result</em> device-side as well. <code>spawnInstances</code> acts as the terminal of a resident run: the transform, scale and rotation columns stay in storage buffers, a WGSL kernel composes them into column-major 4×4 matrices, and the batch hands back an opaque buffer handle instead of a <code>Float32Array</code>. A renderer sharing the same <code>GPUDevice</code> adopts that buffer as a storage instance attribute, so the matrices go from compute kernel to draw call without ever existing in JS.</p>
     <p>The toggle is the point of the demo. Both paths cook the same graph with the same fields on the same device — only the ending differs. Switch to <b>CPU readback</b> and <code>matrices held on device</code> falls to zero while <code>matrices uploaded</code> starts climbing; switch back and the upload counter freezes where it stopped. Both meters are cumulative, so they record what each path has cost since the page loaded rather than what it is holding right now. In the screenshot the camera is parked with autopilot off, nothing has evicted yet, and the cumulative <code>buf</code> count still agrees with <code>live cells</code> at <code>120</code>; start moving and the two part company, which is the honest picture of a streaming world.</p>
     <p>That divergence is also the leak check. Retained device bytes track <em>live</em> cells exactly — 120 cells of 140 instances is 120 × 140 × 64 = 1.0 MiB — while the cumulative counter climbs past it and keeps going. Handles are refcounted by identity, so a parent output aliased into several child cells is freed once, by the last cell to let go of it, in whichever order they evict.</p>
     <div class="note warn">
@@ -709,14 +709,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="demo-links">
       <span class="chip">three: createWebGpuInstanceAdapter · WorldThreeBinding · DeviceInstanceAdapter</span>
       <span class="chip">gpu: GpuFieldEvaluator · deviceInstances · deviceTransformsBuffer</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/09-gpu-world/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/05-gpu-world/">run it →</a>
     </p>
 
-    <h3 id="ex-11">11 · rig playground — the curve vocabulary, end to end</h3>
+    <h3 id="ex-06">06 · Rig playground — the curve vocabulary, end to end</h3>
     <figure>
-      <img src="manual-assets/11-rig-playground.jpg" width="1454" height="783" loading="lazy" decoding="async"
-           alt="The rig-playground demo. On the left, over a faint ground grid, a long horizontal armature hanging from seven vertical chains whose interlocking links alternate a quarter turn as they descend: a box truss of four chords with zigzag diagonal bracing, bristling with hundreds of thin rods pointing outward in every direction, collars and boxy fixtures threaded along it, dense bundles of cables dropping straight down at intervals, and a scatter of long cables swagging beneath the whole span. Everything is shaded by surface direction, so the geometry reads in bands of blue, green, violet and pink rather than by any light. On the right, a dark control panel headed 11 · rig playground with a seed of 3 and a randomize button, a SPINE group of nine sliders reading span 34m, height 7.0m, wander up-down 1.2m, wander sideways 2.4m, wander noise freq 0.035, wander octaves 3, wander variant 0, radius 0.22m and samples 130, then a COMPONENTS group whose mix grid holds relative weights rod 4, bar 2, panel 1 and clamp 2 above sliders for density 900, cluster noise freq 14.0, cluster octaves 2, cluster variant 0, cluster cut 0.46 and radial fan 1.00 turn." />
-      <figcaption><b>11 · rig playground</b> — one graph: a box truss along a spline, component parts scattered over it in noise clusters, chains holding it up, cables gathered into bundles, and sagging chords between anchors. Unlit on purpose: normal shading reads volume and overlap better than any lit render when the geometry is what you are judging.</figcaption>
+      <img src="manual-assets/06-rig-playground.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The rig-playground demo. On the left, over a faint ground grid, a long horizontal armature hanging from seven vertical chains whose interlocking links alternate a quarter turn as they descend: a box truss of four chords with zigzag diagonal bracing, bristling with hundreds of thin rods pointing outward in every direction, collars and boxy fixtures threaded along it, dense bundles of cables dropping straight down at intervals, and a scatter of long cables swagging beneath the whole span. Everything is shaded by surface direction, so the geometry reads in bands of blue, green, violet and pink rather than by any light. On the right, a dark control panel headed 06 · rig playground with a seed of 3 and a randomize button, a SPINE group of nine sliders reading span 34m, height 7.0m, wander up-down 1.2m, wander sideways 2.4m, wander noise freq 0.035, wander octaves 3, wander variant 0, radius 0.22m and samples 130, then a COMPONENTS group whose mix grid holds relative weights rod 4, bar 2, panel 1 and clamp 2 above sliders for density 900, cluster noise freq 14.0, cluster octaves 2, cluster variant 0, cluster cut 0.46 and radial fan 1.00 turn." />
+      <figcaption><b>06 · rig playground</b> — one graph: a box truss along a spline, component parts scattered over it in noise clusters, chains holding it up, cables gathered into bundles, and sagging chords between anchors. Unlit on purpose: normal shading reads volume and overlap better than any lit render when the geometry is what you are judging.</figcaption>
     </figure>
     <p>This demo exists because of something the library could not do. There is no sweep, extrude, loft or revolve anywhere in <code>src/</code>, <code>meshPrimitive</code> builds planes and boxes, and <code>toLineGeometry</code> emits a line one pixel wide — so a path could be generated and never drawn. <code>pathSegments</code> closes that without inventing a swept-surface representation: one instance point per polyline segment, at the midpoint, with <code>rot</code> turning the chosen axis onto the segment and <code>scale</code> carrying its length. A unit cylinder lands exactly on each segment, so every chord, brace and cable in the picture costs one draw call per group.</p>
     <p>The rods point outward rather than all one way because of the second piece. <code>orientAlongVector</code> fixes roll with an <code>up</code> hint, and a <em>constant</em> up cannot follow a curve that turns over — as the tangent passes through it the roll flips a half turn and everything placed along the curve snaps round. <code>writeCurveFrame</code> carries a normal <em>along</em> the curve instead, transported point to point by double reflection, and <code>up</code> is field-capable so <code>cos(a) · curveNormal + sin(a) · curveBinormal</code> can be fed straight back in. The <code>radial fan</code> slider is that angle's range: at 0 every component lines up on one side, at a full turn they cover the circle.</p>
@@ -726,14 +726,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="demo-links">
       <span class="chip">nodes: pathSegments · writeCurveFrame · pathPointAt · orientAlongVector · connectPoints</span>
       <span class="chip">primitives: place/radial-on-curve · transform/gather-on-path · write/curve-frame</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/11-rig-playground/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/06-rig-playground/">run it →</a>
     </p>
   </section>
 
   <section id="editor">
     <p class="eyebrow">Chapter 5</p>
     <h2>Using the graph editor as an authoring tool</h2>
-    <p>Demo 06 is not only a demonstration; it is a usable way to build a graph without writing code, and its output is the same JSON your application loads. The workflow is short.</p>
+    <p>Demo 01 is not only a demonstration; it is a usable way to build a graph without writing code, and its output is the same JSON your application loads. The workflow is short.</p>
     <ol>
       <li><strong>Pick nodes from the palette.</strong> It is grouped by the registry's own categories — source, sampler, point op, filter, attribute, value, spawn, io, composite — so you can find a node by what it does rather than by remembering its name. The search box filters across all of them.</li>
       <li><strong>Wire pins left to right.</strong> Inputs are on the left of a node, outputs on the right. The editor refuses invalid connections because it asks the live graph, and the live graph validates eagerly.</li>
@@ -1520,7 +1520,7 @@ r2.stats;                                       <span class="c">// { cooked: 3, 
 
     <p>Read the stats as a check on your own model. <code>cached: 1</code> is the scatter node — upstream of the edit, so untouched. <code>cooked: 3</code> is the edited node plus its two dependents. Had the numbers come back <code>{ cooked: 4, cached: 0 }</code>, something changed that you did not intend to change, and that is worth investigating before trusting the output.</p>
 
-    <h3>10 · Close the loop</h3>
+    <h3>07 · Close the loop</h3>
     <div class="codeblock"><pre><code>graph.<span class="n">removeNode</span>(byId.spawn);       <span class="c">// documented cascade: the node, its connections,</span>
                                    <span class="c">// and the "instances" output declared on it</span>
 graph.<span class="n">describe</span>().outputs;          <span class="c">// [ { id: "keep", pin: "out", name: "points" } ]</span>

@@ -385,7 +385,7 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  * rather than spend the tolerance it cannot honour.
  *
  * The amplification is measured, not feared. Nudging every P component of
- * a scattered cloud by exactly ONE ulp and re-evaluating the 08-gpu-fields
+ * a scattered cloud by exactly ONE ulp and re-evaluating the 04-gpu-fields
  * tint field moves it by up to 2.1e-1 (mean 2.7e-2), on 99.5% of
  * components — about 2.2e6 range-ULP. Zero the one `randomField` term in
  * that same field and the identical nudge moves it by 7.8e-7, or 8.2
@@ -397,7 +397,7 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  * device-resident" is the wrong lesson and the tempting one: a run may
  * REWRITE P, or it may KEY ON IDENTITY, but not in that order within one
  * run. Identity-keyed members are perfectly fusable — `[tint, psize]` of
- * the 08-gpu-fields chain plans as a two-member run on its own — and a
+ * the 04-gpu-fields chain plans as a two-member run on its own — and a
  * chain that hits this rule usually fuses in full once the identity-keyed
  * members are ordered AHEAD of the P writers (measured: the demo's
  * wobble → tint → psize → jitter → xform ordering plans all five). That
@@ -405,7 +405,7 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  * never something the planner may do on the author's behalf.
  *
  * Two properties of this rule are load-bearing. Both cost real fusion —
- * the 08-gpu-fields chain (setAttribute → jitterPoints → transformPoints
+ * the 04-gpu-fields chain (setAttribute → jitterPoints → transformPoints
  * → setAttribute(tint) → setAttribute(psize), where tint and psize carry
  * `randomField`) fused as one five-member run before identity keying and
  * plans as NO run at all after it (the executor recovers its last two
@@ -433,7 +433,7 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  * arithmetic to the CPU; every surviving suffix is planned here from
  * scratch, against the layout and the CPU-produced bytes entering its own
  * first member, so this rule decides it exactly as it decides any other
- * run. The 08-gpu-fields chain narrows three times and fuses [tint,
+ * run. The 04-gpu-fields chain narrows three times and fuses [tint,
  * psize]. A run that merely did not FIT is not narrowed — see
  * RESOURCE_REJECTION there for why a memory bound must not decide bits.
  *
@@ -459,7 +459,7 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  *     device-written P to an identity-keyed node cooking behind it;
  *   - the PER-FIELD path reaches P too. `jitterPoints` moves P by an
  *     `amount` that may itself have been resolved on the device, and
- *     measured on this adapter the 08-gpu-fields `wobble` field
+ *     measured on this adapter the 04-gpu-fields `wobble` field
  *     (perlin + remap) is NOT bit-exact — 17.8 range-ULP — so a
  *     CPU-applied jitter over a device-resolved amount already lands P on
  *     different bits than a pure-CPU cook, with the amplification above.

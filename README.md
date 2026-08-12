@@ -243,7 +243,7 @@ at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
-reference (generated from the registry). The `06-graph-editor` example
+reference (generated from the registry). The `01-sandbox` example
 is this section as an app: an interactive node editor built entirely on
 `listNodeTypes()` (palette grouped by category), the live graph's
 validation, and `serializeGraph`/`deserializeGraph` — and it edits the
@@ -424,7 +424,7 @@ between them. Downstream ops stay anchored on their own —
 an array index, so an upstream filter that renumbers everything cannot
 move a survivor's draw. The seeded ones still need a cell-invariant seed;
 [docs/authoring.md](./docs/authoring.md) ("Content that must NOT vary per
-cell") has the full table, and `examples/04-infinite-world` reproduces
+cell") has the full table, and `examples/02-infinite-world` reproduces
 each failure live with a toggle.
 
 Levels use square XZ-plane cells by default; `cellMode: "xyz"` switches
@@ -657,7 +657,7 @@ Three things to know before reading a benchmark:
 - **Constant params ride the run uniform, not a column.** A plain
   `translate: [0, 0, 0]` costs a 16-byte uniform slot and no dispatch;
   only field-valued params materialize an `n`-element temporary. In
-  the `examples/08-gpu-fields` chain that is 120 of the 156 bytes per
+  the `examples/04-gpu-fields` chain that is 120 of the 156 bytes per
   point the run used to hold (−23%) and 9 member kernels instead of
   12. Constant *values* live in the uniform and never in the generated
   WGSL, so editing one rebinds a buffer and hits the pipeline cache
@@ -758,7 +758,7 @@ its cache hits across the toggle. Fused runs use the same salt inside
 the run key above. Pipelines are cached on the evaluator instance and
 persist across cooks.
 
-See it live: [`examples/08-gpu-fields`](./examples/08-gpu-fields) cooks
+See it live: [`examples/04-gpu-fields`](./examples/04-gpu-fields) cooks
 a five-node fusable chain over a million points three ways — CPU, GPU
 per-node (fusion switched off), and one fused device-resident run —
 with per-path cold-cache wall times, the full `CookStats.gpu` counters,
@@ -1048,7 +1048,7 @@ handle leaves the cook and goes to the renderer, never into a seed, an
 index, or a subsequent cook. What it *does* mean: if you need matrices
 that match the CPU bit for bit, do not turn `deviceInstances` on.
 
-See it live: [`examples/09-gpu-world`](./examples/09-gpu-world) streams
+See it live: [`examples/05-gpu-world`](./examples/05-gpu-world) streams
 a `World` whose cells render from instance matrices that never touch
 the CPU, showing the binding's live handle count and the evaluator
 pool's own detached-buffer accounting side by side — an independent

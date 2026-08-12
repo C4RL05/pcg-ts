@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { EXIT_OK, runCli } from "./index.js";
 import type { CliIo } from "./io.js";
 
-const GRAPH = fileURLToPath(new URL("../../examples/10-headless/graph.json", import.meta.url));
+const GRAPH = fileURLToPath(new URL("../../examples/07-headless/graph.json", import.meta.url));
 
 function realFileIo(): { io: CliIo; stdout(): string; files: Record<string, string> } {
   const out: string[] = [];
@@ -26,7 +26,7 @@ function realFileIo(): { io: CliIo; stdout(): string; files: Record<string, stri
   };
 }
 
-describe("examples/10-headless", () => {
+describe("examples/07-headless", () => {
   it("validates, carrying its meta block", async () => {
     const io = realFileIo();
     expect(await runCli(["validate", GRAPH, "--json"], io.io)).toBe(EXIT_OK);

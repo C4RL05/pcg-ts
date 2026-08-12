@@ -116,12 +116,12 @@ const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
  * width/height attributes in docs/manual.html.
  */
 const SIZES = {
-  "04-infinite-world": { css: [1454, 783], out: [1454, 783] },
-  "06-graph-editor": { css: [1454, 783], out: [1454, 783] },
-  "07-galaxy": { css: [1454, 783], out: [1454, 783] },
-  "08-gpu-fields": { css: [1366, 900], out: [1366, 900] },
-  "09-gpu-world": { css: [1079, 791], out: [1079, 791] },
-  "11-rig-playground": { css: [1454, 783], out: [1454, 783] },
+  "01-sandbox": { css: [1454, 783], out: [1454, 783] },
+  "02-infinite-world": { css: [1454, 783], out: [1454, 783] },
+  "03-galaxy": { css: [1454, 783], out: [1454, 783] },
+  "04-gpu-fields": { css: [1366, 900], out: [1366, 900] },
+  "05-gpu-world": { css: [1079, 791], out: [1079, 791] },
+  "06-rig-playground": { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -131,7 +131,16 @@ const SIZES = {
  */
 const DEMOS = [
   {
-    id: "04-infinite-world",
+    id: "01-sandbox",
+    // The starter graph is cooked behind a 150 ms debounce; the toolbar reads
+    // "cooking…" until the first cook lands.
+    ready: (s, has) => {
+      const status = document.querySelector(".toolbar .status");
+      return !!status && /^cook\s/.test(status.textContent || "") && has(s["output hash"]);
+    },
+  },
+  {
+    id: "02-infinite-world",
     // The GPU adapter resolving triggers a full world rebuild, so "pending is
     // 0" only means anything once the adapter question has been answered.
     ready: (s, has) =>
@@ -146,16 +155,7 @@ const DEMOS = [
     settle: () => setRangeByLabel("speed", 0),
   },
   {
-    id: "06-graph-editor",
-    // The starter graph is cooked behind a 150 ms debounce; the toolbar reads
-    // "cooking…" until the first cook lands.
-    ready: (s, has) => {
-      const status = document.querySelector(".toolbar .status");
-      return !!status && /^cook\s/.test(status.textContent || "") && has(s["output hash"]);
-    },
-  },
-  {
-    id: "07-galaxy",
+    id: "03-galaxy",
     ready: (s, has) => s["pending"] === "0" && has(s["stars"]) && s["stars"] !== "0",
     // Cruise only disengages on a movement key. A tap moves the camera a
     // couple of units out of a 420-unit radius, which is invisible, and stops
@@ -165,7 +165,7 @@ const DEMOS = [
     animated: true,
   },
   {
-    id: "08-gpu-fields",
+    id: "04-gpu-fields",
     // This demo has no shared overlay; its readouts live in the Svelte panel.
     // The point of the demo is the three-way cost comparison, and the table is
     // empty until "cook all paths (cold)" has run — so press it once the
@@ -180,7 +180,7 @@ const DEMOS = [
     },
   },
   {
-    id: "09-gpu-world",
+    id: "05-gpu-world",
     ready: (s, has) =>
       !!window.pcgWorld &&
       window.pcgWorld.probe().meshes > 0 &&
@@ -196,7 +196,7 @@ const DEMOS = [
     },
   },
   {
-    id: "11-rig-playground",
+    id: "06-rig-playground",
     // The host exposes its own readiness rather than leaving it to be
     // inferred from the readouts: the panel publishes on every fps tick,
     // so a stat can be present while the cook that produced it is stale.

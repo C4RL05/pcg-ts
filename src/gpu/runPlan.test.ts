@@ -101,7 +101,7 @@ const applyOf = (p: PlanShape, i: number): StepShape => {
 };
 
 /**
- * The demo rig's fused chain (examples/08-gpu-fields): setAttribute →
+ * The demo rig's fused chain (examples/04-gpu-fields): setAttribute →
  * jitterPoints → transformPoints(three constants) → setAttribute →
  * setAttribute, over a scattered point cloud.
  *

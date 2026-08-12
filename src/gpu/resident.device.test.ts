@@ -672,7 +672,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device-resident runs"), ()
       expect(c.perNodeStats.residentRuns, `${c.name}: per-node leg must not fuse`).toBe(0);
       expect(c.perNodeStats.fallbacks["run-plan-failed"], `${c.name}: per-node leg`).toBe(1);
     }
-    // The shipped 08-gpu-fields chain specifically: 1 run / 2 fused nodes
+    // The shipped 04-gpu-fields chain specifically: 1 run / 2 fused nodes
     // / 1 readback saved, where phase 42 left 0 / 0 / 0.
     const demo = byName.get("demoOrder5")!;
     expect(demo.members).toBe(5);
