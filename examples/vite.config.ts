@@ -34,6 +34,7 @@ export default defineConfig({
         "07-galaxy": here("07-galaxy/index.html"),
         "08-gpu-fields": here("08-gpu-fields/index.html"),
         "09-gpu-world": here("09-gpu-world/index.html"),
+        "11-rig-playground": here("11-rig-playground/index.html"),
       },
     },
   },

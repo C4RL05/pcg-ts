@@ -125,6 +125,7 @@ const SIZES = {
   "07-galaxy": { css: [1454, 783], out: [1454, 783] },
   "08-gpu-fields": { css: [1366, 900], out: [1366, 900] },
   "09-gpu-world": { css: [1079, 791], out: [1079, 791] },
+  "11-rig-playground": { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -217,6 +218,15 @@ const DEMOS = [
       setCheckboxByLabel("autopilot", false);
       setRangeByLabel("speed", 0);
     },
+  },
+  {
+    id: "11-rig-playground",
+    // The host exposes its own readiness rather than leaving it to be
+    // inferred from the readouts: the panel publishes on every fps tick,
+    // so a stat can be present while the cook that produced it is stale.
+    ready: (s, has) => window.__rigReady?.() === true && has(s["cook"]),
+    // Nothing animates — one cook, then orbit damping settles — so the
+    // pixel criterion is enough and there is nothing to turn off.
   },
 ];
 

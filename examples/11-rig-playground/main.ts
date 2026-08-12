@@ -1,5 +1,5 @@
 /**
- * 12 — rig playground: components scattered along a spline, with cables
+ * 11 — rig playground: components scattered along a spline, with cables
  * hanging off it. Geometry only.
  *
  * There are NO LIGHTS in this scene, on purpose. `examples/shared/scene.ts`
