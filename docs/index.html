@@ -28,51 +28,47 @@
     font-display: swap;
   }
   :root {
-    /* Declare native light+dark support so Chrome's forced/auto dark mode
-       (desktop flag and Android "Dark theme") never inverts the page. */
-    color-scheme: light dark;
-    --bg: #fafbf8;
-    --ink: #1b241e;
-    --muted: #5c6b61;
-    --faint: #8a978d;
-    --accent: #2e7d4f;
-    --accent-ink: #22623d;
-    --amber: #a07d1c;
-    --line: #dfe6df;
-    --card: #f1f5f0;
-    --code-bg: #14201a;
-    --code-ink: #d8e6da;
-    --plate: #f7f9f5;
+    /* ONE world, deliberately — there is no light theme and no
+       [data-theme] hook, because the three primaries below cannot
+       survive a light ground: #00ff00 on white measures 1.37:1 against
+       the 4.5 AA floor for text. A light scheme would need different
+       accents, i.e. a different design, so the page commits to black.
+       `color-scheme: dark` still declares that intent to the browser so
+       forced/auto dark mode has nothing left to invert. */
+    color-scheme: dark;
+    --bg: #000000;
+
+    /* Pure greyscale — every value has R = G = B, no hue anywhere. The
+       ratios are measured against #000000. */
+    --ink-hi: #ffffff;   /* headings, max emphasis      21.00:1 */
+    --ink: #ededed;      /* body text                   17.94:1 */
+    --muted: #9a9a9a;    /* secondary text               7.46:1 */
+    --faint: #7a7a7a;    /* tertiary text                4.89:1 */
+    --line: #262626;     /* borders                             */
+    --line-hi: #3a3a3a;  /* link rules, emphasised borders      */
+    --card: #0d0d0d;
+    --plate: #0a0a0a;
+    --code-bg: #0a0a0a;
+    --code-ink: #ededed;
+
+    /* The three primaries, spent as MARKS and never on body copy. On
+       #000 red measures 5.25:1 and green 15.30:1, so both clear AA as
+       text — but blue is 2.44:1, under even the 3.0 large-text floor.
+       So --b is only ever a fill or a stroke. Never set text to it. */
+    --r: #ff0000;
+    --g: #00ff00;
+    --b: #0000ff;
+
+    /* Kept under their old names so the ~40 var(--accent*) call sites
+       downstream keep reading naturally. Note --accent-ink is now
+       GREYSCALE: link and inline-code text carries no colour, and --g is
+       spent only on interactive states and the one hero CTA. */
+    --accent: #00ff00;
+    --accent-ink: #ededed;
+    --amber: #ff0000;
+
     --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
     --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #101612;
-      --ink: #e5ede6;
-      --muted: #92a296;
-      --faint: #6c7b70;
-      --accent: #58be8a;
-      --accent-ink: #6fcf9d;
-      --amber: #d9b84a;
-      --line: #232e26;
-      --card: #161f19;
-      --code-bg: #0b110d;
-      --code-ink: #cfe0d2;
-      --plate: #151d18;
-    }
-  }
-  :root[data-theme="light"] {
-    --bg: #fafbf8; --ink: #1b241e; --muted: #5c6b61; --faint: #8a978d;
-    --accent: #2e7d4f; --accent-ink: #22623d; --amber: #a07d1c;
-    --line: #dfe6df; --card: #f1f5f0; --code-bg: #14201a; --code-ink: #d8e6da;
-    --plate: #f7f9f5;
-  }
-  :root[data-theme="dark"] {
-    --bg: #101612; --ink: #e5ede6; --muted: #92a296; --faint: #6c7b70;
-    --accent: #58be8a; --accent-ink: #6fcf9d; --amber: #d9b84a;
-    --line: #232e26; --card: #161f19; --code-bg: #0b110d; --code-ink: #cfe0d2;
-    --plate: #151d18;
   }
 
   * { box-sizing: border-box; }
@@ -87,11 +83,13 @@
   }
   .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
 
-  h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; }
+  h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; color: var(--ink-hi); }
   h2 { font-size: 26px; font-weight: 600; margin: 0 0 8px; }
   h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
   p { margin: 0 0 14px; max-width: 70ch; }
-  a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  /* The rule is grey and only the HOVER is green: a link at rest is body
+     copy, so colour marks the interaction rather than the text. */
+  a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid var(--line-hi); }
   a:hover, a:focus-visible { border-bottom-color: var(--accent); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
@@ -101,7 +99,7 @@
     font-weight: 600;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--accent-ink);
+    color: var(--faint);
     margin: 0 0 10px;
   }
   section { padding: 44px 0 20px; }
@@ -165,7 +163,7 @@
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
     border-radius: 6px;
     padding: 6px 12px;
-    color: var(--accent-ink);
+    color: var(--g);
     font-weight: 600;
     pointer-events: auto;
   }
@@ -302,15 +300,18 @@
     margin: 16px 0 10px;
   }
   .codeblock pre { margin: 0; font-family: var(--mono); font-size: 13.5px; line-height: 1.65; }
-  .codeblock .k { color: #7fd4a8; }
-  .codeblock .s { color: #d8c078; }
-  .codeblock .c { color: #6d8577; font-style: italic; }
-  .codeblock .n { color: #a8ccf0; }
+  /* Syntax is carried by LIGHTNESS, not hue — four steps down the same
+     greyscale ramp. Colouring tokens would spend the primaries on the
+     most repeated element on the page, the opposite of sparingly. */
+  .codeblock .k { color: #ffffff; font-weight: 600; }
+  .codeblock .s { color: #9a9a9a; }
+  .codeblock .c { color: #5a5a5a; font-style: italic; }
+  .codeblock .n { color: #c8c8c8; }
 
   /* ---------- feature columns ---------- */
   .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 32px; margin: 14px 0; padding: 0; list-style: none; }
   .features li { padding: 7px 0 7px 20px; position: relative; font-size: 14.5px; color: var(--muted); }
-  .features li::before { content: "▸"; position: absolute; left: 0; color: var(--accent); }
+  .features li::before { content: "▸"; position: absolute; left: 0; color: var(--faint); }
   .features li b { color: var(--ink); font-weight: 600; }
 
   /* ---------- examples ---------- */
@@ -753,8 +754,17 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
 
-    const [ar, ag, ab] = hexToRgb(css("--accent") || "#2e7d4f");
-    const [mr, mg, mb] = hexToRgb(css("--faint") || "#8a978d");
+    // The field is greyscale, ramped --faint -> --ink-hi, with a
+    // deterministic 1-in-24 of surviving points taking one of the three
+    // primaries instead. That is what "sparingly" means here: a scatter
+    // of coloured marks over a grey field, never a tint across all of it.
+    const lo = hexToRgb(css("--faint") || "#7a7a7a");
+    const hi = hexToRgb(css("--ink-hi") || "#ffffff");
+    const PRIMARIES = [
+      hexToRgb(css("--r") || "#ff0000"),
+      hexToRgb(css("--g") || "#00ff00"),
+      hexToRgb(css("--b") || "#0000ff"),
+    ];
 
     // Deterministic scatter: grid cells, one candidate per cell, kept and
     // sized by an fbm density field — a miniature of the library's model.
@@ -771,12 +781,18 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         const edge = Math.min(py / (h * 0.55), 1);          // fade under the title
         const alpha = (0.10 + 0.55 * d) * (0.35 + 0.65 * edge);
         const t = f01(hash(hh, 5));
-        const cr = Math.round(mr + (ar - mr) * t);
-        const cg = Math.round(mg + (ag - mg) * t);
-        const cb = Math.round(mb + (ab - mb) * t);
-        ctx.fillStyle = `rgba(${cr},${cg},${cb},${alpha.toFixed(3)})`;
+        // Same hash chain as everything else, so the marks land in the
+        // same places for the same seed — the field stays deterministic.
+        const marked = hash(hh, 6) % 24 === 0;
+        const [cr, cg, cb] = marked
+          ? PRIMARIES[hash(hh, 7) % 3]
+          : [0, 1, 2].map((i) => Math.round(lo[i] + (hi[i] - lo[i]) * t));
+        // A mark has to survive the density fade or the colour reads as
+        // dirt on the grey rather than as a deliberate accent.
+        const a = marked ? Math.min(1, alpha * 2.4 + 0.25) : alpha;
+        ctx.fillStyle = `rgba(${cr},${cg},${cb},${a.toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(px, py, r, 0, 6.2832);
+        ctx.arc(px, py, marked ? r * 1.3 : r, 0, 6.2832);
         ctx.fill();
       }
     }
@@ -784,16 +800,36 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
   input.addEventListener("input", draw);
   window.addEventListener("resize", draw);
-  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-  if (window.matchMedia) {
-    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
-  }
+  // The theme-change redraws that used to live here are gone with the
+  // themes: the palette no longer varies, so there is nothing to react to.
   draw();
 })();
 </script>
 <script type="module">
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-mermaid.initialize({ startOnLoad: true });
+// Mermaid ships a light theme by default, which would drop a white slab
+// onto a black page. Driven off the same greyscale ramp as the CSS.
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    darkMode: true,
+    background: "#000000",
+    mainBkg: "#0d0d0d",
+    primaryColor: "#0d0d0d",
+    primaryTextColor: "#ededed",
+    primaryBorderColor: "#3a3a3a",
+    secondaryColor: "#0a0a0a",
+    tertiaryColor: "#0a0a0a",
+    nodeBorder: "#3a3a3a",
+    clusterBkg: "#0a0a0a",
+    clusterBorder: "#262626",
+    lineColor: "#7a7a7a",
+    textColor: "#ededed",
+    edgeLabelBackground: "#000000",
+    fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
+  },
+});
 </script>
 </body>
 </html>
