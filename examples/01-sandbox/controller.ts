@@ -17,6 +17,7 @@
 import {
   Graph,
   cook,
+  createGpuCookStats,
   describeSubgraphPins,
   deserializeGraph,
   fieldFromJson,
@@ -31,6 +32,8 @@ import {
   type ExposedParam,
   type ExposedPin,
   type FieldSpec,
+  type GpuCookStats,
+  type GpuFieldResolver,
   type NodeHandle,
   type ParamSchema,
   type ParamValue,
@@ -39,6 +42,7 @@ import {
   type SerializedNode,
   type SerializedSubgraph,
 } from "pcg-ts";
+import { PARTIAL_FUSION } from "../shared/gpu.js";
 import type { Knob, KnobPatch } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
@@ -61,6 +65,13 @@ export interface CookStatus {
   readonly outputs: number;
   /** FNV-1a hash (hex) over every output payload — round-trip proof. */
   readonly hash: string;
+  /**
+   * Device counters, summed over the pass, when a GPU path cooked it.
+   * Absent on the CPU path — `cook` populates `stats.gpu` exactly when a
+   * resolver was passed, so absent and "all zeroes" mean different
+   * things and are worth keeping apart.
+   */
+  readonly gpu?: GpuCookStats;
 }
 
 /** One param as the inspector renders it (plain data only). */
@@ -113,6 +124,32 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Fold one cook's device counters into a running total.
+ *
+ * The work counters sum cleanly: a memoized node does no device work, so
+ * cooking output B after output A adds only what B actually dispatched.
+ * `run-partially-fused` does NOT, because it is counted once per chain
+ * per COOK CALL — including on a memo hit — and this page makes one call
+ * per declared output so one narrowed chain would report itself once per
+ * output. Neither summing nor taking the max is exact once several
+ * outputs hold DIFFERENT narrowed chains; the max is the one that cannot
+ * contradict the run counters sitting beside it in the status line,
+ * which is what a reader would notice.
+ */
+function addGpuStats(into: GpuCookStats, from: GpuCookStats): void {
+  into.dispatches += from.dispatches;
+  into.pipelinesCompiled += from.pipelinesCompiled;
+  into.pipelineCacheHits += from.pipelineCacheHits;
+  into.residentRuns += from.residentRuns;
+  into.fusedNodes += from.fusedNodes;
+  into.readbacksSaved += from.readbacksSaved;
+  for (const [reason, n] of Object.entries(from.fallbacks)) {
+    const prior = into.fallbacks[reason] ?? 0;
+    into.fallbacks[reason] = reason === PARTIAL_FUSION ? Math.max(prior, n) : prior + n;
+  }
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -163,6 +200,22 @@ export class EditorController {
    * render, the import that caused it has long since returned.
    */
   private freshGraph = false;
+  /**
+   * The cook path's resolver, or undefined for the CPU. Held rather than
+   * passed per cook because the cook is debounced: whoever flips the
+   * toolbar is not the caller that eventually runs.
+   */
+  private gpu: GpuFieldResolver | undefined;
+  /**
+   * Rejects the cook pass currently in flight. Held because a lost
+   * device does NOT reject the work already on it — a pending readback
+   * simply never settles — so without a way out the pass never returns,
+   * the recooker's gate never opens, and every later edit is swallowed
+   * for the life of the page. An abort signal is not enough: the
+   * executor checks one between nodes, and the stuck await is inside a
+   * node.
+   */
+  private bail: ((err: Error) => void) | undefined;
   private cookTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly recook: () => void;
   private listener: ((s: CookStatus) => void) | undefined;
@@ -170,6 +223,32 @@ export class EditorController {
   constructor(hooks: ControllerHooks) {
     this.hooks = hooks;
     this.recook = makeRecooker(() => this.cookAll());
+  }
+
+  /**
+   * Choose the cook path. `undefined` is the CPU — `cook` populates
+   * `stats.gpu` exactly when a resolver is passed, so passing none is
+   * how the CPU path stays byte-for-byte what it always was.
+   *
+   * Recooks, because the whole point of switching is to see the same
+   * graph come back the same on a different path.
+   */
+  setGpuResolver(resolver: GpuFieldResolver | undefined): void {
+    if (this.gpu === resolver) return;
+    this.gpu = resolver;
+    this.scheduleCook();
+  }
+
+  /**
+   * Abandon the pass in flight, surfacing `reason` as a cook error.
+   *
+   * Called when the device under the current resolver is gone. The pass
+   * would otherwise sit on a readback that will never settle; letting it
+   * reject instead lets the pass finish, which is what releases the
+   * recooker so the CPU recook behind it can actually run.
+   */
+  abandonCook(reason: string): void {
+    this.bail?.(new Error(reason));
   }
 
   /** The UI's status subscription (the hooks get every status too). */
@@ -686,18 +765,45 @@ export class EditorController {
     const items: DataItem[] = [];
     let cooked = 0;
     let cached = 0;
+    /**
+     * Summed across the per-output loop rather than taken from the last
+     * cook: this page cooks each declared output separately, so a graph
+     * with three outputs runs three passes and the device counters of
+     * the first two would otherwise be thrown away.
+     */
+    const resolver = this.gpu;
+    const gpu = resolver === undefined ? undefined : createGpuCookStats();
+    // One escape hatch for the whole pass. Rejected rather than resolved
+    // so the race lands in the same catch as any other cook failure, and
+    // pre-rejected for every output after the first, which is what makes
+    // the rest of the loop fall through immediately.
+    const escape = new Promise<never>((_, reject) => {
+      this.bail = reject;
+    });
+    escape.catch(() => {}); // a rejection nobody raced is not an error
     const t0 = performance.now();
-    for (const name of names) {
-      if (stale()) return; // structure changed mid-pass; a newer cook follows
-      try {
-        const r = await cook(graph, { outputs: [name] });
-        cooked += r.stats.cooked;
-        cached += r.stats.cached;
-        const col = r.outputs[name];
-        if (col) items.push(...col);
-      } catch (err) {
-        errors.push(errorMessage(err));
+    try {
+      for (const name of names) {
+        if (stale()) return; // structure changed mid-pass; a newer cook follows
+        try {
+          const r = await Promise.race([
+            cook(graph, {
+              outputs: [name],
+              ...(resolver === undefined ? {} : { gpu: resolver }),
+            }),
+            escape,
+          ]);
+          cooked += r.stats.cooked;
+          cached += r.stats.cached;
+          if (gpu !== undefined && r.stats.gpu !== undefined) addGpuStats(gpu, r.stats.gpu);
+          const col = r.outputs[name];
+          if (col) items.push(...col);
+        } catch (err) {
+          errors.push(errorMessage(err));
+        }
       }
+    } finally {
+      this.bail = undefined;
     }
     const elapsedMs = performance.now() - t0;
 
@@ -746,6 +852,7 @@ export class EditorController {
       instances,
       outputs: names.length,
       hash: (h >>> 0).toString(16).padStart(8, "0"),
+      ...(gpu === undefined ? {} : { gpu }),
     };
     // The flag is cleared only by a render that actually happened: a cook
     // abandoned as stale never reached the host, so the graph it loaded

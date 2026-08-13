@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-41 examples, alphabetical by file:
+42 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -39,6 +39,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-transfer-attribute.json](#basics-transfer-attributejson) — read a value off a surface below each point
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
 - [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
+- [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
 - [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/5, edited — hand-placed plots that win on priority
@@ -641,6 +642,24 @@ The forest recipe as one serialized graph. A displaced plane is the terrain; `su
 **Outputs:** `terrain` (from `terrain`.`out`), `instances` (from `spawn`.`instances`)
 
 Cook it: `pcg cook examples/graphs/examples-forest.json --stats`
+
+## examples-gpu-fields.json
+
+**a fusable chain, on the CPU or the device**
+
+Five count-preserving nodes in a strict line, every field param authored as a serialized spec rather than composed in code, so the chain is device-eligible. Switch the cook path in the toolbar: the two device paths agree bit for bit, so the hash holds across them while the time drops as the tail fuses into one resident run. The CPU hash differs, and that is not a defect: GPU floats are not byte-identical to CPU floats. Raise the point count to see why the device path exists.
+
+**Tags:** `gpu`, `fields`, `attributes`, `performance`
+
+**Seed:** 1
+
+**Node types:** `jitterPoints`, `pointScatterInBounds`, `setAttribute`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `psize`.`out`)
+
+Cook it: `pcg cook examples/graphs/examples-gpu-fields.json --stats`
 
 ## pipeline-1-boundary.json
 

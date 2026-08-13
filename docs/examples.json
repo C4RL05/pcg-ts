@@ -906,6 +906,34 @@
     ]
   },
   {
+    "file": "examples-gpu-fields.json",
+    "path": "examples/graphs/examples-gpu-fields.json",
+    "title": "a fusable chain, on the CPU or the device",
+    "description": "Five count-preserving nodes in a strict line, every field param authored as a serialized spec rather than composed in code, so the chain is device-eligible. Switch the cook path in the toolbar: the two device paths agree bit for bit, so the hash holds across them while the time drops as the tail fuses into one resident run. The CPU hash differs, and that is not a defect: GPU floats are not byte-identical to CPU floats. Raise the point count to see why the device path exists.",
+    "tags": [
+      "gpu",
+      "fields",
+      "attributes",
+      "performance"
+    ],
+    "seed": 1,
+    "nodeCount": 6,
+    "nodeTypes": [
+      "jitterPoints",
+      "pointScatterInBounds",
+      "setAttribute",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "psize",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "pipeline-1-boundary.json",
     "path": "examples/graphs/pipeline-1-boundary.json",
     "title": "staged pipeline 1/5 — the ground and the wall",

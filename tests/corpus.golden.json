@@ -1402,6 +1402,48 @@
         ]
       }
     },
+    "examples-gpu-fields.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 40000,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "seed:u32",
+                "wobble:f32x3",
+                "color:f32x3",
+                "psize:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -36.4326,
+                -8.8663,
+                -36.5712
+              ],
+              "max": [
+                36.5664,
+                8.7369,
+                35.9617
+              ]
+            }
+          }
+        ]
+      }
+    },
     "pipeline-1-boundary.json": {
       "outputs": {
         "boundary": [

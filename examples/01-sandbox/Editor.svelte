@@ -24,6 +24,8 @@
     type KnobValues,
   } from "../shared/graphUi.js";
   import { findPreset, loadPresetText } from "../shared/presets.js";
+  import type { CookPath } from "../shared/gpu.js";
+  import type { GpuState } from "./main.js";
   import type { CookStatus, EditorController } from "./controller.js";
   import { topoLayout } from "./layout.js";
   import {
@@ -46,12 +48,17 @@
      * knows whether a keystroke is a command or a character.
      */
     bridge: {
-      publish?: (s: { fps: string; drew: string }) => void;
+      publish?: (s: { fps: string; drew: string; gpu: GpuState }) => void;
       frame?: () => void;
+      setCookPath?: (path: CookPath) => void;
     };
   } = $props();
 
-  let host = $state({ fps: "–", drew: "–" });
+  let host = $state<{ fps: string; drew: string; gpu: GpuState }>({
+    fps: "–",
+    drew: "–",
+    gpu: { path: "cpu", ready: false, label: "", error: null },
+  });
   untrack(() => {
     bridge.publish = (s) => (host = s);
   });
@@ -591,6 +598,7 @@
     onLayout={relayout}
     onFit={() => canvas?.resetView()}
     onFrame={() => bridge.frame?.()}
+    onCookPath={(p) => bridge.setCookPath?.(p)}
     viewLabel={view.label}
     onCycleView={() => cycleView()}
     {host}

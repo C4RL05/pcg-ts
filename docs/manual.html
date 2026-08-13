@@ -951,7 +951,7 @@ pcg nodes pointGrid --json</code></pre></div>
       <tbody>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 41 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">docs/examples.json</a></td><td>The example corpus: 41 graphs under <code>examples/graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.md">docs/examples.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/examples.json">docs/examples.json</a></td><td>The example corpus: 42 graphs under <code>examples/graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
       </tbody>
     </table>
     </div>
@@ -1391,7 +1391,7 @@ cmp a.json b.json</code></pre></div>
     <p>Look up what you are about to type rather than recalling it. From a shell that is two commands, and the answers are the same registries chapter 8 describes:</p>
     <div class="codeblock"><pre><code>pcg nodes pointScatterInBounds   <span class="c"># pins, and every param with its range</span>
 pcg fields fbm                   <span class="c"># the field fn's allowed keys and usage line</span></code></pre></div>
-    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/examples.md</code> indexes 41 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
+    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/examples.md</code> indexes 42 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
 
     <h3>2 · Emit</h3>
     <p>Write the document to a file. Use the chapter 9 example verbatim — four nodes, three connections, two outputs — saved as <code>g.json</code>. From here on the file on disk is the artifact; every command below reads it and none of them modifies it.</p>

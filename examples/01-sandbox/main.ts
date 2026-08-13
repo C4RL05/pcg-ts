@@ -30,6 +30,7 @@ import {
 import { createFpsMeter } from "../shared/fps.js";
 import { createScene } from "../shared/scene.js";
 import { createPlaceholderAssets } from "../shared/assets.js";
+import { createGpuPaths, requestGpuDevice, type CookPath, type GpuPaths } from "../shared/gpu.js";
 import { disposeDrawn, drawItem, type DrawMaterials } from "../shared/draw.js";
 import {
   depthRange,
@@ -206,14 +207,28 @@ function render(items: readonly DataItem[], info: RenderInfo): void {
  * are the host's own (the cook does not know the frame rate, and what an
  * output DREW is a renderer question), pushed in through the bridge.
  */
+/** What the toolbar needs to know about the device, if there is one. */
+export interface GpuState {
+  readonly path: CookPath;
+  /** False while probing, and after a failure or a lost device. */
+  readonly ready: boolean;
+  /** Adapter description, once there is one. */
+  readonly label: string;
+  /** Why there is no device, verbatim. Null while probing or once ready. */
+  readonly error: string | null;
+}
+
 const bridge: {
-  publish?: (s: { fps: string; drew: string }) => void;
+  publish?: (s: { fps: string; drew: string; gpu: GpuState }) => void;
   /** The editor's way back to the scene: re-frame on demand. */
   frame?: () => void;
+  /** The editor's way to choose a cook path. */
+  setCookPath?: (path: CookPath) => void;
 } = {};
 bridge.frame = frameNow;
 let fpsText = "–";
-const publish = (): void => bridge.publish?.({ fps: fpsText, drew: drewSummary });
+let gpu: GpuState = { path: "cpu", ready: false, label: "", error: null };
+const publish = (): void => bridge.publish?.({ fps: fpsText, drew: drewSummary, gpu });
 
 function status(s: CookStatus): void {
   void s; // the editor already has it from the controller; this just refreshes ours
@@ -228,6 +243,73 @@ const target = document.getElementById("editor");
 if (!target) throw new Error("missing #editor element");
 mount(Editor, { target, props: { controller, bridge } });
 publish();
+
+// -- the device ------------------------------------------------------------
+
+/**
+ * The cook paths, once a device answers. The page opens on the CPU and
+ * probes in the background: a graph has to be on screen before WebGPU
+ * has finished negotiating, and a page that waits for an adapter it may
+ * never get is a page that never draws.
+ */
+let paths: GpuPaths | undefined;
+
+/** Push the selected path to the controller, which recooks. */
+function applyCookPath(): void {
+  if (paths === undefined || gpu.path === "cpu") {
+    controller.setGpuResolver(undefined);
+    return;
+  }
+  controller.setGpuResolver(gpu.path === "gpu-fused" ? paths.fused : paths.perNode);
+}
+
+bridge.setCookPath = (path) => {
+  gpu = { ...gpu, path };
+  applyCookPath();
+  publish();
+};
+
+/**
+ * Set the moment a device is lost, and never cleared. The loss can
+ * arrive DURING the probe — the handler is registered before the probe
+ * resolves — and without this the continuation below would build paths
+ * on the corpse and re-advertise the device as ready.
+ */
+let deviceLost = false;
+
+void (async () => {
+  const probe = await requestGpuDevice((detail) => {
+    deviceLost = true;
+    // Deliberately NOT disposed: dispose destroys pooled buffers, and a
+    // cook may still be holding them. The device is gone either way, so
+    // dropping the reference and letting it be collected is the safe
+    // half of that trade.
+    paths = undefined;
+    gpu = { path: "cpu", ready: false, label: "", error: `device lost — ${detail}` };
+    applyCookPath();
+    // The pass in flight was handed the dead device and will never
+    // settle on its own; the CPU recook just scheduled is stuck behind
+    // it until it does.
+    controller.abandonCook(`device lost — ${detail}`);
+    publish();
+  });
+  if ("error" in probe) {
+    // Back to the CPU as well as unavailable. The selector renders
+    // `gpu.path`, so leaving a GPU path selected here would show a path
+    // the page is not on — the same inconsistency the loss branch avoids.
+    gpu = { path: "cpu", ready: false, label: "", error: probe.error };
+    applyCookPath();
+    publish();
+    return;
+  }
+  if (deviceLost) return; // lost while probing; the handler already reported it
+  paths = createGpuPaths(probe);
+  gpu = { ...gpu, ready: true, label: probe.label, error: null };
+  // The selector is live while the probe is in flight, so honour a
+  // choice already made rather than silently staying on the CPU.
+  applyCookPath();
+  publish();
+})();
 
 const fps = createFpsMeter((v) => {
   fpsText = v;
