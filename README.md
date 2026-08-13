@@ -1,4 +1,11 @@
-# pcg-ts
+<!-- The wordmark ships white on transparent, which disappears against
+     GitHub's light theme, so two colour variants are shipped and picked
+     by prefers-color-scheme. The <img> is the light one because it is
+     also the fallback wherever <picture> is not honoured. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/logo-dark.svg">
+  <img alt="pcg-ts" src="./docs/logo-light.svg" width="420">
+</picture>
 
 Real-time procedural content generation for TypeScript — deterministic
 by construction, WebGPU accelerated. Runs in the browser and Node, with
