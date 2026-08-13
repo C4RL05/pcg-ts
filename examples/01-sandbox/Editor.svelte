@@ -39,8 +39,16 @@
     bridge,
   }: {
     controller: EditorController;
-    /** The host publishes readouts it owns (fps, what was drawn) here. */
-    bridge: { publish?: (s: { fps: string; drew: string }) => void };
+    /**
+     * The host publishes readouts it owns (fps, what was drawn) here, and
+     * hangs its re-frame control off it. The scene belongs to the host,
+     * but the keyboard belongs to this component — it is the one that
+     * knows whether a keystroke is a command or a character.
+     */
+    bridge: {
+      publish?: (s: { fps: string; drew: string }) => void;
+      frame?: () => void;
+    };
   } = $props();
 
   let host = $state({ fps: "–", drew: "–" });
@@ -526,6 +534,18 @@
       menuAt = menuAt === null ? { ...pointer } : null;
       return;
     }
+    /**
+     * F re-frames the scene on what the graph made. The camera is placed
+     * automatically when a graph loads and then left alone, so this is
+     * the way back after flying off, or after a knob has grown the
+     * content past the pose it was framed at.
+     */
+    if ((e.key === "f" || e.key === "F") && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (modal !== null || isTyping(target)) return;
+      e.preventDefault();
+      bridge.frame?.();
+      return;
+    }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (modal !== null) return;
     if (isTyping(target)) return;
@@ -570,6 +590,7 @@
     onImport={() => (modal = "import")}
     onLayout={relayout}
     onFit={() => canvas?.resetView()}
+    onFrame={() => bridge.frame?.()}
     viewLabel={view.label}
     onCycleView={() => cycleView()}
     {host}

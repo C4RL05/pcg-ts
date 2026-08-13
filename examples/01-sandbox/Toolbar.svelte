@@ -18,6 +18,7 @@
     onFit,
     host,
     onToggle,
+    onFrame,
   }: {
     seed: number;
     status: CookStatus | null;
@@ -37,6 +38,8 @@
     host: { fps: string; drew: string };
     /** Frame every node in the canvas. */
     onFit: () => void;
+    /** Frame the SCENE camera on what the graph made — the other half of `onFit`. */
+    onFrame: () => void;
     /** Collapse/expand the dock; wired to the title on narrow screens. */
     onToggle: () => void;
   } = $props();
@@ -104,6 +107,7 @@
   </label>
   <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
   <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
+  <button onclick={onFrame} title="point the camera at what the graph made (F) — done automatically whenever a graph loads">frame</button>
   <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back) — hold shift to fly the scene through the graph"
     >view · {viewLabel}</button>
   <button onclick={onExport} title="serializeGraph → JSON">export</button>

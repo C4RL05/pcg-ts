@@ -92,9 +92,20 @@ export interface EdgeRef {
   readonly toPin: string;
 }
 
+/** What produced the cook being rendered. */
+export interface RenderInfo {
+  /**
+   * The graph itself was replaced — a preset load or a paste — rather
+   * than re-cooked after an edit. The host frames the camera on a fresh
+   * graph and leaves it alone otherwise: re-framing on every cook would
+   * yank the view out from under whoever is turning a knob.
+   */
+  readonly fresh: boolean;
+}
+
 /** Host callbacks: scene rendering and stats display. */
 export interface ControllerHooks {
-  render(items: readonly DataItem[]): void;
+  render(items: readonly DataItem[], info: RenderInfo): void;
   status(s: CookStatus): void;
 }
 
@@ -145,6 +156,13 @@ export class EditorController {
   private outputNames: string[] = [];
   /** Bumped on every structural edit, so a stale cook pass abandons itself. */
   private structureRev = 0;
+  /**
+   * Set when a whole new graph arrives, cleared by the render that first
+   * carries it. Held as a flag rather than passed along the import call
+   * because the cook is debounced: by the time there is anything to
+   * render, the import that caused it has long since returned.
+   */
+  private freshGraph = false;
   private cookTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly recook: () => void;
   private listener: ((s: CookStatus) => void) | undefined;
@@ -493,6 +511,7 @@ export class EditorController {
     this.imported = new Map(
       (json.outputs ?? []).map((o) => [o.name, { id: o.id, pin: o.pin }] as const),
     );
+    this.freshGraph = true;
     this.afterStructuralEdit();
     const edges = (json.connections ?? []).map((c) => ({
       from: c.from[0],
@@ -728,7 +747,14 @@ export class EditorController {
       outputs: names.length,
       hash: (h >>> 0).toString(16).padStart(8, "0"),
     };
-    if (!stale()) this.hooks.render(items);
+    // The flag is cleared only by a render that actually happened: a cook
+    // abandoned as stale never reached the host, so the graph it loaded
+    // is still waiting to be framed.
+    if (!stale()) {
+      const fresh = this.freshGraph;
+      this.freshGraph = false;
+      this.hooks.render(items, { fresh });
+    }
     this.hooks.status(status);
     this.listener?.(status);
   }

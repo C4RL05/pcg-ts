@@ -31,21 +31,60 @@ import { createFpsMeter } from "../shared/fps.js";
 import { createScene } from "../shared/scene.js";
 import { createPlaceholderAssets } from "../shared/assets.js";
 import { disposeDrawn, drawItem, type DrawMaterials } from "../shared/draw.js";
-import { EditorController, type CookStatus } from "./controller.js";
+import {
+  depthRange,
+  frameCamera,
+  groundPlan,
+  measureDrawn,
+  type Framing,
+  type GroundPlan,
+} from "../shared/frame.js";
+import { EditorController, type CookStatus, type RenderInfo } from "./controller.js";
 import Editor from "./Editor.svelte";
 
 // -- scene -----------------------------------------------------------------
 
-const { scene, start } = createScene({ cameraPosition: [20, 15, 20], target: [0, 2, 0] });
+const { scene, camera, controls, start } = createScene({
+  cameraPosition: [20, 15, 20],
+  target: [0, 2, 0],
+});
 
-const ground = new Mesh(
-  new PlaneGeometry(30, 30),
-  new MeshStandardMaterial({ color: 0x1a2230, roughness: 1 }),
-);
+/**
+ * The floor is rebuilt to fit whatever the graph made, so nothing here is
+ * a fixed size. What ships as the initial 30×30 is only what stands
+ * before the first cook lands.
+ */
+const groundMaterial = new MeshStandardMaterial({ color: 0x1a2230, roughness: 1 });
+const ground = new Mesh(new PlaneGeometry(1, 1), groundMaterial);
 ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.02;
 scene.add(ground);
-scene.add(new GridHelper(30, 30, 0x2c3a52, 0x1e2939));
+let grid = new GridHelper(30, 30, 0x2c3a52, 0x1e2939);
+scene.add(grid);
+let groundKey = "";
+
+/**
+ * Resize the floor and grid to the measured content.
+ *
+ * The plane is a unit geometry under a scale so that following the
+ * content costs a transform rather than an allocation, but a GridHelper
+ * bakes its divisions into a buffer and has to be rebuilt. That is why
+ * the plan is compared as a key first: a knob that nudges the extent
+ * without crossing a snap boundary must not rebuild geometry on every
+ * cook.
+ */
+function applyGround(plan: GroundPlan): void {
+  ground.scale.set(plan.size, plan.size, 1);
+  ground.position.set(plan.x, plan.y, plan.z);
+  const key = `${plan.size}/${plan.divisions}`;
+  if (key !== groundKey) {
+    groundKey = key;
+    scene.remove(grid);
+    grid.dispose();
+    grid = new GridHelper(plan.size, plan.divisions, 0x2c3a52, 0x1e2939);
+    scene.add(grid);
+  }
+  grid.position.set(plan.x, plan.y + plan.lift, plan.z);
+}
 
 const assets = createPlaceholderAssets();
 const outputGroup = new Group();
@@ -67,7 +106,58 @@ const materials: DrawMaterials = {
 /** What the last cook actually drew, for the overlay's `drew` line. */
 let drewSummary = "–";
 
-function render(items: readonly DataItem[]): void {
+/**
+ * A graph arrived and has not been framed yet.
+ *
+ * It survives a cook that drew nothing rather than being consumed by it,
+ * because "nothing to measure" is not the same as "framed": a graph whose
+ * first cook errors, or whose knob patch arrives a beat later, would
+ * otherwise keep the pose of the graph before it for good.
+ */
+let pendingFrame = true;
+
+/**
+ * The last measurement, kept so the depth range can follow the camera.
+ * The framing fixes where the camera STARTS; the wheel has no ceiling,
+ * so near and far have to be re-derived from where it actually is.
+ */
+let framed: Framing | null = null;
+
+/**
+ * Point the camera at what is there now, whether or not it is new. The
+ * measurement is a parameter so the render path, which has just taken
+ * one to size the floor, does not pay for a second.
+ */
+function frameNow(measured?: Framing | null): void {
+  const framing = measured === undefined ? measureDrawn(outputGroup) : measured;
+  if (framing === null) return;
+  framed = framing;
+  frameCamera(framing, camera, controls);
+  depthAt = camera.position.distanceTo(controls?.target ?? framing.center);
+  pendingFrame = false;
+}
+
+/**
+ * Re-derive the depth range for wherever the camera has been dollied to.
+ *
+ * Guarded by a ratio rather than run unconditionally: this is per-frame
+ * work, and rebuilding the projection matrix for a distance that moved a
+ * fraction of a percent is pure cost. A quarter is far inside the
+ * headroom `depthRange` leaves, so the planes never catch up late.
+ */
+let depthAt = 0;
+function followDepth(): void {
+  if (framed === null || controls === undefined) return;
+  const d = camera.position.distanceTo(controls.target);
+  if (d > depthAt * 0.8 && d < depthAt * 1.25) return;
+  depthAt = d;
+  const { near, far } = depthRange(framed, d);
+  camera.near = near;
+  camera.far = far;
+  camera.updateProjectionMatrix();
+}
+
+function render(items: readonly DataItem[], info: RenderInfo): void {
   for (const obj of drawn) outputGroup.remove(obj);
   disposeDrawn(drawn);
   drawn = [];
@@ -86,6 +176,24 @@ function render(items: readonly DataItem[]): void {
     tally.size === 0
       ? "nothing"
       : [...tally].map(([what, n]) => (n > 1 ? `${n}× ${what}` : what)).join(" · ");
+
+  /**
+   * The floor follows every cook that drew something, the camera only a
+   * new graph. They are judged differently: a floor that lags the content
+   * reads as a bug, while a camera that moves while you are turning a
+   * knob takes the view away from the very thing you are watching.
+   *
+   * A cook that drew nothing — an error, or a filter that kept no points
+   * — leaves both alone rather than collapsing them onto a measurement
+   * that does not exist. The previous floor is the better guess at the
+   * scale the graph is being edited at.
+   */
+  if (info.fresh) pendingFrame = true;
+  const framing = measureDrawn(outputGroup);
+  if (framing === null) return;
+  framed = framing;
+  applyGround(groundPlan(framing));
+  if (pendingFrame) frameNow(framing);
 }
 
 // -- readouts --------------------------------------------------------------
@@ -98,7 +206,12 @@ function render(items: readonly DataItem[]): void {
  * are the host's own (the cook does not know the frame rate, and what an
  * output DREW is a renderer question), pushed in through the bridge.
  */
-const bridge: { publish?: (s: { fps: string; drew: string }) => void } = {};
+const bridge: {
+  publish?: (s: { fps: string; drew: string }) => void;
+  /** The editor's way back to the scene: re-frame on demand. */
+  frame?: () => void;
+} = {};
+bridge.frame = frameNow;
 let fpsText = "–";
 const publish = (): void => bridge.publish?.({ fps: fpsText, drew: drewSummary });
 
@@ -120,4 +233,7 @@ const fps = createFpsMeter((v) => {
   fpsText = v;
   publish();
 });
-start(() => fps());
+start(() => {
+  followDepth();
+  fps();
+});
