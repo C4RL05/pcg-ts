@@ -162,24 +162,33 @@ export async function waitForStableFrame(
  * for the main thread.
  *
  * The measurement is a blank/broken guard: a flat rectangle has almost no
- * luma variance and almost no distinct colours. Darkness alone is not
+ * luma variance and almost no distinct TONES. Darkness alone is not
  * suspicious — the galaxy demo is mostly black by design — so the test is
  * variance, not brightness.
  *
+ * The second floor counts distinct 8-bit LUMA levels, not distinct
+ * colours. It used to bucket RGB at 5 bits a channel, which quietly made
+ * the guard a colour detector: every pixel of a greyscale render lands on
+ * the r==g==b diagonal, so it can produce at most 32 buckets no matter how
+ * rich it is, and a floor of 48 was unreachable by construction. The
+ * greyscale sandbox tripped it with a picture that was completely fine.
+ * Tone count says what the floor was always meant to say — "this has
+ * structure in it" — and says it about colour and greyscale alike.
+ *
  * Both floors are caller-set because they are calibrated to a KIND of
  * picture, not to correctness. The demo screenshots carry UI chrome,
- * gradients and text, so `minColours` at 48 costs them nothing; a clean
- * synthetic render of sky, ground and one cloud is legitimately down at a
- * few dozen 5-bit buckets, and failing it would block an authoring loop
- * over a picture that is exactly right. Luma variance is the signal that
- * actually separates "rendered" from "context lost", and it stays.
+ * gradients and text, so a tone floor costs them nothing; a clean
+ * synthetic render of sky, ground and one cloud is legitimately sparse,
+ * and failing it would block an authoring loop over a picture that is
+ * exactly right. Luma variance is the signal that actually separates
+ * "rendered" from "context lost", and it stays.
  */
 export async function encodeJpeg(
   encPage,
   pngBase64,
   [w, h],
   quality,
-  { minSd = 3, minColours = 48 } = {},
+  { minSd = 3, minTones = 40 } = {},
 ) {
   const result = await encPage.evaluate(
     async (b64, width, height, q) => {
@@ -196,13 +205,13 @@ export async function encodeJpeg(
       let sum = 0;
       let sumSq = 0;
       let n = 0;
-      const colours = new Set();
+      const tones = new Set();
       for (let i = 0; i < data.length; i += 4 * 13) {
         const l = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
         sum += l;
         sumSq += l * l;
         n++;
-        colours.add(((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3));
+        tones.add(Math.round(l));
       }
       const mean = sum / n;
       const sd = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
@@ -214,7 +223,7 @@ export async function encodeJpeg(
       for (let i = 0; i < bytes.length; i += CHUNK) {
         s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
       }
-      return { jpeg: btoa(s), mean, sd, colours: colours.size };
+      return { jpeg: btoa(s), mean, sd, tones: tones.size };
     },
     pngBase64,
     w,
@@ -222,9 +231,9 @@ export async function encodeJpeg(
     quality,
   );
 
-  if (result.sd < minSd || result.colours < minColours) {
+  if (result.sd < minSd || result.tones < minTones) {
     throw new Error(
-      `render looks blank (luma sd ${result.sd.toFixed(1)}, ${result.colours} distinct colours) — ` +
+      `render looks blank (luma sd ${result.sd.toFixed(1)}, ${result.tones} distinct tones) — ` +
         "refusing to write a flat rectangle",
     );
   }

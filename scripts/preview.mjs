@@ -338,7 +338,7 @@ async function main() {
       // content.
       const image = await encodeJpeg(encPage, shot.toString("base64"), opts.size, QUALITY, {
         minSd: 1,
-        minColours: 4,
+        minTones: 4,
       });
       const file = `${opts.label}.${view}.jpg`;
       await writeFile(join(outDir, file), image.buffer);
