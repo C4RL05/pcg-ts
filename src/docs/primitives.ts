@@ -296,7 +296,17 @@ function renderMarkdown(primitives: readonly CanonicalPrimitive[]): string {
               cell(formatRange(s)),
               cell(s.enum !== undefined ? s.enum.map((v) => "`" + v + "`").join(", ") : ""),
               s.acceptsField === true ? "yes" : "",
-              cell(param.targets.map((t) => `${t.node}.${t.param}`).join(", ")),
+              // No targets does not mean the knob does nothing: such a
+              // param binds its name into the body's field scope and its
+              // value is substituted into the expressions that read it as
+              // `{"fn": "param"}`. An empty cell would read as missing
+              // data about a param that in fact drives the cook, so name
+              // the route it takes instead.
+              cell(
+                param.targets.length === 0
+                  ? "*(nothing — the body's field expressions read it by name)*"
+                  : param.targets.map((t) => `${t.node}.${t.param}`).join(", "),
+              ),
               cell(s.description),
             ].join(" | ") +
             " |",

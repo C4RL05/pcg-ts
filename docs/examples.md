@@ -4,12 +4,13 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-45 examples, alphabetical by file:
+46 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
 - [basics-compose-primitives.json](#basics-compose-primitivesjson) — compose several primitives into a scatter
 - [basics-even-spacing.json](#basics-even-spacingjson) — enforce a minimum distance between points
+- [basics-field-params.json](#basics-field-paramsjson) — read a field's shaping numbers from a knob
 - [basics-filter-by-attribute.json](#basics-filter-by-attributejson) — keep points by an attribute comparison
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
 - [basics-filter-by-expression.json](#basics-filter-by-expressionjson) — keep points with a predicate expression
@@ -123,6 +124,24 @@ Cook it: `pcg cook examples/graphs/basics-compose-primitives.json --stats`
 **Outputs:** `points` (from `prune`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-even-spacing.json --stats`
+
+## basics-field-params.json
+
+**read a field's shaping numbers from a knob**
+
+A field expression can read a named value instead of baking one: `{ "fn": "param", "name": "amplitude" }` inside the body's `translate` spec takes whatever the wrapping node's `amplitude` knob holds, so the two numbers that shape this surface are knobs rather than literals a caller would have to edit the graph to move. Every exposed param binds its name into its body's field scope, which is why both declarations here list no `targets` at all — neither writes into an inner param slot, so their type comes from the shape of `default` (a number is f32, a 3-number array vec3, a 4-number array vec4). The value is SUBSTITUTED before the field is built, so what cooks is exactly the field the literal would have built, cache key included: turning the knob invalidates precisely what editing the number would have. `frequency` multiplies the sample position rather than sitting in `opts.frequency`, because the noise options are read as plain numbers and cannot hold a spec — folding the scale into the position is the same move every noise-bearing primitive makes.
+
+**Tags:** `basics`, `fields`, `subgraph`, `params`
+
+**Seed:** 1044
+
+**Node types:** `pointGrid`, `subgraph`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `dunes`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-field-params.json --stats`
 
 ## basics-filter-by-attribute.json
 

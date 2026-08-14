@@ -5,6 +5,7 @@
    * textarea applies through fieldFromJson in the controller; parse and
    * validation errors are shown verbatim below it.
    */
+  import { paramNamesOf, type FieldSpec } from "pcg-ts";
   import type { ParamView } from "./controller.js";
 
   let {
@@ -25,6 +26,22 @@
     view.specText ?? JSON.stringify({ fn: "constant", value: view.schema.default }, null, 2),
   );
   let error = $state<string | null>(null);
+
+  /**
+   * The `{ fn: "param" }` names the edited spec reads, so the widget says
+   * where the value would come from before the cook does. A param is
+   * supplied by an ENCLOSING wrapper's exposed param of the same name;
+   * this graph's own knobs are not that scope, so a spec typed here that
+   * reads one builds and then fails at cook. Parsing is best-effort:
+   * half-typed JSON simply annotates nothing.
+   */
+  const readNames = $derived.by((): readonly string[] => {
+    try {
+      return paramNamesOf(JSON.parse(text) as FieldSpec);
+    } catch {
+      return [];
+    }
+  });
 
   const asNumbers = (v: unknown): number[] =>
     Array.isArray(v) ? v.map((x) => Number(x)) : typeof v === "number" ? [v] : [];
@@ -88,6 +105,12 @@
     <div class="apply-row">
       <button class="apply" onclick={apply}>apply field</button>
     </div>
+    {#if readNames.length > 0}
+      <div class="reads">
+        reads {readNames.map((n) => `"${n}"`).join(", ")} — supplied by an exposed param of that
+        name on an enclosing subgraph, never by this graph's own knobs
+      </div>
+    {/if}
     {#if error !== null}
       <div class="error">{error}</div>
     {/if}
@@ -153,6 +176,15 @@
     border-radius: 5px;
     font: 11px system-ui, sans-serif;
     cursor: pointer;
+  }
+  .reads {
+    margin-top: 4px;
+    padding: 4px 7px;
+    background: #131a26;
+    border: 1px solid #223047;
+    border-radius: 5px;
+    color: #8b98ab;
+    font: 10px/1.5 ui-monospace, monospace;
   }
   .error {
     margin-top: 4px;

@@ -388,7 +388,39 @@ function serializeParamValue(
     plain = new Array<number>(schema.type === "vec3" ? 3 : 4).fill(plain);
   }
   checkParamValue(schema, plain, where);
+  refuseNegativeZero(plain, where);
   return Array.isArray(plain) ? [...(plain as unknown[])] : plain;
+}
+
+/**
+ * Refuse -0 in a serialized param, because JSON cannot carry it:
+ * `JSON.stringify(-0)` is `"0"`, so a graph saved with one loads with the
+ * sign gone and cooks different bytes from the graph that was saved.
+ *
+ * This is the same stance `constant()` already takes when it withholds a
+ * spec for -0 — a form that cannot be parsed back must never be produced —
+ * moved to the one place every param value passes through. It matters most
+ * for a param an expression READS by name (`{"fn":"param"}`), where the
+ * sign reaches `Field.key` and therefore the memo: in memory -0 is exact,
+ * and on the GPU it is strictly better than a baked literal, which a WGSL
+ * front end may flush to +0. None of that survives a save, so the save is
+ * what gets refused rather than the value.
+ */
+function refuseNegativeZero(value: unknown, where: string): void {
+  const negZero = (n: unknown): boolean => typeof n === "number" && Object.is(n, -0);
+  const at = negZero(value)
+    ? ""
+    : Array.isArray(value)
+      ? (() => {
+          const i = value.findIndex(negZero);
+          return i === -1 ? undefined : `[${i}]`;
+        })()
+      : undefined;
+  if (at === undefined) return;
+  fail(
+    `${where}${at}: holds -0, which JSON cannot represent — it would reload as 0 and cook different bytes. ` +
+      `Use 0 if the sign does not matter, or keep the graph in memory if it does`,
+  );
 }
 
 /**

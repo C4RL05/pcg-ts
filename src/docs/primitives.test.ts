@@ -259,3 +259,50 @@ describe("the drift check is load-bearing", () => {
     expect(b.markdown).toBe(a.markdown);
   });
 });
+
+/**
+ * The "Writes to" column for a param that writes to nothing.
+ *
+ * Rendered from a hand-built record rather than a registered primitive:
+ * the branch under test is the RENDERING of an empty target list, no
+ * shipped primitive has one yet, and registering another `test/` name here
+ * would land in `listSubgraphs()` for whatever ran after it. A blank cell
+ * would say "this catalog has no data about that param", which is the one
+ * thing that is not true of a knob the body's fields read by name.
+ */
+describe("a param with no targets", () => {
+  const bindOnly: PrimitiveInfo = {
+    name: "test/bind-only",
+    hash: "0".repeat(16),
+    meta: { title: "Bind only", description: "One knob, read by a field.", tags: [] },
+    inputs: [],
+    outputs: [{ name: "out", kind: "geometry" }],
+    params: [
+      {
+        name: "amplitude",
+        schema: { type: "f32", default: 1, description: "How tall." },
+        targets: [],
+      },
+    ],
+    nodes: 1,
+  };
+
+  it("says where its value goes instead of leaving the cell blank", () => {
+    const { markdown } = renderPrimitiveCatalog([bindOnly]);
+    const row = markdown.split("\n").find((line) => line.startsWith("| `amplitude`"));
+    expect(row).toBeDefined();
+    // The whole cell, so an empty one can never satisfy this.
+    expect(row).toContain("| *(nothing — the body's field expressions read it by name)* |");
+  });
+
+  it("still renders a targeted param as the slots it writes into", () => {
+    const targeted: PrimitiveInfo = {
+      ...bindOnly,
+      params: [{ ...bindOnly.params[0], targets: [{ node: "lift", param: "translate" }] }],
+    };
+    const { markdown } = renderPrimitiveCatalog([targeted]);
+    const row = markdown.split("\n").find((line) => line.startsWith("| `amplitude`"));
+    expect(row).toContain("lift.translate");
+    expect(row).not.toContain("read it by name");
+  });
+});

@@ -62,13 +62,29 @@ export const CORPUS_BUDGET_MS = 8;
 
 /**
  * Wall-clock ceiling per example, covering deserialization and the cook.
- * A smoke budget, not a benchmark: the corpus is authored small on
- * purpose (the slowest example runs in well under a tenth of this), so
- * tripping it means something changed by an order of magnitude, which is
- * the only performance claim a test on shared CI hardware can honestly
- * make.
+ * A smoke budget, not a benchmark: tripping it means something changed by
+ * an order of magnitude, which is the only performance claim a test on
+ * shared CI hardware can honestly make.
+ *
+ * The ceiling was 3000 and the comment here said the slowest example ran
+ * "in well under a tenth of this". That stopped being true as the corpus
+ * grew, and the gap is what made this the suite's one flaky assertion.
+ * Measured 2026-08-14, cooking every example in one process: the slowest
+ * is `examples-gpu-fields.json` at ~1020ms, 7.7x the next (~130ms) and a
+ * third of the old ceiling on its own — and a full parallel suite run
+ * inflates it to ~2300ms, leaving under a quarter of the budget. It
+ * tripped roughly one run in five and passed every targeted rerun, which
+ * reads as a mystery rather than as a slow machine, exactly as the old
+ * message claimed it could not be.
+ *
+ * So: sized against what the corpus actually costs. 10s is ~4x the worst
+ * observed under load and ~75x the median, which still catches a hang or
+ * an order-of-magnitude regression while leaving the scheduler room to be
+ * unfair to one worker. Re-measure this rather than nudging it if it
+ * starts tripping again — a ceiling nobody has measured is how it got
+ * flaky the first time.
  */
-export const CORPUS_TIME_LIMIT_MS = 3000;
+export const CORPUS_TIME_LIMIT_MS = 10000;
 
 /** Decimal places bounds are rounded to before they are stored. */
 export const BOUNDS_DECIMALS = 4;

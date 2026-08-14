@@ -123,6 +123,14 @@ const CASES: ParityCase[] = [
   // front end may flush a `-0` or subnormal literal to `+0` (the D3D12
   // back end does) and never a uniform load. No `literal` twin, because
   // the point is that the twin would be a different number.
+  //
+  // KEEP THESE TWO AT THE BARE ROOT. What is exact is the DELIVERY of the
+  // value, not arithmetic on it: put either through a single multiply and
+  // the D3D12 back end flushes the subnormal result to +-0, which is
+  // pre-existing, param-independent (a literal in the same shape flushes
+  // identically) and already pinned in parity.device.test.ts. Wrapping
+  // one of these in an operation and leaving `cpuExact: true` would fail
+  // here and read as a defect in this feature, which it would not be.
   { name: "negative zero", spec: { fn: "param", name: "z" }, bindings: { z: -0 }, cpuExact: true },
   { name: "subnormal", spec: { fn: "param", name: "s" }, bindings: { s: 1e-45 }, cpuExact: true },
 ];

@@ -202,6 +202,34 @@ describe("serializeGraph", () => {
   });
 });
 
+describe("negative zero", () => {
+  // JSON.stringify(-0) is "0", so a graph saved with one loads with the
+  // sign gone and cooks different bytes than the graph that was saved.
+  // Refusing the SAVE keeps -0 usable in memory — where it is exact, and
+  // where a `param` binding carries it into `Field.key` and onto the GPU
+  // more faithfully than a baked literal would — while making the one
+  // artifact that could not carry it impossible to produce.
+  it("is refused in a scalar param, naming the param and the fix", () => {
+    const g = new Graph(1);
+    g.add(jitterPoints, { amount: [1, 1, 1], seed: -0 }, "jit");
+    expect(() => serializeGraph(g)).toThrow(GraphSerializationError);
+    expect(() => serializeGraph(g)).toThrow(/holds -0, which JSON cannot represent/);
+    expect(() => serializeGraph(g)).toThrow(/Use 0 if the sign does not matter/);
+  });
+
+  it("is refused in a vector param, naming which component holds it", () => {
+    const g = new Graph(1);
+    g.add(jitterPoints, { amount: [0.5, -0, 0.5] }, "jit");
+    expect(() => serializeGraph(g)).toThrow(/"amount"\[1\]: holds -0/);
+  });
+
+  it("does not refuse an ordinary zero", () => {
+    const g = new Graph(1);
+    g.add(jitterPoints, { amount: [0.5, 0, 0.5], seed: 0 }, "jit");
+    expect(() => serializeGraph(g)).not.toThrow();
+  });
+});
+
 describe("deserializeGraph round trip", () => {
   it("serialize(deserialize(j)) deep-equals j", () => {
     const json = serializeGraph(buildGraph(7));

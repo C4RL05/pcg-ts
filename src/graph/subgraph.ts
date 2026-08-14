@@ -1080,6 +1080,13 @@ export async function withExposedParams<T>(
     param: string;
     value: unknown;
   }> = [];
+  // BEFORE the target writes, not after. The scan is memoized per body
+  // version, so a cold cache here would scan a body that this call has
+  // already substituted into — and a param-bearing Field written into a
+  // target slot would then read back as a body reader and refuse the cook.
+  // Both current callers happen to warm it first via `checkExposedValues`;
+  // depending on that would make this function correct only by luck.
+  const scan = bodyScan(inner);
   try {
     for (const exp of paramList) {
       const value = params[exp.name];
@@ -1104,7 +1111,6 @@ export async function withExposedParams<T>(
     // The rebuilt field goes into the same `saved` list as any other write,
     // so the restore below covers it on every path out, cancellation
     // included.
-    const scan = bodyScan(inner);
     if (scan.refs.length > 0 || scan.derivedRefs.length > 0) {
       // Re-run per cook, because the body can be edited after wrapping —
       // these are the same three refusals `prepareWrapper` makes, against

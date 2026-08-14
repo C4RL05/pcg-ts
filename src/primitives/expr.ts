@@ -66,14 +66,24 @@ export function ramp(arg: Arg, stops: readonly (readonly [number, number])[]): S
  * The sample position a TUNABLE noise field reads, built from two
  * parameter attributes.
  *
- * This is the whole reason noise-bearing primitives have knobs at all. An
- * exposed param is pure fan-out into an inner param slot, and a noise
- * `frequency`, `seed` or `offset` lives INSIDE a field spec, where no
- * param slot exists — so neither can ever be exposed. Scaling and
- * offsetting the position the noise samples is the one reachable
- * equivalent: multiplying by `freq` is a frequency control, and adding
- * `variant` walks to an unrelated part of the same infinite field, which
- * is what a per-instance seed would have done.
+ * This is the whole reason noise-bearing primitives have knobs at all. A
+ * noise `frequency`, `seed` or `offset` lives in `opts`, read as a plain
+ * number rather than as a field, so no reference of any kind can stand
+ * there and none of the three is directly tunable. Scaling and offsetting
+ * the position the noise samples is the reachable equivalent: multiplying
+ * by `freq` is a frequency control, and adding `variant` walks to an
+ * unrelated part of the same infinite field, which is what a per-instance
+ * seed would have done.
+ *
+ * The two values arrive as ATTRIBUTES because that was once the only way
+ * anything reached the inside of a field spec: an exposed param fanned
+ * out into an inner param slot, and a spec has none. That is no longer
+ * true — every exposed param now also binds its name into its body's
+ * field scope, so `{ fn: "param", name }` would read the value straight
+ * where `attr()` reads it here. The catalog has not been rewritten to use
+ * it: doing so deletes the `setAttribute`/`removeAttribute` plumbing
+ * these values cost and moves every primitive's content hash, which is
+ * its own unit of work rather than a side effect of the grammar landing.
  */
 export function noisePosition(freqAttr: string, variantAttr: string): Spec {
   return call(

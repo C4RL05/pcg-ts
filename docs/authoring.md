@@ -219,9 +219,24 @@ field with a plain number on the very first cook. The shipped primitives
 therefore keep their noise fields on the inner nodes and expose the
 scalars those fields READ BACK, through the parameter-attribute idiom: a
 `setAttribute` whose value is exposed, and a downstream field that reads
-`{ "fn": "attribute", "name": ... }`. It is the only way to make anything
-inside a field spec adjustable, and `removeAttribute` takes the scratch
-column off again before the result leaves.
+`{ "fn": "attribute", "name": ... }`, with `removeAttribute` taking the
+scratch column off again before the result leaves.
+
+That idiom was once the only way to make anything inside a field spec
+adjustable. It is not any more — an exposed param also binds its name
+into the body's field scope, so a spec can read
+`{ "fn": "param", "name": ... }` directly (see
+[the grammar](#the-field-expression-grammar) below) — and the choice
+between them is a domain question rather than a matter of taste: **a
+value that varies PER ELEMENT is an attribute; a value uniform over the
+cook is a param.** The idiom is still the only route for a number the
+graph itself produced — a measurement, a transferred value, anything
+whose answer differs point to point — because that is a column, and a
+param is one number for the whole cook. For a number a caller types, the
+param route costs no plumbing at all, where the idiom costs a
+`setAttribute` per value and a `removeAttribute` to clear up after them,
+a `count`-element f32 column each, and one of the seven usable
+storage-buffer slots on the GPU.
 
 **What is stored is a recipe, never a live graph.** `subgraphNode`
 mutates what it wraps (it injects a `__in_<name>` portal node per exposed
@@ -350,6 +365,55 @@ same point gets a different `fraction` after any upstream filter changes
 the count, and a different one again in a `World` cell that holds a
 different number of elements. Use `position` for anything that must agree
 across partitions.
+
+`param` is the only fn with no TypeScript constructor, which is not an
+omission: in TypeScript a shaping number is already a variable, and the
+problem it solves — a literal buried in a spec that a caller cannot reach
+— is a JSON problem.
+
+**Where the value comes from: an enclosing wrapper's exposed param.**
+Every exposed param on a `subgraph` node, and on `forEach`, binds its
+name into its body's field scope, so a spec anywhere inside that body
+reads it by name and the wrapper's knob supplies it. See
+[Subgraph composition](#3-subgraph-composition-code) for the declaration;
+a param that exists only to feed an expression declares `targets: []`.
+
+**Binding SUBSTITUTES, and that is the contract rather than an
+optimization.** The value is written into the spec before the field is
+built, so what cooks is byte-for-byte the field the literal would have
+built, `Field.key` included. A value arriving later — at evaluation time,
+from the context — would never enter that key, and since the key is what
+`stableValueHash` hashes a field as, the node's param hash would not move
+and it would serve stale bytes. Substituting instead makes invalidation
+exact and free: turning a knob recooks precisely the nodes whose fields
+read that name, exactly as editing the number in the JSON would.
+
+**Unbound, a `param` builds but refuses to evaluate.** Its key is
+`param("amplitude")` and its WGSL kernel needs only the name, so a spec
+outside any wrapper still validates, hashes and compiles; only producing
+a column needs a value. The refusal names the name and the call that
+supplies one. On the GPU a `param` lowers to a uniform slot — forced, not
+chosen, since `compileFieldSpec` receives a spec and never values — which
+is why it costs no storage buffer where the parameter-attribute idiom
+spends one of seven, and why twenty values share one compiled pipeline
+instead of re-specializing per slider tick.
+
+**Only argument positions can hold one:** `args` entries and a noise
+`opts.position`. Structure cannot — `octaves`, `base`, `component`'s
+`index`, `attribute`'s `name`, `ramp`'s `stops` — and neither can
+`opts.frequency`, `opts.seed` or `opts.offset`, which are read as plain
+numbers rather than as fields. A tunable frequency has an exact
+equivalent, and it is the one the shipped primitives already write: leave
+`opts.frequency` at 1 and scale the sample position instead.
+
+```json
+{ "fn": "mul", "args": [{ "fn": "position" }, { "fn": "param", "name": "freq" }] }
+```
+
+One caveat rides along with it. A position field resolves to an f32
+column, so folding the scale in rounds one step earlier than
+`opts.frequency` does, which multiplies that same f32 position in f64.
+The two agree except at knife edges.
 
 ### Elementwise combinators
 
@@ -515,11 +579,11 @@ a nested `subgraph` payload (see above), recursively, and
 `getSubgraphSpec(def)` exposes a node definition's inner graph, pin
 mappings and param declarations for inspection.
 
-A fourth argument gives the wrapper its own params, each bound to one or
-more inner `(node, param)` slots. Build them with `resolveExposedParam`,
-which DERIVES the schema from the targets' registered schemas — the
-author supplies only a name, an agent-facing description, and optionally
-a default or narrowed bounds:
+A fourth argument gives the wrapper its own params, each fanned out into
+zero or more inner `(node, param)` slots. Build them with
+`resolveExposedParam`, which DERIVES the schema from the targets'
+registered schemas — the author supplies only a name, an agent-facing
+description, and optionally a default or narrowed bounds:
 
 ```ts
 import { resolveExposedParam } from "pcg-ts";
@@ -568,10 +632,45 @@ resolveExposedParam(inner, {
 It is opt-in, like the content hash on a reference: an author who says it
 means it. Every field-capable param in the shipped catalog asserts it.
 
+**`targets` is fan-out, and it is optional.** Every exposed param also
+binds its name into the body's FIELD scope, so any spec in the inner
+graph may read it as `{ "fn": "param", "name": "amplitude" }` — which is
+how a value reaches a number that lives inside a field expression, where
+there is no param slot to write into. A declaration with `targets: []`
+therefore still affects the cook. It has no inner schema to borrow, so
+`default` becomes required and its SHAPE decides the type: a number is
+`f32`, a 3-number array `vec3`, a 4-number array `vec4`. Nothing else —
+`i32` and `u32` are not derivable, because a field expression has no
+integers and deriving one from `3` would promise a rounding the grammar
+never performs. And such a param is never field-capable: the value is
+substituted into the expression before the field is built, and a `Field`
+cannot stand in a literal position, so `acceptsField: true` on a
+targetless declaration is refused rather than quietly ANDed away.
+
+The body may only read names its own wrapper declares. An undeclared one
+is refused at wrap time — naming the slot holding the expression, the
+name, and every name the wrapper does expose, so a typo shows its
+near-miss — rather than left to the unbound-`param` failure the field
+would raise later, once cooking has already started. The one shape that
+cannot be rebuilt is refused too: an expression COMPOSED with the field
+constructors (`mul(fieldFromJson(spec), 3)`) rather than authored as one
+spec would keep whatever value it was built with while the rest of the
+body took the instance's, and two expressions reading one name and
+disagreeing is the wrong cook worth refusing outright.
+
 Two exposed params may not bind the same inner slot, and one may not list
 a slot twice: both are hard errors naming the params and the slot. A
 silent last-write-wins would leave a knob that appears to do something,
 forces a recook when it changes, and provably cannot change the output.
+
+A third refusal has the same shape. A param may not target a slot that
+holds a field expression reading exposed params by name: both writes land
+on that one slot in one cook, so either the fan-out replaces the whole
+expression with a number or the rebuilt expression replaces the fan-out,
+and one of the two provably does nothing. The error names the slot and
+the names that expression reads, and gives both ways out — drop the
+target and let the expression read the param by name, or move the
+expression to a slot nothing fans out into.
 
 **Cooking does not modify the inner graph.** The values are written in
 and restored again around each cook, so a graph's serialized bytes never

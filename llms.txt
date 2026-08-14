@@ -77,7 +77,8 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
   mappings (`{ name, node, pin }` each), and the exposed-param
   declarations (`{ name, targets, description, default, min?, max? }`;
   `type`/`enum`/`acceptsField` are re-derived from the targets on load,
-  never read from JSON) — so nested subgraphs round-trip. Its own
+  never read from JSON, and an EMPTY `targets` derives them from
+  `default`'s shape instead) — so nested subgraphs round-trip. Its own
   `params` hold the exposed params' values. INSTEAD of `subgraph` it may
   carry `ref: { name, hash? }`, referencing a subgraph registered with
   `registerSubgraph` (below); the two keys are mutually exclusive and no
@@ -101,6 +102,16 @@ An exposed-param declaration carries ONLY { `name`, `targets`,
 `acceptsField` on one is refused by name: the schema is derived from the
 targets' registered schemas, so a declaration cannot claim a type or a
 field capability the inner params do not have.
+
+`targets` may be EMPTY. Every exposed param also binds its name into its
+body's FIELD scope, where a spec reads it as `{ fn: "param", name }`, so a
+declaration with no targets still drives the cook — that is how a value
+reaches a number living inside a field expression, which has no param slot
+to write into. With no targets there is no inner schema to borrow: the
+`default` is required and its SHAPE gives the type (a number f32, a
+3-number array vec3, a 4-number array vec4, and nothing else), and the
+param is never field-capable, because the value is substituted into the
+expression as a LITERAL and a Field is not one.
 
 Complete minimal example (deserializes and cooks as-is):
 
@@ -210,7 +221,13 @@ frozen snapshots with no mutation path that bypasses version bumps.
   Field on a param that is not field-capable throws at cook time, naming
   the exposed param and the offending inner target. Two exposed params
   binding the same inner slot, or one listing a slot twice, is a hard
-  error naming the params and the slot.
+  error naming the params and the slot; so is a target that IS the slot
+  holding a field expression reading exposed names, since the write and
+  the rebuilt expression land on one slot and one of them provably does
+  nothing. `targets: []` is legal and means the body's field expressions
+  are the param's only route (see `{ fn: "param" }` below); a declaration
+  with neither a target nor a reader is refused, listing the names the
+  body does read.
 - `registerSubgraph(name, spec)` — publish a subgraph under a name so
   serialized graphs can reference it with `ref: { name, hash? }` instead
   of embedding it. `spec` is `{ graph, inputs?, outputs?, params? }` where
@@ -272,12 +289,17 @@ into `constant`). All 43 fns (`listFieldFns()`):
     value depends on how many elements share the domain, so it says
     "position along this thing", never "position in the world"
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
-  - `{ fn: "param", name: "amplitude" }` — the value bound to that name,
-    substituted where the literal would have stood, so the field is exactly
-    the field the literal would have built. Uniform over the cook: a value
-    that varies per element is an attribute, not a param. Unbound it still
-    builds — its key and its GPU kernel need only the name — but refuses to
-    evaluate, naming the name and the fix
+  - `{ fn: "param", name: "amplitude" }` — the value bound to that name by
+    an enclosing wrapper's exposed param of the same name (every
+    `subgraph` and `forEach` exposed param binds into its body's field
+    scope), substituted where the literal would have stood, so the field is
+    exactly the field the literal would have built. Uniform over the cook:
+    a value that varies per element is an attribute, not a param. Unbound
+    it still builds — its key and its GPU kernel need only the name — but
+    refuses to evaluate, naming the name and the fix. Only argument
+    positions can hold one (`args` entries, noise `opts.position`);
+    `opts.frequency`/`seed`/`offset` are read as plain numbers, so a
+    tunable frequency multiplies `opts.position` instead
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
   - 2 args: `add sub mul div min max lt le gt ge eq ne dot atan2`
     (comparisons emit 1/0, and `ne` is the exact complement of `eq`;
@@ -602,8 +624,9 @@ Three rules an agent needs before choosing one:
 2. **Per-instance variation is counter-intuitive.** Two instances of one
    primitive have different node ids, so anything context-seeded
    (scatter, jitter, randomField) differs automatically — but NOISE does
-   not, and no seed param can change that, because a noise field carries
-   its own seed inside its field spec where no exposed param can reach.
+   not, and no seed param can change that, because a noise field's seed
+   lives in its `opts`, read as a plain number that no reference of any
+   kind can stand in (a `{ fn: "param" }` reaches argument positions only).
    Every noise-bearing primitive therefore exposes `variant`, an OFFSET
    added to the noise sample position, and says so in its description.
    `frequency` is the matching multiplier on that position.
@@ -612,7 +635,12 @@ Three rules an agent needs before choosing one:
    lives on its inner node and the scalars that field reads back are what
    get exposed (a `setAttribute` upstream, `removeAttribute` downstream).
    Field-capable params are marked in the catalog and accept a field spec
-   as their VALUE.
+   as their VALUE. That attribute plumbing is the older of the two routes
+   into a field spec and is what the shipped primitives still use; the
+   newer one is a targetless param the spec reads as
+   `{ fn: "param", name }`. Which one is right is a domain question: a
+   value that varies PER ELEMENT is an attribute, one uniform over the
+   cook is a param.
 
 ## Key invariants and contracts
 
@@ -1367,8 +1395,8 @@ stale and a stale skill is worse than none.
 
 ## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
 
-45 graphs under `examples/graphs/`, each named by what it teaches and
-carrying its own `meta` block: 33 single-concept `basics-*.json`, 4
+46 graphs under `examples/graphs/`, each named by what it teaches and
+carrying its own `meta` block: 34 single-concept `basics-*.json`, 4
 composed `examples-*.json`, plus the 8-file staged pipeline
 `pipeline-*.json` below. Every one cooks from
 JSON alone — no `dataInput`, whose items never survive serialization —
