@@ -2,10 +2,15 @@
 
 <script lang="ts">
   /**
-   * One node box on the SVG canvas: header (type + id + delete), input
-   * pins on the left, output pins on the right, and a band of param
-   * previews under them. Drag/connect gestures are reported to the Canvas
-   * via callbacks; hit circles over the pins keep the targets comfortable.
+   * One node box on the SVG canvas: header (type + id), input pins on the
+   * left, output pins on the right, and a band of param previews under
+   * them. Drag/connect gestures are reported to the Canvas via callbacks;
+   * hit circles over the pins keep the targets comfortable.
+   *
+   * There is no delete affordance ON the box. Deleting has two homes
+   * already — the button in the node panel and the Delete key over a
+   * selection — and a third one, a 10px glyph sitting in the corner of a
+   * draggable target, was the only one you could hit by accident.
    */
   import {
     HEADER_H,
@@ -26,7 +31,6 @@
     params = [],
     onSelect,
     onBodyDown,
-    onDelete,
     onOutDown,
     onInEnter,
     onInLeave,
@@ -37,7 +41,6 @@
     params?: readonly ParamPreview[];
     onSelect: () => void;
     onBodyDown: (e: PointerEvent) => void;
-    onDelete: () => void;
     onOutDown: (e: PointerEvent, pinName: string, index: number) => void;
     onInEnter: (pinName: string) => void;
     onInLeave: () => void;
@@ -65,27 +68,6 @@
   <line class="sep" x1="0" y1={HEADER_H} x2={NODE_W} y2={HEADER_H} />
   <text class="title" x={PAD} y={TITLE_Y}>{node.label ?? node.type}</text>
   <text class="nodeid" x={PAD} y={ID_Y}>{node.id}</text>
-  <!-- Shares the title's baseline rather than being centred on the band:
-       two glyphs on one line is what reads as aligned. -->
-  <text
-    class="close"
-    x={NODE_W - PAD}
-    y={TITLE_Y}
-    role="button"
-    tabindex="-1"
-    aria-label="delete node {node.id}"
-    onpointerdown={(e) => e.stopPropagation()}
-    onclick={(e) => {
-      e.stopPropagation();
-      onDelete();
-    }}
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        e.stopPropagation();
-        onDelete();
-      }
-    }}>✕</text
-  >
   {#each node.inputs as pin, i (pin.name)}
     <circle class="pin k-{pin.kind}" cx="0" cy={pinRowY(i)} r="4.5" />
     <circle
@@ -162,7 +144,6 @@
    * selection state is the indicator.
    */
   .body:focus,
-  .close:focus,
   .pin-hit:focus {
     outline: none;
   }
@@ -180,18 +161,6 @@
     fill: var(--sb-ink-faint);
     font: 9px var(--sb-mono);
     pointer-events: none;
-  }
-  .close {
-    fill: var(--sb-ink-faint);
-    font: 10px var(--sb-sans);
-    text-anchor: end;
-    cursor: pointer;
-  }
-  /* Nothing red left to warn with, so the delete target goes to full
-     white on hover — the brightest thing on the box, which is the same
-     "this one, and it is serious" the colour used to carry. */
-  .close:hover {
-    fill: #ffffff;
   }
   .pin {
     stroke: #000000;

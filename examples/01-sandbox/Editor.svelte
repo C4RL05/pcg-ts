@@ -675,7 +675,6 @@
         onMove={moveNode}
         onConnect={connectEdge}
         onDeleteEdge={deleteEdge}
-        onDeleteNode={deleteNode}
       />
     </div>
     <Sidebar

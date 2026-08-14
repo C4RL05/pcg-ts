@@ -28,7 +28,6 @@
     onMove,
     onConnect,
     onDeleteEdge,
-    onDeleteNode,
   }: {
     model: StructureModel;
     selectedId: string | null;
@@ -43,7 +42,6 @@
     onMove: (id: string, x: number, y: number) => void;
     onConnect: (edge: EdgeView) => void;
     onDeleteEdge: (index: number) => void;
-    onDeleteNode: (id: string) => void;
   } = $props();
 
   let svgEl: SVGSVGElement | undefined = $state();
@@ -282,7 +280,6 @@
       params={previews.get(node.id)}
       onSelect={() => onSelect(node.id)}
       onBodyDown={(e) => startBodyDrag(node, e)}
-      onDelete={() => onDeleteNode(node.id)}
       onOutDown={(e, pinName, i) => startWire(node, pinName, i, e)}
       onInEnter={(pinName) => {
         if (wire) wire.hover = { to: node.id, toPin: pinName };
