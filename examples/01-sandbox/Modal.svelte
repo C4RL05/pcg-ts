@@ -85,10 +85,10 @@
     flex-direction: column;
     padding: 12px 14px;
     background: #0d1117;
-    border: 1px solid #33405a;
+    border: 1px solid var(--sb-edge);
     border-radius: 10px;
-    color: #dbe4f0;
-    font: 13px system-ui, sans-serif;
+    color: var(--sb-ink);
+    font: 13px var(--sb-sans);
   }
   .head {
     display: flex;
@@ -102,12 +102,12 @@
     gap: 6px;
   }
   button {
-    padding: 3px 12px;
-    background: #1d2a3f;
-    color: #9ecbff;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 12px system-ui, sans-serif;
+    padding: var(--sb-btn-pad);
+    background: var(--sb-raised);
+    color: var(--sb-action);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-sans);
     cursor: pointer;
   }
   button.primary {
@@ -124,10 +124,10 @@
     resize: vertical;
     padding: 8px;
     background: #0a0e14;
-    color: #9ecbff;
-    border: 1px solid #223047;
+    color: var(--sb-action);
+    border: 1px solid var(--sb-rule);
     border-radius: 6px;
-    font: 11px/1.5 ui-monospace, monospace;
+    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
     white-space: pre;
   }
   .error {

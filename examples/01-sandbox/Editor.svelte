@@ -731,8 +731,8 @@
     z-index: 10;
     display: flex;
     flex-direction: column;
-    color: #dbe4f0;
-    font: 13px/1.45 system-ui, sans-serif;
+    color: var(--sb-ink);
+    font: 13px/1.45 var(--sb-sans);
     pointer-events: none;
   }
   .editor[hidden] {
@@ -800,8 +800,8 @@
     padding: 4px 12px;
     border-bottom: 1px solid #402734;
     background: #1c1218;
-    color: #ff9ca8;
-    font: 11px/1.5 ui-monospace, monospace;
+    color: var(--sb-danger);
+    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
     white-space: pre-wrap;
   }
   .toast {
@@ -814,7 +814,7 @@
     overflow-y: auto;
     padding: 8px 14px;
     border-radius: 8px;
-    font-size: 12px;
+    font-size: var(--sb-t-body);
     line-height: 1.4;
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
   }
@@ -827,8 +827,8 @@
     background: #33161c;
     border: 1px solid #a04455;
     color: #ffb9c2;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
+    font-family: var(--sb-mono);
+    font-size: var(--sb-t-meta);
   }
   /* Desktop: the drawer tabs do not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */
@@ -863,9 +863,9 @@
       z-index: 16;
       padding: 10px 6px;
       background: rgba(29, 42, 63, 0.92);
-      color: #9ecbff;
-      border: 1px solid #33405a;
-      font: 11px system-ui, sans-serif;
+      color: var(--sb-action);
+      border: 1px solid var(--sb-edge);
+      font: var(--sb-t-meta) var(--sb-sans);
       cursor: pointer;
     }
     .drawer-tab.right {

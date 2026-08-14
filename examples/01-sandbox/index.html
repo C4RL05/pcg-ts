@@ -8,6 +8,58 @@
     html, body { margin: 0; height: 100%; background: #0d1117; overflow: hidden; }
     /* The editor is a full-bleed overlay now, so there is nothing
        floating over the scene to hide at any width. */
+
+    /**
+     * The overlay's shared vocabulary.
+     *
+     * Here rather than in a component because Svelte scopes styles to the
+     * component that renders the markup, and the toolbar, the sidebar, the
+     * node menu and the modal are four components drawing one surface.
+     * They had each spelled the same colour out by hand, which is how a
+     * button ends up 3px 12px in one place and 2px 8px in another and the
+     * bar stops reading as one thing.
+     *
+     * Values are the ones the overlay already used — this names them, it
+     * does not restyle. `examples/shared/Controls.svelte` is deliberately
+     * NOT converted: four other demos render it, and its literals already
+     * match these.
+     */
+    :root {
+      /* surfaces */
+      --sb-panel: rgba(13, 17, 23, 0.94);   /* over the live render */
+      --sb-solid: rgba(13, 17, 23, 0.97);   /* over the render AND itself */
+      --sb-well: #161d29;                   /* inside an input */
+      --sb-raised: #1d2a3f;                 /* a button at rest */
+      --sb-raised-hi: #24334c;              /* a button under the pointer */
+
+      /* lines. Two tiers: one between PANELS, a softer one between rows. */
+      --sb-rule: #223047;
+      --sb-rule-soft: #1b2536;
+      --sb-edge: #33405a;                   /* the border of a control */
+
+      /* ink, brightest to faintest */
+      --sb-ink-hi: #f0f4fa;
+      --sb-ink: #dbe4f0;
+      --sb-ink-mid: #aeb9c9;
+      --sb-ink-dim: #8b98ab;
+      --sb-ink-faint: #6f7c8f;
+      --sb-ink-ghost: #55617a;
+      --sb-action: #9ecbff;                 /* text on a button */
+      --sb-figure: #8fd0ff;                 /* a number worth reading */
+      --sb-danger: #ff9ca8;
+
+      /* type. Three sizes, and no fourth: 11 names things, 12 is prose and
+         controls, 14 titles a panel. */
+      --sb-mono: ui-monospace, monospace;
+      --sb-sans: system-ui, sans-serif;
+      --sb-t-meta: 11px;
+      --sb-t-body: 12px;
+      --sb-t-title: 14px;
+
+      /* geometry */
+      --sb-radius: 5px;
+      --sb-btn-pad: 3px 10px;
+    }
   </style>
 </head>
 <body>

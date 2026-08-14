@@ -128,8 +128,8 @@
     box-sizing: border-box;
     /* Opaque enough to read against a bright render, blurred so the scene
        behind it still reads as depth rather than as a wall. */
-    background: rgba(13, 17, 23, 0.94);
-    border-left: 1px solid #223047;
+    background: var(--sb-panel);
+    border-left: 1px solid var(--sb-rule);
     backdrop-filter: blur(6px);
   }
   .tabs {
@@ -144,10 +144,10 @@
     padding: 5px 8px;
     background: #131c2b;
     color: #8fa3bf;
-    border: 1px solid #223047;
-    border-radius: 5px 5px 0 0;
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius) var(--sb-radius) 0 0;
     border-bottom-color: transparent;
-    font: 11px ui-monospace, monospace;
+    font: var(--sb-t-meta) var(--sb-mono);
     /* A node id is longer than the tab; clip it rather than let it widen
        the tab and shove the other one off its half. */
     overflow: hidden;
@@ -156,10 +156,10 @@
     cursor: pointer;
   }
   .tab:hover {
-    color: #d6e2f2;
+    color: var(--sb-ink);
   }
   .tab.on {
-    color: #eaf1fa;
+    color: var(--sb-ink-hi);
     background: #24344d;
     border-color: #35507a;
     border-bottom-color: transparent;
@@ -167,7 +167,7 @@
   /* The node tab with nothing in it. Dimmed rather than disabled — see
      the markup. */
   .tab.empty:not(.on) {
-    color: #55617a;
+    color: var(--sb-ink-ghost);
   }
   .tab:focus-visible {
     outline: 2px solid #4d7fd1;
@@ -180,7 +180,7 @@
     min-height: 0;
     overflow-y: auto;
     padding: 10px 12px 14px;
-    border-top: 1px solid #223047;
+    border-top: 1px solid var(--sb-rule);
     margin-top: -1px;
   }
   /* [hidden] loses to the flex rule above without this. */
@@ -197,7 +197,7 @@
       z-index: 15;
       flex-basis: auto;
       width: min(78vw, 300px);
-      background: rgba(13, 17, 23, 0.97);
+      background: var(--sb-solid);
       transform: translateX(100%);
       /* Hidden when closed so the off-screen drawer can't take focus or
          intercept hit-testing. */

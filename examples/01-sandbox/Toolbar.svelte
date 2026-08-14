@@ -259,8 +259,8 @@
     align-items: center;
     gap: 6px 14px;
     padding: 8px 12px;
-    background: rgba(13, 17, 23, 0.94);
-    border-bottom: 1px solid #223047;
+    background: var(--sb-panel);
+    border-bottom: 1px solid var(--sb-rule);
     backdrop-filter: blur(6px);
     flex: 0 0 auto;
     /* Wraps at ANY width, not just on phones. A side dock is 420-640px
@@ -286,33 +286,33 @@
   }
   .title {
     font-weight: 600;
-    color: #f0f4fa;
+    color: var(--sb-ink-hi);
     white-space: nowrap;
   }
   label {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #aeb9c9;
-    font-size: 12px;
+    color: var(--sb-ink-mid);
+    font-size: var(--sb-t-body);
   }
   input[type="number"] {
     width: 78px;
     padding: 3px 6px;
-    background: #161d29;
-    color: #dbe4f0;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 12px ui-monospace, monospace;
+    background: var(--sb-well);
+    color: var(--sb-ink);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-mono);
   }
   select {
     max-width: 260px;
     padding: 3px 6px;
-    background: #161d29;
-    color: #dbe4f0;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 12px system-ui, sans-serif;
+    background: var(--sb-well);
+    color: var(--sb-ink);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-sans);
   }
   /* The picker is the bar's primary control, so it keeps its width while
      the status line (flex: 1) absorbs the slack. */
@@ -328,25 +328,25 @@
     opacity: 0.55;
   }
   button {
-    padding: 3px 12px;
-    background: #1d2a3f;
-    color: #9ecbff;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 12px system-ui, sans-serif;
+    padding: var(--sb-btn-pad);
+    background: var(--sb-raised);
+    color: var(--sb-action);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-sans);
     cursor: pointer;
   }
   button:hover {
-    background: #24334c;
+    background: var(--sb-raised-hi);
   }
   /* Label inside the button, so the changing half stands out from the
      word that never changes. */
   .view .k {
     margin-right: 7px;
-    color: #6f7c8f;
+    color: var(--sb-ink-faint);
   }
   .view {
-    color: #d6e2f2;
+    color: var(--sb-ink);
   }
   /**
    * The readouts. `flex: 1 1 100%` puts them on their own row under the
@@ -360,27 +360,27 @@
     justify-content: flex-end;
     gap: 2px 16px;
     min-width: 0;
-    font: 11px ui-monospace, monospace;
+    font: var(--sb-t-meta) var(--sb-mono);
   }
   .stat {
     white-space: nowrap;
   }
   .stat b {
-    color: #8fd0ff;
+    color: var(--sb-figure);
     font-weight: 400;
   }
   /* The word that names the figure, set back so the figure carries the
      line. This is the whole trick: same information, one level of
      contrast between what changes and what labels it. */
   .stat i {
-    color: #55617a;
+    color: var(--sb-ink-ghost);
     font-style: normal;
   }
   .stat.warn b {
     color: #f0c869;
   }
   .stat.err b {
-    color: #ff9ca8;
+    color: var(--sb-danger);
   }
   /* A cook that errored colours the labels too — at that point the whole
      line is reporting a failed cook, not one bad figure in a good one. */
@@ -421,7 +421,7 @@
     .chevron {
       display: inline-block;
       margin-left: 6px;
-      color: #8b98ab;
+      color: var(--sb-ink-dim);
       transition: transform 0.2s;
     }
     .chevron.flip {
