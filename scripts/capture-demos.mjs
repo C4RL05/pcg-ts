@@ -119,10 +119,10 @@ const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
 const SIZES = {
   "01-sandbox": { css: [1454, 783], out: [1454, 783] },
   "01-sandbox-gpu": { css: [1454, 783], out: [1454, 783] },
+  "01-sandbox-rig": { css: [1454, 783], out: [1454, 783] },
   "02-infinite-world": { css: [1454, 783], out: [1454, 783] },
   "03-galaxy": { css: [1454, 783], out: [1454, 783] },
   "05-gpu-world": { css: [1079, 791], out: [1079, 791] },
-  "06-rig-playground": { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -213,6 +213,44 @@ const DEMOS = [
     },
   },
   {
+    // The corpus's largest graph, drawn the way it is worth looking at:
+    // no overlay, because 82 node boxes over a truss is a wall, and
+    // normals, because the geometry is the subject and a key light on a
+    // dark studio flattens 8,000 overlapping tubes into one silhouette.
+    id: "01-sandbox-rig",
+    path: "01-sandbox/?graph=examples-rig",
+    manualOnly: true,
+    settleWait: () => !!document.querySelector(".toolbar .path.shade select"),
+    settle: async () => {
+      const line = () => document.querySelector(".toolbar .status")?.textContent ?? "";
+      const settled = async (before) => {
+        for (let i = 0; i < 1800; i++) {
+          const t = line();
+          if (t !== before && /hash [0-9a-f]{8}/.test(t)) return;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        throw new Error("the status line never settled");
+      };
+      await settled("");
+      setSelectByValue(".toolbar .path.shade select", "normals");
+      // Two clicks from `scene + graph` reaches `scene`. Shading is a
+      // redraw and cycling the view touches no cook, so neither moves the
+      // status line and neither needs waiting on.
+      clickButtonByText("view ·");
+      clickButtonByText("view ·");
+      await new Promise((r) => setTimeout(r, 400));
+      return true;
+    },
+    ready: () => {
+      const status = document.querySelector(".toolbar .status");
+      return (
+        !!status &&
+        /hash [0-9a-f]{8}/.test(status.textContent || "") &&
+        !document.querySelector(".toast")
+      );
+    },
+  },
+  {
     id: "02-infinite-world",
     // The GPU adapter resolving triggers a full world rebuild, so "pending is
     // 0" only means anything once the adapter question has been answered.
@@ -252,15 +290,6 @@ const DEMOS = [
       setCheckboxByLabel("autopilot", false);
       setRangeByLabel("speed", 0);
     },
-  },
-  {
-    id: "06-rig-playground",
-    // The host exposes its own readiness rather than leaving it to be
-    // inferred from the readouts: the panel publishes on every fps tick,
-    // so a stat can be present while the cook that produced it is stale.
-    ready: (s, has) => window.__rigReady?.() === true && has(s["cook"]),
-    // Nothing animates — one cook, then orbit damping settles — so the
-    // pixel criterion is enough and there is nothing to turn off.
   },
 ];
 

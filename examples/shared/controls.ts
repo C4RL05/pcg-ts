@@ -3,11 +3,12 @@
  * written out. `Controls.svelte` renders these; a panel supplies the
  * list and a commit handler.
  *
- * The rig playground got here first — fifty knobs is fifty chances for a
+ * The rig demo got here first — fifty knobs is fifty chances for a
  * label, a range and a param name to disagree, so it listed them instead
- * of writing them out. This is that idea generalised over the params
- * object, which is what lets the same renderer serve a panel whose knobs
- * are not known until a graph is loaded.
+ * of writing them out. That demo has since become a corpus graph, but
+ * the idea outlived it: generalised over the params object, it is what
+ * lets one renderer serve a panel whose knobs are not known until a
+ * graph is loaded.
  *
  * WHY THE SPECS STAY PLAIN DATA. A control names its param by KEY and
  * carries no functions, so the same shape survives a trip through JSON.

@@ -39,7 +39,7 @@
       hierarchical runtime, rendered with three.js. Every demo re-cooks live from its seed.</p>
     <p class="sub">Single-cook recipes are not demos any more — they are graphs in
       <code>examples/graphs/</code>, opened in the sandbox. What is left here needs a host: streaming
-      worlds, a device-resident renderer, and a rig whose topology is a function of its params.</p>
+      worlds and a device-resident renderer.</p>
 
     <a class="card" href="01-sandbox/">
       <span class="num">01</span>
@@ -81,17 +81,6 @@
         <div class="desc">A streamed world drawn from instance matrices composed on the GPU and
           never read back — one shared device behind the field evaluator and a WebGPU renderer,
           with live readouts for retained device buffers and cell churn. Needs WebGPU.</div>
-      </span>
-    </a>
-
-    <a class="card" href="06-rig-playground/">
-      <span class="num">06</span>
-      <span class="body">
-        <span class="name">Rig playground</span>
-        <div class="desc">A suspended armature built live from the curve vocabulary: component parts
-          scattered in clusters along a spline and aimed radially around it, cables gathered into
-          bundles, and sagging chords between anchors. Unlit on purpose — normal shading reads volume
-          and overlap better than any lit render when the geometry is what you are judging.</div>
       </span>
     </a>
 
