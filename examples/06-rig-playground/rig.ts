@@ -31,6 +31,7 @@ import {
   filterByAttribute,
   filterByDensity,
   firstGeometry,
+  forEachNode,
   floor,
   fraction,
   hashCombine,
@@ -41,6 +42,7 @@ import {
   mergePoints,
   mul,
   orientAlongVector,
+  partitionByAttribute,
   pathPointAt,
   pathResample,
   pathSegments,
@@ -53,6 +55,7 @@ import {
   sin,
   spawnInstances,
   sub,
+  transferAttribute,
   transformPoints,
   vec,
   writeCurveFrame,
@@ -653,45 +656,136 @@ function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
   graph.connect(spine, "out", cells, "in");
   graph.connect(cells, "out", frame, "in");
 
+  // ONE body, cooked once per cable, instead of `count` hand-built
+  // branches. The four scalars that made each cable its own — where it
+  // starts, how many turns it makes, how far off the truss it swings, and
+  // which part of the wobble noise it reads — used to be computed here in
+  // TypeScript, which is exactly why this branch could not be a saved
+  // graph: its NODE COUNT was a param.
+  //
+  // Inside a forEach they are written on the CARRIER — a one-point cloud
+  // whose position is its own, so `randomField` over it gives four values
+  // that belong to this cable and no other — and then transferred onto
+  // the frame, where the fields that shape the cable can read them.
+  // `nearest` from a single source point assigns that point's value to
+  // every destination point, which is a broadcast; and transfer clones,
+  // so the frame keeps the polyline topology `pathSegments` needs.
+  const body = new Graph(0);
+  const names = ["wphase", "wturns", "wspread", "wofs"] as const;
+  let carrier: NodeRef | undefined;
+  let carrierHead: NodeRef | undefined;
+  for (const name of names) {
+    const write = body.add(setAttribute, {
+      name,
+      domain: "point",
+      type: "f32",
+      tupleSize: 1,
+      value: randomField(name),
+    });
+    if (carrier !== undefined) body.connect(carrier, "out", write, "in");
+    else carrierHead = write;
+    carrier = write;
+  }
+  let tail: NodeRef | undefined;
+  let frameHead: NodeRef | undefined;
+  for (const name of names) {
+    const onto = body.add(transferAttribute, { name, mapping: "nearest" });
+    body.connect(carrier as NodeRef, "out", onto, "source");
+    if (tail !== undefined) body.connect(tail, "out", onto, "in");
+    else frameHead = onto;
+    tail = onto;
+  }
+
   const N = attribute("curveNormal", 3);
   const B = attribute("curveBinormal", 3);
   const u = attribute("curveU", 1);
+  const phase = mul(attribute("wphase", 1), Math.PI * 2);
+  const turns = lerp(params.wrapTurnsMin, params.wrapTurnsMax, attribute("wturns", 1));
+  // Squared, so most cables hug the truss and a few swing wide — uniform
+  // slack spreads them into an even shell instead of a tangle.
+  const spreadT = mul(attribute("wspread", 1), attribute("wspread", 1));
+  const base = mul(h, add(params.wrapRadius, mul(spreadT, params.wrapSlack)));
+  const theta = add(phase, mul(mul(turns, Math.PI * 2), u));
+  const radius = add(
+    base,
+    mul(
+      params.wrapWobble,
+      fbm(perlinNoise, {
+        seed: noiseSeed(params, 173, params.wrapVariant),
+        frequency: 0.35,
+        octaves: 2,
+        // The noise SEED is a literal in the serialized spec and therefore
+        // the same for every iteration, so the cables would all wobble
+        // alike. Sliding each one's sample position by its own constant is
+        // what separates them — the one place a per-iteration value has to
+        // reach inside a noise rather than beside it.
+        position: add(position(), vec(mul(attribute("wofs", 1), 1000), 0, 0)),
+      }),
+    ),
+  );
+  const move = body.add(transformPoints, {
+    translate: add(mul(mul(radius, cos(theta)), N), mul(mul(radius, sin(theta)), B)),
+  });
+  const solid = body.add(pathSegments, { axis: "+y", radius: params.cableRadius });
+  body.connect(tail as NodeRef, "out", move, "in");
+  body.connect(move, "out", solid, "in");
+
+  const each = forEachNode(
+    body,
+    [
+      // The carrier is what the loop runs over — one per cable, each with
+      // its own identity. The frame is the same geometry every time, so it
+      // is broadcast rather than iterated.
+      { name: "each", node: carrierHead as NodeRef, pin: "in" },
+      { name: "frame", node: frameHead as NodeRef, pin: "in" },
+    ],
+    [{ name: "out", node: solid, pin: "out" }],
+  );
+
+  const carriers = buildCarriers(graph, count, "wrap");
+  const wraps = graph.add(each);
+  graph.connect(carriers, "out", wraps, "each");
+  graph.connect(frame, "out", wraps, "frame");
+
   const merged = graph.add(mergePoints);
-
-  for (let c = 0; c < count; c++) {
-    const salt = hashCombine(hashCombine(params.seed, 811), c + Math.round(params.wrapVariant) * 977);
-    const phase = hashFloat(salt) * Math.PI * 2;
-    const turns =
-      params.wrapTurnsMin +
-      hashFloat(hashCombine(salt, 1)) * (params.wrapTurnsMax - params.wrapTurnsMin);
-    // Squared, so most cables hug the truss and a few swing wide —
-    // uniform slack spreads them into an even shell instead of a tangle.
-    const spread = hashFloat(hashCombine(salt, 2)) ** 2;
-    const base = h * (params.wrapRadius + spread * params.wrapSlack);
-    const theta = add(phase, mul(turns * Math.PI * 2, u));
-    const radius = add(
-      base,
-      mul(
-        params.wrapWobble,
-        fbm(perlinNoise, {
-          seed: hashCombine(salt, 3),
-          frequency: 0.35,
-          octaves: 2,
-        }),
-      ),
-    );
-    const move = graph.add(transformPoints, {
-      translate: add(mul(mul(radius, cos(theta)), N), mul(mul(radius, sin(theta)), B)),
-    });
-    const solid = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius });
-    graph.connect(frame, "out", move, "in");
-    graph.connect(move, "out", solid, "in");
-    graph.connect(solid, "out", merged, "in");
-  }
-
+  graph.connect(wraps, "out", merged, "in");
   const spawn = graph.add(spawnInstances, { assetId: "tube" });
   graph.connect(merged, "out", spawn, "in");
   graph.output(spawn, "instances", "wraps");
+}
+
+/**
+ * `n` single-point geometries, each with its own identity, for a forEach
+ * to iterate when what is wanted is REPLICATION rather than treatment of
+ * data that already exists.
+ *
+ * `pointLine` is the only generator whose point order is defined by its
+ * own params, which is what makes `index()` a safe thing to write here —
+ * the same trick on a scattered or filtered cloud reintroduces the
+ * array-index bug identity keying exists to prevent. `partitionByAttribute`
+ * is then the one way in the library to explode one geometry into many
+ * items.
+ */
+function buildCarriers(graph: Graph, n: number, tag: string): NodeRef {
+  const line = graph.add(pointLine, {
+    count: n,
+    start: [0, 0, 0],
+    // Spaced a unit apart so no two carriers share a position: two items
+    // agreeing on position, seed and tags are ONE item to a forEach, and
+    // it refuses the collection rather than emit the same cable twice.
+    end: [n - 1, 0, 0],
+  });
+  const id = graph.add(setAttribute, {
+    name: `${tag}Id`,
+    domain: "point",
+    type: "i32",
+    tupleSize: 1,
+    value: index(),
+  });
+  const split = graph.add(partitionByAttribute, { name: `${tag}Id` });
+  graph.connect(line, "out", id, "in");
+  graph.connect(id, "out", split, "in");
+  return split;
 }
 
 /**
