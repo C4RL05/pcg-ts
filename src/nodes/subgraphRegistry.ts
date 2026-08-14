@@ -74,7 +74,11 @@ export interface RegistrationPin {
 /** {@link SerializedExposedParam} whose targets' `node` may also be a handle. */
 export interface RegistrationParam {
   readonly name: string;
-  readonly targets: readonly { readonly node: RegistrationNodeRef; readonly param: string }[];
+  /**
+   * Omitted or empty for a param the body's field expressions read by
+   * name; `default` is then required, and its shape decides the type.
+   */
+  readonly targets?: readonly { readonly node: RegistrationNodeRef; readonly param: string }[];
   readonly description: string;
   readonly default?: unknown;
   readonly min?: number;
@@ -169,7 +173,14 @@ function hex8(n: number): string {
   return (n >>> 0).toString(16).padStart(8, "0");
 }
 
-/** The reduced view of an exposed-param declaration the hash covers. */
+/**
+ * The reduced view of an exposed-param declaration the hash covers.
+ *
+ * A param with no targets reduces to `targets: []`, which is as stable as
+ * any other list — and it must be covered, not skipped: a targetless param
+ * is read by the body's field expressions, so adding, removing or renaming
+ * one changes what the recipe cooks exactly as a target list does.
+ */
 function hashableExposedParam(p: SerializedExposedParam): unknown {
   return {
     name: p.name,
@@ -367,7 +378,7 @@ export function registerSubgraph(name: string, spec: SubgraphRegistrationSpec): 
     (list ?? []).map((p) => ({ name: p.name, node: nodeIdOf(p.node), pin: p.pin }));
   const params: SerializedExposedParam[] = (spec.params ?? []).map((p) => ({
     name: p.name,
-    targets: p.targets.map((t) => ({ node: nodeIdOf(t.node), param: t.param })),
+    targets: (p.targets ?? []).map((t) => ({ node: nodeIdOf(t.node), param: t.param })),
     description: p.description,
     default: p.default,
     ...(p.min !== undefined ? { min: p.min } : {}),

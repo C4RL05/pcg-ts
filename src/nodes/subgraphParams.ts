@@ -19,6 +19,7 @@ import {
   GraphValidationError,
   type NodeHandle,
   type ParamSchema,
+  type ParamType,
   type ParamValue,
   getSubgraphSpec,
   paramSchemaError,
@@ -45,6 +46,14 @@ export interface ExposedParamDecl {
    * Inner params this one drives, in write order. One target is the
    * common case; several fan one value out, and must then agree on `type`
    * and `enum` (their `acceptsField` is ANDed and their bounds intersect).
+   *
+   * May be EMPTY, for a param the body's field expressions read by name
+   * (`{"fn": "param", "name": "…"}`) instead of one that writes into a
+   * param slot. There is then no inner schema to borrow, so `default`
+   * becomes required and its SHAPE decides the type: a number is f32, a
+   * 3-number array vec3, a 4-number array vec4. Such a param is never
+   * field-capable — the value is substituted into the expression as a
+   * literal, and a Field is not a literal.
    */
   readonly targets: readonly ExposedParamTargetDecl[];
   /**
@@ -153,6 +162,11 @@ function rangeOf(schema: ParamSchema): string {
  * - `min`/`max` intersect, and an empty intersection is an error;
  * - `description` is authored here and never merged;
  * - `default` is the author's, else the first target's live value.
+ *
+ * With NO targets there is nothing to merge and the schema is derived from
+ * the default's shape instead — see {@link resolveTargetless}. That is the
+ * form a param takes when its only reader is a field expression in the
+ * body, which has no param slot to write into.
  */
 export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): ExposedParam {
   const name = decl.name;
@@ -161,9 +175,13 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
       `exposed param: name must be a non-empty string, got ${JSON.stringify(name)}`,
     );
   }
-  if (!Array.isArray(decl.targets) || decl.targets.length === 0) {
-    bad(name, "needs at least one target { node, param } — an exposed param that writes nowhere cannot affect the cook");
+  if (!Array.isArray(decl.targets)) {
+    bad(
+      name,
+      `"targets" must be an array of { node, param } — pass [] for a param the body's field expressions read by name, got ${JSON.stringify(decl.targets)}`,
+    );
   }
+  if (decl.targets.length === 0) return resolveTargetless(name, decl);
   const schemas = decl.targets.map((t) => targetSchema(inner, name, t));
   const first = schemas[0];
   const firstTarget = decl.targets[0];
@@ -260,6 +278,70 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
     acceptsField: schemas[i].acceptsField === true,
   }));
   return { name, targets, schema };
+}
+
+/** The type a targetless default's shape implies, or undefined for none. */
+function derivedType(value: ParamValue): ParamType | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return "f32";
+  if (Array.isArray(value) && value.every((v) => typeof v === "number" && Number.isFinite(v))) {
+    if (value.length === 3) return "vec3";
+    if (value.length === 4) return "vec4";
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a declaration with NO targets: a param the body's field
+ * expressions read by name rather than one that writes into a param slot.
+ *
+ * There is no inner param to borrow a schema from, so the schema comes
+ * from the SHAPE of the default — the one thing the author has already
+ * said. A number is `f32`, a 3-number array `vec3`, a 4-number array
+ * `vec4`: exactly the literals the field grammar accepts in an argument
+ * position, which is the whole set a substitution can produce. `i32`/`u32`
+ * are deliberately not derivable — a field expression has no integers, so
+ * deriving one from `3` would promise a rounding the grammar never
+ * performs.
+ *
+ * Never field-capable, for the reason the whole mechanism substitutes: the
+ * value is written INTO the expression before it is built, and a Field is
+ * not something a literal position can hold.
+ */
+function resolveTargetless(name: string, decl: ExposedParamDecl): ExposedParam {
+  if (decl.acceptsField === true) {
+    bad(
+      name,
+      'declares acceptsField: true and no targets; a targetless param is read by the body\'s field expressions as {"fn": "param", "name": …}, and that value is substituted as a LITERAL before the expression is built — a Field cannot stand in a literal position. Drop the assertion, or give the param a field-capable inner target',
+    );
+  }
+  const value = decl.default;
+  if (value === undefined) {
+    bad(
+      name,
+      'has no targets, so there is no inner param to derive a schema from and "default" is required; its shape is the only thing that can say whether the param is a number, a vec3 or a vec4',
+    );
+  }
+  const type = derivedType(value);
+  if (type === undefined) {
+    bad(
+      name,
+      `has no targets, so its type is derived from the shape of "default" — a finite number is f32, a 3-number array vec3, a 4-number array vec4 — but the default is ${JSON.stringify(value)}; give it one of those shapes, or add an inner target to derive the schema from`,
+    );
+  }
+  if (decl.min !== undefined && decl.max !== undefined && decl.min > decl.max) {
+    bad(name, `min ${decl.min} is above max ${decl.max}; the declared bounds are empty`);
+  }
+  const schema: ParamSchema = {
+    type,
+    // Copied, so no two instances of the def share one mutable tuple.
+    default: type === "f32" ? (value as number) : [...(value as readonly number[])],
+    description: decl.description,
+    ...(decl.min !== undefined ? { min: decl.min } : {}),
+    ...(decl.max !== undefined ? { max: decl.max } : {}),
+  };
+  const schemaBad = paramSchemaError(schema);
+  if (schemaBad !== undefined) bad(name, schemaBad);
+  return { name, targets: [], schema };
 }
 
 /**

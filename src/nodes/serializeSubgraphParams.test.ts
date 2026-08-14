@@ -448,9 +448,16 @@ describe("exposed params — what serialization refuses", () => {
     expect(() => deserializeGraph(withParams([{ name: "count" }]))).toThrow(
       /node "sub" subgraph params\[0\]: expected \{ name, targets, description, default \}/,
     );
+    expect(() => deserializeGraph(withParams([{ name: "count", description: "x", targets: 7 }]))).toThrow(
+      /node "sub" subgraph params\[0\] \("count"\): "targets" must be an array of \{ node, param \} objects — empty or absent for a param the body's field expressions read by name/,
+    );
+    // Empty targets are legal shape-wise; they fail one layer in, where the
+    // body can be seen, and the message names both routes.
     expect(() =>
-      deserializeGraph(withParams([{ name: "count", description: "x", targets: [] }])),
-    ).toThrow(/node "sub" subgraph params\[0\] \("count"\): "targets" must be a non-empty array/);
+      deserializeGraph(withParams([{ name: "count", description: "x", targets: [], default: 1 }])),
+    ).toThrow(
+      /node "sub": exposed param "count": needs at least one inner target \{ node, param \} to write into, or a field expression in the body reading it/,
+    );
   });
 });
 

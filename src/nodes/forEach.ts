@@ -205,7 +205,7 @@ export function forEachNode(
     async execute({ inputs, params, seed, signal, budgetMs, gpu, checkCancelled }) {
       const source = inputs[iterated.name] ?? [];
       return withExclusiveGraph(inner, async () => {
-        checkExposedValues(paramList, params);
+        checkExposedValues(inner, paramList, params);
         const out: Record<string, DataCollection> = {};
         for (const exp of exposedOutputs) out[exp.name] = [];
 

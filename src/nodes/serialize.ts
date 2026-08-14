@@ -67,7 +67,14 @@ export interface SerializedExposedPin {
 export interface SerializedExposedParam {
   /** Param name on the wrapping subgraph node. */
   readonly name: string;
-  /** Inner slots the value is written into, in write order. */
+  /**
+   * Inner slots the value is written into, in write order. EMPTY for a
+   * param the body's field expressions read by name — the value then
+   * reaches the cook by substitution into those expressions, and the
+   * schema is derived from `default`'s shape (a number is f32, a 3-number
+   * array vec3, a 4-number array vec4) since there is no inner param to
+   * borrow one from. A reader also accepts the key being absent.
+   */
   readonly targets: readonly { readonly node: string; readonly param: string }[];
   /** Agent-facing description, authored at the exposed level. */
   readonly description: string;
@@ -612,9 +619,16 @@ function checkExposedParamDeclaration(
   }
   const held = exposed.schema;
   const want = resolved.schema;
-  const targets = exposed.targets.map(slotLabel).join(", ");
+  // "(none)" when the param has no targets: its schema is then derived
+  // from the default's shape, and saying so is what makes a type
+  // disagreement readable ("its targets ((none)) are f32").
+  const targets = exposed.targets.map(slotLabel).join(", ") || "(none)";
   if (held.type !== want.type) {
-    fail(`${where} declares type "${held.type}", but its targets (${targets}) are ${want.type}; ${door}`);
+    fail(
+      exposed.targets.length === 0
+        ? `${where} declares type "${held.type}", but it has no targets, so its type is derived from the shape of its default and comes out ${want.type}; ${door}`
+        : `${where} declares type "${held.type}", but its targets (${targets}) are ${want.type}; ${door}`,
+    );
   }
   if (!sameEnumList(held.enum, want.enum)) {
     fail(
@@ -623,9 +637,14 @@ function checkExposedParamDeclaration(
   }
   if ((held.acceptsField === true) !== (want.acceptsField === true)) {
     fail(
-      held.acceptsField === true
-        ? `${where} claims to be field-capable, but not every target is: field-capable targets are ${resolved.targets.filter((t) => t.acceptsField === true).map(slotLabel).join(", ") || "(none)"}; a Field set on it would reach a target that takes plain values only — ${door}`
-        : `${where} is recorded as taking plain values only, but every one of its targets (${targets}) accepts a Field; reloading this graph would derive a field-capable param, so the saved node and the loaded one would not behave alike — ${door}`,
+      exposed.targets.length === 0
+        ? // No targets means the value's only route into the body is
+          // substitution into a field expression, as a literal — which a
+          // Field can never be, whatever the schema claims.
+          `${where} claims to be field-capable, but it has no targets: its value reaches the body only by substitution into a field expression, as a literal, and a Field is not one — ${door}`
+        : held.acceptsField === true
+          ? `${where} claims to be field-capable, but not every target is: field-capable targets are ${resolved.targets.filter((t) => t.acceptsField === true).map(slotLabel).join(", ") || "(none)"}; a Field set on it would reach a target that takes plain values only — ${door}`
+          : `${where} is recorded as taking plain values only, but every one of its targets (${targets}) accepts a Field; reloading this graph would derive a field-capable param, so the saved node and the loaded one would not behave alike — ${door}`,
     );
   }
   for (const bound of ["min", "max"] as const) {
@@ -778,12 +797,16 @@ function readExposedParams(v: unknown, inner: Graph, where: string): ExposedPara
       EXPOSED_PARAM_NO_ANNOTATION_KEY,
       DERIVED_EXPOSED_PARAM_KEYS,
     );
-    if (!Array.isArray(e.targets) || e.targets.length === 0) {
+    // Absent and empty both mean "writes nowhere", which is legal exactly
+    // when a field expression in the body reads the name instead — the
+    // wrapper checks that, since only it can see the body.
+    if (e.targets !== undefined && !Array.isArray(e.targets)) {
       fail(
-        `${where}[${i}] ("${e.name}"): "targets" must be a non-empty array of { node, param } objects, got ${JSON.stringify(e.targets)}`,
+        `${where}[${i}] ("${e.name}"): "targets" must be an array of { node, param } objects — empty or absent for a param the body's field expressions read by name — got ${JSON.stringify(e.targets)}`,
       );
     }
-    const targets = e.targets.map((t: unknown, j: number) => {
+    const declaredTargets: readonly unknown[] = e.targets === undefined ? [] : (e.targets as unknown[]);
+    const targets = declaredTargets.map((t: unknown, j: number) => {
       if (!isPlainObject(t) || typeof t.node !== "string" || typeof t.param !== "string") {
         fail(
           `${where}[${i}] ("${e.name}") targets[${j}]: expected { node, param } strings, got ${JSON.stringify(t)}`,

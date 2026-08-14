@@ -1,11 +1,19 @@
 import { isField } from "../fields/index.js";
+import { type FieldSpec, isDerivedSpec, peekFieldSpec } from "../fields/spec.js";
+// The field grammar's parser, reached by MODULE and not through
+// `../nodes/index.js`. It imports only `../fields` and `../noise`, so
+// there is no cycle to break here and no registry crossing the layer
+// boundary: this is the grammar itself, which the graph layer needs
+// because a body's field expressions are rebuilt against a wrapper's
+// exposed values at cook time and building is the only door a value has.
+import { type FieldBindings, fieldFromJson, paramNamesOf } from "../nodes/fieldJson.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";
 import { cook, withExclusiveGraph } from "./execute.js";
 import type { Graph, NodeHandle } from "./graph.js";
 import { defineNode, type NodeDef, type PinDef, type PinKind } from "./node.js";
-import { type ParamSchema, type ParamValue, paramValueError } from "./params.js";
+import { type ParamSchema, type ParamType, type ParamValue, paramValueError } from "./params.js";
 // The spec map lives one module over so `graph.ts` can read it without
 // importing this one back; see subgraphLink.ts.
 import { subgraphSpecs } from "./subgraphLink.js";
@@ -44,9 +52,16 @@ export interface ExposedParamTarget {
 }
 
 /**
- * A named param on the wrapping subgraph node, bound to one or more inner
- * params: setting it on an instance writes the value into every target at
- * cook time.
+ * A named param on the wrapping subgraph node, bound to zero or more
+ * inner params: setting it on an instance writes the value into every
+ * target at cook time.
+ *
+ * The name is ALSO in scope for the body's field expressions: any
+ * `{"fn": "param", "name": "…"}` inside a field a body node holds reads
+ * this param's value, substituted at cook time. So `targets` is optional
+ * fan-out rather than the point — a declaration with none is legal
+ * precisely when a body field reads the name, and is how a value reaches
+ * somewhere no param slot exists.
  *
  * **This is the low-level RESOLVED form.** The schema and every target's
  * `acceptsField` arrive already derived from the targets' own registered
@@ -69,7 +84,11 @@ export interface ExposedParamTarget {
 export interface ExposedParam {
   /** Param name on the wrapping subgraph node. */
   readonly name: string;
-  /** Inner slots written at cook time, in declaration order. */
+  /**
+   * Inner slots written at cook time, in declaration order. May be empty,
+   * and then a body field expression must read the name instead — see the
+   * note above.
+   */
   readonly targets: readonly ExposedParamTarget[];
   /** Merged schema over the targets; the wrapping node's `defaultParams` takes its `default`. */
   readonly schema: ParamSchema;
@@ -357,6 +376,222 @@ export function transitiveVersionKey(graph: Graph, seen: Set<Graph>): string {
   return key;
 }
 
+/** One body param slot whose field expression reads exposed params by name. */
+interface BodyFieldRef {
+  /** Id of the inner node holding the field. */
+  readonly node: string;
+  /** Param name on that inner node. */
+  readonly param: string;
+  /**
+   * The spec the field was built from. Kept because binding SUBSTITUTES:
+   * a value reaches the expression only by rebuilding the field from this
+   * spec, which is what puts the value in `Field.key` and so in the body
+   * node's memo key. `fieldFromJson` clones it and stamps the clone on the
+   * rebuilt field, so the reference — not the value it stood for — is
+   * still what a re-scan (or a save) sees while a rebuild is installed.
+   */
+  readonly spec: FieldSpec;
+  /** Names this spec references, sorted and deduplicated. */
+  readonly names: readonly string[];
+}
+
+/** What one body's field expressions read, as of one {@link Graph.version}. */
+interface BodyScan {
+  readonly version: number;
+  /** Slots holding an AUTHORED spec: the ones a cook rebuilds. */
+  readonly refs: readonly BodyFieldRef[];
+  /**
+   * Slots reading a name through a DERIVED spec, which cannot be rebuilt
+   * (see {@link bodyScan}) and so are refused rather than bound.
+   */
+  readonly derivedRefs: readonly BodyFieldRef[];
+  /** Every name any of `refs` reads. */
+  readonly names: ReadonlySet<string>;
+}
+
+const bodyScans = new WeakMap<Graph, BodyScan>();
+
+/**
+ * What `body` reads by name, computed once per edit of it.
+ *
+ * Version-keyed rather than frozen at wrap time, because the body is not
+ * frozen at wrap time: `getSubgraphSpec(def).graph` is the sanctioned door
+ * back to it, and setting a field on an inner node after wrapping is an
+ * ordinary edit. Every such edit bumps {@link Graph.version} (the quiet
+ * writes this module makes deliberately do not), and that same counter is
+ * already in the wrapper's `memoKey` through `transitiveVersionKey` — so a
+ * body whose scan moved is a body whose wrapper recooks anyway.
+ *
+ * Keyed per GRAPH rather than per def: one body can back several wrappers,
+ * and what it reads is a fact about the body alone.
+ *
+ * Only AUTHORED specs are BOUND. A field composed in TypeScript on top of
+ * one — `mul(fieldFromJson(spec), 3)` — carries a DERIVED spec, and
+ * rebuilding from that would hand the field an authored spec it never had,
+ * moving it onto the device for a graph that never asked (see
+ * `deviceSpec`). Those are collected separately and refused when they read
+ * a name this wrapper declares (see {@link checkDerivedReaders}); one
+ * reading a name nothing declares is left alone, since it can only be a
+ * value an author already baked in.
+ */
+function bodyScan(body: Graph): BodyScan {
+  const cached = bodyScans.get(body);
+  if (cached !== undefined && cached.version === body.version) return cached;
+  const refs: BodyFieldRef[] = [];
+  const derivedRefs: BodyFieldRef[] = [];
+  const names = new Set<string>();
+  for (const state of body._nodes.values()) {
+    for (const [param, value] of Object.entries(state.params)) {
+      if (!isField(value)) continue;
+      const spec = peekFieldSpec(value);
+      if (spec === undefined) continue;
+      const read = paramNamesOf(spec);
+      if (read.length === 0) continue;
+      const ref: BodyFieldRef = { node: state.id, param, spec, names: read };
+      if (isDerivedSpec(spec)) {
+        derivedRefs.push(ref);
+        continue;
+      }
+      refs.push(ref);
+      for (const name of read) names.add(name);
+    }
+  }
+  const scan: BodyScan = { version: body.version, refs, derivedRefs, names };
+  bodyScans.set(body, scan);
+  return scan;
+}
+
+/** `"nodeId".param`, the way these errors name a body slot. */
+function refLabel(ref: BodyFieldRef): string {
+  return `"${ref.node}".${ref.param}`;
+}
+
+/** The body slots reading `name`, for a message. */
+function readersOf(scan: BodyScan, name: string): string {
+  return scan.refs
+    .filter((ref) => ref.names.includes(name))
+    .map(refLabel)
+    .join(", ");
+}
+
+function quotedList(names: Iterable<string>): string {
+  return (
+    [...names]
+      .sort()
+      .map((n) => `"${n}"`)
+      .join(", ") || "(none)"
+  );
+}
+
+/**
+ * Param types a field expression can read. Binding substitutes a literal,
+ * and the grammar's literals are a number or a numeric tuple — so a
+ * `string`, `bool`, `enum`, `items` or `stringList` param has nothing to
+ * substitute.
+ */
+const BINDABLE_PARAM_TYPES: ReadonlySet<ParamType> = new Set<ParamType>([
+  "f32",
+  "i32",
+  "u32",
+  "vec3",
+  "vec4",
+]);
+
+/**
+ * Types a param with NO targets may carry: what deriving a schema from a
+ * default's shape produces (`resolveExposedParam` in the nodes layer). A
+ * narrower set than {@link BINDABLE_PARAM_TYPES}, deliberately —
+ * `i32`/`u32` are legal to READ (a real inner param can be one) but not to
+ * derive, because a field expression has no integers.
+ */
+const TARGETLESS_PARAM_TYPES: ReadonlySet<ParamType> = new Set<ParamType>(["f32", "vec3", "vec4"]);
+
+/**
+ * The value `name` binds as, or `undefined` when it cannot bind at all.
+ * Finite throughout, because that is what the grammar's literals are: a
+ * NaN reaching a spec would fail one layer in, where the message can no
+ * longer say which exposed param it came from.
+ */
+function bindingValue(value: unknown): number | readonly number[] | undefined {
+  const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  if (finite(value)) return value;
+  if (Array.isArray(value) && value.length > 0 && value.every(finite)) {
+    return value as readonly number[];
+  }
+  return undefined;
+}
+
+/**
+ * Refuse a body field that reads a name nothing declares.
+ *
+ * Checked at wrap time, where the declarations are, rather than left to
+ * the unbound-param failure the field itself would raise when it lands on
+ * a domain: this one runs before a single node cooks, names the slot
+ * holding the expression, and lists what the wrapper does declare, so a
+ * typo shows its near-miss.
+ *
+ * Re-checked per cook because the body can be edited afterwards.
+ */
+function checkBodyReferences(scan: BodyScan, declared: ReadonlySet<string>): void {
+  for (const ref of scan.refs) {
+    for (const name of ref.names) {
+      if (declared.has(name)) continue;
+      throw new GraphValidationError(
+        `the body's field expression at ${refLabel(ref)} reads {"fn": "param", "name": ${JSON.stringify(name)}}, ` +
+          `but this wrapper exposes no param "${name}" to supply it; exposed params: ${quotedList(declared)} — ` +
+          `declare "${name}" as an exposed param (its "targets" may be empty: a declaration with none exists exactly to feed a field expression), or correct the name`,
+      );
+    }
+  }
+}
+
+/**
+ * Refuse a body field that reads a DECLARED name through a spec the
+ * constructors composed rather than one `fieldFromJson` authored.
+ *
+ * Such a field cannot be rebuilt — see {@link bodyScan} — so it would
+ * keep whatever value it was built with while every authored expression
+ * in the same body took the instance's. Two expressions reading one name
+ * and disagreeing is a wrong cook with nothing to show for it, which is
+ * the one outcome worth refusing outright.
+ *
+ * A derived spec reading a name this wrapper does NOT declare is left
+ * alone: nothing here would have bound it, so there is nothing to
+ * disagree with, and an unbound one still fails at evaluate.
+ */
+function checkDerivedReaders(scan: BodyScan, declared: ReadonlySet<string>): void {
+  for (const ref of scan.derivedRefs) {
+    for (const name of ref.names) {
+      if (!declared.has(name)) continue;
+      throw new GraphValidationError(
+        `the body's field at ${refLabel(ref)} reads the exposed param "${name}", but it was COMPOSED with the field constructors (mul(fieldFromJson(…), 3)) rather than authored as one JSON spec — ` +
+          `only an authored spec is rebuilt against an exposed value, so this expression would silently keep what it was built with while the rest of the body took "${name}"; ` +
+          "write the whole expression as a single fieldFromJson spec, or read a name this wrapper does not expose",
+      );
+    }
+  }
+}
+
+/**
+ * Refuse an exposed param whose target IS the slot holding a field that
+ * reads exposed names. Both writes land on one slot in one cook, so one of
+ * them provably does nothing: the fan-out would overwrite the whole
+ * expression, or the rebuilt expression would overwrite the fan-out.
+ */
+function checkSlotConflicts(scan: BodyScan, paramList: readonly ExposedParam[]): void {
+  if (scan.refs.length === 0) return;
+  for (const exp of paramList) {
+    for (const target of exp.targets) {
+      const ref = scan.refs.find((r) => r.node === target.node.id && r.param === target.param);
+      if (ref === undefined) continue;
+      throw new GraphValidationError(
+        `exposed param "${exp.name}" writes to the inner slot ${refLabel(ref)}, which holds a field expression reading ${quotedList(ref.names)} — ` +
+          `the write would replace the whole expression, so one of the two provably does nothing; drop that target and let the expression read "${exp.name}" by name, or move the expression to a slot nothing fans out into`,
+      );
+    }
+  }
+}
+
 /** Array defaults are copied so no two instances share one mutable list. */
 function copyParamDefault(v: ParamValue): ParamValue {
   return Array.isArray(v) ? ([...v] as ParamValue) : v;
@@ -390,6 +625,23 @@ function fieldNotAcceptedMessage(exp: ExposedParam): string {
 }
 
 /**
+ * Names the exposed param, the body slots that read it, and the way out.
+ *
+ * A read name is SUBSTITUTED into the expression before the body cooks —
+ * that is what puts the value in the field's key and so in the body node's
+ * memo key — and a Field is not something a literal position can hold: it
+ * is a function of the element the expression lands on, decided one layer
+ * further in than the substitution happens.
+ */
+function fieldNotBindableMessage(exp: ExposedParam, readers: string): string {
+  return (
+    `subgraph exposed param "${exp.name}" holds a Field, but the body's field expression at ${readers} reads it by name: ` +
+    "a read value is substituted into that expression as a literal before the body cooks, and a Field is not a literal — it is a function of the element it lands on. " +
+    `Set a plain ${exp.schema.type} value, or write the varying part into the body's own expression (reading an attribute) instead of passing it in`
+  );
+}
+
+/**
  * First way a plain (non-field) value fails the merged schema, or
  * `undefined` when it is legal. Two runtime-only exemptions match what
  * serialization already treats as legal, so the cook accepts exactly the
@@ -410,10 +662,20 @@ function exposedValueError(schema: ParamSchema, value: unknown): string | undefi
   return paramValueError(schema, value);
 }
 
-/** Names the exposed param, the violation, and the inner slots it drives. */
-function valueRejectedMessage(exp: ExposedParam, bad: string): string {
+/**
+ * Names the exposed param, the violation, and what the value drives —
+ * either route, since a param with no targets is driving field
+ * expressions and saying "it writes to " would name nothing at all.
+ */
+function valueRejectedMessage(exp: ExposedParam, bad: string, readers: string): string {
   const targets = exp.targets.map((t) => `"${t.node.id}".${t.param}`).join(", ");
-  return `subgraph exposed param "${exp.name}": ${bad}; it writes to ${targets}`;
+  const drives = [
+    targets === "" ? "" : `writes to ${targets}`,
+    readers === "" ? "" : `is read by the body's field expression at ${readers}`,
+  ]
+    .filter((part) => part !== "")
+    .join(", and ");
+  return `subgraph exposed param "${exp.name}": ${bad}; it ${drives}`;
 }
 
 /**
@@ -453,7 +715,11 @@ const portalDef = defineNode<PortalParams>({
  * caches — create separate definitions when independent caching matters.
  *
  * Exposed params (the optional fourth argument) give the wrapping node
- * its own params, each bound to one or more inner `(node, param)` slots.
+ * its own params, each bound to zero or more inner `(node, param)` slots
+ * and, by name, to the body's field expressions: a field a body node holds
+ * reads one as `{"fn": "param", "name": "…"}`, which is how a value
+ * reaches inside an expression, where no param slot exists. A declaration
+ * needs one route or the other; `targets` alone is no longer the point.
  * Their values live in the wrapping INSTANCE's params record — so two
  * instances of one def can be tuned differently, and the executor's
  * existing param hashing keys each instance's cache on its own values —
@@ -511,7 +777,7 @@ export function subgraphNode(
       // seed: same graph, same seed, an output that depended on
       // scheduling.
       return withExclusiveGraph(inner, async () => {
-        checkExposedValues(paramList, params);
+        checkExposedValues(inner, paramList, params);
         // Same outer seed and inputs reproduce the same inner keys, so the
         // persisted inner caches serve unchanged nodes across outer cooks.
         // Quiet setters: plumbing must not bump the inner version, or the
@@ -604,6 +870,17 @@ export function prepareWrapper(
   // here — the one validation this layer can do without a registry — so a
   // typo names the node and lists what it does have instead of silently
   // creating a param on an inner node at cook time.
+  //
+  // A param reaches the body by two routes, and the checks below cover
+  // both: `targets` writes it into inner param slots, and the NAME is in
+  // scope for the body's field expressions, which read it as
+  // {"fn": "param", "name": …}. Each route is optional on its own; a
+  // declaration with neither is the one thing that cannot affect a cook.
+  const scan = bodyScan(inner);
+  // Ahead of everything else, so a body reading a declared name through a
+  // spec that cannot be rebuilt is named as itself rather than as a
+  // declaration that reads nothing.
+  checkDerivedReaders(scan, new Set(exposedParams.map((exp) => exp.name)));
   const paramNames = new Set<string>();
   // Which exposed param already claimed each inner `(node, param)` slot.
   // Two claims on one slot are rejected outright: cooking writes them in
@@ -619,9 +896,36 @@ export function prepareWrapper(
       );
     }
     paramNames.add(exp.name);
+    const readByBody = scan.names.has(exp.name);
     if (exp.targets.length === 0) {
+      if (!readByBody) {
+        throw new GraphValidationError(
+          `exposed param "${exp.name}": needs at least one inner target { node, param } to write into, or a field expression in the body reading it as {"fn": "param", "name": "${exp.name}"} — ` +
+            `an exposed param that does neither cannot affect the cook; names the body's field expressions do read: ${quotedList(scan.names)}`,
+        );
+      }
+      // With no targets there is no inner schema to have come from, so the
+      // schema must be exactly what deriving one from a default's SHAPE
+      // produces (`resolveExposedParam`, the supported door). Anything else
+      // wraps and cooks but can never be saved: `serializeGraph` re-derives
+      // the declaration and would refuse it.
+      if (!TARGETLESS_PARAM_TYPES.has(exp.schema.type)) {
+        throw new GraphValidationError(
+          `exposed param "${exp.name}" has no targets and type "${exp.schema.type}"; a targetless param's schema is derived from the SHAPE of its default, which yields ${[...TARGETLESS_PARAM_TYPES].join(", ")} and nothing else — ` +
+            "give it an inner target to derive that type from, or declare it as one of those",
+        );
+      }
+      if (exp.schema.acceptsField === true) {
+        throw new GraphValidationError(
+          `exposed param "${exp.name}" has no targets and claims to accept a Field; its only route into the body is substitution into a field expression as a LITERAL, and a Field is not a literal — ` +
+            "drop the capability, or give it a field-capable inner target",
+        );
+      }
+    }
+    if (readByBody && !BINDABLE_PARAM_TYPES.has(exp.schema.type)) {
       throw new GraphValidationError(
-        `exposed param "${exp.name}": needs at least one inner target { node, param } — an exposed param that writes nowhere cannot affect the cook`,
+        `exposed param "${exp.name}" is read by the body's field expression at ${readersOf(scan, exp.name)}, but its type "${exp.schema.type}" cannot be substituted into one: ` +
+          `a field expression takes a number or a numeric tuple, so only ${[...BINDABLE_PARAM_TYPES].join(", ")} params can be read by name`,
       );
     }
     for (const target of exp.targets) {
@@ -654,6 +958,8 @@ export function prepareWrapper(
     }
     defaultParams[exp.name] = copyParamDefault(exp.schema.default);
   }
+  checkBodyReferences(scan, paramNames);
+  checkSlotConflicts(scan, exposedParams);
   const paramList = exposedParams.map(detachParam);
   return { inputPins, outputPins, portals, paramList, defaultParams };
 }
@@ -694,12 +1000,22 @@ export function recordWrapperSpec(
  * leaves the inner graph exactly as it found it.
  */
 export function checkExposedValues(
+  inner: Graph,
   paramList: readonly ExposedParam[],
   params: Record<string, unknown>,
 ): void {
+  const scan = bodyScan(inner);
   for (const exp of paramList) {
     const value = params[exp.name];
+    const readByBody = scan.names.has(exp.name);
     if (isField(value)) {
+      // Checked BEFORE the schema's own field capability, because a name a
+      // field expression reads refuses a Field however capable the targets
+      // are — the two routes disagree, and the one that cannot carry it
+      // decides.
+      if (readByBody) {
+        throw new GraphValidationError(fieldNotBindableMessage(exp, readersOf(scan, exp.name)));
+      }
       if (exp.schema.acceptsField !== true) {
         throw new GraphValidationError(fieldNotAcceptedMessage(exp));
       }
@@ -707,13 +1023,29 @@ export function checkExposedValues(
     }
     const bad = exposedValueError(exp.schema, value);
     if (bad !== undefined) {
-      throw new GraphValidationError(valueRejectedMessage(exp, bad));
+      throw new GraphValidationError(
+        valueRejectedMessage(exp, bad, readByBody ? readersOf(scan, exp.name) : ""),
+      );
+    }
+    if (readByBody && bindingValue(value) === undefined) {
+      throw new GraphValidationError(
+        `subgraph exposed param "${exp.name}" holds ${JSON.stringify(value) ?? String(value)}, which cannot be substituted into the field expression at ${readersOf(scan, exp.name)} that reads it; ` +
+          "a field expression takes a number or a non-empty numeric tuple",
+      );
     }
   }
 }
 
 /**
  * @internal Write the exposed values inward, run `fn`, and restore them.
+ *
+ * Two routes in, both undone by the one `finally`: the declared `targets`
+ * take the value into inner param slots, and every body field expression
+ * reading an exposed name is REBUILT from its authored spec against the
+ * current values. The rebuild is not an optimization of a write — a field
+ * built with the value in it carries that value in `Field.key`, which is
+ * what the executor hashes, so substituting at build time is the only
+ * spelling under which a changed value moves a body node's memo key.
  *
  * Written here and only here. Wrap time is too early (the values do not
  * exist yet) and setParam time is wrong twice over: a loud write would
@@ -762,6 +1094,63 @@ export async function withExposedParams<T>(
           value: inner.require(handle.id).params[target.param],
         });
         inner._setParamQuiet(handle, target.param, value);
+      }
+    }
+    // The other route in: a body field expression reading exposed names.
+    // It is REBUILT rather than written, because binding substitutes — the
+    // value has to be there when the field is constructed or it never
+    // reaches `Field.key`, and a value outside that key is a value the
+    // executor's memo cannot see (it would serve the previous one's bytes).
+    // The rebuilt field goes into the same `saved` list as any other write,
+    // so the restore below covers it on every path out, cancellation
+    // included.
+    const scan = bodyScan(inner);
+    if (scan.refs.length > 0 || scan.derivedRefs.length > 0) {
+      // Re-run per cook, because the body can be edited after wrapping —
+      // these are the same three refusals `prepareWrapper` makes, against
+      // the same scan, for a body that has moved since.
+      const declared = new Set(paramList.map((exp) => exp.name));
+      checkDerivedReaders(scan, declared);
+      checkBodyReferences(scan, declared);
+      checkSlotConflicts(scan, paramList);
+      const bindings: Record<string, FieldBindings[string]> = {};
+      for (const exp of paramList) {
+        if (!scan.names.has(exp.name)) continue;
+        const bound = bindingValue(params[exp.name]);
+        // `checkExposedValues` has already refused anything unbindable and
+        // runs before every cook; this is the belt to its braces, and keeps
+        // this function correct when called on its own.
+        if (bound === undefined) {
+          throw new GraphValidationError(
+            `subgraph exposed param "${exp.name}" cannot be substituted into the field expression at ${readersOf(scan, exp.name)} that reads it; a field expression takes a number or a non-empty numeric tuple`,
+          );
+        }
+        bindings[exp.name] = bound;
+      }
+      for (const ref of scan.refs) {
+        const handle: NodeHandle<Record<string, unknown>> = { id: ref.node };
+        saved.push({
+          handle,
+          param: ref.param,
+          value: inner.require(handle.id).params[ref.param],
+        });
+        // A build failure here is an arity mismatch between a value and
+        // the position it was substituted into ("add: incompatible tuple
+        // sizes 3 and 2"). `fieldFromJson` names the bindings it was
+        // given; only this frame knows WHICH body slot held the
+        // expression, and without that the author is left grepping.
+        let rebuilt: unknown;
+        try {
+          rebuilt = fieldFromJson(ref.spec, bindings);
+        } catch (err) {
+          throw new GraphValidationError(
+            `the body's field expression at ${refLabel(ref)} cannot be built with the exposed values it reads (${quotedList(ref.names)}): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { cause: err },
+          );
+        }
+        inner._setParamQuiet(handle, ref.param, rebuilt);
       }
     }
     return await fn();

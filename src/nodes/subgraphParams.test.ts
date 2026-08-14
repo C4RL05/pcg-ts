@@ -181,11 +181,63 @@ describe("resolveExposedParam — bad targets", () => {
     ).toThrow(/inner node "b" has unregistered type "resolver_unregistered"/);
   });
 
-  it("rejects a declaration with no targets", () => {
+  it("rejects a declaration with no targets and no default to derive a schema from", () => {
     const inner = new Graph();
     expect(() =>
       resolveExposedParam(inner, { name: "count", targets: [], description: "Anything." }),
-    ).toThrow(/exposed param "count": needs at least one target/);
+    ).toThrow(/exposed param "count": has no targets, so .* "default" is required/);
+  });
+
+  it("rejects a targetless default whose shape names no field literal", () => {
+    const inner = new Graph();
+    for (const value of ["big", true, [1, 2], []] as const) {
+      expect(() =>
+        resolveExposedParam(inner, {
+          name: "amp",
+          targets: [],
+          description: "Anything.",
+          default: value as never,
+        }),
+      ).toThrow(/exposed param "amp": has no targets, so its type is derived from the shape of "default"/);
+    }
+  });
+
+  it("rejects a targetless declaration asserting field capability", () => {
+    const inner = new Graph();
+    expect(() =>
+      resolveExposedParam(inner, {
+        name: "amp",
+        targets: [],
+        description: "Anything.",
+        default: 1,
+        acceptsField: true,
+      }),
+    ).toThrow(/exposed param "amp": declares acceptsField: true and no targets/);
+  });
+
+  it("derives a targetless schema from the default's shape", () => {
+    const inner = new Graph();
+    const decl = { targets: [], description: "Anything." } as const;
+    const scalar = resolveExposedParam(inner, { ...decl, name: "amp", default: 1.5, min: 0, max: 4 });
+    expect(scalar.targets).toEqual([]);
+    expect(scalar.schema).toEqual({
+      type: "f32",
+      default: 1.5,
+      description: "Anything.",
+      min: 0,
+      max: 4,
+    });
+    expect(resolveExposedParam(inner, { ...decl, name: "o", default: [1, 2, 3] }).schema.type).toBe("vec3");
+    expect(resolveExposedParam(inner, { ...decl, name: "o", default: [1, 2, 3, 4] }).schema.type).toBe(
+      "vec4",
+    );
+    // Never field-capable: the value is substituted as a literal.
+    expect(scalar.schema.acceptsField).toBeUndefined();
+    // Copied, so two instances of the def cannot share one tuple.
+    const tuple = [1, 2, 3];
+    expect(resolveExposedParam(inner, { ...decl, name: "o", default: tuple }).schema.default).not.toBe(
+      tuple,
+    );
   });
 });
 
