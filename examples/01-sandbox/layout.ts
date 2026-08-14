@@ -9,15 +9,15 @@ import type { EdgeView, NodeView } from "./model.js";
 export const NODE_W = 168;
 
 /**
- * Inner padding, and the same number on every side.
+ * Inner padding on the left, the right and the bottom.
  *
- * SVG text is positioned by its BASELINE, not by its box, so "9 from the
- * top" is not `y = 9` — it is 9 plus the cap height of the face, and
+ * SVG text is positioned by its BASELINE, not by its box, so "8 from the
+ * top" is not `y = 8` — it is 8 plus the cap height of the face, and
  * getting that wrong is what had the title sitting 5px under the edge
  * while everything beside it sat 9 from the left. The baselines below are
- * derived from this rather than typed in, so the padding is one number.
+ * derived from these constants rather than typed in.
  */
-export const PAD = 9;
+export const PAD = 8;
 
 /**
  * Space above the title, and deliberately MORE than `PAD`.
@@ -29,7 +29,7 @@ export const PAD = 9;
  * This is an optical correction, not a second opinion about the value:
  * left, right and bottom all still come off `PAD`.
  */
-export const PAD_TOP = 14;
+export const PAD_TOP = 12;
 
 /** Cap height of the 11px title face, and of the 9px id face below it. */
 const TITLE_CAP = 8;
@@ -54,10 +54,11 @@ export const HEADER_H = ID_Y + PAD + 2;
 /** Vertical spacing between pin rows. */
 export const PIN_SPACING = 20;
 /**
- * Padding below the last row. Two less than `PAD` for the same reason the
- * header adds two: this one is measured from a baseline that has the band
- * gap above it, and 8 here is what puts the same 11 units under the last
- * param row as sit under the id.
+ * Padding below the last row. Its own constant rather than `PAD` even
+ * though the two currently agree: this one is measured from a text
+ * BASELINE and the side padding is measured to the edge of a glyph, so
+ * they answer different questions and only happen to land on the same
+ * number.
  */
 export const PAD_BOTTOM = 8;
 /** Vertical spacing between param preview rows. */
