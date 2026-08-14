@@ -10,9 +10,10 @@
    */
   import { onMount, tick, untrack } from "svelte";
   import Canvas from "./Canvas.svelte";
+  import Inspector from "./Inspector.svelte";
   import Modal from "./Modal.svelte";
+  import Overview from "./Overview.svelte";
   import Palette from "./Palette.svelte";
-  import Sidebar from "./Sidebar.svelte";
   import Toolbar from "./Toolbar.svelte";
   import { narrowScreen } from "../shared/mobile.js";
   import {
@@ -206,23 +207,20 @@
   });
 
   let collapsed = $state(narrowScreen().matches);
-  let sidebarOpen = $state(false);
-
   /**
-   * Which sidebar pane is up. Held here rather than inside the sidebar
-   * because SELECTION steers it: clicking a node is the gesture that means
-   * "show me this node", and a panel that stayed on the graph tab would
-   * make you say it twice.
+   * Narrow screens only: the floating panels would cover a phone's whole
+   * canvas, so there they are a drawer rather than an overlay. At desktop
+   * widths this styles nothing and both panels are simply up.
    */
-  let sidebarTab = $state<"graph" | "node">("graph");
+  let panelsOpen = $state(false);
 
   /**
-   * Selecting a node opens its pane; clearing the selection goes back to
-   * the graph, so the empty pane is never what you are left staring at.
+   * The node panel appears BECAUSE something is selected — there is no
+   * separate "which panel" state to keep in step any more. Clearing the
+   * selection takes the panel away with it.
    */
   function select(id: string | null): void {
     selectedId = id;
-    sidebarTab = id === null ? "graph" : "node";
   }
 
   $effect(() => {
@@ -231,7 +229,7 @@
       collapsed = e.matches;
       // Leaving the narrow range also resets the drawer, so one left open
       // does not silently reappear the next time the range is entered.
-      if (!e.matches) sidebarOpen = false;
+      if (!e.matches) panelsOpen = false;
     };
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
@@ -679,23 +677,37 @@
         onDeleteEdge={deleteEdge}
       />
     </div>
-    <Sidebar
-      {controller}
-      node={selectedNode}
-      {paramsRev}
-      spec={panelSpec}
-      title={graphTitle}
-      {baseline}
-      seed={model.seed}
-      {loadedSeed}
-      bind:tab={sidebarTab}
-      open={sidebarOpen}
-      onEdit={() => paramsRev++}
-      onReset={resetKnobs}
-      {shareUrl}
-      onPlain={onPlainParam}
-      onFieldApply={onFieldParam}
-      onDelete={deleteNode} />
+    <!-- Two floating cards over the canvas rather than one docked column.
+         The graph's knobs are always up, because a graph always has some;
+         the node's params only exist when a node is selected, and a panel
+         that is empty most of the time is a panel asking for the width
+         back. Left and right so they cannot collide, and inset from the
+         edges so each reads as sitting ON the canvas rather than as
+         another edge of the window. -->
+    <div class="panel graph" class:open={panelsOpen}>
+      <Overview
+        {controller}
+        rev={paramsRev}
+        spec={panelSpec}
+        title={graphTitle}
+        {baseline}
+        seed={model.seed}
+        {loadedSeed}
+        onEdit={() => paramsRev++}
+        onReset={resetKnobs}
+        {shareUrl} />
+    </div>
+    {#if selectedNode}
+      <div class="panel node" class:open={panelsOpen}>
+        <Inspector
+          {controller}
+          node={selectedNode}
+          {paramsRev}
+          onPlain={onPlainParam}
+          onFieldApply={onFieldParam}
+          onDelete={deleteNode} />
+      </div>
+    {/if}
     <!-- Narrow-screen drawer toggle for the param column, floating over
          the canvas edge. display: none outside the media query. The label
          "params" is chosen to dodge the capture tooling's
@@ -703,8 +715,8 @@
     <button
       class="drawer-tab right"
       aria-label="toggle the param drawer"
-      aria-expanded={sidebarOpen}
-      onclick={() => (sidebarOpen = !sidebarOpen)}
+      aria-expanded={panelsOpen}
+      onclick={() => (panelsOpen = !panelsOpen)}
     >
       params
     </button>
@@ -815,6 +827,37 @@
     min-height: 0;
     overflow: hidden;
   }
+  /**
+   * A floating card over the canvas. AUTO HEIGHT — it is as tall as what
+   * is in it, capped at the viewport so a forty-knob graph scrolls inside
+   * its own card rather than running off the bottom of the window.
+   *
+   * Absolute against `.body`, which is the region below the toolbar, so a
+   * panel can never ride up over the bar. Inset from the edges rather than
+   * flush: the gap is what makes it read as sitting ON the canvas instead
+   * of being another edge of the window.
+   */
+  .panel {
+    position: absolute;
+    top: 12px;
+    z-index: 12;
+    width: 300px;
+    max-height: calc(100% - 24px);
+    box-sizing: border-box;
+    overflow-y: auto;
+    padding: 10px 12px 12px;
+    background: var(--sb-panel);
+    border: 1px solid var(--sb-rule);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+  }
+  .panel.graph {
+    left: 12px;
+  }
+  .panel.node {
+    right: 12px;
+  }
   .cook-errors {
     max-height: 64px;
     overflow-y: auto;
@@ -909,6 +952,34 @@
        tabs anchor to its vertical center. */
     .editor.collapsed .drawer-tab {
       display: none;
+    }
+    /**
+     * A phone has no room for two cards floating beside a canvas, so the
+     * panels stop floating and become one full-width drawer that the
+     * "params" tab slides in. They stack — graph first, then the node if
+     * one is selected — and share the height rather than overlapping.
+     */
+    .panel {
+      left: 8px;
+      right: 8px;
+      width: auto;
+      z-index: 15;
+      max-height: calc(50% - 16px);
+      transform: translateX(105%);
+      /* Hidden when closed so the off-screen panel can't take focus or
+         intercept hit-testing. */
+      visibility: hidden;
+      transition:
+        transform 0.2s ease,
+        visibility 0.2s;
+    }
+    .panel.node {
+      top: auto;
+      bottom: 8px;
+    }
+    .panel.open {
+      transform: none;
+      visibility: visible;
     }
   }
 </style>
