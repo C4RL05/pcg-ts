@@ -173,13 +173,16 @@ describe("forEachNode — construction", () => {
     ).toThrow(/a loop runs over one thing/);
   });
 
-  it("declares the iterated pin single-valued, whatever the inner pin accepts", () => {
+  it("declares the iterated pin multi, whatever the inner pin accepts", () => {
+    // The inner pin sees one element per iteration; the outer pin receives
+    // the collection. Different arities, about different things.
     const inner = new Graph();
     const t = inner.add(transformPoints, {}, "t");
+    expect(transformPoints.inputs.find((p) => p.name === "in")?.multi).toBeUndefined();
     const def = forEachNode(inner, [{ name: "each", node: t, pin: "in" }], [
       { name: "out", node: t, pin: "out" },
     ]);
-    expect(def.inputs.find((p) => p.name === "each")?.multi).toBeUndefined();
+    expect(def.inputs.find((p) => p.name === "each")?.multi).toBe(true);
   });
 });
 

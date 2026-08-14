@@ -771,10 +771,7 @@ silently dropped two thirds of the work — the failure this library is
 least able to help you find. An error at the pin names the node and the
 count instead.
 
-**There is no for-each node, and no in-graph node that selects one item
-of a collection.** This is a real limitation, not an omission you can
-route around inside the JSON. Three fixes, and the error message lists
-all three:
+Three fixes, and the error message lists all three:
 
 1. **Merge.** Insert `mergePoints` between the source and the node, to
    concatenate the geometries back into one cloud. It is points-only, so
@@ -783,10 +780,58 @@ all three:
 2. **Move the op upstream of the split**, so it runs once on the whole
    cloud before it is partitioned. Usually the right answer when the
    operation does not actually depend on the partitioning.
-3. **Drive it from TypeScript**, where a collection is an ordinary array:
-   `collection.filter((item) => item.kind === "geometry")` gives you all
-   of them to loop over, and `filterByTag(collection, "<attr>=<value>")`
-   picks one by the tag `partitionByAttribute` wrote.
+3. **Put the op inside a `forEach`**, which cooks an inner graph once per
+   element instead of once — see below.
+
+### forEach: one cook per element
+
+`forEach` is a composite node built like `subgraph`, with one added rule:
+exactly one of its exposed inputs must be named **`each`** or
+**`eachPoint`**, and that pin is what the body iterates.
+
+| exposed input | one iteration per |
+| --- | --- |
+| `each` | ITEM of the collection on that pin |
+| `eachPoint` | POINT of the one geometry on that pin, the body seeing a one-point cloud |
+
+Every other exposed input is **broadcast** — passed whole to every
+iteration — so a shared spine, a lookup surface or a mask reaches all of
+them. Each iteration's outputs are concatenated onto the matching output
+pin, in the iterated collection's own order, carrying the iterated item's
+tags so `partitionByAttribute` → `forEach` → `filterByTag` works end to
+end.
+
+The mode is a pin NAME rather than a param on purpose. The graph format is
+closed at every object position and a new key arrives with a
+`formatVersion` bump, which would move every registered primitive's
+content hash and break every pinned `ref`; reserved names (`__in_`,
+`__out_`) are how this format already encodes roles.
+
+**Every iteration is seeded on its element's content** — its points'
+position bits, their `seed` attribute, and the item's tags — and never on
+its position in the collection. That matters because a collection's order
+is an artefact: `partitionByAttribute` emits groups in first-occurrence
+order, a pin with two connections concatenates them in connection order,
+and a `dataInput` binding is whatever the host passed. Reordering the
+input reorders the output and re-rolls none of it. Two elements with
+identical content AND identical tags are refused rather than run twice:
+they would be seeded alike and emit the same block, which is never what a
+loop was reached for.
+
+**The body gets no memo reuse between iterations, by construction.** Each
+iteration rotates the inner graph's seed — that is where per-iteration
+randomness comes from — which changes every inner node's memo key, and a
+node holds one cache slot. The `forEach` node itself memoizes normally, so
+an unchanged graph still costs nothing on a recook. Budget and cancellation
+are honoured between iterations as well as inside them.
+
+To REPLICATE rather than iterate over data — K variations of one thing —
+build the carriers and iterate those: `pointLine` with `count: K`, a
+`setAttribute` writing `index()` to an `id`, and `partitionByAttribute` on
+that `id` gives K single-point items, each with its own identity. Inside
+the body, a `setAttribute` on the `detail` domain reading `randomField` is
+a per-iteration constant (detail always holds exactly one element), which
+`promoteAttribute` can then push onto the points.
 
 ## Transfer mappings
 

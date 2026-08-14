@@ -22,6 +22,7 @@ import {
   deserializeGraph,
   fieldFromJson,
   fieldToJson,
+  forEachNode,
   getNodeType,
   getRegisteredSubgraph,
   isField,
@@ -85,7 +86,17 @@ export interface ParamView {
   readonly specText: string | null;
 }
 
-/** What one subgraph node exposes, resolved from its payload at import. */
+/**
+ * The two node types that wrap an inner graph. They serialize to the same
+ * payload and reach the editor by the same route; only the cook differs
+ * (`forEach` runs the body once per element), which is nothing this editor
+ * has to know. Checking the pair rather than the word "subgraph" is what
+ * keeps a forEach from being treated as an ordinary registered node —
+ * whose registry entry declares no pins and cannot cook.
+ */
+const WRAPPER_TYPES = new Set(["subgraph", "forEach"]);
+
+/** What one wrapper node exposes, resolved from its payload at import. */
 export interface SubgraphView {
   /** Exposed params, in declaration order — the node's whole param surface. */
   readonly params: readonly ExposedParam[];
@@ -262,9 +273,9 @@ export class EditorController {
    * is true of every subgraph node and therefore tells you nothing.
    */
   describeNode(id: string, type: string): { label: string; description: string } {
-    if (type === "subgraph") {
+    if (WRAPPER_TYPES.has(type)) {
       const view = this.subgraphs.get(id);
-      return { label: view?.ref ?? "subgraph", description: view?.description ?? "" };
+      return { label: view?.ref ?? type, description: view?.description ?? "" };
     }
     return { label: type, description: getNodeType(type).info.description };
   }
@@ -278,10 +289,9 @@ export class EditorController {
    * every other node keeps its cache.
    */
   addNode(id: string, type: string): { inputs: PinView[]; outputs: PinView[] } | { error: string } {
-    if (type === "subgraph") {
+    if (WRAPPER_TYPES.has(type)) {
       return {
-        error:
-          'the registered "subgraph" type is metadata-only; subgraph nodes enter the editor via import (their inner graph travels in the serialized payload)',
+        error: `the registered "${type}" type is metadata-only; ${type} nodes enter the editor via import (their inner graph travels in the serialized payload)`,
       };
     }
     try {
@@ -358,10 +368,10 @@ export class EditorController {
    * become spec text.
    */
   paramViews(id: string, type: string): ParamView[] {
-    // A subgraph's schemas are not in the node-type registry — they were
+    // A wrapper's schemas are not in the node-type registry — they were
     // resolved from its payload at import and kept in `subgraphs`.
     const schemas: Readonly<Record<string, ParamSchema>> =
-      type === "subgraph"
+      WRAPPER_TYPES.has(type)
         ? Object.fromEntries((this.subgraphs.get(id)?.params ?? []).map((p) => [p.name, p.schema]))
         : getNodeType(type).info.params;
     let rec: Readonly<Record<string, unknown>>;
@@ -610,7 +620,7 @@ export class EditorController {
     sn: SerializedNode,
     subgraphs: Map<string, SubgraphView>,
   ): { inputs: PinView[]; outputs: PinView[] } {
-    if (sn.type === "subgraph") {
+    if (WRAPPER_TYPES.has(sn.type)) {
       /**
        * Two flavours, mutually exclusive in the format: a `ref` naming a
        * registered subgraph, or an inline `subgraph` payload. This editor
@@ -647,12 +657,15 @@ export class EditorController {
           ...(p.max !== undefined ? { max: p.max } : {}),
         }),
       );
-      const def = subgraphNode(
-        inner,
-        payload.inputs.map(toExposed),
-        payload.outputs.map(toExposed),
-        exposed,
-      );
+      const def =
+        sn.type === "forEach"
+          ? forEachNode(inner, payload.inputs.map(toExposed), payload.outputs.map(toExposed), exposed)
+          : subgraphNode(
+              inner,
+              payload.inputs.map(toExposed),
+              payload.outputs.map(toExposed),
+              exposed,
+            );
       const params: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(sn.params ?? {})) {
         const schema = exposed.find((e) => e.name === key)?.schema;

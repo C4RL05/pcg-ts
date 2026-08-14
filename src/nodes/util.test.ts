@@ -72,8 +72,12 @@ describe("requireGeometry: multi-item collections", () => {
     expect(msg).toContain("partitionByAttribute");
     // The fix that exists today, by exact node type.
     expect(msg).toContain("mergePoints");
-    // And an honest statement that per-group processing is not a node.
-    expect(msg).toMatch(/no for-each/i);
+    // And the node that DOES process each group separately. This assertion
+    // read `/no for-each/i` until forEach shipped: the message's whole job
+    // is to leave an agent knowing its next move, so the day the answer
+    // changed the message had to change with it.
+    expect(msg).toMatch(/inside a forEach/);
+    expect(msg).toContain("forEachNode");
     // The escape hatch must name only things a package consumer can
     // actually reach: `filterByTag` is exported, and the plain filter
     // needs no import at all. `geometryItems` is internal to the node

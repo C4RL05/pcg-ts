@@ -689,7 +689,7 @@ describe("named subgraph registry", () => {
     );
   });
 
-  it("refuses ref or subgraph on a node that is not a subgraph node", () => {
+  it("refuses ref or subgraph on a node that wraps no inner graph", () => {
     registerSubgraph("test/jitter", recipeOf(buildEmbedded()));
     for (const key of ["ref", "subgraph"]) {
       expect(() =>
@@ -704,7 +704,8 @@ describe("named subgraph registry", () => {
         }),
       ).toThrow(
         new RegExp(
-          `node "p": type "pointScatterInBounds" is not a subgraph node, so it cannot carry "${key}"`,
+          `node "p": type "pointScatterInBounds" wraps no inner graph, so it cannot carry "${key}"; ` +
+            `only "subgraph" and "forEach" nodes wrap one`,
         ),
       );
     }

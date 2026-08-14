@@ -54,25 +54,35 @@ write it to an int attribute with one extra node.
   and the hazard disappears because the index never leaves the host.
 - Cost: the fixed five-site grammar change `ne` and `fraction` both paid.
 
-**For-each over a collection.** `partitionByAttribute` emits one
-geometry per distinct value and nothing can process them separately, so
-per-region treatment means K hardcoded parallel branches. This is the
-long-running `filterGroup` blocker, and phase 37's stated reason for it
-was wrong — see the correction in that phase.
-- The mechanism is closer than the history suggests: pins are ALREADY
-  collection-shaped (`DataCollection = DataItem[]`, and subgraphs
-  forward the whole array); the only blocker is `requireGeometry` taking
-  `item[0]`, which phase 40 turned from silent truncation into a
-  diagnostic. The subgraph machinery — payload, exposed params,
-  registry, serializable form — already exists, so a `forEach` could
-  reuse that execution path rather than invent one.
-- **The design question to settle first is what seeds each iteration.**
-  Keying on the item INDEX is the trap: a collection from
-  `partitionByAttribute` is ordered by discovery, and a partitioned cook
-  can reorder it. Key on the hashed group VALUE. Same lesson again.
-- It also touches the executor, memoization (the memo key becomes
-  per-item), the GPU resident planner and serialization. A phase, not a
-  patch.
+**A per-item cache for `forEach`.** The loop shipped; this is the one
+piece of it deliberately left out, and the measurement is the expensive
+part to re-derive. A `forEach` cooks its body once per element and
+memoizes nothing between iterations, so an edit anywhere upstream
+recooks all K.
+- **Caching per item does not pay against its own motivating producer.**
+  `partitionByAttribute` calls `makeGeometryItem` per group on every
+  execute, and that mints a fresh `rev` — so when anything upstream
+  moves, all K groups arrive with new revs even where K-1 are
+  byte-identical, and a rev-keyed cache misses on all of them. When
+  nothing moves, the `forEach` node's own memo key is unchanged and the
+  whole node is a hit, so the per-item cache is never consulted. Its win
+  case is the narrow band where exactly one item's rev moved: a
+  `dataInput` binding from the World, not the partition producer the
+  feature exists for.
+- **Keying it on content alone would be unsound**, which is the trap
+  worth recording: a changed "pine" group would serve the old "pine"
+  bytes. `(contentKey, rev)` is sound and never hits, per above.
+- So the prerequisite is a rev-stable `partitionByAttribute` — one that
+  hands an unchanged group back its previous item rather than minting a
+  new one. That is a separate, well-scoped change, and it is what a
+  consumer should ask for first.
+- Two hazards for whoever builds it. A cached item carrying
+  `deviceBatches` hands out a handle its consumer already disposed —
+  the executor marks those entries `volatile` for exactly this reason,
+  so any cache must refuse them. And the no-node-mutates-its-input rule
+  the aliasing rests on is a convention (`cloneGeometry` at 46 sites),
+  not an enforced invariant: a third-party node that mutates its input
+  corrupts a shared cache where today it corrupts only its own memo.
 
 **A topology-preserving union.** `mergePoints` destroys topology, so two
 polyline geometries cannot be combined — which blocks mixing authored

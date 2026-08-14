@@ -2,7 +2,7 @@
 
 Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/gen-node-reference.mjs` — do not edit by hand. The same metadata, machine-readable, is in [nodes.json](./nodes.json). For the graph JSON format and field-expression grammar see [authoring.md](./authoring.md).
 
-41 node types, grouped by `category` (node sections below are alphabetical):
+42 node types, grouped by `category` (node sections below are alphabetical):
 
 **attribute**
 
@@ -20,6 +20,7 @@ Generated from the node registry metadata (`listNodeTypes()`) by `node scripts/g
 
 **composite**
 
+- [forEach](#foreach) — Composite node that cooks an inner graph ONCE PER ELEMENT instead of once.
 - [subgraph](#subgraph) — Composite node wrapping an inner graph as a single node.
 
 **filter**
@@ -255,6 +256,18 @@ Keeps or drops WHOLE PRIMITIVES by testing their vertices against the axis-align
 | `mode` | enum | `"inside"` |  | `inside`, `outside` |  | 'inside' keeps the primitives the `vertex` rule places in the box, 'outside' keeps the rest. They are exact complements under whichever vertex rule and boundary are active, so running both over one input reproduces every primitive exactly once. Read the two params together: 'any' with 'outside' keeps primitives lying ENTIRELY outside the box (no vertex inside), which is the deletion 'all' with 'outside' does NOT perform — that one keeps everything not entirely within it, straddlers included. |
 | `boundary` | enum | `"halfOpen"` |  | `halfOpen`, `inclusive` |  | Which faces belong to the box, exactly as in filterByBounds. 'halfOpen' (the default) keeps min <= p < max on every axis, so two boxes meeting at a face claim a vertex lying on it exactly once between them — pair it with vertex 'first' and it is an ownership rule a partitioned cook can tile with. 'inclusive' keeps min <= p <= max, so both boxes claim that vertex, and with vertex 'first' both would emit the same edge; choose it for a selection whose faces carry points on purpose, never for a cook that is split into cells. |
 | `unreferencedPoints` | enum | `"keep"` |  | `keep`, `drop` |  | What happens to points no surviving primitive references. 'keep' (the default) leaves the point domain completely untouched: same points in the same order, so every point index, attribute and identity is still the input's and anything computed per point upstream still lines up — a partition cell keeps its halo points as isolated leftovers beside the network it owns. 'drop' removes them and renumbers the topology onto the points that remain, in ascending input order, which yields a clean network with nothing dangling; the cost is that point indices move, and that a point kept by one cell may also be kept by its neighbour, since an edge crossing a seam needs both of its endpoints wherever it is emitted. Note that 'drop' also drops points that had NO primitive to begin with, so a cloud carrying both a road network and unrelated scatter loses the scatter — filter such a cloud before the network is built, or keep the leftovers. |
+
+## forEach
+
+Composite node that cooks an inner graph ONCE PER ELEMENT instead of once. Exactly one exposed input must be named "each" (one iteration per item of the collection on that pin) or "eachPoint" (one iteration per point of the one geometry on that pin, the body seeing a one-point cloud); every other exposed input is broadcast whole to every iteration. Each iteration's outputs are concatenated onto the matching output pin in the iterated collection's own order, and carry the iterated item's tags. Every iteration is seeded on its element's CONTENT — position bits, the seed attribute and the tags — never on its position in the collection, so reordering the input reorders the output without re-rolling any of it. Pins and params are per-instance exactly as for "subgraph", and the serialized form is the same payload: create instances with forEachNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one. The body gets no memo reuse between iterations, by construction — each rotates the inner seed, and a node holds one cache slot.
+
+**Category:** composite
+
+**Inputs:** *(none)*
+
+**Outputs:** *(none)*
+
+**Params:** *(none)*
 
 ## jitterPoints
 

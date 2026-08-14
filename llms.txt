@@ -21,15 +21,32 @@ driven programmatically: node capabilities are enumerable at runtime
   on it (`partitionByAttribute` emits one per distinct value; a subgraph
   or `dataInput` forwards however many it holds). A node that processes
   exactly one geometry ERRORS when handed several, rather than silently
-  using the first — that would look like a successful cook. There is no
-  for-each node and no in-graph way to select one item of a collection.
-  The three fixes, all named in the error: insert `mergePoints` to
-  concatenate them back into one cloud (points-only — rebuild any path
-  after it with `pointsToPath`), move the op UPSTREAM of the split so it
-  runs once on the whole cloud, or drive the per-item loop from
-  TypeScript, where `collection.filter((i) => i.kind === "geometry")`
-  gives you all of them and `filterByTag(collection, "<attr>=<value>")`
-  picks one by the tag `partitionByAttribute` wrote.
+  using the first — that would look like a successful cook. The three
+  fixes, all named in the error: insert `mergePoints` to concatenate them
+  back into one cloud (points-only — rebuild any path after it with
+  `pointsToPath`), move the op UPSTREAM of the split so it runs once on
+  the whole cloud, or put it inside a `forEach`.
+- `forEach` cooks an inner graph ONCE PER ELEMENT. Built like `subgraph`,
+  with one rule: exactly one exposed input must be named `each` (one
+  iteration per item) or `eachPoint` (one iteration per point of the one
+  geometry, the body seeing a one-point cloud). Every other exposed input
+  is broadcast whole to every iteration. Outputs are concatenated in the
+  iterated collection's own order and carry the iterated item's tags, so
+  `partitionByAttribute` → `forEach` → `filterByTag` works end to end.
+  The mode is a pin NAME, not a param, because the format is closed and a
+  new key would need a `formatVersion` bump. Every iteration is seeded on
+  its element's CONTENT (position bits, the `seed` attribute, the tags),
+  never on its index — so reordering the input reorders the output and
+  re-rolls none of it — and two elements with identical content and tags
+  are refused rather than run twice. The body gets no memo reuse between
+  iterations by construction (each rotates the inner seed, and a node
+  holds one cache slot); the `forEach` node itself memoizes normally. To
+  REPLICATE rather than iterate data, build K carriers — `pointLine`
+  count K → `setAttribute` id = `index()` → `partitionByAttribute` — and
+  read per-iteration constants from `randomField` on the `detail` domain.
+  From TypeScript a collection is still an ordinary array:
+  `collection.filter((i) => i.kind === "geometry")` gives you all of them
+  and `filterByTag(collection, "<attr>=<value>")` picks one by tag.
 - A `Geometry` holds four attribute domains: point, vertex, primitive,
   detail (always 1 element), plus topology (vertex->point map, primitive
   vertex ranges). Point-only clouds are the common fast path.
@@ -1344,8 +1361,8 @@ stale and a stale skill is worse than none.
 
 ## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
 
-43 graphs under `examples/graphs/`, each named by what it teaches and
-carrying its own `meta` block: 32 single-concept `basics-*.json`, 3
+44 graphs under `examples/graphs/`, each named by what it teaches and
+carrying its own `meta` block: 33 single-concept `basics-*.json`, 3
 composed `examples-*.json`, plus the 8-file staged pipeline
 `pipeline-*.json` below. Every one cooks from
 JSON alone — no `dataInput`, whose items never survive serialization —

@@ -476,6 +476,14 @@
     }
   },
   {
+    "type": "forEach",
+    "description": "Composite node that cooks an inner graph ONCE PER ELEMENT instead of once. Exactly one exposed input must be named \"each\" (one iteration per item of the collection on that pin) or \"eachPoint\" (one iteration per point of the one geometry on that pin, the body seeing a one-point cloud); every other exposed input is broadcast whole to every iteration. Each iteration's outputs are concatenated onto the matching output pin in the iterated collection's own order, and carry the iterated item's tags. Every iteration is seeded on its element's CONTENT — position bits, the seed attribute and the tags — never on its position in the collection, so reordering the input reorders the output without re-rolling any of it. Pins and params are per-instance exactly as for \"subgraph\", and the serialized form is the same payload: create instances with forEachNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one. The body gets no memo reuse between iterations, by construction — each rotates the inner seed, and a node holds one cache slot.",
+    "category": "composite",
+    "inputs": [],
+    "outputs": [],
+    "params": {}
+  },
+  {
     "type": "jitterPoints",
     "description": "Offsets each point by a deterministic random vector: each axis moves by a uniform random in [-amount, +amount], hashed from (seed, point IDENTITY, axis). Identity is the point's incoming position bits together with its `seed` point attribute, not its array index, so the offset belongs to the point: reorder the cloud, drop points upstream, or derive the same region inside another cell's halo, and every point still moves exactly as far. Two points that share a position AND a seed move identically and stay coincident (the `seed` attribute defaults to 0, so a cloud with no per-point seeds jitters on position alone). amount is field-capable (evaluated on the input positions; tuple 1 broadcasts to all axes).",
     "category": "point op",

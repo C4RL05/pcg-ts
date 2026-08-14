@@ -21,7 +21,9 @@ import {
   type ParamValue,
   type SubgraphSpec,
 } from "../graph/index.js";
+import type { WrapperKind } from "../graph/subgraph.js";
 import { type FieldSpec, fieldFromJson, fieldToJson } from "./fieldJson.js";
+import { forEachNode } from "./forEach.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./registry.js";
 import { type ExposedParamDecl, resolveExposedParam } from "./subgraphParams.js";
 // Import cycle, deliberate and safe: the registry stores serialized
@@ -271,6 +273,31 @@ standardNode<Record<string, never>>({
   },
 });
 
+/**
+ * Registry entry for the for-each composite. Metadata-only for the same
+ * reason as `subgraph` above, and carrying the same payload — a forEach IS
+ * a subgraph plus a loop, and the loop is named by a reserved exposed-input
+ * name inside that payload rather than by a field of its own.
+ *
+ * The entry exists at all because `deserializeGraph` checks `hasNodeType`
+ * before it dispatches on the wrapper types, so an unregistered `forEach`
+ * would be refused as an unknown type before it ever reached its reader.
+ */
+standardNode<Record<string, never>>({
+  type: "forEach",
+  category: "composite",
+  description:
+    "Composite node that cooks an inner graph ONCE PER ELEMENT instead of once. Exactly one exposed input must be named \"each\" (one iteration per item of the collection on that pin) or \"eachPoint\" (one iteration per point of the one geometry on that pin, the body seeing a one-point cloud); every other exposed input is broadcast whole to every iteration. Each iteration's outputs are concatenated onto the matching output pin in the iterated collection's own order, and carry the iterated item's tags. Every iteration is seeded on its element's CONTENT — position bits, the seed attribute and the tags — never on its position in the collection, so reordering the input reorders the output without re-rolling any of it. Pins and params are per-instance exactly as for \"subgraph\", and the serialized form is the same payload: create instances with forEachNode(innerGraph, exposedInputs, exposedOutputs, exposedParams), or deserialize a graph containing one. The body gets no memo reuse between iterations, by construction — each rotates the inner seed, and a node holds one cache slot.",
+  inputs: [],
+  outputs: [],
+  params: {},
+  execute() {
+    throw new Error(
+      'the registered "forEach" definition is metadata-only and cannot cook; create forEach nodes with forEachNode(innerGraph, exposedInputs, exposedOutputs), or deserialize a graph containing one',
+    );
+  },
+});
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -423,7 +450,7 @@ function serializeSubgraphNode(
       `cannot serialize node "${id}": it references the registered subgraph "${ref.name}", but its inner graph no longer matches the registered recipe — writing the reference back out would silently discard the edit. Edit a referenced primitive by registering it under a new name, or drop the reference by rebuilding the node from an embedded "subgraph" payload`,
     );
   }
-  return { id, type: "subgraph", params: embedded.params, ref };
+  return { id, type: spec.wrapper, params: embedded.params, ref };
 }
 
 /** Serialize one subgraph node as its nested payload; `seen` holds the graphs on the current path. */
@@ -483,7 +510,13 @@ function buildEmbeddedSubgraphNode(
   }
   return {
     id,
-    type: "subgraph",
+    // From the spec, never a literal. Both wrappers record a spec and the
+    // caller dispatches on the spec's PRESENCE, so a hardcoded "subgraph"
+    // here would write a forEach out as a plain subgraph: it would
+    // round-trip, validate, and cook one pass over the concatenated
+    // collection instead of one pass per item. A wrong answer that saves
+    // cleanly is the worst shape a bug can take.
+    type: spec.wrapper,
     params,
     subgraph: {
       graph: inner,
@@ -627,9 +660,11 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
         continue;
       }
       const type = state.def.type;
-      if (type === "subgraph") {
+      if (type === "subgraph" || type === "forEach") {
         fail(
-          `cannot serialize node "${state.id}": its definition was not created by subgraphNode(...); build subgraph nodes with subgraphNode (or deserializeGraph) so their inner graph can be serialized`,
+          `cannot serialize node "${state.id}": its definition was not created by ${
+            type === "forEach" ? "forEachNode(...)" : "subgraphNode(...)"
+          }; build ${type} nodes with that factory (or deserializeGraph) so their inner graph can be serialized`,
         );
       }
       if (!hasNodeType(type)) {
@@ -843,6 +878,7 @@ function addSubgraphNode(
   nodeJson: Record<string, unknown>,
   paramsJson: Record<string, unknown>,
   ctx: ReadContext,
+  wrapper: WrapperKind,
 ): NodeHandle {
   const refJson = nodeJson.ref;
   const payload = nodeJson.subgraph;
@@ -882,6 +918,7 @@ function addSubgraphNode(
         paramsJson,
         ctx,
         ref,
+        wrapper,
       );
     } finally {
       ctx.seenNames.delete(ref.name);
@@ -889,7 +926,7 @@ function addSubgraphNode(
   }
   if (!isPlainObject(payload)) {
     fail(
-      `node "${id}": a "subgraph" node needs a "subgraph" payload object { graph, inputs, outputs } carrying its inner graph, or a "ref" { name } naming a registered one, got ${JSON.stringify(payload)}`,
+      `node "${id}": a "${wrapper}" node needs a "subgraph" payload object { graph, inputs, outputs } carrying its inner graph, or a "ref" { name } naming a registered one, got ${JSON.stringify(payload)}`,
     );
   }
   if (ctx.seenPayloads.has(payload)) {
@@ -899,7 +936,7 @@ function addSubgraphNode(
   }
   ctx.seenPayloads.add(payload);
   try {
-    return buildSubgraphNode(graph, id, payload, paramsJson, ctx, undefined);
+    return buildSubgraphNode(graph, id, payload, paramsJson, ctx, undefined, wrapper);
   } finally {
     ctx.seenPayloads.delete(payload);
   }
@@ -918,6 +955,7 @@ function buildSubgraphNode(
   paramsJson: Record<string, unknown>,
   ctx: ReadContext,
   ref: SerializedSubgraphRef | undefined,
+  wrapper: WrapperKind,
 ): NodeHandle {
   checkKeys(payload, SUBGRAPH_PAYLOAD_KEYS, `node "${id}" subgraph payload`, NO_ANNOTATION_KEY);
   let inner: Graph;
@@ -956,7 +994,14 @@ function buildSubgraphNode(
   let exposed: readonly ExposedParam[];
   try {
     exposed = decls.map((decl) => resolveExposedParam(inner, decl));
-    def = subgraphNode(inner, inputs, outputs, exposed);
+    // The one place the two wrappers part company on the way in. Both read
+    // the same payload — a forEach is a subgraph plus a loop, and the loop
+    // is named by a reserved exposed-input name inside `inputs`, so the
+    // payload needs no field to say which this is.
+    def =
+      wrapper === "forEach"
+        ? forEachNode(inner, inputs, outputs, exposed)
+        : subgraphNode(inner, inputs, outputs, exposed);
   } catch (err) {
     fail(`node "${id}": ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -1070,17 +1115,17 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
     if (!isPlainObject(paramsJson)) {
       fail(`node "${id}": params must be an object, got ${JSON.stringify(nodeJson.params)}`);
     }
-    if (type === "subgraph") {
-      handles.set(id, addSubgraphNode(graph, id, nodeJson, paramsJson, ctx));
+    if (type === "subgraph" || type === "forEach") {
+      handles.set(id, addSubgraphNode(graph, id, nodeJson, paramsJson, ctx, type));
       return;
     }
-    // Both keys are subgraph plumbing. Carried by any other type they are
-    // a mistake — and one that used to be ignored, which is exactly how a
-    // graph cooks something other than what it says.
+    // Both keys are inner-graph plumbing. Carried by any other type they
+    // are a mistake — and one that used to be ignored, which is exactly how
+    // a graph cooks something other than what it says.
     for (const key of ["subgraph", "ref"] as const) {
       if (nodeJson[key] !== undefined) {
         fail(
-          `node "${id}": type "${type}" is not a subgraph node, so it cannot carry "${key}"; only nodes of type "subgraph" wrap an inner graph (inline under "subgraph", or by name under "ref")`,
+          `node "${id}": type "${type}" wraps no inner graph, so it cannot carry "${key}"; only "subgraph" and "forEach" nodes wrap one (inline under "subgraph", or by name under "ref")`,
         );
       }
     }

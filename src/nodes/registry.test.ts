@@ -413,6 +413,7 @@ describe("category metadata", () => {
       spawnInstances: "spawn",
       dataInput: "io",
       subgraph: "composite",
+      forEach: "composite",
     };
     for (const [type, category] of Object.entries(expected)) {
       expect(getNodeType(type).info.category, type).toBe(category);

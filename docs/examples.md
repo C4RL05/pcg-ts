@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-43 examples, alphabetical by file:
+44 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -13,6 +13,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-filter-by-attribute.json](#basics-filter-by-attributejson) — keep points by an attribute comparison
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
 - [basics-filter-by-expression.json](#basics-filter-by-expressionjson) — keep points with a predicate expression
+- [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
@@ -175,6 +176,24 @@ Cook it: `pcg cook examples/graphs/basics-filter-by-density.json --stats`
 **Outputs:** `points` (from `keep`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-filter-by-expression.json --stats`
+
+## basics-foreach-per-group.json
+
+**treat each group on its own**
+
+`partitionByAttribute` splits the cloud into one geometry per district, and `forEach` cooks its inner graph once per group instead of once — so each district shakes loose on its own seed rather than all four sharing one. Exactly one exposed input must be named `each` (one iteration per item) or `eachPoint` (one per point); every other exposed input is broadcast whole to every iteration. Each iteration is seeded on its group's own CONTENT, never on where the group sat in the collection, so reordering the input reorders the output and re-rolls none of it. The `groups` output is the four separate results, still tagged `district=<value>`; `points` is the same four put back together with `mergePoints`, which is how you return to a single cloud.
+
+**Tags:** `basics`, `foreach`, `partition`, `composite`
+
+**Seed:** 2026
+
+**Node types:** `forEach`, `jitterPoints`, `mergePoints`, `partitionByAttribute`, `pointScatterInBounds`, `setAttribute`
+
+**Primitives:** *(none)*
+
+**Outputs:** `groups` (from `each`.`out`), `points` (from `rejoin`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-foreach-per-group.json --stats`
 
 ## basics-gather-on-path.json
 

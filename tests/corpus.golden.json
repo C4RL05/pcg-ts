@@ -267,6 +267,202 @@
         ]
       }
     },
+    "basics-foreach-per-group.json": {
+      "outputs": {
+        "groups": [
+          {
+            "kind": "geometry",
+            "tags": [
+              "district=south"
+            ],
+            "counts": {
+              "point": 499,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -25.8588,
+                0,
+                -25.9992
+              ],
+              "max": [
+                25.4023,
+                0,
+                25.9455
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "district=west"
+            ],
+            "counts": {
+              "point": 255,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -25.9427,
+                0,
+                -25.3513
+              ],
+              "max": [
+                22.4309,
+                0,
+                19.2862
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "district=east"
+            ],
+            "counts": {
+              "point": 145,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -25.6369,
+                0,
+                -25.6215
+              ],
+              "max": [
+                25.9904,
+                0,
+                26.2179
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "district=north"
+            ],
+            "counts": {
+              "point": 1,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -22.8627,
+                0,
+                16.0331
+              ],
+              "max": [
+                -22.8627,
+                0,
+                16.0331
+              ]
+            }
+          }
+        ],
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [
+              "district=east",
+              "district=north",
+              "district=south",
+              "district=west"
+            ],
+            "counts": {
+              "point": 900,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "district:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -25.9427,
+                0,
+                -25.9992
+              ],
+              "max": [
+                25.9904,
+                0,
+                26.2179
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-gather-on-path.json": {
       "outputs": {
         "points": [

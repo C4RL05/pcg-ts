@@ -48,10 +48,12 @@ function multiGeometryMessage(nodeType: string, pin: string, count: number): str
     `mergePoints between the source and ${nodeType} to concatenate the ${count} back into one ` +
     "cloud — mergePoints is points-only, so rebuild any path after it with pointsToPath; (2) " +
     `move ${nodeType} UPSTREAM of the split, so it runs once on the whole cloud before it is ` +
-    "partitioned; (3) to process each geometry separately, note there is no for-each node and " +
-    "no in-graph node that selects one item of a collection — drive it from TypeScript, where " +
-    'collection.filter((item) => item.kind === "geometry") gives you all of them and ' +
-    'filterByTag(collection, "<attr>=<value>") picks one by the tag partitionByAttribute wrote.'
+    `partitioned; (3) to process each geometry SEPARATELY, put ${nodeType} inside a forEach — ` +
+    "forEachNode(body, [{ name: \"each\", ... }], outputs) cooks its body once per item, seeded " +
+    "on each item's own content, and concatenates the results. From TypeScript you can also " +
+    'walk the collection directly: collection.filter((item) => item.kind === "geometry") gives ' +
+    'you all of them and filterByTag(collection, "<attr>=<value>") picks one by the tag ' +
+    "partitionByAttribute wrote."
   );
 }
 

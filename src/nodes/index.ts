@@ -8,6 +8,9 @@ export * from "./registry.js";
 export * from "./fieldJson.js";
 export * from "./subgraphParams.js";
 export * from "./serialize.js";
+// The factory only: `ITERATION_MODE`/`MAX_ITERATIONS` and the internals
+// beside it are this module's business, not the package's.
+export { forEachNode } from "./forEach.js";
 // Named exports rather than `export *`: the registry's test doors
 // (`__resetSubgraphRegistry`, `__defineSubgraphUnchecked`) and its
 // serialization-internal helpers are deliberately not part of the package.

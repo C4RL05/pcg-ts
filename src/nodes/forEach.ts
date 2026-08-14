@@ -175,11 +175,17 @@ export function forEachNode(
   const iterated = resolveIteratedPin(exposedInputs);
   const parts = prepareWrapper(inner, exposedInputs, exposedOutputs, exposedParams);
   const { portals, paramList } = parts;
-  // The iterated pin never carries a collection into the body — one item at
-  // a time does — so it is single-valued on the wrapper regardless of what
-  // the inner pin behind it accepts.
+  // The iterated pin takes as many connections as an author wants, whatever
+  // the inner pin behind it accepts, because the two arities are about
+  // different things: the inner pin sees ONE element per iteration, while
+  // the outer pin receives the COLLECTION to iterate — and a collection
+  // assembled from two producers is a collection. `eachPoint` is multi for
+  // the same reason and still refuses a second geometry, at cook time,
+  // where it can say to merge them first: declaring it single-valued would
+  // catch two connections carrying one geometry each and miss one
+  // connection carrying two, which is the same mistake wired differently.
   const inputPins: PinDef[] = parts.inputPins.map((pin) =>
-    pin.name === iterated.name ? { name: pin.name, kind: pin.kind } : pin,
+    pin.name === iterated.name ? { name: pin.name, kind: pin.kind, multi: true } : pin,
   );
 
   const def = defineNode<Record<string, unknown>>({
