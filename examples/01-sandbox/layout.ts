@@ -13,16 +13,48 @@ export const HEADER_H = 30;
 export const PIN_SPACING = 20;
 /** Padding below the last pin row. */
 export const PAD_BOTTOM = 8;
+/** Vertical spacing between param preview rows. */
+export const PARAM_SPACING = 13;
+/** Gap between the last pin row and the first param row. */
+export const PARAM_GAP = 6;
 
-/** Full height of a node box. */
-export function nodeHeight(node: NodeView): number {
+/**
+ * Height of the pins band alone — everything above the param preview.
+ * Split out because that boundary is where the preview starts, and two
+ * places computing it from the same three constants is how they drift.
+ */
+function pinsHeight(node: NodeView): number {
   const rows = Math.max(node.inputs.length, node.outputs.length, 1);
-  return HEADER_H + rows * PIN_SPACING + PAD_BOTTOM;
+  return HEADER_H + rows * PIN_SPACING;
+}
+
+/**
+ * Full height of a node box.
+ *
+ * `paramRows` is a parameter rather than a property of the node because
+ * params are not IN the node view — they live on the controller's graph,
+ * and the editor reads them once per revision and hands the count down.
+ * Zero is the honest default: a caller with no preview to show gets the
+ * box the node had before previews existed.
+ */
+export function nodeHeight(node: NodeView, paramRows = 0): number {
+  const params = paramRows === 0 ? 0 : PARAM_GAP + paramRows * PARAM_SPACING;
+  return pinsHeight(node) + params + PAD_BOTTOM;
 }
 
 /** Vertical center of pin row `index`, relative to the node's top edge. */
 export function pinRowY(index: number): number {
   return HEADER_H + index * PIN_SPACING + PIN_SPACING / 2;
+}
+
+/** Where the rule above the param band sits. */
+export function paramBandY(node: NodeView): number {
+  return pinsHeight(node) + PARAM_GAP / 2;
+}
+
+/** Baseline of param preview row `index`. */
+export function paramRowY(node: NodeView, index: number): number {
+  return pinsHeight(node) + PARAM_GAP + index * PARAM_SPACING + PARAM_SPACING - 3;
 }
 
 const COL_GAP = 72;
@@ -35,8 +67,17 @@ const MARGIN_Y = 28;
  * node a column; nodes stack top-to-bottom within a column in model
  * order. Mutates node x/y in place. Edges always describe a DAG (they
  * come from validated graphs), but leftovers are still placed defensively.
+ *
+ * `paramRows` reports how tall each box's preview band is, so a column of
+ * boxes stacks without overlapping. Omitted, every box is measured as if
+ * it had no preview — which is right for a caller that renders none, and
+ * would tuck boxes into each other for one that does.
  */
-export function topoLayout(nodes: NodeView[], edges: EdgeView[]): void {
+export function topoLayout(
+  nodes: NodeView[],
+  edges: EdgeView[],
+  paramRows?: ReadonlyMap<string, number>,
+): void {
   const depth = new Map<string, number>();
   const indegree = new Map<string, number>();
   for (const n of nodes) indegree.set(n.id, 0);
@@ -68,7 +109,7 @@ export function topoLayout(nodes: NodeView[], edges: EdgeView[]): void {
     for (const n of list) {
       n.x = MARGIN_X + col * (NODE_W + COL_GAP);
       n.y = y;
-      y += nodeHeight(n) + ROW_GAP;
+      y += nodeHeight(n, paramRows?.get(n.id) ?? 0) + ROW_GAP;
     }
   }
 }

@@ -18,11 +18,12 @@
    */
   import NodeBox from "./NodeBox.svelte";
   import { NODE_W, nodeHeight, pinRowY } from "./layout.js";
-  import type { EdgeView, NodeView, StructureModel } from "./model.js";
+  import type { EdgeView, NodeView, ParamPreview, StructureModel } from "./model.js";
 
   let {
     model,
     selectedId,
+    previews,
     onSelect,
     onMove,
     onConnect,
@@ -31,6 +32,13 @@
   }: {
     model: StructureModel;
     selectedId: string | null;
+    /**
+     * Node id → the param rows its box shows. Handed down rather than read
+     * here: it is rebuilt once per param revision by the component that
+     * owns that revision, and rebuilding it per node per frame would put a
+     * walk of the graph inside a drag.
+     */
+    previews: ReadonlyMap<string, readonly ParamPreview[]>;
     onSelect: (id: string | null) => void;
     onMove: (id: string, x: number, y: number) => void;
     onConnect: (edge: EdgeView) => void;
@@ -55,6 +63,14 @@
 
   const MIN_ZOOM = 0.2;
   const MAX_ZOOM = 2.5;
+  /**
+   * The zoom below which a box stops saying anything: its title is 11px
+   * and its param rows are 9px, so under about half scale the canvas is a
+   * diagram of rectangles. The wheel still goes to MIN_ZOOM — asking for
+   * the bird's-eye view is a thing you can do — but nothing ARRIVES there
+   * on its own.
+   */
+  const LEGIBLE_ZOOM = 0.5;
 
   /** Pointer position in graph units — the space node x/y live in. */
   function toGraph(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -91,8 +107,20 @@
     return toGraph({ clientX, clientY });
   }
 
-  /** Frame every node, so a pan that wandered off is one click from home. */
-  export function resetView(): void {
+  /**
+   * Frame every node, so a pan that wandered off is one click from home.
+   *
+   * `legible` refuses to zoom out past the point where the boxes stop
+   * being readable, and shows the START of the graph instead — the
+   * sources, which is where you read a chain from. It is what a LOAD
+   * wants: a forty-node pipeline fitted whole is a field of grey
+   * rectangles, and opening on one is worse than opening on the first
+   * eight boxes with their params legible.
+   *
+   * The "fit" button passes nothing and gets the true fit, because a
+   * control named fit that declines to fit is a broken control.
+   */
+  export function resetView(opts: { legible?: boolean } = {}): void {
     if (!svgEl || model.nodes.length === 0) {
       view = { x: 0, y: 0, z: 1 };
       return;
@@ -101,17 +129,22 @@
     const minX = Math.min(...model.nodes.map((n) => n.x));
     const minY = Math.min(...model.nodes.map((n) => n.y));
     const maxX = Math.max(...model.nodes.map((n) => n.x + NODE_W));
-    const maxY = Math.max(...model.nodes.map((n) => n.y + nodeHeight(n)));
-    const pad = 40;
-    const z = Math.min(
-      MAX_ZOOM,
-      Math.max(MIN_ZOOM, Math.min((r.width - pad * 2) / (maxX - minX), (r.height - pad * 2) / (maxY - minY))),
+    const maxY = Math.max(
+      ...model.nodes.map((n) => n.y + nodeHeight(n, previews.get(n.id)?.length ?? 0)),
     );
-    view = {
-      z,
-      x: (r.width - (maxX - minX) * z) / 2 - minX * z,
-      y: (r.height - (maxY - minY) * z) / 2 - minY * z,
-    };
+    const pad = 40;
+    const w = maxX - minX;
+    const h = maxY - minY;
+    const fit = Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / h);
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit));
+    if (opts.legible === true && z < LEGIBLE_ZOOM) {
+      // Anchored to the content's top-left rather than centred: at a zoom
+      // that does not fit, centring puts the middle of the graph on screen
+      // and cuts off both ends, including the one it starts at.
+      view = { z: LEGIBLE_ZOOM, x: pad - minX * LEGIBLE_ZOOM, y: pad - minY * LEGIBLE_ZOOM };
+      return;
+    }
+    view = { z, x: (r.width - w * z) / 2 - minX * z, y: (r.height - h * z) / 2 - minY * z };
   }
 
   /**
@@ -234,6 +267,7 @@
     <NodeBox
       {node}
       selected={node.id === selectedId}
+      params={previews.get(node.id)}
       onSelect={() => onSelect(node.id)}
       onBodyDown={(e) => startBodyDrag(node, e)}
       onDelete={() => onDeleteNode(node.id)}
@@ -247,6 +281,12 @@
     />
   {/each}
   </g>
+  <!-- Outside the view transform: an empty canvas has no content to be
+       positioned relative to, and a hint that pans away from the viewport
+       is a hint nobody reads. -->
+  {#if model.nodes.length === 0}
+    <text class="blank" x="50%" y="50%">press Tab to add a node</text>
+  {/if}
 </svg>
 
 <style>
@@ -260,11 +300,20 @@
     user-select: none;
     touch-action: none;
   }
+  /**
+   * ONE COLOUR, deliberately. Colouring a wire by the kind it carries —
+   * to match the pin dots, which do differ — was tried and removed: every
+   * input pin in the shipped node library is `geometry`, and the other
+   * kinds (`value`, `instances`, `any`) appear only on outputs that
+   * nothing accepts. They are terminal, so every EDGE is geometry and the
+   * palette painted all of them the same. Before re-adding it, check that
+   * a node exists whose input pin is not geometry.
+   */
   .edge-line {
     fill: none;
     stroke: #4c8dff;
     stroke-width: 1.6;
-    opacity: 0.85;
+    opacity: 0.75;
     pointer-events: none;
   }
   .edge-hit {
@@ -274,17 +323,35 @@
     pointer-events: stroke;
     cursor: pointer;
   }
+  /* Hovering an edge offers to CUT it, so it turns the colour everything
+     destructive on this page is — not a brighter version of itself. */
   .edge:hover .edge-line {
     stroke: #ff9ca8;
+    stroke-width: 2.2;
+    opacity: 1;
   }
   .wire {
     fill: none;
     stroke: #8b98ab;
     stroke-width: 1.6;
     stroke-dasharray: 5 4;
+    opacity: 0.6;
     pointer-events: none;
   }
+  /* Over a pin it will actually connect to. Dashed-and-faint means "going
+     nowhere yet"; solid, green and full strength means releasing here
+     makes the connection — the same green the value palette uses for a
+     thing that resolves. */
   .wire.live {
     stroke: #b8f5c8;
+    stroke-dasharray: none;
+    stroke-width: 2.2;
+    opacity: 1;
+  }
+  .blank {
+    fill: #55617a;
+    font: 12px system-ui, sans-serif;
+    text-anchor: middle;
+    pointer-events: none;
   }
 </style>

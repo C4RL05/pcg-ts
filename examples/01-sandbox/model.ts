@@ -6,6 +6,9 @@
  * controller's live Graph.
  */
 import { getNodeType, listNodeTypes, type NodeTypeInfo, type PinInfo } from "pcg-ts";
+// Type-only, so it is erased: controller.ts imports this module at
+// runtime, and a value import back would close the cycle.
+import type { ParamView } from "./controller.js";
 
 /** One pin as the canvas renders it. */
 export interface PinView {
@@ -29,6 +32,92 @@ export interface NodeView {
   y: number;
   inputs: PinView[];
   outputs: PinView[];
+}
+
+/**
+ * One param as a node box shows it: a short name and a shorter value.
+ *
+ * The boxes used to be a type, an id and a row of pins — the same picture
+ * whether `count` was 350 or 350000. Everything that distinguishes one
+ * scatter from another was a click away in the inspector, so reading a
+ * graph meant clicking through it node by node. These few characters per
+ * box are what let you read the settings off the canvas instead.
+ */
+export interface ParamPreview {
+  readonly key: string;
+  readonly value: string;
+  /**
+   * The param is a Field rather than a constant. Marked because it is a
+   * different KIND of answer, not a different value: a field is resolved
+   * per point when it lands on a domain, so "0.4" and "ƒ fbm" are not two
+   * settings of one knob.
+   */
+  readonly field: boolean;
+}
+
+/** Most rows a box shows before it stops naming them and counts instead. */
+const PREVIEW_ROWS = 3;
+
+/** Trim a rendered value to what fits the box at 9px monospace. */
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function fmtNumber(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  if (Number.isInteger(n)) return String(n);
+  // Two places is enough to tell 2.5 from 2.75 and short enough that a
+  // vec3 of them still fits the width.
+  return String(Number(n.toFixed(2)));
+}
+
+function fmtValue(view: ParamView): string {
+  if (view.mode === "field") {
+    /**
+     * The OUTERMOST function of the field expression, dug out of the
+     * pretty-printed spec rather than re-serialized: the first `"fn"` in
+     * that JSON is the root of the tree, since its own key precedes its
+     * `args`. A bare "ƒ" would say a field is here; "ƒ mul" says which.
+     */
+    const fn = view.specText === null ? null : /"fn":\s*"([^"]+)"/.exec(view.specText);
+    return fn === null ? "ƒ" : `ƒ ${fn[1]}`;
+  }
+  const v = view.value;
+  if (typeof v === "number") return fmtNumber(v);
+  if (typeof v === "boolean") return String(v);
+  // An en dash for "set to nothing", so an unset string param is a row
+  // that reads as empty rather than a key with a blank where its value
+  // should be — which looks like the box failed to render one.
+  if (typeof v === "string") return v === "" ? "–" : v;
+  if (Array.isArray(v)) {
+    return v.length === 0
+      ? "–"
+      : v.map((x) => (typeof x === "number" ? fmtNumber(x) : String(x))).join(", ");
+  }
+  return v === undefined || v === null ? "–" : String(v);
+}
+
+/**
+ * The rows one node box shows. `items` params are dropped: they are
+ * runtime-injected DataItems with nothing to print, the same reason the
+ * inspector renders them as a read-only note.
+ *
+ * All of them when there are few, and the first few plus a count when
+ * there are many — a box that listed twelve params would be taller than
+ * the graph it is in, and the twelfth is not the one you were looking for.
+ */
+export function paramPreviews(views: readonly ParamView[]): ParamPreview[] {
+  const shown = views.filter((v) => v.mode !== "items");
+  const head = shown.length <= PREVIEW_ROWS + 1 ? shown : shown.slice(0, PREVIEW_ROWS);
+  const rows: ParamPreview[] = head.map((v) => ({
+    key: clip(v.key, 13),
+    value: clip(fmtValue(v), 14),
+    field: v.mode === "field",
+  }));
+  if (shown.length > head.length) {
+    rows.push({ key: "", value: `+${shown.length - head.length} more`, field: false });
+  }
+  return rows;
 }
 
 /** One connection in the editor model (mirrors a graph connection). */

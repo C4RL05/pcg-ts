@@ -31,7 +31,9 @@
     STARTER_GRAPH_TEXT,
     allocateId,
     paletteGroups,
+    paramPreviews,
     type EdgeView,
+    type ParamPreview,
     type StructureModel,
   } from "./model.js";
 
@@ -142,6 +144,23 @@
   const selectedNode = $derived(model.nodes.find((n) => n.id === selectedId) ?? null);
 
   /**
+   * What every node box prints in its param band, rebuilt once per
+   * revision. Here rather than in the boxes because `paramViews` reads
+   * the live graph: per box it would be one walk per node per render, and
+   * renders happen on every pointermove of a drag.
+   *
+   * It reads each node's `id` and `type` and nothing else, so MOVING a
+   * node — which writes x and y — does not invalidate it. That is the
+   * whole reason dragging stays free.
+   */
+  const previews = $derived.by((): Map<string, readonly ParamPreview[]> => {
+    void paramsRev;
+    return new Map(
+      model.nodes.map((n) => [n.id, paramPreviews(controller.paramViews(n.id, n.type))]),
+    );
+  });
+
+  /**
    * Narrow-screen treatment (viewing-grade, not a mobile editor): the
    * overlay collapses to the toolbar's first row, and the palette and
    * param columns become slide-over drawers so the node canvas gets the
@@ -153,7 +172,7 @@
   /** Canvas component ref, for the toolbar's "fit" button and node placement. */
   let canvas = $state<
     | {
-        resetView: () => void;
+        resetView: (opts?: { legible?: boolean }) => void;
         graphPointAt: (x: number, y: number) => { x: number; y: number };
       }
     | undefined
@@ -293,7 +312,7 @@
    * the fit measures the canvas, which has not laid out the new nodes yet.
    */
   function frameGraph(): void {
-    void tick().then(() => canvas?.resetView());
+    void tick().then(() => canvas?.resetView({ legible: true }));
   }
 
   /**
@@ -467,7 +486,13 @@
   }
 
   function relayout(): void {
-    topoLayout(model.nodes, model.edges);
+    // The row heights the boxes actually have — a column stacked on the
+    // pre-preview height would tuck each box into the one below it.
+    topoLayout(
+      model.nodes,
+      model.edges,
+      new Map([...previews].map(([id, rows]) => [id, rows.length])),
+    );
     frameGraph();
   }
 
@@ -629,6 +654,7 @@
         bind:this={canvas}
         {model}
         {selectedId}
+        {previews}
         onSelect={select}
         onMove={moveNode}
         onConnect={connectEdge}

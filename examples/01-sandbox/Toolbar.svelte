@@ -214,7 +214,7 @@
 
   <div class="grp" title="the node canvas">
     <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
-    <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
+    <button onclick={onFit} title="zoom out until every node is on screen, however small — a graph LOADS at a readable zoom instead. The canvas pans with the right button and zooms on the wheel">fit</button>
   </div>
 
   <div class="grp">
