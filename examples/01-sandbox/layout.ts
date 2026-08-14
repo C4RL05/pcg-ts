@@ -25,10 +25,10 @@ export const PAD = 8;
  * Its own constant partly because it is a different measurement — this
  * one runs to the top of the CAPS while the side padding runs to the edge
  * of a glyph — and partly because it is the one that gets tuned by eye.
- * The two units over `PAD` are an optical correction: a band of text
- * wants slightly more air above it than beside it to look even.
+ * The unit over `PAD` is an optical correction: a band of text wants
+ * slightly more air above it than beside it to look even.
  */
-export const PAD_TOP = 10;
+export const PAD_TOP = 9;
 
 /** Cap height of the 11px title face, and of the 9px id face below it. */
 const TITLE_CAP = 8;
