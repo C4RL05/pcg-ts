@@ -35,6 +35,22 @@ import type { Control, ControlSection, ControlValue } from "./controls.js";
 export interface PanelControlSpec {
   /** `"<nodeId>.<paramName>"`, the same key {@link Knob.key} carries. */
   readonly param: string;
+  /**
+   * Further knob keys this row writes with the same value.
+   *
+   * One knob standing for several params is the library's own idea: a
+   * subgraph's exposed param already declares `targets` as a list. This
+   * is that idea for a graph of plain nodes, where a thing an author
+   * thinks of as one setting is spread over several. A box truss has four
+   * chord tubes; "chord" is one number, not four sliders that have to be
+   * dragged into agreement.
+   *
+   * The row reads the primary's value, so a mirror moved on its own — in
+   * the node inspector — reads as the graph's, not the panel's, until
+   * this row is next turned. The patch reports each param separately, so
+   * a shared link still replays exactly what the graph holds.
+   */
+  readonly also?: readonly string[];
   readonly label?: string;
   /** Supplying both promotes a typed box to a slider. */
   readonly min?: number;
@@ -94,6 +110,11 @@ export type KnobValues = Record<string, ControlValue>;
 export interface KnobPanel {
   readonly sections: ControlSection<KnobValues>[];
   readonly values: KnobValues;
+  /**
+   * Primary knob key → the other keys its row writes, from
+   * {@link PanelControlSpec.also}. Empty for a panel with no spec.
+   */
+  readonly mirrors: Record<string, readonly string[]>;
   /** Knobs no widget could represent, and why — never dropped silently. */
   readonly skipped: { key: string; reason: string }[];
   /** Spec rows naming a param this graph does not expose. */
@@ -253,6 +274,7 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
   const values: KnobValues = {};
   const skipped: { key: string; reason: string }[] = [];
   const unknown: string[] = [];
+  const mirrors: Record<string, readonly string[]> = {};
   const byKey = new Map(knobs.map((k) => [k.key, k]));
 
   /** Register one knob's value; false when it cannot be shown. */
@@ -287,11 +309,13 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
           delete values[knob.key];
           continue;
         }
+        const also = mirrorsFor(row, knob, byKey, skipped, unknown);
+        if (also.length > 0) mirrors[knob.key] = also;
         controls.push(control);
       }
       if (controls.length > 0) sections.push({ title: section.title, controls });
     }
-    return { sections, values, skipped, unknown, authored: true };
+    return { sections, values, mirrors, skipped, unknown, authored: true };
   }
 
   const grouped = new Map<string, Control<KnobValues>[]>();
@@ -321,5 +345,44 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
     title: titles.get(node) ?? node,
     controls,
   }));
-  return { sections, values, skipped, unknown, authored: false };
+  return { sections, values, mirrors, skipped, unknown, authored: false };
+}
+
+/**
+ * The keys a row writes besides its own, checked against the graph.
+ *
+ * A mirror that does not exist, holds a field, or is a different type is
+ * reported the same way a bad primary is — writing a value nothing reads,
+ * or writing a float into an enum, is the failure that would otherwise be
+ * silent, because the row would keep moving and only some of the truss
+ * would follow.
+ */
+function mirrorsFor(
+  row: PanelControlSpec,
+  primary: Knob,
+  byKey: ReadonlyMap<string, Knob>,
+  skipped: { key: string; reason: string }[],
+  unknown: string[],
+): string[] {
+  const also: string[] = [];
+  for (const key of row.also ?? []) {
+    const knob = byKey.get(key);
+    if (knob === undefined) {
+      unknown.push(key);
+      continue;
+    }
+    if (knob.isField) {
+      skipped.push({ key, reason: `mirrored by ${primary.key}, but holds a field` });
+      continue;
+    }
+    if (knob.schema.type !== primary.schema.type) {
+      skipped.push({
+        key,
+        reason: `mirrored by ${primary.key}, which is ${primary.schema.type}, not ${knob.schema.type}`,
+      });
+      continue;
+    }
+    also.push(key);
+  }
+  return also;
 }

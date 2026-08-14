@@ -143,6 +143,22 @@ var e=`{
       }
     },
     {
+      "id": "trussStation",
+      "type": "setAttribute",
+      "params": {
+        "name": "stationId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "index"
+        },
+        "values": [],
+        "stringValue": "",
+        "seed": 0
+      }
+    },
+    {
       "id": "trussChords",
       "type": "mergePoints",
       "params": {}
@@ -1056,53 +1072,6 @@ var e=`{
       }
     },
     {
-      "id": "trussStationId",
-      "type": "setAttribute",
-      "params": {
-        "name": "stationId",
-        "domain": "point",
-        "type": "i32",
-        "tupleSize": 1,
-        "value": {
-          "fn": "sub",
-          "args": [
-            {
-              "fn": "index"
-            },
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": 46
-                },
-                {
-                  "fn": "floor",
-                  "args": [
-                    {
-                      "fn": "div",
-                      "args": [
-                        {
-                          "fn": "index"
-                        },
-                        {
-                          "fn": "constant",
-                          "value": 46
-                        }
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        "values": [],
-        "stringValue": "",
-        "seed": 0
-      }
-    },
-    {
       "id": "trussPhase",
       "type": "setAttribute",
       "params": {
@@ -1742,7 +1711,9 @@ var e=`{
     {
       "id": "wrapWraps",
       "type": "forEach",
-      "params": {},
+      "params": {
+        "cableRadius": 0.035
+      },
       "subgraph": {
         "graph": {
           "formatVersion": 1,
@@ -2430,6 +2401,21 @@ var e=`{
             "name": "out",
             "node": "wrapSolid",
             "pin": "out"
+          }
+        ],
+        "params": [
+          {
+            "name": "cableRadius",
+            "targets": [
+              {
+                "node": "wrapSolid",
+                "param": "radius"
+              }
+            ],
+            "description": "Radius of the tube each wrap is drawn as.",
+            "default": 0.035,
+            "min": 0.005,
+            "max": 0.2
           }
         ]
       }
@@ -3348,6 +3334,16 @@ var e=`{
         "out"
       ],
       "to": [
+        "trussStation",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussStation",
+        "out"
+      ],
+      "to": [
         "trussMove0",
         "in"
       ]
@@ -3384,7 +3380,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3414,7 +3410,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3454,7 +3450,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3484,7 +3480,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3524,7 +3520,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3554,7 +3550,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3594,7 +3590,7 @@ var e=`{
     },
     {
       "from": [
-        "trussFrame",
+        "trussStation",
         "out"
       ],
       "to": [
@@ -3639,26 +3635,6 @@ var e=`{
       ],
       "to": [
         "trussBraceSpawn",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussCorners",
-        "out"
-      ],
-      "to": [
-        "trussStationId",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussStationId",
-        "out"
-      ],
-      "to": [
-        "trussPhase",
         "in"
       ]
     },
@@ -4189,6 +4165,16 @@ var e=`{
       ],
       "to": [
         "drapeDrapeSpawn",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussCorners",
+        "out"
+      ],
+      "to": [
+        "trussPhase",
         "in"
       ]
     }

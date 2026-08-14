@@ -1,4 +1,4 @@
-{
+var e=`{
   "_comment": "Panel spec — presentation only; the graph cooks identically without it. See examples/shared/graphUi.ts.",
   "sections": [
     {
@@ -87,3 +87,4 @@
     }
   ]
 }
+`;export{e as default};

@@ -128,9 +128,16 @@
 
   function commit(c: ControlCommit<KnobValues>): void {
     applyCommit(values, c);
-    const target = targets.get(String(c.key));
+    const key = String(c.key);
+    const target = targets.get(key);
     if (target === undefined) return;
-    controller.setPlainParam(target.node, target.name, c.value);
+    // A row may stand for several params — four chord tubes are one
+    // "chord" setting. The writes are separate, but scheduleCook is
+    // debounced, so they still cost one cook.
+    for (const k of [key, ...(panel.mirrors[key] ?? [])]) {
+      const t = targets.get(k);
+      if (t !== undefined) controller.setPlainParam(t.node, t.name, c.value);
+    }
     onEdit();
   }
 
