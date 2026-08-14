@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-42 examples, alphabetical by file:
+43 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -40,6 +40,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
 - [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
 - [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
+- [examples-headless-scatter.json](#examples-headless-scatterjson) — headless scatter
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
 - [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/5, edited — hand-placed plots that win on priority
@@ -660,6 +661,24 @@ Five count-preserving nodes in a strict line, every field param authored as a se
 **Outputs:** `points` (from `psize`.`out`)
 
 Cook it: `pcg cook examples/graphs/examples-gpu-fields.json --stats`
+
+## examples-headless-scatter.json
+
+**headless scatter**
+
+Scatter points across a 60x60 patch, write a height attribute from fbm perlin noise, keep the points above the midline, and jitter what survives. Cooks in plain Node with no renderer and no page — the graph is data, and the CLI is its feedback loop.
+
+**Tags:** `headless`, `scatter`, `fields`, `cli`
+
+**Seed:** 20260808
+
+**Node types:** `filterByAttribute`, `jitterPoints`, `pointScatterInBounds`, `setAttribute`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `spread`.`out`)
+
+Cook it: `pcg cook examples/graphs/examples-headless-scatter.json --stats`
 
 ## pipeline-1-boundary.json
 

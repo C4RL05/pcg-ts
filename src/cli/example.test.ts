@@ -1,7 +1,16 @@
 /**
- * The shipped headless example, driven through the CLI exactly as its
- * README tells a reader to. An example that is data can rot silently —
- * a renamed param, a tightened validator — so it is cooked here.
+ * One corpus graph driven through all four CLI verbs, which is what
+ * `docs/examples.md` tells a reader to do with any of them — every entry
+ * in the catalog prints `Cook it: pcg cook examples/graphs/<file>.json
+ * --stats`. `tests/corpus.test.ts` already cooks the whole corpus through
+ * the library, so what is left to rot is the CLI's own path to a file: an
+ * argument name, a report shape, a renderer flag. That is what this
+ * covers, and one graph covers it.
+ *
+ * This one, because it is the composed case — four nodes, a noise field,
+ * a filter that drops points and a numeric attribute to inspect and
+ * render — so every verb has something to report. It carried the
+ * `07-headless` page before the corpus absorbed it.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -9,7 +18,9 @@ import { describe, expect, it } from "vitest";
 import { EXIT_OK, runCli } from "./index.js";
 import type { CliIo } from "./io.js";
 
-const GRAPH = fileURLToPath(new URL("../../examples/07-headless/graph.json", import.meta.url));
+const GRAPH = fileURLToPath(
+  new URL("../../examples/graphs/examples-headless-scatter.json", import.meta.url),
+);
 
 function realFileIo(): { io: CliIo; stdout(): string; files: Record<string, string> } {
   const out: string[] = [];
@@ -26,7 +37,7 @@ function realFileIo(): { io: CliIo; stdout(): string; files: Record<string, stri
   };
 }
 
-describe("examples/07-headless", () => {
+describe("examples/graphs/examples-headless-scatter.json through the CLI", () => {
   it("validates, carrying its meta block", async () => {
     const io = realFileIo();
     expect(await runCli(["validate", GRAPH, "--json"], io.io)).toBe(EXIT_OK);

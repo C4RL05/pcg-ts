@@ -1444,6 +1444,47 @@
         ]
       }
     },
+    "examples-headless-scatter.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 1598,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "height:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -22.9608,
+                0,
+                -30.508
+              ],
+              "max": [
+                30.2399,
+                0,
+                30.3971
+              ]
+            }
+          }
+        ]
+      }
+    },
     "pipeline-1-boundary.json": {
       "outputs": {
         "boundary": [

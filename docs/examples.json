@@ -934,6 +934,34 @@
     ]
   },
   {
+    "file": "examples-headless-scatter.json",
+    "path": "examples/graphs/examples-headless-scatter.json",
+    "title": "headless scatter",
+    "description": "Scatter points across a 60x60 patch, write a height attribute from fbm perlin noise, keep the points above the midline, and jitter what survives. Cooks in plain Node with no renderer and no page — the graph is data, and the CLI is its feedback loop.",
+    "tags": [
+      "headless",
+      "scatter",
+      "fields",
+      "cli"
+    ],
+    "seed": 20260808,
+    "nodeCount": 4,
+    "nodeTypes": [
+      "filterByAttribute",
+      "jitterPoints",
+      "pointScatterInBounds",
+      "setAttribute"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "spread",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "pipeline-1-boundary.json",
     "path": "examples/graphs/pipeline-1-boundary.json",
     "title": "staged pipeline 1/5 — the ground and the wall",
