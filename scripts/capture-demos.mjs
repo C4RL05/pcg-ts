@@ -165,7 +165,7 @@ const DEMOS = [
     // if there is none, this fails loudly rather than photographing a CPU
     // cook under a heading that claims otherwise.
     settleWait: () => {
-      const opt = document.querySelector('.toolbar .path select option[value="gpu-fused"]');
+      const opt = document.querySelector('.toolbar .path.cook select option[value="gpu-fused"]');
       return !!opt && !opt.disabled;
     },
     // Async, and it has to be: the FIRST cook on a device path compiles its
@@ -186,7 +186,7 @@ const DEMOS = [
         throw new Error("the status line never settled after a cook");
       };
       let before = line();
-      setSelectByValue(".toolbar .path select", "gpu-fused");
+      setSelectByValue(".toolbar .path.cook select", "gpu-fused");
       await changedFrom(before);
       for (const step of [1, -1]) {
         before = line();

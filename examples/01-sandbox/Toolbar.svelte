@@ -28,6 +28,7 @@
     onToggle,
     onFrame,
     onCookPath,
+    onShading,
   }: {
     seed: number;
     status: CookStatus | null;
@@ -43,8 +44,10 @@
     /** Name of the current view, and the control that cycles it. */
     viewLabel: string;
     onCycleView: () => void;
-    /** Readouts the host owns rather than the cook: frame rate, what drew, the device. */
-    host: { fps: string; drew: string; gpu: GpuState };
+    /** Readouts the host owns rather than the cook: frame rate, what drew, the device, the look. */
+    host: { fps: string; drew: string; gpu: GpuState; shading: "lit" | "normals" };
+    /** Choose how geometry is shaded. A redraw, not a recook. */
+    onShading: (mode: "lit" | "normals") => void;
     /** Choose the cook path. The graph is unchanged; only how it cooks moves. */
     onCookPath: (path: CookPath) => void;
     /** Frame every node in the canvas. */
@@ -157,7 +160,14 @@
   <button onclick={onFrame} title="point the camera at what the graph made (F) — done automatically whenever a graph loads">frame</button>
   <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back) — hold shift to fly the scene through the graph"
     >view · {viewLabel}</button>
-  <label class="path" class:off={!host.gpu.ready} title={gpuTitle}>
+  <label class="path shade" title="how the geometry is shaded — normals read volume and overlap where a single key light flattens them into one silhouette. A redraw, not a recook; vertex colours only show under `lit`.">
+    shade
+    <select value={host.shading} onchange={(e) => onShading(e.currentTarget.value as "lit" | "normals")}>
+      <option value="lit">lit</option>
+      <option value="normals">normals</option>
+    </select>
+  </label>
+  <label class="path cook" class:off={!host.gpu.ready} title={gpuTitle}>
     cook
     <select
       value={host.gpu.path}

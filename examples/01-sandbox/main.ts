@@ -23,6 +23,7 @@ import {
   Group,
   LineBasicMaterial,
   Mesh,
+  MeshNormalMaterial,
   MeshStandardMaterial,
   PlaneGeometry,
   type Object3D,
@@ -98,11 +99,46 @@ let drawn: Object3D[] = [];
  * work, and the two pages are judged against different things. These
  * match the dark studio of `shared/scene.ts`.
  */
-const materials: DrawMaterials = {
+const litMaterials: DrawMaterials = {
   mesh: (vertexColors) =>
     new MeshStandardMaterial({ color: 0x93a7c4, roughness: 0.85, metalness: 0, vertexColors }),
   line: (vertexColors) => new LineBasicMaterial({ color: 0xffb454, vertexColors }),
 };
+
+/**
+ * The other way to look at geometry: surface direction instead of light.
+ *
+ * Worth a control rather than a preference, because the two answer
+ * different questions. A lit render says what a thing would look like; a
+ * normal render says what SHAPE it is — overlapping solids, a twist in a
+ * swept tube, a face pointing the wrong way, all of which a single key
+ * light on a dark studio flattens into one silhouette. When the geometry
+ * is what you are judging, and in a graph editor it usually is, normals
+ * read better.
+ *
+ * `MeshNormalMaterial` ignores vertex colours by construction, so the
+ * flag the lit factories take is dropped here rather than passed on: a
+ * graph's `color` attribute stops showing in this mode, which is the
+ * trade — direction OR colour, not both.
+ */
+const normalMaterials: DrawMaterials = {
+  mesh: () => sharedNormal,
+  line: (vertexColors) => new LineBasicMaterial({ color: 0xcfd6e4, vertexColors }),
+};
+
+/**
+ * One material for the whole page, not one per cook.
+ *
+ * `disposeDrawn` deliberately leaves an InstancedMesh's material alone —
+ * normally it belongs to the memoized asset — so minting one of these per
+ * cook would leak a GPU program on every knob turn.
+ */
+const sharedNormal = new MeshNormalMaterial();
+
+export type Shading = "lit" | "normals";
+let shading: Shading = "lit";
+const materialsFor = (mode: Shading): DrawMaterials =>
+  mode === "normals" ? normalMaterials : litMaterials;
 
 /** What the last cook actually drew, for the overlay's `drew` line. */
 let drewSummary = "–";
@@ -158,7 +194,25 @@ function followDepth(): void {
   camera.updateProjectionMatrix();
 }
 
+/**
+ * What the last cook drew, kept so the shading control can redraw without
+ * re-cooking. Switching how something is shaded is not a question about
+ * the graph, and paying a cook for it would make the control unusable on
+ * exactly the graphs it is most useful for.
+ */
+let lastDrawn: { items: readonly DataItem[]; info: RenderInfo } | null = null;
+
+function setShading(mode: Shading): void {
+  if (mode === shading) return;
+  shading = mode;
+  // `fresh: false` — a redraw must not re-frame the camera. The content is
+  // the same content; only its material changed.
+  if (lastDrawn !== null) render(lastDrawn.items, { ...lastDrawn.info, fresh: false });
+}
+
 function render(items: readonly DataItem[], info: RenderInfo): void {
+  lastDrawn = { items, info };
+  const materials = materialsFor(shading);
   for (const obj of drawn) outputGroup.remove(obj);
   disposeDrawn(drawn);
   drawn = [];
@@ -167,7 +221,12 @@ function render(items: readonly DataItem[], info: RenderInfo): void {
   // less than "3 mesh · 12 points".
   const tally = new Map<string, number>();
   for (const item of items) {
-    const { objects, report } = drawItem(item, { assets, materials, pointSize: 0.16 });
+    const { objects, report } = drawItem(item, {
+      assets,
+      materials,
+      pointSize: 0.16,
+      ...(shading === "normals" ? { instanceMaterial: sharedNormal } : {}),
+    });
     for (const obj of objects) outputGroup.add(obj);
     drawn.push(...objects);
     for (const what of report.drew) tally.set(what, (tally.get(what) ?? 0) + 1);
@@ -219,16 +278,22 @@ export interface GpuState {
 }
 
 const bridge: {
-  publish?: (s: { fps: string; drew: string; gpu: GpuState }) => void;
+  publish?: (s: { fps: string; drew: string; gpu: GpuState; shading: Shading }) => void;
   /** The editor's way back to the scene: re-frame on demand. */
   frame?: () => void;
   /** The editor's way to choose a cook path. */
   setCookPath?: (path: CookPath) => void;
+  /** The editor's way to choose how geometry is shaded. Redraws, never re-cooks. */
+  setShading?: (mode: Shading) => void;
 } = {};
+bridge.setShading = (mode) => {
+  setShading(mode);
+  publish();
+};
 bridge.frame = frameNow;
 let fpsText = "–";
 let gpu: GpuState = { path: "cpu", ready: false, label: "", error: null };
-const publish = (): void => bridge.publish?.({ fps: fpsText, drew: drewSummary, gpu });
+const publish = (): void => bridge.publish?.({ fps: fpsText, drew: drewSummary, gpu, shading });
 
 function status(s: CookStatus): void {
   void s; // the editor already has it from the controller; this just refreshes ours

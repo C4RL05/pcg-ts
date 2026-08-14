@@ -21,6 +21,7 @@ import {
   toInstancedMeshes,
   toLineGeometry,
   toPointsObject,
+  type InstancedAsset,
 } from "pcg-ts/three";
 import { InstancedMesh, LineSegments, Mesh, Points, type Material, type Object3D } from "three";
 import { resolveAssets, type PlaceholderAssets } from "./assets.js";
@@ -41,6 +42,22 @@ export interface DrawMaterials {
 export interface DrawOptions {
   assets: PlaceholderAssets;
   materials: DrawMaterials;
+  /**
+   * Draw every instance batch with THIS material instead of the one its
+   * asset carries, keeping the asset's geometry.
+   *
+   * The reason it exists is normal shading. An asset is a geometry and a
+   * material together, memoized so a viewer that re-cooks on every edit
+   * does not leak a GPU program per cook — so a page that wants to change
+   * how instances are shaded cannot rebuild the assets without giving that
+   * up. Overriding at draw time keeps the memoization and costs one
+   * material for the whole scene.
+   *
+   * The caller owns it: `disposeDrawn` does not free an InstancedMesh's
+   * material, because normally that material belongs to the asset. Mint
+   * one per page, not one per cook.
+   */
+  instanceMaterial?: Material;
   /** Draw points even for geometries that carry topology. */
   points?: boolean;
   /** World size for point sprites (they are size-attenuated). */
@@ -88,7 +105,16 @@ export function drawItem(item: DataItem, opts: DrawOptions): Drawn {
         report: { kind: "instances", drew: [], skipped: "device-resident batches" },
       };
     }
-    const meshes = toInstancedMeshes(item.batches, resolveAssets(item.batches, opts.assets));
+    let resolved = resolveAssets(item.batches, opts.assets);
+    if (opts.instanceMaterial !== undefined) {
+      const override = opts.instanceMaterial;
+      const swapped: Record<string, InstancedAsset> = {};
+      for (const [id, asset] of Object.entries(resolved)) {
+        swapped[id] = { geometry: asset.geometry, material: override };
+      }
+      resolved = swapped;
+    }
+    const meshes = toInstancedMeshes(item.batches, resolved);
     let instances = 0;
     const batches: Record<string, number> = {};
     for (const mesh of meshes) {

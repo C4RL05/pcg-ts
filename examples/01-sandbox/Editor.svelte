@@ -48,16 +48,23 @@
      * knows whether a keystroke is a command or a character.
      */
     bridge: {
-      publish?: (s: { fps: string; drew: string; gpu: GpuState }) => void;
+      publish?: (s: {
+        fps: string;
+        drew: string;
+        gpu: GpuState;
+        shading: "lit" | "normals";
+      }) => void;
       frame?: () => void;
       setCookPath?: (path: CookPath) => void;
+      setShading?: (mode: "lit" | "normals") => void;
     };
   } = $props();
 
-  let host = $state<{ fps: string; drew: string; gpu: GpuState }>({
+  let host = $state<{ fps: string; drew: string; gpu: GpuState; shading: "lit" | "normals" }>({
     fps: "–",
     drew: "–",
     gpu: { path: "cpu", ready: false, label: "", error: null },
+    shading: "lit",
   });
   untrack(() => {
     bridge.publish = (s) => (host = s);
@@ -599,6 +606,7 @@
     onFit={() => canvas?.resetView()}
     onFrame={() => bridge.frame?.()}
     onCookPath={(p) => bridge.setCookPath?.(p)}
+    onShading={(m) => bridge.setShading?.(m)}
     viewLabel={view.label}
     onCycleView={() => cycleView()}
     {host}
