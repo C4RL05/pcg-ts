@@ -7,7 +7,17 @@
    * previews under them. Drag/connect gestures are reported to the Canvas
    * via callbacks; hit circles over the pins keep the targets comfortable.
    */
-  import { HEADER_H, NODE_W, nodeHeight, paramBandY, paramRowY, pinRowY } from "./layout.js";
+  import {
+    HEADER_H,
+    ID_Y,
+    NODE_W,
+    PAD,
+    TITLE_Y,
+    nodeHeight,
+    paramBandY,
+    paramRowY,
+    pinRowY,
+  } from "./layout.js";
   import type { NodeView, ParamPreview } from "./model.js";
 
   let {
@@ -37,19 +47,13 @@
 </script>
 
 <g transform="translate({node.x}, {node.y})" class:selected>
-  <!-- Selection is a HALO, not a heavier border. A thicker stroke changes
-       the box's weight, so a selected node reads as a different kind of
-       node rather than as the one you happen to be editing; a ring drawn
-       outside the shape says "this one" without restating what it is.
-       Behind the body and non-interactive, so it never eats a click. -->
-  {#if selected}
-    <rect class="halo" x="-3" y="-3" width={NODE_W + 6} height={h + 6} rx="10" />
-  {/if}
+  <!-- Square. No `rx`, and no halo ring behind it: selection is carried by
+       the border's colour alone, so the shape a node has when selected is
+       the shape it has the rest of the time. -->
   <rect
     class="body"
     width={NODE_W}
     height={h}
-    rx="7"
     role="button"
     tabindex="-1"
     aria-label="node {node.id}"
@@ -59,12 +63,14 @@
     }}
   />
   <line class="sep" x1="0" y1={HEADER_H} x2={NODE_W} y2={HEADER_H} />
-  <text class="title" x="9" y="13">{node.label ?? node.type}</text>
-  <text class="nodeid" x="9" y="25">{node.id}</text>
+  <text class="title" x={PAD} y={TITLE_Y}>{node.label ?? node.type}</text>
+  <text class="nodeid" x={PAD} y={ID_Y}>{node.id}</text>
+  <!-- Shares the title's baseline rather than being centred on the band:
+       two glyphs on one line is what reads as aligned. -->
   <text
     class="close"
-    x={NODE_W - 9}
-    y="14"
+    x={NODE_W - PAD}
+    y={TITLE_Y}
     role="button"
     tabindex="-1"
     aria-label="delete node {node.id}"
@@ -117,10 +123,12 @@
     <text class="pinlabel out" x={NODE_W - 10} y={pinRowY(i) + 3}>{pin.name}</text>
   {/each}
   {#if params.length > 0}
-    <line class="sep" x1="9" y1={paramBandY(node)} x2={NODE_W - 9} y2={paramBandY(node)} />
+    <line class="sep" x1={PAD} y1={paramBandY(node)} x2={NODE_W - PAD} y2={paramBandY(node)} />
     {#each params as p, i (p.key + p.value)}
-      <text class="pkey" x="9" y={paramRowY(node, i)}>{p.key}</text>
-      <text class="pval" class:field={p.field} x={NODE_W - 9} y={paramRowY(node, i)}>{p.value}</text>
+      <text class="pkey" x={PAD} y={paramRowY(node, i)}>{p.key}</text>
+      <text class="pval" class:field={p.field} x={NODE_W - PAD} y={paramRowY(node, i)}>
+        {p.value}
+      </text>
     {/each}
   {/if}
 </g>
@@ -137,13 +145,6 @@
   }
   .selected .body {
     stroke: var(--sb-select);
-  }
-  .halo {
-    fill: none;
-    stroke: var(--sb-select);
-    stroke-width: 1.5;
-    opacity: 0.4;
-    pointer-events: none;
   }
   .sep {
     stroke: var(--sb-rule);

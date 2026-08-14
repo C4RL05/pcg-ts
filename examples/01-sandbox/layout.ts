@@ -7,11 +7,46 @@ import type { EdgeView, NodeView } from "./model.js";
 
 /** Node box width in canvas units. */
 export const NODE_W = 168;
-/** Header band height (type name + id). */
-export const HEADER_H = 30;
+
+/**
+ * Inner padding, and the same number on every side.
+ *
+ * SVG text is positioned by its BASELINE, not by its box, so "9 from the
+ * top" is not `y = 9` — it is 9 plus the cap height of the face, and
+ * getting that wrong is what had the title sitting 5px under the edge
+ * while everything beside it sat 9 from the left. The baselines below are
+ * derived from this rather than typed in, so the padding is one number.
+ */
+export const PAD = 9;
+
+/** Cap height of the 11px title face, and of the 9px id face below it. */
+const TITLE_CAP = 8;
+/** Leading between the title baseline and the id baseline. */
+const TITLE_TO_ID = 12;
+
+/** Baseline of the type name. Its cap top lands exactly `PAD` from the top. */
+export const TITLE_Y = PAD + TITLE_CAP;
+/** Baseline of the node id, one line under the title. */
+export const ID_Y = TITLE_Y + TITLE_TO_ID;
+
+/**
+ * Header band height (type name + id).
+ *
+ * `PAD + 2` below the id's BASELINE rather than PAD: descenders drop
+ * about two units past it, so measuring from the baseline alone would
+ * leave the gap under a "spawn" or a "yaw" visibly tighter than the gap
+ * above the title.
+ */
+export const HEADER_H = ID_Y + PAD + 2;
+
 /** Vertical spacing between pin rows. */
 export const PIN_SPACING = 20;
-/** Padding below the last pin row. */
+/**
+ * Padding below the last row. Two less than `PAD` for the same reason the
+ * header adds two: this one is measured from a baseline that has the band
+ * gap above it, and 8 here is what puts the same 11 units under the last
+ * param row as sit under the id.
+ */
 export const PAD_BOTTOM = 8;
 /** Vertical spacing between param preview rows. */
 export const PARAM_SPACING = 13;

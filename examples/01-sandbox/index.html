@@ -19,10 +19,16 @@
      * button ends up 3px 12px in one place and 2px 8px in another and the
      * bar stops reading as one thing.
      *
-     * GREYSCALE, zero hue. Every value below is r == g == b, on pure
-     * black. Nothing here is a tint of anything: the page had a blue cast
-     * in its surfaces, its ink and its accents at once, and taking it out
-     * of only some of them would read as a mistake rather than a choice.
+     * GREYSCALE, zero hue — with ONE deliberate exception, `--sb-select`.
+     * Every other value below is r == g == b, on pure black. Nothing here
+     * is a tint of anything: the page had a blue cast in its surfaces, its
+     * ink and its accents at once, and taking it out of only some of them
+     * would read as a mistake rather than a choice.
+     *
+     * The exception earns itself by being the only one. On a page with no
+     * other hue, "which node am I editing" is answered from across the
+     * canvas by a colour that cannot be confused with a lightness — which
+     * is what the greyscale pass otherwise spent.
      *
      * WHAT REPLACES COLOUR. Three signals were carried by hue and now are
      * not, so each is carried by something else:
@@ -72,7 +78,7 @@
       --sb-k-geometry: #c4c4c4;
       --sb-k-value: #949494;
       --sb-k-any: #6a6a6a;
-      --sb-select: #ffffff;                 /* the node you are editing */
+      --sb-select: #00ff00;                 /* the node you are editing */
 
       /* tab bars — the sidebar's and the knob panel's, kept identical */
       --sb-tab: #101010;
