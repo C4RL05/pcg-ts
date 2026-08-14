@@ -3,7 +3,7 @@
   "seed": 3,
   "meta": {
     "title": "a suspended rig, built from curves",
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. Nothing is drawn as a surface — the library has no sweep or extrude, so everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on. Eight declared outputs, one per part, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.",
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Nothing is drawn as a surface — the library has no sweep or extrude, so everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on. Eight declared outputs, one per part, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.",
     "tags": [
       "examples",
       "curves",
@@ -33,76 +33,159 @@
     },
     {
       "id": "spineWander",
-      "type": "transformPoints",
+      "type": "subgraph",
       "params": {
-        "translate": {
-          "fn": "vec",
-          "args": [
+        "verticalAmplitude": 1.2,
+        "horizontalAmplitude": 2.4,
+        "wanderScale": 1
+      },
+      "subgraph": {
+        "graph": {
+          "formatVersion": 1,
+          "seed": 0,
+          "nodes": [
             {
-              "fn": "constant",
-              "value": 0
-            },
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": 1.2
+              "id": "wander",
+              "type": "transformPoints",
+              "params": {
+                "translate": {
+                  "fn": "vec",
+                  "args": [
+                    {
+                      "fn": "constant",
+                      "value": 0
+                    },
+                    {
+                      "fn": "mul",
+                      "args": [
+                        {
+                          "fn": "param",
+                          "name": "verticalAmplitude"
+                        },
+                        {
+                          "fn": "fbm",
+                          "base": "perlinNoise",
+                          "opts": {
+                            "seed": 4178438610,
+                            "frequency": 0.035,
+                            "position": {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "position"
+                                },
+                                {
+                                  "fn": "param",
+                                  "name": "wanderScale"
+                                }
+                              ]
+                            },
+                            "offset": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "octaves": 3,
+                            "lacunarity": 2,
+                            "gain": 0.5
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "fn": "mul",
+                      "args": [
+                        {
+                          "fn": "param",
+                          "name": "horizontalAmplitude"
+                        },
+                        {
+                          "fn": "fbm",
+                          "base": "perlinNoise",
+                          "opts": {
+                            "seed": 2443226542,
+                            "frequency": 0.035,
+                            "position": {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "position"
+                                },
+                                {
+                                  "fn": "param",
+                                  "name": "wanderScale"
+                                }
+                              ]
+                            },
+                            "offset": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "octaves": 3,
+                            "lacunarity": 2,
+                            "gain": 0.5
+                          }
+                        }
+                      ]
+                    }
+                  ]
                 },
-                {
-                  "fn": "fbm",
-                  "base": "perlinNoise",
-                  "opts": {
-                    "seed": 4178438610,
-                    "frequency": 0.035,
-                    "offset": [
-                      0,
-                      0,
-                      0
-                    ],
-                    "octaves": 3,
-                    "lacunarity": 2,
-                    "gain": 0.5
-                  }
-                }
-              ]
-            },
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": 2.4
-                },
-                {
-                  "fn": "fbm",
-                  "base": "perlinNoise",
-                  "opts": {
-                    "seed": 2443226542,
-                    "frequency": 0.035,
-                    "offset": [
-                      0,
-                      0,
-                      0
-                    ],
-                    "octaves": 3,
-                    "lacunarity": 2,
-                    "gain": 0.5
-                  }
-                }
-              ]
+                "rotateEuler": [
+                  0,
+                  0,
+                  0
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
+              }
             }
-          ]
+          ],
+          "connections": [],
+          "outputs": []
         },
-        "rotateEuler": [
-          0,
-          0,
-          0
+        "inputs": [
+          {
+            "name": "in",
+            "node": "wander",
+            "pin": "in"
+          }
         ],
-        "scale": [
-          1,
-          1,
-          1
+        "outputs": [
+          {
+            "name": "out",
+            "node": "wander",
+            "pin": "out"
+          }
+        ],
+        "params": [
+          {
+            "name": "verticalAmplitude",
+            "targets": [],
+            "description": "How far the spine wanders up and down, in world units, multiplied into a perlin fBm that is already centred on zero — so 0 gives a straight spine. It writes into no inner param slot: the body's `translate` expression reads it by name, which is why its type comes from the shape of this default rather than from a target's schema.",
+            "default": 1.2,
+            "min": 0,
+            "max": 8
+          },
+          {
+            "name": "horizontalAmplitude",
+            "targets": [],
+            "description": "How far the spine wanders sideways over the same run, on its own noise seed, so the two axes drift independently instead of tracing one curve in a plane.",
+            "default": 2.4,
+            "min": 0,
+            "max": 12
+          },
+          {
+            "name": "wanderScale",
+            "targets": [],
+            "description": "Scales the position both noises are sampled at, so larger means a tighter, faster wander and 1 is the wander the graph was authored with. It is a MULTIPLIER rather than a frequency because that is what keeps the default exact: the base frequency stays in the noise, where it multiplies in f64, and x1.0 through the position column is the identity. Spelling it as an absolute frequency instead would fold the base into an f32 column and shift the spine by a last bit. This graph amplifies that: the swags are picked by an index-keyed random over edges whose ORDER a last-bit move can change, so 200 tube instances appear or vanish from a change of 1.9e-6 world units. A tunable frequency has to reach the position at all because `opts.frequency` is read as a plain number and cannot hold a field expression.",
+            "default": 1,
+            "min": 0.1,
+            "max": 8
+          }
         ]
       }
     },
