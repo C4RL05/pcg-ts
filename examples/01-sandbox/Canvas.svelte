@@ -335,6 +335,12 @@
     pointer-events: stroke;
     cursor: pointer;
   }
+  /* Same reasoning as the node box's: `tabindex="-1"`, so clicking focuses
+     it and Chrome paints its rounded `outline: auto` ring along the wire,
+     and no keyboard path exists that the ring would serve. */
+  .edge-hit:focus {
+    outline: none;
+  }
   /* Hovering an edge offers to CUT it. That used to be a red; with hue
      gone it is white and noticeably thicker, so the signal is weight
      rather than warmth. */

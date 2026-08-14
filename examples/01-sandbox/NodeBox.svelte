@@ -146,6 +146,26 @@
   .selected .body {
     stroke: var(--sb-select);
   }
+  /**
+   * No UA focus ring on any of these.
+   *
+   * Every interactive shape in this box carries `tabindex="-1"` — it is
+   * focusable by script and by click, and unreachable by Tab. Clicking one
+   * still focuses it, and Chrome answers with `outline-style: auto`: its
+   * own ring, ROUNDED, and drawn in the browser's colour rather than the
+   * one `outline-color` computes to. On a selected node that landed as a
+   * white rounded rectangle sitting inside the square green border — two
+   * selection indicators disagreeing about both shape and colour.
+   *
+   * Suppressing it costs no keyboard affordance, because there is no
+   * keyboard path to these elements to begin with. The graph's own
+   * selection state is the indicator.
+   */
+  .body:focus,
+  .close:focus,
+  .pin-hit:focus {
+    outline: none;
+  }
   .sep {
     stroke: var(--sb-rule);
     stroke-width: 1;
