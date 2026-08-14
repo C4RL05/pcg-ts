@@ -22,9 +22,7 @@ import {
   GridHelper,
   Group,
   LineBasicMaterial,
-  Mesh,
   MeshStandardMaterial,
-  PlaneGeometry,
   type Object3D,
 } from "three";
 import { createFpsMeter } from "../shared/fps.js";
@@ -59,39 +57,37 @@ const { scene, camera, controls, start } = createScene({
 });
 
 /**
- * The floor is rebuilt to fit whatever the graph made, so nothing here is
+ * THE LINES ARE THE FLOOR. There is no ground plane under them any more.
+ *
+ * There used to be a lit slab beneath the grid, and on a pure black page
+ * it was the one surface that read as a colour: a MeshStandardMaterial is
+ * not its hex, it is its hex times whatever the lights do to it, so the
+ * darkest floor that still looked deliberate was still visibly lighter
+ * than everything around it. Deleted rather than made transparent — an
+ * invisible mesh is still submitted, still lit, and still something to
+ * keep in sync with the plan.
+ *
+ * The grid is rebuilt to fit whatever the graph made, so nothing here is
  * a fixed size. What ships as the initial 30×30 is only what stands
  * before the first cook lands.
  */
-/**
- * Dark enough to sit against pure black without becoming a lit slab, but
- * not black itself — the floor has to be findable, or the content floats
- * in a void with nothing to say where the ground plane is.
- */
-const groundMaterial = new MeshStandardMaterial({ color: 0x141414, roughness: 1 });
-const ground = new Mesh(new PlaneGeometry(1, 1), groundMaterial);
-ground.rotation.x = -Math.PI / 2;
-scene.add(ground);
 let grid = new GridHelper(30, 30, 0x3a3a3a, 0x242424);
 scene.add(grid);
-let groundKey = "";
+let gridKey = "";
 
 /**
- * Resize the floor and grid to the measured content.
+ * Resize the grid to the measured content.
  *
- * The plane is a unit geometry under a scale so that following the
- * content costs a transform rather than an allocation, but a GridHelper
- * bakes its divisions into a buffer and has to be rebuilt. That is why
- * the plan is compared as a key first: a knob that nudges the extent
- * without crossing a snap boundary must not rebuild geometry on every
- * cook.
+ * A GridHelper bakes its divisions into a buffer and has to be rebuilt,
+ * which is why the plan is compared as a key first: a knob that nudges
+ * the extent without crossing a snap boundary must not rebuild geometry
+ * on every cook. Position is a transform either way, so it is set every
+ * time.
  */
 function applyGround(plan: GroundPlan): void {
-  ground.scale.set(plan.size, plan.size, 1);
-  ground.position.set(plan.x, plan.y, plan.z);
   const key = `${plan.size}/${plan.divisions}`;
-  if (key !== groundKey) {
-    groundKey = key;
+  if (key !== gridKey) {
+    gridKey = key;
     scene.remove(grid);
     grid.dispose();
     grid = new GridHelper(plan.size, plan.divisions, 0x3a3a3a, 0x242424);
