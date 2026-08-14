@@ -93,13 +93,20 @@ Two constraints that decide the design for you:
 - An exposed param's default must be a plain value, and every cook writes the
   current value inward. So a slot holding a field expression **cannot** be
   usefully exposed — the first cook overwrites the expression with a number.
-- Exposed params cannot reach inside a field spec. A noise `seed`,
-  `frequency` or `offset` lives in the spec, where no param slot exists.
+- An exposed param DOES reach inside a field spec, by name: a spec in the
+  body reads it as `{ "fn": "param", "name": "amplitude" }`, and `targets`
+  is optional — a param that writes nowhere and is only read by a spec is
+  the normal shape. This is what the shipped vocabulary uses.
+- What still cannot be reached is a noise's `seed`, `frequency` or
+  `offset`. Those live in `opts`, which the parser reads as plain numbers;
+  only ARGUMENT positions hold a reference. `opts.position` is an argument
+  position, so a tunable frequency multiplies the sample position instead:
+  `position: { "fn": "mul", "args": [{ "fn": "position" }, { "fn":
+  "param", "name": "scale" }] }`, leaving `frequency` at its base.
 
-The consequence is the pattern the shipped vocabulary uses: keep the noise on
-an inner node and expose the *scalars it reads* — typically a frequency
-multiplier and a `variant` added to the sample position. See the
-`determinism` skill for why `variant` is the re-roll and a seed is not.
+So keep the noise on an inner node and expose the scalars its spec reads —
+typically a scale on the sample position and a `variant` added to it. See
+the `determinism` skill for why `variant` is the re-roll and a seed is not.
 
 ## The loop
 

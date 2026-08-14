@@ -9,24 +9,23 @@
  * moves points by a DELTA at scale 1 — `translate = target - position()` —
  * which leaves `scale` and `rot` exactly as they arrived.
  */
-import { type Spec, attr, call, position, tunableFbm, vec } from "./expr.js";
+import { type Spec, attr, call, param, position, tunableFbm, vec } from "./expr.js";
 import { definePrimitive } from "./define.js";
 
 /**
  * Where a point of a path is heading when it gathers: the centre of the
  * bin its own `curveU` falls in.
  *
- * The two knobs live in ATTRIBUTES rather than in this expression, and
- * that is forced rather than stylistic — an exposed subgraph param is
- * pure fan-out into an inner param slot, and there is no slot inside a
- * field spec. `setAttribute` writes the scalar, the field reads it back,
- * and `removeAttribute` takes it away again; see `noisePosition` in
- * expr.ts, which exists for the same reason.
+ * `bins` is the primitive's own knob, read straight out of the exposed
+ * param by name. `curveU` stays an ATTRIBUTE because it genuinely is one —
+ * it varies per point, and it is the input this expression is about. The
+ * two are the whole distinction the grammar draws: a value that varies per
+ * element is an attribute, a value uniform over the cook is a param.
  */
 const BIN_CENTRE: Spec = call(
   "div",
-  call("add", call("floor", call("mul", attr("curveU", 1), attr("__bins"))), 0.5),
-  attr("__bins"),
+  call("add", call("floor", call("mul", attr("curveU", 1), param("bins"))), 0.5),
+  param("bins"),
 );
 
 /** Register every `transform/*` primitive. Call once, from the family index. */
@@ -38,21 +37,6 @@ export function registerTransformPrimitives(): void {
     tags: ["noise", "terrain"],
     nodes: [
       {
-        id: "freqAttr",
-        type: "setAttribute",
-        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 0.05 },
-      },
-      {
-        id: "variantAttr",
-        type: "setAttribute",
-        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
-      },
-      {
-        id: "ampAttr",
-        type: "setAttribute",
-        params: { name: "amp", domain: "point", type: "f32", tupleSize: 1, value: 4 },
-      },
-      {
         id: "displace",
         type: "transformPoints",
         params: {
@@ -60,46 +44,36 @@ export function registerTransformPrimitives(): void {
           rotateEuler: [0, 0, 0],
           translate: vec(
             0,
-            call("mul", attr("amp"), call("remap", tunableFbm("freq", "variant"), 0, 1, -1, 1)),
+            call("mul", param("amount"), call("remap", tunableFbm("frequency", "variant"), 0, 1, -1, 1)),
             0,
           ),
         },
       },
-      {
-        id: "cleanup",
-        type: "removeAttribute",
-        params: { names: ["freq", "variant", "amp"], domain: "point", strict: true },
-      },
     ],
-    connections: [
-      { from: ["freqAttr", "out"], to: ["variantAttr", "in"] },
-      { from: ["variantAttr", "out"], to: ["ampAttr", "in"] },
-      { from: ["ampAttr", "out"], to: ["displace", "in"] },
-      { from: ["displace", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "freqAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [],
+    inputs: [{ name: "in", node: "displace", pin: "in" }],
+    outputs: [{ name: "out", node: "displace", pin: "out" }],
     params: [
       {
         name: "amount",
-        targets: [{ node: "ampAttr", param: "value" }],
+        targets: [],
+        default: 4,
         description:
           "How far points move along Y. It SCALES the displacement but does not bound it: on a cloud spanning many noise periods the peak is about 0.42 * amount, so the default 4 lifts and drops by roughly 1.7 units, and for a peak of h world units ask for amount around 2.4 * h. Exactly linear in amount — doubling it doubles every displacement — and the mean stays within 1% of 0, so the average height does not move. This is a FRACTION OF A NOMINAL RANGE, not of the displacement you get: the value scales a noise term whose range is +/-1 in principle, and four octaves of normalized fBm only ever reach the middle of it. How much of it depends on how much FIELD the cloud spans — extent x `frequency`, not the point count. Measured at amount 4: a 600-unit spread peaks at 0.42 to 0.49 of amount at every frequency from 0.01 up, while a 30-unit patch at the default frequency 0.05 spans barely one period and peaks at only 0.25, whether it holds 100 points or 20,000. On a small patch, either raise `frequency` or scale `amount` up to compensate.",
-        acceptsField: true,
       },
       {
         name: "frequency",
-        targets: [{ node: "freqAttr", param: "value" }],
+        targets: [],
+        default: 0.05,
         description:
           "Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves.",
-        acceptsField: true,
       },
       {
         name: "variant",
-        targets: [{ node: "variantAttr", param: "value" }],
+        targets: [],
+        default: 0,
         description:
           "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
-        acceptsField: true,
       },
     ],
   });
@@ -110,11 +84,6 @@ export function registerTransformPrimitives(): void {
       "Snaps every point to the nearest corner of a regular 3D grid of the given pitch, so scattered positions become tile-aligned. Note that snapping can land two points on the SAME corner: follow it with `selfPrune` at a distance just under the pitch if the duplicates matter. Fully deterministic. Reads and writes `P`; leaves every other attribute alone, including `scale`.",
     tags: ["grid", "align"],
     nodes: [
-      {
-        id: "cellAttr",
-        type: "setAttribute",
-        params: { name: "cell", domain: "point", type: "f32", tupleSize: 1, value: 4 },
-      },
       {
         id: "snap",
         type: "transformPoints",
@@ -127,27 +96,23 @@ export function registerTransformPrimitives(): void {
             "sub",
             call(
               "mul",
-              call("floor", call("add", call("div", position(), attr("cell")), 0.5)),
-              attr("cell"),
+              call("floor", call("add", call("div", position(), param("cellSize")), 0.5)),
+              param("cellSize"),
             ),
             position(),
           ),
         },
       },
-      { id: "cleanup", type: "removeAttribute", params: { names: ["cell"], domain: "point", strict: true } },
     ],
-    connections: [
-      { from: ["cellAttr", "out"], to: ["snap", "in"] },
-      { from: ["snap", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "cellAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [],
+    inputs: [{ name: "in", node: "snap", pin: "in" }],
+    outputs: [{ name: "out", node: "snap", pin: "out" }],
     params: [
       {
         name: "cellSize",
-        targets: [{ node: "cellAttr", param: "value" }],
+        targets: [],
+        default: 4,
         description: "Grid pitch in world units, the same on all three axes. Must be greater than 0.",
-        acceptsField: true,
       },
     ],
   });
@@ -159,16 +124,6 @@ export function registerTransformPrimitives(): void {
     tags: ["curve", "path", "spacing"],
     nodes: [
       {
-        id: "binsAttr",
-        type: "setAttribute",
-        params: { name: "__bins", domain: "point", type: "f32", tupleSize: 1, value: 6 },
-      },
-      {
-        id: "amountAttr",
-        type: "setAttribute",
-        params: { name: "__gather", domain: "point", type: "f32", tupleSize: 1, value: 0.7 },
-      },
-      {
         id: "slide",
         type: "pathPointAt",
         params: {
@@ -178,38 +133,30 @@ export function registerTransformPrimitives(): void {
           // this point started and the move can be expressed relative to
           // it. A target alone would place every point of a bin on top of
           // its neighbours; the lerp is what makes `amount` a dial.
-          parameter: call("lerp", attr("curveU", 1), BIN_CENTRE, attr("__gather")),
+          parameter: call("lerp", attr("curveU", 1), BIN_CENTRE, param("amount")),
         },
       },
-      {
-        id: "cleanup",
-        type: "removeAttribute",
-        params: { names: ["__bins", "__gather"], domain: "point", strict: true },
-      },
     ],
-    connections: [
-      { from: ["binsAttr", "out"], to: ["amountAttr", "in"] },
-      { from: ["amountAttr", "out"], to: ["slide", "in"] },
-      { from: ["slide", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "binsAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [],
+    inputs: [{ name: "in", node: "slide", pin: "in" }],
+    outputs: [{ name: "out", node: "slide", pin: "out" }],
     params: [
       {
         name: "bins",
-        targets: [{ node: "binsAttr", param: "value" }],
+        targets: [],
+        default: 6,
         description:
-          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. The schema admits a field because the slot underneath it does, but keep it CONSTANT: a per-point bin count gives neighbouring points different bins, which stop partitioning the path and send them to targets that do not line up.",
+          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. It is one value for the whole cook, which is what a bin count has to be: neighbouring points on different bin counts stop partitioning the path and head for targets that do not line up.",
         min: 1,
       },
       {
         name: "amount",
-        targets: [{ node: "amountAttr", param: "value" }],
+        targets: [],
+        default: 0.7,
         description:
-          "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other.",
+          "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. It is uniform over the cook. To gather one end of a path harder than the other, run the primitive on a partition of the points rather than looking for a per-point dial here.",
         min: 0,
         max: 1,
-        acceptsField: true,
       },
     ],
   });
@@ -233,28 +180,22 @@ export function registerTransformPrimitives(): void {
         },
       },
       {
-        id: "strAttr",
-        type: "setAttribute",
-        params: { name: "__str", domain: "point", type: "f32", tupleSize: 1, value: 0.5 },
-      },
-      {
         id: "push",
         type: "transformPoints",
         params: {
           scale: [1, 1, 1],
           rotateEuler: [0, 0, 0],
-          translate: call("mul", attr("__str"), call("sub", position(), attr("__nbrP", 3))),
+          translate: call("mul", param("strength"), call("sub", position(), attr("__nbrP", 3))),
         },
       },
       {
         id: "cleanup",
         type: "removeAttribute",
-        params: { names: ["__nbrP", "__str"], domain: "point", strict: true },
+        params: { names: ["__nbrP"], domain: "point", strict: true },
       },
     ],
     connections: [
-      { from: ["nbr", "out"], to: ["strAttr", "in"] },
-      { from: ["strAttr", "out"], to: ["push", "in"] },
+      { from: ["nbr", "out"], to: ["push", "in"] },
       { from: ["push", "out"], to: ["cleanup", "in"] },
     ],
     inputs: [{ name: "in", node: "nbr", pin: "in" }],
@@ -269,10 +210,10 @@ export function registerTransformPrimitives(): void {
       },
       {
         name: "strength",
-        targets: [{ node: "strAttr", param: "value" }],
+        targets: [],
+        default: 0.5,
         description:
           "How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates.",
-        acceptsField: true,
       },
     ],
   });

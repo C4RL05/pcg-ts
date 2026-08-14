@@ -1,8 +1,11 @@
 /**
- * `filter/*` — remove points, never move them. `P` is untouched and the
- * output carries no column the input did not have: every scratch attribute
- * these recipes need to reach a decision is deleted again before the
- * result leaves.
+ * `filter/*` — remove points, never move them. `P` is untouched, and the
+ * only column any of these adds is one it DOCUMENTS adding:
+ * `filter/thin-by-density` leaves the `density` it thinned by, and that is
+ * the whole list. Every scratch attribute a recipe needs to reach its
+ * decision — `__radial`, `__nearDist`, `__nbrCount` — is deleted again
+ * before the result leaves, and the two noise filters need none at all now
+ * that their knobs are read by name rather than carried in a column.
  *
  * The distinction an agent must understand lives in this family: a
  * THRESHOLD on a noise field gives connected regions with hard edges,
@@ -11,7 +14,7 @@
  * are the same field with those two readings, and each description points
  * at the other.
  */
-import { attr, call, position, tunableFbm } from "./expr.js";
+import { attr, call, param, position, tunableFbm } from "./expr.js";
 import { definePrimitive } from "./define.js";
 
 /** Register every `filter/*` primitive. Call once, from the family index. */
@@ -19,19 +22,9 @@ export function registerFilterPrimitives(): void {
   definePrimitive("filter/thin-by-density", {
     title: "Thin a point cloud by a noise density",
     description:
-      "Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — noise carries its own seed inside its field spec, where no exposed param can reach, so two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.",
+      "Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, so no reference of any kind can stand there and no knob can move it — two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.",
     tags: ["noise", "density"],
     nodes: [
-      {
-        id: "variantAttr",
-        type: "setAttribute",
-        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
-      },
-      {
-        id: "freqAttr",
-        type: "setAttribute",
-        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 0.02 },
-      },
       {
         id: "densityAttr",
         type: "setAttribute",
@@ -40,34 +33,28 @@ export function registerFilterPrimitives(): void {
           domain: "point",
           type: "f32",
           tupleSize: 1,
-          value: tunableFbm("freq", "variant"),
+          value: tunableFbm("frequency", "variant"),
         },
       },
       { id: "thin", type: "filterByDensity", params: { mode: "probabilistic", threshold: 0.5, seed: 0 } },
-      { id: "cleanup", type: "removeAttribute", params: { names: ["variant", "freq"], domain: "point", strict: true } },
     ],
-    connections: [
-      { from: ["variantAttr", "out"], to: ["freqAttr", "in"] },
-      { from: ["freqAttr", "out"], to: ["densityAttr", "in"] },
-      { from: ["densityAttr", "out"], to: ["thin", "in"] },
-      { from: ["thin", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "variantAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [{ from: ["densityAttr", "out"], to: ["thin", "in"] }],
+    inputs: [{ name: "in", node: "densityAttr", pin: "in" }],
+    outputs: [{ name: "out", node: "thin", pin: "out" }],
     params: [
       {
         name: "frequency",
-        targets: [{ node: "freqAttr", param: "value" }],
+        targets: [],
+        default: 0.02,
         description:
           "Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across.",
-        acceptsField: true,
       },
       {
         name: "variant",
-        targets: [{ node: "variantAttr", param: "value" }],
+        targets: [],
+        default: 0,
         description:
           "Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces.",
-        acceptsField: true,
       },
       {
         name: "seed",
@@ -81,65 +68,40 @@ export function registerFilterPrimitives(): void {
   definePrimitive("filter/mask-by-noise", {
     title: "Keep the points where a noise field is above a threshold",
     description:
-      "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less — but the usable band is only about 0.32 to 0.68, not the full 0..1 the param's range suggests; the `threshold` description gives the measured table. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing (every scratch column is removed again).",
+      "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less — but the usable band is only about 0.32 to 0.68, not the full 0..1 the param's range suggests; the `threshold` description gives the measured table. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing at all — the whole test is one field expression, so no scratch column is created to be cleaned up.",
     tags: ["noise", "mask"],
     nodes: [
       {
-        id: "variantAttr",
-        type: "setAttribute",
-        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
-      },
-      {
-        id: "freqAttr",
-        type: "setAttribute",
-        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 0.02 },
-      },
-      {
-        id: "threshAttr",
-        type: "setAttribute",
-        params: { name: "threshold", domain: "point", type: "f32", tupleSize: 1, value: 0.5 },
-      },
-      {
         id: "mask",
         type: "filterByExpression",
-        params: { predicate: call("ge", tunableFbm("freq", "variant"), attr("threshold")), seed: 0 },
-      },
-      {
-        id: "cleanup",
-        type: "removeAttribute",
-        params: { names: ["variant", "freq", "threshold"], domain: "point", strict: true },
+        params: { predicate: call("ge", tunableFbm("frequency", "variant"), param("threshold")), seed: 0 },
       },
     ],
-    connections: [
-      { from: ["variantAttr", "out"], to: ["freqAttr", "in"] },
-      { from: ["freqAttr", "out"], to: ["threshAttr", "in"] },
-      { from: ["threshAttr", "out"], to: ["mask", "in"] },
-      { from: ["mask", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "variantAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [],
+    inputs: [{ name: "in", node: "mask", pin: "in" }],
+    outputs: [{ name: "out", node: "mask", pin: "out" }],
     params: [
       {
         name: "threshold",
-        targets: [{ node: "threshAttr", param: "value" }],
+        targets: [],
+        default: 0.5,
         description:
           "Where the cut falls on the 0..1 noise — but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.32 (keeps everything) and 0.68 (keeps nothing). Four octaves of normalized fBm come out bell-shaped around 0.5 with a standard deviation near 0.065, never at the ends: the theoretical 0..1 is the nominal range of the term, not the values it takes. Measured on a wide 2D spread: 0.42 keeps ~89%, 0.46 ~75%, 0.50 ~50%, 0.55 ~23%, 0.59 ~9%. So a threshold of 0.8 does not keep a fifth, it keeps NOTHING, and 0.2 does not keep four fifths, it keeps everything. `frequency`, `variant` and how widely the points sample the field move the two ends by a few hundredths.",
         min: 0,
         max: 1,
-        acceptsField: true,
       },
       {
         name: "frequency",
-        targets: [{ node: "freqAttr", param: "value" }],
+        targets: [],
+        default: 0.02,
         description: "Feature size: the noise sample position is multiplied by this, so smaller means larger regions.",
-        acceptsField: true,
       },
       {
         name: "variant",
-        targets: [{ node: "variantAttr", param: "value" }],
+        targets: [],
+        default: 0,
         description:
           "Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically.",
-        acceptsField: true,
       },
     ],
   });
@@ -147,14 +109,9 @@ export function registerFilterPrimitives(): void {
   definePrimitive("filter/inside-radius", {
     title: "Keep the points within a radius of a centre",
     description:
-      "Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (both scratch columns are removed again).",
+      "Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (the scratch distance column is removed again).",
     tags: ["spatial", "mask"],
     nodes: [
-      {
-        id: "centerAttr",
-        type: "setAttribute",
-        params: { name: "__center", domain: "point", type: "f32", tupleSize: 3, value: 0 },
-      },
       {
         id: "distAttr",
         type: "setAttribute",
@@ -163,30 +120,29 @@ export function registerFilterPrimitives(): void {
           domain: "point",
           type: "f32",
           tupleSize: 1,
-          value: call("length", call("sub", position(), attr("__center", 3))),
+          value: call("length", call("sub", position(), param("center"))),
         },
       },
       { id: "keep", type: "filterByAttribute", params: { attribute: "__radial", comparison: "le", value: 10, stringValue: "" } },
       {
         id: "cleanup",
         type: "removeAttribute",
-        params: { names: ["__center", "__radial"], domain: "point", strict: true },
+        params: { names: ["__radial"], domain: "point", strict: true },
       },
     ],
     connections: [
-      { from: ["centerAttr", "out"], to: ["distAttr", "in"] },
       { from: ["distAttr", "out"], to: ["keep", "in"] },
       { from: ["keep", "out"], to: ["cleanup", "in"] },
     ],
-    inputs: [{ name: "in", node: "centerAttr", pin: "in" }],
+    inputs: [{ name: "in", node: "distAttr", pin: "in" }],
     outputs: [{ name: "out", node: "cleanup", pin: "out" }],
     params: [
       {
         name: "center",
-        targets: [{ node: "centerAttr", param: "value" }],
+        targets: [],
+        default: [0, 0, 0],
         description:
-          'World position the distance is measured from. A plain number broadcasts to all three axes, so 0 is the origin; for anywhere else pass a field spec: {"fn":"constant","value":[x,y,z]}.',
-        acceptsField: true,
+          "World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted.",
       },
       {
         name: "radius",

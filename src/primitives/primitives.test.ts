@@ -23,6 +23,7 @@ import {
   getRegisteredSubgraph,
   listSubgraphs,
 } from "../index.js";
+import { STANDARD_POINT_ATTRS } from "../data/points.js";
 import { snapshotGeometry } from "../nodes/nodes.testsupport.js";
 import "./index.js";
 import { PRIMITIVE_FAMILIES, primitiveFamily } from "./define.js";
@@ -369,6 +370,61 @@ describe("the shipped vocabulary", () => {
       expect((entry.meta?.description ?? "").length).toBeGreaterThan(120);
     }
   });
+
+  // The whole catalog reaches inside its field expressions through
+  // {"fn":"param"}. It used to reach in through the PARAMETER-ATTRIBUTE
+  // idiom instead — a `setAttribute` writing the knob's value into a
+  // `count`-element column, a field reading it back by name, and a
+  // `removeAttribute` deleting it again — which cost a node, a column, a
+  // GPU dispatch and one of the seven usable storage-buffer slots PER
+  // KNOB. This is the assertion that keeps it gone: a recipe reintroducing
+  // the pair fails here, naming both halves.
+  it("reaches inside its field expressions by param, never by a parameter attribute", () => {
+    const offenders: string[] = [];
+    for (const entry of listSubgraphs()) {
+      const nodes = entry.subgraph.graph.nodes;
+      for (const exp of entry.subgraph.params ?? []) {
+        for (const target of exp.targets) {
+          if (target.param !== "value") continue;
+          const writer = nodes.find((n) => n.id === target.node && n.type === "setAttribute");
+          const written = writer?.params?.name;
+          if (typeof written !== "string" || written === "") continue;
+          // The other half: something in this recipe reads that very
+          // column back out of a field spec.
+          const read = JSON.stringify(nodes.filter((n) => n.id !== writer?.id)).includes(
+            `{"fn":"attribute","name":${JSON.stringify(written)}`,
+          );
+          if (read) {
+            offenders.push(
+              `${entry.name}: param "${exp.name}" -> "${target.node}".value writes "${written}", read back as {"fn":"attribute"}`,
+            );
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // The counterpart, so the assertion above cannot pass vacuously: the
+  // catalog really does use the grammar it is asserted not to work around.
+  it("declares targetless params its own field expressions read by name", () => {
+    const bound = listSubgraphs().filter((entry) =>
+      (entry.subgraph.params ?? []).some((p) => p.targets.length === 0),
+    );
+    expect(bound.length).toBeGreaterThanOrEqual(14);
+    for (const entry of bound) {
+      for (const p of entry.subgraph.params ?? []) {
+        if (p.targets.length > 0) continue;
+        // A targetless declaration writes nowhere, so the body's fields
+        // are the only thing that can be reading it — and its default is
+        // what the schema's whole type is derived from.
+        expect(JSON.stringify(entry.subgraph.graph.nodes)).toContain(
+          `{"fn":"param","name":${JSON.stringify(p.name)}}`,
+        );
+        expect(p.default, `${entry.name}.${p.name}`).toBeDefined();
+      }
+    }
+  });
 });
 
 describe("every primitive cooks from JSON", () => {
@@ -522,6 +578,27 @@ function geo(outputs: Record<string, DataCollection>, key = "main_out") {
   throw new Error(`no geometry on output "${key}"`);
 }
 
+/**
+ * Every point column an output carries beyond the eight standard ones, so
+ * a recipe's leftovers can be asserted as a SET.
+ *
+ * This is deliberately name-blind. The suite used to name the scratch
+ * columns it expected to be gone — `not.toContain("freq")` and its
+ * siblings — and every one of those assertions became unfalsifiable the
+ * moment the catalog stopped writing that column at all: the parameter
+ * attributes are not cleaned up any more, they are never created. Asking
+ * for the whole extra set instead catches a leftover under ANY name,
+ * including a reintroduced parameter attribute, and it also catches a
+ * column that silently stops being written.
+ */
+function extraPointAttrs(g: { attrs: { point: { names(): readonly string[] } } }): string[] {
+  const standard = new Set(STANDARD_POINT_ATTRS.map((a) => a.name));
+  return g.attrs.point
+    .names()
+    .filter((n) => !standard.has(n))
+    .sort();
+}
+
 describe("shape/", () => {
   it("ring emits exactly `count` points on the circle of the requested size", async () => {
     // `count` means count. It used to mean "count - 1 on a full sweep",
@@ -615,9 +692,8 @@ describe("fill/", () => {
     expect(g.pointCount).toBeGreaterThan(1200);
     expect(g.pointCount).toBeLessThan(2800);
     expect(g.attrs.point.names()).toContain("density");
-    // The parameter attributes the recipe needed are gone again.
-    expect(g.attrs.point.names()).not.toContain("freq");
-    expect(g.attrs.point.names()).not.toContain("variant");
+    // `density` is standard, so a clean thin adds NOTHING to the cloud.
+    expect(extraPointAttrs(g)).toEqual([]);
   });
 
   it("scatter-clustered multiplies the two counts", async () => {
@@ -650,7 +726,8 @@ describe("transform/", () => {
       if (Math.abs(P.get(i, 1)) > 1e-6) moved++;
     }
     expect(moved).toBeGreaterThan(250);
-    expect(g.attrs.point.names()).not.toContain("amp");
+    // A transform changes P and nothing else — no column comes or goes.
+    expect(extraPointAttrs(g)).toEqual([]);
   });
 
   it("snap-to-grid lands every point on a multiple of the pitch and keeps scale", async () => {
@@ -712,9 +789,11 @@ describe("filter/", () => {
       "filter/by-neighbor-count",
     ]) {
       const g = geo(await cookOne(name));
-      for (const scratch of ["freq", "variant", "threshold", "__center", "__radial", "__nbrCount"]) {
-        expect(g.attrs.point.names(), `${name} left ${scratch} behind`).not.toContain(scratch);
-      }
+      // The family contract as a SET: a filter reaches its decision
+      // through scratch columns (`__radial`, `__nbrCount`) and every one
+      // is gone by the time the result leaves, so the only point columns
+      // left are the eight standard ones.
+      expect(extraPointAttrs(g), `${name} left a column behind`).toEqual([]);
       expect(g.pointCount).toBeLessThanOrEqual(FIXTURE_POINTS);
     }
   });
@@ -729,14 +808,14 @@ describe("filter/", () => {
     }
   });
 
-  it("inside-radius moves its centre through a field-valued param", async () => {
+  // `center` is read by the body's distance expression as
+  // {"fn":"param","name":"center"}, so it is a plain vec3 knob: the three
+  // numbers go straight into the expression. It used to be a scalar
+  // written into a `setAttribute`, where the only way to reach a real
+  // position was to hand the slot a constant FIELD.
+  it("inside-radius moves its centre through a vec3 param the body's field reads", async () => {
     const atOrigin = geo(await cookOne("filter/inside-radius", { radius: 5 }));
-    const moved = geo(
-      await cookOne("filter/inside-radius", {
-        radius: 5,
-        center: { fn: "constant", value: [12, 0, 12] },
-      }),
-    );
+    const moved = geo(await cookOne("filter/inside-radius", { radius: 5, center: [12, 0, 12] }));
     expect(snapshotGeometry(moved)).not.toEqual(snapshotGeometry(atOrigin));
     const P = moved.attrs.point.require("P");
     for (let i = 0; i < moved.pointCount; i++) {
@@ -1040,14 +1119,16 @@ describe("write/", () => {
     expect(g.attrs.point.require("slope").get(0, 0)).toBeCloseTo(0, 5);
   });
 
-  it("density-from-noise writes a normalized density and cleans up after itself", async () => {
+  it("density-from-noise writes a normalized density and adds no column of its own", async () => {
     const g = geo(await cookOne("write/density-from-noise"));
     const density = g.attrs.point.require("density");
     for (let i = 0; i < g.pointCount; i++) {
       expect(density.get(i, 0)).toBeGreaterThanOrEqual(0);
       expect(density.get(i, 0)).toBeLessThanOrEqual(1);
     }
-    expect(g.attrs.point.names()).not.toContain("freq");
+    // One `setAttribute` writing one STANDARD column, and nothing else:
+    // the knobs are read by the field, not carried in columns.
+    expect(extraPointAttrs(g)).toEqual([]);
   });
 
   it("random-scale writes ONE size per point, the same on all three axes", async () => {
@@ -1225,13 +1306,10 @@ describe("the curve set", () => {
     const seg = segmentLengths(g);
     expect(Math.max(...seg) / Math.min(...seg)).toBeLessThan(1.06);
 
-    // Fresh points: the three parameter attributes never reach the output,
-    // and the sampler's own columns are there instead.
-    for (const scratch of ["freq", "variant", "amp"]) {
-      expect(g.attrs.point.names()).not.toContain(scratch);
-    }
-    expect(g.attrs.point.names()).toContain("tangent");
-    expect(g.attrs.point.names()).toContain("curveU");
+    // Fresh points: the resample builds them, so the ONLY columns beyond
+    // the standard eight are the two the sampler itself writes. Anything
+    // the recipe carried internally would show up here.
+    expect(extraPointAttrs(g)).toEqual(["curveU", "tangent"]);
   });
 
   it("path-meander at wander 0 is a straight line of the requested length", async () => {
@@ -1420,9 +1498,9 @@ describe("the curve set", () => {
     expect(even.pointCount).toBe(SAMPLED_CURVE_POINTS);
     expect(clumped.pointCount).toBe(SAMPLED_CURVE_POINTS);
     expect(clumped.primitiveCount).toBe(1); // and it is still a path
-    for (const scratch of ["__bins", "__gather"]) {
-      expect(clumped.attrs.point.names(), `left ${scratch} behind`).not.toContain(scratch);
-    }
+    // Nothing but what the fixture's resample already wrote: the gather
+    // reads `curveU` and its own two knobs, and carries no column.
+    expect(extraPointAttrs(clumped)).toEqual(["curveU", "tangent"]);
     // amount 0 is the identity: the resample's own even spacing survives.
     const E = even.attrs.point.require("P");
     const step = (2 * CURVE_HALF_LENGTH) / (SAMPLED_CURVE_POINTS - 1);
@@ -1442,10 +1520,10 @@ describe("the curve set", () => {
     const fan = geo(await cookOne("place/radial-on-curve", { count: 12 }));
     expect(fan.pointCount).toBe(12);
     expect(fan.primitiveCount).toBe(1); // still a path, still resamplable
-    expect(fan.attrs.point.names()).not.toContain("__spread");
-    for (const name of ["tangent", "curveU", "curveNormal", "curveBinormal", "rot"]) {
-      expect(fan.attrs.point.names()).toContain(name);
-    }
+    expect(fan.attrs.point.names()).toContain("rot"); // standard, written here
+    // The frame's three columns and the sampler's parameterisation, and
+    // nothing else — `spread` reaches the roll expression as a param.
+    expect(extraPointAttrs(fan)).toEqual(["curveBinormal", "curveNormal", "curveU", "tangent"]);
     // The whole claim, on a STRAIGHT curve where a constant up cannot be
     // blamed for the difference: every tangent is +X, so place/along-curve
     // gives all twelve points the same rot and this one gives them twelve.

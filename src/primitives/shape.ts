@@ -2,12 +2,14 @@
  * `shape/*` — a point set describing a region or skeleton, with no input.
  *
  * Every one is built at UNIT SIZE around the origin and placed by a
- * trailing `transformPoints`, because an exposed param is pure fan-out of
- * one identical value: no arithmetic can turn a `radius` into the pair of
- * corners `[-r,0,-r]` and `[r,0,r]` that a bounds-based construction would
- * need. The trailing transform does the arithmetic the param mechanism
- * cannot, and it is why `size`, `rotate` and `center` are the same three
- * knobs on all four.
+ * trailing `transformPoints`, because neither route a knob has into a body
+ * can turn a `radius` into the pair of corners `[-r,0,-r]` and `[r,0,r]`
+ * that a bounds-based construction would need: fan-out writes one
+ * identical value with no arithmetic in between, and the field expression
+ * that COULD do the arithmetic cannot stand in a bounds slot, which is a
+ * plain `vec3` that refuses a field. The trailing transform does the
+ * arithmetic neither mechanism can, and it is why `size`, `rotate` and
+ * `center` are the same three knobs on all four.
  *
  * Two mechanisms are shared and neither is obvious:
  *
@@ -31,7 +33,7 @@
  * `shape/spiral` trace a curve's outline as loose points and do not.
  */
 import type { SerializedNode } from "../index.js";
-import { TAU, attr, call, component, constant, position, tunableFbm, vec } from "./expr.js";
+import { TAU, call, component, constant, param, position, tunableFbm, vec } from "./expr.js";
 import { type PrimitiveParamDecl, definePrimitive } from "./define.js";
 
 /** Reset the per-point `scale` attribute after placement. See the header. */
@@ -117,35 +119,27 @@ export function registerShapePrimitives(): void {
         params: { count: 24, start: [0, 0, 0], end: [1, 0, 0], includeEnd: false },
       },
       {
-        id: "sweepAttr",
-        type: "setAttribute",
-        params: { name: "sweep", domain: "point", type: "f32", tupleSize: 1, value: 1 },
-      },
-      {
         id: "ring",
         type: "transformPoints",
         params: {
           scale: [0, 0, 0],
           rotateEuler: [0, 0, 0],
           translate: vec(
-            call("cos", call("mul", call("mul", u(), attr("sweep")), TAU)),
+            call("cos", call("mul", call("mul", u(), param("sweep")), TAU)),
             0,
-            call("sin", call("mul", call("mul", u(), attr("sweep")), TAU)),
+            call("sin", call("mul", call("mul", u(), param("sweep")), TAU)),
           ),
         },
       },
       place(),
       resetScale(),
-      { id: "cleanup", type: "removeAttribute", params: { names: ["sweep"], domain: "point", strict: true } },
     ],
     connections: [
-      { from: ["line", "out"], to: ["sweepAttr", "in"] },
-      { from: ["sweepAttr", "out"], to: ["ring", "in"] },
+      { from: ["line", "out"], to: ["ring", "in"] },
       { from: ["ring", "out"], to: ["place", "in"] },
       { from: ["place", "out"], to: ["reset", "in"] },
-      { from: ["reset", "out"], to: ["cleanup", "in"] },
     ],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    outputs: [{ name: "out", node: "reset", pin: "out" }],
     params: [
       {
         name: "count",
@@ -155,11 +149,11 @@ export function registerShapePrimitives(): void {
       },
       {
         name: "sweep",
-        targets: [{ node: "sweepAttr", param: "value" }],
+        targets: [],
+        default: 1,
         description: "How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc.",
         min: 0,
         max: 1,
-        acceptsField: true,
       },
       {
         name: "includeEnd",
@@ -181,35 +175,27 @@ export function registerShapePrimitives(): void {
       // real endpoint on the outer rim, not a seam that meets its start.
       { id: "line", type: "pointLine", params: { count: 160, start: [0, 0, 0], end: [1, 0, 0], includeEnd: true } },
       {
-        id: "turnsAttr",
-        type: "setAttribute",
-        params: { name: "turns", domain: "point", type: "f32", tupleSize: 1, value: 3 },
-      },
-      {
         id: "spiral",
         type: "transformPoints",
         params: {
           scale: [0, 0, 0],
           rotateEuler: [0, 0, 0],
           translate: vec(
-            call("mul", u(), call("cos", call("mul", call("mul", u(), attr("turns")), TAU))),
+            call("mul", u(), call("cos", call("mul", call("mul", u(), param("turns")), TAU))),
             0,
-            call("mul", u(), call("sin", call("mul", call("mul", u(), attr("turns")), TAU))),
+            call("mul", u(), call("sin", call("mul", call("mul", u(), param("turns")), TAU))),
           ),
         },
       },
       place(),
       resetScale(),
-      { id: "cleanup", type: "removeAttribute", params: { names: ["turns"], domain: "point", strict: true } },
     ],
     connections: [
-      { from: ["line", "out"], to: ["turnsAttr", "in"] },
-      { from: ["turnsAttr", "out"], to: ["spiral", "in"] },
+      { from: ["line", "out"], to: ["spiral", "in"] },
       { from: ["spiral", "out"], to: ["place", "in"] },
       { from: ["place", "out"], to: ["reset", "in"] },
-      { from: ["reset", "out"], to: ["cleanup", "in"] },
     ],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    outputs: [{ name: "out", node: "reset", pin: "out" }],
     params: [
       {
         name: "count",
@@ -219,10 +205,10 @@ export function registerShapePrimitives(): void {
       },
       {
         name: "turns",
-        targets: [{ node: "turnsAttr", param: "value" }],
+        targets: [],
+        default: 3,
         description: "How many full revolutions the spiral makes between the centre and the outer radius.",
         min: 0,
-        acceptsField: true,
       },
       ...placementParams(),
     ],
@@ -285,7 +271,7 @@ export function registerShapePrimitives(): void {
   definePrimitive("shape/path-meander", {
     title: "A wandering open path between two ends",
     description:
-      "Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so none of the recipe's own working columns reach the output and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.",
+      "Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so the recipe writes no working column at all and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.",
     tags: ["curve", "path", "noise"],
     nodes: [
       // Unit space: a line from -0.5 to +0.5 along X, wandering in Z, with
@@ -294,21 +280,6 @@ export function registerShapePrimitives(): void {
         id: "line",
         type: "pointLine",
         params: { count: 33, start: [-0.5, 0, 0], end: [0.5, 0, 0], includeEnd: true },
-      },
-      {
-        id: "freqAttr",
-        type: "setAttribute",
-        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 3 },
-      },
-      {
-        id: "variantAttr",
-        type: "setAttribute",
-        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
-      },
-      {
-        id: "ampAttr",
-        type: "setAttribute",
-        params: { name: "amp", domain: "point", type: "f32", tupleSize: 1, value: 0.15 },
       },
       {
         id: "wander",
@@ -320,7 +291,7 @@ export function registerShapePrimitives(): void {
           translate: vec(
             0,
             0,
-            call("mul", attr("amp"), call("remap", tunableFbm("freq", "variant"), 0, 1, -1, 1)),
+            call("mul", param("wander"), call("remap", tunableFbm("frequency", "variant"), 0, 1, -1, 1)),
           ),
         },
       },
@@ -332,17 +303,14 @@ export function registerShapePrimitives(): void {
         params: { scale: [40, 1, 40], rotateEuler: [0, 0, 0], translate: [0, 0, 0] },
       },
       { id: "path", type: "pointsToPath", params: { closed: false, groupAttr: "", orderAttr: "" } },
-      // No `removeAttribute` and no `scale` reset: pathResample builds NEW
-      // points carrying the standard attributes plus `tangent` and
-      // `curveU`, so the three parameter attributes and the placement's
-      // scale never reach the output. The tests assert exactly that.
+      // No `scale` reset: pathResample builds NEW points carrying the
+      // standard attributes plus `tangent` and `curveU`, so the
+      // placement's scale never reaches the output. The tests assert
+      // exactly that.
       { id: "even", type: "pathResample", params: { mode: "count", count: 33, spacing: 1 } },
     ],
     connections: [
-      { from: ["line", "out"], to: ["freqAttr", "in"] },
-      { from: ["freqAttr", "out"], to: ["variantAttr", "in"] },
-      { from: ["variantAttr", "out"], to: ["ampAttr", "in"] },
-      { from: ["ampAttr", "out"], to: ["wander", "in"] },
+      { from: ["line", "out"], to: ["wander", "in"] },
       { from: ["wander", "out"], to: ["place", "in"] },
       { from: ["place", "out"], to: ["path", "in"] },
       { from: ["path", "out"], to: ["even", "in"] },
@@ -361,24 +329,24 @@ export function registerShapePrimitives(): void {
       },
       {
         name: "wander",
-        targets: [{ node: "ampAttr", param: "value" }],
+        targets: [],
+        default: 0.15,
         description:
           "How far the path strays from the straight line between its ends. 0 is a straight line; above that the peak deviation is about 0.22 * wander * `size.z`, exactly linear in both — so at the default `size` [40,1,40], 0.15 strays about 1.3 units to each side and 0.5 about 4.4. Inverted, for a peak of a fraction f of `size.z`, ask for wander around 4.6 * f. This is a FRACTION OF A NOMINAL RANGE, not of the deviation you get: the value scales a noise term whose range is +/-1 in principle, but four octaves of normalized fBm sampled along one line only cover part of it, and `frequency` and `variant` move that coverage (measured 0.13 to 0.31 of wander * `size.z` across the usable range). The wander is sideways only — the path is a height field along X, so it NEVER doubles back on itself at any wander; for a curve that turns back, build the corners yourself and run `pointsToPath` over them.",
-        acceptsField: true,
       },
       {
         name: "frequency",
-        targets: [{ node: "freqAttr", param: "value" }],
+        targets: [],
+        default: 3,
         description:
           "How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves.",
-        acceptsField: true,
       },
       {
         name: "variant",
-        targets: [{ node: "variantAttr", param: "value" }],
+        targets: [],
+        default: 0,
         description:
           "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
-        acceptsField: true,
       },
       ...placementParams(
         'Extent in world units: X is the end-to-end length, Z scales the wander. A bare number is not accepted here: pass three numbers [40,1,40], or {"fn":"constant","value":40}.',

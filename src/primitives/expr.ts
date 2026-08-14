@@ -5,7 +5,7 @@
  * every field value here is a plain `FieldSpec` object — never a live
  * `Field`. Building them through these helpers rather than as literals
  * buys one thing: the shape of an expression stays readable at the call
- * site (`mul(position(), attr("freq"))`), which matters because the
+ * site (`mul(position(), param("frequency"))`), which matters because the
  * recipes below are the library's own worked examples of the grammar.
  *
  * Nothing here validates: `fieldFromJson` does that, at the moment
@@ -37,6 +37,23 @@ export function constant(value: number | readonly number[]): Spec {
   return { fn: "constant", value };
 }
 
+/**
+ * `{ fn: "param", name }` — the value the wrapper's exposed param of that
+ * name holds, substituted in as the literal it stands for.
+ *
+ * This is how a primitive's knob reaches INSIDE a field expression, and
+ * the whole catalog is written on it. `name` is the PRIMITIVE's param name
+ * (the one an agent sets), not an inner node's: every exposed param binds
+ * its name into its body's field scope, so a declaration with an empty
+ * `targets` list writes nowhere and is read here instead.
+ *
+ * A misspelling is a hard error at registration naming the declared
+ * params, so the two halves cannot drift.
+ */
+export function param(name: string): Spec {
+  return { fn: "param", name };
+}
+
 /** Per-element deterministic random in [0, 1), salted by `key`. */
 export function randomField(key: string): Spec {
   return { fn: "randomField", key };
@@ -63,33 +80,31 @@ export function ramp(arg: Arg, stops: readonly (readonly [number, number])[]): S
 }
 
 /**
- * The sample position a TUNABLE noise field reads, built from two
- * parameter attributes.
+ * The sample position a TUNABLE noise field reads, built from two exposed
+ * params.
  *
  * This is the whole reason noise-bearing primitives have knobs at all. A
  * noise `frequency`, `seed` or `offset` lives in `opts`, read as a plain
  * number rather than as a field, so no reference of any kind can stand
  * there and none of the three is directly tunable. Scaling and offsetting
  * the position the noise samples is the reachable equivalent: multiplying
- * by `freq` is a frequency control, and adding `variant` walks to an
- * unrelated part of the same infinite field, which is what a per-instance
- * seed would have done.
+ * by the frequency knob is a frequency control, and adding the variant
+ * knob walks to an unrelated part of the same infinite field, which is
+ * what a per-instance seed would have done.
  *
- * The two values arrive as ATTRIBUTES because that was once the only way
- * anything reached the inside of a field spec: an exposed param fanned
- * out into an inner param slot, and a spec has none. That is no longer
- * true — every exposed param now also binds its name into its body's
- * field scope, so `{ fn: "param", name }` would read the value straight
- * where `attr()` reads it here. The catalog has not been rewritten to use
- * it: doing so deletes the `setAttribute`/`removeAttribute` plumbing
- * these values cost and moves every primitive's content hash, which is
- * its own unit of work rather than a side effect of the grammar landing.
+ * Both values arrive as {@link param} references. They used to arrive as
+ * ATTRIBUTES, because an exposed param fanned out into an inner param slot
+ * and a field spec has none — so each knob cost a `setAttribute` writing a
+ * `count`-element f32 column, a `removeAttribute` taking it away again,
+ * and a storage-buffer slot in the compiled kernel. A `param` reference
+ * reads the same value with none of that, and lowers to a uniform slot on
+ * the GPU rather than a buffer.
  */
-export function noisePosition(freqAttr: string, variantAttr: string): Spec {
+export function noisePosition(freqParam: string, variantParam: string): Spec {
   return call(
     "add",
-    call("mul", position(), attr(freqAttr)),
-    vec(attr(variantAttr), attr(variantAttr), attr(variantAttr)),
+    call("mul", position(), param(freqParam)),
+    vec(param(variantParam), param(variantParam), param(variantParam)),
   );
 }
 
@@ -103,10 +118,10 @@ export function noisePosition(freqAttr: string, variantAttr: string): Spec {
  * raw, it is always wrapped in a remap or given `normalized: true`. Baking
  * it here is what a primitive is for.
  */
-export function tunableFbm(freqAttr: string, variantAttr: string, octaves = 4): Spec {
+export function tunableFbm(freqParam: string, variantParam: string, octaves = 4): Spec {
   return {
     fn: "fbm",
     base: "perlinNoise",
-    opts: { normalized: true, octaves, position: noisePosition(freqAttr, variantAttr) },
+    opts: { normalized: true, octaves, position: noisePosition(freqParam, variantParam) },
   };
 }

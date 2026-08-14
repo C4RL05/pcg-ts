@@ -214,8 +214,7 @@
         "schema": {
           "type": "f32",
           "default": 0.02,
-          "description": "Feature size of the clumps: smaller means broader clumps.",
-          "acceptsField": true
+          "description": "Feature size of the clumps: smaller means broader clumps."
         },
         "targets": [
           {
@@ -247,8 +246,7 @@
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position — the only way to give two instances different CLUMPS rather than different points in the same clumps.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position — the only way to give two instances different CLUMPS rather than different points in the same clumps."
         },
         "targets": [
           {
@@ -487,7 +485,7 @@
   },
   {
     "name": "fill/volume-by-noise",
-    "hash": "41deaab7adaf34d8",
+    "hash": "d725ed5f8975818a",
     "title": "Carve connected volumes out of a solid box",
     "description": "Fills a box with a jittered grid of points and keeps only the cells where a 3D noise field rises above a threshold, carving connected volumes out of solid — caves, clouds, asteroid interiors, floating islands. COUNT: the grid is extent cubed over cellSize cubed, so this is the one primitive here that can blow up; halving `cellSize` costs eight times as many points in a three-dimensional region (four over a flat one) before the threshold takes any away. Connect the `in` pin and the bounds come from that geometry's own extents instead of the params, which is the library's only 'adapt to whatever arrives' mechanism. VARIATION: the jitter varies per instance but the CARVE PATTERN does not, so two instances hollow out the same shape unless their `variant` differs.",
     "tags": [
@@ -495,7 +493,7 @@
       "noise",
       "volume"
     ],
-    "nodes": 6,
+    "nodes": 2,
     "inputs": [
       {
         "name": "in",
@@ -564,15 +562,9 @@
         "schema": {
           "type": "f32",
           "default": 0.05,
-          "description": "Feature size: smaller means larger, smoother caverns.",
-          "acceptsField": true
+          "description": "Feature size: smaller means larger, smoother caverns."
         },
-        "targets": [
-          {
-            "node": "freqAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "jitter",
@@ -611,31 +603,19 @@
           "type": "f32",
           "default": 0.5,
           "description": "Where the cut falls on the 0..1 noise. Higher leaves less material, but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.35 (solid) and 0.68 (empty) — four octaves of normalized fBm are bell-shaped around 0.5 and never near the ends. Measured on the default 32-unit box at cellSize 2: 0.3 keeps 100% of the grid, 0.45 keeps 85%, 0.5 keeps 65%, 0.55 keeps 41%, 0.6 keeps 18%, 0.65 keeps 3.6%, 0.7 keeps nothing. The centre of that band is NOT fixed at 0.5 the way the flat filters' is: the box times `frequency` decides how much of the field is sampled, and a small window sits wherever its own patch of noise happens to sit (the same box read as a 2D spread has 0.5 keeping half rather than two thirds). Sweep in steps of 0.02, not 0.1.",
-          "acceptsField": true,
           "min": 0,
           "max": 1
         },
-        "targets": [
-          {
-            "node": "threshAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "variant",
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position — the per-instance re-roll of the carve pattern.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position — the per-instance re-roll of the carve pattern."
         },
-        "targets": [
-          {
-            "node": "variantAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
@@ -869,15 +849,15 @@
   },
   {
     "name": "filter/inside-radius",
-    "hash": "3281ccbb09ada442",
+    "hash": "6e560ec2b3e9af83",
     "title": "Keep the points within a radius of a centre",
-    "description": "Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (both scratch columns are removed again).",
+    "description": "Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (the scratch distance column is removed again).",
     "tags": [
       "filter",
       "spatial",
       "mask"
     ],
-    "nodes": 4,
+    "nodes": 3,
     "inputs": [
       {
         "name": "in",
@@ -894,17 +874,15 @@
       {
         "name": "center",
         "schema": {
-          "type": "f32",
-          "default": 0,
-          "description": "World position the distance is measured from. A plain number broadcasts to all three axes, so 0 is the origin; for anywhere else pass a field spec: {\"fn\":\"constant\",\"value\":[x,y,z]}.",
-          "acceptsField": true
+          "type": "vec3",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted."
         },
-        "targets": [
-          {
-            "node": "centerAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "comparison",
@@ -947,15 +925,15 @@
   },
   {
     "name": "filter/mask-by-noise",
-    "hash": "2883baa351726504",
+    "hash": "badd94382742ee61",
     "title": "Keep the points where a noise field is above a threshold",
-    "description": "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less — but the usable band is only about 0.32 to 0.68, not the full 0..1 the param's range suggests; the `threshold` description gives the measured table. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing (every scratch column is removed again).",
+    "description": "Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less — but the usable band is only about 0.32 to 0.68, not the full 0..1 the param's range suggests; the `threshold` description gives the measured table. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing at all — the whole test is one field expression, so no scratch column is created to be cleaned up.",
     "tags": [
       "filter",
       "noise",
       "mask"
     ],
-    "nodes": 5,
+    "nodes": 1,
     "inputs": [
       {
         "name": "in",
@@ -974,15 +952,9 @@
         "schema": {
           "type": "f32",
           "default": 0.02,
-          "description": "Feature size: the noise sample position is multiplied by this, so smaller means larger regions.",
-          "acceptsField": true
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means larger regions."
         },
-        "targets": [
-          {
-            "node": "freqAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "threshold",
@@ -990,45 +962,33 @@
           "type": "f32",
           "default": 0.5,
           "description": "Where the cut falls on the 0..1 noise — but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.32 (keeps everything) and 0.68 (keeps nothing). Four octaves of normalized fBm come out bell-shaped around 0.5 with a standard deviation near 0.065, never at the ends: the theoretical 0..1 is the nominal range of the term, not the values it takes. Measured on a wide 2D spread: 0.42 keeps ~89%, 0.46 ~75%, 0.50 ~50%, 0.55 ~23%, 0.59 ~9%. So a threshold of 0.8 does not keep a fifth, it keeps NOTHING, and 0.2 does not keep four fifths, it keeps everything. `frequency`, `variant` and how widely the points sample the field move the two ends by a few hundredths.",
-          "acceptsField": true,
           "min": 0,
           "max": 1
         },
-        "targets": [
-          {
-            "node": "threshAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "variant",
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically."
         },
-        "targets": [
-          {
-            "node": "variantAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
   {
     "name": "filter/thin-by-density",
-    "hash": "f933bd0bccb5b2e2",
+    "hash": "f6f376aa61310021",
     "title": "Thin a point cloud by a noise density",
-    "description": "Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — noise carries its own seed inside its field spec, where no exposed param can reach, so two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.",
+    "description": "Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, so no reference of any kind can stand there and no knob can move it — two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.",
     "tags": [
       "filter",
       "noise",
       "density"
     ],
-    "nodes": 5,
+    "nodes": 2,
     "inputs": [
       {
         "name": "in",
@@ -1047,15 +1007,9 @@
         "schema": {
           "type": "f32",
           "default": 0.02,
-          "description": "Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across.",
-          "acceptsField": true
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across."
         },
-        "targets": [
-          {
-            "node": "freqAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "seed",
@@ -1076,15 +1030,9 @@
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces."
         },
-        "targets": [
-          {
-            "node": "variantAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
@@ -1549,7 +1497,7 @@
   },
   {
     "name": "place/radial-on-curve",
-    "hash": "2303e7dd3922f1e6",
+    "hash": "412bf5157e3edf44",
     "title": "Place points along a curve and aim them radially",
     "description": "Places points at even arc-length steps along every path of the supplied `curve`, then rolls each one to a random angle AROUND the curve — spikes on a mace, bristles on a brush, brackets round a mast, leaves up a stem, buds on a branch. It is deliberately distinct from `place/along-curve`, which spaces points the same way but aims them ALONG the tangent with a CONSTANT world `up`: that fixes every asset in the same world orientation, and it flips them a half turn wherever the curve turns over. Here the up hint is per point — cos(a) * `curveNormal` + sin(a) * `curveBinormal`, the unit vector at a random angle a in the plane perpendicular to the tangent, taken from the rotation-minimizing frame `write/curve-frame` describes — so the assets fan out around the path and the fan follows the path however it bends. A constant up simply cannot express that, which is the whole reason to reach for this one. GEOMETRY: the asset's local +z runs along the curve and its local +y is the radial direction, so a prop that must stick OUT of the path wants its length on +y. The points are NEW: they carry `P`, the unit `tangent`, `curveU`, `curveNormal`, `curveBinormal` and `rot`, plus the standard attributes at their defaults, and nothing written on the curve's own POINTS survives — use `write/curve-frame` and an `orientAlongVector` of your own if it must. Every PRIMITIVE attribute does survive, since a sample inherits the polyline it was taken from. PRECONDITION: `curve` must carry polyline topology and must not have been through anything that can REMOVE points — the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy it, and `filterByAttribute` does so even when its predicate keeps every point. VARIATION: yes — the angle is drawn from the evaluation context, so two instances in one graph fan differently on their own; there is no seed knob, so an explicit re-roll means a different `spread`. A CLOSED path does not come back seamless: the frame is transported around the loop and returns rotated by that curve's residual angle, so the fan does not line up across the seam. The output is still a path and can be resampled again.",
     "tags": [
@@ -1558,7 +1506,7 @@
       "path",
       "instancing"
     ],
-    "nodes": 5,
+    "nodes": 3,
     "inputs": [
       {
         "name": "curve",
@@ -1593,15 +1541,9 @@
           "type": "f32",
           "default": 1,
           "description": "How much of a full turn around the curve the fan covers, as a fraction: 1 spreads uniformly over the whole circle, 0.25 over a quarter turn, and 0 aims every point the same way — straight along the transported `curveNormal`, which is a smooth ribbon rather than a fan, and the one setting that does NOT vary between two instances. The angle is drawn uniformly over 0..spread turns, so it is one-sided: the fan opens from the normal in one direction only, and a spread of 0.5 covers a half turn from it rather than a quarter turn either side. Values above 1 wrap and buy nothing.",
-          "acceptsField": true,
           "min": 0
         },
-        "targets": [
-          {
-            "node": "spreadAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
@@ -1808,16 +1750,16 @@
   },
   {
     "name": "shape/path-meander",
-    "hash": "997b64b03a959e47",
+    "hash": "597f419da9624691",
     "title": "A wandering open path between two ends",
-    "description": "Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so none of the recipe's own working columns reach the output and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.",
+    "description": "Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so the recipe writes no working column at all and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.",
     "tags": [
       "shape",
       "curve",
       "path",
       "noise"
     ],
-    "nodes": 8,
+    "nodes": 5,
     "inputs": [],
     "outputs": [
       {
@@ -1869,15 +1811,9 @@
         "schema": {
           "type": "f32",
           "default": 3,
-          "description": "How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves.",
-          "acceptsField": true
+          "description": "How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves."
         },
-        "targets": [
-          {
-            "node": "freqAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "rotate",
@@ -1922,36 +1858,24 @@
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field."
         },
-        "targets": [
-          {
-            "node": "variantAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "wander",
         "schema": {
           "type": "f32",
           "default": 0.15,
-          "description": "How far the path strays from the straight line between its ends. 0 is a straight line; above that the peak deviation is about 0.22 * wander * `size.z`, exactly linear in both — so at the default `size` [40,1,40], 0.15 strays about 1.3 units to each side and 0.5 about 4.4. Inverted, for a peak of a fraction f of `size.z`, ask for wander around 4.6 * f. This is a FRACTION OF A NOMINAL RANGE, not of the deviation you get: the value scales a noise term whose range is +/-1 in principle, but four octaves of normalized fBm sampled along one line only cover part of it, and `frequency` and `variant` move that coverage (measured 0.13 to 0.31 of wander * `size.z` across the usable range). The wander is sideways only — the path is a height field along X, so it NEVER doubles back on itself at any wander; for a curve that turns back, build the corners yourself and run `pointsToPath` over them.",
-          "acceptsField": true
+          "description": "How far the path strays from the straight line between its ends. 0 is a straight line; above that the peak deviation is about 0.22 * wander * `size.z`, exactly linear in both — so at the default `size` [40,1,40], 0.15 strays about 1.3 units to each side and 0.5 about 4.4. Inverted, for a peak of a fraction f of `size.z`, ask for wander around 4.6 * f. This is a FRACTION OF A NOMINAL RANGE, not of the deviation you get: the value scales a noise term whose range is +/-1 in principle, but four octaves of normalized fBm sampled along one line only cover part of it, and `frequency` and `variant` move that coverage (measured 0.13 to 0.31 of wander * `size.z` across the usable range). The wander is sideways only — the path is a height field along X, so it NEVER doubles back on itself at any wander; for a curve that turns back, build the corners yourself and run `pointsToPath` over them."
         },
-        "targets": [
-          {
-            "node": "ampAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
   {
     "name": "shape/ring",
-    "hash": "ac1cddafb1a1492b",
+    "hash": "8bfa819950fabbb7",
     "title": "Points evenly around a circle or an arc",
     "description": "Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is exactly the number of points emitted, whatever `sweep` and `includeEnd` are. The seam is handled by `includeEnd`, not by deleting a point: left false (the default) the samples divide the sweep and the last one stops one step short, which is what a full circle needs — the end of a full sweep IS its start. Set it true for an arc that must touch both ends. Emits a loose point CLOUD, not a path: for polyline topology use `shape/path-loop`, which is this primitive plus the closure. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.",
     "tags": [
@@ -1959,7 +1883,7 @@
       "radial",
       "outline"
     ],
-    "nodes": 6,
+    "nodes": 4,
     "inputs": [],
     "outputs": [
       {
@@ -2060,16 +1984,10 @@
           "type": "f32",
           "default": 1,
           "description": "How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc.",
-          "acceptsField": true,
           "min": 0,
           "max": 1
         },
-        "targets": [
-          {
-            "node": "sweepAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
@@ -2182,7 +2100,7 @@
   },
   {
     "name": "shape/spiral",
-    "hash": "62e4436dd187375e",
+    "hash": "77b5b04eb9649255",
     "title": "Points winding outward over a number of turns",
     "description": "Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre and the outermost exactly on the rim. Emits a loose point CLOUD, not a path. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.",
     "tags": [
@@ -2190,7 +2108,7 @@
       "radial",
       "outline"
     ],
-    "nodes": 6,
+    "nodes": 4,
     "inputs": [],
     "outputs": [
       {
@@ -2277,21 +2195,15 @@
           "type": "f32",
           "default": 3,
           "description": "How many full revolutions the spiral makes between the centre and the outer radius.",
-          "acceptsField": true,
           "min": 0
         },
-        "targets": [
-          {
-            "node": "turnsAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
   {
     "name": "transform/displace-by-noise",
-    "hash": "f81df283558901c3",
+    "hash": "8fe1bd2b9b26ccdc",
     "title": "Push points up and down by a noise field",
     "description": "Displaces every point along +Y by a noise field centred on zero, so a flat scatter becomes a rolling one. The displacement is centred: the mean height does not move, and the peak is a FRACTION of `amount` — about 0.42 on a wide cloud and as little as 0.25 on a small patch, never `amount` itself. See that param for the law. LIMITATION: +Y only — the direction lives inside the field structure, not in a param slot, so displacing along another axis means rotating the whole result. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances displace IDENTICALLY unless their `variant` differs, and this is the primitive most likely to be used twice in one graph. Reads and writes `P`; leaves every other attribute alone.",
     "tags": [
@@ -2299,7 +2211,7 @@
       "noise",
       "terrain"
     ],
-    "nodes": 5,
+    "nodes": 1,
     "inputs": [
       {
         "name": "in",
@@ -2318,51 +2230,33 @@
         "schema": {
           "type": "f32",
           "default": 4,
-          "description": "How far points move along Y. It SCALES the displacement but does not bound it: on a cloud spanning many noise periods the peak is about 0.42 * amount, so the default 4 lifts and drops by roughly 1.7 units, and for a peak of h world units ask for amount around 2.4 * h. Exactly linear in amount — doubling it doubles every displacement — and the mean stays within 1% of 0, so the average height does not move. This is a FRACTION OF A NOMINAL RANGE, not of the displacement you get: the value scales a noise term whose range is +/-1 in principle, and four octaves of normalized fBm only ever reach the middle of it. How much of it depends on how much FIELD the cloud spans — extent x `frequency`, not the point count. Measured at amount 4: a 600-unit spread peaks at 0.42 to 0.49 of amount at every frequency from 0.01 up, while a 30-unit patch at the default frequency 0.05 spans barely one period and peaks at only 0.25, whether it holds 100 points or 20,000. On a small patch, either raise `frequency` or scale `amount` up to compensate.",
-          "acceptsField": true
+          "description": "How far points move along Y. It SCALES the displacement but does not bound it: on a cloud spanning many noise periods the peak is about 0.42 * amount, so the default 4 lifts and drops by roughly 1.7 units, and for a peak of h world units ask for amount around 2.4 * h. Exactly linear in amount — doubling it doubles every displacement — and the mean stays within 1% of 0, so the average height does not move. This is a FRACTION OF A NOMINAL RANGE, not of the displacement you get: the value scales a noise term whose range is +/-1 in principle, and four octaves of normalized fBm only ever reach the middle of it. How much of it depends on how much FIELD the cloud spans — extent x `frequency`, not the point count. Measured at amount 4: a 600-unit spread peaks at 0.42 to 0.49 of amount at every frequency from 0.01 up, while a 30-unit patch at the default frequency 0.05 spans barely one period and peaks at only 0.25, whether it holds 100 points or 20,000. On a small patch, either raise `frequency` or scale `amount` up to compensate."
         },
-        "targets": [
-          {
-            "node": "ampAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "frequency",
         "schema": {
           "type": "f32",
           "default": 0.05,
-          "description": "Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves.",
-          "acceptsField": true
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves."
         },
-        "targets": [
-          {
-            "node": "freqAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "variant",
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field."
         },
-        "targets": [
-          {
-            "node": "variantAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
   {
     "name": "transform/gather-on-path",
-    "hash": "474dfa9bf777d7e2",
+    "hash": "a6d1dddfb6894390",
     "title": "Gather a path's own points into clumps along it",
     "description": "Slides every point of a path along the curve it already sits on, toward the centre of its own bin, so an even distribution becomes clumps with bare runs between them — hedgerows, rock piles, bundled cables, knots in a crowd. Nothing is created or deleted: the count, the attributes and the polyline topology all survive, and each point is RE-EVALUATED on the curve rather than stepped along its tangent, so it stays exactly on the path however hard the path bends. Each point's target is the centre of the bin its own `curveU` falls into — `bins` equal bins per path — and `amount` is how far of the way there it travels, so 0 changes nothing and 1 collapses every bin onto a single spot. PRECONDITION: the input must carry `curveU` (f32, tuple 1) as well as polyline topology, so it has to have come from a sampler that writes one — `pathResample`, `splineSample`, `place/along-curve`, `place/radial-on-curve` or `shape/path-meander`. A path built straight out of `pointsToPath` has no parameterization to gather along, and the cook fails naming `curveU` rather than guessing one. The point sitting exactly at the end of a path does not move: its bin centre lies past the end and clamps back onto it. `curveU` and `tangent` are rewritten to where each point LANDS, so a second gather bins the new positions and not the old ones. Fully deterministic: two instances with the same params clump identically, and there is no seed — the clumps are where the bins are, not where a draw put them. Reads and writes `P`; every other attribute arrives untouched.",
     "tags": [
@@ -2371,7 +2265,7 @@
       "path",
       "spacing"
     ],
-    "nodes": 4,
+    "nodes": 1,
     "inputs": [
       {
         "name": "in",
@@ -2390,39 +2284,27 @@
         "schema": {
           "type": "f32",
           "default": 0.7,
-          "description": "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other.",
-          "acceptsField": true,
+          "description": "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. It is uniform over the cook. To gather one end of a path harder than the other, run the primitive on a partition of the points rather than looking for a per-point dial here.",
           "min": 0,
           "max": 1
         },
-        "targets": [
-          {
-            "node": "amountAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "bins",
         "schema": {
           "type": "f32",
           "default": 6,
-          "description": "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. The schema admits a field because the slot underneath it does, but keep it CONSTANT: a per-point bin count gives neighbouring points different bins, which stop partitioning the path and send them to targets that do not line up.",
-          "acceptsField": true,
+          "description": "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. It is one value for the whole cook, which is what a bin count has to be: neighbouring points on different bin counts stop partitioning the path and head for targets that do not line up.",
           "min": 1
         },
-        "targets": [
-          {
-            "node": "binsAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
   {
     "name": "transform/relax-spacing",
-    "hash": "00d0b320600b2385",
+    "hash": "f71db798e240a787",
     "title": "Even out spacing without deleting anything",
     "description": "Nudges every point away from the centroid of its neighbours, so crowded regions spread out and the spacing evens up while the COUNT stays exactly the same. This is the alternative to `selfPrune`, which enforces spacing by deleting: use this one when the count is fixed (a fleet, a crowd, a fixed budget of props). A strength near 0.5 is one relaxation step; run the primitive twice for a stronger effect rather than pushing the strength past 1, which overshoots and oscillates. Isolated points do not move. Fully deterministic. Reads and writes `P`; leaves every other attribute alone.",
     "tags": [
@@ -2430,7 +2312,7 @@
       "neighborhood",
       "spacing"
     ],
-    "nodes": 4,
+    "nodes": 3,
     "inputs": [
       {
         "name": "in",
@@ -2464,21 +2346,15 @@
         "schema": {
           "type": "f32",
           "default": 0.5,
-          "description": "How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates.",
-          "acceptsField": true
+          "description": "How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates."
         },
-        "targets": [
-          {
-            "node": "strAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
   {
     "name": "transform/snap-to-grid",
-    "hash": "399afbaa1ca4eb39",
+    "hash": "602df0a0be5e1894",
     "title": "Move every point to the nearest grid corner",
     "description": "Snaps every point to the nearest corner of a regular 3D grid of the given pitch, so scattered positions become tile-aligned. Note that snapping can land two points on the SAME corner: follow it with `selfPrune` at a distance just under the pitch if the duplicates matter. Fully deterministic. Reads and writes `P`; leaves every other attribute alone, including `scale`.",
     "tags": [
@@ -2486,7 +2362,7 @@
       "grid",
       "align"
     ],
-    "nodes": 3,
+    "nodes": 1,
     "inputs": [
       {
         "name": "in",
@@ -2505,15 +2381,9 @@
         "schema": {
           "type": "f32",
           "default": 4,
-          "description": "Grid pitch in world units, the same on all three axes. Must be greater than 0.",
-          "acceptsField": true
+          "description": "Grid pitch in world units, the same on all three axes. Must be greater than 0."
         },
-        "targets": [
-          {
-            "node": "cellAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
@@ -2628,15 +2498,15 @@
   },
   {
     "name": "write/density-from-noise",
-    "hash": "f6463069f49e3917",
+    "hash": "66dc6b192f780d49",
     "title": "Write the standard density attribute from a noise field",
-    "description": "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field carries its own seed inside its spec, where no exposed param can reach. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
+    "description": "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, and only an argument position can hold a reference. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
     "tags": [
       "write",
       "noise",
       "density"
     ],
-    "nodes": 4,
+    "nodes": 1,
     "inputs": [
       {
         "name": "in",
@@ -2655,30 +2525,18 @@
         "schema": {
           "type": "f32",
           "default": 0.02,
-          "description": "Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across.",
-          "acceptsField": true
+          "description": "Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across."
         },
-        "targets": [
-          {
-            "node": "freqAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "variant",
         "schema": {
           "type": "f32",
           "default": 0,
-          "description": "Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this.",
-          "acceptsField": true
+          "description": "Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this."
         },
-        "targets": [
-          {
-            "node": "variantAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       }
     ]
   },
@@ -2913,7 +2771,7 @@
   },
   {
     "name": "write/random-scale",
-    "hash": "fa8ac17842b0c258",
+    "hash": "45343acef3bf3ab8",
     "title": "Write one uniform random size per point",
     "description": "Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per point, drawn uniformly between min and max — both ends reachable — and written the same on all three axes. It REPLACES `scale` rather than multiplying it, so anything an earlier node wrote there is discarded and two of these in a chain do not compound. The uniformity is the content: a hand-written version reaches for a separate random per axis and gets an asset stretched differently in x, y and z, which reads as a modelling error rather than as variety. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically, and `seed` re-rolls one of them explicitly. Writes `scale`; reads nothing.",
     "tags": [
@@ -2921,7 +2779,7 @@
       "scatter",
       "instancing"
     ],
-    "nodes": 4,
+    "nodes": 1,
     "inputs": [
       {
         "name": "in",
@@ -2940,30 +2798,18 @@
         "schema": {
           "type": "f32",
           "default": 1.4,
-          "description": "Largest size a point can get, as a multiple of the asset's own size.",
-          "acceptsField": true
+          "description": "Largest size a point can get, as a multiple of the asset's own size."
         },
-        "targets": [
-          {
-            "node": "maxAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "min",
         "schema": {
           "type": "f32",
           "default": 0.7,
-          "description": "Smallest size a point can get, as a multiple of the asset's own size.",
-          "acceptsField": true
+          "description": "Smallest size a point can get, as a multiple of the asset's own size."
         },
-        "targets": [
-          {
-            "node": "minAttr",
-            "param": "value"
-          }
-        ]
+        "targets": []
       },
       {
         "name": "seed",

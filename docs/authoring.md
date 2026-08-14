@@ -217,10 +217,14 @@ writes each exposed param's current value into its targets, so exposing a
 slot that holds the primitive's characteristic field would overwrite that
 field with a plain number on the very first cook. The shipped primitives
 therefore keep their noise fields on the inner nodes and expose the
-scalars those fields READ BACK, through the parameter-attribute idiom: a
-`setAttribute` whose value is exposed, and a downstream field that reads
-`{ "fn": "attribute", "name": ... }`, with `removeAttribute` taking the
-scratch column off again before the result leaves.
+scalars those fields READ BACK.
+
+They used to do that through the parameter-attribute idiom: a
+`setAttribute` whose value is exposed, a downstream field reading
+`{ "fn": "attribute", "name": ... }`, and a `removeAttribute` taking the
+scratch column off again before the result leaves. None of them do any
+more — those 37 plumbing nodes are gone, and the specs read their scalars
+by name instead.
 
 That idiom was once the only way to make anything inside a field spec
 adjustable. It is not any more — an exposed param also binds its name

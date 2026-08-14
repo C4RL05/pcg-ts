@@ -10,7 +10,7 @@
  * bakes the right name is not a rename of `setAttribute` — it is the only
  * place that coupling is written down.
  */
-import { TAU, attr, call, component, position, ramp, randomField, tunableFbm, vec } from "./expr.js";
+import { TAU, attr, call, component, param, position, ramp, randomField, tunableFbm, vec } from "./expr.js";
 import { definePrimitive } from "./define.js";
 
 /**
@@ -19,7 +19,7 @@ import { definePrimitive } from "./define.js";
  * three DIFFERENT keys here is what would stretch the asset differently
  * per axis, and it is the spelling this primitive exists to replace.
  */
-const UNIFORM_SIZE = call("lerp", attr("sMin"), attr("sMax"), randomField("size"));
+const UNIFORM_SIZE = call("lerp", param("min"), param("max"), randomField("size"));
 
 /** Register every `write/*` primitive. Call once, from the family index. */
 export function registerWritePrimitives(): void {
@@ -54,19 +54,9 @@ export function registerWritePrimitives(): void {
   definePrimitive("write/density-from-noise", {
     title: "Write the standard density attribute from a noise field",
     description:
-      "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field carries its own seed inside its spec, where no exposed param can reach. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
+      "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, and only an argument position can hold a reference. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
     tags: ["noise", "density"],
     nodes: [
-      {
-        id: "variantAttr",
-        type: "setAttribute",
-        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
-      },
-      {
-        id: "freqAttr",
-        type: "setAttribute",
-        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 0.02 },
-      },
       {
         id: "densityAttr",
         type: "setAttribute",
@@ -75,32 +65,27 @@ export function registerWritePrimitives(): void {
           domain: "point",
           type: "f32",
           tupleSize: 1,
-          value: tunableFbm("freq", "variant"),
+          value: tunableFbm("frequency", "variant"),
         },
       },
-      { id: "cleanup", type: "removeAttribute", params: { names: ["variant", "freq"], domain: "point", strict: true } },
     ],
-    connections: [
-      { from: ["variantAttr", "out"], to: ["freqAttr", "in"] },
-      { from: ["freqAttr", "out"], to: ["densityAttr", "in"] },
-      { from: ["densityAttr", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "variantAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [],
+    inputs: [{ name: "in", node: "densityAttr", pin: "in" }],
+    outputs: [{ name: "out", node: "densityAttr", pin: "out" }],
     params: [
       {
         name: "frequency",
-        targets: [{ node: "freqAttr", param: "value" }],
+        targets: [],
+        default: 0.02,
         description:
           "Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across.",
-        acceptsField: true,
       },
       {
         name: "variant",
-        targets: [{ node: "variantAttr", param: "value" }],
+        targets: [],
+        default: 0,
         description:
           "Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this.",
-        acceptsField: true,
       },
     ],
   });
@@ -111,16 +96,6 @@ export function registerWritePrimitives(): void {
       "Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per point, drawn uniformly between min and max — both ends reachable — and written the same on all three axes. It REPLACES `scale` rather than multiplying it, so anything an earlier node wrote there is discarded and two of these in a chain do not compound. The uniformity is the content: a hand-written version reaches for a separate random per axis and gets an asset stretched differently in x, y and z, which reads as a modelling error rather than as variety. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically, and `seed` re-rolls one of them explicitly. Writes `scale`; reads nothing.",
     tags: ["scatter", "instancing"],
     nodes: [
-      {
-        id: "minAttr",
-        type: "setAttribute",
-        params: { name: "sMin", domain: "point", type: "f32", tupleSize: 1, value: 0.7 },
-      },
-      {
-        id: "maxAttr",
-        type: "setAttribute",
-        params: { name: "sMax", domain: "point", type: "f32", tupleSize: 1, value: 1.4 },
-      },
       {
         id: "scaleAttr",
         type: "setAttribute",
@@ -133,27 +108,22 @@ export function registerWritePrimitives(): void {
           value: vec(UNIFORM_SIZE, UNIFORM_SIZE, UNIFORM_SIZE),
         },
       },
-      { id: "cleanup", type: "removeAttribute", params: { names: ["sMin", "sMax"], domain: "point", strict: true } },
     ],
-    connections: [
-      { from: ["minAttr", "out"], to: ["maxAttr", "in"] },
-      { from: ["maxAttr", "out"], to: ["scaleAttr", "in"] },
-      { from: ["scaleAttr", "out"], to: ["cleanup", "in"] },
-    ],
-    inputs: [{ name: "in", node: "minAttr", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    connections: [],
+    inputs: [{ name: "in", node: "scaleAttr", pin: "in" }],
+    outputs: [{ name: "out", node: "scaleAttr", pin: "out" }],
     params: [
       {
         name: "min",
-        targets: [{ node: "minAttr", param: "value" }],
+        targets: [],
+        default: 0.7,
         description: "Smallest size a point can get, as a multiple of the asset's own size.",
-        acceptsField: true,
       },
       {
         name: "max",
-        targets: [{ node: "maxAttr", param: "value" }],
+        targets: [],
+        default: 1.4,
         description: "Largest size a point can get, as a multiple of the asset's own size.",
-        acceptsField: true,
       },
       {
         name: "seed",
@@ -212,9 +182,10 @@ export function registerWritePrimitives(): void {
         type: "orientAlongVector",
         // Reads back exactly what the node above wrote. The attribute NAME
         // is deliberately not exposed: it lives inside this field spec as
-        // well as in the param above, and nothing inside a field spec is
-        // reachable from an exposed param — a `name` knob would move one
-        // half of the pair and silently orient nothing.
+        // well as in the param above, and an exposed param reaches a field
+        // spec as a VALUE substituted into an argument position — never as
+        // an attribute's name, which is structure. A `name` knob would move
+        // one half of the pair and silently orient nothing.
         params: { direction: attr("tangent", 3), up: [0, 1, 0], axis: "+z" },
       },
     ],

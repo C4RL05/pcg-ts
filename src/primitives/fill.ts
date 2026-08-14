@@ -6,11 +6,15 @@
  * family an agent reaches for most.
  *
  * Bounds arrive as two corners rather than one extent, in every entry
- * here, and that is forced rather than chosen: an exposed param writes one
- * identical value into its targets with no arithmetic in between, so a
- * single `size` could never produce `[-s,0,-s]` and `[s,0,s]`.
+ * here, and that is forced rather than chosen, by BOTH routes a knob has
+ * into a body. Fan-out writes one identical value into its targets with no
+ * arithmetic in between, so a single `size` could never produce `[-s,0,-s]`
+ * and `[s,0,s]`. A field expression could do that arithmetic — that is
+ * exactly what `{ fn: "param" }` in a `mul` is — but the bounds params of
+ * `pointScatterInBounds` and `volumeSample` are plain `vec3` slots that
+ * refuse a field, so no expression can stand in one to do it.
  */
-import { attr, call, constant, tunableFbm } from "./expr.js";
+import { call, constant, param, tunableFbm } from "./expr.js";
 import { definePrimitive } from "./define.js";
 
 /** Register every `fill/*` primitive. Call once, from the family index. */
@@ -99,14 +103,12 @@ export function registerFillPrimitives(): void {
         name: "frequency",
         targets: [{ node: "thin", param: "frequency" }],
         description: "Feature size of the clumps: smaller means broader clumps.",
-        acceptsField: true,
       },
       {
         name: "variant",
         targets: [{ node: "thin", param: "variant" }],
         description:
           "Offset added to the noise sample position — the only way to give two instances different CLUMPS rather than different points in the same clumps.",
-        acceptsField: true,
       },
       {
         name: "seed",
@@ -213,40 +215,14 @@ export function registerFillPrimitives(): void {
         params: { boundsMin: [0, 0, 0], boundsMax: [32, 32, 32], cellSize: 2, jitter: 0.5, seed: 0 },
       },
       {
-        id: "variantAttr",
-        type: "setAttribute",
-        params: { name: "variant", domain: "point", type: "f32", tupleSize: 1, value: 0 },
-      },
-      {
-        id: "freqAttr",
-        type: "setAttribute",
-        params: { name: "freq", domain: "point", type: "f32", tupleSize: 1, value: 0.05 },
-      },
-      {
-        id: "threshAttr",
-        type: "setAttribute",
-        params: { name: "threshold", domain: "point", type: "f32", tupleSize: 1, value: 0.5 },
-      },
-      {
         id: "carve",
         type: "filterByExpression",
-        params: { predicate: call("ge", tunableFbm("freq", "variant"), attr("threshold")), seed: 0 },
-      },
-      {
-        id: "cleanup",
-        type: "removeAttribute",
-        params: { names: ["variant", "freq", "threshold"], domain: "point", strict: true },
+        params: { predicate: call("ge", tunableFbm("frequency", "variant"), param("threshold")), seed: 0 },
       },
     ],
-    connections: [
-      { from: ["vol", "out"], to: ["variantAttr", "in"] },
-      { from: ["variantAttr", "out"], to: ["freqAttr", "in"] },
-      { from: ["freqAttr", "out"], to: ["threshAttr", "in"] },
-      { from: ["threshAttr", "out"], to: ["carve", "in"] },
-      { from: ["carve", "out"], to: ["cleanup", "in"] },
-    ],
+    connections: [{ from: ["vol", "out"], to: ["carve", "in"] }],
     inputs: [{ name: "in", node: "vol", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    outputs: [{ name: "out", node: "carve", pin: "out" }],
     params: [
       {
         name: "cellSize",
@@ -265,24 +241,24 @@ export function registerFillPrimitives(): void {
       },
       {
         name: "threshold",
-        targets: [{ node: "threshAttr", param: "value" }],
+        targets: [],
+        default: 0.5,
         description:
           "Where the cut falls on the 0..1 noise. Higher leaves less material, but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.35 (solid) and 0.68 (empty) — four octaves of normalized fBm are bell-shaped around 0.5 and never near the ends. Measured on the default 32-unit box at cellSize 2: 0.3 keeps 100% of the grid, 0.45 keeps 85%, 0.5 keeps 65%, 0.55 keeps 41%, 0.6 keeps 18%, 0.65 keeps 3.6%, 0.7 keeps nothing. The centre of that band is NOT fixed at 0.5 the way the flat filters' is: the box times `frequency` decides how much of the field is sampled, and a small window sits wherever its own patch of noise happens to sit (the same box read as a 2D spread has 0.5 keeping half rather than two thirds). Sweep in steps of 0.02, not 0.1.",
         min: 0,
         max: 1,
-        acceptsField: true,
       },
       {
         name: "frequency",
-        targets: [{ node: "freqAttr", param: "value" }],
+        targets: [],
+        default: 0.05,
         description: "Feature size: smaller means larger, smoother caverns.",
-        acceptsField: true,
       },
       {
         name: "variant",
-        targets: [{ node: "variantAttr", param: "value" }],
+        targets: [],
+        default: 0,
         description: "Offset added to the noise sample position — the per-instance re-roll of the carve pattern.",
-        acceptsField: true,
       },
       {
         name: "boundsMin",

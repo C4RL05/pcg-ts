@@ -633,12 +633,12 @@ Three rules an agent needs before choosing one:
 3. **An exposed param's default is a plain value, never a `Field`,** and
    every cook writes it inward — so a primitive's characteristic field
    lives on its inner node and the scalars that field reads back are what
-   get exposed (a `setAttribute` upstream, `removeAttribute` downstream).
-   Field-capable params are marked in the catalog and accept a field spec
-   as their VALUE. That attribute plumbing is the older of the two routes
-   into a field spec and is what the shipped primitives still use; the
-   newer one is a targetless param the spec reads as
-   `{ fn: "param", name }`. Which one is right is a domain question: a
+   get exposed. Field-capable params are marked in the catalog and accept
+   a field spec as their VALUE. There are two routes into a field spec:
+   attribute plumbing (a `setAttribute` upstream, `removeAttribute`
+   downstream) is the older, and a targetless param the spec reads as
+   `{ fn: "param", name }` is the newer and is what every shipped
+   primitive now uses. Which one is right is a domain question: a
    value that varies PER ELEMENT is an attribute, one uniform over the
    cook is a param.
 

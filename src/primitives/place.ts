@@ -14,23 +14,24 @@
  * the curve side, and `pointsToPath` (and `shape/path-loop` over it) is
  * what brings it back.
  */
-import { TAU, type Spec, attr, call, randomField } from "./expr.js";
+import { TAU, type Spec, attr, call, param, randomField } from "./expr.js";
 import { definePrimitive } from "./define.js";
 
 /**
- * A random angle around the curve, in radians, scaled by the `__spread`
- * attribute the recipe below writes.
+ * A random angle around the curve, in radians, scaled by the recipe's own
+ * `spread` knob.
  *
- * The scalar has to travel as an ATTRIBUTE: an exposed subgraph param is
- * fan-out into an inner param slot, and there is no slot anywhere inside
- * a field spec — so a `spread` knob could not otherwise reach the one
- * place it means anything. Same reason `expr.ts`'s `noisePosition` reads
- * its frequency back out of a column.
+ * The knob reaches the expression by NAME: every exposed param binds into
+ * its body's field scope, so `{ fn: "param", name: "spread" }` reads
+ * whatever the instance holds. It used to travel as an attribute a
+ * `setAttribute` wrote and a `removeAttribute` took away again, because
+ * fan-out into an inner param slot was the only route in and a field spec
+ * has no slot. Same change as `expr.ts`'s `noisePosition`.
  */
 const RADIAL_ANGLE: Spec = call(
   "mul",
   randomField("radial"),
-  call("mul", TAU, attr("__spread")),
+  call("mul", TAU, param("spread")),
 );
 
 /**
@@ -282,29 +283,17 @@ export function registerPlacePrimitives(): void {
         },
       },
       {
-        id: "spreadAttr",
-        type: "setAttribute",
-        params: { name: "__spread", domain: "point", type: "f32", tupleSize: 1, value: 1 },
-      },
-      {
         id: "orient",
         type: "orientAlongVector",
         params: { direction: attr("tangent", 3), up: RADIAL_UP, axis: "+z" },
       },
-      {
-        id: "cleanup",
-        type: "removeAttribute",
-        params: { names: ["__spread"], domain: "point", strict: true },
-      },
     ],
     connections: [
       { from: ["resample", "out"], to: ["frame", "in"] },
-      { from: ["frame", "out"], to: ["spreadAttr", "in"] },
-      { from: ["spreadAttr", "out"], to: ["orient", "in"] },
-      { from: ["orient", "out"], to: ["cleanup", "in"] },
+      { from: ["frame", "out"], to: ["orient", "in"] },
     ],
     inputs: [{ name: "curve", node: "resample", pin: "in" }],
-    outputs: [{ name: "out", node: "cleanup", pin: "out" }],
+    outputs: [{ name: "out", node: "orient", pin: "out" }],
     params: [
       {
         name: "count",
@@ -315,11 +304,11 @@ export function registerPlacePrimitives(): void {
       },
       {
         name: "spread",
-        targets: [{ node: "spreadAttr", param: "value" }],
+        targets: [],
+        default: 1,
         description:
           "How much of a full turn around the curve the fan covers, as a fraction: 1 spreads uniformly over the whole circle, 0.25 over a quarter turn, and 0 aims every point the same way — straight along the transported `curveNormal`, which is a smooth ribbon rather than a fan, and the one setting that does NOT vary between two instances. The angle is drawn uniformly over 0..spread turns, so it is one-sided: the fan opens from the normal in one direction only, and a spread of 0.5 covers a half turn from it rather than a quarter turn either side. Values above 1 wrap and buy nothing.",
         min: 0,
-        acceptsField: true,
       },
     ],
   });
