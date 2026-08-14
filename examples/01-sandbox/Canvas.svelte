@@ -293,12 +293,16 @@
         >
           <title>{edge.from}.{edge.fromPin} → {edge.to}.{edge.toPin} — click to disconnect</title>
         </path>
+        <!-- Casing under the line, painted first so the line sits on it. -->
+        <path class="edge-casing" {d} />
         <path class="edge-line" {d} />
       </g>
     {/if}
   {/each}
   {#if wire}
-    <path class="wire" class:live={wire.hover !== null} d={curve({ x: wire.x1, y: wire.y1 }, { x: wire.x2, y: wire.y2 })} />
+    {@const wd = curve({ x: wire.x1, y: wire.y1 }, { x: wire.x2, y: wire.y2 })}
+    <path class="edge-casing" d={wd} />
+    <path class="wire" class:live={wire.hover !== null} d={wd} />
   {/if}
   {#each model.nodes as node (node.id)}
     <NodeBox
@@ -345,6 +349,32 @@
    * palette painted all of them the same. Before re-adding it, check that
    * a node exists whose input pin is not geometry.
    */
+  /**
+   * A black casing under every wire, so a cable stays readable where it
+   * crosses something bright.
+   *
+   * The graph is drawn OVER the live render, and the render is white
+   * points on black — so a mid-grey cable is legible over the empty parts
+   * of the scene and disappears the moment it passes through the scatter.
+   * Two strokes of the same path, the wider dark one painted first, is the
+   * trick a map uses to keep a label off its own coastline.
+   *
+   * It costs nothing where it is not needed: black on the black page is
+   * invisible, so the casing only shows up against bright content.
+   */
+  .edge-casing {
+    fill: none;
+    stroke: #000000;
+    stroke-width: 4;
+    pointer-events: none;
+  }
+  /* Keep pace with the line, which thickens to 2.4 under the pointer. */
+  .edge:hover .edge-casing {
+    stroke-width: 5;
+  }
+  /* The opacity composites against the CASING now, not against whatever
+     the wire happens to be crossing — so a cable is one colour along its
+     whole length instead of washing out over the bright half. */
   .edge-line {
     fill: none;
     stroke: var(--sb-k-geometry);
