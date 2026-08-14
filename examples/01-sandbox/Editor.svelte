@@ -69,6 +69,13 @@
    * a boolean because the useful question is not "graph or no graph" but
    * whether the scene is behind it: all of it while you place nodes
    * against what they make, none of it when the graph IS the work.
+   *
+   * `graph` hides the CANVAS AND THE SIDEBAR, never the toolbar. The bar
+   * carries the graph picker, the seed, the cook path and the whole
+   * readout line — none of which stop being useful when you are looking
+   * at the render, and one of which is how you get back. Hiding the
+   * overlay wholesale meant the only way out of the scene view was the
+   * space bar, with nothing on screen to say so.
    */
   const VIEWS = [
     { id: "scene", label: "scene", scrim: 0, graph: false },
@@ -186,9 +193,15 @@
   let menuAt = $state<{ x: number; y: number } | null>(null);
   let pointer = { x: 0, y: 0 };
 
-  /** Refit when the overlay appears: it was not measurable while hidden. */
+  /**
+   * Refit when the canvas appears: it was not measurable while hidden.
+   * Leaving the graph closes the node menu with it — it is summoned at the
+   * pointer and floats above everything, so a menu left open would hang
+   * over the bare scene with nothing to add a node to.
+   */
   $effect(() => {
     if (view.graph) frameGraph();
+    else menuAt = null;
   });
 
   let collapsed = $state(narrowScreen().matches);
@@ -622,7 +635,7 @@
      one element rather than an opacity smeared over the editor's parts. -->
 <div class="scrim" style="opacity: {view.scrim}" aria-hidden="true"></div>
 
-<div class="editor" class:collapsed hidden={!view.graph}>
+<div class="editor" class:collapsed class:bare={!view.graph}>
   <Toolbar
     seed={model.seed}
     {status}
@@ -648,7 +661,10 @@
       {/each}
     </div>
   {/if}
-  <div class="body">
+  <!-- The graph half. Hidden in the scene view, which is also what stops
+       it taking the pointer: `display: none` cannot be clicked, so the
+       render underneath orbits normally with no click-through needed. -->
+  <div class="body" hidden={!view.graph}>
     <div class="canvas-wrap" class:through={sceneHasPointer}>
       <Canvas
         bind:this={canvas}
@@ -735,9 +751,6 @@
     font: 13px/1.45 var(--sb-sans);
     pointer-events: none;
   }
-  .editor[hidden] {
-    display: none;
-  }
   /* Only the parts take the pointer; the overlay itself is a frame, and
      so is the row inside it — otherwise the row would swallow whatever
      the canvas declined, which is exactly what an earlier attempt at
@@ -789,6 +802,10 @@
     /* Anchors the narrow-screen drawers and their toggle tabs below the
        toolbar. Visually inert at desktop widths. */
     position: relative;
+  }
+  /* `display: flex` above would otherwise beat the [hidden] default. */
+  .body[hidden] {
+    display: none;
   }
   /* No scrollbars: the canvas pans and zooms itself. */
   .canvas-wrap {
@@ -861,6 +878,11 @@
     .editor.collapsed {
       height: 44px;
       overflow: hidden;
+    }
+    /* Scene view: the sheet is only the bar, so it stops reserving half
+       the screen for a graph that is not being drawn. */
+    .editor.bare {
+      height: auto;
     }
     .drawer-tab {
       display: block;
