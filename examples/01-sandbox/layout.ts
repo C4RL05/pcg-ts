@@ -9,6 +9,17 @@ import type { EdgeView, NodeView } from "./model.js";
 export const NODE_W = 168;
 
 /**
+ * Corner radius of a node box, matching the 4px the graph panel's section
+ * tabs use — the boxes and those buttons are the two things on screen at
+ * roughly the same size, so they are the pair that has to agree.
+ *
+ * In GRAPH units, so it is 4px at 100% zoom and scales with everything
+ * else after that. That is right for canvas content: a corner that stayed
+ * 4 screen px while the box shrank would round a small node into a pill.
+ */
+export const NODE_RADIUS = 4;
+
+/**
  * Inner padding on the left, the right and the bottom.
  *
  * SVG text is positioned by its BASELINE, not by its box, so "8 from the

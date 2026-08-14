@@ -15,6 +15,7 @@
   import {
     HEADER_H,
     ID_Y,
+    NODE_RADIUS,
     NODE_W,
     PAD,
     TITLE_Y,
@@ -50,13 +51,14 @@
 </script>
 
 <g transform="translate({node.x}, {node.y})" class:selected>
-  <!-- Square. No `rx`, and no halo ring behind it: selection is carried by
-       the border's colour alone, so the shape a node has when selected is
-       the shape it has the rest of the time. -->
+  <!-- No halo ring behind it: selection is carried by the border's colour
+       alone, so the shape a node has when selected is the shape it has the
+       rest of the time. -->
   <rect
     class="body"
     width={NODE_W}
     height={h}
+    rx={NODE_RADIUS}
     role="button"
     tabindex="-1"
     aria-label="node {node.id}"
