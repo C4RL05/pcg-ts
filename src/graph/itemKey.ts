@@ -29,19 +29,29 @@
  * WHAT COLLIDES, stated plainly for the same reason `identity.ts` states
  * its version: `pointIdentities` reads position bits and the `seed`
  * attribute and nothing else, so two items whose points agree on those and
- * whose tags agree are the same item as far as this is concerned, however
- * their other attribute columns differ. Their OUTPUTS still differ — the
- * body reads the real geometry — but their randomness is correlated. From
- * `partitionByAttribute` this is unreachable, since groups are disjoint
- * point sets. It is constructible by hand, and a caller that cannot tolerate
- * it should give its items distinct tags. Deep-hashing every column instead
- * would contradict this library's standing rule that data is never
- * deep-hashed, and cost a full pass per cook to buy very little.
+ * whose tags agree share a key here, however their other attribute columns
+ * differ. This is a real reach — two branches off one cloud, or a
+ * `snapToGrid` that manufactured coincident points over a cloud carrying no
+ * `seed` column — and not only a pathological one. From
+ * `partitionByAttribute` it is unreachable, since groups are disjoint point
+ * sets.
+ *
+ * Deep-hashing every column instead would contradict this library's
+ * standing rule that data is never deep-hashed, and cost a full pass per
+ * cook to buy very little. So the collision stands, and what to DO about it
+ * is the caller's decision rather than this module's: `forEach` refuses a
+ * collection holding two colliding elements outright (see
+ * `checkDistinctKeys` there and the reasoning with it), because two
+ * iterations seeded alike emit the same block twice, which is never what a
+ * loop was reached for. A caller that wants the other answer — correlated
+ * randomness over genuinely different data — has to say so, and none does
+ * today.
  *
  * Internal: not re-exported from `src/index.ts`, for the same reason
  * `pointIdentities` is not.
  */
 import { pointIdentities } from "../data/identity.js";
+import { GraphValidationError } from "./errors.js";
 import { hashCombine, hashString } from "../random/hash.js";
 import type { DataItem, DataValue, GeometryItem } from "./data.js";
 
@@ -117,7 +127,7 @@ export function itemKey(item: DataItem, who: string): number {
     case "value":
       return hashCombine(VALUE_SALT, tagDigest(item.tags), valueDigest(item.value));
     case "instances":
-      throw new Error(
+      throw new GraphValidationError(
         `${who}: cannot iterate an instances item. Instance batches are a terminal render payload — ` +
           "spawnInstances is the end of a chain, not something with elements to walk" +
           (item.deviceBatches === undefined

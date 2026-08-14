@@ -21,7 +21,7 @@ import {
   type ParamValue,
   type SubgraphSpec,
 } from "../graph/index.js";
-import type { WrapperKind } from "../graph/subgraph.js";
+import { ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
 import { type FieldSpec, fieldFromJson, fieldToJson } from "./fieldJson.js";
 import { forEachNode } from "./forEach.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./registry.js";
@@ -986,6 +986,30 @@ function buildSubgraphNode(
     if (inner._outputs.some((o) => o.name === outName)) {
       fail(
         `node "${id}": inner output "${outName}" collides with the output injected for exposed output "${exp.name}" — ids "__in_<name>" and "__out_<name>" are reserved for subgraph plumbing; rename the inner output or the exposed pin`,
+      );
+    }
+  }
+  // A recipe records a body and its exposed pins and NOTHING about which
+  // wrapper cooks them, so the kind lives only in the referencing node's
+  // `type`. That leaves one way to reach the wrong answer through
+  // well-formed JSON: point a `subgraph` node at a body written to be
+  // iterated, and it cooks once over the concatenated collection and emits
+  // one item where the author expected K. Checked HERE rather than in
+  // `subgraphNode`, because a forEach body is a perfectly good thing to
+  // REGISTER — the registry canonicalizes every recipe through a probe
+  // typed "subgraph", so refusing at construction would make such a body
+  // unregisterable. What is refused is the confusion, not the body.
+  if (wrapper === "subgraph") {
+    const iterated = inputs.filter((e) => ITERATED_PIN_NAMES.has(e.name));
+    if (iterated.length > 0) {
+      fail(
+        `node "${id}": a "subgraph" node cannot expose ${iterated
+          .map((e) => `"${e.name}"`)
+          .join(" or ")} — those names are reserved for the pin a "forEach" iterates, and this body is ` +
+          `written to be looped over. As a "subgraph" it would cook ONCE over the whole collection and ` +
+          `emit one result where K were meant. Change this node's "type" to "forEach"${
+            ref === undefined ? "" : ` (the recipe "${ref.name}" itself is fine — the type is the mistake)`
+          }, or rename the exposed input if a single cook is what you want.`,
       );
     }
   }

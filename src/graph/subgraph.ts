@@ -91,6 +91,19 @@ export interface PortalParams {
 export type WrapperKind = "subgraph" | "forEach";
 
 /**
+ * Exposed-input names reserved for the iterated pin of a `forEach`.
+ *
+ * Reserved GLOBALLY rather than only meaningful on a forEach, because a
+ * registered recipe records a body and its exposed pins and nothing about
+ * which wrapper cooks them — so without this, a body authored to be
+ * iterated could be referenced from a `subgraph` node and cook once over
+ * the concatenated collection. That is the same wrong-but-well-formed
+ * answer the writer's type discriminator closes, reached through the
+ * registry instead.
+ */
+export const ITERATED_PIN_NAMES: ReadonlySet<string> = new Set(["each", "eachPoint"]);
+
+/**
  * The recorded composition of a def created by {@link subgraphNode}: the
  * wrapped inner graph and the exposed pin mappings, exactly as passed in
  * (detached copies). Serialization reads this to emit the nested payload;

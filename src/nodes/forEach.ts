@@ -59,7 +59,7 @@ import {
   makeGeometryItem,
   makeValueItem,
 } from "../graph/data.js";
-import { GraphValidationError } from "../graph/errors.js";
+import { CookCancelledError, GraphValidationError } from "../graph/errors.js";
 import { cook, withExclusiveGraph } from "../graph/execute.js";
 import type { Graph } from "../graph/graph.js";
 import { itemKey, pointIdentityColumn, pointItemKey } from "../graph/itemKey.js";
@@ -67,6 +67,7 @@ import { type NodeDef, type PinDef, defineNode } from "../graph/node.js";
 import {
   type ExposedParam,
   type ExposedPin,
+  ITERATED_PIN_NAMES,
   checkExposedValues,
   prepareWrapper,
   recordWrapperSpec,
@@ -76,9 +77,12 @@ import {
 import { hashCombine, hashString } from "../random/hash.js";
 import { gatherPoints } from "./util.js";
 
-/** The reserved exposed-input names, and what each iterates. */
-export const ITERATED_PIN_NAMES = ["each", "eachPoint"] as const;
-export type IterationMode = (typeof ITERATED_PIN_NAMES)[number];
+/**
+ * What the iterated pin's name means. The set itself lives beside the
+ * wrapper machinery, because reserving those names is a rule about EVERY
+ * wrapper — a subgraph exposing `each` is refused there.
+ */
+export type IterationMode = "each" | "eachPoint";
 
 /**
  * Ceiling on iterations, and the reason there is one.
@@ -97,8 +101,8 @@ function resolveIteratedPin(exposedInputs: readonly ExposedPin[]): {
   name: string;
   mode: IterationMode;
 } {
-  const found = exposedInputs.filter((e): e is ExposedPin & { name: IterationMode } =>
-    (ITERATED_PIN_NAMES as readonly string[]).includes(e.name),
+  const found = exposedInputs.filter(
+    (e): e is ExposedPin & { name: IterationMode } => ITERATED_PIN_NAMES.has(e.name),
   );
   if (found.length === 0) {
     throw new GraphValidationError(
@@ -205,9 +209,27 @@ export function forEachNode(
         const out: Record<string, DataCollection> = {};
         for (const exp of exposedOutputs) out[exp.name] = [];
 
+        // The seed is restored for the same reason the exposed params are:
+        // the inner graph is SHARED, `getSubgraphSpec(def).graph` is the
+        // sanctioned door to it, and `serializeGraph` reads what it finds.
+        // A wrapper cooks under a derived seed, so leaving the last one
+        // behind makes those bytes depend on cook history — and for a
+        // forEach the residue is worse than a subgraph's, because the seed
+        // it stops on is a function of WHICH COLLECTION cooked, so two
+        // graphs sharing one def leave different values. Serializing the
+        // OUTER graph was always safe (the payload carries `spec.seed`),
+        // which is why this went unnoticed; this closes the inner door too.
+        const seedBefore = inner.seed;
+        try {
+          return await runIterations();
+        } finally {
+          inner._setSeedQuiet(seedBefore);
+        }
+
         // One window over the whole loop, not one per iteration: the values
         // do not vary between iterations, and restoring K times would be K
         // chances to leave the shared graph dirty for one that is enough.
+        async function runIterations(): Promise<Record<string, DataCollection>> {
         return withExposedParams(inner, paramList, params, async () => {
           const plan = planIterations(source, iterated.mode);
           // The budget is metered HERE and not by the executor. A node body
@@ -232,6 +254,20 @@ export function forEachNode(
             try {
               result = await cook(inner, { signal, budgetMs, gpu });
             } catch (err) {
+              // Cancellation passes through UNWRAPPED, and this branch has
+              // to come first. The executor rethrows a cancelled cook as
+              // itself only when it sees a `CookCancelledError`; anything
+              // else becomes a `NodeExecutionError`. Wrapping it here — as
+              // the "name the iteration" branch below did — turned every
+              // abort landing inside an inner cook, which is where the time
+              // goes and so the common case, into an ordinary node failure.
+              // `World` rethrows a cook's error verbatim and the worker
+              // protocol reconstructs by `error.name`, so both would have
+              // reported a broken graph where the caller had simply
+              // cancelled. There is no iteration to name in that case: the
+              // caller asked to stop, and which iteration was in flight is
+              // not a fact about the graph.
+              if (err instanceof CookCancelledError) throw err;
               // Which of sixteen blew up is the first thing an author needs
               // and the last thing the raw error says.
               throw new Error(
@@ -255,6 +291,7 @@ export function forEachNode(
           }
           return out;
         });
+        }
       });
     },
   });
@@ -279,6 +316,9 @@ interface Iteration {
 function planIterations(source: DataCollection, mode: IterationMode): Iteration[] {
   const plan: Iteration[] = [];
   if (mode === "each") {
+    // Counted BEFORE the keys are computed: an oversized collection would
+    // otherwise pay a full identity pass over every item only to be refused.
+    checkIterationCount(source.length, 'items on "each"');
     for (const item of source) {
       plan.push({ items: [item], key: itemKey(item, "forEach"), tags: item.tags });
     }
@@ -336,20 +376,35 @@ function checkIterationCount(count: number, what: string): void {
  * the reason to reach for a loop is K DIFFERENT results, and silently
  * emitting the same block twice is the failure an author would ship without
  * noticing. So it is loud here, one level up from where `identity.ts`
- * chooses to be quiet.
+ * chooses to be quiet — a repeated POINT is usually harmless, a repeated
+ * BLOCK is duplicated geometry.
+ *
+ * The cost is real and worth naming: an identity does not read every
+ * column, so this refuses collections whose items differ in ways the body
+ * could act on — two branches off one cloud, or `snapToGrid` output with no
+ * `seed` column under `eachPoint`. The message says which three things
+ * decide an identity so the fix is one edit rather than a hunt.
  */
 function checkDistinctKeys(plan: readonly Iteration[], mode: IterationMode): void {
   const seen = new Map<number, number>();
   for (let i = 0; i < plan.length; i++) {
     const first = seen.get(plan[i].key);
     if (first !== undefined) {
+      // What is equal here is the KEY, not the bytes — say so. An identity
+      // reads position bits, the `seed` attribute and the tags and nothing
+      // else, so two items can collide while carrying different values in
+      // some other column. Claiming they are "identical" would send an
+      // author looking for a duplicate that is not there.
       throw new GraphValidationError(
         `forEach: ${describeIteration(first, plan[first].key, plan[first].tags)} and ` +
-          `${describeIteration(i, plan[i].key, plan[i].tags)} are the same ${
-            mode === "each" ? "item" : "point"
-          } — identical content and identical tags — so both would be seeded alike and emit the same ` +
-          "block twice. Give them something to be told apart by: distinct positions or seeds, or a tag " +
-          `naming what each one is (partitionByAttribute writes one per group).`,
+          `${describeIteration(i, plan[i].key, plan[i].tags)} have the same IDENTITY, so both would be ` +
+          `seeded alike and emit the same block twice. ${
+            mode === "each" ? "Two items" : "Two points"
+          } share an identity when their positions, their "seed" attribute and their tags all agree — ` +
+          "any other attribute they carry is not part of it, so they may well differ in ways the body " +
+          `can see. Give them something to be told apart by: distinct positions, distinct values in a ` +
+          `"seed" attribute (every scatter writes one; a hand-built or snapped cloud may not), or ` +
+          "distinct tags — partitionByAttribute writes one per group.",
       );
     }
     seen.set(plan[i].key, i);

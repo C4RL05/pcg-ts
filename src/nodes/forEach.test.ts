@@ -205,7 +205,7 @@ describe("forEachNode — what it refuses at cook time", () => {
     const { def } = jitterBody();
     const twin = () => makeGeometryItem(cloudAt([[1, 2, 3]]), ["g=1"]);
     await expect(runOver(def, [twin(), twin()])).rejects.toThrow(
-      /are the same item — identical content and identical tags/,
+      /have the same IDENTITY, so both would be seeded alike/,
     );
   });
 

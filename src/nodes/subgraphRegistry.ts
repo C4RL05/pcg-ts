@@ -24,6 +24,7 @@
  * `import "pcg-ts"` costing nothing.
  */
 import { Graph, type GraphMeta, type NodeHandle } from "../graph/index.js";
+import { ITERATED_PIN_NAMES } from "../graph/subgraph.js";
 import { hashCombine, hashString } from "../random/index.js";
 import {
   deserializeGraph,
@@ -299,10 +300,19 @@ function deepFreeze<T>(v: T): T {
  * instead of at some consumer's `deserializeGraph`.
  */
 function canonicalize(name: string, raw: SerializedSubgraph): SerializedSubgraph {
+  // The probe's own type is scaffolding — `canonicalize` returns the
+  // PAYLOAD, so this never reaches the recipe or its content hash. It has
+  // to be right anyway: a recipe is wrapper-agnostic, but the wrapper it
+  // will be used with is the one whose rules it must satisfy, and a body
+  // exposing the reserved iterated-pin name is written to be looped over.
+  // Probing it as a "subgraph" would refuse it at registration (the loader
+  // rejects that combination as the one way to reach a silent one-pass
+  // cook), making a forEach body unregisterable.
+  const wrapper = raw.inputs.some((p) => ITERATED_PIN_NAMES.has(p.name)) ? "forEach" : "subgraph";
   const probe: SerializedGraph = {
     formatVersion: 1,
     seed: 0,
-    nodes: [{ id: PROBE_ID, type: "subgraph", params: {}, subgraph: raw }],
+    nodes: [{ id: PROBE_ID, type: wrapper, params: {}, subgraph: raw }],
     connections: [],
     outputs: [],
   };
