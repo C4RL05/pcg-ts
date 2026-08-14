@@ -57,6 +57,7 @@ import {
   transformPoints,
   volumeSample,
 } from "../nodes/index.js";
+import { forEachNode } from "../nodes/forEach.js";
 import { resolveOnMaybeGpu } from "../nodes/util.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
@@ -645,21 +646,47 @@ function alwaysAdopterSources(): string[] {
   return hits.sort();
 }
 
-/** The composite adopter under test: a subgraph wrapping one adopter. */
-function alwaysFixture(value: FieldLike): { g: Graph; id: string } {
+/**
+ * The composite adopters under test: a wrapper around one adopter.
+ *
+ * Both wrappers, because both forward the outer resolver into a nested cook
+ * they cannot see inside, and so both salt on the resolver's mere presence.
+ * `forEach` runs its body once per item and is fed exactly one, so the two
+ * fixtures differ in the loop and in nothing else that matters here.
+ */
+const ALWAYS_WRAPPERS = ["subgraph", "forEach"] as const;
+
+// Defaults to `subgraph` because the literal-key pin further down calls
+// this through a one-argument builder signature, and those literals are the
+// v0.8.0 compatibility promise — a `forEach` has no v0.8.0 key to keep.
+function alwaysFixture(
+  value: FieldLike,
+  wrapper: (typeof ALWAYS_WRAPPERS)[number] = "subgraph",
+): { g: Graph; id: string } {
   const inner = new Graph(3);
-  const din = cloudInput(inner, 20);
   const sa = inner.add(setAttribute, { name: "d", value: value as never });
-  inner.connect(din, "out", sa, "in");
-  const sub = subgraphNode(inner, [], [{ name: "out", node: sa, pin: "out" }]);
+  if (wrapper === "subgraph") {
+    const din = cloudInput(inner, 20);
+    inner.connect(din, "out", sa, "in");
+    const sub = subgraphNode(inner, [], [{ name: "out", node: sa, pin: "out" }]);
+    const g = new Graph(11);
+    const n = g.add(sub);
+    g.output(n, "out", "out");
+    return { g, id: n.id };
+  }
+  const def = forEachNode(inner, [{ name: "each", node: sa, pin: "in" }], [
+    { name: "out", node: sa, pin: "out" },
+  ]);
   const g = new Graph(11);
-  const n = g.add(sub);
+  const din = cloudInput(g, 20);
+  const n = g.add(def);
+  g.connect(din, "out", n, "each");
   g.output(n, "out", "out");
   return { g, id: n.id };
 }
 
 describe('the gpu:"always" class is covered too', () => {
-  it("has exactly one member, and it is the fixture below", () => {
+  it("has exactly the members covered below", () => {
     // Registry-invisible by construction: assert that too, so the day a
     // `standardNode` declares `gpu: "always"` the ADOPTERS pin above
     // starts carrying it instead of this one silently going stale.
@@ -667,13 +694,16 @@ describe('the gpu:"always" class is covered too', () => {
       .map((info) => info.type)
       .filter((type) => getNodeType(type).def.gpu === "always");
     expect(registered, 'no registered node type declares gpu:"always"').toEqual([]);
-    expect(alwaysAdopterSources()).toEqual(["graph/subgraph.ts"]);
+    // One entry per wrapper. A THIRD arriving here means a new composite
+    // that forwards a resolver into a cook this file does not exercise.
+    expect(alwaysAdopterSources()).toEqual(["graph/subgraph.ts", "nodes/forEach.ts"]);
   });
 
+  for (const wrapper of ALWAYS_WRAPPERS)
   for (const pop of POPULATIONS) {
     for (const accept of [false, true]) {
-      it(`subgraph / ${pop.name} field / acceptDerivedSpecs=${accept}`, async () => {
-        const { g, id } = alwaysFixture(pop.make());
+      it(`${wrapper} / ${pop.name} field / acceptDerivedSpecs=${accept}`, async () => {
+        const { g, id } = alwaysFixture(pop.make(), wrapper);
         const probe = probeResolver({ acceptDerivedSpecs: accept });
         await cook(g, { gpu: probe });
 
@@ -692,10 +722,12 @@ describe('the gpu:"always" class is covered too', () => {
   }
 
   it("and salts nothing at all without a resolver", async () => {
-    for (const pop of POPULATIONS) {
-      const { g, id } = alwaysFixture(pop.make());
-      await cook(g);
-      expect(gpuMark(g.require(id).cache!.key), pop.name).toBeUndefined();
+    for (const wrapper of ALWAYS_WRAPPERS) {
+      for (const pop of POPULATIONS) {
+        const { g, id } = alwaysFixture(pop.make(), wrapper);
+        await cook(g);
+        expect(gpuMark(g.require(id).cache!.key), `${wrapper}/${pop.name}`).toBeUndefined();
+      }
     }
   });
 });

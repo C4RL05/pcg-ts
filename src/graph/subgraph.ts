@@ -75,9 +75,20 @@ export interface ExposedParam {
   readonly schema: ParamSchema;
 }
 
-interface PortalParams {
+/** @internal Params of the injected pass-through source. */
+export interface PortalParams {
   items: DataCollection;
 }
+
+/**
+ * The two node types built on the inner-graph machinery below.
+ *
+ * `subgraph` cooks its body once, forwarding each pin's whole collection.
+ * `forEach` cooks it once per element of one designated pin, broadcasting
+ * the rest. They share everything except that loop, which is why they share
+ * a spec, a payload shape and a construction path.
+ */
+export type WrapperKind = "subgraph" | "forEach";
 
 /**
  * The recorded composition of a def created by {@link subgraphNode}: the
@@ -88,6 +99,18 @@ interface PortalParams {
  * its memo key, same as code-first wrapping).
  */
 export interface SubgraphSpec {
+  /**
+   * Which factory built the def, and therefore what the node MEANS.
+   *
+   * Load-bearing for serialization, not decoration. Both wrappers record a
+   * spec here and the writer dispatches on the spec's presence, so without
+   * this a `forEach` would be written out as a plain `subgraph` node: it
+   * would round-trip, validate and cook — one pass over the concatenated
+   * collection instead of one pass per item. A wrong answer that saves
+   * cleanly is the worst shape a bug can take, so the discriminator travels
+   * with the spec rather than being inferred at the emit site.
+   */
+  readonly wrapper: WrapperKind;
   /** The wrapped inner graph (the live object, not a copy). */
   readonly graph: Graph;
   /**
@@ -309,7 +332,7 @@ export function describeSubgraphParams<P>(def: NodeDef<P>): readonly DescribedSu
  * current recursion path: adversarial cyclic wiring must terminate here
  * even though serialization (and cooking) reject it.
  */
-function transitiveVersionKey(graph: Graph, seen: Set<Graph>): string {
+export function transitiveVersionKey(graph: Graph, seen: Set<Graph>): string {
   if (seen.has(graph)) return "cycle";
   seen.add(graph);
   let key = String(graph.version);
@@ -449,6 +472,79 @@ export function subgraphNode(
   exposedOutputs: readonly ExposedPin[],
   exposedParams: readonly ExposedParam[] = [],
 ): NodeDef<Record<string, unknown>> {
+  const parts = prepareWrapper(inner, exposedInputs, exposedOutputs, exposedParams);
+  const { portals, paramList } = parts;
+
+  const def = defineNode<Record<string, unknown>>({
+    type: "subgraph",
+    inputs: parts.inputPins,
+    outputs: parts.outputPins,
+    defaultParams: parts.defaultParams,
+    // The outer cook's resolver is forwarded into the inner cook, so the
+    // wrapper's memo key must carry GPU provenance whenever a resolver
+    // is present — the wrapper cannot see which inner nodes adopt, so
+    // "always" over-invalidates conservatively (inner nodes apply their
+    // own precise "fields" rule inside the nested cook).
+    gpu: "always",
+    memoKey: () => transitiveVersionKey(inner, new Set()),
+    async execute({ inputs, params, seed, signal, budgetMs, gpu }) {
+      // The writes and the cook are ONE indivisible step. One inner graph
+      // can back several wrapper instances — the same def used twice, or,
+      // once primitives are named, the same primitive referenced from two
+      // graphs — and those wrappers can be cooked concurrently. Preparing
+      // outside the guard let a second wrapper overwrite the seed and
+      // portal items after the first had written them and before its cook
+      // had read them, so the first cook finished against the second's
+      // seed: same graph, same seed, an output that depended on
+      // scheduling.
+      return withExclusiveGraph(inner, async () => {
+        checkExposedValues(paramList, params);
+        // Same outer seed and inputs reproduce the same inner keys, so the
+        // persisted inner caches serve unchanged nodes across outer cooks.
+        // Quiet setters: plumbing must not bump the inner version, or the
+        // memo key above would invalidate this node on every cook.
+        inner._setSeedQuiet(hashCombine(seed, hashString("subgraph")));
+        for (const portal of portals) {
+          inner._setParamQuiet(portal.handle, "items", inputs[portal.name] ?? []);
+        }
+        return withExposedParams(inner, paramList, params, async () => {
+          // gpu forwards like signal/budgetMs: the inner cook applies the
+          // same policy (its per-cook stats view reports into the outer
+          // cook's sink; see gpuStatsView in execute.ts).
+          const result = await cook(inner, { signal, budgetMs, gpu });
+          const out: Record<string, DataCollection> = {};
+          for (const exp of exposedOutputs) {
+            out[exp.name] = result.outputs[`__out_${exp.name}`] ?? [];
+          }
+          return out;
+        });
+      });
+    },
+  });
+  recordWrapperSpec(def, "subgraph", inner, exposedInputs, exposedOutputs, paramList);
+  return def;
+}
+
+/**
+ * @internal Validate one wrapper's exposed interface and inject its
+ * plumbing, returning what the definition needs.
+ *
+ * Shared by {@link subgraphNode} and `forEachNode` because the interface is
+ * the same construction in both: the two differ only in how often the body
+ * cooks, which is the execute body and nothing here.
+ */
+export function prepareWrapper(
+  inner: Graph,
+  exposedInputs: readonly ExposedPin[],
+  exposedOutputs: readonly ExposedPin[],
+  exposedParams: readonly ExposedParam[],
+): {
+  inputPins: PinDef[];
+  outputPins: PinDef[];
+  portals: Array<{ name: string; handle: NodeHandle<PortalParams> }>;
+  paramList: ExposedParam[];
+  defaultParams: Record<string, unknown>;
+} {
   const inputPins: PinDef[] = [];
   const portals: Array<{ name: string; handle: NodeHandle<PortalParams> }> = [];
   const plumbing = plumbingOf(inner);
@@ -546,129 +642,128 @@ export function subgraphNode(
     defaultParams[exp.name] = copyParamDefault(exp.schema.default);
   }
   const paramList = exposedParams.map(detachParam);
+  return { inputPins, outputPins, portals, paramList, defaultParams };
+}
 
-  const def = defineNode<Record<string, unknown>>({
-    type: "subgraph",
-    inputs: inputPins,
-    outputs: outputPins,
-    defaultParams,
-    // The outer cook's resolver is forwarded into the inner cook, so the
-    // wrapper's memo key must carry GPU provenance whenever a resolver
-    // is present — the wrapper cannot see which inner nodes adopt, so
-    // "always" over-invalidates conservatively (inner nodes apply their
-    // own precise "fields" rule inside the nested cook).
-    gpu: "always",
-    memoKey: () => transitiveVersionKey(inner, new Set()),
-    async execute({ inputs, params, seed, signal, budgetMs, gpu }) {
-      // The writes and the cook are ONE indivisible step. One inner graph
-      // can back several wrapper instances — the same def used twice, or,
-      // once primitives are named, the same primitive referenced from two
-      // graphs — and those wrappers can be cooked concurrently. Preparing
-      // outside the guard let a second wrapper overwrite the seed and
-      // portal items after the first had written them and before its cook
-      // had read them, so the first cook finished against the second's
-      // seed: same graph, same seed, an output that depended on
-      // scheduling.
-      return withExclusiveGraph(inner, async () => {
-        // Values are checked BEFORE the first write, so a bad one fails
-        // naming the exposed param and its targets instead of surfacing as
-        // "[object Object]" (a Field) or as an inner node's own complaint
-        // about a value the author never set there (a plain value out of
-        // range) — and leaves the inner graph exactly as it found it.
-        for (const exp of paramList) {
-          const value = params[exp.name];
-          if (isField(value)) {
-            if (exp.schema.acceptsField !== true) {
-              throw new GraphValidationError(fieldNotAcceptedMessage(exp));
-            }
-            continue;
-          }
-          const bad = exposedValueError(exp.schema, value);
-          if (bad !== undefined) {
-            throw new GraphValidationError(valueRejectedMessage(exp, bad));
-          }
-        }
-        // Same outer seed and inputs reproduce the same inner keys, so the
-        // persisted inner caches serve unchanged nodes across outer cooks.
-        // Quiet setters: plumbing must not bump the inner version, or the
-        // memo key above would invalidate this node on every cook.
-        inner._setSeedQuiet(hashCombine(seed, hashString("subgraph")));
-        for (const portal of portals) {
-          inner._setParamQuiet(portal.handle, "items", inputs[portal.name] ?? []);
-        }
-        // Exposed values, written inward here and only here. Wrap time is
-        // too early (the values do not exist yet) and setParam time is
-        // wrong twice over: a loud write would invalidate every other
-        // instance of this def, and a quiet one would let the last writer
-        // decide what all of them cook.
-        //
-        // Every one of these writes is undone before the section ends, so
-        // a cook LEAVES THE INNER GRAPH EXACTLY AS IT FOUND IT. The inner
-        // graph is shared — by the instances of this def, and by anyone
-        // reaching it through getSubgraphSpec(def).graph — and it is what
-        // serializeGraph reads to emit the nested payload. Without the
-        // restore, the payload records whichever value cooked last: bytes
-        // that depend on cook history, on which OTHER outer graph cooked,
-        // and a failed cook that wedges the graph unserializable with no
-        // way back. The inner seed is the same hazard, solved the other
-        // way (SubgraphSpec.seed, emitted instead of the live value);
-        // params are restored because the graph itself is the shared
-        // object an author can hold.
-        const saved: Array<{
-          handle: NodeHandle<Record<string, unknown>>;
-          param: string;
-          value: unknown;
-        }> = [];
-        try {
-          for (const exp of paramList) {
-            const value = params[exp.name];
-            for (const target of exp.targets) {
-              // The handle is untyped here by construction — targets name
-              // params of arbitrary inner node types, checked above against
-              // the live graph rather than by the type system.
-              const handle = target.node as NodeHandle<Record<string, unknown>>;
-              saved.push({
-                handle,
-                param: target.param,
-                value: inner.require(handle.id).params[target.param],
-              });
-              inner._setParamQuiet(handle, target.param, value);
-            }
-          }
-          // gpu forwards like signal/budgetMs: the inner cook applies the
-          // same policy (its per-cook stats view reports into the outer
-          // cook's sink; see gpuStatsView in execute.ts).
-          const result = await cook(inner, { signal, budgetMs, gpu });
-          const out: Record<string, DataCollection> = {};
-          for (const exp of exposedOutputs) {
-            out[exp.name] = result.outputs[`__out_${exp.name}`] ?? [];
-          }
-          return out;
-        } finally {
-          // Reverse order, so the first write of a slot is the last undone
-          // — the restore is exact even if a future change lets two writes
-          // land on one slot. Quiet both ways: restoring must no more bump
-          // the inner version than writing did, or the memo key above would
-          // invalidate this node on every cook.
-          for (let i = saved.length - 1; i >= 0; i--) {
-            const slot = saved[i];
-            // A node removed mid-cook has nothing to restore; letting
-            // `require` throw here would mask the error already in flight.
-            if (inner._nodes.has(slot.handle.id)) {
-              inner._setParamQuiet(slot.handle, slot.param, slot.value);
-            }
-          }
-        }
-      });
-    },
-  });
+/**
+ * @internal Record what a wrapper def is made of, so it serializes.
+ *
+ * Both wrappers land here, and `wrapper` is the field that keeps them
+ * apart at the emit site — see {@link SubgraphSpec.wrapper}. Registering
+ * here is also what puts a def in front of `checkNoWrapCycle`: a wrapper
+ * missing from this map is a wrapper whose self-nesting is not refused at
+ * `add` time and hangs at cook time instead.
+ */
+export function recordWrapperSpec(
+  def: NodeDef<Record<string, unknown>>,
+  wrapper: WrapperKind,
+  inner: Graph,
+  exposedInputs: readonly ExposedPin[],
+  exposedOutputs: readonly ExposedPin[],
+  paramList: readonly ExposedParam[],
+): void {
   const detach = (e: ExposedPin): ExposedPin => ({ name: e.name, node: { id: e.node.id }, pin: e.pin });
   subgraphSpecs.set(def, {
+    wrapper,
     graph: inner,
     seed: inner.seed,
     inputs: exposedInputs.map(detach),
     outputs: exposedOutputs.map(detach),
     params: paramList,
   });
-  return def;
+}
+
+/**
+ * @internal Check every exposed value BEFORE the first write, so a bad one
+ * fails naming the exposed param and its targets instead of surfacing as
+ * "[object Object]" (a Field) or as an inner node's own complaint about a
+ * value the author never set there (a plain value out of range) — and
+ * leaves the inner graph exactly as it found it.
+ */
+export function checkExposedValues(
+  paramList: readonly ExposedParam[],
+  params: Record<string, unknown>,
+): void {
+  for (const exp of paramList) {
+    const value = params[exp.name];
+    if (isField(value)) {
+      if (exp.schema.acceptsField !== true) {
+        throw new GraphValidationError(fieldNotAcceptedMessage(exp));
+      }
+      continue;
+    }
+    const bad = exposedValueError(exp.schema, value);
+    if (bad !== undefined) {
+      throw new GraphValidationError(valueRejectedMessage(exp, bad));
+    }
+  }
+}
+
+/**
+ * @internal Write the exposed values inward, run `fn`, and restore them.
+ *
+ * Written here and only here. Wrap time is too early (the values do not
+ * exist yet) and setParam time is wrong twice over: a loud write would
+ * invalidate every other instance of this def, and a quiet one would let
+ * the last writer decide what all of them cook.
+ *
+ * Every write is undone before this returns, so a cook LEAVES THE INNER
+ * GRAPH EXACTLY AS IT FOUND IT. The inner graph is shared — by the
+ * instances of this def, and by anyone reaching it through
+ * `getSubgraphSpec(def).graph` — and it is what `serializeGraph` reads to
+ * emit the nested payload. Without the restore, the payload records
+ * whichever value cooked last: bytes that depend on cook history, on which
+ * OTHER outer graph cooked, and a failed cook that wedges the graph
+ * unserializable with no way back. The inner seed is the same hazard,
+ * solved the other way (`SubgraphSpec.seed`, emitted instead of the live
+ * value); params are restored because the graph itself is the shared
+ * object an author can hold.
+ *
+ * A `forEach` wraps its WHOLE loop in one of these rather than one per
+ * iteration: the values do not vary between iterations, and restoring K
+ * times would be K chances to leave the graph dirty for one that is
+ * enough.
+ */
+export async function withExposedParams<T>(
+  inner: Graph,
+  paramList: readonly ExposedParam[],
+  params: Record<string, unknown>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const saved: Array<{
+    handle: NodeHandle<Record<string, unknown>>;
+    param: string;
+    value: unknown;
+  }> = [];
+  try {
+    for (const exp of paramList) {
+      const value = params[exp.name];
+      for (const target of exp.targets) {
+        // The handle is untyped here by construction — targets name params
+        // of arbitrary inner node types, checked in prepareWrapper against
+        // the live graph rather than by the type system.
+        const handle = target.node as NodeHandle<Record<string, unknown>>;
+        saved.push({
+          handle,
+          param: target.param,
+          value: inner.require(handle.id).params[target.param],
+        });
+        inner._setParamQuiet(handle, target.param, value);
+      }
+    }
+    return await fn();
+  } finally {
+    // Reverse order, so the first write of a slot is the last undone — the
+    // restore is exact even if a future change lets two writes land on one
+    // slot. Quiet both ways: restoring must no more bump the inner version
+    // than writing did, or the memo key would invalidate on every cook.
+    for (let i = saved.length - 1; i >= 0; i--) {
+      const slot = saved[i];
+      // A node removed mid-cook has nothing to restore; letting `require`
+      // throw here would mask the error already in flight.
+      if (inner._nodes.has(slot.handle.id)) {
+        inner._setParamQuiet(slot.handle, slot.param, slot.value);
+      }
+    }
+  }
 }
