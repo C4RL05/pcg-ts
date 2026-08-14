@@ -19,13 +19,25 @@ export const NODE_W = 168;
  */
 export const PAD = 9;
 
+/**
+ * Space above the title, and deliberately MORE than `PAD`.
+ *
+ * Metrically equal padding does not read as equal here. The side padding
+ * is measured to the edge of a glyph, while the top is measured to the
+ * top of the caps — and the eye reads the run of text as a band, so the
+ * gap above it needs to be visibly larger before the two look the same.
+ * This is an optical correction, not a second opinion about the value:
+ * left, right and bottom all still come off `PAD`.
+ */
+export const PAD_TOP = 14;
+
 /** Cap height of the 11px title face, and of the 9px id face below it. */
 const TITLE_CAP = 8;
 /** Leading between the title baseline and the id baseline. */
 const TITLE_TO_ID = 12;
 
-/** Baseline of the type name. Its cap top lands exactly `PAD` from the top. */
-export const TITLE_Y = PAD + TITLE_CAP;
+/** Baseline of the type name. Its cap top lands `PAD_TOP` from the top. */
+export const TITLE_Y = PAD_TOP + TITLE_CAP;
 /** Baseline of the node id, one line under the title. */
 export const ID_Y = TITLE_Y + TITLE_TO_ID;
 
