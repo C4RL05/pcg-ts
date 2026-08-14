@@ -28,7 +28,7 @@ export default defineConfig({
         "01-sandbox": here("01-sandbox/index.html"),
         "02-infinite-world": here("02-infinite-world/index.html"),
         "03-galaxy": here("03-galaxy/index.html"),
-        "05-gpu-world": here("05-gpu-world/index.html"),
+        "04-gpu-world": here("04-gpu-world/index.html"),
       },
     },
   },

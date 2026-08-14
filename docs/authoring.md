@@ -2298,7 +2298,7 @@ leaves the cook and goes to the renderer, never into a seed, an index,
 or a later cook. What it *does* mean: if you need instance matrices
 that match the CPU bit for bit, leave `deviceInstances` off.
 
-`examples/05-gpu-world` is the worked end-to-end version of all of the
+`examples/04-gpu-world` is the worked end-to-end version of all of the
 above: a streamed `World` whose cells draw from matrices that never
 touch the CPU, with the binding's handle accounting and the evaluator
 pool's detached-buffer counters shown side by side.
@@ -2486,7 +2486,7 @@ whose `planRun` returns null), and one fused device-resident run — and
 its status line carries the wall time, the output hash and the full
 counter set for the selected path. Open it on
 `examples/graphs/examples-gpu-fields.json`, a five-node fusable chain,
-to read all three off one graph. `examples/05-gpu-world` covers the
+to read all three off one graph. `examples/04-gpu-world` covers the
 device-resident instancing surface: a streamed `World` drawing from
 matrices that never reach the CPU, with `poolStats.detachedBuffers`
 and the binding's own handle count shown together as a live leak meter.

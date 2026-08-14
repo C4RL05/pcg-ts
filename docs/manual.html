@@ -690,11 +690,11 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/03-galaxy/">run it →</a>
     </p>
 
-    <h3 id="ex-05">05 · GPU world — matrices that never reach the CPU</h3>
+    <h3 id="ex-04">04 · GPU world — matrices that never reach the CPU</h3>
     <figure>
-      <img src="manual-assets/05-gpu-world.jpg" width="1079" height="791" loading="lazy" decoding="async"
+      <img src="manual-assets/04-gpu-world.jpg" width="1079" height="791" loading="lazy" decoding="async"
            alt="The gpu-world demo running the device-resident path with the camera at rest. The left panel offers a two-way toggle, device-resident selected over CPU readback, above sliders for seed 1, speed 0 u/s, gen radius 150 u and per cell 140, with autopilot unchecked. The counters below read renderer nvidia blackwell webgpu, 120 live cells, 120 cells cooked and 0 evicted, a churn of 0.0 cooked and 0.0 evicted per second, 16,800 instances drawn, 120 buffers holding 1.0 MiB of matrices on device, the same 120 buffers and 1.0 MiB of readbacks avoided, and 0 buffers and 0 B of matrices uploaded. The status line reads device-resident, no matrix readback. The right of the screen renders a dense field of tall teal spires receding to the horizon." />
-      <figcaption><b>05 · gpu world</b> — a streamed world drawing 16,800 instances across 120 live cells, from 1.0 MiB of matrices that were composed on the GPU and never read back. The <code>matrices uploaded</code> row stays at <code>0 B</code> for as long as the device path is selected.</figcaption>
+      <figcaption><b>04 · gpu world</b> — a streamed world drawing 16,800 instances across 120 live cells, from 1.0 MiB of matrices that were composed on the GPU and never read back. The <code>matrices uploaded</code> row stays at <code>0 B</code> for as long as the device path is selected.</figcaption>
     </figure>
     <p>Where the sandbox's <a href="#ex-01">fused cook path</a> keeps <em>attribute columns</em> device-side between fused kernels, this one keeps the <em>result</em> device-side as well. <code>spawnInstances</code> acts as the terminal of a resident run: the transform, scale and rotation columns stay in storage buffers, a WGSL kernel composes them into column-major 4×4 matrices, and the batch hands back an opaque buffer handle instead of a <code>Float32Array</code>. A renderer sharing the same <code>GPUDevice</code> adopts that buffer as a storage instance attribute, so the matrices go from compute kernel to draw call without ever existing in JS.</p>
     <p>The toggle is the point of the demo. Both paths cook the same graph with the same fields on the same device — only the ending differs. Switch to <b>CPU readback</b> and <code>matrices held on device</code> falls to zero while <code>matrices uploaded</code> starts climbing; switch back and the upload counter freezes where it stopped. Both meters are cumulative, so they record what each path has cost since the page loaded rather than what it is holding right now. In the screenshot the camera is parked with autopilot off, nothing has evicted yet, and the cumulative <code>buf</code> count still agrees with <code>live cells</code> at <code>120</code>; start moving and the two part company, which is the honest picture of a streaming world.</p>
@@ -706,10 +706,10 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="demo-links">
       <span class="chip">three: createWebGpuInstanceAdapter · WorldThreeBinding · DeviceInstanceAdapter</span>
       <span class="chip">gpu: GpuFieldEvaluator · deviceInstances · deviceTransformsBuffer</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/05-gpu-world/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/examples/04-gpu-world/">run it →</a>
     </p>
 
-    <h3 id="ex-06">The rig — the curve vocabulary, end to end</h3>
+    <h3 id="ex-rig">The rig — the curve vocabulary, end to end</h3>
     <figure>
       <img src="manual-assets/01-sandbox-rig.jpg" width="1454" height="783" loading="lazy" decoding="async"
            alt="The rig graph open in the sandbox, shaded by surface direction over a faint ground grid and with the node overlay hidden. A long horizontal armature hangs from seven vertical chains of interlocking links: a box truss of four chords with zigzag diagonal bracing, bristling with hundreds of thin rods pointing outward in every direction, collars and boxy fixtures threaded along it, dense bundles of cables dropping straight down at intervals, and a scatter of long cables swagging beneath the whole span. The geometry reads in bands of blue, violet and pink rather than by any light." />
@@ -787,7 +787,7 @@ console.<span class="n">log</span>(result.stats.gpu);
     <p>It does not help, and can cost, when the domain is small enough that dispatch and readback dominate; when the fields were composed in code and carry no spec, so every one of them falls back; when the graph's cost is in topology rather than fields, since only field evaluation moves to the device; or when you are toggling the path back and forth, which recooks the chain each time. Bit-exactness with existing goldens is a reason to stay on the CPU, and staying on the CPU is always a supported choice — it is the reference.</p>
     <div class="note">
       <span class="tag">Scope</span>
-      <p>What is on device today is field evaluation, plus fused runs of the four count-preserving node kinds above, plus one <em>terminal</em> kind: <code>spawnInstances</code>. Under <code>deviceInstances: true</code> a run can end at the spawner and compose its 4×4 matrices — and, with <code>colorAttr</code> set, its per-instance RGB — straight into GPU buffers a <code>WebGPURenderer</code> draws from, with no readback at all; multi-asset spawning has been device-side since v0.8. Chapter 4's forest and gpu-world demos both run it, and <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a> carries the contract. Anything beyond that — topology, sampling, spawner-side allocation — is unshipped.</p>
+      <p>What is on device today is field evaluation, plus fused runs of the four count-preserving node kinds above, plus one <em>terminal</em> kind: <code>spawnInstances</code>. Under <code>deviceInstances: true</code> a run can end at the spawner and compose its 4×4 matrices — and, with <code>colorAttr</code> set, its per-instance RGB — straight into GPU buffers a <code>WebGPURenderer</code> draws from, with no readback at all; multi-asset spawning has been device-side since v0.8. Chapter 4's gpu-world demo runs it, and <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a> carries the contract. Anything beyond that — topology, sampling, spawner-side allocation — is unshipped.</p>
     </div>
   </section>
 

@@ -489,7 +489,7 @@ function buildWorld(): void {
 // -- overlay ---------------------------------------------------------------
 
 const overlay = createOverlay({
-  title: "05 · gpu world",
+  title: "04 · gpu world",
   info:
     "A world streamed around a flying camera. Each cell's instance matrices are composed in a " +
     "WGSL kernel and drawn straight from that GPU buffer — they never exist on the CPU. Switch " +
@@ -707,7 +707,7 @@ function onDeviceLost(detail: string): void {
   deviceLostDetail = detail;
   deviceAdapter = undefined;
   setStatus(deviceLostStatus());
-  console.error(`05-gpu-world: WebGPU device lost — ${detail}`);
+  console.error(`04-gpu-world: WebGPU device lost — ${detail}`);
   if (rig) teardown(rig);
   rig = undefined;
   paintMode();
@@ -1032,7 +1032,7 @@ async function boot(): Promise<void> {
       }
     } catch (err) {
       residentBlocker = `the renderer failed to initialise on the shared device: ${errText(err)}`;
-      console.warn("05-gpu-world: shared-device renderer failed:", err);
+      console.warn("04-gpu-world: shared-device renderer failed:", err);
     }
   }
   if (gl === undefined) {
@@ -1065,17 +1065,17 @@ async function boot(): Promise<void> {
       });
     } catch (err) {
       residentBlocker = `device instances are unavailable: ${errText(err)}`;
-      console.warn("05-gpu-world: device instance adapter unavailable:", err);
+      console.warn("04-gpu-world: device instance adapter unavailable:", err);
     }
   }
 
   statAdapter(`${adapterLabel} · ${backendLabel}`);
   if (!residentAvailable()) {
     mode = "cpu";
-    console.info(`05-gpu-world: device path unavailable — ${residentBlocker ?? "unknown reason"}`);
+    console.info(`04-gpu-world: device path unavailable — ${residentBlocker ?? "unknown reason"}`);
   } else {
     console.info(
-      `05-gpu-world: WebGPU ready — ${adapterLabel}; ` +
+      `04-gpu-world: WebGPU ready — ${adapterLabel}; ` +
         `residentTerminals=[${residentEval?.residentTerminals.join(", ") ?? ""}]`,
     );
   }
@@ -1100,5 +1100,5 @@ async function boot(): Promise<void> {
 
 void boot().catch((err: unknown) => {
   setStatus(`boot failed: ${errText(err)}`);
-  console.error("05-gpu-world: boot failed:", err);
+  console.error("04-gpu-world: boot failed:", err);
 });

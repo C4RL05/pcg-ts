@@ -122,7 +122,7 @@ const SIZES = {
   "01-sandbox-rig": { css: [1454, 783], out: [1454, 783] },
   "02-infinite-world": { css: [1454, 783], out: [1454, 783] },
   "03-galaxy": { css: [1454, 783], out: [1454, 783] },
-  "05-gpu-world": { css: [1079, 791], out: [1079, 791] },
+  "04-gpu-world": { css: [1079, 791], out: [1079, 791] },
 };
 
 /**
@@ -276,7 +276,7 @@ const DEMOS = [
     animated: true,
   },
   {
-    id: "05-gpu-world",
+    id: "04-gpu-world",
     ready: (s, has) =>
       !!window.pcgWorld &&
       window.pcgWorld.probe().meshes > 0 &&

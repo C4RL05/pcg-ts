@@ -1058,7 +1058,7 @@ handle leaves the cook and goes to the renderer, never into a seed, an
 index, or a subsequent cook. What it *does* mean: if you need matrices
 that match the CPU bit for bit, do not turn `deviceInstances` on.
 
-See it live: [`examples/05-gpu-world`](./examples/05-gpu-world) streams
+See it live: [`examples/04-gpu-world`](./examples/04-gpu-world) streams
 a `World` whose cells render from instance matrices that never touch
 the CPU, showing the binding's live handle count and the evaluator
 pool's own detached-buffer accounting side by side — an independent
