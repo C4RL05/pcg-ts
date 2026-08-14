@@ -54,6 +54,34 @@ write it to an int attribute with one extra node.
   and the hazard disappears because the index never leaves the host.
 - Cost: the fixed five-site grammar change `ne` and `fraction` both paid.
 
+**A field input that yields the node seed.** A serialized noise carries
+its seed as a LITERAL inside its field spec, so changing a graph's seed
+re-rolls everything keyed on a node seed — `randomField`, the scatters,
+the jitters, the probabilistic filters — and moves no noise at all. All
+20 corpus graphs that use a noise are in this position; it is a property
+of the format, not a defect in any one of them.
+- **It surfaced when the rig was frozen**, which is the consumer. Its
+  four `*Variant` params existed precisely to re-roll one shape at a
+  time, and they worked by folding into the noise seed host-side. Frozen,
+  they are gone: the seed they computed is a number in a spec.
+- **The obvious workaround is worse than the gap.** A panel knob
+  addresses `"<nodeId>.<param>"` and cannot reach INTO a field spec, so
+  the only way to make a frozen noise movable today is to write an offset
+  to an attribute and add it to the noise's sample `position` — which
+  works (the rig's cables decorrelate their wobble exactly this way) but
+  costs a node per noise, spreads a convention no other graph follows,
+  and still leaves the seed box doing nothing to it.
+- The mechanism that fits is a grammar input — `{ "fn": "nodeSeed" }` —
+  resolving to `ctx.seed`, which is already what `randomField` reads. It
+  is the fixed five-site grammar change `ne` and `fraction` both paid,
+  plus a WGSL lowering that has a constant to fold rather than a value to
+  compute. Every frozen graph becomes seed-re-rollable at once, which is
+  the difference between this and the per-graph workaround.
+- Until then a graph is a fixed recipe whose seed moves its scatters and
+  not its shapes. That is worth stating in prose somewhere an author
+  reads before they wonder why the seed box did half of what they
+  expected.
+
 **A per-item cache for `forEach`.** The loop shipped; this is the one
 piece of it deliberately left out, and the measurement is the expensive
 part to re-derive. A `forEach` cooks its body once per element and
