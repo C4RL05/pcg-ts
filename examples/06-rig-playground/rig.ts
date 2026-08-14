@@ -306,7 +306,7 @@ export function buildRigGraph(params: RigParams): Graph {
     start: [-half, params.height, 0],
     end: [half, params.height, 0],
     includeEnd: true,
-  });
+  }, "spineLine");
   const wanderOpts = {
     frequency: params.wanderFreq,
     octaves: Math.max(1, Math.round(params.wanderOctaves)),
@@ -332,12 +332,12 @@ export function buildRigGraph(params: RigParams): Graph {
         }),
       ),
     ),
-  });
-  const spinePath = graph.add(pointsToPath, { closed: false });
+  }, "spineWander");
+  const spinePath = graph.add(pointsToPath, { closed: false }, "spineSpinePath");
   // Displacing a line sideways stretches its segments where the wander
   // is steep, so the spacing is evened out again before anything is
   // placed along it — otherwise everything bunches on the straight runs.
-  const spine = graph.add(pathResample, { mode: "count", count: params.spineSamples });
+  const spine = graph.add(pathResample, { mode: "count", count: params.spineSamples }, "spineSpine");
   graph.connect(line, "out", wander, "in");
   graph.connect(wander, "out", spinePath, "in");
   graph.connect(spinePath, "out", spine, "in");
@@ -346,12 +346,12 @@ export function buildRigGraph(params: RigParams): Graph {
   // -- components -----------------------------------------------------
   // Dense even samples, thinned by a noise field read along the curve
   // parameter so the survivors arrive in clusters rather than evenly.
-  const dense = graph.add(pathResample, { mode: "count", count: params.partDensity });
+  const dense = graph.add(pathResample, { mode: "count", count: params.partDensity }, "partDense");
   // The frame goes AFTER the dense resample, not before: pathResample
   // builds new points and does not carry the input's POINT attributes,
   // so a frame written upstream would be dropped right here. It has to
   // be computed on the points that survive to the end.
-  const frame = graph.add(writeCurveFrame, {});
+  const frame = graph.add(writeCurveFrame, {}, "partFrame");
   const density = graph.add(setAttribute, {
     name: "density",
     domain: "point",
@@ -367,11 +367,11 @@ export function buildRigGraph(params: RigParams): Graph {
       normalized: true,
       position: vec(attribute("curveU", 1), 0, 0),
     }),
-  });
+  }, "partDensity");
   const cluster = graph.add(filterByDensity, {
     mode: "threshold",
     threshold: params.clusterThreshold,
-  });
+  }, "partCluster");
   // Thresholding an EVEN resample leaves the survivors on a regular
   // lattice, which reads as a comb rather than a cluster. The jitter is
   // about half the sample spacing.
@@ -383,7 +383,7 @@ export function buildRigGraph(params: RigParams): Graph {
     // the seed attribute), not the index, so this seed is what re-rolls
     // the scatter without moving anything else.
     seed: hashCombine(5, Math.round(params.clusterVariant)),
-  });
+  }, "partScatter");
   // Which shape each point spawns. The selector is floored and clamped
   // into the values list, so a 0..1 random scaled by the list length
   // picks one entry, and repeated entries are simply more likely.
@@ -394,7 +394,7 @@ export function buildRigGraph(params: RigParams): Graph {
     type: "string",
     values: values.length > 0 ? values : ["rod"],
     value: mul(randomField("part"), Math.max(1, values.length)),
-  });
+  }, "partPart");
   // Local +Z runs along the spine, so a Z-long bar or collar lies along
   // it and a Y-long rod sticks out sideways. WHICH sideways is the roll,
   // and for axis ±z the roll is exactly what the `up` hint sets — so
@@ -417,7 +417,7 @@ export function buildRigGraph(params: RigParams): Graph {
     type: "f32",
     tupleSize: 1,
     value: mul(randomField("radial"), Math.PI * 2 * params.radialSpread),
-  });
+  }, "partAngleAttr");
   const angle = attribute("radialAngle", 1);
 
   // Mount to the nearest CHORD rather than to the axis: snap the fan
@@ -436,7 +436,7 @@ export function buildRigGraph(params: RigParams): Graph {
         mul(mul(reach, sin(corner)), attribute("curveBinormal", 3)),
       );
     })(),
-  });
+  }, "partMount");
 
   const orient = graph.add(orientAlongVector, {
     direction: attribute("tangent", 3),
@@ -445,7 +445,7 @@ export function buildRigGraph(params: RigParams): Graph {
       mul(sin(angle), attribute("curveBinormal", 3)),
     ),
     axis: "+z",
-  });
+  }, "partOrient");
   const size = graph.add(setAttribute, {
     name: "scale",
     domain: "point",
@@ -458,8 +458,8 @@ export function buildRigGraph(params: RigParams): Graph {
       );
       return vec(s, s, s);
     })(),
-  });
-  const partSpawn = graph.add(spawnInstances, { assetId: "rod", assetAttr: "part" });
+  }, "partSize");
+  const partSpawn = graph.add(spawnInstances, { assetId: "rod", assetAttr: "part" }, "partPartSpawn");
   graph.connect(spine, "out", dense, "in");
   graph.connect(dense, "out", frame, "in");
   graph.connect(frame, "out", density, "in");
@@ -513,8 +513,8 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
   // Corners sit at 45, 135, 225 and 315 degrees, so the distance from
   // the axis is half the DIAGONAL, not half the side.
   const h = trussCornerRadius(params);
-  const cells = graph.add(pathResample, { mode: "count", count: stations });
-  const frame = graph.add(writeCurveFrame, {});
+  const cells = graph.add(pathResample, { mode: "count", count: stations }, "trussCells");
+  const frame = graph.add(writeCurveFrame, {}, "trussFrame");
   graph.connect(spine, "out", cells, "in");
   graph.connect(cells, "out", frame, "in");
 
@@ -527,20 +527,22 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
   })();
 
   /** One member: displace the framed spine, then make it solid. */
+  let members = 0;
   const member = (translate: FieldLike, radius: number, into: NodeRef): NodeRef => {
-    const move = graph.add(transformPoints, { translate });
-    const solid = graph.add(pathSegments, { axis: "+y", radius, extend: radius });
+    const n = members++;
+    const move = graph.add(transformPoints, { translate }, `trussMove${n}`);
+    const solid = graph.add(pathSegments, { axis: "+y", radius, extend: radius }, `trussSolid${n}`);
     graph.connect(frame, "out", move, "in");
     graph.connect(move, "out", solid, "in");
     graph.connect(solid, "out", into, "in");
     return move;
   };
 
-  const chords = graph.add(mergePoints);
-  const braces = graph.add(mergePoints);
+  const chords = graph.add(mergePoints, undefined, "trussChords");
+  const braces = graph.add(mergePoints, undefined, "trussBraces");
   // The four chords again, as POINTS this time. Ringing the corners at
   // one station needs the corners, not the tubes between them.
-  const corners = graph.add(mergePoints);
+  const corners = graph.add(mergePoints, undefined, "trussCorners");
   for (let c = 0; c < 4; c++) {
     const a = Math.PI / 4 + (c * Math.PI) / 2;
     // A chord's angle is constant, so its sine and cosine are numbers and
@@ -561,8 +563,8 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
     member(add(mul(mul(h, cosA), N), mul(mul(h, sinA), B)), params.trussBrace, braces);
   }
 
-  const chordSpawn = graph.add(spawnInstances, { assetId: "tube" });
-  const braceSpawn = graph.add(spawnInstances, { assetId: "tube" });
+  const chordSpawn = graph.add(spawnInstances, { assetId: "tube" }, "trussChordSpawn");
+  const braceSpawn = graph.add(spawnInstances, { assetId: "tube" }, "trussBraceSpawn");
   graph.connect(chords, "out", chordSpawn, "in");
   graph.connect(braces, "out", braceSpawn, "in");
   graph.output(chordSpawn, "instances", "truss");
@@ -588,7 +590,7 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
         const i = index();
         return sub(i, mul(stations, floor(div(i, stations))));
       })(),
-    });
+    }, "trussStationId");
     // Frames at every station read as a solid tube rather than a truss,
     // so most stations are dropped. The keep test is a modulo written as
     // a remainder, thresholded — filterByAttribute compares against a
@@ -602,20 +604,20 @@ function buildTruss(graph: Graph, params: RigParams, spine: NodeRef): void {
         const k = attribute("stationId", 1);
         return sub(k, mul(every, floor(div(k, every))));
       })(),
-    });
+    }, "trussPhase");
     const keep = graph.add(filterByAttribute, {
       attribute: "framePhase",
       comparison: "lt",
       value: 0.5,
-    });
+    }, "trussKeep");
     // Closed, so the fourth corner joins back to the first.
-    const ring = graph.add(pointsToPath, { closed: true, groupAttr: "stationId" });
+    const ring = graph.add(pointsToPath, { closed: true, groupAttr: "stationId" }, "trussRing");
     const solid = graph.add(pathSegments, {
       axis: "+y",
       radius: params.trussBrace,
       extend: params.trussBrace,
-    });
-    const spawn = graph.add(spawnInstances, { assetId: "tube" });
+    }, "trussSolid");
+    const spawn = graph.add(spawnInstances, { assetId: "tube" }, "trussSpawn");
     graph.connect(corners, "out", stationId, "in");
     graph.connect(stationId, "out", phase, "in");
     graph.connect(phase, "out", keep, "in");
@@ -651,8 +653,8 @@ function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
   const cells = graph.add(pathResample, {
     mode: "count",
     count: Math.max(2, Math.round(params.wrapSegments)),
-  });
-  const frame = graph.add(writeCurveFrame, {});
+  }, "wrapCells");
+  const frame = graph.add(writeCurveFrame, {}, "wrapFrame");
   graph.connect(spine, "out", cells, "in");
   graph.connect(cells, "out", frame, "in");
 
@@ -681,7 +683,7 @@ function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
       type: "f32",
       tupleSize: 1,
       value: randomField(name),
-    });
+    }, `wrapPick_${name}`);
     if (carrier !== undefined) body.connect(carrier, "out", write, "in");
     else carrierHead = write;
     carrier = write;
@@ -689,7 +691,7 @@ function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
   let tail: NodeRef | undefined;
   let frameHead: NodeRef | undefined;
   for (const name of names) {
-    const onto = body.add(transferAttribute, { name, mapping: "nearest" });
+    const onto = body.add(transferAttribute, { name, mapping: "nearest" }, `wrapOnto_${name}`);
     body.connect(carrier as NodeRef, "out", onto, "source");
     if (tail !== undefined) body.connect(tail, "out", onto, "in");
     else frameHead = onto;
@@ -725,8 +727,8 @@ function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
   );
   const move = body.add(transformPoints, {
     translate: add(mul(mul(radius, cos(theta)), N), mul(mul(radius, sin(theta)), B)),
-  });
-  const solid = body.add(pathSegments, { axis: "+y", radius: params.cableRadius });
+  }, "wrapMove");
+  const solid = body.add(pathSegments, { axis: "+y", radius: params.cableRadius }, "wrapSolid");
   body.connect(tail as NodeRef, "out", move, "in");
   body.connect(move, "out", solid, "in");
 
@@ -743,13 +745,13 @@ function buildWraps(graph: Graph, params: RigParams, spine: NodeRef): void {
   );
 
   const carriers = buildCarriers(graph, count, "wrap");
-  const wraps = graph.add(each);
+  const wraps = graph.add(each, undefined, "wrapWraps");
   graph.connect(carriers, "out", wraps, "each");
   graph.connect(frame, "out", wraps, "frame");
 
-  const merged = graph.add(mergePoints);
+  const merged = graph.add(mergePoints, undefined, "wrapMerged");
   graph.connect(wraps, "out", merged, "in");
-  const spawn = graph.add(spawnInstances, { assetId: "tube" });
+  const spawn = graph.add(spawnInstances, { assetId: "tube" }, "wrapSpawn");
   graph.connect(merged, "out", spawn, "in");
   graph.output(spawn, "instances", "wraps");
 }
@@ -774,15 +776,15 @@ function buildCarriers(graph: Graph, n: number, tag: string): NodeRef {
     // agreeing on position, seed and tags are ONE item to a forEach, and
     // it refuses the collection rather than emit the same cable twice.
     end: [n - 1, 0, 0],
-  });
+  }, `${tag}CarrierLine`);
   const id = graph.add(setAttribute, {
     name: `${tag}Id`,
     domain: "point",
     type: "i32",
     tupleSize: 1,
     value: index(),
-  });
-  const split = graph.add(partitionByAttribute, { name: `${tag}Id` });
+  }, `${tag}CarrierId`);
+  const split = graph.add(partitionByAttribute, { name: `${tag}Id` }, `${tag}Carriers`);
   graph.connect(line, "out", id, "in");
   graph.connect(id, "out", split, "in");
   return split;
@@ -808,11 +810,11 @@ function buildChains(graph: Graph, params: RigParams, spine: NodeRef): void {
     start: [0, 0, 0],
     end: [0, 1, 0],
     includeEnd: true,
-  });
+  }, "chainStrand");
   const anchors = graph.add(pathResample, {
     mode: "count",
     count: Math.max(2, Math.round(params.chainCount)),
-  });
+  }, "chainAnchors");
   // Each chain reaches the SAME ceiling from a different height, so the
   // stretch is per anchor: copyToPoints multiplies the target's scale
   // into the source positions, and the strand is one unit long, so
@@ -824,17 +826,17 @@ function buildChains(graph: Graph, params: RigParams, spine: NodeRef): void {
     type: "f32",
     tupleSize: 3,
     value: vec(1, sub(params.ceilingHeight, component(position(), 1)), 1),
-  });
-  const copies = graph.add(copyToPoints);
+  }, "chainReach");
+  const copies = graph.add(copyToPoints, undefined, "chainCopies");
   const chainId = graph.add(setAttribute, {
     name: "chainId",
     domain: "point",
     type: "i32",
     tupleSize: 1,
     value: floor(div(index(), links + 1)),
-  });
-  const chainPath = graph.add(pointsToPath, { closed: false, groupAttr: "chainId" });
-  const segments = graph.add(pathSegments, { axis: "+y", radius: 1 });
+  }, "chainChainId");
+  const chainPath = graph.add(pointsToPath, { closed: false, groupAttr: "chainId" }, "chainChainPath");
+  const segments = graph.add(pathSegments, { axis: "+y", radius: 1 }, "chainSegments");
   // Size each link to its own segment: chains span different gaps, so a
   // fixed link size would leave gaps on the long ones and pile up on the
   // short. pathSegments already wrote the segment length into scale.y —
@@ -850,7 +852,7 @@ function buildChains(graph: Graph, params: RigParams, spine: NodeRef): void {
       const s = mul(1.3, component(attribute("scale", 3), 1));
       return vec(s, s, s);
     })(),
-  });
+  }, "chainLinkSize");
   const alternate = graph.add(orientAlongVector, {
     // index mod 2, without a modulo combinator: i - 2 * floor(i / 2).
     direction: (() => {
@@ -860,8 +862,8 @@ function buildChains(graph: Graph, params: RigParams, spine: NodeRef): void {
     })(),
     up: attribute("tangent", 3),
     axis: "+z",
-  });
-  const spawn = graph.add(spawnInstances, { assetId: "chainLink" });
+  }, "chainAlternate");
+  const spawn = graph.add(spawnInstances, { assetId: "chainLink" }, "chainSpawn");
   graph.connect(spine, "out", anchors, "in");
   graph.connect(anchors, "out", reach, "in");
   graph.connect(strand, "out", copies, "source");
@@ -891,14 +893,14 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
     start: [0, 0, 0],
     end: [0, -1, 0],
     includeEnd: true,
-  });
+  }, "danglerStrand");
   const strandU = graph.add(setAttribute, {
     name: "cableU",
     domain: "point",
     type: "f32",
     tupleSize: 1,
     value: fraction(),
-  });
+  }, "danglerStrandU");
   // Bundling GATHERS the anchors instead of deleting some of them: each
   // one slides along the curve toward the middle of its own bundle, so
   // the cables leave in fat clumps with bare runs between.
@@ -921,7 +923,7 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
   const anchors = graph.add(pathResample, {
     mode: "count",
     count: Math.max(2, Math.round(params.danglerCount)),
-  });
+  }, "danglerAnchors");
   const bundling = graph.add(pathPointAt, {
     mode: "fraction",
     // Each anchor slides `bundle` of the way from where it is to the
@@ -934,7 +936,7 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
       const centre = div(add(floor(mul(u, bins)), 0.5), bins);
       return lerp(u, centre, bundle);
     })(),
-  });
+  }, "danglerBundling");
   // The attachment's SCALE is the strand's length: copyToPoints applies
   // the target's scale to the source positions, and the unit strand is
   // 1 long, so scale.y IS the drop in metres. Its rot is left identity
@@ -953,15 +955,15 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
       ),
       1,
     ),
-  });
-  const copies = graph.add(copyToPoints);
+  }, "danglerDrop");
+  const copies = graph.add(copyToPoints, undefined, "danglerCopies");
   const cableId = graph.add(setAttribute, {
     name: "cableId",
     domain: "point",
     type: "i32",
     tupleSize: 1,
     value: floor(div(index(), points)),
-  });
+  }, "danglerCableId");
   // The curl grows toward the free end: at the anchor cableU is 0 and
   // the cable is where it was attached, at the tip it is 1 and free.
   const curl = graph.add(transformPoints, {
@@ -984,10 +986,10 @@ function buildDanglers(graph: Graph, params: RigParams, spine: NodeRef): void {
         ),
       );
     })(),
-  });
-  const danglerPath = graph.add(pointsToPath, { closed: false, groupAttr: "cableId" });
-  const danglerTube = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius });
-  const danglerSpawn = graph.add(spawnInstances, { assetId: "tube" });
+  }, "danglerCurl");
+  const danglerPath = graph.add(pointsToPath, { closed: false, groupAttr: "cableId" }, "danglerDanglerPath");
+  const danglerTube = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius }, "danglerDanglerTube");
+  const danglerSpawn = graph.add(spawnInstances, { assetId: "tube" }, "danglerDanglerSpawn");
   graph.connect(strand, "out", strandU, "in");
   graph.connect(spine, "out", anchors, "in");
   graph.connect(anchors, "out", bundling, "in");
@@ -1007,7 +1009,7 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
   // connectPoints gives the chords and their lengths; the sag is a
   // parabola applied as a field, which at these slacks is
   // indistinguishable from a catenary and needs no solve.
-  const drapeAnchors = graph.add(pathResample, { mode: "count", count: params.drapeCount });
+  const drapeAnchors = graph.add(pathResample, { mode: "count", count: params.drapeCount }, "drapeDrapeAnchors");
   // A reach shorter than the gap between neighbouring anchors finds NO
   // edges, and the resample downstream then fails with "no polyline
   // primitives" — the whole rig disappears because one slider went too
@@ -1024,7 +1026,7 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
     mode: params.drapeMode,
     radius: Math.max(params.drapeReach, spacing * 1.05),
     lengthAttr: "edgeLength",
-  });
+  }, "drapeChords");
   // One random number per CHORD, written on the primitive domain. On any
   // domain but `point`, randomField hashes the element index rather than
   // a point identity — and connectPoints emits its edges in a canonical
@@ -1038,14 +1040,14 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
     type: "f32",
     tupleSize: 1,
     value: randomField(`chord${Math.round(params.curlVariant)}`),
-  });
+  }, "drapePick");
   // pathResample carries the primitive attributes onto every sample and
   // writes curveU, so both halves of the parabola are readable as
   // fields on the points it just made.
   const drapeEven = graph.add(pathResample, {
     mode: "count",
     count: Math.max(2, Math.round(params.drapeSegments) + 1),
-  });
+  }, "drapeDrapeEven");
   const sag = graph.add(transformPoints, {
     translate: (() => {
       const u = attribute("curveU", 1);
@@ -1071,9 +1073,9 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
       );
       return vec(0, mul(-1, mul(slack, mul(attribute("edgeLength", 1), bulge))), 0);
     })(),
-  });
-  const drapeTube = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius });
-  const drapeSpawn = graph.add(spawnInstances, { assetId: "tube" });
+  }, "drapeSag");
+  const drapeTube = graph.add(pathSegments, { axis: "+y", radius: params.cableRadius }, "drapeDrapeTube");
+  const drapeSpawn = graph.add(spawnInstances, { assetId: "tube" }, "drapeDrapeSpawn");
   graph.connect(spine, "out", drapeAnchors, "in");
   graph.connect(drapeAnchors, "out", chords, "in");
   graph.connect(chords, "out", pick, "in");
@@ -1101,7 +1103,7 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
       attribute: "edgeLength",
       comparison: "ge",
       value: params.drapeMinLength,
-    });
+    }, "drapeLong");
     graph.connect(tail, "out", long, "in");
     tail = long;
   }
@@ -1110,7 +1112,7 @@ function buildDrapes(graph: Graph, params: RigParams, spine: NodeRef): void {
       attribute: "chordPick",
       comparison: "lt",
       value: params.drapeKeep,
-    });
+    }, "drapeSome");
     graph.connect(tail, "out", some, "in");
     tail = some;
   }

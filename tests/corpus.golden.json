@@ -1681,6 +1681,192 @@
         ]
       }
     },
+    "examples-rig.json": {
+      "outputs": {
+        "braces": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 180,
+            "batches": [
+              {
+                "assetId": "tube",
+                "count": 180
+              }
+            ]
+          }
+        ],
+        "chains": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 238,
+            "batches": [
+              {
+                "assetId": "chainLink",
+                "count": 238
+              }
+            ]
+          }
+        ],
+        "danglers": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 3200,
+            "batches": [
+              {
+                "assetId": "tube",
+                "count": 3200
+              }
+            ]
+          }
+        ],
+        "drapes": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 1386,
+            "batches": [
+              {
+                "assetId": "tube",
+                "count": 1386
+              }
+            ]
+          }
+        ],
+        "frames": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 48,
+            "batches": [
+              {
+                "assetId": "tube",
+                "count": 48
+              }
+            ]
+          }
+        ],
+        "parts": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 666,
+            "batches": [
+              {
+                "assetId": "rod",
+                "count": 294
+              },
+              {
+                "assetId": "bar",
+                "count": 147
+              },
+              {
+                "assetId": "clamp",
+                "count": 143
+              },
+              {
+                "assetId": "panel",
+                "count": 82
+              }
+            ]
+          }
+        ],
+        "spinePoints": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 130,
+              "vertex": 130,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17,
+                6.8992,
+                -0.665
+              ],
+              "max": [
+                17,
+                7.6223,
+                0.6917
+              ]
+            }
+          }
+        ],
+        "truss": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 180,
+            "batches": [
+              {
+                "assetId": "tube",
+                "count": 180
+              }
+            ]
+          }
+        ],
+        "wraps": [
+          {
+            "kind": "instances",
+            "tags": [
+              "wrapId=0",
+              "wrapId=1",
+              "wrapId=10",
+              "wrapId=11",
+              "wrapId=12",
+              "wrapId=13",
+              "wrapId=14",
+              "wrapId=15",
+              "wrapId=2",
+              "wrapId=3",
+              "wrapId=4",
+              "wrapId=5",
+              "wrapId=6",
+              "wrapId=7",
+              "wrapId=8",
+              "wrapId=9"
+            ],
+            "residency": "cpu",
+            "instances": 2384,
+            "batches": [
+              {
+                "assetId": "tube",
+                "count": 2384
+              }
+            ]
+          }
+        ]
+      }
+    },
     "pipeline-1-boundary.json": {
       "outputs": {
         "boundary": [

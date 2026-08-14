@@ -997,6 +997,90 @@
     ]
   },
   {
+    "file": "examples-rig.json",
+    "path": "examples/graphs/examples-rig.json",
+    "title": "a suspended rig, built from curves",
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. Nothing is drawn as a surface — the library has no sweep or extrude, so everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on. Eight declared outputs, one per part, so a viewer can tell them apart.",
+    "tags": [
+      "examples",
+      "curves",
+      "foreach",
+      "instancing",
+      "rig"
+    ],
+    "seed": 3,
+    "nodeCount": 82,
+    "nodeTypes": [
+      "connectPoints",
+      "copyToPoints",
+      "filterByAttribute",
+      "filterByDensity",
+      "forEach",
+      "jitterPoints",
+      "mergePoints",
+      "orientAlongVector",
+      "partitionByAttribute",
+      "pathPointAt",
+      "pathResample",
+      "pathSegments",
+      "pointLine",
+      "pointsToPath",
+      "setAttribute",
+      "spawnInstances",
+      "transferAttribute",
+      "transformPoints",
+      "writeCurveFrame"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "truss",
+        "node": "trussChordSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "braces",
+        "node": "trussBraceSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "frames",
+        "node": "trussSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "parts",
+        "node": "partPartSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "wraps",
+        "node": "wrapSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "chains",
+        "node": "chainSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "danglers",
+        "node": "danglerDanglerSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "drapes",
+        "node": "drapeDrapeSpawn",
+        "pin": "instances"
+      },
+      {
+        "name": "spinePoints",
+        "node": "spineSpine",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "pipeline-1-boundary.json",
     "path": "examples/graphs/pipeline-1-boundary.json",
     "title": "staged pipeline 1/5 — the ground and the wall",

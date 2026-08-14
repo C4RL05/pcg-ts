@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-44 examples, alphabetical by file:
+45 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -42,6 +42,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
 - [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
 - [examples-headless-scatter.json](#examples-headless-scatterjson) — headless scatter
+- [examples-rig.json](#examples-rigjson) — a suspended rig, built from curves
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
 - [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/5, edited — hand-placed plots that win on priority
@@ -698,6 +699,24 @@ Scatter points across a 60x60 patch, write a height attribute from fbm perlin no
 **Outputs:** `points` (from `spread`.`out`)
 
 Cook it: `pcg cook examples/graphs/examples-headless-scatter.json --stats`
+
+## examples-rig.json
+
+**a suspended rig, built from curves**
+
+A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. Nothing is drawn as a surface — the library has no sweep or extrude, so everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on. Eight declared outputs, one per part, so a viewer can tell them apart.
+
+**Tags:** `examples`, `curves`, `foreach`, `instancing`, `rig`
+
+**Seed:** 3
+
+**Node types:** `connectPoints`, `copyToPoints`, `filterByAttribute`, `filterByDensity`, `forEach`, `jitterPoints`, `mergePoints`, `orientAlongVector`, `partitionByAttribute`, `pathPointAt`, `pathResample`, `pathSegments`, `pointLine`, `pointsToPath`, `setAttribute`, `spawnInstances`, `transferAttribute`, `transformPoints`, `writeCurveFrame`
+
+**Primitives:** *(none)*
+
+**Outputs:** `truss` (from `trussChordSpawn`.`instances`), `braces` (from `trussBraceSpawn`.`instances`), `frames` (from `trussSpawn`.`instances`), `parts` (from `partPartSpawn`.`instances`), `wraps` (from `wrapSpawn`.`instances`), `chains` (from `chainSpawn`.`instances`), `danglers` (from `danglerDanglerSpawn`.`instances`), `drapes` (from `drapeDrapeSpawn`.`instances`), `spinePoints` (from `spineSpine`.`out`)
+
+Cook it: `pcg cook examples/graphs/examples-rig.json --stats`
 
 ## pipeline-1-boundary.json
 
