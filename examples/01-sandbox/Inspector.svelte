@@ -5,6 +5,10 @@
    * enums become selects, vecs get one input per component, stringLists
    * are row-editable, items are read-only, and field-capable params get
    * the constant/field toggle (FieldParam).
+   *
+   * Pure content: the column around it — width, backing, scroll, and the
+   * narrow-screen drawer — belongs to Sidebar, which renders this as one
+   * of its two tabs.
    */
   import FieldParam from "./FieldParam.svelte";
   import type { EditorController, ParamView } from "./controller.js";
@@ -14,7 +18,6 @@
     controller,
     node,
     paramsRev,
-    open = false,
     onPlain,
     onFieldApply,
     onDelete,
@@ -22,12 +25,6 @@
     controller: EditorController;
     node: NodeView | null;
     paramsRev: number;
-    /**
-     * On narrow screens the inspector is a slide-over drawer and `open`
-     * (driven by the editor's "params" tab) slides it in from the right.
-     * At desktop widths it has no styled effect.
-     */
-    open?: boolean;
     onPlain: (id: string, key: string, value: unknown) => void;
     onFieldApply: (id: string, key: string, text: string) => string | null;
     onDelete: (id: string) => void;
@@ -108,13 +105,19 @@
   }
 </script>
 
-<div class="inspector" class:open>
+<div class="inspector">
   {#if node === null}
-    <div class="hint">select a node to edit its params — pins connect left (in) to right (out)</div>
+    <div class="empty">
+      <p>No node selected.</p>
+      <p>
+        Click a node on the canvas to edit its params here. Pins connect left (in) to right (out);
+        press <kbd>Tab</kbd> over the canvas to add one.
+      </p>
+    </div>
   {:else}
     {#key node.id}
       <div class="head">
-        <div>
+        <div class="who">
           <div class="type">{info.label}</div>
           <div class="id">{node.id}</div>
         </div>
@@ -122,10 +125,10 @@
       </div>
       <p class="desc">{info.description}</p>
       {#if node.type === "subgraph"}
-        <div class="hint">
+        <p class="note">
           composite: its inner graph is not editable here, but the params it exposes are — each one
           writes into the inner nodes it was declared over
-        </div>
+        </p>
       {/if}
       {#each views as view (view.key)}
         <div class="param">
@@ -189,16 +192,21 @@
 </div>
 
 <style>
-  .inspector {
-    flex: 0 0 250px;
-    overflow-y: auto;
-    padding: 10px;
-    border-left: 1px solid #223047;
-  }
-  .hint {
+  .empty {
     color: #6f7c8f;
-    font-size: 11px;
-    line-height: 1.5;
+    font-size: 11.5px;
+    line-height: 1.6;
+  }
+  .empty p {
+    margin: 0 0 8px;
+  }
+  kbd {
+    padding: 0 4px;
+    background: #161d29;
+    border: 1px solid #33405a;
+    border-radius: 3px;
+    color: #9ecbff;
+    font: 10px ui-monospace, monospace;
   }
   .head {
     display: flex;
@@ -206,30 +214,57 @@
     justify-content: space-between;
     gap: 8px;
   }
+  /* The name has to be allowed to shrink, or a long node id widens the
+     row and pushes "delete" off the column. */
+  .who {
+    min-width: 0;
+  }
   .type {
     font-weight: 600;
     color: #eaf1fa;
+    overflow-wrap: anywhere;
   }
   .id {
     color: #6f7c8f;
     font: 10px ui-monospace, monospace;
+    overflow-wrap: anywhere;
   }
   .danger {
+    flex: 0 0 auto;
     padding: 2px 10px;
     background: #33161c;
     color: #ffb9c2;
     border: 1px solid #a04455;
     border-radius: 5px;
     font: 11px system-ui, sans-serif;
+    white-space: nowrap;
     cursor: pointer;
   }
+  .danger:hover {
+    background: #451d25;
+  }
+  /**
+   * Set in full, with no scroller of its own. It used to be capped at 78px
+   * with `overflow-y: auto`, which cut the sentence mid-word behind a
+   * native scrollbar and stranded the note under it — a description is the
+   * registry telling you what the node is for, and half of one is worse
+   * than the space it saves. The column scrolls; this rides it.
+   */
   .desc {
     margin: 6px 0 10px;
     color: #8b98ab;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .note {
+    margin: 0 0 10px;
+    padding: 6px 8px;
+    background: #121b28;
+    border-left: 2px solid #33405a;
+    border-radius: 0 4px 4px 0;
+    color: #8b98ab;
     font-size: 11px;
-    line-height: 1.45;
-    max-height: 78px;
-    overflow-y: auto;
+    line-height: 1.5;
   }
   .param {
     margin: 9px 0;
@@ -288,28 +323,8 @@
     font: 11px system-ui, sans-serif;
     cursor: pointer;
   }
-  @media (max-width: 700px) {
-    /* keep in sync with NARROW_MEDIA_QUERY in examples/shared/mobile.ts */
-    .inspector {
-      position: absolute;
-      right: 0;
-      top: 0;
-      bottom: 0;
-      z-index: 15;
-      width: min(70vw, 240px);
-      box-sizing: border-box;
-      background: rgba(13, 17, 23, 0.97);
-      transform: translateX(100%);
-      /* Hidden when closed so the off-screen drawer can't take focus or
-         intercept hit-testing. */
-      visibility: hidden;
-      transition:
-        transform 0.2s ease,
-        visibility 0.2s;
-    }
-    .inspector.open {
-      transform: none;
-      visibility: visible;
-    }
+  .list-row button:hover,
+  .add:hover {
+    background: #24334c;
   }
 </style>

@@ -10,10 +10,9 @@
    */
   import { onMount, tick, untrack } from "svelte";
   import Canvas from "./Canvas.svelte";
-  import Inspector from "./Inspector.svelte";
   import Modal from "./Modal.svelte";
-  import Overview from "./Overview.svelte";
   import Palette from "./Palette.svelte";
+  import Sidebar from "./Sidebar.svelte";
   import Toolbar from "./Toolbar.svelte";
   import { narrowScreen } from "../shared/mobile.js";
   import {
@@ -174,23 +173,36 @@
   });
 
   let collapsed = $state(narrowScreen().matches);
-  let inspectorOpen = $state(false);
+  let sidebarOpen = $state(false);
+
+  /**
+   * Which sidebar pane is up. Held here rather than inside the sidebar
+   * because SELECTION steers it: clicking a node is the gesture that means
+   * "show me this node", and a panel that stayed on the graph tab would
+   * make you say it twice.
+   */
+  let sidebarTab = $state<"graph" | "node">("graph");
+
+  /**
+   * Selecting a node opens its pane; clearing the selection goes back to
+   * the graph, so the empty pane is never what you are left staring at.
+   */
+  function select(id: string | null): void {
+    selectedId = id;
+    sidebarTab = id === null ? "graph" : "node";
+  }
 
   $effect(() => {
     const mql = narrowScreen();
     const onChange = (e: MediaQueryListEvent): void => {
       collapsed = e.matches;
-      // Leaving the narrow range also resets the drawers, so one left open
+      // Leaving the narrow range also resets the drawer, so one left open
       // does not silently reappear the next time the range is entered.
-      if (!e.matches) inspectorOpen = false;
+      if (!e.matches) sidebarOpen = false;
     };
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   });
-
-  function toggleInspector(): void {
-    inspectorOpen = !inspectorOpen;
-  }
 
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   function showToast(text: string, kind: "error" | "info" = "info"): void {
@@ -268,7 +280,7 @@
       return;
     }
     model = res.structure;
-    selectedId = null;
+    select(null);
     paramsRev++;
     captureBaseline();
     frameGraph();
@@ -400,7 +412,7 @@
       inputs: res.inputs,
       outputs: res.outputs,
     });
-    selectedId = id;
+    select(id);
     paramsRev++;
   }
 
@@ -445,7 +457,7 @@
     }
     model.nodes = model.nodes.filter((n) => n.id !== id);
     model.edges = model.edges.filter((e) => e.from !== id && e.to !== id);
-    if (selectedId === id) selectedId = null;
+    if (selectedId === id) select(null);
     paramsRev++;
   }
 
@@ -469,7 +481,7 @@
     const res = controller.importText(text);
     if ("error" in res) return res.error;
     model = res.structure;
-    selectedId = null;
+    select(null);
     importLabel = label;
     awaitingImportCook = true;
     paramsRev++;
@@ -617,42 +629,39 @@
         bind:this={canvas}
         {model}
         {selectedId}
-        onSelect={(id) => (selectedId = id)}
+        onSelect={select}
         onMove={moveNode}
         onConnect={connectEdge}
         onDeleteEdge={deleteEdge}
         onDeleteNode={deleteNode}
       />
     </div>
-    <Overview
+    <Sidebar
       {controller}
-      rev={paramsRev}
+      node={selectedNode}
+      {paramsRev}
       spec={panelSpec}
       title={graphTitle}
       {baseline}
       seed={model.seed}
       {loadedSeed}
+      bind:tab={sidebarTab}
+      open={sidebarOpen}
       onEdit={() => paramsRev++}
       onReset={resetKnobs}
-      {shareUrl} />
-    <Inspector
-      {controller}
-      node={selectedNode}
-      {paramsRev}
-      open={inspectorOpen}
+      {shareUrl}
       onPlain={onPlainParam}
       onFieldApply={onFieldParam}
-      onDelete={deleteNode}
-    />
-    <!-- Narrow-screen drawer toggle for the param columns, floating over
+      onDelete={deleteNode} />
+    <!-- Narrow-screen drawer toggle for the param column, floating over
          the canvas edge. display: none outside the media query. The label
          "params" is chosen to dodge the capture tooling's
          click-button-by-substring needles. -->
     <button
       class="drawer-tab right"
-      aria-label="toggle the param inspector drawer"
-      aria-expanded={inspectorOpen}
-      onclick={toggleInspector}
+      aria-label="toggle the param drawer"
+      aria-expanded={sidebarOpen}
+      onclick={() => (sidebarOpen = !sidebarOpen)}
     >
       params
     </button>

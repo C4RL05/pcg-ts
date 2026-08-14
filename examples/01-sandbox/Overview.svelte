@@ -1,21 +1,20 @@
 <script lang="ts">
   /**
    * The loaded graph at a glance — its title, what it is for, and the
-   * knobs worth turning — as a column of the editor overlay. Named for
-   * the job rather than for the widgets, because it is half prose: this
-   * is the panel you READ to learn what a graph does, and the node
-   * inspector beside it is the one you OPEN to edit a single node.
+   * knobs worth turning. Named for the job rather than for the widgets,
+   * because it is half prose: this is the pane you READ to learn what a
+   * graph does, and the node inspector behind the other tab is the one
+   * you OPEN to edit a single node.
    *
    * `Knob` stays the word for one tunable param (`shared/graphUi.ts`) —
-   * the data, not the column.
+   * the data, not the pane.
    *
    * It used to be a floating card, which worked until the overlay went
    * full-bleed and translucent: anything behind that canvas shows through
    * it, and a card of controls came out as ghost text under the nodes.
-   * In the column it
-   * is legible, it scrolls with its own bar, and the scene is still right
-   * there behind the overlay. Rendered by the shared spec-driven
-   * renderer, which is what that renderer was generalised for.
+   * Pure content now — Sidebar owns the backing that makes it legible and
+   * the scroll it rides. Rendered by the shared spec-driven renderer,
+   * which is what that renderer was generalised for.
    *
    * The rows are the exposed params of the graph's subgraph nodes, laid
    * out by a panel spec when the graph ships one and grouped by node when
@@ -221,16 +220,6 @@
 </div>
 
 <style>
-  .overview {
-    flex: 0 0 296px;
-    min-height: 0;
-    overflow-y: auto;
-    box-sizing: border-box;
-    padding: 10px 12px;
-    background: rgba(13, 17, 23, 0.94);
-    border-left: 1px solid #223047;
-    backdrop-filter: blur(6px);
-  }
   .graph-title {
     margin: 0 0 4px;
     font-size: 14px;
@@ -241,7 +230,8 @@
   .note {
     margin: 0 0 6px;
     color: #8b98ab;
-    font-size: 12px;
+    font-size: 11.5px;
+    line-height: 1.5;
   }
   code {
     color: #9ecbff;
