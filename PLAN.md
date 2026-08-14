@@ -35,6 +35,35 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+**Primitive identity, so primitive-domain randomness stops being
+index-keyed.** Point-domain randomness is keyed on position bits and a
+seed attribute (`src/data/identity.ts`), so it survives a renumbering.
+Primitive-domain randomness has no such identity and falls back to the
+element index — which means it re-rolls whenever anything upstream changes
+the ORDER primitives come out in, even when the set is unchanged.
+- **Measured 2026-08-14 on `examples-rig.json`**, and this is what makes
+  it worth an entry rather than a note. Moving the spine by 1.9e-6 world
+  units — an f32 rounding, nothing more — left `connectPoints` emitting
+  the same 456 edges with sorted lengths agreeing to 2.4e-7, but 156 of
+  the 456 slots held a different edge. `chordPick` is a `randomField` on
+  the primitive domain, so 63 chords passing its threshold became 54, and
+  198 tube instances appeared out of a last-bit change. A control
+  confirms the mechanism is not the field-param work: nudging the
+  unwrapped original's baked noise frequency by a relative 1e-8 does the
+  same thing.
+- So a graph that is perfectly deterministic is not STABLE: any numerical
+  improvement anywhere upstream — a reassociated sum, a faster spatial
+  grid, the f32-vs-f64 difference between two spellings of the same knob
+  — silently reshuffles every downstream primitive-keyed random. That is
+  exactly the class of change `tests/corpus.test.ts` says it wants to
+  survive.
+- The fix is the phase-42 answer at a new domain: derive a primitive's
+  identity from its ENDPOINTS' identities (order-independently, so an
+  edge and its reverse agree), the way a point's comes from its position
+  bits. Wants a caller before it is designed — the honest trigger is the
+  first time someone is bitten by a corpus diff they cannot explain, or
+  the first graph that needs a stable per-edge random across an edit.
+
 **Strings readable as fields.** A field cannot read a string attribute,
 so a `species` or `biome` string cannot drive a density field. Workaround
 today: `setAttribute` in string mode already takes a NUMERIC selector to
