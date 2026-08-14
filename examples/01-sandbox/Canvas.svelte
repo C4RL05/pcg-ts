@@ -198,8 +198,20 @@
       return;
     }
     if (dragNode) {
+      /**
+       * UNCLAMPED, both axes. These used to be floored at graph
+       * coordinate 4, which put a wall along the top and left edges: a
+       * node could be dragged down and right forever but never above the
+       * first row it was laid out in.
+       *
+       * The floor made sense when the canvas was a scrolled oversized
+       * SVG, where a negative coordinate was genuinely unreachable. It
+       * pans and zooms now — the origin is not a corner, it is just a
+       * place — so negative coordinates are as visible as any other, and
+       * `resetView` measures the real min/max so "fit" frames them.
+       */
       const p = toGraph(e);
-      onMove(dragNode.id, Math.max(4, p.x - dragNode.offX), Math.max(4, p.y - dragNode.offY));
+      onMove(dragNode.id, p.x - dragNode.offX, p.y - dragNode.offY);
     }
     if (wire) {
       const p = toGraph(e);
