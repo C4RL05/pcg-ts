@@ -1,9 +1,8 @@
 <script lang="ts">
   /**
-   * Svelte 5 (runes) control panel for the rig playground. Same host↔panel
-   * split as 04-gpu-fields: the host pushes immutable `PanelView`
-   * snapshots through the bridge, the panel calls back through
-   * `PanelHost`. Nothing here knows what a graph is.
+   * Svelte 5 (runes) control panel for the rig playground. The host pushes
+   * immutable `PanelView` snapshots through the bridge, the panel calls
+   * back through `PanelHost`. Nothing here knows what a graph is.
    *
    * The knobs are rendered by `../shared/Controls.svelte` from the list
    * in view.ts, so a new knob is a line there and neither this file nor

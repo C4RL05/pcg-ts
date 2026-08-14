@@ -101,11 +101,11 @@ const applyOf = (p: PlanShape, i: number): StepShape => {
 };
 
 /**
- * The demo rig's fused chain (examples/04-gpu-fields): setAttribute →
- * jitterPoints → transformPoints(three constants) → setAttribute →
- * setAttribute, over a scattered point cloud.
+ * The shipped fused chain (examples/graphs/examples-gpu-fields.json):
+ * setAttribute → jitterPoints → transformPoints(three constants) →
+ * setAttribute → setAttribute, over a scattered point cloud.
  *
- * A STAND-IN, and knowingly so: the real demo's `tint` and `psize` carry
+ * A STAND-IN, and knowingly so: the shipped `tint` and `psize` carry
  * a `randomField` term, and this fixture uses plain perlin instead. The
  * difference is not cosmetic — the real chain DOES NOT PLAN AS ONE RUN
  * (the planner declines the identity-keyed `tint` because jitterPoints

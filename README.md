@@ -664,9 +664,9 @@ Three things to know before reading a benchmark:
 - **Constant params ride the run uniform, not a column.** A plain
   `translate: [0, 0, 0]` costs a 16-byte uniform slot and no dispatch;
   only field-valued params materialize an `n`-element temporary. In
-  the `examples/04-gpu-fields` chain that is 120 of the 156 bytes per
-  point the run used to hold (−23%) and 9 member kernels instead of
-  12. Constant *values* live in the uniform and never in the generated
+  the `examples/graphs/examples-gpu-fields.json` chain that is 120 of
+  the 156 bytes per point the run used to hold (−23%) and 9 member
+  kernels instead of 12. Constant *values* live in the uniform and never in the generated
   WGSL, so editing one rebinds a buffer and hits the pipeline cache
   instead of recompiling. (Before v0.6.1 constants cost a full column
   each, which is why older notes describe constant-heavy chains as a
@@ -765,11 +765,14 @@ its cache hits across the toggle. Fused runs use the same salt inside
 the run key above. Pipelines are cached on the evaluator instance and
 persist across cooks.
 
-See it live: [`examples/04-gpu-fields`](./examples/04-gpu-fields) cooks
-a five-node fusable chain over a million points three ways — CPU, GPU
-per-node (fusion switched off), and one fused device-resident run —
-with per-path cold-cache wall times, the full `CookStats.gpu` counters,
-per-path output hashes, and a live deviation readout.
+See it live: the sandbox's `cook` selector switches between the same
+three paths — CPU, GPU per-node (fusion switched off), and one fused
+device-resident run — under a graph that does not change, and its
+status line carries the wall time, the output hash and the full
+`CookStats.gpu` counter set for whichever is selected. Open it on
+[`examples-gpu-fields`](./examples/graphs/examples-gpu-fields.json),
+a five-node fusable chain, and watch two numbers: the time moves, and
+the hash holds across the two device paths but not across the CPU.
 
 ## Device-resident instancing
 

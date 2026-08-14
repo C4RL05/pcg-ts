@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * capture-demos.mjs — regenerate docs/manual-assets/*.jpg and docs/thumbs/*.jpg
- * from the nine browser demos in examples/.
+ * from the five browser demos in examples/.
  *
- * Run with `npm run capture` (optionally `-- --only=04,07` / `--no-build`).
+ * Run with `npm run capture` (optionally `-- --only=01,03` / `--no-build`).
  *
  * ---------------------------------------------------------------------------
  * WHY THIS SCRIPT EXISTS
  *
- * These 18 JPEGs are committed and are referenced from docs/manual.html and
+ * These 11 JPEGs are committed and are referenced from docs/manual.html and
  * docs/index.html with hard-coded width/height attributes. They used to be
  * produced by an ad-hoc script that lived on one machine, so they drifted
  * silently whenever a demo changed. Everything below is the set of things that
@@ -18,7 +18,7 @@
  * The machinery this shares with `npm run preview` — the rAF counter, the
  * stable-frame loop, the JPEG encoder and its blank guard, the browser
  * flags — lives in `scripts/lib/capture.mjs`. What stays here is what is
- * specific to these nine pages.
+ * specific to these pages.
  *
  * ---------------------------------------------------------------------------
  * THE READINESS SIGNAL (the important part)
@@ -41,11 +41,11 @@
  *      every value starts as an en dash "–" until the demo writes it. That
  *      makes the demo's own instrumentation the readiness signal — no
  *      demo-side hooks were added for this script. Per demo we wait for the
- *      specific stat that means "the cook is done": `cook` leaving "–" (01,
- *      03), `build + evaluate` (05), the toolbar leaving "cooking…" (06),
- *      `pending` reaching 0 for the streaming worlds (04, 07), the panel's
- *      `cook` reading "idle" (08), and the two demos that expose a real probe
- *      object use it (`window.pcgForest`, `window.pcgWorld`).
+ *      specific stat that means "the cook is done": the sandbox toolbar's
+ *      status line carrying a hash (01), `pending` reaching 0 for the
+ *      streaming worlds (02, 03), the rig publishing `window.__rigReady`
+ *      (06), and the one demo that exposes a real probe object uses it
+ *      (`window.pcgWorld`, 05).
  *
  *   3. A STABLE FRAME. Cook-complete is not the same as settled, so after (2)
  *      we sample repeatedly and only shoot once the picture stops changing.
@@ -54,14 +54,15 @@
  *          region covering only the 3D viewport (the overlay is excluded
  *          because its fps counter ticks every 500 ms and would never settle).
  *        - "stats-plateau": for demos that animate by design and can never be
- *          pixel-identical (07 twinkles star shaders on a clock), the demo's
+ *          pixel-identical (03 twinkles star shaders on a clock), the demo's
  *          own non-volatile counters holding steady over several samples.
  *      Neither converging inside the budget is a hard failure.
  *
- * DETERMINISM. Every demo hard-codes its seed (1, or 42 for the galaxy) and
- * reads no URL parameters, so content is already reproducible. What is not
- * reproducible is the camera: 04 flies forward at 18 u/s from t=0, 09 has
- * autopilot on, and 07 cruises. Each of those is stopped through its own UI
+ * DETERMINISM. Every demo hard-codes its seed (1, or 42 for the galaxy), and
+ * the only URL parameter any of them reads is the sandbox's `?graph=`, which
+ * this script sets deliberately — so content is already reproducible. What is
+ * not reproducible is the camera: 02 flies forward at 18 u/s from t=0, 05 has
+ * autopilot on, and 03 cruises. Each of those is stopped through its own UI
  * *before* waiting for the world to settle, so the camera sits at its initial
  * position and the framing does not depend on how fast the machine booted.
  *
@@ -117,9 +118,9 @@ const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
  */
 const SIZES = {
   "01-sandbox": { css: [1454, 783], out: [1454, 783] },
+  "01-sandbox-gpu": { css: [1454, 783], out: [1454, 783] },
   "02-infinite-world": { css: [1454, 783], out: [1454, 783] },
   "03-galaxy": { css: [1454, 783], out: [1454, 783] },
-  "04-gpu-fields": { css: [1366, 900], out: [1366, 900] },
   "05-gpu-world": { css: [1079, 791], out: [1079, 791] },
   "06-rig-playground": { css: [1454, 783], out: [1454, 783] },
 };
@@ -135,9 +136,80 @@ const DEMOS = [
     // The graph is cooked behind a 150 ms debounce; the toolbar reads
     // "cooking…" until the first cook lands. There is no stats card to
     // scrape any more — the status line carries the readouts.
+    //
+    // The load toast has to be gone as well. It carries the hash of the
+    // cook that produced it and expires after 3.5 s, which is longer than
+    // this page takes to settle: shoot before it clears and the figure
+    // shows a hash from an earlier cook next to the status line's current
+    // one, reading as a contradiction.
     ready: () => {
       const status = document.querySelector(".toolbar .status");
-      return !!status && /hash [0-9a-f]{8}/.test(status.textContent || "");
+      return (
+        !!status &&
+        /hash [0-9a-f]{8}/.test(status.textContent || "") &&
+        !document.querySelector(".toast")
+      );
+    },
+  },
+  {
+    // The same page, twice, because the sandbox absorbed what the retired
+    // `04-gpu-fields` demo used to be: a graph is not what changes between
+    // the two shots, the cook path under it is. `?graph=` opens it on the
+    // fusable chain and `manualOnly` keeps it out of docs/thumbs, since
+    // the demo index has one card per PAGE and this is not another page.
+    id: "01-sandbox-gpu",
+    path: "01-sandbox/?graph=examples-gpu-fields",
+    manualOnly: true,
+    // The selector's GPU options stay disabled until the adapter probe
+    // answers, so waiting for the option is waiting for the device — and
+    // if there is none, this fails loudly rather than photographing a CPU
+    // cook under a heading that claims otherwise.
+    settleWait: () => {
+      const opt = document.querySelector('.toolbar .path select option[value="gpu-fused"]');
+      return !!opt && !opt.disabled;
+    },
+    // Async, and it has to be: the FIRST cook on a device path compiles its
+    // pipelines and reports a wall time that is mostly compilation (measured
+    // here: 293 ms per-node, against 41 ms once the cache is warm). A figure
+    // showing that number would say the device is no faster than the CPU.
+    // So switch, let it cook, then force a second cook that changes nothing —
+    // seed +1 and back, which lands on the same seed the other shot uses and
+    // recooks in full, because a node holds one memo slot.
+    settle: async () => {
+      const line = () => document.querySelector(".toolbar .status")?.textContent ?? "";
+      const changedFrom = async (before) => {
+        for (let i = 0; i < 1800; i++) {
+          const t = line();
+          if (t !== before && /hash [0-9a-f]{8}/.test(t)) return t;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        throw new Error("the status line never settled after a cook");
+      };
+      let before = line();
+      setSelectByValue(".toolbar .path select", "gpu-fused");
+      await changedFrom(before);
+      for (const step of [1, -1]) {
+        before = line();
+        const seed = document.querySelector('.toolbar input[type="number"]');
+        seed.value = String(Number(seed.value) + step);
+        seed.dispatchEvent(new Event("change", { bubbles: true }));
+        await changedFrom(before);
+      }
+      return true;
+    },
+    // Device counters are appended to the status line only on a GPU path,
+    // so "the line carries dispatches" is the proof the switch took —
+    // a hash alone would also match the CPU cook it replaced. The toast
+    // clause is the one above: here it would show the CPU hash from the
+    // opening cook beside the fused hash on the status line.
+    ready: () => {
+      const status = document.querySelector(".toolbar .status");
+      const text = status ? status.textContent || "" : "";
+      return (
+        /hash [0-9a-f]{8}/.test(text) &&
+        /\d+ disp/.test(text) &&
+        !document.querySelector(".toast")
+      );
     },
   },
   {
@@ -164,21 +236,6 @@ const DEMOS = [
     settleKey: "KeyW",
     // Star shaders animate on a clock: pixel-identical frames never happen.
     animated: true,
-  },
-  {
-    id: "04-gpu-fields",
-    // This demo has no shared overlay; its readouts live in the Svelte panel.
-    // The point of the demo is the three-way cost comparison, and the table is
-    // empty until "cook all paths (cold)" has run — so press it once the
-    // opening cook is idle, and treat "all three rows carry a time" as ready.
-    // The CPU path alone is ~12 s of blocking work over a million points.
-    settleWait: (s) => s["cook"] === "idle" && !!s["points"] && s["points"] !== "0",
-    settle: () => clickButtonByText("cook all paths"),
-    ready: (s) => {
-      if (s["cook"] !== "idle") return false;
-      const rows = [...document.querySelectorAll(".paths .pathrow:not(.off) .pv")];
-      return rows.length >= 3 && rows.every((r) => /[\d.]+ ms · best [\d.]+ ms/.test(r.textContent));
-    },
   },
   {
     id: "05-gpu-world",
@@ -265,6 +322,17 @@ function pageInstrumentation() {
     const input = row && row.querySelector('input[type="checkbox"]');
     if (!input) throw new Error(`no checkbox labelled "${label}"`);
     if (input.checked !== checked) input.click();
+    return true;
+  };
+
+  window.setSelectByValue = (selector, value) => {
+    const el = document.querySelector(selector);
+    if (!el) throw new Error(`no select matching "${selector}"`);
+    const option = [...el.options].find((o) => o.value === value);
+    if (!option) throw new Error(`select "${selector}" has no option "${value}"`);
+    if (option.disabled) throw new Error(`option "${value}" is disabled`);
+    el.value = value;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   };
 
@@ -404,7 +472,7 @@ async function captureDemo(browser, encPage, origin, demo, log) {
     await page.setViewport({ width: size.css[0], height: size.css[1], deviceScaleFactor: 2 });
     await page.bringToFront();
 
-    await page.goto(`${origin}/${demo.id}/`, { waitUntil: "load" });
+    await page.goto(`${origin}/${demo.path ?? `${demo.id}/`}`, { waitUntil: "load" });
 
     // (1) rendering is actually happening in this tab
     await page.waitForFunction(() => window.__capFrames > 3, { timeout: 20_000 });
@@ -434,9 +502,11 @@ async function captureDemo(browser, encPage, origin, demo, log) {
 
     // Demos whose manual asset is laid out at the thumbnail's CSS size get
     // both images from one screenshot; the rest need a second pass so the
-    // thumbnail keeps the 640x345 aspect docs/index.html declares.
+    // thumbnail keeps the 640x345 aspect docs/index.html declares. A
+    // `manualOnly` shot is a second figure of a page that already has a
+    // card, so it needs no thumbnail at all.
     let rawThumb = rawManual;
-    if (size.css[0] !== THUMB.css[0] || size.css[1] !== THUMB.css[1]) {
+    if (!demo.manualOnly && (size.css[0] !== THUMB.css[0] || size.css[1] !== THUMB.css[1])) {
       await page.setViewport({ width: THUMB.css[0], height: THUMB.css[1], deviceScaleFactor: 2 });
       await settleAt(page, THUMB.css, demo.animated === true, log);
       rawThumb = await page.screenshot({ type: "png", optimizeForSpeed: true });
@@ -449,10 +519,13 @@ async function captureDemo(browser, encPage, origin, demo, log) {
     await page.close();
 
     const manual = await encodeJpeg(encPage, rawManual.toString("base64"), size.out, MANUAL_QUALITY);
-    const thumb = await encodeJpeg(encPage, rawThumb.toString("base64"), THUMB.out, THUMB.quality);
-
     await writeFile(join(MANUAL_DIR, `${demo.id}.jpg`), manual.buffer);
-    await writeFile(join(THUMB_DIR, `${demo.id}.jpg`), thumb.buffer);
+
+    let thumb;
+    if (!demo.manualOnly) {
+      thumb = await encodeJpeg(encPage, rawThumb.toString("base64"), THUMB.out, THUMB.quality);
+      await writeFile(join(THUMB_DIR, `${demo.id}.jpg`), thumb.buffer);
+    }
 
     return { stability, stats, manual, thumb, size };
   } finally {
@@ -507,7 +580,9 @@ async function main() {
         const secs = ((Date.now() - t0) / 1000).toFixed(1);
         log(
           `    ok  manual ${r.size.out[0]}x${r.size.out[1]} ${(r.manual.buffer.length / 1024).toFixed(0)} KB` +
-            `  ·  thumb ${THUMB.out[0]}x${THUMB.out[1]} ${(r.thumb.buffer.length / 1024).toFixed(0)} KB` +
+            (r.thumb
+              ? `  ·  thumb ${THUMB.out[0]}x${THUMB.out[1]} ${(r.thumb.buffer.length / 1024).toFixed(0)} KB`
+              : `  ·  no thumb (manual-only)`) +
             `  ·  stable via ${r.stability.criterion} in ${(r.stability.elapsed / 1000).toFixed(1)}s` +
             `  ·  ${secs}s total`,
         );

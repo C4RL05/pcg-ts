@@ -39,7 +39,7 @@
       hierarchical runtime, rendered with three.js. Every demo re-cooks live from its seed.</p>
     <p class="sub">Single-cook recipes are not demos any more — they are graphs in
       <code>examples/graphs/</code>, opened in the sandbox. What is left here needs a host: streaming
-      worlds, a GPU comparison, and a rig whose topology is a function of its params.</p>
+      worlds, a device-resident renderer, and a rig whose topology is a function of its params.</p>
 
     <a class="card" href="01-sandbox/">
       <span class="num">01</span>
@@ -47,8 +47,9 @@
         <span class="name">Sandbox — graph editor</span>
         <div class="desc">Load any of the corpus graphs and edit it live: palette, pin wiring with
           real graph validation, schema-driven params, a curated overview panel, JSON round-trip, and
-          shareable links. The scatter, forest, fence and field demos that used to live here are
-          corpus graphs now — pick them from the graph menu.</div>
+          shareable links. Switch the cook path between the CPU and two GPU paths under a graph that
+          does not change. The scatter, forest, fence, field and gpu-fields demos that used to live
+          here are corpus graphs now — pick them from the graph menu.</div>
       </span>
     </a>
 
@@ -70,16 +71,6 @@
         <div class="desc">An infinite deterministic spiral galaxy: log-spiral density fields,
           streamed star cells with nebular dust, and click-to-visit planetary systems — every
           seed grows a different galaxy.</div>
-      </span>
-    </a>
-
-    <a class="card" href="04-gpu-fields/">
-      <span class="num">04</span>
-      <span class="body">
-        <span class="name">GPU fields</span>
-        <div class="desc">A million points colored by a chunky field expression compiled to a
-          WebGPU compute kernel — CPU/GPU toggle, cook stats, and a live parity readout against
-          the bit-exact CPU reference. Falls back to CPU without WebGPU.</div>
       </span>
     </a>
 

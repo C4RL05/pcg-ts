@@ -1,7 +1,7 @@
 /**
  * Shared types between the host (main.ts) and the Svelte panel: the host
  * pushes immutable view snapshots through the bridge, the panel calls
- * back through `PanelHost`. Same split as 04-gpu-fields.
+ * back through `PanelHost`.
  *
  * The control layout lives here as DATA rather than as markup in the
  * panel. Fifty knobs written out by hand is fifty chances for a label, a

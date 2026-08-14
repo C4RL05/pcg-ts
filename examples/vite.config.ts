@@ -28,7 +28,6 @@ export default defineConfig({
         "01-sandbox": here("01-sandbox/index.html"),
         "02-infinite-world": here("02-infinite-world/index.html"),
         "03-galaxy": here("03-galaxy/index.html"),
-        "04-gpu-fields": here("04-gpu-fields/index.html"),
         "05-gpu-world": here("05-gpu-world/index.html"),
         "06-rig-playground": here("06-rig-playground/index.html"),
       },

@@ -628,7 +628,7 @@ function detectResidentRuns(
  * failed at (the resolver contract carries no index), but the repeated
  * form is not merely what the seam allows — it is strictly more capable.
  * Jumping to the rejecting member k answers "does [k..] plan?" once, and
- * on the shipped 04-gpu-fields chain the answer is no twice over: wobble
+ * on the shipped gpu-fields chain the answer is no twice over: wobble
  * → jitter → xform → tint → psize narrows three times ([jitter..] and
  * [xform..] each still write P ahead of the identity-keyed tint) before
  * [tint, psize] plans. Scanning from the longest suffix down stops at the

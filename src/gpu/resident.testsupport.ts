@@ -2033,7 +2033,7 @@ function retryCases(): RetryCase[] {
       ],
     },
     {
-      // The shipped 04-gpu-fields chain, in its authored order, which is
+      // The shipped gpu-fields chain, in its authored order, which is
       // the chain phase 42 stopped fusing entirely. Three narrowings are
       // needed before a suffix plans, so this is also the case that
       // proves one jump would not have been enough.

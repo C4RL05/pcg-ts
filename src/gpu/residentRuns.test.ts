@@ -766,7 +766,7 @@ const NOISE = (seed: number): object => ({
 const VEC3 = (s: object): object => ({ fn: "vec", args: [s, s, s] });
 
 /**
- * The shipped 04-gpu-fields chain in its authored order: setAttribute
+ * The shipped gpu-fields chain in its authored order: setAttribute
  * ("wobble", noise) → jitterPoints(amount = attribute("wobble")) →
  * transformPoints(constants) → setAttribute("tint", identity-keyed) →
  * setAttribute("psize", identity-keyed). Two members rewrite P and the
@@ -810,7 +810,7 @@ function buildDemoChain(geo: Geometry, reordered = false) {
 }
 
 describe("suffix retry: a rejected member costs its prefix, not the whole run", () => {
-  it("recovers the 04-gpu-fields tail instead of fusing nothing", async () => {
+  it("recovers the gpu-fields tail instead of fusing nothing", async () => {
     const cpu = await cook(buildDemoChain(makeCorpusGeometry(40)).g);
     const { g, ids } = buildDemoChain(makeCorpusGeometry(40));
     const fake = cpuRunResolver("fake|R", { reject: plannerReject() });

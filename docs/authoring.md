@@ -1888,7 +1888,8 @@ That is by design, not a bug; benchmark from cold caches.
 
 **Cost model.** A *constant* param — a plain number or number tuple —
 costs a 16-byte uniform slot and no dispatch; only field-valued params
-materialize an `n`-element column. In the `examples/04-gpu-fields`
+materialize an `n`-element column. In the
+`examples/graphs/examples-gpu-fields.json`
 chain (five members: `setAttribute` → `jitterPoints` →
 `transformPoints` → `setAttribute` → `setAttribute`) that is 120 bytes
 per point and 9 member kernels, down from 212 bytes and 12 kernels
@@ -2434,12 +2435,13 @@ a 256-byte floor — and
 its bind-layout plan directly, and `supportedGpuFieldFns()` lists the
 compilable fns.
 
-The `examples/04-gpu-fields` demo shows the whole surface at once: one
-five-node fusable chain over a million points cooked three ways — CPU,
-GPU per-node (a resolver whose `planRun` returns null), and one fused
-device-resident run — with per-path cold-cache wall times, the full
-counter set, per-path output hashes, and a live deviation readout
-against the CPU reference. `examples/05-gpu-world` covers the
+The sandbox shows the whole surface at once: its `cook` selector cooks
+the graph you have open three ways — CPU, GPU per-node (a resolver
+whose `planRun` returns null), and one fused device-resident run — and
+its status line carries the wall time, the output hash and the full
+counter set for the selected path. Open it on
+`examples/graphs/examples-gpu-fields.json`, a five-node fusable chain,
+to read all three off one graph. `examples/05-gpu-world` covers the
 device-resident instancing surface: a streamed `World` drawing from
 matrices that never reach the CPU, with `poolStats.detachedBuffers`
 and the binding's own handle count shown together as a live leak meter.

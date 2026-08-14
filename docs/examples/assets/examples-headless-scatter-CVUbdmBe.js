@@ -1,0 +1,52 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 20260808,
+  "meta": {
+    "title": "headless scatter",
+    "description": "Scatter points across a 60x60 patch, write a height attribute from fbm perlin noise, keep the points above the midline, and jitter what survives. Cooks in plain Node with no renderer and no page — the graph is data, and the CLI is its feedback loop.",
+    "tags": ["headless", "scatter", "fields", "cli"]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInBounds",
+      "params": {
+        "count": 4000,
+        "boundsMin": [-30, 0, -30],
+        "boundsMax": [30, 0, 30]
+      }
+    },
+    {
+      "id": "height",
+      "type": "setAttribute",
+      "params": {
+        "name": "height",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "fbm",
+          "base": "perlinNoise",
+          "opts": { "frequency": 0.02, "octaves": 4, "gain": 0.5, "normalized": true }
+        }
+      }
+    },
+    {
+      "id": "ridge",
+      "type": "filterByAttribute",
+      "params": { "attribute": "height", "comparison": "gt", "value": 0.55 }
+    },
+    {
+      "id": "spread",
+      "type": "jitterPoints",
+      "params": { "amount": [0.6, 0, 0.6] }
+    }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["height", "in"] },
+    { "from": ["height", "out"], "to": ["ridge", "in"] },
+    { "from": ["ridge", "out"], "to": ["spread", "in"] }
+  ],
+  "outputs": [{ "id": "spread", "pin": "out", "name": "points" }]
+}
+`;export{e as default};
