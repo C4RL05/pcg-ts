@@ -602,6 +602,24 @@
       bridge.frame?.();
       return;
     }
+    /**
+     * Ctrl+0 (Cmd+0) puts the GRAPH back to 100%, the chord that resets a
+     * page's zoom everywhere else. `preventDefault` is what stops the
+     * browser doing its own reset on top; if the chord ever stops being
+     * preventable, the "100%" button is the same action.
+     *
+     * No `isTyping` guard, unlike the bare keys above: Ctrl+0 means
+     * nothing inside a text field, so there is nothing to yield to and
+     * the shortcut should still work with focus in a param box. A modal
+     * hands it back to the browser, and so does the scene view, where
+     * there is no graph to zoom.
+     */
+    if (e.key === "0" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (modal !== null || !view.graph) return;
+      e.preventDefault();
+      canvas?.actualSize();
+      return;
+    }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (modal !== null) return;
     if (isTyping(target)) return;
@@ -848,7 +866,7 @@
     padding: 10px 12px 12px;
     background: var(--sb-panel);
     border: 1px solid var(--sb-rule);
-    border-radius: 8px;
+    border-radius: var(--sb-radius-lg);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(6px);
   }
@@ -877,7 +895,7 @@
     max-height: 110px;
     overflow-y: auto;
     padding: 8px 14px;
-    border-radius: 8px;
+    border-radius: var(--sb-radius-lg);
     font-size: var(--sb-t-body);
     line-height: 1.4;
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
@@ -945,7 +963,7 @@
     .drawer-tab.right {
       right: 0;
       border-right: none;
-      border-radius: 6px 0 0 6px;
+      border-radius: var(--sb-radius) 0 0 var(--sb-radius);
     }
     /* The collapsed overlay is a title bar only; the tabs would otherwise
        poke into it, because .body still has a few clipped pixels and the

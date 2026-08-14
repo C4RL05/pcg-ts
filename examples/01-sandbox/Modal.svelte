@@ -86,7 +86,7 @@
     padding: 12px 14px;
     background: #000000;
     border: 1px solid var(--sb-edge);
-    border-radius: 10px;
+    border-radius: var(--sb-radius-lg);
     color: var(--sb-ink);
     font: 13px var(--sb-sans);
   }
@@ -128,7 +128,7 @@
     background: #0a0a0a;
     color: var(--sb-ink);
     border: 1px solid var(--sb-rule);
-    border-radius: 6px;
+    border-radius: var(--sb-radius);
     font: var(--sb-t-meta) / 1.5 var(--sb-mono);
     white-space: pre;
   }
@@ -139,7 +139,7 @@
     padding: 6px 8px;
     background: var(--sb-alert-bg);
     border: 1px solid var(--sb-edge-err);
-    border-radius: 6px;
+    border-radius: var(--sb-radius);
     color: #ffffff;
     font: 11px/1.5 ui-monospace, monospace;
     white-space: pre-wrap;

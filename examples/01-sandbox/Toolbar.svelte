@@ -217,7 +217,7 @@
 
   <div class="grp" title="the node canvas">
     <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
-    <button onclick={onActual} title="back to 1:1, centred on the graph — the zoom a graph opens at whenever it fits there">100%</button>
+    <button onclick={onActual} title="back to 1:1, centred on the graph (ctrl+0) — the zoom a graph opens at whenever it fits there">100%</button>
     <button onclick={onFit} title="zoom out until every node is on screen, however small. The canvas pans with the right button and zooms on the wheel">fit</button>
   </div>
 

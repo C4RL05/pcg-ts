@@ -98,8 +98,15 @@
       --sb-t-body: 12px;
       --sb-t-title: 14px;
 
-      /* geometry */
-      --sb-radius: 5px;
+      /**
+       * geometry — TWO radii, and no third.
+       *
+       * The page had 4, 5, 6, 8 and 10 in it, most of them a pixel apart
+       * and none of them meaning anything by being different. One radius
+       * for things you click or type into, one for floating surfaces.
+       */
+      --sb-radius: 4px;                     /* buttons, inputs, tabs */
+      --sb-radius-lg: 8px;                  /* panels, menus, the modal */
       --sb-btn-pad: 3px 10px;
     }
   </style>

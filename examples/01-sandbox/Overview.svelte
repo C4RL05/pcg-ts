@@ -292,7 +292,7 @@
     overflow: auto;
     background: #0a0a0a;
     border: 1px solid var(--sb-rule);
-    border-radius: 4px;
+    border-radius: var(--sb-radius);
     color: var(--sb-ink-mid);
     font: var(--sb-t-meta) / 1.45 var(--sb-mono);
     white-space: pre-wrap;
@@ -308,7 +308,7 @@
     padding: 6px 8px;
     background: var(--sb-alert-bg);
     border: 1px solid var(--sb-edge-warn);
-    border-radius: 6px;
+    border-radius: var(--sb-radius);
     color: var(--sb-ink);
     font-size: var(--sb-t-meta);
   }

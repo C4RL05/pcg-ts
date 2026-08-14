@@ -347,7 +347,7 @@
     color: var(--sb-ink-dim, #8fa3bf);
     background: var(--sb-tab, #131c2b);
     border: 1px solid var(--sb-rule, #223047);
-    border-radius: 4px;
+    border-radius: var(--sb-radius, 4px);
     cursor: pointer;
   }
   .tab:hover {
@@ -396,7 +396,7 @@
     background: var(--sb-well, #161d29);
     color: var(--sb-ink, #dbe4f0);
     border: 1px solid var(--sb-edge, #33405a);
-    border-radius: 5px;
+    border-radius: var(--sb-radius, 5px);
     font: 12px system-ui, sans-serif;
   }
   .num {
@@ -423,7 +423,7 @@
     padding: 8px;
     background: var(--sb-grid-bg, #111823);
     border: 1px solid var(--sb-rule, #223047);
-    border-radius: 6px;
+    border-radius: var(--sb-radius, 6px);
   }
   .gridhead {
     margin-bottom: 6px;

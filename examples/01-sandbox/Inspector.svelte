@@ -231,7 +231,7 @@
     padding: 6px 8px;
     background: #101010;
     border-left: 2px solid var(--sb-edge);
-    border-radius: 0 4px 4px 0;
+    border-radius: 0 var(--sb-radius) var(--sb-radius) 0;
     color: var(--sb-ink-dim);
     font-size: var(--sb-t-meta);
     line-height: 1.5;
