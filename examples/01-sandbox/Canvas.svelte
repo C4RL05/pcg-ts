@@ -61,14 +61,10 @@
 
   const MIN_ZOOM = 0.2;
   const MAX_ZOOM = 2.5;
-  /**
-   * The zoom below which a box stops saying anything: its title is 11px
-   * and its param rows are 9px, so under about half scale the canvas is a
-   * diagram of rectangles. The wheel still goes to MIN_ZOOM — asking for
-   * the bird's-eye view is a thing you can do — but nothing ARRIVES there
-   * on its own.
-   */
-  const LEGIBLE_ZOOM = 0.5;
+  /** One graph unit to one screen pixel — the size the boxes were drawn at. */
+  const ACTUAL = 1;
+  /** Breathing room between the framed content and the viewport edge. */
+  const PAD = 40;
 
   /** Pointer position in graph units — the space node x/y live in. */
   function toGraph(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -105,44 +101,75 @@
     return toGraph({ clientX, clientY });
   }
 
-  /**
-   * Frame every node, so a pan that wandered off is one click from home.
-   *
-   * `legible` refuses to zoom out past the point where the boxes stop
-   * being readable, and shows the START of the graph instead — the
-   * sources, which is where you read a chain from. It is what a LOAD
-   * wants: a forty-node pipeline fitted whole is a field of grey
-   * rectangles, and opening on one is worse than opening on the first
-   * eight boxes with their params legible.
-   *
-   * The "fit" button passes nothing and gets the true fit, because a
-   * control named fit that declines to fit is a broken control.
-   */
-  export function resetView(opts: { legible?: boolean } = {}): void {
-    if (!svgEl || model.nodes.length === 0) {
-      view = { x: 0, y: 0, z: 1 };
-      return;
-    }
-    const r = svgEl.getBoundingClientRect();
+  /** The nodes' bounding box in graph units, or null when there are none. */
+  function contentBounds(): { minX: number; minY: number; w: number; h: number } | null {
+    if (model.nodes.length === 0) return null;
     const minX = Math.min(...model.nodes.map((n) => n.x));
     const minY = Math.min(...model.nodes.map((n) => n.y));
     const maxX = Math.max(...model.nodes.map((n) => n.x + NODE_W));
     const maxY = Math.max(
       ...model.nodes.map((n) => n.y + nodeHeight(n, previews.get(n.id)?.length ?? 0)),
     );
-    const pad = 40;
-    const w = maxX - minX;
-    const h = maxY - minY;
-    const fit = Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / h);
-    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit));
-    if (opts.legible === true && z < LEGIBLE_ZOOM) {
-      // Anchored to the content's top-left rather than centred: at a zoom
-      // that does not fit, centring puts the middle of the graph on screen
-      // and cuts off both ends, including the one it starts at.
-      view = { z: LEGIBLE_ZOOM, x: pad - minX * LEGIBLE_ZOOM, y: pad - minY * LEGIBLE_ZOOM };
+    return { minX, minY, w: maxX - minX, h: maxY - minY };
+  }
+
+  /** Put the content in the middle of the viewport at zoom `z`. */
+  function centreAt(
+    z: number,
+    b: { minX: number; minY: number; w: number; h: number },
+    r: DOMRect,
+  ): void {
+    view = { z, x: (r.width - b.w * z) / 2 - b.minX * z, y: (r.height - b.h * z) / 2 - b.minY * z };
+  }
+
+  /** The zoom at which the whole graph just fits, ignoring the clamps. */
+  function fitZoom(b: { w: number; h: number }, r: DOMRect): number {
+    return Math.min((r.width - PAD * 2) / b.w, (r.height - PAD * 2) / b.h);
+  }
+
+  /**
+   * Frame the graph, so a pan that wandered off is one click from home.
+   *
+   * `preferActual` opens at 1:1 WHEN THE GRAPH FITS THERE, and only falls
+   * back to shrinking when it does not. That is what a load wants: most
+   * graphs are a handful of nodes and have no business being scaled at
+   * all, and a box drawn at the size it was designed at is the one that
+   * reads best. The big pipelines still get fitted, because the
+   * alternative is opening on a corner of something you cannot navigate.
+   *
+   * The "fit" button passes nothing and always fits, because a control
+   * named fit that declines to fit is a broken control.
+   */
+  export function resetView(opts: { preferActual?: boolean } = {}): void {
+    if (!svgEl) return;
+    const b = contentBounds();
+    if (b === null) {
+      view = { x: 0, y: 0, z: ACTUAL };
       return;
     }
-    view = { z, x: (r.width - w * z) / 2 - minX * z, y: (r.height - h * z) / 2 - minY * z };
+    const r = svgEl.getBoundingClientRect();
+    const fit = fitZoom(b, r);
+    // `fit >= ACTUAL` is exactly "the content fits at 1:1 with its padding".
+    if (opts.preferActual === true && fit >= ACTUAL) {
+      centreAt(ACTUAL, b, r);
+      return;
+    }
+    centreAt(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit)), b, r);
+  }
+
+  /**
+   * Back to 1:1, whatever the graph's size. Centred on the content rather
+   * than on wherever the view had drifted, so it is a way HOME and not
+   * just a scale change — the same promise "fit" makes, at a fixed zoom.
+   */
+  export function actualSize(): void {
+    if (!svgEl) return;
+    const b = contentBounds();
+    if (b === null) {
+      view = { x: 0, y: 0, z: ACTUAL };
+      return;
+    }
+    centreAt(ACTUAL, b, svgEl.getBoundingClientRect());
   }
 
   /**

@@ -179,7 +179,8 @@
   /** Canvas component ref, for the toolbar's "fit" button and node placement. */
   let canvas = $state<
     | {
-        resetView: (opts?: { legible?: boolean }) => void;
+        resetView: (opts?: { preferActual?: boolean }) => void;
+        actualSize: () => void;
         graphPointAt: (x: number, y: number) => { x: number; y: number };
       }
     | undefined
@@ -325,7 +326,7 @@
    * the fit measures the canvas, which has not laid out the new nodes yet.
    */
   function frameGraph(): void {
-    void tick().then(() => canvas?.resetView({ legible: true }));
+    void tick().then(() => canvas?.resetView({ preferActual: true }));
   }
 
   /**
@@ -647,6 +648,7 @@
     onImport={() => (modal = "import")}
     onLayout={relayout}
     onFit={() => canvas?.resetView()}
+    onActual={() => canvas?.actualSize()}
     onFrame={() => bridge.frame?.()}
     onCookPath={(p) => bridge.setCookPath?.(p)}
     viewLabel={view.label}

@@ -24,6 +24,7 @@
     viewLabel,
     onCycleView,
     onFit,
+    onActual,
     host,
     onToggle,
     onFrame,
@@ -47,8 +48,10 @@
     host: { fps: string; drew: string; gpu: GpuState };
     /** Choose the cook path. The graph is unchanged; only how it cooks moves. */
     onCookPath: (path: CookPath) => void;
-    /** Frame every node in the canvas. */
+    /** Frame every node in the canvas, at whatever zoom that takes. */
     onFit: () => void;
+    /** Back to 1:1, centred on the graph. */
+    onActual: () => void;
     /** Frame the SCENE camera on what the graph made — the other half of `onFit`. */
     onFrame: () => void;
     /** Collapse/expand the dock; wired to the title on narrow screens. */
@@ -214,7 +217,8 @@
 
   <div class="grp" title="the node canvas">
     <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
-    <button onclick={onFit} title="zoom out until every node is on screen, however small — a graph LOADS at a readable zoom instead. The canvas pans with the right button and zooms on the wheel">fit</button>
+    <button onclick={onActual} title="back to 1:1, centred on the graph — the zoom a graph opens at whenever it fits there">100%</button>
+    <button onclick={onFit} title="zoom out until every node is on screen, however small. The canvas pans with the right button and zooms on the wheel">fit</button>
   </div>
 
   <div class="grp">
