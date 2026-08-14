@@ -294,13 +294,44 @@ const CASES: Case[] = [
 ];
 
 describe("derived spec round-trip", () => {
-  it("the matrix reaches every registered grammar fn", () => {
+  /**
+   * `param` is the one grammar fn NO constructor derives, and the
+   * exclusion is a statement about the feature rather than a gap in this
+   * matrix. A `param` names a value supplied at bind time; in TypeScript
+   * you have variables, so you write `constant(amp)` (or pass `amp`
+   * straight into the combinator) and the spec that derives from it says
+   * `constant` — correctly, because that is what was built. The fn exists
+   * for JSON, where there are no variables, and it is reachable only
+   * through `fieldFromJson`, which is where its round trip is pinned
+   * (`src/nodes/fieldJson.test.ts`).
+   *
+   * So the invariant this asserts is "every DERIVABLE fn is covered
+   * here", with the one exception named rather than skip-listed: a fn
+   * added later that no constructor derives must justify itself the same
+   * way, not simply appear in a filter.
+   */
+  const JSON_ONLY = new Set(["param"]);
+
+  it("the matrix reaches every grammar fn a constructor can derive", () => {
     const reached = new Set<string>();
     for (const c of CASES) {
       const spec = getFieldSpec(c.make());
       if (spec !== undefined) reached.add(spec.fn);
     }
-    expect([...reached].sort()).toEqual(listFieldFns());
+    expect([...reached].sort()).toEqual(listFieldFns().filter((fn) => !JSON_ONLY.has(fn)));
+  });
+
+  it("the JSON-only fns really are underivable, not merely unlisted", () => {
+    // The exception has to stay earned: if a constructor ever starts
+    // deriving `param`, the filter above would silently hide the case
+    // instead of covering it. A derivation would have to come from a
+    // Field the combinator API produced, and nothing in that API can
+    // produce one — the only way to get a `param` spec is to author it.
+    const spec = fieldFromJson({ fn: "param", name: "amp" }, { amp: 2 });
+    expect(getFieldSpec(spec)?.fn, "authored param keeps its reference").toBe("param");
+    // ...while the same value written as a literal derives `constant`,
+    // which is the whole reason no constructor needs `param`.
+    expect(getFieldSpec(constant(2))?.fn).toBe("constant");
   });
 
   for (const c of CASES) {

@@ -65,6 +65,15 @@
  * specialization key encodes only which params are constant, their
  * tuple sizes, and their slots, so editing a constant rebinds a uniform
  * and hits the pipeline cache instead of compiling.
+ *
+ * The uniform tail this file defines ({@link APPLY_CONST_OFFSET},
+ * {@link APPLY_CONST_STRIDE}, {@link APPLY_CONST_COMPONENTS},
+ * {@link applyUniformBytes}) is shared, not apply-only: a FIELD kernel
+ * carrying `{"fn":"param"}` slots declares the identical `_pad0` +
+ * `array<vec4<f32>>` layout and the executor writes both kinds through
+ * the same offset. It lives here because this is where the argument for
+ * it — a slot rather than a literal, so a value edit rebinds instead of
+ * recompiling — was first written down.
  */
 import type { GpuScalarType } from "./types.js";
 import { libClosure, wgslF32 } from "./wgslLib.js";

@@ -33,7 +33,7 @@ const ROOT_SURFACE = [
   "listNodeTypes", "listSubgraphs", "lt", "makeDeviceInstancesItem", "makeField",
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints",
   "meshPrimitive", "min", "mul", "ne", "nextRev", "noiseOutputRange", "normalize",
-  "orientAlongVector", "paramSchemaError", "paramValueError", "partitionByAttribute",
+  "orientAlongVector", "paramNamesOf", "paramSchemaError", "paramValueError", "partitionByAttribute",
   "pathPointAt", "pathResample", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
   "pointScatterInBounds", "pointScatterInWorld", "pointsToPath", "position",
   "primitiveTypeCounts", "projectToPlane", "promote", "promoteAttribute", "ramp",

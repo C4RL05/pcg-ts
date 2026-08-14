@@ -18,7 +18,14 @@ import {
   type Field,
 } from "../fields/index.js";
 import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
-import { FieldJsonError, fieldFromJson, fieldToJson, listFieldFns, type FieldSpec } from "./fieldJson.js";
+import {
+  FieldJsonError,
+  fieldFromJson,
+  fieldToJson,
+  listFieldFns,
+  paramNamesOf,
+  type FieldSpec,
+} from "./fieldJson.js";
 
 function testCloud(n = 16): EvalContext {
   const geo = createPointCloud(n);
@@ -460,5 +467,184 @@ describe("fieldToJson refusals name their cause", () => {
         /The sub-expression `opaque` carries none of its own/,
       );
     }
+  });
+});
+
+/**
+ * `param` — a named value standing where a literal would. The whole
+ * design turns on one asymmetry: the VALUE goes into `Field.key` (by
+ * substitution, so memoization needs no new machinery) while the
+ * REFERENCE stays in the spec (so the graph serializes what was
+ * authored). These pin both halves and the seam between them.
+ */
+describe("param bindings", () => {
+  const AMP: FieldSpec = { fn: "param", name: "amp" };
+
+  it("binds by substitution: the field IS the field the literal builds", () => {
+    // Byte-identical to the literal, key included — which is the point.
+    // `Field.key` is the memo contract (`stableValueHash` hashes a field
+    // as `F(${key})`), so a value that reached the field any later than
+    // construction could never move a node's param hash.
+    const bound = fieldFromJson(AMP, { amp: 1.25 });
+    expect(bound.key).toBe(constant(1.25).key);
+
+    const ctx = testCloud();
+    expect(Array.from(evaluateField(bound, ctx).data)).toEqual(
+      Array.from(evaluateField(constant(1.25), ctx).data),
+    );
+  });
+
+  it("a rebind moves the key exactly as editing the literal would", () => {
+    expect(fieldFromJson(AMP, { amp: 1 }).key).not.toBe(fieldFromJson(AMP, { amp: 2 }).key);
+    // ...and two names bound to one value share a key legitimately: they
+    // produce the same bytes, so a shared cache entry is correct.
+    expect(fieldFromJson({ fn: "param", name: "other" }, { other: 2 }).key).toBe(
+      fieldFromJson(AMP, { amp: 2 }).key,
+    );
+  });
+
+  it("binds an array as the matching vector", () => {
+    const bound = fieldFromJson({ fn: "param", name: "offset" }, { offset: [1, 2, 3] });
+    expect(bound.key).toBe(constant([1, 2, 3]).key);
+    expect(bound.tupleSize).toBe(3);
+  });
+
+  it("round-trips the REFERENCE, never the value it stood for", () => {
+    const bound = fieldFromJson(
+      { fn: "mul", args: [{ fn: "position" }, AMP] },
+      { amp: 0.5 },
+    );
+    expect(fieldToJson(bound)).toEqual({ fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "amp" }] });
+    // A serialized graph therefore reopens as a reference and must be
+    // bound again — the value is not smuggled through the JSON.
+    expect(JSON.stringify(fieldToJson(bound))).not.toContain("0.5");
+  });
+
+  it("is buildable but not evaluable when nothing binds it", () => {
+    const unbound = fieldFromJson(AMP);
+    expect(unbound.key).toBe('param("amp")');
+    expect(() => evaluateField(unbound, testCloud())).toThrow(FieldJsonError);
+    // The refusal names the param and states the fix — it is the message
+    // a cook surfaces when a graph forgot a binding.
+    expect(() => evaluateField(unbound, testCloud())).toThrow(/param "amp": nothing bound this name/);
+    expect(() => evaluateField(unbound, testCloud())).toThrow(/fieldFromJson\(spec, \{ "amp": /);
+  });
+
+  it("an unbound param still round-trips and still nests", () => {
+    const spec: FieldSpec = { fn: "add", args: [AMP, 1] };
+    expect(fieldToJson(fieldFromJson(spec))).toEqual(spec);
+    expect(fieldFromJson(spec).key).toBe(fieldFromJson(spec).key);
+  });
+
+  it("binds inside opts.position, which is an argument position like any other", () => {
+    const spec: FieldSpec = {
+      fn: "perlinNoise",
+      opts: { position: { fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "freq" }] } },
+    };
+    const bound = fieldFromJson(spec, { freq: 0.25 });
+    expect(bound.key).toBe(perlinNoise({ position: mul(position(), 0.25) }).key);
+    expect(fieldToJson(bound)).toEqual(spec);
+  });
+
+  it("rejects a malformed name and unknown keys the way every other fn does", () => {
+    expect(() => fieldFromJson({ fn: "param" } as unknown as FieldSpec)).toThrow(
+      /param requires a non-empty string name/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "" })).toThrow(/non-empty string name/);
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1 })).toThrow(
+      /unknown key "value" for fn "param"/,
+    );
+  });
+
+  it("rejects a binding the grammar could not have accepted as a literal", () => {
+    expect(() => fieldFromJson(AMP, { amp: Number.NaN })).toThrow(/bound to NaN; a binding must be finite/);
+    expect(() => fieldFromJson(AMP, { amp: [] })).toThrow(/must be a finite number .* or a non-empty array/);
+    expect(() => fieldFromJson(AMP, { amp: "big" as unknown as number })).toThrow(
+      /param "amp" is bound to a string/,
+    );
+    expect(() => fieldFromJson(AMP, [1, 2] as unknown as Record<string, number>)).toThrow(
+      /bindings must be an object/,
+    );
+  });
+
+  it("names the bindings when an arity does not fit its use site", () => {
+    // The combinator raises the tuple error and cannot know a param
+    // stood there; `fieldFromJson` is the only frame that still knows.
+    expect(() =>
+      fieldFromJson({ fn: "add", args: [AMP, [1, 2]] }, { amp: [1, 2, 3] }),
+    ).toThrow(/incompatible tuple sizes/);
+    expect(() =>
+      fieldFromJson({ fn: "add", args: [AMP, [1, 2]] }, { amp: [1, 2, 3] }),
+    ).toThrow(/this spec binds "amp" = a 3-tuple; check each binding's arity/);
+  });
+
+  it("a binding for a name the spec never references is inert", () => {
+    const spec: FieldSpec = { fn: "add", args: [1, 2] };
+    expect(fieldFromJson(spec, { unused: 9 }).key).toBe(fieldFromJson(spec).key);
+  });
+
+  it("does not read binding names off Object.prototype", () => {
+    // `{}.toString` exists on every object; a param named `toString` is
+    // unbound unless something bound it as an OWN key.
+    const spec: FieldSpec = { fn: "param", name: "toString" };
+    expect(fieldFromJson(spec, { amp: 1 }).key).toBe('param("toString")');
+  });
+
+  it("is a leaf for the depth cap, like position", () => {
+    const deep = (n: number): FieldSpec => {
+      let spec: FieldSpec = AMP;
+      for (let i = 1; i < n; i++) spec = { fn: "add", args: [spec, 1] };
+      return spec;
+    };
+    expect(() => fieldFromJson(deep(256), { amp: 1 })).not.toThrow();
+    expect(() => fieldFromJson(deep(257), { amp: 1 })).toThrow(/nesting deeper than 256 levels/);
+  });
+});
+
+describe("paramNamesOf", () => {
+  it("lists every referenced name, sorted and deduplicated", () => {
+    expect(
+      paramNamesOf({
+        fn: "add",
+        args: [
+          { fn: "mul", args: [{ fn: "param", name: "b" }, { fn: "param", name: "a" }] },
+          { fn: "param", name: "b" },
+        ],
+      }),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("walks opts.position, which no `args` traversal would reach", () => {
+    expect(
+      paramNamesOf({
+        fn: "fbm",
+        base: "perlinNoise",
+        opts: { position: { fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "freq" }] } },
+      }),
+    ).toEqual(["freq"]);
+  });
+
+  it("reads rather than validates, and survives a cyclic spec", () => {
+    expect(paramNamesOf({ fn: "add", args: [1, 2] })).toEqual([]);
+    expect(paramNamesOf({ fn: "param" } as unknown as FieldSpec)).toEqual([]);
+    const cyclic = { fn: "add", args: [{ fn: "param", name: "a" }] } as Record<string, unknown>;
+    (cyclic.args as unknown[]).push(cyclic);
+    expect(paramNamesOf(cyclic as unknown as FieldSpec)).toEqual(["a"]);
+  });
+});
+
+describe("param binding immutability", () => {
+  it("a tuple binding is copied, so mutating the caller's array cannot desync it", () => {
+    // The field's key was fixed from the value at construction. If the
+    // recorded binding were the caller's array, a later mutation would
+    // leave the key and the recorded value describing different numbers —
+    // and the GPU reads the recording while the memo cache reads the key.
+    const off = [1, 2, 3];
+    const field = fieldFromJson({ fn: "param", name: "off" }, { off });
+    const before = fieldToJson(field);
+    off[0] = 99;
+    expect(field.key).toBe(constant([1, 2, 3]).key);
+    expect(fieldToJson(field)).toEqual(before);
+    expect(Array.from(evaluateField(field, testCloud(2)).data)).toEqual([1, 2, 3, 1, 2, 3]);
   });
 });

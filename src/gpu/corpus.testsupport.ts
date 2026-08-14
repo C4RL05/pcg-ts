@@ -76,6 +76,10 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   index: { fn: "index" },
   fraction: { fn: "fraction" },
   randomField: { fn: "randomField" },
+  // Unbound: the front end must accept the uniform-slot lowering on the
+  // name alone (a bound one produces the same kernel — the value never
+  // reaches the WGSL text).
+  param: { fn: "param", name: "amplitude" },
   add: { fn: "add", args: [1, 2] },
   sub: { fn: "sub", args: [1, 2] },
   mul: { fn: "mul", args: [1, 2] },

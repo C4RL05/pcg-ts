@@ -13,6 +13,9 @@
  *   exactly 0 on the first element and exactly 1 on the last (a lone
  *   element gives 0)
  * - `{ fn: "randomField", key?: 0 | "salt" }`
+ * - `{ fn: "param", name: "amplitude" }` — the value bound to that name,
+ *   substituted at build time as if the literal had been written (see
+ *   {@link fieldFromJson}'s `bindings`)
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
  *   lt, le, gt, ge, eq, ne, dot, atan2 (2 args); abs, floor, length,
  *   normalize, sin, cos, tan, asin, acos, atan (1 arg); clamp, lerp,
@@ -74,6 +77,7 @@ import {
   type FieldSpec,
   MAX_SPEC_DEPTH,
   attachAuthoredSpec,
+  attachParamValue,
   attachSpec,
   peekFieldSpec,
   withheldReason,
@@ -269,6 +273,63 @@ register("index", [], `{ fn: "index" }`, () => detachedLeaf(index(), { fn: "inde
 register("fraction", [], `{ fn: "fraction" }`, () =>
   detachedLeaf(fraction(), { fn: "fraction" }),
 );
+
+/**
+ * Bindings for the `fieldFromJson` call currently building, read by the
+ * `param` handler. Module state for the same reason {@link deepestLevel}
+ * is: `FnDef.build` takes a spec and a path, and threading a bindings
+ * argument through every one of the ~45 constructors to serve one of them
+ * would put the feature in every signature in the file.
+ */
+let currentBindings: FieldBindings | undefined;
+
+/**
+ * The refusal an UNBOUND `param` evaluates to. Buildable but not
+ * evaluable is the point: the structural key and the WGSL kernel need
+ * only the name (the GPU lowers a param to a uniform slot, so it compiles
+ * the same expression whatever the value), while producing a COLUMN
+ * needs the value and there is none.
+ */
+function unboundParam(name: string): Field {
+  const quoted = JSON.stringify(name);
+  return makeField(`param(${quoted})`, undefined, () => {
+    throw new FieldJsonError(
+      `param ${quoted}: nothing bound this name, so the field has no value to evaluate. ` +
+        `Build it with fieldFromJson(spec, { ${JSON.stringify(name)}: <number | number[]> }); ` +
+        "an unbound param is buildable — its key and its GPU kernel need only the name — but never evaluable",
+    );
+  });
+}
+
+// A named value standing where a literal would: the value is
+// SUBSTITUTED here, so the field this returns is the field the literal
+// would have produced, key included. That is not an optimization but the
+// memoization contract — `Field.key` is computed at construction and is
+// what `stableValueHash` hashes a field as, so a value arriving later
+// (an `EvalContext` variable, say) would never move a node's param hash
+// and the node would serve stale bytes for the new value.
+register("param", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) => {
+  const name = spec.name;
+  if (typeof name !== "string" || name === "") {
+    fail(`${path}.name`, "param requires a non-empty string name");
+  }
+  if (currentBindings === undefined || !Object.hasOwn(currentBindings, name)) {
+    return unboundParam(name);
+  }
+  const value = currentBindings[name];
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      fail(`${path}.name`, `param ${JSON.stringify(name)} is bound to ${String(value)}; a binding must be finite`);
+    }
+    return constant(value);
+  }
+  if (isNumberArray(value)) return constant(value);
+  fail(
+    `${path}.name`,
+    `param ${JSON.stringify(name)} is bound to ${describeValue(value)}; a binding must be a finite ` +
+      "number (which binds as a scalar) or a non-empty array of finite numbers (which binds as the matching vector)",
+  );
+});
 
 register("randomField", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
   const key = spec.key;
@@ -514,21 +575,156 @@ export function listFieldFnInfos(): FieldFnInfo[] {
 }
 
 /**
+ * Values for the `param` references in a spec, by name. A number binds
+ * as a scalar and an array as the matching vector — in both cases
+ * exactly what writing that literal in the same position would have
+ * produced.
+ */
+export type FieldBindings = Readonly<Record<string, number | readonly number[]>>;
+
+/**
+ * Visit every spec node in a tree, once each. The field-valued positions
+ * are `args` entries and `opts.position` — the noise samplers' position
+ * input is an argument position like any other, which is why a `param`
+ * can appear there too (`collectAttrNames` in `src/gpu/compile.ts` walks
+ * the same two).
+ *
+ * `seen` guards cycles: `buildSpec` rejects them before anything reaches
+ * here, but {@link paramNamesOf} is public and may be handed raw JSON
+ * that `structuredClone` has faithfully reproduced a cycle in.
+ */
+function walkSpecNodes(
+  v: unknown,
+  visit: (node: Record<string, unknown>) => void,
+  seen: Set<object>,
+): void {
+  if (!isPlainObject(v) || seen.has(v)) return;
+  seen.add(v);
+  visit(v);
+  const args = v.args;
+  if (Array.isArray(args)) {
+    for (const a of args) walkSpecNodes(a, visit, seen);
+  }
+  const opts = v.opts;
+  if (isPlainObject(opts)) walkSpecNodes(opts.position, visit, seen);
+}
+
+/** Call `visit` for every well-formed `param` node in `spec`. */
+function eachParam(spec: FieldSpec, visit: (node: Record<string, unknown>, name: string) => void): void {
+  walkSpecNodes(
+    spec,
+    (node) => {
+      if (node.fn === "param" && typeof node.name === "string" && node.name !== "") {
+        visit(node, node.name);
+      }
+    },
+    new Set<object>(),
+  );
+}
+
+/**
+ * Every `param` name a spec references, sorted and deduplicated — the
+ * catalog of what {@link fieldFromJson} must be given before the spec can
+ * be evaluated. Walks the whole tree, `opts.position` included, and is
+ * tolerant of malformed input (it reads, it does not validate).
+ */
+export function paramNamesOf(spec: FieldSpec): readonly string[] {
+  const names = new Set<string>();
+  eachParam(spec, (_node, name) => names.add(name));
+  return [...names].sort();
+}
+
+/**
+ * Add the bindings a build resolved to the message of a failure the
+ * FIELD CONSTRUCTORS raised. A tuple mismatch is reported by whichever
+ * combinator broadcast the substituted constant ("add: incompatible
+ * tuple sizes 3 and 2"), which cannot know a `param` stood in that
+ * position — so the fact only this frame still holds is appended here
+ * rather than guessed at the throw site. Grammar failures are left
+ * alone: `fail()` already names the path, the cause and the fix.
+ */
+function withBindingContext(err: unknown, spec: FieldSpec, bindings: FieldBindings): unknown {
+  if (err instanceof FieldJsonError || !(err instanceof Error)) return err;
+  const bound = paramNamesOf(spec).filter((n) => Object.hasOwn(bindings, n));
+  if (bound.length === 0) return err;
+  const shown = bound
+    .map((n) => {
+      const v = bindings[n];
+      return `${JSON.stringify(n)} = ${typeof v === "number" ? "a scalar" : `a ${v.length}-tuple`}`;
+    })
+    .join(", ");
+  const wrapped = new FieldJsonError(
+    `${err.message} — this spec binds ${shown}; check each binding's arity against the position ` +
+      "it is used in (a scalar broadcasts against any tuple size, a tuple must match exactly)",
+  );
+  // The constructor's own stack points here, at the frame that added a
+  // clause — not at the combinator that refused. Carrying the original
+  // keeps that frame reachable, since the same underlying failure surfaces
+  // as a plain Error when no bindings were passed.
+  wrapped.cause = err;
+  return wrapped;
+}
+
+/**
  * Build a Field from a declarative JSON spec. Validates the constructor
  * name and every argument (errors name the failing path and list valid
  * alternatives), and attaches a copy of the spec to the resulting field
  * so {@link fieldToJson} can serialize it back.
+ *
+ * `bindings` supplies the values for the spec's `param` references
+ * ({@link paramNamesOf} lists what a spec needs). Binding SUBSTITUTES:
+ * the field comes out as if the literal had been written, so `Field.key`
+ * carries the value and a rebind moves the cook's memo key exactly the
+ * way editing the literal would. The spec attached to the field keeps the
+ * reference, so `fieldToJson` round-trips `{fn: "param", name}` rather
+ * than the value it stood for — and a name nothing bound builds a field
+ * that refuses to evaluate rather than one that quietly reads zero.
  */
-export function fieldFromJson(spec: FieldSpec): Field {
+export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field {
   if (!isPlainObject(spec)) {
     throw new FieldJsonError(`fieldFromJson: expected a spec object, got ${describeValue(spec)}`);
   }
+  if (bindings !== undefined && !isPlainObject(bindings)) {
+    throw new FieldJsonError(
+      "fieldFromJson: bindings must be an object mapping param names to a number or a number " +
+        `array, got ${describeValue(bindings)}`,
+    );
+  }
   deepestLevel = 0;
-  const field = buildSpec(spec, "$");
+  const outer = currentBindings;
+  currentBindings = bindings;
+  let field: Field;
+  try {
+    field = buildSpec(spec, "$");
+  } catch (err) {
+    throw bindings === undefined ? err : withBindingContext(err, spec, bindings);
+  } finally {
+    currentBindings = outer;
+  }
   // Stamped LAST, over whatever spec the constructors derived while
   // building the tree, so `fieldToJson` returns the author's exact JSON
   // rather than a canonicalized derivation of it.
-  attachAuthoredSpec(field, structuredClone(spec) as FieldSpec, deepestLevel);
+  const authored = structuredClone(spec) as FieldSpec;
+  if (bindings !== undefined) {
+    // The values ride the CLONE's nodes — the objects the attached spec
+    // is made of, and the ones a derived parent structure-shares — so
+    // whatever later reads this field's spec (the WGSL compiler, the run
+    // planner) recovers the arity it must lower and the value it must
+    // write into the uniform. See `attachParamValue` for why they cannot
+    // live inside the node.
+    eachParam(authored, (node, name) => {
+      if (!Object.hasOwn(bindings, name)) return;
+      const value = bindings[name];
+      // Copied, never referenced: the field's key was fixed from this
+      // value at construction, so a caller who later mutates the array
+      // they passed would leave the recorded arity and the key describing
+      // different numbers — and the device would then write bytes the CPU
+      // never produced. The copy is what makes the record as immutable as
+      // the key it belongs to.
+      attachParamValue(node as unknown as FieldSpec, typeof value === "number" ? value : [...value]);
+    });
+  }
+  attachAuthoredSpec(field, authored, deepestLevel);
   return field;
 }
 

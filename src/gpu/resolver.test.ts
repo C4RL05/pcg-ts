@@ -350,3 +350,71 @@ describe("GpuFieldEvaluator cache salt", () => {
     expect(ev.cacheSalt).toBe("gpu2|explicit|?|?|?");
   });
 });
+
+/**
+ * The two keys, from the cache side (device-free: an empty domain
+ * resolves without a dispatch, and both caches are populated before the
+ * count is looked at). `field.key` carries a bound `param`'s VALUE — the
+ * CPU memo contract — so a kernel cache keyed on it would gain an entry
+ * per value. Both maps here are unbounded, which makes that a leak on
+ * every slider drag rather than a slowdown.
+ */
+describe("param rebinding does not grow the caches", () => {
+  const SPEC: FieldSpec = {
+    fn: "mul",
+    args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "amp" }],
+  };
+
+  it("a hundred values compile one kernel", () => {
+    const ev = new GpuFieldEvaluator(untouchableDevice());
+    const geo = makeCorpusGeometry(0);
+    const ctx = { geo, domain: "point" as const, seed: 0 };
+    const keys = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      const field = fieldFromJson(SPEC, { amp: i * 0.01 });
+      keys.add(field.key);
+      expect(ev.resolveField(field, ctx)).not.toBeNull();
+    }
+    // The premise: every value really did produce a distinct field key.
+    expect(keys.size).toBe(100);
+    expect(ev.kernelCacheSize).toBe(1);
+    expect(ev.pipelineCacheSize).toBe(0); // no dispatch on an empty domain
+  });
+
+  it("...but a different arity is a different kernel, because the text differs", () => {
+    const ev = new GpuFieldEvaluator(untouchableDevice());
+    const ctx = { geo: makeCorpusGeometry(0), domain: "point" as const, seed: 0 };
+    ev.resolveField(fieldFromJson({ fn: "param", name: "amp" }, { amp: 1 }), ctx);
+    expect(ev.kernelCacheSize).toBe(1);
+    ev.resolveField(fieldFromJson({ fn: "param", name: "amp" }, { amp: [1, 2, 3] }), ctx);
+    expect(ev.kernelCacheSize).toBe(2);
+  });
+
+  it("declines a param nothing bound, so the CPU raises the named refusal", () => {
+    const ev = new GpuFieldEvaluator(untouchableDevice());
+    const stats = createGpuCookStats();
+    // Count 4, not 0: the binding check must precede the empty-domain
+    // shortcut, and this asserts it does for a populated domain too.
+    const ctx = { geo: makeCorpusGeometry(4), domain: "point" as const, seed: 0 };
+    expect(ev.resolveField(fieldFromJson(SPEC), ctx, stats)).toBeNull();
+    expect(stats.fallbacks).toEqual({ "param-bindings": 1 });
+    // ...and on an empty domain, where an empty column would have hidden it.
+    const stats2 = createGpuCookStats();
+    const empty = { geo: makeCorpusGeometry(0), domain: "point" as const, seed: 0 };
+    expect(ev.resolveField(fieldFromJson(SPEC), empty, stats2)).toBeNull();
+    expect(stats2.fallbacks).toEqual({ "param-bindings": 1 });
+  });
+
+  it("declines one name bound two ways in a single expression", () => {
+    // Only reachable by composing two separately-bound fields in code;
+    // one uniform slot cannot serve both, and picking either would serve
+    // bytes the CPU never produced.
+    const ev = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs: true });
+    const stats = createGpuCookStats();
+    const ctx = { geo: makeCorpusGeometry(4), domain: "point" as const, seed: 0 };
+    const one = fieldFromJson({ fn: "param", name: "amp" }, { amp: 1 });
+    const two = fieldFromJson({ fn: "param", name: "amp" }, { amp: 2 });
+    expect(ev.resolveField(mul(one, two), ctx, stats)).toBeNull();
+    expect(stats.fallbacks).toEqual({ "param-bindings": 1 });
+  });
+});

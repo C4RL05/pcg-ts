@@ -23,6 +23,8 @@ import {
   PARITY_CASES,
   corpusSpecs,
 } from "./corpus.testsupport.js";
+import { dispatchTask } from "./runnerClient.js";
+import { makeCorpusGeometry } from "./testGeometry.js";
 
 describe("device-test corpus", () => {
   it("minimal corpus covers every grammar fn (drift pin)", () => {
@@ -93,5 +95,29 @@ describe("code-authored twins of the parity corpus", () => {
       "normal",
       "uv",
     ]);
+  });
+});
+
+describe("device runner protocol", () => {
+  it("refuses to dispatch a kernel whose uniform it cannot write", () => {
+    // The runner hardcodes the bare 12-byte {count, seed, chunkOffset}
+    // uniform. The corpus now carries a `param` spec — for front-end
+    // VALIDATION, which needs no uniform — so a dispatch of one is one
+    // line away, and would bind 12 bytes to a 16 + 16n struct and read
+    // whatever the driver left past the header.
+    const kernel = compileFieldSpec(MINIMAL_SPECS.param, CORPUS_LAYOUT);
+    expect(kernel.constSlots).toBe(1);
+    expect(() => dispatchTask("min:param", kernel, makeCorpusGeometry(4), 4, 0)).toThrow(
+      /uniform constant slot\(s\) for param\(s\) "amplitude".*cannot carry their values/s,
+    );
+  });
+
+  it("...and still dispatches every param-free corpus kernel", () => {
+    const geo = makeCorpusGeometry(4);
+    for (const { name, spec } of corpusSpecs()) {
+      const kernel = compileFieldSpec(spec, CORPUS_LAYOUT);
+      if (kernel.constSlots > 0) continue;
+      expect(() => dispatchTask(name, kernel, geo, 4, 0), name).not.toThrow();
+    }
   });
 });

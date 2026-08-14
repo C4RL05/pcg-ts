@@ -55,6 +55,16 @@ export function decodeRun(kernel: CompiledFieldKernel, base64: string): Column {
  * the geometry's point domain, marshalling exactly as the evaluator
  * does: tightly packed SoA scalar prefixes, bool columns widened to
  * u32 0/1.
+ *
+ * A kernel carrying `{"fn":"param"}` uniform slots is REFUSED rather
+ * than dispatched: this protocol's uniform is the bare 12-byte
+ * {count, seed, chunkOffset} the runner hardcodes, so binding it to a
+ * kernel whose `PcgParams` is 16 + 16n bytes would read whatever the
+ * driver leaves past the header and quietly produce bytes no CPU
+ * evaluation ever made. The corpus already carries a `param` spec (for
+ * front-end VALIDATION, which needs no uniform), so the trap is one line
+ * away and worth an error rather than a comment — `params.device.test.ts`
+ * measures param parity through the real evaluator instead.
  */
 export function dispatchTask(
   name: string,
@@ -64,6 +74,15 @@ export function dispatchTask(
   seed: number,
   runs = 1,
 ): RunnerTask {
+  if (kernel.constSlots > 0) {
+    throw new Error(
+      `dispatchTask("${name}"): this kernel declares ${kernel.constSlots} uniform constant slot(s) ` +
+        `for param(s) ${kernel.paramNames.map((n) => JSON.stringify(n)).join(", ")}, and the device ` +
+        "runner protocol writes only the 12-byte {count, seed, chunkOffset} header — it cannot carry " +
+        "their values. Dispatch param kernels through GpuFieldEvaluator (see params.testsupport.ts), " +
+        "or extend RunnerTask and deviceRunner.mjs to write the slots at APPLY_CONST_OFFSET",
+    );
+  }
   const set = geo.attrs.point;
   const inputs = kernel.inputs.map((input) => {
     const attr = set.require(input.name);

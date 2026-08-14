@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type FieldSpecArg, listFieldFns } from "../nodes/fieldJson.js";
+import { peekFieldSpec } from "../fields/spec.js";
+import { type FieldSpec, type FieldSpecArg, fieldFromJson, listFieldFns } from "../nodes/fieldJson.js";
+import { paramConstValues } from "./compile.js";
 import { compileFieldSpec, supportedGpuFieldFns } from "./index.js";
 import type { FieldKernelLayout } from "./index.js";
 
@@ -195,6 +197,9 @@ describe("grammar coverage", () => {
     index: { fn: "index" },
     fraction: { fn: "fraction" },
     randomField: { fn: "randomField" },
+    // Unbound on purpose: compiling a `param` needs its name and nothing
+    // else, which is exactly why it lowers to a uniform slot.
+    param: { fn: "param", name: "amplitude" },
     add: { fn: "add", args: [1, 2] },
     sub: { fn: "sub", args: [1, 2] },
     mul: { fn: "mul", args: [1, 2] },
@@ -490,5 +495,151 @@ describe("codegen structure", () => {
     expect(k.outTupleSize).toBe(3);
     expect(k.outType).toBe("f32");
     expect(k.inputs).toEqual([{ name: "P", type: "f32", tupleSize: 3, binding: 1 }]);
+  });
+});
+
+/**
+ * `param` lowers to a uniform slot rather than a literal, which is what
+ * makes ONE compiled kernel serve every value a name is bound to. These
+ * pin the three things that has to be true of: the emitted struct and
+ * read, the absence of a storage buffer, and a key that carries names
+ * and arities but never values.
+ */
+describe("param uniform slots", () => {
+  const bound = (spec: FieldSpec, bindings: Record<string, number | readonly number[]>): FieldSpec =>
+    // The bindings ride the spec `fieldFromJson` attaches — the same
+    // object `deviceSpec` hands the compiler at cook time.
+    peekFieldSpec(fieldFromJson(spec, bindings)) as FieldSpec;
+
+  it("declares the slot array and reads it, with no value in the text", () => {
+    const k = compileFieldSpec(bound({ fn: "param", name: "amp" }, { amp: 0.375 }), LAYOUT);
+    expect(k.wgsl).toContain("  chunkOffset: u32,\n  _pad0: u32,\n  consts: array<vec4<f32>, 1>,");
+    expect(k.wgsl).toContain("let v0 = params.consts[0].x;");
+    expect(k.wgsl).not.toContain("0.375");
+    expect(k.constSlots).toBe(1);
+    expect(k.paramNames).toEqual(["amp"]);
+    expect(k.uniformBytes).toBe(32);
+  });
+
+  it("costs a uniform slot and NO storage buffer", () => {
+    // The saving that justifies the feature: carrying the same value in
+    // an attribute column spends one of the seven usable storage slots.
+    const k = compileFieldSpec(bound({ fn: "param", name: "amp" }, { amp: 1 }), LAYOUT);
+    expect(k.inputs).toEqual([]);
+    expect(k.bindings.output).toBe(1);
+  });
+
+  it("allocates one slot per distinct name, in sorted-name order", () => {
+    const k = compileFieldSpec(
+      bound(
+        {
+          fn: "add",
+          args: [
+            { fn: "mul", args: [{ fn: "param", name: "b" }, { fn: "param", name: "a" }] },
+            { fn: "param", name: "b" },
+          ],
+        },
+        { a: 2, b: 3 },
+      ),
+      LAYOUT,
+    );
+    expect(k.paramNames).toEqual(["a", "b"]);
+    expect(k.constSlots).toBe(2);
+    // Repeated references share their name's slot rather than taking one.
+    expect(k.wgsl).toContain("params.consts[0].x"); // a
+    expect(k.wgsl).toContain("params.consts[1].x"); // b
+    expect(k.uniformBytes).toBe(48);
+  });
+
+  it("binds a tuple as the matching vector", () => {
+    const k = compileFieldSpec(bound({ fn: "param", name: "off" }, { off: [1, 2, 3] }), LAYOUT);
+    expect(k.wgsl).toContain(
+      "let v0 = vec3<f32>(params.consts[0].x, params.consts[0].y, params.consts[0].z);",
+    );
+    expect(k.outTupleSize).toBe(3);
+  });
+
+  it("compiles unbound: the name is all a kernel needs", () => {
+    const unbound = compileFieldSpec({ fn: "param", name: "amp" }, LAYOUT);
+    const withValue = compileFieldSpec(bound({ fn: "param", name: "amp" }, { amp: 4 }), LAYOUT);
+    expect(unbound.wgsl).toBe(withValue.wgsl);
+    expect(unbound.key).toBe(withValue.key);
+  });
+
+  it("keys on names and arities, never on values", () => {
+    const spec: FieldSpec = { fn: "param", name: "amp" };
+    const a = compileFieldSpec(bound(spec, { amp: 1 }), LAYOUT);
+    const b = compileFieldSpec(bound(spec, { amp: 999.5 }), LAYOUT);
+    // Same key, same text: rebinding must hit the pipeline cache, or a
+    // slider drag would compile a pipeline per tick.
+    expect(b.key).toBe(a.key);
+    expect(b.wgsl).toBe(a.wgsl);
+    expect(a.key).toContain('|params=["amp":1]');
+
+    // Arity is not a value, and it does change the text — so it is in
+    // the key, or the two would collide on one cache entry.
+    const vec = compileFieldSpec(bound(spec, { amp: [1, 2, 3] }), LAYOUT);
+    expect(vec.key).not.toBe(a.key);
+    expect(vec.key).toContain('|params=["amp":3]');
+  });
+
+  it("leaves a param-free kernel's key and text exactly as they were", () => {
+    // The signature is appended only when there are params, so every
+    // pre-existing kernel keeps its identity and its cached pipeline.
+    const k = compileFieldSpec({ fn: "add", args: [1, 2] }, LAYOUT);
+    expect(k.key).not.toContain("params=");
+    expect(k.wgsl).not.toContain("consts");
+    expect(k.constSlots).toBe(0);
+    expect(k.paramNames).toEqual([]);
+    expect(k.uniformBytes).toBe(12);
+  });
+
+  it("rejects arities one slot cannot hold or reconcile", () => {
+    expect(() => compileFieldSpec(bound({ fn: "param", name: "w" }, { w: [1, 2, 3, 4, 5] }), LAYOUT)).toThrow(
+      /bound to a 5-tuple, but a uniform slot holds 4 components/,
+    );
+  });
+
+  it("turns a spec's bindings into the slot payload, zero-padded", () => {
+    const spec = bound(
+      { fn: "add", args: [{ fn: "param", name: "b" }, { fn: "param", name: "a" }] },
+      { a: 0.5, b: [1, 2, 3] },
+    );
+    const k = compileFieldSpec(spec, LAYOUT);
+    const values = paramConstValues(spec, k);
+    expect("values" in values && Array.from(values.values)).toEqual([0.5, 0, 0, 0, 1, 2, 3, 0]);
+  });
+
+  it("refuses to produce a payload it would have to invent", () => {
+    const unbound = compileFieldSpec({ fn: "param", name: "amp" }, LAYOUT);
+    // Unbound: the CPU field throws, so the device must decline rather
+    // than write a zero the CPU never produced.
+    const missing = paramConstValues({ fn: "param", name: "amp" }, unbound);
+    expect("problem" in missing && missing.problem).toMatch(/param "amp" has no bound value/);
+  });
+});
+
+describe("param plan failures are decided once", () => {
+  it("remembers a contradiction instead of re-deriving it every cook", () => {
+    // The evaluator caches compile FAILURES in its kernel map; a plan
+    // failure happens before a cache key exists, so it is remembered here
+    // or not at all. Identity, not just equality: the same Error object.
+    const spec = peekFieldSpec(
+      fieldFromJson({ fn: "param", name: "w" }, { w: [1, 2, 3, 4, 5] }),
+    ) as FieldSpec;
+    const first = (() => {
+      try {
+        compileFieldSpec(spec, LAYOUT);
+      } catch (err) {
+        return err;
+      }
+      throw new Error("expected a compile failure");
+    })();
+    expect(() => compileFieldSpec(spec, LAYOUT)).toThrow(/bound to a 5-tuple/);
+    try {
+      compileFieldSpec(spec, LAYOUT);
+    } catch (second) {
+      expect(second).toBe(first);
+    }
   });
 });

@@ -934,3 +934,99 @@ describe("resident run planning: the spawner's instance budget", () => {
     expect(p.members).toHaveLength(1);
   });
 });
+
+/**
+ * A `{"fn":"param"}` inside a member's FIELD param. The apply kernel's
+ * constant slots and the field kernel's param slots are the same uniform
+ * tail written by the same executor line, so what the planner has to get
+ * right is only that the field STEP carries its values and its (larger)
+ * uniform size — which is exactly what this reads back.
+ */
+describe("param slots in a member's field kernel", () => {
+  const bound = (spec: object, bindings: Record<string, number | readonly number[]>) =>
+    fieldFromJson(spec as FieldSpec, bindings);
+
+  it("carries the values on the field step, sized for its slots", () => {
+    const p = plan(
+      [
+        member("setAttribute", {
+          name: "d",
+          type: "f32",
+          tupleSize: 1,
+          value: bound(
+            { fn: "mul", args: [{ fn: "component", args: [{ fn: "position" }], index: 1 }, { fn: "param", name: "amp" }] },
+            { amp: 0.5 },
+          ),
+        }),
+      ],
+      64,
+    );
+    const fieldStep = p.members[0].steps[0];
+    // 4 f32 per slot, zero-padded — the apply kernels' slot payload.
+    expect(fieldStep.consts).toEqual([0.5, 0, 0, 0]);
+    // Padded 16-byte header + one 16-byte slot, not the bare 12.
+    expect(fieldStep.uniformBytes).toBe(32);
+    expect(fieldStep.wgsl).toContain("consts: array<vec4<f32>, 1>,");
+    // The key carries the name and arity; the VALUE is only in `consts`,
+    // so a rebind reuses this pipeline.
+    expect(fieldStep.key).toContain('|params=["amp":1]');
+    expect(fieldStep.key).not.toContain("0.5");
+  });
+
+  it("a param-free field step is untouched: no slots, the bare header", () => {
+    const p = plan(
+      [
+        member("setAttribute", {
+          name: "d",
+          type: "f32",
+          tupleSize: 1,
+          value: field({ fn: "component", args: [{ fn: "position" }], index: 1 }),
+        }),
+      ],
+      64,
+    );
+    const fieldStep = p.members[0].steps[0];
+    expect(fieldStep.consts).toEqual([]);
+    expect(fieldStep.uniformBytes).toBe(12);
+  });
+
+  it("rebinding changes the values and nothing else", () => {
+    const spec = { fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "amp" }] };
+    const stepFor = (amp: number) =>
+      plan(
+        [
+          member("setAttribute", {
+            name: "d",
+            type: "f32",
+            tupleSize: 3,
+            value: bound(spec, { amp }),
+          }),
+        ],
+        64,
+      ).members[0].steps[0];
+    const a = stepFor(1);
+    const b = stepFor(2);
+    expect(b.consts).toEqual([2, 0, 0, 0]);
+    expect(b.key).toBe(a.key);
+    expect(b.wgsl).toBe(a.wgsl);
+  });
+
+  it("declines a run whose param nothing bound", () => {
+    // Not a compile failure — the kernel compiles fine — but the values
+    // are missing, so the members cook per-node and the CPU raises the
+    // refusal that names the param.
+    expect(
+      rejection(
+        [
+          member("setAttribute", {
+            name: "d",
+            type: "f32",
+            tupleSize: 1,
+            value: field({ fn: "param", name: "amp" }),
+          }),
+        ],
+        64,
+      ),
+    ).toBe("run-plan-failed");
+  });
+});

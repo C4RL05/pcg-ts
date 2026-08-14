@@ -322,7 +322,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 42 names at runtime.
+256 levels). `listFieldFns()` returns all 43 names at runtime.
 
 ### Inputs
 
@@ -334,6 +334,7 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 | `index` | `{ fn }` | Element index 0, 1, 2, ... |
 | `fraction` | `{ fn }` | Normalized element index, `index / (count - 1)` |
 | `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, index) |
+| `param` | `{ fn, name: "amplitude" }` | The value bound to that name, substituted where the literal would have stood. Same for every element — a value that varies per element is an attribute, not a param. An unbound `param` builds (its key and its GPU kernel need only the name) but refuses to evaluate |
 
 `fraction` spans **[0, 1] closed**: exactly 0 on the first element and
 exactly 1 on the last, matching `pointLine`'s `includeEnd: true`

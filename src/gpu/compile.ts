@@ -23,9 +23,11 @@
  * inside float arithmetic (f32 mantissa); as the kernel root it is
  * written as raw u32 and exact everywhere.
  */
+import { paramValue } from "../fields/spec.js";
 import type { FieldSpec, FieldSpecArg } from "../nodes/fieldJson.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { hashCombine, hashString } from "../random/hash.js";
+import { APPLY_CONST_COMPONENTS, applyUniformBytes } from "./applyKernels.js";
 import { NOISE_RAW_RANGES, type NoiseRange, hash2 } from "../noise/util.js";
 import { VALUE_SALT } from "../noise/value.js";
 import { PERLIN_SALT } from "../noise/perlin.js";
@@ -104,6 +106,7 @@ interface BoundAttr {
 
 class CompileCtx {
   readonly layout: FieldKernelLayout;
+  readonly params: ParamPlan;
   readonly lines: string[] = [];
   readonly libRoots = new Set<string>();
   usesSeed = false;
@@ -115,8 +118,9 @@ class CompileCtx {
   private readonly helperCounters = new Map<string, number>();
   private varCounter = 0;
 
-  constructor(layout: FieldKernelLayout, boundNames: readonly string[]) {
+  constructor(layout: FieldKernelLayout, boundNames: readonly string[], params: ParamPlan) {
     this.layout = layout;
+    this.params = params;
     boundNames.forEach((name, i) => {
       this.bindings.set(name, {
         name,
@@ -125,6 +129,13 @@ class CompileCtx {
         attr: layout.attributes[name],
       });
     });
+  }
+
+  /** The pre-assigned uniform slot for a param known to be in the plan. */
+  paramSlot(name: string): { slot: number; arity: number } {
+    const slot = this.params.slots.get(name);
+    if (slot === undefined) throw new Error(`internal: param ${JSON.stringify(name)} was not pre-planned`);
+    return { slot, arity: this.params.arities[slot] };
   }
 
   /** Emit (or reuse) an SSA `let` for a canonical expression. */
@@ -312,6 +323,33 @@ HANDLERS.set("attribute", (spec, path, ctx) => {
 
 HANDLERS.set("position", (_spec, path, ctx) => {
   return loadAttribute(ctx, path, "P", 3, "position reads ");
+});
+
+// A named value lowers to a UNIFORM SLOT, never to a literal — forced
+// rather than chosen. `compileFieldSpec` is handed a spec and never
+// values, so a literal lowering has nowhere to read from; and the uniform
+// is the path this runtime already settled on next door, where a constant
+// apply param "contributes its tuple size and slot — never its values, so
+// a constant edit rebinds the uniform and reuses the pipeline"
+// (applyKernels.ts). Two further properties fall out of that: it costs no
+// storage buffer (`collectAttrNames` finds nothing in a `param`, which is
+// the whole saving against carrying the value in an attribute column),
+// and it is BIT-EXACT against the CPU — better than a literal, since a
+// WGSL front end may flush a `-0` or subnormal literal to `+0` but never
+// a uniform load (see run.ts).
+//
+// The arity comes from the binding recorded on this spec node, not from
+// the value: it decides the emitted text, so it is in the specialization
+// key, while the value is not. An unbound param compiles as a scalar —
+// nothing will ever dispatch it (the evaluator declines, so the CPU
+// raises the actionable refusal), but it must still COMPILE, because the
+// key and the kernel are exactly what a compiler needs from an unbound
+// reference.
+HANDLERS.set("param", (spec, _path, ctx) => {
+  const { slot, arity } = ctx.paramSlot(spec.name as string);
+  const read = (k: number): string => `params.consts[${slot}].${XYZW[k]}`;
+  if (arity === 1) return ctx.emit(read(0), 1);
+  return ctx.emit(`vec${arity}<f32>(${Array.from({ length: arity }, (_v, k) => read(k)).join(", ")})`, arity);
 });
 
 HANDLERS.set("index", (_spec, _path, ctx) => ctx.emit("f32(i)", 1));
@@ -715,7 +753,15 @@ HANDLERS.set("fbm", (spec, path, ctx) => {
 
 const NOISE_LIKE = new Set(["valueNoise", "perlinNoise", "simplexNoise", "worleyNoise", "fbm"]);
 
-/** Collect every attribute name the spec reads (position/noise imply "P"). */
+/**
+ * Collect every attribute name the spec reads (position/noise imply "P").
+ *
+ * `param` is deliberately absent, and inert here by construction: it has
+ * no `args` and no `opts`, so the walk falls through it and adds nothing.
+ * That is the saving — a named value costs a uniform slot and NOT one of
+ * the seven usable storage-buffer slots, where carrying the same value in
+ * an attribute column spends one per value.
+ */
 function collectAttrNames(v: unknown, out: Set<string>): void {
   if (!isPlainObject(v)) return; // numbers and number arrays read nothing
   const fn = v.fn;
@@ -747,6 +793,229 @@ function collectAttrNames(v: unknown, out: Set<string>): void {
   if (Array.isArray(args)) {
     for (const a of args) collectAttrNames(a, out);
   }
+}
+
+// ---------------------------------------------------------------------------
+// param collection (pre-pass)
+
+/**
+ * Uniform constant slots one FIELD kernel may carry — one per distinct
+ * `param` name. Far above what an expression plausibly references (a slot
+ * is 16 bytes of a uniform whose baseline binding limit is 64 KiB); the
+ * cap exists so a pathological spec fails with a message naming the count
+ * rather than building a uniform no device will bind.
+ */
+const MAX_FIELD_CONST_SLOTS = 16;
+
+/** The `param` names a kernel carries, their slots, and their arities. */
+interface ParamPlan {
+  /** Distinct names in SLOT ORDER: sorted, as the attribute pre-pass is. */
+  readonly names: readonly string[];
+  readonly slots: ReadonlyMap<string, number>;
+  /** Components each slot holds — the binding's arity, 1 when unbound. */
+  readonly arities: readonly number[];
+}
+
+const EMPTY_PARAMS: ParamPlan = { names: [], slots: new Map(), arities: [] };
+
+/** Component count a recorded binding lowers as. */
+function bindingArity(value: number | readonly number[]): number {
+  return typeof value === "number" ? 1 : value.length;
+}
+
+/** Walk `args` and `opts.position`, the two field-valued positions. */
+function eachSpecNode(v: unknown, visit: (node: Record<string, unknown>) => void): void {
+  if (!isPlainObject(v)) return;
+  visit(v);
+  const args = v.args;
+  if (Array.isArray(args)) {
+    for (const a of args) eachSpecNode(a, visit);
+  }
+  const opts = v.opts;
+  if (isPlainObject(opts)) eachSpecNode(opts.position, visit);
+}
+
+/**
+ * Allocate a uniform slot per distinct `param` name, in sorted-name order
+ * so codegen is deterministic exactly as the attribute pre-pass is.
+ *
+ * Arity is read from the binding recorded on each node (see
+ * `attachParamValue`), and an UNBOUND node takes whatever arity a bound
+ * node of the same name declared — never the other way round — so a
+ * partially bound composition still lowers, and is then declined at
+ * dispatch by {@link paramConstValues} rather than lowered wrong. Two
+ * bound nodes disagreeing about arity is a genuine contradiction (one
+ * slot cannot be both a scalar and a vec3) and rejects the compile.
+ */
+function planParams(root: FieldSpec): ParamPlan {
+  const cached = PARAM_PLANS.get(root);
+  if (cached !== undefined) return cached;
+  // A contradiction is a property of the spec, so it is decided once and
+  // remembered exactly as a plan is. The evaluator caches a compile
+  // FAILURE in its kernel map for this reason; a plan failure happens
+  // BEFORE a cache key can be computed, so without this the spec would be
+  // re-walked and re-thrown every cook of a graph that is merely wrong.
+  const failed = PARAM_PLAN_ERRORS.get(root);
+  if (failed !== undefined) throw failed;
+  try {
+    const plan = computeParamPlan(root);
+    PARAM_PLANS.set(root, plan);
+    return plan;
+  } catch (err) {
+    if (err instanceof GpuCompileError) PARAM_PLAN_ERRORS.set(root, err);
+    throw err;
+  }
+}
+
+function computeParamPlan(root: FieldSpec): ParamPlan {
+  const bound = new Map<string, number>();
+  const seen = new Set<string>();
+  eachSpecNode(root, (node) => {
+    if (node.fn !== "param" || typeof node.name !== "string" || node.name === "") return;
+    const name = node.name;
+    seen.add(name);
+    const value = paramValue(node as unknown as FieldSpec);
+    if (value === undefined) return;
+    const arity = bindingArity(value);
+    if (arity > APPLY_CONST_COMPONENTS) {
+      throw new GpuCompileError(
+        `param ${JSON.stringify(name)} is bound to a ${arity}-tuple, but a uniform slot holds ` +
+          `${APPLY_CONST_COMPONENTS} components; bind a tuple of 1 to ${APPLY_CONST_COMPONENTS}, ` +
+          "or evaluate this field on the CPU",
+      );
+    }
+    const previous = bound.get(name);
+    if (previous !== undefined && previous !== arity) {
+      throw new GpuCompileError(
+        `param ${JSON.stringify(name)} is bound to a ${previous}-tuple in one place and a ` +
+          `${arity}-tuple in another within the same expression; one uniform slot serves the name, ` +
+          "so both references must have the same arity",
+      );
+    }
+    bound.set(name, arity);
+  });
+  if (seen.size === 0) return EMPTY_PARAMS;
+  const names = [...seen].sort();
+  if (names.length > MAX_FIELD_CONST_SLOTS) {
+    throw new GpuCompileError(
+      `this field references ${names.length} distinct params, but a kernel carries at most ` +
+        `${MAX_FIELD_CONST_SLOTS} uniform constant slots (raise MAX_FIELD_CONST_SLOTS in ` +
+        "compile.ts if an expression legitimately needs more)",
+    );
+  }
+  return {
+    names,
+    slots: new Map(names.map((n, i) => [n, i])),
+    arities: names.map((n) => bound.get(n) ?? 1),
+  };
+}
+
+/** Plans, plan failures and keys memoized per spec OBJECT; specs are immutable by contract. */
+const PARAM_PLANS = new WeakMap<FieldSpec, ParamPlan>();
+const PARAM_PLAN_ERRORS = new WeakMap<FieldSpec, GpuCompileError>();
+const SPEC_KEYS = new WeakMap<FieldSpec, string>();
+
+/** The params' contribution to a specialization key: names and arities, never values. */
+function paramSig(plan: ParamPlan): string {
+  if (plan.names.length === 0) return "";
+  return `|params=[${plan.names.map((n, i) => `${JSON.stringify(n)}:${plan.arities[i]}`).join(",")}]`;
+}
+
+/**
+ * The VALUE-FREE specialization identity of a spec: the structural key of
+ * the field it builds with NOTHING bound, plus the params' names and
+ * arities. This is the key a kernel cache must use.
+ *
+ * The distinction matters because there are deliberately two keys. A
+ * BOUND field's `key` carries the value — that is the CPU memoization
+ * contract, and what makes rebinding invalidate exactly the nodes that
+ * read the name. The kernel is the same kernel for every value, so a
+ * cache keyed on the field's key would gain an entry per slider tick of
+ * an unbounded Map. Crossing the two the other way would be worse: GPU
+ * bytes served under a CPU key.
+ *
+ * `fieldKey` is the key of the field this spec came from, and is the
+ * ANSWER whenever the spec references no param: a field's key and its
+ * spec's key are the same string (that equality is what the derived-spec
+ * round-trip pins), and with no param in it there is no value in it
+ * either. So the overwhelmingly common case costs one walk and returns
+ * exactly the key that shipped, and only a spec that actually names a
+ * param pays to rebuild itself unbound.
+ *
+ * Memoized on the spec object, which callers treat as immutable
+ * (`peekFieldSpec`'s contract); a different value means a different
+ * `fieldFromJson` call and so a different spec object, whose key then
+ * comes out IDENTICAL and hits the same kernel.
+ */
+export function specKernelKey(spec: FieldSpec, fieldKey: string): string {
+  const plan = planParams(spec);
+  if (plan.names.length === 0) return fieldKey;
+  const cached = SPEC_KEYS.get(spec);
+  if (cached !== undefined) return cached;
+  const key = `${fieldFromJson(spec).key}${paramSig(plan)}`;
+  SPEC_KEYS.set(spec, key);
+  return key;
+}
+
+/** {@link paramConstValues}' two outcomes: the slot payload, or why there is none. */
+export type ParamConstValues =
+  | { readonly values: readonly number[] }
+  | { readonly problem: string };
+
+function sameComponents(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+}
+
+/**
+ * The uniform payload for a compiled kernel's constant slots:
+ * {@link APPLY_CONST_COMPONENTS} f32 per slot (zero-padded), in slot
+ * order — or the reason the spec's bindings cannot produce one.
+ *
+ * Read from the SPEC, never from the kernel: the kernel is shared by
+ * every value the names are bound to, which is the point of the uniform.
+ * Values are passed through as authored, because a JS number written
+ * through a `Float32Array` rounds exactly as the CPU `constant` column it
+ * substitutes for — including `-0` and subnormals, which is where this
+ * path is strictly closer to the reference than a baked literal.
+ *
+ * The two refusals are the cases where GPU bytes would silently differ
+ * from CPU bytes: a reference nothing bound (the CPU field throws, so the
+ * device must decline and let it), and two references to one name bound
+ * to different values in one expression, which one slot cannot represent.
+ */
+export function paramConstValues(spec: FieldSpecArg, kernel: CompiledFieldKernel): ParamConstValues {
+  if (kernel.constSlots === 0) return { values: [] };
+  const byName = new Map<string, readonly number[]>();
+  let problem: string | undefined;
+  eachSpecNode(spec, (node) => {
+    if (node.fn !== "param" || typeof node.name !== "string" || node.name === "") return;
+    const name = node.name;
+    const value = paramValue(node as unknown as FieldSpec);
+    if (value === undefined) {
+      problem ??= `param ${JSON.stringify(name)} has no bound value`;
+      return;
+    }
+    const components = typeof value === "number" ? [value] : [...value];
+    const previous = byName.get(name);
+    if (previous === undefined) byName.set(name, components);
+    else if (!sameComponents(previous, components)) {
+      problem ??= `param ${JSON.stringify(name)} is bound to two different values in one expression`;
+    }
+  });
+  if (problem !== undefined) return { problem };
+  const values: number[] = [];
+  for (const name of kernel.paramNames) {
+    const components = byName.get(name);
+    if (components === undefined) {
+      // Only reachable if a caller pairs a kernel with a spec it was not
+      // compiled from; refusing beats writing a zero the CPU never saw.
+      return { problem: `param ${JSON.stringify(name)} is not referenced by this spec` };
+    }
+    for (let k = 0; k < APPLY_CONST_COMPONENTS; k++) {
+      values.push(k < components.length ? components[k] : 0);
+    }
+  }
+  return { values };
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +1068,9 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
   validateLayout(layout);
   const rootSpec = normalizeRootSpec(spec);
   // Full grammar validation plus the canonical structural key (spec JSON
-  // key order and defaulted options do not affect it).
+  // key order and defaulted options do not affect it). Built with NO
+  // bindings, so a `param` contributes `param("name")` and the key stays
+  // value-free — see `specKernelKey`.
   const field = fieldFromJson(rootSpec);
 
   // Pre-pass: find every attribute the spec reads and pre-assign binding
@@ -809,7 +1080,10 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
   const eligible = [...attrNames]
     .filter((n) => Object.hasOwn(layout.attributes, n) && layout.attributes[n].type !== "string")
     .sort();
-  const ctx = new CompileCtx(layout, eligible);
+  // The same pre-pass for params, over the other resource a spec claims:
+  // a uniform slot per distinct name, sorted the same way.
+  const params = planParams(rootSpec);
+  const ctx = new CompileCtx(layout, eligible, params);
 
   // Root special cases mirror the CPU output column types: index → u32,
   // i32/u32 attributes → their own type; everything else lands as f32.
@@ -870,6 +1144,16 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
   }
   decls.push(`@group(0) @binding(${outputBinding}) var<storage, read_write> outBuf: array<${outType}>;`);
 
+  // The constant tail is byte-for-byte the apply kernels' (`_pad0` brings
+  // the 12-byte scalar header up to the 16-byte alignment `array<vec4>`
+  // requires in the uniform address space), so both kinds of step write
+  // their slots through the same offset. A spec with no params emits the
+  // header alone — character for character what it emitted before params
+  // existed, which is what lets every pre-existing kernel keep its key.
+  const constMembers =
+    params.names.length === 0
+      ? ""
+      : `\n  _pad0: u32,\n  consts: array<vec4<f32>, ${params.names.length}>,`;
   const blocks: string[] = [
     `// Generated by pcg-ts compileFieldSpec (WGSL field kernel).
 // Dispatch: 1D, chunked; each chunk runs ceil(chunkElements / ${WORKGROUP_SIZE}) workgroups of ${WORKGROUP_SIZE}
@@ -878,7 +1162,7 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
 struct PcgParams {
   count: u32,
   seed: u32,
-  chunkOffset: u32,
+  chunkOffset: u32,${constMembers}
 }
 
 ${decls.join("\n")}`,
@@ -897,6 +1181,10 @@ ${[...ctx.lines, ...storeLines].join("\n")}
   const layoutKey = bound
     .map((b) => `${JSON.stringify(b.name)}:${b.attr.type}x${b.attr.tupleSize}`)
     .join(",");
+  const specKey = `${field.key}${paramSig(params)}`;
+  // Seed the memo the evaluator reads before it decides to compile at
+  // all, so the two spellings of this key cannot drift apart.
+  SPEC_KEYS.set(rootSpec, specKey);
   return {
     wgsl: `${blocks.join("\n\n")}\n`,
     entryPoint: "main",
@@ -905,7 +1193,10 @@ ${[...ctx.lines, ...storeLines].join("\n")}
     outType,
     inputs,
     bindings: { uniforms: 0, output: outputBinding },
+    constSlots: params.names.length,
+    paramNames: params.names,
+    uniformBytes: applyUniformBytes(params.names.length),
     usesSeed: ctx.usesSeed,
-    key: `${CODEGEN_VERSION}|spec=${field.key}|layout=[${layoutKey}]`,
+    key: `${CODEGEN_VERSION}|spec=${specKey}|layout=[${layoutKey}]`,
   };
 }

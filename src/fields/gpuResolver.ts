@@ -32,6 +32,19 @@ import type { Column, EvalContext, Field } from "./types.js";
  * - `"too-many-buffers"` — the kernel would need more storage buffers
  *   than the baseline WebGPU limit guarantees (more than 7 attribute
  *   inputs plus the output).
+ * - `"param-bindings"` — the spec's `{"fn":"param"}` references cannot
+ *   be resolved to one value per name: a name nothing bound, or two
+ *   references to one name bound to different VALUES in a single
+ *   expression. The kernel compiles either way (a param lowers to a
+ *   uniform slot, which needs only the name), but the values it would
+ *   write are missing or contradictory, so the CPU path runs instead —
+ *   and raises the refusal that names the param. Two references bound at
+ *   different ARITIES are a different failure and report
+ *   `"compile-error"`: one slot cannot be both a scalar and a vector, so
+ *   there is no kernel to compile rather than no value to write. A fused
+ *   run declines for either as `"run-plan-failed"`, like every other
+ *   plan-time refusal, and its members then take the per-node path where
+ *   the reason above is counted.
  *
  * Per-run reasons ({@link GpuFieldResolver.planRun}; each counts once
  * per run that falls back, and every member of that run then cooks on

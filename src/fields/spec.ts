@@ -22,6 +22,10 @@
  * spec). The internal `deviceSpec` does, because device eligibility
  * depends on provenance: it is THE predicate every eligibility seam asks,
  * and the only way to ask it.
+ *
+ * A third record rides the same outside-the-object channel: the value a
+ * `param` node was bound to ({@link attachParamValue}). Same reason, same
+ * shape — see that function.
  */
 import type { GpuFieldResolver } from "./gpuResolver.js";
 import { type Field, isField } from "./types.js";
@@ -72,6 +76,44 @@ const DERIVED_SPECS = new WeakSet<FieldSpec>();
  * building an n-deep expression O(n²).
  */
 const SPEC_DEPTH = new WeakMap<FieldSpec, number>();
+
+/** A value a `param` reference binds to: a scalar, or a tuple. */
+export type FieldBindingValue = number | readonly number[];
+
+/**
+ * @internal The value each `param` spec NODE was bound to, held OUTSIDE
+ * the node for exactly the reason {@link DERIVED_SPECS} and
+ * {@link SPEC_DEPTH} are: `checkKeys` in `fieldJson.ts` rejects every key
+ * the grammar does not know, so a value written into the node would make
+ * `fieldFromJson(getFieldSpec(f))` throw — and that round trip is the
+ * whole point of the arrangement. The REFERENCE stays in the spec (so it
+ * serializes as one) while the VALUE goes into `Field.key` by
+ * substitution; this map is how the parts that see only a spec — the WGSL
+ * compiler and the run planner — find the arity and the value again.
+ *
+ * Keyed per NODE rather than per authored root, so a binding survives
+ * composition: `mul(fieldFromJson(spec, bindings), 3)` derives a parent
+ * spec that structure-shares the very node objects stamped here (see
+ * {@link attachArgsSpec}), and the lookup keeps working through it. The
+ * defensive copies {@link getFieldSpec} and `fieldToJson` hand out are
+ * fresh objects and therefore deliberately UNstamped: a serialized graph
+ * carries the reference, and binding it is the reader's job.
+ */
+const PARAM_VALUES = new WeakMap<FieldSpec, FieldBindingValue>();
+
+/** @internal Record the value a `param` node was bound to. */
+export function attachParamValue(node: FieldSpec, value: FieldBindingValue): void {
+  PARAM_VALUES.set(node, value);
+}
+
+/**
+ * @internal The value a `param` node was bound to, or undefined when
+ * nothing bound it — which is a buildable field (its key and its kernel
+ * need only the name) that refuses to evaluate.
+ */
+export function paramValue(node: FieldSpec): FieldBindingValue | undefined {
+  return PARAM_VALUES.get(node);
+}
 
 /**
  * @internal Why a constructor declined to derive a spec — the one cause

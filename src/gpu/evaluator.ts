@@ -46,7 +46,8 @@ import type {
   ResidentRunResult,
 } from "../fields/index.js";
 import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
-import { compileFieldSpec } from "./compile.js";
+import { APPLY_CONST_OFFSET } from "./applyKernels.js";
+import { compileFieldSpec, paramConstValues, specKernelKey } from "./compile.js";
 import {
   BUFFER_USAGE,
   MAP_MODE,
@@ -60,7 +61,6 @@ import {
   DEFAULT_MAX_RESIDENT_BYTES,
   MAX_STORAGE_BUFFERS,
   MAX_WORKGROUPS,
-  UNIFORM_BYTES,
   asResidentRunPlan,
   chunkCapacity,
   executeResidentRun,
@@ -285,6 +285,17 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     return this.pipelines.size;
   }
 
+  /**
+   * Number of cached compiled kernels. Both caches are unbounded Maps, so
+   * what they are KEYED on is a memory contract, not a detail: a `param`
+   * rebound a thousand times must leave both of these at the size one
+   * value produced (see the two-keys note in `resolveField`), and a test
+   * can only pin that by reading them.
+   */
+  get kernelCacheSize(): number {
+    return this.kernels.size;
+  }
+
   /** Buffer-pool counters (created/reused/destroyed, retained bytes). */
   get poolStats(): GpuPoolStats {
     return this.pool.stats;
@@ -338,7 +349,23 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
       attrs[name] = { type: attr.type, tupleSize: attr.tupleSize };
       sigParts.push(`${JSON.stringify(name)}:${attr.type}x${attr.tupleSize}`);
     }
-    const cacheKey = `${field.key.length}#${field.key}|${sigParts.join(",")}`;
+    // TWO KEYS, DELIBERATELY. This cache is keyed on the SPEC's key, not
+    // on `field.key`, because a bound `param` puts its VALUE in the field
+    // key — the CPU memoization contract, and what makes rebinding
+    // invalidate exactly the nodes that read the name — while the kernel
+    // it needs is the same kernel for every value (the value rides a
+    // uniform). Keying this Map on the field would therefore add an entry
+    // per slider tick to a Map with no bound, and `pipelines` with it: a
+    // leak on every drag rather than a slowdown. See `specKernelKey`.
+    let specKey: string;
+    try {
+      specKey = specKernelKey(spec, field.key);
+    } catch {
+      // planParams' contradictions (a name bound at two arities, a tuple
+      // wider than a slot) surface here, before anything is cached.
+      return countFallback(stats, "compile-error");
+    }
+    const cacheKey = `${specKey.length}#${specKey}|${sigParts.join(",")}`;
 
     let kernel = this.kernels.get(cacheKey);
     if (kernel === undefined) {
@@ -354,6 +381,13 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     if (kernel.inputs.length + 1 > MAX_STORAGE_BUFFERS) {
       return countFallback(stats, "too-many-buffers");
     }
+    // The other half of the two keys: the values the kernel deliberately
+    // does not carry. Decided BEFORE the empty-count shortcut, so a field
+    // whose params cannot be resolved falls back on an empty domain too —
+    // the CPU refusal names the param, and an empty column would hide it.
+    const consts = paramConstValues(spec, kernel);
+    if ("problem" in consts) return countFallback(stats, "param-bindings");
+
     const count = set.count;
     if (count === 0) {
       // Nothing to dispatch; mirror the CPU's empty column of the same type.
@@ -362,7 +396,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
 
     const pipeline = this.getPipeline(kernel.key, kernel.wgsl, kernel.entryPoint, stats);
     if (stats !== undefined) stats.dispatches++;
-    return this.dispatch(field, ctx, kernel, pipeline, count);
+    return this.dispatch(field, ctx, kernel, pipeline, count, consts.values);
   }
 
   /**
@@ -443,6 +477,7 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     kernel: CompiledFieldKernel,
     pipeline: GpuComputePipelineLike,
     count: number,
+    consts: readonly number[],
   ): Promise<Column> {
     const device = this.device;
     // Buffers acquired from the pool for this dispatch; released (not
@@ -493,12 +528,25 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
       const readBuf = acquire(outBytes, BUFFER_USAGE.COPY_DST | BUFFER_USAGE.MAP_READ);
 
       // Uniforms per chunk: { count, seed, chunkOffset } — seed coerced
-      // exactly as the CPU hash chain coerces ctx.seed (>>> 0). One
-      // buffer + bind group per chunk; a single submit runs them all.
+      // exactly as the CPU hash chain coerces ctx.seed (>>> 0) — followed
+      // by the kernel's `param` slots when it has any. The slot values
+      // are chunk-invariant, so the f32 view rounds each exactly once
+      // (matching the CPU `constant` column they stand in for) and only
+      // chunkOffset changes between writes. One buffer + bind group per
+      // chunk; a single submit runs them all.
+      const uniformData = new ArrayBuffer(kernel.uniformBytes);
+      const uniformBytes = new Uint8Array(uniformData);
+      const header = new Uint32Array(uniformData, 0, 3);
+      header[0] = count;
+      header[1] = ctx.seed >>> 0;
+      if (consts.length > 0) {
+        new Float32Array(uniformData, APPLY_CONST_OFFSET, consts.length).set(consts);
+      }
       const bindGroups: ReturnType<GpuDeviceLike["createBindGroup"]>[] = [];
       for (let c = 0; c < chunkCount; c++) {
-        const uniformBuf = acquire(UNIFORM_BYTES, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
-        device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([count, ctx.seed >>> 0, c * chunk]));
+        const uniformBuf = acquire(kernel.uniformBytes, BUFFER_USAGE.UNIFORM | BUFFER_USAGE.COPY_DST);
+        header[2] = c * chunk;
+        device.queue.writeBuffer(uniformBuf, 0, uniformBytes);
         bindGroups.push(
           device.createBindGroup({
             layout: pipeline.getBindGroupLayout(0),

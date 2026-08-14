@@ -73,6 +73,30 @@ export interface CompiledFieldKernel {
   /** Fixed bindings: the uniform struct and the output storage buffer. */
   readonly bindings: { readonly uniforms: number; readonly output: number };
   /**
+   * Uniform constant slots this kernel's `PcgParams` declares — one
+   * `vec4<f32>` per distinct `param` name the spec references, 0 when it
+   * references none. A `param` costs a uniform slot and NO storage
+   * buffer, which is what makes it cheaper than the attribute idiom it
+   * replaces.
+   */
+  readonly constSlots: number;
+  /**
+   * The `param` names those slots hold, in SLOT ORDER (sorted by name,
+   * mirroring the attribute pre-pass, so codegen is deterministic).
+   * Values are deliberately absent: they are written into the uniform at
+   * dispatch, never baked, so one compiled kernel serves every value the
+   * names are bound to. Use `paramConstValues` to turn a spec's bindings
+   * into the slot payload.
+   */
+  readonly paramNames: readonly string[];
+  /**
+   * Byte size of this kernel's `PcgParams` uniform: the 12-byte scalar
+   * header, or the padded 16-byte header plus 16 bytes per constant slot
+   * (the layout `applyUniformBytes` computes for apply kernels — one
+   * uniform tail, shared).
+   */
+  readonly uniformBytes: number;
+  /**
    * Whether the kernel reads the evaluation-context seed uniform
    * (`randomField` does; noise fields don't — their seeds are baked in).
    * The uniform struct always carries a seed member; when this is false
@@ -85,6 +109,11 @@ export interface CompiledFieldKernel {
    * options do not matter) and the layout subset actually used. Two
    * compilations with the same key produce byte-identical `wgsl`;
    * phase 20 uses it as the pipeline cache key.
+   *
+   * VALUE-FREE where `param` is concerned: the spec key is taken from the
+   * UNBOUND field, and the params contribute their names and arities
+   * only. Rebinding a name must hit this key, or the pipeline cache would
+   * gain an entry per value — see the two-keys note in `evaluator.ts`.
    */
   readonly key: string;
 }

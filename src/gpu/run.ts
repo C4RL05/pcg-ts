@@ -43,6 +43,12 @@
  * to `+0` as a literal but never as a uniform load — those now match
  * the CPU's bytes where the column did not (see applyKernels.ts).
  *
+ * A `{"fn":"param"}` inside a FIELD spec rides the same mechanism one
+ * level down: the field kernel declares its own slots and this planner
+ * fills the step's `consts` from the spec's bindings. The executor did
+ * not change for it — it already wrote `step.consts` into the per-chunk
+ * uniform, and field kernels had simply never carried any.
+ *
  * Memory bound: a run's working set — resident attribute buffers
  * (every epoch) + field temp columns (held for the whole run) + the
  * readback staging buffer — is computed at plan time and compared
@@ -133,7 +139,7 @@ import {
   type ApplyKernel,
   type ApplyParamRef,
 } from "./applyKernels.js";
-import { compileFieldSpec } from "./compile.js";
+import { compileFieldSpec, paramConstValues } from "./compile.js";
 import {
   BUFFER_USAGE,
   MAP_MODE,
@@ -146,10 +152,11 @@ import type { BufferPool } from "./pool.js";
 import type { CompiledFieldKernel, FieldKernelAttr, GpuScalarType } from "./types.js";
 
 /**
- * Byte size of the field-kernel uniform struct {count, seed,
- * chunkOffset}. Apply kernels carrying constant slots declare a larger
- * `PcgParams` (see `applyUniformBytes`); every step carries its own
- * `uniformBytes`.
+ * Byte size of the bare uniform struct {count, seed, chunkOffset} — what
+ * a field kernel with no `param` slots declares. A kernel carrying slots
+ * (a field kernel's params, an apply kernel's constants) declares the
+ * padded header plus its slots instead, which is why every step carries
+ * its own `uniformBytes` rather than assuming this one.
  */
 export const UNIFORM_BYTES = 12;
 
@@ -494,9 +501,6 @@ function isVec3(v: unknown): v is readonly [number, number, number] {
 /** Internal planning failure signal (never escapes planResidentRun). */
 class PlanFail extends Error {}
 
-/** Shared empty constant list for steps carrying no uniform slots. */
-const NO_CONSTS: readonly number[] = [];
-
 /** What a planned run costs on the device, and what it must read back. */
 interface RunFootprint {
   readonly writtenList: { name: string; slot: number }[];
@@ -667,6 +671,14 @@ export function planResidentRun(
     }
     if (kernel.inputs.length + 1 > MAX_STORAGE_BUFFERS) throw new PlanFail("buffers");
     if (allowedTuples !== null && !allowedTuples.includes(kernel.outTupleSize)) throw new PlanFail("tuple");
+    // A field kernel carrying `param` slots writes them exactly as an
+    // apply kernel writes its constant params: same uniform tail, same
+    // offset, same executor line. The plumbing was already here and
+    // simply unused — every field kernel passed an empty `consts` — so
+    // this is the one place that had to change for a run to carry a
+    // named value; the executor needed nothing.
+    const slotValues = paramConstValues(spec, kernel);
+    if ("problem" in slotValues) throw new PlanFail("param bindings");
     const colIndex = cols.length;
     cols.push(count * kernel.outTupleSize * 4);
     steps.push({
@@ -676,8 +688,8 @@ export function planResidentRun(
       workgroupSize: kernel.workgroupSize,
       seed,
       uniformsBinding: kernel.bindings.uniforms,
-      uniformBytes: UNIFORM_BYTES,
-      consts: NO_CONSTS,
+      uniformBytes: kernel.uniformBytes,
+      consts: slotValues.values,
       perBatch: false,
       bindings: [
         ...kernel.inputs.map((inp) => ({ binding: inp.binding, ref: { kind: "slot", index: slotFor(inp.name) } as BufRef })),

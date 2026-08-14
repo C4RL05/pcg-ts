@@ -257,7 +257,7 @@ graph round-trips and cooks identically. Rebuilding via
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 42 fns (`listFieldFns()`):
+into `constant`). All 43 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
@@ -272,6 +272,12 @@ into `constant`). All 42 fns (`listFieldFns()`):
     value depends on how many elements share the domain, so it says
     "position along this thing", never "position in the world"
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
+  - `{ fn: "param", name: "amplitude" }` — the value bound to that name,
+    substituted where the literal would have stood, so the field is exactly
+    the field the literal would have built. Uniform over the cook: a value
+    that varies per element is an attribute, not a param. Unbound it still
+    builds — its key and its GPU kernel need only the name — but refuses to
+    evaluate, naming the name and the fix
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
   - 2 args: `add sub mul div min max lt le gt ge eq ne dot atan2`
     (comparisons emit 1/0, and `ne` is the exact complement of `eq`;
