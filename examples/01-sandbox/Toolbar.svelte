@@ -64,36 +64,85 @@
    * Everything on it was already here except the frame rate and what the
    * outputs drew, and a card that has to be hidden whenever the graph is
    * up is a card in the wrong place.
+   *
+   * STRUCTURED, not interpolated. It was one monospace run joined by
+   * middle dots, which meant every figure on it — a frame rate, a
+   * millisecond count, an eight-character hash — carried the same weight
+   * and you had to read the whole line to find any of it. As pairs the
+   * number can be bright and the word that names it dim, which is what
+   * makes a readout scannable at a glance rather than legible on
+   * inspection. Nothing was dropped: this is a debug line, and the value
+   * of a debug line is that it says everything.
    */
+  interface Stat {
+    /** The figure. Bright, monospace. */
+    readonly value: string;
+    /** What it is. Dim, and set beside rather than under. */
+    readonly label: string;
+    /**
+     * Which side the word goes on. A UNIT follows its number — "60 fps",
+     * "523 pts" — and a NOUN precedes it: "cook 20.9 ms", "hash 6f8d3476".
+     * Set it the other way and the line still contains everything and
+     * still reads wrong.
+     */
+    readonly labelFirst?: boolean;
+    readonly tone?: "err" | "warn";
+  }
+
   /**
-   * Device counters, appended only on a GPU path. `stats.gpu` is present
-   * exactly when a resolver cooked, so its absence is the CPU path
-   * rather than a device that did nothing — worth keeping distinct,
-   * because "no dispatches" is a real and interesting GPU result.
+   * Thousands separated with a THIN space. A scatter that reaches six
+   * digits is the case this line exists to report, and `523000` is a
+   * number you have to count the digits of. Thin rather than a comma,
+   * which reads as a decimal point to half the world, and rather than a
+   * full space, which at 11px reads as two separate figures.
    */
-  const gpuText = $derived.by(() => {
+  function group(n: number): string {
+    return n.toLocaleString("en-US").replaceAll(",", " ");
+  }
+
+  /**
+   * Device counters, present only on a GPU path. `stats.gpu` is present
+   * exactly when a resolver cooked, so its absence is the CPU path rather
+   * than a device that did nothing — worth keeping distinct, because "no
+   * dispatches" is a real and interesting GPU result.
+   */
+  const gpuStats = $derived.by((): Stat[] => {
     const g = status?.gpu;
-    if (!g) return "";
+    if (!g) return [];
     const { real, partial } = splitFallbacks(g.fallbacks);
     const fallbacks = fmtFallbacks(real);
-    return (
-      ` · ${g.dispatches} disp · ${g.residentRuns} run / ${g.fusedNodes} fused · ` +
-      `${g.readbacksSaved} readbacks saved` +
+    return [
+      { value: group(g.dispatches), label: "disp" },
+      { value: `${g.residentRuns} / ${g.fusedNodes}`, label: "run / fused" },
+      { value: group(g.readbacksSaved), label: "readbacks saved" },
       // Reported apart from the fallbacks, because it is not one: the
       // planner dropped a member and fused the suffix after it.
-      (partial > 0 ? ` · ${partial}× suffix-fused` : "") +
-      (fallbacks === "none" ? "" : ` · fell back: ${fallbacks}`)
-    );
+      ...(partial > 0 ? [{ value: `${partial}×`, label: "suffix-fused" }] : []),
+      ...(fallbacks === "none" ? [] : [{ value: fallbacks, label: "fell back", tone: "warn" as const }]),
+    ];
   });
 
-  const statusText = $derived(
-    status === null
-      ? "cooking…"
-      : `${host.fps} fps · cook ${status.elapsedMs.toFixed(1)} ms · ${status.cooked} cooked / ${status.cached} cached · ` +
-          `${status.outputs} out · ${status.points} pts · ${status.instances} inst · ${host.drew} · hash ${status.hash}` +
-          gpuText +
-          (status.errors.length > 0 ? ` · ${status.errors.length} error(s)` : ""),
-  );
+  const stats = $derived.by((): Stat[] => {
+    if (status === null) return [{ value: "cooking…", label: "" }];
+    return [
+      { value: host.fps, label: "fps" },
+      { value: `${status.elapsedMs.toFixed(1)} ms`, label: "cook", labelFirst: true },
+      { value: `${group(status.cooked)} / ${group(status.cached)}`, label: "cooked / cached" },
+      { value: group(status.outputs), label: "out" },
+      { value: group(status.points), label: "pts" },
+      { value: group(status.instances), label: "inst" },
+      { value: host.drew, label: "drew", labelFirst: true },
+      ...gpuStats,
+      ...(status.errors.length > 0
+        ? [{ value: String(status.errors.length), label: "error(s)", tone: "err" as const }]
+        : []),
+      // Label first, and the wording is load-bearing: the capture
+      // tooling's readiness probe scrapes this line for /hash [0-9a-f]{8}/
+      // to know the first cook has landed. It also happens to be how you
+      // would say it — "hash 6f8d3476", not "6f8d3476 hash".
+      { value: status.hash, label: "hash", labelFirst: true },
+    ];
+  });
 
   /**
    * Why a device path is unavailable, or which adapter is behind it.
@@ -135,29 +184,50 @@
     onclick={onToggle}
     onkeydown={onTitleKeydown}
   >01 · sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
-  <label class="graph">
-    graph
-    <select value={preset} onchange={(e) => onPreset(e.currentTarget.value)}>
-      <option value="">starter graph</option>
-      {#each byGroup as { group, items } (group)}
-        <optgroup label={group}>
-          {#each items as p (p.name)}
-            <option value={p.name} title={p.description}>{p.title}</option>
-          {/each}
-        </optgroup>
-      {/each}
-    </select>
-  </label>
-  <label>
-    seed
-    <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
-  </label>
-  <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
-  <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
-  <button onclick={onFrame} title="point the camera at what the graph made (F) — done automatically whenever a graph loads">frame</button>
-  <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back) — hold shift to fly the scene through the graph"
-    >view · {viewLabel}</button>
-  <label class="path" class:off={!host.gpu.ready} title={gpuTitle}>
+
+  <!-- Grouped by what a control acts ON — the loaded graph, the node
+       canvas, the render, the cook — with a hairline between groups.
+       Everything used to sit in one undifferentiated run, so "fit" (which
+       moves the canvas) and "frame" (which moves the camera) read as a
+       pair of the same thing when they are opposites. -->
+  <div class="grp">
+    <label class="graph">
+      graph
+      <select value={preset} onchange={(e) => onPreset(e.currentTarget.value)}>
+        <option value="">starter graph</option>
+        {#each byGroup as { group, items } (group)}
+          <optgroup label={group}>
+            {#each items as p (p.name)}
+              <option value={p.name} title={p.description}>{p.title}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
+    </label>
+    <label>
+      seed
+      <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
+    </label>
+    <button onclick={onExport} title="serializeGraph → JSON">export</button>
+    <button onclick={onImport} title="paste JSON → deserializeGraph">import</button>
+  </div>
+
+  <div class="grp" title="the node canvas">
+    <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
+    <button onclick={onFit} title="frame every node (the canvas pans with the right button and zooms on the wheel)">fit</button>
+  </div>
+
+  <div class="grp">
+    <button onclick={onFrame} title="point the camera at what the graph made (F) — done automatically whenever a graph loads">frame</button>
+    <!-- The view button is also the view READOUT, so the name is set
+         apart and bright: it is the part that changes. It used to be a
+         green button, which made the loudest thing on the bar a control
+         you press three times a session. -->
+    <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back) — hold shift to fly the scene through the graph"
+      ><span class="k">view</span>{viewLabel}</button>
+  </div>
+
+  <label class="path grp" class:off={!host.gpu.ready} title={gpuTitle}>
     cook
     <select
       value={host.gpu.path}
@@ -168,24 +238,51 @@
       {/each}
     </select>
   </label>
-  <button onclick={onExport} title="serializeGraph → JSON">export</button>
-  <button onclick={onImport} title="paste JSON → deserializeGraph">import</button>
-  <span class="status" class:err={status !== null && status.errors.length > 0}>{statusText}</span>
+
+  <!-- The `{" "}` between the pairs is for READERS OF THE TEXT, not for
+       the layout: the flex gap is what separates them on screen, and
+       without a real character the scraped textContent runs the pairs
+       together as "60 fpscook 21.4 ms". A whitespace-only node between
+       flex items is not itself a flex item, so it costs no layout. -->
+  <span class="status" class:err={status !== null && status.errors.length > 0}>
+    {#each stats as s (s.label + s.value)}<span class="stat {s.tone ?? ''}"
+      >{#if s.labelFirst}<i>{s.label}</i>{" "}<b>{s.value}</b>{:else}<b>{s.value}</b>{#if s.label !== ""}{" "}<i
+          >{s.label}</i
+        >{/if}{/if}</span
+    >{" "}{/each}
+  </span>
 </div>
 
 <style>
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px 14px;
     padding: 8px 12px;
+    background: rgba(13, 17, 23, 0.94);
     border-bottom: 1px solid #223047;
+    backdrop-filter: blur(6px);
     flex: 0 0 auto;
     /* Wraps at ANY width, not just on phones. A side dock is 420-640px
        wide and the dock is `overflow: hidden` — without this the row runs
        past the edge and the controls at its end are simply gone, which
        included the buttons for getting back out of a side dock. */
     flex-wrap: wrap;
+  }
+  /* One group of controls, and the hairline before the next. The rule is
+     drawn as a border on the group rather than as a separate element so
+     that a group wrapping to the next row takes its divider with it. */
+  .grp {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 14px;
+    border-left: 1px solid #26344a;
+  }
+  /* The first group follows the title, which is its own separator. */
+  .title + .grp {
+    border-left: none;
+    padding-left: 0;
   }
   .title {
     font-weight: 600;
@@ -242,26 +339,53 @@
   button:hover {
     background: #24334c;
   }
+  /* Label inside the button, so the changing half stands out from the
+     word that never changes. */
+  .view .k {
+    margin-right: 7px;
+    color: #6f7c8f;
+  }
   .view {
-    color: #b8f5c8;
-    border-color: #2f4a3c;
-    background: #16241d;
+    color: #d6e2f2;
   }
-  .view:hover {
-    background: #1d3126;
-  }
+  /**
+   * The readouts. `flex: 1 1 100%` puts them on their own row under the
+   * controls at every width, which is what lets them be a table of pairs
+   * rather than a sentence squeezed into whatever the controls left over.
+   */
   .status {
+    display: flex;
     flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 2px 16px;
     min-width: 0;
-    text-align: right;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #8fd0ff;
     font: 11px ui-monospace, monospace;
   }
-  .status.err {
+  .stat {
+    white-space: nowrap;
+  }
+  .stat b {
+    color: #8fd0ff;
+    font-weight: 400;
+  }
+  /* The word that names the figure, set back so the figure carries the
+     line. This is the whole trick: same information, one level of
+     contrast between what changes and what labels it. */
+  .stat i {
+    color: #55617a;
+    font-style: normal;
+  }
+  .stat.warn b {
+    color: #f0c869;
+  }
+  .stat.err b {
     color: #ff9ca8;
+  }
+  /* A cook that errored colours the labels too — at that point the whole
+     line is reporting a failed cook, not one bad figure in a good one. */
+  .status.err .stat i {
+    color: #7a5560;
   }
   /* Desktop: the chevron does not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */
@@ -281,8 +405,15 @@
        reads; captures also never run at narrow widths. */
     .toolbar.collapsed label,
     .toolbar.collapsed button,
+    .toolbar.collapsed .grp,
     .toolbar.collapsed .status {
       display: none;
+    }
+    /* The groups' hairlines would otherwise stack into a row of stray
+       rules once the bar wraps onto four lines of two controls each. */
+    .grp {
+      padding-left: 0;
+      border-left: none;
     }
     .title {
       cursor: pointer;
