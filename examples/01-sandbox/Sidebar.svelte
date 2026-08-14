@@ -196,7 +196,10 @@
       bottom: 0;
       z-index: 15;
       flex-basis: auto;
-      width: min(78vw, 300px);
+      /* Wider than the old inspector drawer, because it now carries both
+         panes — but still short of the screen, so the canvas behind it
+         says which graph the drawer belongs to. */
+      width: min(72vw, 280px);
       background: var(--sb-solid);
       transform: translateX(100%);
       /* Hidden when closed so the off-screen drawer can't take focus or

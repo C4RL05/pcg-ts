@@ -271,9 +271,16 @@
   }
   /* One group of controls, and the hairline before the next. The rule is
      drawn as a border on the group rather than as a separate element so
-     that a group wrapping to the next row takes its divider with it. */
+     that a group wrapping to the next row takes its divider with it.
+
+     `flex-wrap` is not optional: the bar wraps at ANY width because a
+     side dock is 420-640px and the dock clips, and a group that cannot
+     wrap INSIDE itself just runs off the edge taking its last controls
+     with it — which is how export and import disappeared at phone
+     widths the moment these groups were introduced. */
   .grp {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     padding-left: 14px;
@@ -314,10 +321,15 @@
     border-radius: var(--sb-radius);
     font: var(--sb-t-body) var(--sb-sans);
   }
-  /* The picker is the bar's primary control, so it keeps its width while
-     the status line (flex: 1) absorbs the slack. */
+  /* The picker is the bar's primary control, but it may not force the bar
+     wider than the dock: `min-width: 0` lets its select shrink, and the
+     select's own max-width keeps it from hogging a desktop bar. */
   .graph {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .graph select {
+    min-width: 0;
   }
   .path select {
     max-width: none;
