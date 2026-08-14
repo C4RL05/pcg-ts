@@ -775,7 +775,10 @@
     position: fixed;
     inset: 0;
     z-index: 9;
-    background: #05070b;
+    /* Pure black, and it has to be: at opacity 1 this IS the background of
+       the graph-only view, so any tint here would be the one colour left
+       on the page — and it would be the largest surface on it. */
+    background: #000000;
     pointer-events: none;
     transition: opacity 0.18s ease;
   }
@@ -798,8 +801,8 @@
     max-height: 64px;
     overflow-y: auto;
     padding: 4px 12px;
-    border-bottom: 1px solid #402734;
-    background: #1c1218;
+    border-bottom: 1px solid var(--sb-edge-err);
+    background: var(--sb-alert-bg);
     color: var(--sb-danger);
     font: var(--sb-t-meta) / 1.5 var(--sb-mono);
     white-space: pre-wrap;
@@ -818,15 +821,20 @@
     line-height: 1.4;
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
   }
+  /* The two toasts differ by BORDER BRIGHTNESS and by face, not by hue:
+     an error is bordered white and set in monospace at a smaller size, an
+     acknowledgement is bordered mid-grey and set in the body face. That
+     second cue matters more than usual here — with the greens and reds
+     gone, a border alone would be a thin thing to tell them apart by. */
   .toast.info {
-    background: #16321f;
-    border: 1px solid #2f9e5f;
-    color: #b8f5c8;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-ok);
+    color: var(--sb-ink);
   }
   .toast.error {
-    background: #33161c;
-    border: 1px solid #a04455;
-    color: #ffb9c2;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-err);
+    color: #ffffff;
     font-family: var(--sb-mono);
     font-size: var(--sb-t-meta);
   }
@@ -862,7 +870,7 @@
       /* Above the drawers (z-index 15) so a second tap can close them. */
       z-index: 16;
       padding: 10px 6px;
-      background: rgba(29, 42, 63, 0.92);
+      background: rgba(26, 26, 26, 0.94);
       color: var(--sb-action);
       border: 1px solid var(--sb-edge);
       font: var(--sb-t-meta) var(--sb-sans);

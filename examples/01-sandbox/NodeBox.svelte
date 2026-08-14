@@ -127,64 +127,69 @@
 
 <style>
   .body {
-    fill: #131a26;
-    stroke: #33405a;
+    fill: #0e0e0e;
+    stroke: var(--sb-edge);
     stroke-width: 1;
     cursor: grab;
   }
   .body:hover {
-    stroke: #4a5b7d;
+    stroke: #5e5e5e;
   }
   .selected .body {
-    stroke: #4c8dff;
+    stroke: var(--sb-select);
   }
   .halo {
     fill: none;
-    stroke: #4c8dff;
+    stroke: var(--sb-select);
     stroke-width: 1.5;
-    opacity: 0.35;
+    opacity: 0.4;
     pointer-events: none;
   }
   .sep {
-    stroke: #223047;
+    stroke: var(--sb-rule);
     stroke-width: 1;
     pointer-events: none;
   }
   .title {
-    fill: #eaf1fa;
-    font: 600 11px system-ui, sans-serif;
+    fill: var(--sb-ink-hi);
+    font: 600 11px var(--sb-sans);
     pointer-events: none;
   }
   .nodeid {
-    fill: #6f7c8f;
-    font: 9px ui-monospace, monospace;
+    fill: var(--sb-ink-faint);
+    font: 9px var(--sb-mono);
     pointer-events: none;
   }
   .close {
-    fill: #6f7c8f;
-    font: 10px system-ui, sans-serif;
+    fill: var(--sb-ink-faint);
+    font: 10px var(--sb-sans);
     text-anchor: end;
     cursor: pointer;
   }
+  /* Nothing red left to warn with, so the delete target goes to full
+     white on hover — the brightest thing on the box, which is the same
+     "this one, and it is serious" the colour used to carry. */
   .close:hover {
-    fill: #ff9ca8;
+    fill: #ffffff;
   }
   .pin {
-    stroke: #0d1117;
+    stroke: #000000;
     stroke-width: 1;
     pointer-events: none;
   }
+  /* Kind by LIGHTNESS now. Instances are brightest: they are what a graph
+     is usually built to produce, and the pin you look for first. */
   .k-geometry {
-    fill: #6fb1ff;
+    fill: var(--sb-k-geometry);
   }
   .k-instances {
-    fill: #ffb86f;
+    fill: var(--sb-k-instances);
   }
   .k-value {
-    fill: #b8f5c8;
+    fill: var(--sb-k-value);
   }
   .k-any {
-    fill: #c8c8d8;
+    fill: var(--sb-k-any);
   }
   .pin-hit {
     fill: transparent;
@@ -194,28 +199,28 @@
     cursor: crosshair;
   }
   .pinlabel {
-    fill: #8b98ab;
-    font: 9px ui-monospace, monospace;
+    fill: var(--sb-ink-dim);
+    font: 9px var(--sb-mono);
     pointer-events: none;
   }
   .pinlabel.out {
     text-anchor: end;
   }
   .pkey {
-    fill: #6f7c8f;
-    font: 9px ui-monospace, monospace;
+    fill: var(--sb-ink-faint);
+    font: 9px var(--sb-mono);
     pointer-events: none;
   }
   .pval {
-    fill: #aeb9c9;
-    font: 9px ui-monospace, monospace;
+    fill: var(--sb-ink-mid);
+    font: 9px var(--sb-mono);
     text-anchor: end;
     pointer-events: none;
   }
-  /* A field reads in the pin palette's `value` green — the same colour a
-     value pin carries, because it is the same idea arriving by a
-     different route. */
+  /* A field is white where a constant is grey. It used to be the value
+     pin's green; with hue gone, the contrast has to come from brightness
+     — and a field is the more notable of the two, so it takes the top. */
   .pval.field {
-    fill: #b8f5c8;
+    fill: #ffffff;
   }
 </style>

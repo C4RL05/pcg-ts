@@ -311,9 +311,9 @@
    */
   .edge-line {
     fill: none;
-    stroke: #4c8dff;
+    stroke: var(--sb-k-geometry);
     stroke-width: 1.6;
-    opacity: 0.75;
+    opacity: 0.55;
     pointer-events: none;
   }
   .edge-hit {
@@ -323,34 +323,34 @@
     pointer-events: stroke;
     cursor: pointer;
   }
-  /* Hovering an edge offers to CUT it, so it turns the colour everything
-     destructive on this page is — not a brighter version of itself. */
+  /* Hovering an edge offers to CUT it. That used to be a red; with hue
+     gone it is white and noticeably thicker, so the signal is weight
+     rather than warmth. */
   .edge:hover .edge-line {
-    stroke: #ff9ca8;
-    stroke-width: 2.2;
+    stroke: #ffffff;
+    stroke-width: 2.4;
     opacity: 1;
   }
   .wire {
     fill: none;
-    stroke: #8b98ab;
+    stroke: var(--sb-ink-dim);
     stroke-width: 1.6;
     stroke-dasharray: 5 4;
-    opacity: 0.6;
+    opacity: 0.55;
     pointer-events: none;
   }
   /* Over a pin it will actually connect to. Dashed-and-faint means "going
-     nowhere yet"; solid, green and full strength means releasing here
-     makes the connection — the same green the value palette uses for a
-     thing that resolves. */
+     nowhere yet"; solid, white and full strength means releasing here
+     makes the connection. */
   .wire.live {
-    stroke: #b8f5c8;
+    stroke: #ffffff;
     stroke-dasharray: none;
-    stroke-width: 2.2;
+    stroke-width: 2.4;
     opacity: 1;
   }
   .blank {
-    fill: #55617a;
-    font: 12px system-ui, sans-serif;
+    fill: var(--sb-ink-ghost);
+    font: var(--sb-t-body) var(--sb-sans);
     text-anchor: middle;
     pointer-events: none;
   }

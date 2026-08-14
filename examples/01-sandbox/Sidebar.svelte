@@ -142,8 +142,8 @@
     flex: 1 1 0;
     min-width: 0;
     padding: 5px 8px;
-    background: #131c2b;
-    color: #8fa3bf;
+    background: var(--sb-tab);
+    color: var(--sb-ink-dim);
     border: 1px solid var(--sb-rule);
     border-radius: var(--sb-radius) var(--sb-radius) 0 0;
     border-bottom-color: transparent;
@@ -158,10 +158,12 @@
   .tab:hover {
     color: var(--sb-ink);
   }
+  /* Same three tokens the knob panel's tab bar uses, so the two bars in
+     one column cannot drift apart. */
   .tab.on {
     color: var(--sb-ink-hi);
-    background: #24344d;
-    border-color: #35507a;
+    background: var(--sb-tab-on);
+    border-color: var(--sb-tab-on-edge);
     border-bottom-color: transparent;
   }
   /* The node tab with nothing in it. Dimmed rather than disabled — see
@@ -170,7 +172,7 @@
     color: var(--sb-ink-ghost);
   }
   .tab:focus-visible {
-    outline: 2px solid #4d7fd1;
+    outline: 2px solid var(--sb-focus);
     outline-offset: 1px;
   }
   /* The line the tabs sit on, drawn by the pane so the active tab's own

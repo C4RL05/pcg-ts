@@ -229,19 +229,23 @@
     font: 10px var(--sb-mono);
     overflow-wrap: anywhere;
   }
+  /* The one destructive control in the column. It reads as such by being
+     the only outlined-white button on the page — the red is gone, so the
+     weight has to say it. */
   .danger {
     flex: 0 0 auto;
     padding: var(--sb-btn-pad);
-    background: #33161c;
-    color: #ffb9c2;
-    border: 1px solid #a04455;
+    background: var(--sb-alert-bg);
+    color: #ffffff;
+    border: 1px solid var(--sb-edge-err);
     border-radius: var(--sb-radius);
     font: var(--sb-t-meta) var(--sb-sans);
     white-space: nowrap;
     cursor: pointer;
   }
   .danger:hover {
-    background: #451d25;
+    background: #ffffff;
+    color: #000000;
   }
   /**
    * Set in full, with no scroller of its own. It used to be capped at 78px
@@ -259,7 +263,7 @@
   .note {
     margin: 0 0 10px;
     padding: 6px 8px;
-    background: #121b28;
+    background: #101010;
     border-left: 2px solid var(--sb-edge);
     border-radius: 0 4px 4px 0;
     color: var(--sb-ink-dim);
@@ -299,7 +303,7 @@
     font: var(--sb-t-body) var(--sb-mono);
   }
   input[type="checkbox"] {
-    accent-color: #4c8dff;
+    accent-color: #ffffff;
   }
   .vec {
     display: flex;

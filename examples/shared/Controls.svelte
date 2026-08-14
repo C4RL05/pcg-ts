@@ -302,14 +302,22 @@
 {/each}
 
 <style>
+  /**
+   * Colours are `var(--sb-*, <literal>)` throughout. The literal is what
+   * every demo has always rendered and is what still renders — only a
+   * page that DEFINES these names changes, which today is the greyscale
+   * sandbox and nothing else. Without this the knob panel would keep a
+   * bright blue slider thumb on an otherwise hueless page, since
+   * `accent-color` is not something a parent can tint.
+   */
   .group {
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid #223047;
+    border-top: 1px solid var(--sb-rule, #223047);
   }
   h2 {
     margin: 0 0 4px;
-    color: #cfe0f5;
+    color: var(--sb-ink, #cfe0f5);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.06em;
@@ -329,29 +337,29 @@
     gap: 3px;
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid #223047;
+    border-top: 1px solid var(--sb-rule, #223047);
   }
   .tab {
     flex: 1 1 auto;
     padding: 4px 7px;
     font: inherit;
     font-size: 11px;
-    color: #8fa3bf;
-    background: #131c2b;
-    border: 1px solid #223047;
+    color: var(--sb-ink-dim, #8fa3bf);
+    background: var(--sb-tab, #131c2b);
+    border: 1px solid var(--sb-rule, #223047);
     border-radius: 4px;
     cursor: pointer;
   }
   .tab:hover {
-    color: #d6e2f2;
+    color: var(--sb-ink, #d6e2f2);
   }
   .tab.on {
-    color: #eaf1fa;
-    background: #24344d;
-    border-color: #35507a;
+    color: var(--sb-ink-hi, #eaf1fa);
+    background: var(--sb-tab-on, #24344d);
+    border-color: var(--sb-tab-on-edge, #35507a);
   }
   .tab:focus-visible {
-    outline: 2px solid #4d7fd1;
+    outline: 2px solid var(--sb-focus, #4d7fd1);
     outline-offset: 1px;
   }
   .row {
@@ -365,29 +373,29 @@
   }
   .row > span {
     flex: 0 0 84px;
-    color: #aeb9c9;
+    color: var(--sb-ink-mid, #aeb9c9);
     font-size: 12px;
   }
   .row > em {
     flex: 0 0 56px;
     text-align: right;
     font-style: normal;
-    color: #8fd0ff;
+    color: var(--sb-figure, #8fd0ff);
     font: 12px ui-monospace, monospace;
   }
   input[type="range"] {
     flex: 1;
     min-width: 0;
-    accent-color: #4c8dff;
+    accent-color: var(--sb-accent, #4c8dff);
   }
   select,
   .num {
     flex: 1;
     min-width: 0;
     padding: 3px 6px;
-    background: #161d29;
-    color: #dbe4f0;
-    border: 1px solid #33405a;
+    background: var(--sb-well, #161d29);
+    color: var(--sb-ink, #dbe4f0);
+    border: 1px solid var(--sb-edge, #33405a);
     border-radius: 5px;
     font: 12px system-ui, sans-serif;
   }
@@ -413,13 +421,13 @@
   .grid {
     margin: 6px 0 10px;
     padding: 8px;
-    background: #111823;
-    border: 1px solid #223047;
+    background: var(--sb-grid-bg, #111823);
+    border: 1px solid var(--sb-rule, #223047);
     border-radius: 6px;
   }
   .gridhead {
     margin-bottom: 6px;
-    color: #8b98ab;
+    color: var(--sb-ink-dim, #8b98ab);
     font-size: 11.5px;
   }
   .gridrow {
@@ -433,7 +441,7 @@
     gap: 3px;
   }
   .cell > span {
-    color: #aeb9c9;
+    color: var(--sb-ink-mid, #aeb9c9);
     font-size: 11px;
   }
   .cell .num {
@@ -446,7 +454,7 @@
     flex: 0 0 auto;
     align-items: center;
     gap: 5px;
-    color: #aeb9c9;
+    color: var(--sb-ink-mid, #aeb9c9);
     font-size: 12px;
     cursor: pointer;
   }
@@ -458,6 +466,6 @@
   }
   input[type="checkbox"] {
     margin: 0;
-    accent-color: #4c8dff;
+    accent-color: var(--sb-accent, #4c8dff);
   }
 </style>

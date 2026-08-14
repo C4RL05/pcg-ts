@@ -290,10 +290,10 @@
     padding: 6px 8px;
     max-height: 160px;
     overflow: auto;
-    background: #0e1621;
+    background: #0a0a0a;
     border: 1px solid var(--sb-rule);
     border-radius: 4px;
-    color: #9fd0b0;
+    color: var(--sb-ink-mid);
     font: var(--sb-t-meta) / 1.45 var(--sb-mono);
     white-space: pre-wrap;
     word-break: break-word;
@@ -306,10 +306,10 @@
   .warn {
     margin: 8px 0 0;
     padding: 6px 8px;
-    background: #33261a;
-    border: 1px solid #7a5a2e;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-warn);
     border-radius: 6px;
-    color: #f0c869;
+    color: var(--sb-ink);
     font-size: var(--sb-t-meta);
   }
   .skipped {

@@ -217,8 +217,8 @@
     margin: 2px 0;
     padding: 4px 8px;
     text-align: left;
-    background: #131a26;
-    color: #cfe0f5;
+    background: #101010;
+    color: var(--sb-ink);
     border: 1px solid var(--sb-rule);
     border-radius: var(--sb-radius);
     font: var(--sb-t-body) var(--sb-mono);
@@ -229,8 +229,9 @@
   }
   .entry:hover,
   .entry.on {
-    border-color: #4c8dff;
-    background: #16202f;
+    border-color: #ffffff;
+    background: #232323;
+    color: #ffffff;
   }
   .empty {
     margin-top: 10px;

@@ -45,9 +45,17 @@ import Editor from "./Editor.svelte";
 
 // -- scene -----------------------------------------------------------------
 
+/**
+ * GREYSCALE, and pure black behind it. The shared look is a cool sky over
+ * a warm sun on a dark blue ground, which reads blue everywhere; this page
+ * asks for neither cast. The lights have to be neutral for it to hold —
+ * grey materials under a blue lamp are still blue.
+ */
 const { scene, camera, controls, start } = createScene({
   cameraPosition: [20, 15, 20],
   target: [0, 2, 0],
+  background: 0x000000,
+  lights: { sky: 0xffffff, ground: 0x2a2a2a, sun: 0xffffff },
 });
 
 /**
@@ -55,11 +63,16 @@ const { scene, camera, controls, start } = createScene({
  * a fixed size. What ships as the initial 30×30 is only what stands
  * before the first cook lands.
  */
-const groundMaterial = new MeshStandardMaterial({ color: 0x1a2230, roughness: 1 });
+/**
+ * Dark enough to sit against pure black without becoming a lit slab, but
+ * not black itself — the floor has to be findable, or the content floats
+ * in a void with nothing to say where the ground plane is.
+ */
+const groundMaterial = new MeshStandardMaterial({ color: 0x141414, roughness: 1 });
 const ground = new Mesh(new PlaneGeometry(1, 1), groundMaterial);
 ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
-let grid = new GridHelper(30, 30, 0x2c3a52, 0x1e2939);
+let grid = new GridHelper(30, 30, 0x3a3a3a, 0x242424);
 scene.add(grid);
 let groundKey = "";
 
@@ -81,13 +94,13 @@ function applyGround(plan: GroundPlan): void {
     groundKey = key;
     scene.remove(grid);
     grid.dispose();
-    grid = new GridHelper(plan.size, plan.divisions, 0x2c3a52, 0x1e2939);
+    grid = new GridHelper(plan.size, plan.divisions, 0x3a3a3a, 0x242424);
     scene.add(grid);
   }
   grid.position.set(plan.x, plan.y + plan.lift, plan.z);
 }
 
-const assets = createPlaceholderAssets();
+const assets = createPlaceholderAssets({ mono: true });
 const outputGroup = new Group();
 scene.add(outputGroup);
 let drawn: Object3D[] = [];
@@ -95,13 +108,17 @@ let drawn: Object3D[] = [];
 /**
  * This page's look, kept out of `shared/draw.ts` for the same reason the
  * preview page keeps its daylight one: choosing a material is renderer
- * work, and the two pages are judged against different things. These
- * match the dark studio of `shared/scene.ts`.
+ * work, and the two pages are judged against different things.
+ *
+ * White, for the brightest thing on a black page. `vertexColors` is still
+ * honoured where a graph wrote a colour attribute — that is the graph's
+ * own data showing through, not this page's palette, and blanking it
+ * would be hiding a cook result rather than styling a page.
  */
 const materials: DrawMaterials = {
   mesh: (vertexColors) =>
-    new MeshStandardMaterial({ color: 0x93a7c4, roughness: 0.85, metalness: 0, vertexColors }),
-  line: (vertexColors) => new LineBasicMaterial({ color: 0xffb454, vertexColors }),
+    new MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0, vertexColors }),
+  line: (vertexColors) => new LineBasicMaterial({ color: 0xffffff, vertexColors }),
 };
 
 /** What the last cook actually drew, for the overlay's `drew` line. */

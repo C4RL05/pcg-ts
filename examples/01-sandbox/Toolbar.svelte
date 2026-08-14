@@ -284,7 +284,7 @@
     align-items: center;
     gap: 6px;
     padding-left: 14px;
-    border-left: 1px solid #26344a;
+    border-left: 1px solid #333333;
   }
   /* The first group follows the title, which is its own separator. */
   .title + .grp {
@@ -388,16 +388,19 @@
     color: var(--sb-ink-ghost);
     font-style: normal;
   }
+  /* A warning is dimmer than a figure, an error is the same white but its
+     LABEL comes up to meet it — so the pair reads as one loud unit rather
+     than one loud half. Hue used to do this; brightness does it now. */
   .stat.warn b {
-    color: #f0c869;
+    color: var(--sb-ink-mid);
   }
   .stat.err b {
     color: var(--sb-danger);
   }
-  /* A cook that errored colours the labels too — at that point the whole
+  /* A cook that errored brightens the labels too — at that point the whole
      line is reporting a failed cook, not one bad figure in a good one. */
   .status.err .stat i {
-    color: #7a5560;
+    color: var(--sb-ink-dim);
   }
   /* Desktop: the chevron does not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */

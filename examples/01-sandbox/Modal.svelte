@@ -76,7 +76,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(4, 6, 10, 0.65);
+    background: rgba(0, 0, 0, 0.72);
   }
   .modal {
     width: min(680px, calc(100vw - 48px));
@@ -84,7 +84,7 @@
     display: flex;
     flex-direction: column;
     padding: 12px 14px;
-    background: #0d1117;
+    background: #000000;
     border: 1px solid var(--sb-edge);
     border-radius: 10px;
     color: var(--sb-ink);
@@ -110,21 +110,23 @@
     font: var(--sb-t-body) var(--sb-sans);
     cursor: pointer;
   }
+  /* The button that commits the paste, solid white against the outlined
+     ones — same rule as FieldParam's apply. */
   button.primary {
-    background: #16321f;
-    color: #b8f5c8;
-    border-color: #2f9e5f;
+    background: #ffffff;
+    color: #000000;
+    border-color: #ffffff;
   }
   button:hover {
-    filter: brightness(1.15);
+    filter: brightness(1.25);
   }
   textarea {
     flex: 1;
     min-height: 220px;
     resize: vertical;
     padding: 8px;
-    background: #0a0e14;
-    color: var(--sb-action);
+    background: #0a0a0a;
+    color: var(--sb-ink);
     border: 1px solid var(--sb-rule);
     border-radius: 6px;
     font: var(--sb-t-meta) / 1.5 var(--sb-mono);
@@ -135,10 +137,10 @@
     max-height: 120px;
     overflow-y: auto;
     padding: 6px 8px;
-    background: #33161c;
-    border: 1px solid #a04455;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-err);
     border-radius: 6px;
-    color: #ffb9c2;
+    color: #ffffff;
     font: 11px/1.5 ui-monospace, monospace;
     white-space: pre-wrap;
     word-break: break-word;
