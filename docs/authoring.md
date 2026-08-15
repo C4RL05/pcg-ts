@@ -1228,6 +1228,60 @@ widening is bounded — only `connectPoints` and `promoteAttribute`
 produce primitive columns — and it is the better trade, because the
 alternative is losing a value the author asked for in silence.
 
+### Giving a path a surface
+
+`sweepProfile` places a cross-section on **every point** of every
+polyline and stitches consecutive placements into triangles, so a curve
+becomes a mesh rather than a run of instanced cylinders. `extrudePolygon`
+does the closed-boundary case: a footprint becomes walls, a floor and a
+roof. Both emit **3-vertex `poly` primitives**, which is not decoration
+— `surfaceSample` skips any primitive that is not one, and so do the
+`uv` and `raycast` transfer mappings, so a quad-spelled surface would
+draw and then be invisible to the library's own consumers.
+
+Four things about them are easy to get wrong from the schema alone:
+
+- **Neither node resamples.** `sweepProfile` puts one ring on each
+  point it is handed. If the silhouette is too coarse, run
+  `pathResample` first — that is the density knob, and there is no
+  second one. The payoff is that `radius`, `width`, `roll` and `up`
+  resolve as fields **at the ring**, exactly, instead of being averaged
+  across a segment's two endpoints the way `pathSegments`' `radius` must
+  be (a segment has no element of its own; a ring does).
+- **`frame` fixes the roll, never the plane.** The ring's plane always
+  comes from the path, bisecting the two segments that meet at the
+  point. `upHint` is purely local; `curveFrame` reads the `curveNormal`
+  that `writeCurveFrame` wrote, and inherits **that** node's documented
+  non-locality and nothing more; `rot` reads whatever
+  `orientAlongVector` left. So a sweep introduces no new
+  cook-order sensitivity of its own.
+- **`normal` and `uv` are reporting slots.** The node picks their shape,
+  so an input already carrying either under a different shape is refused
+  by name rather than silently deleted (`requireReportSlot`, the same
+  rule `writeTangents` and `writeCurveFrame` follow). `u` is normalized
+  arc length, matching `curveU`, so a texture lines up with anything
+  else measured along that curve.
+- **Attributes cross the dimension change by the table above, with one
+  addition.** Input *point* attributes are **copied**, replicated around
+  each ring, with no interpolation — the sweep adds no new positions
+  *along* the path, only around it, so there is nothing to interpolate
+  between. Input *primitive* attributes gather onto the triangles that
+  came from them, by the same rule and with the same refusal on
+  collision. Input *vertex* attributes are dropped, for
+  `setPolylineTopology`'s reason: the topology they described is gone.
+  Copying every point column means the standard eight ride around every
+  ring whether or not they mean anything on a surface point; if that
+  matters, `removeAttribute` upstream is the answer, and a silent
+  built-in exception list is deliberately not.
+
+`pathSegments` keeps the job it was always right for and loses the one
+it was borrowed for. **One oriented asset per segment** is how a chain of
+separate links, a row of sleepers or a string of beads is spelled, and no
+swept surface can express it. Faking a tube is no longer its job — and
+its `extend` param, which exists purely to overlap consecutive cylinders
+so the wedge on the outside of a bend closes, has nothing to do on a
+surface that is continuous.
+
 ## Networks: the primitive domain is the edge domain
 
 A path visits its points in a line. A **network** lets them branch — a

@@ -31,8 +31,9 @@ export interface NodeSpec<P> {
   /**
    * Optional grouping label for palettes and generated docs. Short and
    * lowercase; the standard library uses "source" (emits points from
-   * nothing), "sampler" (points from existing geometry), "point op"
-   * (transforms a point cloud), "filter" (keeps a subset), "attribute"
+   * nothing), "sampler" (points from existing geometry), "surface"
+   * (builds triangle mesh from curves), "point op" (transforms a point
+   * cloud), "filter" (keeps a subset), "attribute"
    * (attribute create/promote/transfer), "value" (plain value plumbing),
    * "spawn" (graph terminals emitting instances), "io" (runtime data
    * bridges), and "composite" (nodes wrapping inner graphs). Omit it to

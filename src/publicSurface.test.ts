@@ -22,7 +22,7 @@ const ROOT_SURFACE = [
   "copyToPoints", "cos", "createGpuCookStats", "createPointCloud", "createPolyline",
   "createTriangleMesh", "dataInput", "defineNode", "describeSubgraphParams",
   "describeSubgraphPins", "deserializeGraph", "div", "dot", "elementCount", "eq",
-  "evaluateField", "fbm", "fieldFromJson", "fieldToJson", "filterByAttribute",
+  "evaluateField", "extrudePolygon", "fbm", "fieldFromJson", "fieldToJson", "filterByAttribute",
   "filterByBounds", "filterByDensity", "filterByExpression", "filterByTag",
   "filterPrimitivesByBounds", "firstGeometry", "floor", "forEachNode", "fraction", "ge",
   "getFieldSpec",
@@ -41,7 +41,7 @@ const ROOT_SURFACE = [
   "resolveField", "sampleNearestPoint", "select", "selfPrune", "serializeGraph",
   "setAttribute", "setBounds", "setPolylineTopology", "simplexNoise", "sin",
   "spawnInstances", "splineSample", "standardNode", "sub", "subgraphContentHash",
-  "subgraphNode", "surfaceSample", "tan", "transferAttribute", "transferNearest",
+  "subgraphNode", "surfaceSample", "sweepProfile", "tan", "transferAttribute", "transferNearest",
   "transferRaycast", "transferUv", "transformPoints", "validateGraphMeta", "valueConstant",
   "valueNoise", "vec", "volumeSample", "worleyNoise", "writeCurveFrame", "writeTangents",
 ] as const;

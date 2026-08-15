@@ -46,6 +46,7 @@ import {
   type NodeDef,
 } from "../graph/index.js";
 import {
+  extrudePolygon,
   getNodeType,
   jitterPoints,
   listNodeTypes,
@@ -54,6 +55,7 @@ import {
   pathSegments,
   setAttribute,
   surfaceSample,
+  sweepProfile,
   transformPoints,
   volumeSample,
 } from "../nodes/index.js";
@@ -222,6 +224,39 @@ const ADOPTERS: AdopterFixture[] = [
         makeGeometryItem(createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 2, 1, 0])),
       ]);
       const n = g.add(pathSegments, { radius: value as never });
+      g.connect(din, "out", n, "in");
+      g.output(n, "out", "out");
+      return { g, id: n.id };
+    },
+  },
+  {
+    type: "sweepProfile",
+    build: (value) => {
+      const g = new Graph(7);
+      const din = g.add(dataInput);
+      // A path: this adopter resolves `radius` on the points its rings
+      // sit on, and never mutates them.
+      g.setParam(din, "items", [
+        makeGeometryItem(createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 2, 1, 0])),
+      ]);
+      const n = g.add(sweepProfile, { radius: value as never });
+      g.connect(din, "out", n, "in");
+      g.output(n, "out", "out");
+      return { g, id: n.id };
+    },
+  },
+  {
+    type: "extrudePolygon",
+    build: (value) => {
+      const g = new Graph(7);
+      const din = g.add(dataInput);
+      // A CLOSED path: extrusion is not defined on an open one.
+      g.setParam(din, "items", [
+        makeGeometryItem(
+          createPolyline([0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1], { closed: true }),
+        ),
+      ]);
+      const n = g.add(extrudePolygon, { distance: value as never });
       g.connect(din, "out", n, "in");
       g.output(n, "out", "out");
       return { g, id: n.id };

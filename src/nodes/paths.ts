@@ -3,12 +3,15 @@
  * resample a path by arc length, write per-point tangents at a path's own
  * points, and turn a path's segments into oriented instance points.
  *
- * That last one, pathSegments, is the only way a curve in this library
- * becomes solid. There is no sweep, extrude, loft or revolve anywhere in
- * src/, and meshPrimitive builds planes and boxes; the polyline converter
- * emits line segments a pixel wide. So a tube is not a surface here — it
- * is a run of instanced assets, one per segment, which is also why it
- * costs one draw call for a whole tangle of cable.
+ * That last one, pathSegments, was for a long time the only way a curve
+ * in this library became solid: the polyline converter emits line
+ * segments a pixel wide, and meshPrimitive builds planes and boxes, so a
+ * tube was not a surface here — it was a run of instanced assets, one
+ * per segment, which is also why it costs one draw call for a whole
+ * tangle of cable. sweepProfile (src/nodes/surfaces.ts) now emits the
+ * real thing, and pathSegments keeps the job it was always right for:
+ * ONE ORIENTED ASSET PER SEGMENT, which is how a chain of separate links
+ * is spelled and which no swept surface can express.
  *
  * These are the in-graph door to polyline geometry. Before them the
  * library had a polyline consumer (splineSample), a polyline type
@@ -424,7 +427,7 @@ export const pathSegments = standardNode<PathSegmentsParams>({
   type: "pathSegments",
   category: "sampler",
   description:
-    "Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is how a curve becomes something you can look at: the library has no sweep, extrude or loft, and toLineGeometry only ever draws a one-pixel line, so a cable, a chain, a rod or a tube is a run of instanced segments rather than a swept surface. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.",
+    "Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is the DISCRETE way to draw a curve: one asset per segment, which is what a chain of separate links, a row of sleepers or a string of beads is. For a continuous skin use sweepProfile instead — it emits a real triangle mesh, shares rings between segments, and needs no `extend` because it leaves no gap to fill. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {

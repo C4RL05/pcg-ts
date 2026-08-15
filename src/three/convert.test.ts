@@ -273,6 +273,78 @@ describe("toBufferGeometry", () => {
     expect(toBufferGeometry(flat(), { normals: false }).getAttribute("normal")).toBeUndefined();
   });
 
+  it("carries the uv point attribute onto the compacted points", () => {
+    // meshPrimitive has written `uv` since it shipped and this bridge
+    // dropped every one of them, so a textured plane was not expressible
+    // in the examples at all. Asserted through the shape a producer
+    // actually writes: f32 tuple 2 on the point domain.
+    const geo = createTriangleMesh([0, 0, 0, 1, 0, 0, 0, 0, 1], [0, 1, 2]);
+    const uv = geo.attrs.point.add("uv", "f32", 2);
+    uv.setTuple(0, [0, 0]);
+    uv.setTuple(1, [1, 0]);
+    uv.setTuple(2, [0, 1]);
+    const out = toBufferGeometry(geo, { normals: false });
+    expect(Array.from(out.getAttribute("uv").array)).toEqual([0, 0, 1, 0, 0, 1]);
+
+    // Compaction applies to it as it does to position: an unreferenced
+    // point takes its uv out of the buffer with it.
+    const extra = createTriangleMesh([9, 9, 9, 0, 0, 0, 1, 0, 0, 0, 0, 1], [1, 2, 3]);
+    const uv2 = extra.attrs.point.add("uv", "f32", 2);
+    for (let i = 0; i < 4; i++) uv2.setTuple(i, [i / 4, 0]);
+    const compacted = toBufferGeometry(extra, { normals: false });
+    expect(Array.from(compacted.getAttribute("uv").array)).toEqual([0.25, 0, 0.5, 0, 0.75, 0]);
+
+    // No column, no attribute — nothing is invented.
+    const bare = createTriangleMesh([0, 0, 0, 1, 0, 0, 0, 0, 1], [0, 1, 2]);
+    expect(toBufferGeometry(bare, { normals: false }).getAttribute("uv")).toBeUndefined();
+
+    // A wider column contributes its first two components and nothing
+    // else — the same "extra components ignored" rule the uv transfer
+    // mapping states.
+    const wide = createTriangleMesh([0, 0, 0, 1, 0, 0, 0, 0, 1], [0, 1, 2]);
+    const uv3 = wide.attrs.point.add("uv", "f32", 3);
+    uv3.setTuple(0, [0, 0, 9]);
+    uv3.setTuple(1, [1, 0, 9]);
+    uv3.setTuple(2, [0, 1, 9]);
+    const wideOut = toBufferGeometry(wide, { normals: false }).getAttribute("uv");
+    expect(wideOut.itemSize).toBe(2);
+    expect(Array.from(wideOut.array)).toEqual([0, 0, 1, 0, 0, 1]);
+  });
+
+  it("carries a swept surface's uv, normal and position together", async () => {
+    // The end-to-end reason the uv gap mattered: sweepProfile writes all
+    // three, and before this bridge carried uv, two of them arrived.
+    const { sweepProfile } = await import("../nodes/index.js");
+    const { makeGeometryItem } = await import("../graph/index.js");
+    const path = createPolyline([0, 0, 0, 1, 0, 0, 2, 0, 0]);
+    const cooked = await sweepProfile.execute({
+      inputs: { in: [makeGeometryItem(path)] },
+      params: { ...sweepProfile.defaultParams, sides: 6, caps: false },
+      seed: 1,
+      checkCancelled() {},
+    });
+    const item = cooked.out?.[0];
+    if (item === undefined || item.kind !== "geometry") throw new Error("expected geometry");
+    const out = toBufferGeometry(item.geo);
+    const uv = out.getAttribute("uv");
+    expect(uv.itemSize).toBe(2);
+    expect(uv.count).toBe(out.getAttribute("position").count);
+    expect(out.getAttribute("normal").count).toBe(uv.count);
+    // u is normalized arc length, v runs 0..1 around the profile, and
+    // both ends of each range are actually present.
+    let minU = Infinity;
+    let maxU = -Infinity;
+    let maxV = -Infinity;
+    for (let i = 0; i < uv.count; i++) {
+      minU = Math.min(minU, uv.getX(i));
+      maxU = Math.max(maxU, uv.getX(i));
+      maxV = Math.max(maxV, uv.getY(i));
+    }
+    expect(minU).toBeCloseTo(0, 6);
+    expect(maxU).toBeCloseTo(1, 6);
+    expect(maxV).toBeCloseTo(1, 6);
+  });
+
   it("refuses a polyline network and a bare cloud, naming the function that does draw them", () => {
     const path = createPolyline([0, 0, 0, 1, 0, 0, 2, 0, 0]);
     expect(() => toBufferGeometry(path)).toThrow(/toBufferGeometry: no "poly" primitives/);

@@ -4,12 +4,13 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-46 examples, alphabetical by file:
+48 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
 - [basics-compose-primitives.json](#basics-compose-primitivesjson) — compose several primitives into a scatter
 - [basics-even-spacing.json](#basics-even-spacingjson) — enforce a minimum distance between points
+- [basics-extrude-polygon.json](#basics-extrude-polygonjson) — turn a footprint into massing
 - [basics-field-params.json](#basics-field-paramsjson) — read a field's shaping numbers from a knob
 - [basics-filter-by-attribute.json](#basics-filter-by-attributejson) — keep points by an attribute comparison
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
@@ -38,6 +39,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-spawn-instances.json](#basics-spawn-instancesjson) — turn points into instance batches
 - [basics-subgraph-exposed-params.json](#basics-subgraph-exposed-paramsjson) — wrap a graph as one node with its own knobs
 - [basics-surface-sample.json](#basics-surface-samplejson) — scatter points over a mesh surface
+- [basics-sweep-profile.json](#basics-sweep-profilejson) — put a real surface on a curve
 - [basics-transfer-attribute.json](#basics-transfer-attributejson) — read a value off a surface below each point
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
 - [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
@@ -124,6 +126,24 @@ Cook it: `pcg cook examples/graphs/basics-compose-primitives.json --stats`
 **Outputs:** `points` (from `prune`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-even-spacing.json --stats`
+
+## basics-extrude-polygon.json
+
+**turn a footprint into massing**
+
+A closed polyline is already a plan; `extrudePolygon` gives it a third dimension. The boundary is swept along a direction into three-vertex 'poly' triangles — walls, a floor and a roof — and until this node existed a graph that had computed its plots could only draw them as hairlines, which is why a settlement pipeline puts a pre-made house on a lot CENTRE while the lot's own shape goes unshown. `distance` is field-capable and resolves on the INPUT points, so a per-point value gives a SLOPED top rather than a flat one: the noise here lifts each corner of the plan by a different amount. Walls, roof and floor keep SEPARATE points, so the eaves stay a crease instead of being shaded round, and the winding is derived from the polygon's own Newell normal against the direction — a footprint wound either way comes out facing outward. Caps are fan-triangulated from the boundary's first point, which is exact for a CONVEX plan and is all the topology records. An OPEN polyline is refused by name: extrusion is not defined on one, and the fix is `pointsToPath` with `closed: true`.
+
+**Tags:** `basics`, `surface`, `mesh`, `extrude`, `fields`
+
+**Seed:** 1046
+
+**Node types:** `extrudePolygon`, `subgraph`
+
+**Primitives:** `shape/path-loop`
+
+**Outputs:** `massing` (from `massing`.`out`), `footprint` (from `plot`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-extrude-polygon.json --stats`
 
 ## basics-field-params.json
 
@@ -381,7 +401,7 @@ Cook it: `pcg cook examples/graphs/basics-path-resample.json --stats`
 
 **draw a curve as solid geometry**
 
-A path cannot be drawn. There is no sweep, extrude, loft or revolve in this library, `meshPrimitive` builds planes and boxes, and the polyline converter emits lines a pixel wide — so a tube here is not a surface, it is a run of instanced assets. `pathSegments` emits ONE point per polyline segment: positioned at the segment's midpoint, `rot` turning the chosen local axis onto the segment, and `scale` carrying the segment's length on that axis with `radius` on the other two. Spawn a unit cylinder — radius 1, height 1 — on those points and each one lands exactly on its segment, so a whole tangle of cable costs a single draw call. The default axis is `+y` rather than orientAlongVector's `+z` because the assets this feeds are cylinders and capsules, which three.js builds along Y. `extend` adds to both ends, closing the wedge consecutive segments leave on the outside of a bend. The OUTPUT IS A PLAIN CLOUD: the points are midpoints, not the curve, so re-pathing them describes the midpoints.
+One oriented asset per segment, which is a different job from a skin. `sweepProfile` is what draws a curve as a continuous SURFACE; this node draws it as a run of discrete instanced assets, which is the only way to spell a chain of separate links, a row of sleepers or a string of beads. `pathSegments` emits ONE point per polyline segment: positioned at the segment's midpoint, `rot` turning the chosen local axis onto the segment, and `scale` carrying the segment's length on that axis with `radius` on the other two. Spawn a unit cylinder — radius 1, height 1 — on those points and each one lands exactly on its segment, so a whole tangle of cable costs a single draw call. The default axis is `+y` rather than orientAlongVector's `+z` because the assets this feeds are cylinders and capsules, which three.js builds along Y. `extend` adds to both ends, closing the wedge consecutive segments leave on the outside of a bend. The OUTPUT IS A PLAIN CLOUD: the points are midpoints, not the curve, so re-pathing them describes the midpoints.
 
 **Tags:** `basics`, `curve`, `path`, `instancing`
 
@@ -629,6 +649,24 @@ Cook it: `pcg cook examples/graphs/basics-subgraph-exposed-params.json --stats`
 
 Cook it: `pcg cook examples/graphs/basics-surface-sample.json --stats`
 
+## basics-sweep-profile.json
+
+**put a real surface on a curve**
+
+A curve becomes a skin. `sweepProfile` places a cross-section on EVERY POINT of a polyline and stitches consecutive placements into three-vertex 'poly' triangles — the same topology `meshPrimitive` emits, so the result is not a second class of mesh: `surfaceSample`, `promoteAttribute` and the 'uv' and 'raycast' transfer mappings all see it. THE PATH IS NOT RESAMPLED. One ring per input point, exactly where the point is, which is why `radius` here can be a field: it resolves AT the ring rather than being averaged across a segment's two endpoints the way `pathSegments` must, so this taper from 0.9 to 0.15 along `curveU` is exact. For a finer surface, run `pathResample` first — that is the knob, not a subdivision param. Rings meet through a mitered joint, so the section keeps its radius round a bend instead of pinching by the cosine of the half-angle. The node writes `normal` itself rather than leaving `computeVertexNormals` to smooth across the uv seam and the caps, and writes `uv` with `u` as normalized arc length — the same measure `curveU` carries, so a texture lines up with anything else measured along this curve.
+
+**Tags:** `basics`, `curve`, `surface`, `mesh`, `fields`
+
+**Seed:** 1045
+
+**Node types:** `subgraph`, `sweepProfile`
+
+**Primitives:** `shape/path-meander`
+
+**Outputs:** `surface` (from `skin`.`out`), `path` (from `curve`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-sweep-profile.json --stats`
+
 ## basics-transfer-attribute.json
 
 **read a value off a surface below each point**
@@ -723,7 +761,7 @@ Cook it: `pcg cook examples/graphs/examples-headless-scatter.json --stats`
 
 **a suspended rig, built from curves**
 
-A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Nothing is drawn as a surface — the library has no sweep or extrude, so everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on. Eight declared outputs, one per part, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.
+A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Nothing is drawn as a surface — everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on — this graph predates `sweepProfile` and has not been rewired to it yet. Eight declared outputs, one per part, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.
 
 **Tags:** `examples`, `curves`, `foreach`, `instancing`, `rig`
 

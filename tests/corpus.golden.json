@@ -146,6 +146,90 @@
         ]
       }
     },
+    "basics-extrude-polygon.json": {
+      "outputs": {
+        "footprint": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 7,
+              "vertex": 8,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -8.1087,
+                0,
+                -8.7744
+              ],
+              "max": [
+                9,
+                0,
+                8.7744
+              ]
+            }
+          }
+        ],
+        "massing": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 42,
+              "vertex": 72,
+              "primitive": 24,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -8.1087,
+                0,
+                -8.7744
+              ],
+              "max": [
+                9,
+                9.4755,
+                8.7744
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-field-params.json": {
       "outputs": {
         "points": [
@@ -1493,6 +1577,94 @@
                 10,
                 10,
                 10
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-sweep-profile.json": {
+      "outputs": {
+        "path": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 64,
+              "vertex": 64,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -20,
+                0,
+                -1.0035
+              ],
+              "max": [
+                20,
+                0,
+                2.6159
+              ]
+            }
+          }
+        ],
+        "surface": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 726,
+              "vertex": 3840,
+              "primitive": 1280,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -20.2677,
+                -0.856,
+                -1.5945
+              ],
+              "max": [
+                20.0165,
+                0.856,
+                3.0322
               ]
             }
           }

@@ -31,6 +31,7 @@ import { transformPoints } from "./pointOps.js";
 import { hasNodeType } from "./registry.js";
 import { surfaceSample } from "./samplers.js";
 import { pointGrid } from "./sources.js";
+import { sweepProfile } from "./surfaces.js";
 import { connectPoints } from "./topology.js";
 
 /**
@@ -42,6 +43,7 @@ import { connectPoints } from "./topology.js";
 const MODULE_WITNESSES: readonly { readonly type: string }[] = [
   pointGrid, // sources.ts
   meshPrimitive, // meshes.ts
+  sweepProfile, // surfaces.ts
   surfaceSample, // samplers.ts
   pointsToPath, // paths.ts
   connectPoints, // topology.ts

@@ -31,6 +31,7 @@ export {
 } from "./subgraphRegistry.js";
 export * from "./sources.js";
 export * from "./meshes.js";
+export * from "./surfaces.js";
 export * from "./samplers.js";
 export * from "./paths.js";
 export * from "./topology.js";

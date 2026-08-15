@@ -332,6 +332,29 @@ function gatherVec3(geo: Geometry, name: string, kept: Uint32Array): Float32Arra
 }
 
 /**
+ * Gather the first two components of a point-domain f32 column onto the
+ * compacted points, or undefined when no column of that shape is there.
+ *
+ * Separate from {@link gatherVec3} rather than a width parameter on it:
+ * that one is the colour-shaped read (`rgbSourceOf`/`readRgb`, three
+ * components, alpha dropped) and widening it would put a uv through a
+ * function named for colour. Two components is the whole difference.
+ */
+function gatherVec2(geo: Geometry, name: string, kept: Uint32Array): Float32Array | undefined {
+  const attr = geo.attrs.point.get(name);
+  if (attr === undefined || attr.type !== "f32" || attr.tupleSize < 2) return undefined;
+  const src = attr.data;
+  const ts = attr.tupleSize;
+  const out = new Float32Array(kept.length * 2);
+  for (let i = 0; i < kept.length; i++) {
+    const o = kept[i] * ts;
+    out[i * 2] = src[o];
+    out[i * 2 + 1] = src[o + 1];
+  }
+  return out;
+}
+
+/**
  * Convert a pcg {@link Geometry}'s `poly` primitives into a triangle
  * `THREE.BufferGeometry` — the inverse of {@link fromBufferGeometry},
  * and what makes a cooked mesh (`meshPrimitive`, `createTriangleMesh`,
@@ -351,6 +374,12 @@ function gatherVec3(geo: Geometry, name: string, kept: Uint32Array): Float32Arra
  * unchanged rather than a valid permutation of it. A triangle touching a
  * non-finite position is dropped; if that leaves nothing, this throws
  * rather than return an empty geometry.
+ *
+ * Four point attributes cross the bridge: `P` as `position`, `color` and
+ * `normal` under {@link ToBufferGeometryOptions}, and `uv` (f32, tuple 2
+ * or wider, first two components) unconditionally — what `meshPrimitive`
+ * and `sweepProfile`/`extrudePolygon` write. Nothing else does; a
+ * geometry's other columns stay on the pcg side.
  *
  * The caller owns the result and should `dispose()` it.
  */
@@ -383,6 +412,13 @@ export function toBufferGeometry(
     if (normals) out.setAttribute("normal", new BufferAttribute(normals, 3));
     else out.computeVertexNormals();
   }
+  // Unconditional, unlike `color` and `normal`: a `uv` attribute is inert
+  // until a material samples a texture, so there is no shader variant to
+  // flip and no expensive fallback to choose between. Dropping it was a
+  // silent hole — meshPrimitive has written `uv` since it shipped and not
+  // one of those coordinates could reach three.
+  const uvs = gatherVec2(geo, "uv", kept);
+  if (uvs) out.setAttribute("uv", new BufferAttribute(uvs, 2));
   return out;
 }
 
