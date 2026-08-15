@@ -49,7 +49,7 @@ import {
   tan,
   vec,
 } from "./combinators.js";
-import { attribute, constant, fraction, index, position, randomField } from "./inputs.js";
+import { attribute, constant, fraction, index, nodeSeed, position, randomField } from "./inputs.js";
 import {
   type FieldSpec,
   deviceSpec,
@@ -208,6 +208,7 @@ const CASES: Case[] = [
   { name: "position", make: () => position() },
   { name: "index", make: () => index() },
   { name: "fraction", make: () => fraction() },
+  { name: "nodeSeed", make: () => nodeSeed() },
   { name: "randomField default key", make: () => randomField() },
   { name: "randomField numeric key", make: () => randomField(7) },
   { name: "randomField negative key", make: () => randomField(-3) },

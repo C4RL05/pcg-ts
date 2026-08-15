@@ -75,6 +75,7 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   position: { fn: "position" },
   index: { fn: "index" },
   fraction: { fn: "fraction" },
+  nodeSeed: { fn: "nodeSeed" },
   randomField: { fn: "randomField" },
   // Unbound: the front end must accept the uniform-slot lowering on the
   // name alone (a bound one produces the same kernel — the value never

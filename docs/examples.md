@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-49 examples, alphabetical by file:
+50 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -34,6 +34,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
 - [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
 - [basics-radial-on-curve.json](#basics-radial-on-curvejson) — aim things radially around a curve
+- [basics-reseed-a-noise.json](#basics-reseed-a-noisejson) — make a saved noise re-roll with the graph seed
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
 - [basics-spawn-by-species.json](#basics-spawn-by-speciesjson) — spawn a different asset per point
@@ -60,7 +61,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 
 **write an attribute from a noise field**
 
-A field-capable param takes a field expression instead of a constant: `setAttribute`'s `value` here is four octaves of Perlin fBm, resolved once per point and stored into a new `height` attribute. `normalized: true` maps the noise's own raw range onto [0, 1], so no remap wrapper is needed. Noise carries its own `seed` inside the spec — the graph seed does not move the pattern, only `opts.seed` or the sample position does.
+A field-capable param takes a field expression instead of a constant: `setAttribute`'s `value` here is four octaves of Perlin fBm, resolved once per point and stored into a new `height` attribute. `normalized: true` maps the noise's own raw range onto [0, 1], so no remap wrapper is needed. Noise carries its own `seed` inside the spec — the graph seed does not move the pattern, only `opts.seed` or the sample position does, which is what `basics-reseed-a-noise` folds `{ "fn": "nodeSeed" }` into.
 
 **Tags:** `basics`, `fields`, `noise`, `attributes`
 
@@ -559,6 +560,24 @@ Cook it: `pcg cook examples/graphs/basics-props-along-a-path.json --stats`
 **Outputs:** `instances` (from `spawn`.`instances`), `points` (from `fan`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-radial-on-curve.json --stats`
+
+## basics-reseed-a-noise.json
+
+**make a saved noise re-roll with the graph seed**
+
+A serialized field expression bakes its numbers, so a noise carries `opts.seed` as a literal and the graph's seed box moves every scatter and jitter while leaving the shape exactly where it was. `{ "fn": "nodeSeed" }` is the way out: it resolves to the cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes — and `opts.position` is an ordinary argument position where `opts.seed` is read as a plain number and cannot hold a spec. So the seed is folded into the SAMPLE POSITION instead, on two axes at different scales so the two offsets do not move together, and scaled by 1e-6 because a node seed is a full uint32 and an unscaled offset would leave the range where an f32 still resolves a lattice cell. Change the seed and this surface becomes a different surface; delete the `add` and it is deaf to the seed again.
+
+**Tags:** `basics`, `fields`, `noise`, `determinism`
+
+**Seed:** 1048
+
+**Node types:** `pointGrid`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `lift`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-reseed-a-noise.json --stats`
 
 ## basics-scatter-in-bounds.json
 

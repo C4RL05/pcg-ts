@@ -419,3 +419,43 @@ describe("param rebinding does not grow the caches", () => {
     expect(stats.fallbacks).toEqual({ "param-bindings": 1 });
   });
 });
+
+/**
+ * The same two keys, from the other side. A bound `param` puts its value
+ * in `field.key` and must be kept OUT of the kernel key; `nodeSeed` is
+ * the mirror image — its value is never in `field.key` at all, because
+ * the seed arrives at evaluation while the key is fixed at construction,
+ * and it must stay out of the kernel key for the same reason a param
+ * value does. Both would grow an unbounded Map on every drag of a seed
+ * box rather than merely slow one down.
+ *
+ * Device-free for the same reason the block above is: an empty domain
+ * compiles and caches without dispatching.
+ */
+describe("reseeding does not grow the caches", () => {
+  const SEEDS = [0, 1, 7, 1048, 0xdead_beef, 4294967295];
+
+  it("every seed compiles one kernel, on one field and on fresh ones", () => {
+    const ev = new GpuFieldEvaluator(untouchableDevice());
+    const geo = makeCorpusGeometry(0);
+    const spec: FieldSpec = { fn: "mul", args: [{ fn: "nodeSeed" }, 1e-6] };
+    // One field object resolved under many contexts — the shape a cook
+    // takes when only the graph seed moved.
+    const shared = fieldFromJson(spec);
+    for (const seed of SEEDS) {
+      expect(ev.resolveField(shared, { geo, domain: "point", seed })).not.toBeNull();
+    }
+    expect(ev.kernelCacheSize).toBe(1);
+    // ...and rebuilt per seed, the shape a reload takes. The premise is
+    // that the key never moved with the seed, so this must not add one.
+    const keys = new Set<string>();
+    for (const seed of SEEDS) {
+      const field = fieldFromJson(spec);
+      keys.add(field.key);
+      expect(ev.resolveField(field, { geo, domain: "point", seed })).not.toBeNull();
+    }
+    expect(keys.size).toBe(1);
+    expect(ev.kernelCacheSize).toBe(1);
+    expect(ev.pipelineCacheSize).toBe(0); // no dispatch on an empty domain
+  });
+});

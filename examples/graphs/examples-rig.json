@@ -2960,7 +2960,7 @@
       "type": "pathResample",
       "params": {
         "mode": "count",
-        "count": 200,
+        "count": 100,
         "spacing": 1
       }
     },

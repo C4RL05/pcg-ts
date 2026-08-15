@@ -53,22 +53,32 @@ as `hashCombine(nodeSeed, seed)`, with `0` meaning "node seed unchanged" so
 graphs authored before the param exists keep bit-identical output.
 
 **It re-rolls randomness drawn from the evaluation context** — `randomField`,
-and the per-point `seed` attribute.
+the per-point `seed` attribute, and the `nodeSeed` FIELD (the grammar fn
+`{ "fn": "nodeSeed" }`, which resolves to that same derived node seed;
+below, unquoted "node seed" means the number, and `nodeSeed` in backticks
+means the fn that reads it).
 
-**It does not touch noise.** A noise field carries its own seed *inside its
-spec*, so `valueNoise` / `perlinNoise` / `simplexNoise` / `worleyNoise` /
-`fbm` — the grammar's actual names, which is what a `fn` field must say —
-are completely unaffected by a node-level seed. Measured, not assumed: on a fixed
+**It does not touch a noise that does not ask.** A noise field carries its own
+seed *inside its spec*, so `valueNoise` / `perlinNoise` / `simplexNoise` /
+`worleyNoise` / `fbm` — the grammar's actual names, which is what a `fn` field
+must say — are unaffected by a node-level seed unless their `opts.position`
+reads it. Measured, not assumed: on a fixed
 16-point grid, changing `setAttribute.seed` from 0 to 99 moved a
 `randomField` attribute (mean 0.5003 to 0.5584) and left a `perlinNoise`
 attribute bit-identical (min −0.19169002771377563, max 0.20500269532203674,
 identical in both runs).
 
-So there are exactly two ways to vary noise:
+So there are exactly three ways to vary noise, and two of them are the same
+move:
 
 1. Set `opts.seed` inside the field spec — reachable when you author the spec.
 2. **Move the position it samples** — the only route from outside, because an
    exposed param cannot reach inside a field spec at all.
+3. Move the position it samples **by the node seed**, with `{ "fn": "nodeSeed" }`
+   folded into `opts.position`. This is (2) with the offset supplied from
+   inside the spec, and it is what makes a SAVED noise answer to the graph's
+   seed box — scaled down (`mul(nodeSeed, 1e-6)`), because a node seed is a
+   full uint32. See `examples/graphs/basics-reseed-a-noise.json`.
 
 That is why noise-bearing primitives expose `frequency` and `variant` rather
 than a seed: `variant` is added to the sample position and walks to an

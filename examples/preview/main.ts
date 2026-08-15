@@ -236,6 +236,90 @@ const PREVIEW_MATERIALS: DrawMaterials = {
   line: (vertexColors) => new LineBasicMaterial({ color: 0xffb454, vertexColors }),
 };
 
+/**
+ * How much of the scene's footprint the graph's own ground covers, as a
+ * fraction, so the stand-in below can be skipped when there is a real one.
+ *
+ * THE RULE: a mesh is ground where it lies at the bottom of the scene and
+ * spans the footprint. Both halves are needed and neither is "the graph
+ * made a mesh", which is what this used to ask — right while a terrain was
+ * the only thing that made one, and wrong for a suspended structure, which
+ * makes tens of thousands of triangles and still hangs in a void.
+ *
+ * - AT THE BOTTOM: a mesh whose own lowest point is not the lowest of any
+ *   surface is something ABOVE the floor — a deck, a canopy, a truss —
+ *   and a deck is not a floor however much of the plan it covers.
+ * - SPANNING: measured, not assumed from a bounding box, because a lattice
+ *   the size of the scene has the bounding box of a ground and the
+ *   coverage of a sketch. Each triangle marks the cells of a 32×32 grid
+ *   over the footprint that its own bounds touch, which over-reports for
+ *   triangles larger than a cell — the direction that favours calling
+ *   something ground, and it only ever fires on coarse terrain, which is.
+ *
+ * Relief is why the bottom test is per MESH and not per cell: a hilltop is
+ * far above the scene floor and still ground. Being the lowest thing in
+ * the scene is a property the whole surface has, not one its high parts
+ * lose.
+ *
+ * Measured over the corpus as it stood at 49 graphs: everything that reads as ground
+ * covers 1.000 (the forest terrain, all eight pipeline stages, the bare
+ * mesh primitive, the extruded polygon), and the two graphs that hang in
+ * space cover 0.117 (the rig — its 21 meshes span 0.561 of the plan
+ * between them, but the only one that reaches the floor is the fringe)
+ * and 0.422 (a single swept tube). Nothing lands in between, so the
+ * threshold sits at 0.6, and the run's own figure goes in the sidecar.
+ */
+const GROUND_COVERAGE = 0.6;
+const GROUND_CELLS = 32;
+
+function groundCoverage(meshes: readonly Mesh[], box: Box3): number {
+  const spanX = Math.max(box.max.x - box.min.x, 1e-6);
+  const spanZ = Math.max(box.max.z - box.min.z, 1e-6);
+  // A flat scene has no vertical span to take a fraction of, and a mesh
+  // lying exactly on the floor must still count as being on it.
+  const tol = Math.max((box.max.y - box.min.y) * 0.02, 1e-6);
+  const n = GROUND_CELLS;
+  const covered = new Uint8Array(n * n);
+  const cell = (v: number, lo: number, span: number): number =>
+    Math.min(n - 1, Math.max(0, Math.floor(((v - lo) / span) * n)));
+  const corner = [new Vector3(), new Vector3(), new Vector3()];
+  /**
+   * The floor is the lowest SURFACE, not the lowest anything.
+   *
+   * `box` is the whole scene's, so it takes points, lines and instanced
+   * meshes into account as well — and one stray point under a terrain, or
+   * an instance with its origin below its base, would otherwise put the
+   * terrain above "the floor" and drop a stand-in ground through it.
+   */
+  const boxes = meshes.map((mesh) => new Box3().setFromObject(mesh));
+  let floorY = Infinity;
+  for (const b of boxes) if (b.min.y < floorY) floorY = b.min.y;
+  for (const [m, mesh] of meshes.entries()) {
+    // A mesh with no position attribute measures as an empty box, whose
+    // minimum is +Infinity — not finite, so it is skipped rather than
+    // walked for triangles it does not have.
+    if (!Number.isFinite(boxes[m].min.y) || boxes[m].min.y > floorY + tol) continue;
+    const pos = mesh.geometry.getAttribute("position");
+    const index = mesh.geometry.getIndex();
+    const count = index === null ? pos.count : index.count;
+    for (let i = 0; i + 2 < count; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        corner[k]
+          .fromBufferAttribute(pos, index === null ? i + k : index.getX(i + k))
+          .applyMatrix4(mesh.matrixWorld);
+      }
+      const x0 = cell(Math.min(corner[0].x, corner[1].x, corner[2].x), box.min.x, spanX);
+      const x1 = cell(Math.max(corner[0].x, corner[1].x, corner[2].x), box.min.x, spanX);
+      const z0 = cell(Math.min(corner[0].z, corner[1].z, corner[2].z), box.min.z, spanZ);
+      const z1 = cell(Math.max(corner[0].z, corner[1].z, corner[2].z), box.min.z, spanZ);
+      for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) covered[cz * n + cx] = 1;
+    }
+  }
+  let hit = 0;
+  for (const c of covered) if (c === 1) hit++;
+  return hit / (n * n);
+}
+
 /** Turn one cooked item into scene objects, and say what it drew. */
 function addItem(group: Group, output: string, item: DataItem, job: PreviewJob): ItemReport {
   const { objects, report } = drawItem(item, {
@@ -348,11 +432,6 @@ async function main(): Promise<void> {
   const cz = snap(centre.z);
   const groundY = snap(box.min.y);
 
-  let hasSurface = false;
-  group.traverse((o: Object3D) => {
-    if (o instanceof Mesh && !(o instanceof InstancedMesh)) hasSurface = true;
-  });
-
   const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -369,20 +448,22 @@ async function main(): Promise<void> {
   scene.fog = fog;
   scene.add(group);
 
-  // A stand-in ground when the graph made no surface of its own.
+  // A stand-in ground when the graph provided no GROUND of its own.
   //
   // Not decoration. Placement is unjudgeable against a void: nothing
   // catches a shadow, so you cannot tell a tree standing on the ground
   // from one hovering above it, and the standard `color` point attribute
   // defaults to WHITE — so an ordinary point cloud over a bright sky is
-  // very nearly invisible. It is skipped when the graph produced its own
-  // mesh, which for a terrain graph is the real ground and would z-fight
-  // with a second one.
-  const surfaces: Object3D[] = [];
+  // very nearly invisible. It is skipped when the graph made its own
+  // ground, which is the real one and would z-fight with a second.
+  //
+  // "Made a mesh" is not the question `groundCoverage` answers; see there.
+  const surfaces: Mesh[] = [];
   group.traverse((o: Object3D) => {
     if (o instanceof Mesh && !(o instanceof InstancedMesh)) surfaces.push(o);
   });
-  if (!hasSurface) {
+  const coverage = groundCoverage(surfaces, box);
+  if (coverage < GROUND_COVERAGE) {
     const ground = new Mesh(
       new PlaneGeometry(extent * 4, extent * 4),
       new MeshStandardMaterial({ color: 0x4a5240, roughness: 1, metalness: 0 }),
@@ -490,6 +571,11 @@ async function main(): Promise<void> {
       pinned: job.extent !== undefined,
       eye,
       groundY,
+      // Which floor the frames stand on, and the number that decided it.
+      // A shot that reads wrong is then one field away from knowing
+      // whether the graph's own ground was believed.
+      ground: coverage < GROUND_COVERAGE ? "stand-in" : "graph",
+      groundCoverage: Math.round(coverage * 1000) / 1000,
       centre: [cx, snap(centre.y), cz],
       bounds: { min: box.min.toArray(), max: box.max.toArray() },
     },

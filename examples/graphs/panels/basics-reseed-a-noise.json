@@ -1,0 +1,14 @@
+{
+  "_comment": "Panel spec — presentation only; the graph cooks identically without it. See examples/shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "lattice",
+      "controls": [
+        { "param": "grid.countX", "label": "columns", "min": 8, "max": 96, "step": 1 },
+        { "param": "grid.countZ", "label": "rows", "min": 8, "max": 96, "step": 1 },
+        { "param": "grid.spacing", "label": "spacing" },
+        { "param": "grid.origin", "label": "origin" }
+      ]
+    }
+  ]
+}

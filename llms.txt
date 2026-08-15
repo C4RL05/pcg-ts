@@ -274,7 +274,7 @@ graph round-trips and cooks identically. Rebuilding via
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 43 fns (`listFieldFns()`):
+into `constant`). All 44 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
@@ -288,6 +288,19 @@ into `constant`). All 43 fns (`listFieldFns()`):
     element — scale by `(count - 1) / count` for a seam-free loop. Its
     value depends on how many elements share the domain, so it says
     "position along this thing", never "position in the world"
+  - `{ fn: "nodeSeed" }` — the cooking node's own seed, `deriveNodeSeed(graph
+    seed, node id)`: the same number `randomField` hashes, and the same
+    value on every element. It exists because a serialized field expression
+    bakes its numbers, so a saved noise carries `opts.seed` as a literal and
+    the graph seed re-rolls every scatter while moving no noise at all. The
+    fix enters through an ARGUMENT position — fold it into `opts.position`
+    (`add(position, vec(mul(nodeSeed, 1e-6), 0, 0))`), since `opts.seed` is
+    read as a plain number and cannot hold a spec. Scale it down: a node
+    seed is a full uint32. It lands in an f32 column, so it is a
+    decorrelation source and not an integer to compare. Not in `Field.key`
+    (fixed at construction, while the seed arrives at evaluation) and it
+    does not need to be — the executor's node memo key already carries the
+    node seed, so every node recooks when the graph seed moves
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
   - `{ fn: "param", name: "amplitude" }` — the value bound to that name by
     an enclosing wrapper's exposed param of the same name (every
@@ -678,9 +691,9 @@ Three rules an agent needs before choosing one:
   candidates rather than receiving them.
 - Identity keying makes those nodes indifferent to the WINDOW, not to
   their own seed. `filterByDensity`, `jitterPoints` and any field param
-  resolving `randomField` still fold in the node seed, so wiring a
-  per-cell `ctx.seed` into one of them de-anchors a chain one node after
-  the source. Seed them from the cell-invariant `ctx.worldSeed` /
+  resolving `randomField` or `nodeSeed` still fold in the node seed, so
+  wiring a per-cell `ctx.seed` into one of them de-anchors a chain one
+  node after the source. Seed them from the cell-invariant `ctx.worldSeed` /
   `ctx.levelSeed`, or leave them at their defaults. See docs/authoring.md,
   "Content that must NOT vary per cell", for the full table.
 - Purity: node execute treats inputs as immutable and uses only its
@@ -1444,8 +1457,8 @@ stale and a stale skill is worse than none.
 
 ## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
 
-49 graphs under `examples/graphs/`, each named by what it teaches and
-carrying its own `meta` block: 37 single-concept `basics-*.json`, 4
+50 graphs under `examples/graphs/`, each named by what it teaches and
+carrying its own `meta` block: 38 single-concept `basics-*.json`, 4
 composed `examples-*.json`, plus the 8-file staged pipeline
 `pipeline-*.json` below. Every one cooks from
 JSON alone — no `dataInput`, whose items never survive serialization —

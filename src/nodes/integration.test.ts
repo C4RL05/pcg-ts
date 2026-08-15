@@ -105,3 +105,107 @@ describe("whole-library determinism", () => {
     expect((world.pointCount - 9) % 3).toBe(0);
   });
 });
+
+/**
+ * The seed box and a frozen noise. A serialized field expression bakes
+ * its numbers, so `opts.seed` is a LITERAL and moving the graph's seed
+ * re-rolls every scatter and jitter while leaving the noise exactly
+ * where it was. `opts.seed` is read as a plain number and cannot hold a
+ * spec; `opts.position` is an ordinary argument position and can — so
+ * `{"fn":"nodeSeed"}` folded into the sample position is what closes it.
+ *
+ * Both halves are cooked here, because the gap is only visible against
+ * its control: the same graph written without the fold has to stay
+ * still, or the "fixed" one proves nothing.
+ */
+function seedableNoiseGraph(seed: number, opts: { fold: boolean }): Graph {
+  const g = new Graph(seed);
+  const grid = g.add(pointGrid, { countX: 12, countY: 1, countZ: 12, spacing: [1, 1, 1] }, "grid");
+  // Scaled down hard: a node seed is a full uint32, and adding one to a
+  // position raw would push the sample point past the range where an f32
+  // still resolves a lattice cell. 1e-6 lands the offset in [0, 4295],
+  // and the lattice period here is 1/0.06 ≈ 17 units — so a typical seed
+  // walks a couple of hundred cells from the origin, and two seeds land
+  // that far from each other.
+  const off = (k: number) => ({
+    fn: "mul" as const,
+    args: [{ fn: "nodeSeed" }, k],
+  });
+  const position = opts.fold
+    ? {
+        fn: "add",
+        args: [{ fn: "position" }, { fn: "vec", args: [off(1e-6), 0, off(3.1e-6)] }],
+      }
+    : { fn: "position" };
+  const h = g.add(
+    setAttribute,
+    {
+      name: "h",
+      value: fieldFromJson({
+        fn: "perlinNoise",
+        opts: { seed: 5, frequency: 0.06, normalized: true, position },
+      }),
+    },
+    "h",
+  );
+  g.connect(grid, "out", h, "in");
+  g.output(h, "out", "pts");
+  return g;
+}
+
+/** The `h` column, trimmed to the live count — storage is capacity-backed. */
+const heights = (result: Awaited<ReturnType<typeof cook>>): number[] => {
+  const geo = firstGeo(result.outputs.pts);
+  return Array.from(geo.attrs.point.require("h").data.subarray(0, geo.pointCount));
+};
+
+describe("nodeSeed: a saved noise that moves with the graph seed", () => {
+  it("a literal noise seed is deaf to the graph seed — the gap", async () => {
+    const a = heights(await cook(seedableNoiseGraph(1, { fold: false })));
+    const b = heights(await cook(seedableNoiseGraph(2, { fold: false })));
+    expect(a).toEqual(b);
+  });
+
+  it("folding nodeSeed into the sample position makes it move", async () => {
+    const a = heights(await cook(seedableNoiseGraph(1, { fold: true })));
+    const b = heights(await cook(seedableNoiseGraph(2, { fold: true })));
+    expect(a.length).toBe(144);
+    expect(a).not.toEqual(b);
+    // Moved, not merely perturbed: an offset of thousands of lattice
+    // cells decorrelates, so most lanes differ by a visible amount
+    // rather than by a rounding step.
+    const moved = a.filter((v, i) => Math.abs(v - b[i]) > 0.05).length;
+    expect(moved).toBeGreaterThan(100);
+  });
+
+  it("is deterministic and memoized: same seed same bytes, setSeed recooks", async () => {
+    const g = seedableNoiseGraph(7, { fold: true });
+    const first = await cook(g);
+    const again = await cook(g);
+    expect(again.stats.cooked).toBe(0);
+    expect(heights(again)).toEqual(heights(first));
+    // The seed is deliberately NOT in `Field.key` — it arrives at
+    // evaluation, while the key is fixed at construction. Invalidation
+    // is exact anyway because the executor's node memo key carries the
+    // node seed verbatim, so this recooks with no help from the field.
+    g.setSeed(8);
+    const moved = await cook(g);
+    expect(moved.stats.cooked).toBe(2);
+    expect(heights(moved)).not.toEqual(heights(first));
+    // ...and coming back is not a new answer.
+    g.setSeed(7);
+    expect(heights(await cook(g))).toEqual(heights(first));
+  });
+
+  it("a fully partitioned cook gives the same bytes as a straight-through one", async () => {
+    // The node seed cannot move mid-cook — `graph.seed` is read once per
+    // node, and a budget only decides WHEN a node runs, never with what.
+    // Asserted rather than argued, because it is the invariant a field
+    // that reads the context would be the first thing to break.
+    const straight = heights(await cook(seedableNoiseGraph(3, { fold: true })));
+    const yielded = heights(
+      await cook(seedableNoiseGraph(3, { fold: true }), { budgetMs: 0 }),
+    );
+    expect(yielded).toEqual(straight);
+  });
+});

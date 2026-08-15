@@ -56,6 +56,49 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     expect(k.usesSeed).toBe(false);
   });
 
+  it("nodeSeed kernel: the seed uniform, split so both sides land on one f32", () => {
+    const k = compileFieldSpec({ fn: "nodeSeed" }, LAYOUT);
+    // The whole body, so a future edit to the split has to be deliberate.
+    // `seed >> 8` is under 2^24 and converts exactly; `* 256.0` only
+    // moves the exponent; the single add is correctly rounded. So this
+    // is `Math.fround(seed)` — what the CPU's Float32Array store
+    // produces — without depending on how an adapter rounds a lossy
+    // u32-to-f32 conversion, which for a hashed node seed is every
+    // value rather than an edge case.
+    expect(k.wgsl).toContain(
+      "  let v0 = f32(params.seed >> 8u) * 256.0 + f32(params.seed & 0xFFu);\n  outBuf[i] = v0;",
+    );
+    expect(k.usesSeed).toBe(true);
+    expect(k.outType).toBe("f32");
+    expect(k.outTupleSize).toBe(1);
+    // No storage buffer, no const slot, bare 12-byte header: the seed is
+    // a uniform member every kernel already carries.
+    expect(k.inputs).toEqual([]);
+    expect(k.constSlots).toBe(0);
+    expect(k.paramNames).toEqual([]);
+    expect(k.uniformBytes).toBe(12);
+  });
+
+  it("a nodeSeed kernel reads the seed, it does not bake it", () => {
+    // The two-keys hazard `param` documented, arriving as a value that
+    // moves on every drag of a seed box. What keeps it away here is that
+    // the seed is READ from the uniform the dispatch writes rather than
+    // emitted as a literal — so the WGSL, and therefore `kernel.key`, is
+    // the same text for every seed and one pipeline serves them all.
+    // (`compileFieldSpec` is never handed a seed at all, which is the
+    // structural half of the same statement; the per-seed cache count is
+    // asserted end to end in `resolver.test.ts`.)
+    const k = compileFieldSpec({ fn: "nodeSeed" }, LAYOUT);
+    // Every occurrence of the seed in the body is a uniform read.
+    expect(count(k.wgsl, "params.seed")).toBe(2);
+    // The uniform member is declared, not a value substituted for it.
+    expect(k.wgsl).toContain("  seed: u32,");
+    expect(k.key).toContain("spec=nodeSeed");
+    // The layout offers attributes; a seed-only kernel binds none of
+    // them, so nothing about the geometry can enter the key either.
+    expect(k.key).toContain("layout=[]");
+  });
+
   it("attribute * randomField kernel (hash library, seed uniform)", () => {
     const k = compileFieldSpec(
       { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "randomField", key: "jitter" }] },
@@ -197,6 +240,7 @@ describe("grammar coverage", () => {
     position: { fn: "position" },
     index: { fn: "index" },
     fraction: { fn: "fraction" },
+    nodeSeed: { fn: "nodeSeed" },
     randomField: { fn: "randomField" },
     // Unbound on purpose: compiling a `param` needs its name and nothing
     // else, which is exactly why it lowers to a uniform slot.

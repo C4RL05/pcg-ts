@@ -1422,6 +1422,46 @@
         ]
       }
     },
+    "basics-reseed-a-noise.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 1936,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -30,
+                -3.1626,
+                -30
+              ],
+              "max": [
+                30.2,
+                2.6601,
+                30.2
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-scatter-in-bounds.json": {
       "outputs": {
         "points": [
@@ -2005,9 +2045,9 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 34200,
-              "vertex": 163200,
-              "primitive": 54400,
+              "point": 17100,
+              "vertex": 81600,
+              "primitive": 27200,
               "detail": 1
             },
             "attrs": {
@@ -2031,14 +2071,14 @@
             },
             "bounds": {
               "min": [
-                -15.1425,
-                3.8008,
-                -0.8939
+                -15.0814,
+                3.7477,
+                -0.8911
               ],
               "max": [
-                17.0368,
-                7.5622,
-                0.8245
+                17.0367,
+                7.5609,
+                0.7584
               ]
             }
           }

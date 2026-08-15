@@ -1,0 +1,68 @@
+{
+  "formatVersion": 1,
+  "seed": 1048,
+  "meta": {
+    "title": "make a saved noise re-roll with the graph seed",
+    "description": "A serialized field expression bakes its numbers, so a noise carries `opts.seed` as a literal and the graph's seed box moves every scatter and jitter while leaving the shape exactly where it was. `{ \"fn\": \"nodeSeed\" }` is the way out: it resolves to the cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes — and `opts.position` is an ordinary argument position where `opts.seed` is read as a plain number and cannot hold a spec. So the seed is folded into the SAMPLE POSITION instead, on two axes at different scales so the two offsets do not move together, and scaled by 1e-6 because a node seed is a full uint32 and an unscaled offset would leave the range where an f32 still resolves a lattice cell. Change the seed and this surface becomes a different surface; delete the `add` and it is deaf to the seed again.",
+    "tags": ["basics", "fields", "noise", "determinism"]
+  },
+  "nodes": [
+    {
+      "id": "grid",
+      "type": "pointGrid",
+      "params": {
+        "countX": 44,
+        "countY": 1,
+        "countZ": 44,
+        "spacing": [1.4, 1, 1.4],
+        "origin": [-30, 0, -30]
+      }
+    },
+    {
+      "id": "lift",
+      "type": "transformPoints",
+      "params": {
+        "translate": {
+          "fn": "vec",
+          "args": [
+            0,
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "perlinNoise",
+                  "opts": {
+                    "seed": 5,
+                    "frequency": 0.045,
+                    "normalized": true,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        { "fn": "position" },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "nodeSeed" }, 1e-6] },
+                            0,
+                            { "fn": "mul", "args": [{ "fn": "nodeSeed" }, 3.1e-6] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0,
+                1,
+                -6,
+                6
+              ]
+            },
+            0
+          ]
+        }
+      }
+    }
+  ],
+  "connections": [{ "from": ["grid", "out"], "to": ["lift", "in"] }],
+  "outputs": [{ "id": "lift", "pin": "out", "name": "points" }]
+}

@@ -233,6 +233,14 @@ const BITEXACT_SPECS: Record<string, FieldSpecArg> = {
   randomField: { fn: "randomField" },
   randomKeyed: { fn: "randomField", key: "jitter" },
   index: { fn: "index" },
+  // The seed itself, which is where the claim actually bites: the CPU
+  // holds it in an f32 column and the kernel splits the u32 rather than
+  // converting it whole, because converting a value past 2^24 is lossy
+  // and 0xdeadbeef and -7 in BITEXACT_SEEDS are both past it. If the
+  // split were wrong, or if the CPU dropped its `>>> 0`, this row says
+  // so — and it is the row that keeps the claim from resting on how one
+  // adapter happens to round.
+  nodeSeed: { fn: "nodeSeed" },
   // Pure hash + compare + select: no rounding anywhere, so bit-exact.
   randomSelect: EXTENDED_SPECS.randomSelect,
 };

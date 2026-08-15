@@ -730,7 +730,7 @@ export const filterByExpression = standardNode<FilterByExpressionParams>({
       type: "u32",
       default: 0,
       description:
-        "Extra seed for evaluating `predicate`: 0 (the default) uses the node's derived seed unchanged; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the evaluation context (randomField, and the per-point seed attribute) but NOT noise, whose seed lives inside its own field spec.",
+        "Extra seed for evaluating `predicate`: 0 (the default) uses the node's derived seed unchanged; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the evaluation context (randomField, the per-point seed attribute, and the `nodeSeed` field) but not a noise on its own, whose seed lives inside its own field spec — a noise moves with this only when its `opts.position` reads `nodeSeed`.",
     },
   },
   execute({ inputs, params, seed: nodeSeed }) {

@@ -123,6 +123,16 @@ export interface RenderInfo {
    * yank the view out from under whoever is turning a knob.
    */
   readonly fresh: boolean;
+  /**
+   * Which declared output each item came from, parallel to `items`.
+   *
+   * The items arrive flattened because a cook returns a COLLECTION per
+   * output and most hosts want the lot, but "which output is this" is not
+   * recoverable from a `DataItem` — and it is what a viewer colours by.
+   * One output can contribute many items (the rig's cable wraps are
+   * sixteen), so the name repeats rather than indexing outputs.
+   */
+  readonly outputs: readonly string[];
 }
 
 /** Host callbacks: scene rendering and stats display. */
@@ -776,6 +786,8 @@ export class EditorController {
     const stale = (): boolean => graph !== this.mirror || rev !== this.structureRev;
     const errors: string[] = [];
     const items: DataItem[] = [];
+    /** The output each item came from, kept parallel to `items`. */
+    const owners: string[] = [];
     let cooked = 0;
     let cached = 0;
     /**
@@ -810,7 +822,10 @@ export class EditorController {
           cached += r.stats.cached;
           if (gpu !== undefined && r.stats.gpu !== undefined) addGpuStats(gpu, r.stats.gpu);
           const col = r.outputs[name];
-          if (col) items.push(...col);
+          if (col) {
+            items.push(...col);
+            for (let i = 0; i < col.length; i++) owners.push(name);
+          }
         } catch (err) {
           errors.push(errorMessage(err));
         }
@@ -873,7 +888,7 @@ export class EditorController {
     if (!stale()) {
       const fresh = this.freshGraph;
       this.freshGraph = false;
-      this.hooks.render(items, { fresh });
+      this.hooks.render(items, { fresh, outputs: owners });
     }
     this.hooks.status(status);
     this.listener?.(status);

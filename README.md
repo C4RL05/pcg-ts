@@ -108,7 +108,8 @@ recooks. Same seed always reproduces the same bytes.
 
 A `Field` is a deferred computation: it resolves to one column of values
 when evaluated over a domain (`EvalContext` = geometry + domain + seed).
-Inputs (`position()`, `attribute(name)`, `index()`, `randomField(key)`),
+Inputs (`position()`, `attribute(name)`, `index()`, `fraction()`,
+`nodeSeed()`, `randomField(key)`),
 combinators (arithmetic, comparisons, trig from `sin` through `atan2`,
 `clamp`/`lerp`/`remap`, `select`, `ramp`, vector ops), and noise
 (`valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise`, `fbm`) all

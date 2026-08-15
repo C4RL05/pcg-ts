@@ -307,7 +307,9 @@ export interface LevelDef {
    * `pointScatterInWorld`, whose lattice is a function of its own `seed`
    * param and never of the graph seed. It CAN move anything downstream
    * that draws on its node seed — a probabilistic `filterByDensity`,
-   * `jitterPoints`, any field param resolving `randomField` — and that
+   * `jitterPoints`, any field param resolving `randomField` or
+   * `nodeSeed` (including a noise whose `opts.position` folds one in) —
+   * and that
    * lands one node later exactly where de-anchoring the source used to:
    * the halo and the neighbour disagree, deterministically and silently.
    * A level whose anchored content feeds such a node should seed its

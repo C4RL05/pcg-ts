@@ -100,7 +100,7 @@ export const setAttribute = standardNode<SetAttributeParams>({
       type: "u32",
       default: 0,
       description:
-        "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but NOT noise: a noise field carries its own seed inside its spec, so `valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise` and `fbm` are unaffected here and are varied through their own `opts.seed`, or by moving the positions they sample. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level.",
+        "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but a noise only if it ASKS: a noise field carries its own seed inside its spec, so `valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise` and `fbm` are unaffected here unless their `opts.position` reads the seed through the `nodeSeed` field. Otherwise they are varied through their own `opts.seed`, or by moving the positions they sample some other way. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level — and note that a `nodeSeed`-folded noise then samples a different region in every cell, so it must not feed anything that has to agree across a seam.",
     },
   },
   // Numeric mode resolves `value` on the GPU when a cook carries a

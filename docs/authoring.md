@@ -344,7 +344,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 43 names at runtime.
+256 levels). `listFieldFns()` returns all 44 names at runtime.
 
 ### Inputs
 
@@ -355,6 +355,7 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 | `position` | `{ fn }` | The `P` attribute (f32, tuple 3) |
 | `index` | `{ fn }` | Element index 0, 1, 2, ... |
 | `fraction` | `{ fn }` | Normalized element index, `index / (count - 1)` |
+| `nodeSeed` | `{ fn }` | The cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes. The same value on every element |
 | `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, index) |
 | `param` | `{ fn, name: "amplitude" }` | The value bound to that name, substituted where the literal would have stood. Same for every element — a value that varies per element is an attribute, not a param. An unbound `param` builds (its key and its GPU kernel need only the name) but refuses to evaluate |
 
@@ -372,6 +373,41 @@ same point gets a different `fraction` after any upstream filter changes
 the count, and a different one again in a `World` cell that holds a
 different number of elements. Use `position` for anything that must agree
 across partitions.
+
+`nodeSeed` exists because a saved graph's seed box does only half of
+what an author expects. A serialized field expression bakes its numbers,
+so a noise carries `opts.seed` as a LITERAL: moving the graph seed
+re-rolls every scatter, jitter and probabilistic filter and moves no
+noise at all. It is a property of the format, not a defect in any one
+graph. The fix has to enter through an ARGUMENT position, because
+`opts.seed` (like `frequency` and `offset`) is read as a plain number
+and cannot hold a spec — `opts.position` can, and folding the seed into
+the sample position decorrelates a noise exactly as changing its seed
+would:
+
+```json
+{ "fn": "perlinNoise", "opts": { "frequency": 0.05, "position":
+  { "fn": "add", "args": [{ "fn": "position" },
+    { "fn": "vec", "args": [
+      { "fn": "mul", "args": [{ "fn": "nodeSeed" }, 1e-6] }, 0, 0] }] } } }
+```
+
+Scale it down like that. A node seed is a full uint32, and an unscaled
+offset lands the sample point where an f32 no longer resolves a lattice
+cell. For the same reason the value is a DECORRELATION SOURCE rather
+than an integer: it arrives in an f32 column, so seeds above 2^24 round
+to the nearest representable multiple and will not compare equal to the
+seed `Graph.describe()` reports.
+
+Two more properties follow from where the seed comes from. It is the
+NODE's seed, so two nodes in one graph get different values and renaming
+a node changes its value — the same rule every seeded node already
+lives under. And it is not in `Field.key`, which is fixed at
+construction while the seed arrives at evaluation; invalidation stays
+exact anyway, because the executor's memo key carries the node seed
+itself, so every node recooks when the graph seed moves whether or not
+its fields mention this one. `examples/graphs/basics-reseed-a-noise.json`
+is the worked example.
 
 `param` is the only fn with no TypeScript constructor, which is not an
 omission: in TypeScript a shaping number is already a variable, and the
@@ -1817,7 +1853,7 @@ still derive it from the graph seed:
 | Node | Reseeding per cell moves it? |
 | --- | --- |
 | `filterByDensity` (probabilistic), `jitterPoints` | yes — `hashCombine(nodeSeed, seed)` decides each draw |
-| any field param resolving `randomField` (including `selfPrune`'s `minDistance` / `priority` and `filterByExpression`'s `predicate`) | yes — the node seed is the evaluation seed |
+| any field param resolving `randomField` or `nodeSeed` (including `selfPrune`'s `minDistance` / `priority` and `filterByExpression`'s `predicate`) | yes — the node seed is the evaluation seed |
 | `selfPrune` with plain numbers, `pointNeighborhood` | no — their order is pure identity, with no seed in it |
 
 So a per-cell `ctx.seed` (or a whole-graph reseed) wired into one of the

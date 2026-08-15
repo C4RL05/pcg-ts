@@ -99,11 +99,78 @@ let drawn: Object3D[] = [];
  * work, and the two pages are judged against different things. These
  * match the dark studio of `shared/scene.ts`.
  */
-const litMaterials: DrawMaterials = {
-  mesh: (vertexColors) =>
-    new MeshStandardMaterial({ color: 0x93a7c4, roughness: 0.85, metalness: 0, vertexColors }),
-  line: (vertexColors) => new LineBasicMaterial({ color: 0xffb454, vertexColors }),
+/**
+ * One hue per OUTPUT, because a graph declares outputs to name its parts.
+ *
+ * A single constant colour for all geometry was fine while a graph was one
+ * thing. It stopped being fine when the parts became real surfaces: the
+ * rig declares nine outputs precisely so a viewer can tell a clamp from a
+ * cable, its two instanced outputs keep their per-asset materials and read
+ * as themselves, and its seven swept ones all arrived in the same
+ * blue-grey. Colour-coding the instances and not the geometry is an
+ * accident of where the material comes from, not a decision anyone made.
+ *
+ * Index 0 is the old constant, so every single-output graph — most of the
+ * corpus — renders exactly as it did. The hues after it are spaced around
+ * the wheel at a similar lightness, which is what makes them tell apart on
+ * a near-black background where saturation alone would not.
+ *
+ * Assigned by first appearance rather than hashed from the name: a hash is
+ * stable across graphs but collides, and two ADJACENT parts sharing a
+ * colour is the exact failure this exists to prevent. The cost is that
+ * adding an output can shift the ones after it, which is a re-cook of the
+ * same scene, not a comparison between two.
+ */
+const OUTPUT_COLORS = [
+  0x93a7c4, 0xe2a447, 0x6ec2a0, 0xcf8bc4, 0xd2705f, 0x8fb84a, 0x59b6cf, 0xa396d8,
+];
+
+/**
+ * The line colour for an output: its hue, lifted towards white.
+ *
+ * Lines and surfaces from the SAME output want to be recognisably one
+ * part, and still separable from each other — a swept tube drawn over the
+ * path it was swept along is the everyday case. Lightness carries the
+ * second distinction, so hue is left to carry the first.
+ *
+ * Slot 0 keeps the amber the page has always drawn lines in, so that the
+ * corpus's many single-output path graphs are untouched by this: slot 0 is
+ * the old PAIR, not just the old mesh colour.
+ */
+const LINE_0 = 0xffb454;
+const litLine = (index: number): number => {
+  if (index % OUTPUT_COLORS.length === 0) return LINE_0;
+  const c = OUTPUT_COLORS[index % OUTPUT_COLORS.length];
+  const lift = (shift: number): number =>
+    Math.round(((c >> shift) & 0xff) + (0xff - ((c >> shift) & 0xff)) * 0.45);
+  return (lift(16) << 16) | (lift(8) << 8) | lift(0);
 };
+
+/**
+ * Materials for one output's items.
+ *
+ * Minted per draw, as the single constant pair was: `disposeDrawn` frees a
+ * Mesh's material, so a shared palette instance would be disposed by the
+ * first cook that drew it and the page would be handing out dead materials
+ * from then on. That contract is worth more than the allocation — three
+ * caches the compiled program per material key, so a colour drawn every
+ * cook costs a JS object and no GPU work.
+ *
+ * The colour multiplies any vertex colours the geometry carries, exactly
+ * as the old constant did: for the standard `color` attribute at its white
+ * default this IS the colour, and a graph that authors real colours is
+ * tinted by its output's hue rather than by one blue-grey.
+ */
+const litMaterialsFor = (index: number): DrawMaterials => ({
+  mesh: (vertexColors) =>
+    new MeshStandardMaterial({
+      color: OUTPUT_COLORS[index % OUTPUT_COLORS.length],
+      roughness: 0.85,
+      metalness: 0,
+      vertexColors,
+    }),
+  line: (vertexColors) => new LineBasicMaterial({ color: litLine(index), vertexColors }),
+});
 
 /**
  * The other way to look at geometry: surface direction instead of light.
@@ -122,7 +189,14 @@ const litMaterials: DrawMaterials = {
  * trade — direction OR colour, not both.
  */
 const normalMaterials: DrawMaterials = {
-  mesh: () => sharedNormal,
+  /**
+   * Minted per draw, NOT `sharedNormal`. `disposeDrawn` frees a plain
+   * Mesh's material, so handing it the page-wide instance disposed it on
+   * the next cook — and the InstancedMeshes still holding it as their
+   * override lost their compiled program with it, every knob turn. The
+   * shared one is for the override alone, which dispose leaves untouched.
+   */
+  mesh: () => new MeshNormalMaterial(),
   line: (vertexColors) => new LineBasicMaterial({ color: 0xcfd6e4, vertexColors }),
 };
 
@@ -137,8 +211,14 @@ const sharedNormal = new MeshNormalMaterial();
 
 export type Shading = "lit" | "normals";
 let shading: Shading = "lit";
-const materialsFor = (mode: Shading): DrawMaterials =>
-  mode === "normals" ? normalMaterials : litMaterials;
+/**
+ * Normals mode answers a question about SHAPE, so it stays one material
+ * for the whole scene: per-output colour there would be a second signal
+ * fighting the one being read, and `MeshNormalMaterial` has no colour to
+ * give anyway.
+ */
+const materialsFor = (mode: Shading, output: number): DrawMaterials =>
+  mode === "normals" ? normalMaterials : litMaterialsFor(output);
 
 /** What the last cook actually drew, for the overlay's `drew` line. */
 let drewSummary = "–";
@@ -212,18 +292,24 @@ function setShading(mode: Shading): void {
 
 function render(items: readonly DataItem[], info: RenderInfo): void {
   lastDrawn = { items, info };
-  const materials = materialsFor(shading);
   for (const obj of drawn) outputGroup.remove(obj);
   disposeDrawn(drawn);
   drawn = [];
+  /**
+   * A palette slot per output, in the order the outputs first appear. The
+   * map is what makes an output that produced sixteen items one colour
+   * rather than sixteen.
+   */
+  const slot = new Map<string, number>();
+  for (const name of info.outputs) if (!slot.has(name)) slot.set(name, slot.size);
   // A count per kind rather than a list: an arbitrary graph can produce a
   // dozen outputs, and "mesh · lines · points" repeated twelve times says
   // less than "3 mesh · 12 points".
   const tally = new Map<string, number>();
-  for (const item of items) {
+  for (const [i, item] of items.entries()) {
     const { objects, report } = drawItem(item, {
       assets,
-      materials,
+      materials: materialsFor(shading, slot.get(info.outputs[i] ?? "") ?? 0),
       pointSize: 0.16,
       ...(shading === "normals" ? { instanceMaterial: sharedNormal } : {}),
     });

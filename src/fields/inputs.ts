@@ -150,6 +150,60 @@ export function fraction(): Field<1> {
   return FRACTION;
 }
 
+const NODE_SEED: Field<1> = makeField("nodeSeed", 1, (ctx) => {
+  const n = elementCount(ctx);
+  const data = new Float32Array(n);
+  // `>>> 0` because that is exactly what the device paths write into the
+  // seed uniform (`evaluator.ts` and `run.ts` both coerce), and the two
+  // must not read the same context differently. Every seed the executor
+  // derives is already a uint32, so this changes nothing for them and
+  // pins the answer for a node that folds a param into its own seed.
+  //
+  // Stored as f32 like every other column, so the low bits round off
+  // above 2^24. Deliberate, and why the GPU lowering splits the u32
+  // rather than converting it whole: both sides must land on the SAME
+  // f32, and only 24 of the 32 bits survive the trip either way.
+  data.fill(ctx.seed >>> 0);
+  return { data, tupleSize: 1 };
+});
+attachSpec(NODE_SEED, { fn: "nodeSeed" }, 1);
+
+/**
+ * The cooking node's own seed — `EvalContext.seed`, which the executor
+ * derives as `deriveNodeSeed(graph.seed, nodeId)` and which `randomField`
+ * already hashes. Constant over the domain: the same number on every
+ * element, changing only when the GRAPH seed or the node's id changes.
+ *
+ * It exists because a serialized field expression bakes its numbers, so a
+ * saved noise carries a literal `opts.seed` and the graph's seed box
+ * moves nothing about it. `opts.seed` is read as a plain number and
+ * cannot hold a spec; `opts.position` is an ordinary argument position
+ * and can — so this is what an author folds into the SAMPLE POSITION to
+ * make a frozen noise re-roll with the graph:
+ *
+ * ```json
+ * { "fn": "perlinNoise", "opts": { "frequency": 0.05, "position":
+ *   { "fn": "add", "args": [{ "fn": "position" },
+ *     { "fn": "vec", "args": [
+ *       { "fn": "mul", "args": [{ "fn": "nodeSeed" }, 1e-6] }, 0, 0] }] } } }
+ * ```
+ *
+ * Two properties worth stating, because both are easy to assume wrongly:
+ *
+ * - The value lands in an f32 column, so seeds above 2^24 round to the
+ *   nearest multiple of a power of two. It is a decorrelation source, not
+ *   an integer you can compare for equality against `Graph.describe`'s
+ *   reported seed.
+ * - It is NOT in `Field.key`, and must not be: the key is fixed at
+ *   construction while the seed arrives at evaluation. Invalidation is
+ *   exact anyway, because the executor's memo key already carries the
+ *   node seed verbatim (`|s${seed}|`) — every node recooks when the graph
+ *   seed moves, whether or not its fields mention this one.
+ */
+export function nodeSeed(): Field<1> {
+  return NODE_SEED;
+}
+
 /**
  * Per-element deterministic random in [0, 1). Same seed and key always
  * reproduce the same values; distinct keys give independent streams.

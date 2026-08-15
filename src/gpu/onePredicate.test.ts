@@ -651,8 +651,8 @@ describe("fieldFromJson never changes a live field's provenance", () => {
     expect([...source.matchAll(/function detachedLeaf</g)].length).toBe(1);
     expect(
       [...source.matchAll(/detachedLeaf\(/g)].length,
-      "callers of detachedLeaf (position, index, fraction)",
-    ).toBe(3);
+      "callers of detachedLeaf (position, index, fraction, nodeSeed)",
+    ).toBe(4);
     expect([...source.matchAll(/attachAuthoredSpec\(/g)].length, "authored stamping sites").toBe(1);
   });
 });

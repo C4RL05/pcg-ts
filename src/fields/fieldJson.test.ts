@@ -11,6 +11,7 @@ import {
   fraction,
   makeField,
   mul,
+  nodeSeed,
   position,
   remap,
   sin,
@@ -87,6 +88,7 @@ describe("fieldFromJson", () => {
       { fn: "vec", args: [{ fn: "index" }, 0, { fn: "randomField" }] },
       { fn: "select", args: [{ fn: "gt", args: [{ fn: "index" }, 3] }, 1, 0] },
       { fn: "fraction" },
+      { fn: "nodeSeed" },
     ];
     for (const spec of specs) {
       const field = fieldFromJson(spec);
@@ -106,6 +108,68 @@ describe("fieldFromJson", () => {
     expect(() => fieldFromJson({ fn: "fraction", args: [1] } as unknown as FieldSpec)).toThrow(
       /unknown key "args" for fn "fraction"/,
     );
+  });
+
+  it("nodeSeed round-trips and reads the evaluation context's seed", () => {
+    const spec: FieldSpec = { fn: "nodeSeed" };
+    const field = fieldFromJson(spec);
+    expect(fieldToJson(field)).toEqual(spec);
+    expect(field.key).toBe(nodeSeed().key);
+    const ctx = testCloud(5);
+    expect(Array.from(evaluateField(field, ctx).data)).toEqual([7, 7, 7, 7, 7]);
+    // A different context, same field object: the value follows the
+    // SEED, not the field — which is the whole feature.
+    const moved = { ...ctx, seed: 99 };
+    expect(Array.from(evaluateField(field, moved).data)).toEqual([99, 99, 99, 99, 99]);
+    expect(() => fieldFromJson({ fn: "nodeSeed", args: [1] } as unknown as FieldSpec)).toThrow(
+      /unknown key "args" for fn "nodeSeed"/,
+    );
+  });
+
+  it("nodeSeed's key carries no seed, and must not", () => {
+    // `Field.key` is fixed at construction while the seed arrives at
+    // evaluation, so the seed CANNOT be in the key. Invalidation is
+    // exact anyway: the executor's node memo key already carries the
+    // node seed verbatim, so every node recooks when the graph seed
+    // moves (pinned in `src/graph/execute.test.ts`). Asserted here
+    // because a future "improvement" that folded a seed into this key
+    // would look like a fix and would silently key on whichever seed
+    // happened to build the field.
+    const composed = fieldFromJson({ fn: "mul", args: [{ fn: "nodeSeed" }, 2] });
+    const before = composed.key;
+    const ctx = testCloud(4);
+    const a = Array.from(evaluateField(composed, { ...ctx, seed: 11 }).data);
+    const b = Array.from(evaluateField(composed, { ...ctx, seed: 12 }).data);
+    // The value tracked the seed; the key did not move with it.
+    expect(a).toEqual([22, 22, 22, 22]);
+    expect(b).toEqual([24, 24, 24, 24]);
+    expect(composed.key).toBe(before);
+    expect(nodeSeed().key).toBe("nodeSeed");
+  });
+
+  it("nodeSeed reads the seed as a uint32, matching what the device paths write", () => {
+    // The GPU uniform is written as `ctx.seed >>> 0` on both device
+    // paths, so the CPU has to read it the same way or the two disagree
+    // for any node that hands its own param through as a seed.
+    const ctx = testCloud(3);
+    const field = fieldFromJson({ fn: "nodeSeed" });
+    expect(Array.from(evaluateField(field, { ...ctx, seed: -7 }).data)).toEqual([
+      4294967296, 4294967296, 4294967296,
+    ]);
+    // ...and the f32 column is why: 4294967289 is not representable, so
+    // both sides land on the same nearest f32 rather than on two.
+    expect(Math.fround(-7 >>> 0)).toBe(4294967296);
+  });
+
+  it("a domain with no elements yields an empty nodeSeed column", () => {
+    const geo = createPointCloud(0);
+    const col = evaluateField(fieldFromJson({ fn: "nodeSeed" }), {
+      geo,
+      domain: "point",
+      seed: 3,
+    });
+    expect(col.data.length).toBe(0);
+    expect(col.tupleSize).toBe(1);
   });
 
   it("round-trips: fieldToJson returns the original spec, and rebuilding evaluates identically", () => {
@@ -256,6 +320,7 @@ describe("fieldFromJson", () => {
       "position",
       "index",
       "fraction",
+      "nodeSeed",
       "randomField",
       "add",
       "sub",

@@ -3,7 +3,7 @@
     "file": "basics-attribute-from-noise.json",
     "path": "examples/graphs/basics-attribute-from-noise.json",
     "title": "write an attribute from a noise field",
-    "description": "A field-capable param takes a field expression instead of a constant: `setAttribute`'s `value` here is four octaves of Perlin fBm, resolved once per point and stored into a new `height` attribute. `normalized: true` maps the noise's own raw range onto [0, 1], so no remap wrapper is needed. Noise carries its own `seed` inside the spec — the graph seed does not move the pattern, only `opts.seed` or the sample position does.",
+    "description": "A field-capable param takes a field expression instead of a constant: `setAttribute`'s `value` here is four octaves of Perlin fBm, resolved once per point and stored into a new `height` attribute. `normalized: true` maps the noise's own raw range onto [0, 1], so no remap wrapper is needed. Noise carries its own `seed` inside the spec — the graph seed does not move the pattern, only `opts.seed` or the sample position does, which is what `basics-reseed-a-noise` folds `{ \"fn\": \"nodeSeed\" }` into.",
     "tags": [
       "basics",
       "fields",
@@ -779,6 +779,32 @@
       {
         "name": "points",
         "node": "fan",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-reseed-a-noise.json",
+    "path": "examples/graphs/basics-reseed-a-noise.json",
+    "title": "make a saved noise re-roll with the graph seed",
+    "description": "A serialized field expression bakes its numbers, so a noise carries `opts.seed` as a literal and the graph's seed box moves every scatter and jitter while leaving the shape exactly where it was. `{ \"fn\": \"nodeSeed\" }` is the way out: it resolves to the cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes — and `opts.position` is an ordinary argument position where `opts.seed` is read as a plain number and cannot hold a spec. So the seed is folded into the SAMPLE POSITION instead, on two axes at different scales so the two offsets do not move together, and scaled by 1e-6 because a node seed is a full uint32 and an unscaled offset would leave the range where an f32 still resolves a lattice cell. Change the seed and this surface becomes a different surface; delete the `add` and it is deaf to the seed again.",
+    "tags": [
+      "basics",
+      "fields",
+      "noise",
+      "determinism"
+    ],
+    "seed": 1048,
+    "nodeCount": 2,
+    "nodeTypes": [
+      "pointGrid",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "lift",
         "pin": "out"
       }
     ]

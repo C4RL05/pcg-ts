@@ -12,6 +12,10 @@
  * - `{ fn: "fraction" }` — normalized index, `index / (count - 1)`:
  *   exactly 0 on the first element and exactly 1 on the last (a lone
  *   element gives 0)
+ * - `{ fn: "nodeSeed" }` — the cooking node's own seed (`ctx.seed`), the
+ *   same number `randomField` hashes, constant over the domain. Fold it
+ *   into a noise's `opts.position` to make a saved noise re-roll with the
+ *   graph seed, which its literal `opts.seed` cannot
  * - `{ fn: "randomField", key?: 0 | "salt" }`
  * - `{ fn: "param", name: "amplitude" }` — the value bound to that name,
  *   substituted at build time as if the literal had been written; a
@@ -72,6 +76,7 @@ import {
   min,
   mul,
   ne,
+  nodeSeed,
   normalize,
   position,
   ramp,
@@ -292,6 +297,9 @@ register("position", [], `{ fn: "position" }`, () => detachedLeaf(position(), { 
 register("index", [], `{ fn: "index" }`, () => detachedLeaf(index(), { fn: "index" }));
 register("fraction", [], `{ fn: "fraction" }`, () =>
   detachedLeaf(fraction(), { fn: "fraction" }),
+);
+register("nodeSeed", [], `{ fn: "nodeSeed" }`, () =>
+  detachedLeaf(nodeSeed(), { fn: "nodeSeed" }),
 );
 
 /**

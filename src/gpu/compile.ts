@@ -379,6 +379,30 @@ HANDLERS.set("fraction", (_spec, _path, ctx) =>
   ctx.emit("f32(i) / f32(max(params.count, 2u) - 1u)", 1),
 );
 
+// The node seed is already a uniform (`params.seed`, written per
+// dispatch), so this leaf costs no binding, no const slot, and — the
+// part that matters — nothing in `kernel.key`, which is a function of
+// the SPEC. One kernel serves every seed the graph is ever given, where
+// a baked literal would have specialized a pipeline per seed into an
+// unbounded cache: the two-keys hazard `param` documented, arriving here
+// as a value that changes on every drag of the seed box.
+//
+// Split rather than `f32(params.seed)`. The CPU column is an f32, so
+// the value both sides must agree on is the nearest f32 to a full u32,
+// and a u32 past 2^24 is exactly the case where converting it whole is
+// LOSSY — which for a hashed node seed is not an edge case but every
+// value. Rather than depend on how a given adapter rounds that
+// conversion, the pieces are made exact and the rounding is left to one
+// correctly-rounded add: `seed >> 8` is under 2^24 and converts
+// exactly, `* 256.0` only moves the exponent, and the sum is
+// `Math.fround(seed)`. Measured both ways on the reference adapter
+// (RTX 5090, D3D12) — it agrees either way, which is the point: this
+// spelling does not need it to.
+HANDLERS.set("nodeSeed", (_spec, _path, ctx) => {
+  ctx.usesSeed = true;
+  return ctx.emit("f32(params.seed >> 8u) * 256.0 + f32(params.seed & 0xFFu)", 1);
+});
+
 // randomField is keyed on POINT IDENTITY on the CPU (see
 // `src/data/identity.ts`): the f32 bit patterns of P.xyz hashed with the
 // `seed` attribute, then folded into (params.seed, key). A layout carries
