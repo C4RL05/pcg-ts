@@ -125,6 +125,65 @@ export interface GpuCookStats {
   readbacksSaved: number;
   /** CPU fallbacks by machine-readable reason (see the vocabulary above). */
   fallbacks: Record<string, number>;
+  /** Non-finite findings and blind spots on the device path. */
+  nonFinite: NonFiniteReport;
+}
+
+/**
+ * What the non-finite guard FOUND on the device path, and — the half that
+ * matters more — what it could not look at.
+ *
+ * A field-capable param that resolves to NaN or ±Infinity is refused where
+ * it lands on a domain, naming the node and the param (`resolveOn` in
+ * `src/nodes/util.ts`). A FUSED device-resident run never reaches that
+ * seam: its members' field columns stay in storage buffers and only the
+ * written attributes come back, so the guard that throws on the CPU would
+ * be silent on a run-fusing device — the CPU is the reference, and a path
+ * that quietly checks less than the reference is exactly what the
+ * determinism pillar forbids. The run terminal therefore scans what it
+ * DOES have (the readback geometry) and declares what it does not.
+ *
+ * Both records are empty on a cook where nothing fused, which is an honest
+ * silence: no run means no site bypassed the guarded seam. They are never
+ * absent while `CookStats.gpu` is present, so an agent can tell "clean"
+ * from "not looked at" without knowing which cook shape produced them.
+ */
+export interface NonFiniteReport {
+  /**
+   * Non-finite ELEMENT counts of a fused run's readback geometry, keyed
+   * `<terminal node id>:<point attribute>`, SUMMED over every execution of
+   * that terminal in this cook (a forEach body cooks once per item into
+   * this one sink). Present only for attributes that hold at least one, so
+   * an empty record means the scan found nothing — not that it did not
+   * run.
+   *
+   * A REPORT, never a throw. The run has fused several nodes into one
+   * pipeline, so the value's param cannot be named, and a throw that
+   * cannot say which knob to turn is a worse answer than a count.
+   *
+   * From runs that EXECUTED on this cook only: a run served from its
+   * terminal's memo entry does no device work and re-reports nothing,
+   * exactly as `residentRuns` documents. Its `unchecked` declaration below
+   * IS reported warm, so a warm cook never reads as fully guarded — read
+   * the two together, never one as a restatement of the other.
+   */
+  counts: Record<string, number>;
+  /**
+   * Sites the guard did not read, keyed `<node id>:<what>` with a
+   * machine-readable reason. The vocabulary:
+   *
+   * - `"fused-run"` (key `<terminal>:params`) — the run's members never
+   *   called the param seam, so no param was checked BY NAME. What the
+   *   run wrote is covered by `counts` instead, without attribution.
+   * - `"device-resident"` (key `<terminal>:transforms`) — the terminal's
+   *   instance transforms live in a GPU buffer that is never read back.
+   *   Checking them means a full `count * 16` float readback on the frame
+   *   path, reintroducing the transfer the feature exists to remove, so
+   *   they are declared unchecked rather than paid for. (The bounds a
+   *   caller supplies for such a batch ARE validated, by
+   *   `resolveBoundingSphere` in `src/three/webgpuInstances.ts`.)
+   */
+  unchecked: Record<string, string>;
 }
 
 /** A fresh all-zero {@link GpuCookStats}. */
@@ -137,6 +196,7 @@ export function createGpuCookStats(): GpuCookStats {
     fusedNodes: 0,
     readbacksSaved: 0,
     fallbacks: {},
+    nonFinite: { counts: {}, unchecked: {} },
   };
 }
 

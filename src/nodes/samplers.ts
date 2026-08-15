@@ -177,7 +177,7 @@ export const surfaceSample = standardNode<SurfaceSampleParams>({
     // the area CDF is built in primitive order, and no keying of the
     // acceptance draw could make it so.
     const density = requireTuple(
-      await resolveOnMaybeGpu(gpu, candidates, "point", params.densityField, seed),
+      await resolveOnMaybeGpu(gpu, candidates, "point", params.densityField, seed, "surfaceSample", "densityField"),
       [1],
       "surfaceSample",
       "densityField",
@@ -480,7 +480,7 @@ export const volumeSample = standardNode<VolumeSampleParams>({
     }
     // Jitter each point inside its cell (field evaluated on the centers).
     const jitter = requireTuple(
-      await resolveOnMaybeGpu(gpu, geo, "point", params.jitter, seed),
+      await resolveOnMaybeGpu(gpu, geo, "point", params.jitter, seed, "volumeSample", "jitter"),
       [1],
       "volumeSample",
       "jitter",

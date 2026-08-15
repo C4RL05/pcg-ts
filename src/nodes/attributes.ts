@@ -25,6 +25,7 @@ import {
   requireGeometryItem,
   requireReportSlot,
   resolveOn,
+  resolveOnAllowingNonFinite,
   tryResolveOnGpu,
 } from "./util.js";
 
@@ -134,7 +135,13 @@ export const setAttribute = standardNode<SetAttributeParams>({
         return { out: [makeGeometryItem(geo)] };
       }
       // Value-list mode: `value` selects per element among `values`.
-      const col = resolveOn(geo, domain, params.value, seed);
+      // Deliberately NOT guarded against non-finite values (the one
+      // string-mode call, and the reason it is spelled differently from
+      // the numeric one below): the selector's floor+clamp is TOTAL by
+      // design — NaN and -Infinity land on entry 0, +Infinity on the last,
+      // "never a per-element throw" — so a non-finite value here is a
+      // defined selection rather than a broken recipe.
+      const col = resolveOnAllowingNonFinite(geo, domain, params.value, seed);
       if (col.tupleSize !== 1 && col.tupleSize !== ts) {
         throw new Error(
           `setAttribute: value evaluates to tuple size ${col.tupleSize}, which is neither 1 (broadcast) nor tupleSize ${ts}`,
@@ -181,8 +188,10 @@ export const setAttribute = standardNode<SetAttributeParams>({
     // on the device; null (plain value, no spec, incompatible layout)
     // falls back to the byte-identical CPU evaluation.
     const gpuCol =
-      gpu !== undefined ? await tryResolveOnGpu(gpu, geo, domain, params.value, seed) : null;
-    const col = gpuCol ?? resolveOn(geo, domain, params.value, seed);
+      gpu !== undefined
+        ? await tryResolveOnGpu(gpu, geo, domain, params.value, seed, "setAttribute", "value")
+        : null;
+    const col = gpuCol ?? resolveOn(geo, domain, params.value, seed, "setAttribute", "value");
     if (col.tupleSize !== 1 && col.tupleSize !== ts) {
       throw new Error(
         `setAttribute: value evaluates to tuple size ${col.tupleSize}, which is neither 1 (broadcast) nor tupleSize ${ts}`,

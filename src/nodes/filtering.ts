@@ -32,7 +32,7 @@ import {
   gatherPoints,
   gatherPrimitives,
   requireGeometry,
-  resolveOn,
+  resolveOnAllowingNonFinite,
 } from "./util.js";
 
 /** Params of {@link filterByDensity}. */
@@ -745,7 +745,11 @@ export const filterByExpression = standardNode<FilterByExpressionParams>({
     // key. Adopting is one line plus a fixture in the bidirectional guard at
     // src/gpu/onePredicate.test.ts — do it only with a parity budget
     // expressed in surviving points, not in ulps.
-    const col = resolveOn(geo, "point", params.predicate, seed);
+    // Deliberately NOT guarded against non-finite values: a NaN predicate
+    // means DROP THIS POINT, which this node's own description states and
+    // the `> 0 || < 0` test below implements. A throw would delete a
+    // documented meaning — see resolveOnAllowingNonFinite.
+    const col = resolveOnAllowingNonFinite(geo, "point", params.predicate, seed);
     if (col.tupleSize !== 1) {
       throw new Error(
         `filterByExpression: predicate must evaluate to tuple size 1 (one flag per point), got tuple size ${col.tupleSize}; field comparisons broadcast elementwise, so comparing a vector such as gt(position(), 0) yields one flag per component — compare a single component instead, e.g. gt(component(position(), 1), 0)`,
@@ -783,7 +787,14 @@ function selfPruneScalar(
   seed: number,
   what: string,
 ): Column {
-  const col = resolveOn(geo, "point", value, seed);
+  // Deliberately NOT guarded against non-finite values, for BOTH params
+  // (see resolveOnAllowingNonFinite): a NaN radius claims nothing (every
+  // distance involving it compares false, the spatial index's documented
+  // tolerance) and a NaN rank loses every contest, falling through to the
+  // identity tiebreak. Both are stated in the two param descriptions and
+  // pinned by tests — "treats 0, negative and NaN radii as claiming
+  // nothing, but still prunes them", and "ranks NaN lowest".
+  const col = resolveOnAllowingNonFinite(geo, "point", value, seed);
   if (col.tupleSize !== 1) {
     throw new Error(
       `selfPrune: param "${param}" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — ${what} is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,

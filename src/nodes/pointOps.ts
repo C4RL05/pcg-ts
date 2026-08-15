@@ -74,9 +74,9 @@ export const transformPoints = standardNode<TransformPointsParams>({
   async execute({ inputs, params, seed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "transformPoints"));
     const n = geo.pointCount;
-    const tCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.translate, seed), [1, 3], "transformPoints", "translate");
-    const rCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.rotateEuler, seed), [1, 3], "transformPoints", "rotateEuler");
-    const sCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.scale, seed), [1, 3], "transformPoints", "scale");
+    const tCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.translate, seed, "transformPoints", "translate"), [1, 3], "transformPoints", "translate");
+    const rCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.rotateEuler, seed, "transformPoints", "rotateEuler"), [1, 3], "transformPoints", "rotateEuler");
+    const sCol = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.scale, seed, "transformPoints", "scale"), [1, 3], "transformPoints", "scale");
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
@@ -153,7 +153,7 @@ export const jitterPoints = standardNode<JitterPointsParams>({
   async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "jitterPoints"));
     const seed = hashCombine(nodeSeed, params.seed);
-    const amount = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.amount, seed), [1, 3], "jitterPoints", "amount");
+    const amount = requireTuple(await resolveOnMaybeGpu(gpu, geo, "point", params.amount, seed, "jitterPoints", "amount"), [1, 3], "jitterPoints", "amount");
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
@@ -419,7 +419,7 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
       );
     }
     const dir = requireTuple(
-      await resolveOnMaybeGpu(gpu, geo, "point", params.direction, seed),
+      await resolveOnMaybeGpu(gpu, geo, "point", params.direction, seed, "orientAlongVector", "direction"),
       [1, 3],
       "orientAlongVector",
       "direction",
@@ -437,7 +437,7 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
     let upz = 0;
     if (upIsField) {
       upCol = requireTuple(
-        await resolveOnMaybeGpu(gpu, geo, "point", params.up, seed),
+        await resolveOnMaybeGpu(gpu, geo, "point", params.up, seed, "orientAlongVector", "up"),
         [1, 3],
         "orientAlongVector",
         "up",

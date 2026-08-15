@@ -323,6 +323,51 @@ describe("pcg cli — cook", () => {
     );
   });
 
+  it("a field param that resolves to a non-finite value fails the cook, not silently", async () => {
+    // The refusal has to reach the shell as a FAILURE. A serialized graph
+    // carries its field as the JSON grammar, where `div` by a literal 0 is
+    // the shortest way to write the mistake the guard exists for: the
+    // schema's min/max bound nothing, because there was no number to bind
+    // until the recipe landed on a domain.
+    const io = fakeIo({
+      "/non-finite.json": JSON.stringify({
+        formatVersion: 1,
+        seed: 1,
+        nodes: [
+          {
+            id: "scatter",
+            type: "pointScatterInBounds",
+            params: { count: 6, boundsMin: [0, 0, 0], boundsMax: [4, 0, 4] },
+          },
+          {
+            id: "height",
+            type: "setAttribute",
+            params: {
+              name: "height",
+              domain: "point",
+              type: "f32",
+              value: { fn: "div", args: [1, 0] },
+            },
+          },
+        ],
+        connections: [{ from: ["scatter", "out"], to: ["height", "in"] }],
+        outputs: [{ id: "height", pin: "out", name: "points" }],
+      }),
+    });
+    expect(await runCli(["cook", "/non-finite.json"], io.io)).toBe(EXIT_FAILURE);
+    // The node instance, the node TYPE and the PARAM, all named — the
+    // three things an agent needs to edit the right key of the right node.
+    expect(io.stderr()).toContain(
+      'node "height" failed: setAttribute: param "value" resolved to +Infinity at element 0 — ' +
+        "6 of 6 elements are non-finite.",
+    );
+    // ...and the fix, in the same breath as the complaint.
+    expect(io.stderr()).toContain('set "value" to a plain number');
+    // Nothing may read as a completed cook: an exit code alone is easy to
+    // miss in a pipeline that also prints a report.
+    expect(io.stdout()).not.toContain("cooked /non-finite.json");
+  });
+
   it("a graph with no declared outputs says so, and points at the fix", async () => {
     const io = fakeIo({
       "/no-outputs.json": JSON.stringify({

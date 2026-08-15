@@ -56,6 +56,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
       fusedNodes: 0,
       readbacksSaved: 0,
       fallbacks: { "derived-spec": 1 },
+      nonFinite: { counts: {}, unchecked: {} },
     });
   });
 
@@ -225,7 +226,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     expect(Array.from(frac.data)).toEqual(
       Array.from(evaluateField(fieldFromJson({ fn: "fraction" }), ctx).data),
     );
-    expect(stats).toEqual({ dispatches: 0, pipelinesCompiled: 0, pipelineCacheHits: 0, residentRuns: 0, fusedNodes: 0, readbacksSaved: 0, fallbacks: {} });
+    expect(stats).toEqual({ dispatches: 0, pipelinesCompiled: 0, pipelineCacheHits: 0, residentRuns: 0, fusedNodes: 0, readbacksSaved: 0, fallbacks: {}, nonFinite: { counts: {}, unchecked: {} } });
     expect(ev.pipelineCacheSize).toBe(0);
   });
 

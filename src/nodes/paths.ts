@@ -474,7 +474,7 @@ export const pathSegments = standardNode<PathSegmentsParams>({
     const geo = requireGeometry(inputs, "in", "pathSegments");
     const tables = polylineArcTables(geo, "pathSegments");
     const radius = requireTuple(
-      await resolveOnMaybeGpu(gpu, geo, "point", params.radius, seed),
+      await resolveOnMaybeGpu(gpu, geo, "point", params.radius, seed, "pathSegments", "radius"),
       [1],
       "pathSegments",
       "radius",
@@ -635,7 +635,7 @@ export const pathPointAt = standardNode<PathPointAtParams>({
     const geo = cloneGeometry(src);
     const tables = polylineArcTables(geo, "pathPointAt");
     const at = requireTuple(
-      await resolveOnMaybeGpu(gpu, geo, "point", params.parameter, seed),
+      await resolveOnMaybeGpu(gpu, geo, "point", params.parameter, seed, "pathPointAt", "parameter"),
       [1],
       "pathPointAt",
       "parameter",

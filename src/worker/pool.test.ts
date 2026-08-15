@@ -318,6 +318,46 @@ describe("CookWorkerPool", () => {
     }
   }, 60_000);
 
+  it("carries the non-finite refusal across the wire with its nodeId intact", async () => {
+    // The guard at the param seam throws a PLAIN Error from inside the
+    // node's execute rather than inventing an error class of its own,
+    // precisely so this holds: the executor wraps it in
+    // NodeExecutionError, and that is the one shape `encodeError` knows
+    // how to carry the offending node's id through. A bespoke class would
+    // cross as a bare Error and the id would be gone by the time it
+    // reached the main thread — the off-thread cook would name a broken
+    // param but not which node holds it.
+    const graph = new Graph(1);
+    const scatter = graph.add(
+      pointScatterInBounds,
+      { count: 6, boundsMin: [0, 0, 0], boundsMax: [4, 0, 4] },
+      "cloud",
+    );
+    const height = graph.add(
+      setAttribute,
+      { name: "height", type: "f32", value: fieldFromJson({ fn: "div", args: [1, 0] }) },
+      "broken-height",
+    );
+    graph.connect(scatter, "out", height, "in");
+    graph.output(height, "out", "points");
+    const json = serializeGraph(graph);
+    const pool = new CookWorkerPool({ workers: 1, createWorker: entry.createWorker });
+    try {
+      const failure = pool.cook({ graph: json });
+      await expect(failure).rejects.toBeInstanceOf(NodeExecutionError);
+      const err = (await failure.catch((e: unknown) => e)) as NodeExecutionError;
+      expect(err.nodeId).toBe("broken-height");
+      expect(err.message).toContain(
+        'setAttribute: param "value" resolved to +Infinity at element 0 — 6 of 6 elements are non-finite.',
+      );
+      // The stated fix survives the boundary too, so the message an agent
+      // reads off-thread is the message it would have read in-process.
+      expect(err.message).toContain('set "value" to a plain number');
+    } finally {
+      await pool.close();
+    }
+  }, 60_000);
+
   it("surfaces a deserialization failure as that cook's rejection", async () => {
     const bad = {
       formatVersion: 1,

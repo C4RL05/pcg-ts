@@ -880,7 +880,7 @@ function containerNode(type: string): NodeDef<ContainerParams> {
       // Resolve exactly as an adopter does; the geometry passes through
       // untouched, so the node's only observable effect is the resolve.
       for (const value of values) {
-        await resolveOnMaybeGpu(gpu, item.geo, "point", value, seed);
+        await resolveOnMaybeGpu(gpu, item.geo, "point", value, seed, type, "fields");
       }
       return { out: [item] };
     },

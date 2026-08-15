@@ -8,6 +8,10 @@ import {
   type ResidentMemberDesc,
   type ResidentRunResult,
 } from "../fields/index.js";
+// Directly, not through `../fields/index.js`: the scan is internal (see
+// the module doc there), and this file owns one of the two seams that
+// decide what to DO with the answer.
+import { countNonFiniteElements, firstNonFinite } from "../fields/finite.js";
 import { acceptsDerivedSpecs, deviceSpec, resolverView } from "../fields/spec.js";
 import {
   makeDeviceInstancesItem,
@@ -379,6 +383,85 @@ function countedSince(
     if (n > (before[name] ?? 0)) names.push(name);
   }
   return names;
+}
+
+/**
+ * The fused run's half of the non-finite guard, in two functions: DECLARE
+ * what could not be looked at ({@link declareRunParamsUnchecked}), and
+ * scan what came back ({@link reportRunNonFinite}).
+ *
+ * The param seam (`resolveOn` in `src/nodes/util.ts`) refuses a field
+ * param that evaluates to NaN or ±Infinity, naming the node and the param.
+ * A fused run never calls it — its members' field columns stay in storage
+ * buffers and only the written attributes are read back — and five of the
+ * eight failures that motivated the guard are resident kinds. Left at the
+ * param seam alone, the guard would throw on the CPU and stay silent on a
+ * run-fusing device, which is the CPU-is-the-reference invariant broken in
+ * the one direction that looks like success.
+ *
+ * So: REPORT, never throw. A run has fused several nodes into one
+ * pipeline, so the offending param cannot be named, and this scan also
+ * cannot separate a value a member computed from one that arrived on the
+ * input — it is a statement about the run's OUTPUT, which is true either
+ * way. Throwing on that would fail cooks the CPU path completes.
+ *
+ * THE ASYMMETRY RUNS BOTH WAYS, and the second direction is the sharp
+ * one: a graph whose field param goes non-finite on a resident kind
+ * (`setAttribute`, `transformPoints`, `jitterPoints`, `orientAlongVector`)
+ * FAILS per-node and SUCCEEDS-with-a-report when the same nodes fuse — and
+ * whether they fuse is a resource decision (`planRun` returning null drops
+ * the chain back to the per-node path, where the seam throws). So "did
+ * this cook throw" can depend on device memory. That is the price of
+ * reporting rather than throwing here, it is why the `unchecked` key
+ * exists, and it is the first thing to revisit if the run terminal ever
+ * learns which member wrote a column.
+ *
+ * Point domain only, because a run is planned against the input's POINT
+ * layout alone (`planRun` is handed the point attributes and the point
+ * count, and nothing else), so a resident member has no other domain to
+ * write. f32 columns only (see `src/fields/finite.ts`).
+ */
+function declareRunParamsUnchecked(run: ResidentRun, sink: GpuCookStats | undefined): void {
+  if (sink === undefined) return;
+  // Reported WARM AND COLD, like {@link countPartialFusion} and for the
+  // same reason: which params reach the checked seam is a property of the
+  // GRAPH, not of the cache state. A run served from its terminal's memo
+  // entry checked nothing this cook either, and a cook that looked fully
+  // guarded on the second pass would be the exact silence this key exists
+  // to break. The `counts` beside it are cold-only — they are a record of
+  // device work, like `residentRuns`. Read the two together.
+  sink.nonFinite.unchecked[`${run.terminal}:params`] = "fused-run";
+}
+
+function reportRunNonFinite(
+  run: ResidentRun,
+  result: ResidentRunResult,
+  sink: GpuCookStats | undefined,
+): void {
+  if (sink === undefined) return;
+  const report = sink.nonFinite;
+  declareRunParamsUnchecked(run, sink);
+  if (result.deviceBatches !== undefined) {
+    report.unchecked[`${run.terminal}:transforms`] = "device-resident";
+  }
+  if (result.geo === undefined) return;
+  const set = result.geo.attrs.point;
+  for (const attr of set) {
+    // Attribute storage is `capacity * tupleSize` long and its tail is
+    // dead: scan the live elements only.
+    const scalars = set.count * attr.tupleSize;
+    if (firstNonFinite(attr.data, scalars) < 0) continue;
+    // ACCUMULATED, not assigned, like `fallbacks` and for the same reason:
+    // one terminal id can execute many times in a cook (a forEach body
+    // cooks once per item into the outermost sink, and a subgraph's node
+    // ids are per-graph, so an inner id can equal an outer one). Assigning
+    // would make the number "the last offending run" while reading like a
+    // total, and would let a clean later run leave an earlier count
+    // standing unchanged rather than adding nothing to it.
+    const key = `${run.terminal}:${attr.name}`;
+    report.counts[key] =
+      (report.counts[key] ?? 0) + countNonFiniteElements(attr.data, scalars, attr.tupleSize);
+  }
 }
 
 /**
@@ -1071,6 +1154,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
 
     if (terminal.cache !== undefined && terminal.cache.key === key && terminal.cache.volatile !== true) {
       countPartialFusion(run);
+      declareRunParamsUnchecked(run, countSink);
       const elapsed = performance.now() - runStart;
       for (const id of run.members) {
         const node = graph.require(id);
@@ -1182,6 +1266,7 @@ async function cookRun(graph: Graph, opts: CookOptions): Promise<CookResult> {
     if (result.deviceBatches !== undefined) {
       for (const batch of result.deviceBatches) produced.push(batch.transforms);
     }
+    reportRunNonFinite(run, result, countSink);
     // Tags the CPU chain would have produced: every resident CHAIN node
     // emits an untagged item, so a multi-member run's outputs carry no
     // tags (unchanged behavior); a lone terminal-only member is the one

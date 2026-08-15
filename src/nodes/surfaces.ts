@@ -435,13 +435,15 @@ export const sweepProfile = standardNode<SweepProfileParams>({
         "point",
         profile.scaleParam === "width" ? params.width : params.radius,
         seed,
+        "sweepProfile",
+        profile.scaleParam,
       ),
       [1],
       "sweepProfile",
       profile.scaleParam,
     );
     const rollCol = requireTuple(
-      await resolveOnMaybeGpu(gpu, src, "point", params.roll, seed),
+      await resolveOnMaybeGpu(gpu, src, "point", params.roll, seed, "sweepProfile", "roll"),
       [1],
       "sweepProfile",
       "roll",
@@ -453,7 +455,7 @@ export const sweepProfile = standardNode<SweepProfileParams>({
     let upz = 0;
     if (upIsField) {
       upCol = requireTuple(
-        await resolveOnMaybeGpu(gpu, src, "point", params.up, seed),
+        await resolveOnMaybeGpu(gpu, src, "point", params.up, seed, "sweepProfile", "up"),
         [1, 3],
         "sweepProfile",
         "up",
@@ -975,7 +977,7 @@ export const extrudePolygon = standardNode<ExtrudePolygonParams>({
 
     const tables = polylineArcTables(src, "extrudePolygon");
     const distCol = requireTuple(
-      await resolveOnMaybeGpu(gpu, src, "point", params.distance, seed),
+      await resolveOnMaybeGpu(gpu, src, "point", params.distance, seed, "extrudePolygon", "distance"),
       [1],
       "extrudePolygon",
       "distance",

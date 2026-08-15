@@ -20,6 +20,10 @@ import {
   isField,
   resolveField,
 } from "../fields/index.js";
+// Directly, not through `../fields/index.js`: the scan is internal to the
+// library (see the module doc there), and the seams that own the POLICY
+// are this file and the fused-run terminal in `src/graph/execute.ts`.
+import { countNonFiniteElements, firstNonFinite } from "../fields/finite.js";
 import type { DataCollection, GeometryItem } from "../graph/index.js";
 import type { PositionView } from "../spatial/index.js";
 
@@ -145,10 +149,117 @@ export function positionView(geo: Geometry, nodeType: string, pin: string): Posi
 export type FieldParam = FieldLike;
 
 /**
- * Resolve a field-capable param against a geometry domain. Plain numbers
- * and tuples become constants; Fields evaluate with the given seed.
+ * The refusal a field-capable param raises when it lands on a domain as
+ * NaN or ±Infinity, and the reason this seam exists at all.
+ *
+ * A declared `min`/`max` binds a PLAIN param value — a field is a recipe
+ * with no number to check until it is evaluated — so a division by zero,
+ * an overflow, or an `asin` outside [-1, 1] used to travel all the way
+ * into a column and cook `ok: true` with nothing drawable in it. The
+ * policy is not new: `toBufferGeometry` already throws for exactly this
+ * condition and already blames "a field divided by zero or overflowed
+ * upstream" (`src/three/convert.ts`). This is that policy moved UPSTREAM
+ * to the node that caused it, where a headless `pcg cook`, a worker cook
+ * and an export can all see it, and where the PARAM can still be named —
+ * which no downstream placement can do.
+ *
+ * Never clamped. A clamp cannot handle NaN without INVENTING a value, and
+ * every candidate (0, the schema's `min`, the previous element) is a
+ * number the author did not ask for, producing the plausible-looking cook
+ * that {@link requireReportSlot} and {@link multiGeometryMessage} both
+ * exist to refuse. `f8dbfbd` already ran the experiment: `max(param,
+ * least)` is a floor and `Math.max(NaN, x)` is NaN.
+ *
+ * Thrown as a plain Error from inside a node's `execute`, which the
+ * executor wraps in `NodeExecutionError` — so it carries `nodeId`, and
+ * crosses the worker wire with it intact.
+ */
+function nonFiniteParamError(col: Column, nodeType: string, param: string, at: number): Error {
+  const ts = col.tupleSize;
+  const value = col.data[at];
+  const spelling = Number.isNaN(value) ? "NaN" : value > 0 ? "+Infinity" : "-Infinity";
+  const bad = countNonFiniteElements(col.data, col.data.length, ts);
+  const total = col.data.length / ts;
+  // A vec param's offender is one COMPONENT of one element, and saying
+  // which costs nothing: "element 0" alone sends an author to look at all
+  // three.
+  const where = ts === 1 ? `element ${at}` : `element ${Math.floor(at / ts)}, component ${at % ts}`;
+  return new Error(
+    `${nodeType}: param "${param}" resolved to ${spelling} at ${where} — ` +
+      `${bad} of ${total} elements are non-finite. A FIELD param is not range-checked: a schema's ` +
+      "min/max bind a plain value, and a field is a recipe with no number to check until it lands " +
+      "on a domain, so a division by zero, an overflow, or an asin() outside [-1, 1] arrives here " +
+      "as NaN or ±Infinity and draws nothing downstream. Guard the expression itself — max(x, " +
+      `1e-6) under a div, clamp before an asin — or set "${param}" to a plain number, which IS ` +
+      "checked wherever a graph is loaded, patched, or exposed as a subgraph param.",
+  );
+}
+
+/**
+ * Refuse a resolved column holding a non-finite value, naming the node and
+ * the param ({@link nonFiniteParamError}). Read-only: a graph that
+ * produces no non-finite value cooks byte-identically, and for one that
+ * does the throw is as deterministic as the output was.
+ */
+function requireFiniteColumn(col: Column, nodeType: string, param: string): Column {
+  const at = firstNonFinite(col.data, col.data.length);
+  if (at < 0) return col;
+  throw nonFiniteParamError(col, nodeType, param, at);
+}
+
+/**
+ * Resolve a field-capable param against a geometry domain, refusing a
+ * FIELD that evaluates to NaN or ±Infinity ({@link nonFiniteParamError}).
+ * Plain numbers and tuples become constants; Fields evaluate with the
+ * given seed.
+ *
+ * GATED ON `isField`, and the gate is worth its line. `constant()`
+ * materializes a full `count * tupleSize` column, so scanning plain values
+ * too would cost about 6x more on the rig for zero coverage: a plain
+ * value's finiteness is decidable from the 1-4 raw numbers it is made of,
+ * and `paramValueError` already decides it at every boundary that has a
+ * schema (deserialization, exposed params, World patches). `Graph.setParam`
+ * checking nothing is a real hole, but it is a hole in the PLAIN-value
+ * story and wants its own fix, not a full column scan standing in for one.
+ *
+ * Use {@link resolveOnAllowingNonFinite} for the params whose non-finite
+ * values are DATA rather than a broken recipe.
  */
 export function resolveOn(
+  geo: Geometry,
+  domain: "point" | "vertex" | "primitive" | "detail",
+  value: FieldLike,
+  seed: number,
+  nodeType: string,
+  param: string,
+): Column {
+  const col = resolveOnAllowingNonFinite(geo, domain, value, seed);
+  return isField(value) ? requireFiniteColumn(col, nodeType, param) : col;
+}
+
+/**
+ * {@link resolveOn} for the params where a non-finite value is DEFINED
+ * behavior rather than a broken expression. Finiteness is a property of
+ * the PARAM, not of the number, so the opt-out is a named call at the
+ * three sites whose NaN semantics are DOCUMENTED IN THE PARAM'S OWN
+ * DESCRIPTION and pinned by tests — four params in all, each quoting the
+ * semantics it preserves:
+ *
+ * - `filterByExpression.predicate` — NaN means DROP THIS POINT, stated in
+ *   the node's own description and implemented as the `> 0 || < 0` test.
+ * - `setAttribute.value` in string value-list mode — NaN and -Infinity
+ *   select entry 0, +Infinity the last, "never a per-element throw". The
+ *   NUMERIC mode of the same param is guarded.
+ * - `selfPrune.minDistance` and `selfPrune.priority` (one shared helper) —
+ *   "a per-point radius that is 0, negative or NaN claims no room of its
+ *   own" and "NaN ranks lowest", both in those descriptions and both
+ *   pinned by `filtering.test.ts`.
+ *
+ * That documented-and-tested pair IS the bar. Adding a fifth param means
+ * the same argument in the same shape: a stated meaning for NaN that a
+ * throw would delete. Absent that, the param is guarded.
+ */
+export function resolveOnAllowingNonFinite(
   geo: Geometry,
   domain: "point" | "vertex" | "primitive" | "detail",
   value: FieldLike,
@@ -165,6 +276,12 @@ export function resolveOn(
  * ineligible — the caller then falls back to {@link resolveOn}, which
  * must produce the same bytes the GPU path would have. Counter recording
  * happens inside the resolver (the cook's stats view).
+ *
+ * Guarded like the CPU seam, and it costs no readback to be: the resolver
+ * contracts to return "a freshly allocated column", so the bytes are
+ * already here when the scan runs. Only a FUSED run escapes this seam (it
+ * never calls it at all), and that is what the run terminal's scan in
+ * `src/graph/execute.ts` reports.
  */
 export async function tryResolveOnGpu(
   gpu: GpuFieldResolver,
@@ -172,10 +289,13 @@ export async function tryResolveOnGpu(
   domain: "point" | "vertex" | "primitive" | "detail",
   value: FieldLike,
   seed: number,
+  nodeType: string,
+  param: string,
 ): Promise<Column | null> {
   if (!isField(value)) return null;
   const pending = gpu.resolveField(value, { geo, domain, seed });
-  return pending === null ? null : await pending;
+  if (pending === null) return null;
+  return requireFiniteColumn(await pending, nodeType, param);
 }
 
 /**
@@ -195,12 +315,14 @@ export async function resolveOnMaybeGpu(
   domain: "point" | "vertex" | "primitive" | "detail",
   value: FieldLike,
   seed: number,
+  nodeType: string,
+  param: string,
 ): Promise<Column> {
   if (gpu !== undefined) {
-    const col = await tryResolveOnGpu(gpu, geo, domain, value, seed);
+    const col = await tryResolveOnGpu(gpu, geo, domain, value, seed, nodeType, param);
     if (col !== null) return col;
   }
-  return resolveOn(geo, domain, value, seed);
+  return resolveOn(geo, domain, value, seed, nodeType, param);
 }
 
 /**
