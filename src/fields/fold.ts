@@ -71,6 +71,40 @@ const FOLDED = new WeakMap<Field, Map<number, Field>>();
  */
 const MAX_SEEDS_PER_FIELD = 8;
 
+/**
+ * Domain size below which folding is not attempted at all.
+ *
+ * A fold MISS costs about 89 µs — it re-parses the whole tree through
+ * `fieldFromJson`, plus one parse per subtree it replaces — while the
+ * saving is per element. So there is a break-even domain size, and under
+ * it this optimization is a pessimization.
+ *
+ * That is not a corner case, it is the library's streaming regime. A
+ * hierarchical cook derives a seed per CELL, and the per-field cache
+ * holds {@link MAX_SEEDS_PER_FIELD} seeds, so past a handful of cells
+ * every cell is a miss. Measured on one shared field resolved over 4000
+ * cells, `add(position, vec(shift, shift, shift))`:
+ *
+ *     elements/resolve     fold off     fold on
+ *                   16      17.8 ms    298.2 ms   16.8x SLOWER
+ *                   64      49.0 ms    275.1 ms    5.6x slower
+ *                  256     126.2 ms    334.1 ms    2.6x slower
+ *                 4096      83.7 ms     41.5 ms    2.0x faster
+ *                40000     834.5 ms    278.0 ms    3.0x faster
+ *
+ * 1024 sits above the measured crossover (somewhere in 300–1000) rather
+ * than on it, because the two sides are not symmetric: past the crossover
+ * the fold wins by a ratio that keeps growing, while under it a wrong
+ * guess multiplies the cost of the small cooks that happen thousands of
+ * times. A missed fold costs a fraction of one resolve; a taken one on a
+ * 16-point cell costs 17 of them.
+ *
+ * The one-shot 40k cook this was originally measured on sits at the far
+ * end of that table, which is exactly why the first version shipped
+ * without a threshold and looked like a pure win.
+ */
+const MIN_ELEMENTS_TO_FOLD = 1024;
+
 function isSpec(v: unknown): v is FieldSpec {
   return (
     typeof v === "object" && v !== null && !Array.isArray(v) &&
@@ -252,12 +286,15 @@ function foldOnce(field: Field, spec: FieldSpec, seed: number): Field {
  * the identity of the answer and not an incidental input: `nodeSeed` is
  * what most folded subtrees are made of.
  */
-export function foldDomainConstants(field: Field, seed: number): Field {
+export function foldDomainConstants(field: Field, seed: number, count: number): Field {
   const spec = peekFieldSpec(field);
   if (spec === undefined) return field;
   let bySeed = FOLDED.get(field);
   const hit = bySeed?.get(seed);
+  // Before the threshold, because a cached fold costs a map lookup and is
+  // worth having at any size. Only the MISS is expensive.
   if (hit !== undefined) return hit;
+  if (count < MIN_ELEMENTS_TO_FOLD) return field;
   const folded = foldOnce(field, spec, seed);
   if (bySeed === undefined) {
     bySeed = new Map();

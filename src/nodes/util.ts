@@ -279,7 +279,9 @@ export function resolveOnAllowingNonFinite(
   value: FieldLike,
   seed: number,
 ): Column {
-  const field: Field = isField(value) ? foldDomainConstants(value, seed) : resolveField(value);
+  const field: Field = isField(value)
+    ? foldDomainConstants(value, seed, geo.attrs[domain].count)
+    : resolveField(value);
   return evaluateField(field, { geo, domain, seed });
 }
 
