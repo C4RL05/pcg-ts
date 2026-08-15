@@ -48,6 +48,7 @@ import type { Knob, KnobPatch } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
 import {
+  nodeCategory,
   nodePinsForType,
   paramPreviews,
   type NodeView,
@@ -617,10 +618,12 @@ export class EditorController {
         const view = this.addImportedNode(mirror, sn, subgraphs);
         pins.set(sn.id, view);
         const copy = copyPinViews(view);
+        const category = nodeCategory(sn.type);
         nodes.push({
           id: sn.id,
           type: sn.type,
           ...(sn.ref !== undefined ? { label: sn.ref.name } : {}),
+          ...(category !== undefined ? { category } : {}),
           x: 0,
           y: 0,
           inputs: copy.inputs,

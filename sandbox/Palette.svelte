@@ -15,6 +15,7 @@
    * Tab, a few letters, Enter — without the hand leaving the keyboard.
    */
   import { tick } from "svelte";
+  import { CATEGORY_ICONS, ICON_VIEWBOX } from "./icons.js";
   import type { PaletteGroup } from "./model.js";
 
   let {
@@ -156,7 +157,20 @@
       bind:value={search} />
     <div class="list">
       {#each filtered as group (group.name)}
-        <div class="group">{group.name}</div>
+        <!-- The section heading carries the same glyph the node boxes
+             draw, which is what makes the icon set learnable: you meet
+             the shape next to the word here, in the one place you come to
+             on purpose, and recognise it on the canvas afterwards. The
+             `other · <bucket>` fallback groups have no category and so no
+             icon, and the heading simply has no glyph in front of it. -->
+        <div class="group">
+          {#if CATEGORY_ICONS[group.name] !== undefined}
+            <svg class="gicon" viewBox={ICON_VIEWBOX} aria-hidden="true">
+              <path d={CATEGORY_ICONS[group.name]} />
+            </svg>
+          {/if}
+          {group.name}
+        </div>
         {#each group.entries as entry (entry.type)}
           <button
             class="entry"
@@ -204,12 +218,27 @@
     font: var(--sb-t-body) var(--sb-sans);
   }
   .group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     margin: 8px 0 3px;
     color: var(--sb-ink-faint);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+  /* `currentColor`, so the glyph is exactly as faint as the heading it
+     belongs to and follows it if that grey is ever retuned. Note this is
+     NOT what the node box does: there the icon is pinned to
+     `--sb-ink-mid`, deliberately a step under the title's white. Both are
+     grey, and neither borrows the other's rule — a heading is already
+     faint enough to inherit from, and a title is not. */
+  .gicon {
+    flex: none;
+    width: 11px;
+    height: 11px;
+    fill: currentColor;
   }
   .entry {
     display: block;

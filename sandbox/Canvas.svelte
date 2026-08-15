@@ -52,6 +52,8 @@
   let wire = $state<{
     from: string;
     fromPin: string;
+    /** Kind of the pin it was pulled from, so the wire shows what it carries. */
+    kind: string;
     x1: number;
     y1: number;
     x2: number;
@@ -204,6 +206,21 @@
     return a && b ? curve(a, b) : null;
   }
 
+  /**
+   * The kind a cable CARRIES, read off the output pin it leaves from.
+   *
+   * The source pin and not the target: a connection is only legal when
+   * the two agree (or one is the `any` wildcard), so the source is the
+   * side that always names something concrete. The fallback is `any`
+   * rather than `geometry` — a cable whose source pin cannot be found is
+   * a cable of unknown kind, and guessing the common one would draw a
+   * confident answer to a question that failed. It is unreachable in
+   * practice: `edgePath` already returns null for a missing endpoint.
+   */
+  function edgeKind(e: EdgeView): string {
+    return nodeById(e.from)?.outputs.find((p) => p.name === e.fromPin)?.kind ?? "any";
+  }
+
   function startBodyDrag(node: NodeView, e: PointerEvent): void {
     const p = toGraph(e);
     dragNode = { id: node.id, offX: p.x - node.x, offY: p.y - node.y };
@@ -213,7 +230,8 @@
     const x = node.x + NODE_W;
     const y = node.y + pinRowY(index);
     const p = toGraph(e);
-    wire = { from: node.id, fromPin: pinName, x1: x, y1: y, x2: p.x, y2: p.y, hover: null };
+    const kind = node.outputs.find((pin) => pin.name === pinName)?.kind ?? "any";
+    wire = { from: node.id, fromPin: pinName, kind, x1: x, y1: y, x2: p.x, y2: p.y, hover: null };
   }
 
   function onPointerMove(e: PointerEvent): void {
@@ -295,14 +313,14 @@
         </path>
         <!-- Casing under the line, painted first so the line sits on it. -->
         <path class="edge-casing" {d} />
-        <path class="edge-line" {d} />
+        <path class="edge-line k-{edgeKind(edge)}" {d} />
       </g>
     {/if}
   {/each}
   {#if wire}
     {@const wd = curve({ x: wire.x1, y: wire.y1 }, { x: wire.x2, y: wire.y2 })}
     <path class="edge-casing" d={wd} />
-    <path class="wire" class:live={wire.hover !== null} d={wd} />
+    <path class="wire k-{wire.kind}" class:live={wire.hover !== null} d={wd} />
   {/if}
   {#each model.nodes as node (node.id)}
     <NodeBox
@@ -341,13 +359,30 @@
     touch-action: none;
   }
   /**
-   * ONE COLOUR, deliberately. Colouring a wire by the kind it carries —
-   * to match the pin dots, which do differ — was tried and removed: every
-   * input pin in the shipped node library is `geometry`, and the other
-   * kinds (`value`, `instances`, `any`) appear only on outputs that
-   * nothing accepts. They are terminal, so every EDGE is geometry and the
-   * palette painted all of them the same. Before re-adding it, check that
-   * a node exists whose input pin is not geometry.
+   * A cable takes the colour of the KIND it carries, from the same four
+   * `--sb-k-*` tokens the pin dots use — one vocabulary, so the dot you
+   * drag from and the line you drag out of it are the same colour.
+   *
+   * IT IS INERT TODAY, AND THAT IS A MEASUREMENT, NOT AN OVERSIGHT.
+   * Every input pin in the shipped library is `geometry` (39 of 39), and
+   * the three other kinds appear only on outputs: `instances` and `value`
+   * are terminal — no input accepts them, so they can never BE a cable —
+   * and `any` is declared by exactly one node, `dataInput`, which no
+   * graph in the corpus uses. `any` is the only one of the three that a
+   * cable could ever carry, and it can reach one more way than that count
+   * suggests: `subgraph` and `forEach` derive their pins from the nodes
+   * they wrap, so a wrapper around a `dataInput` exposes an `any` output
+   * too. Still nothing in the corpus. Measured over `graphs/`, resolving
+   * the wrappers' derived pins rather than their empty declared ones: 445
+   * edges, 445 of them geometry->geometry. So every cable is grey, and
+   * the two hues below only ever reach the canvas through the pin dots,
+   * and through the wire being dragged out of one.
+   *
+   * The mapping is kept anyway because it costs one class per path and it
+   * is the thing that would otherwise be missing on the day an input pin
+   * stops being geometry — but do not read a coloured graph into it, and
+   * do not spend a hue on `geometry` to make the feature "show up". The
+   * substrate is not a mark.
    */
   /**
    * A black casing under every wire, so a cable stays readable where it
@@ -381,6 +416,18 @@
     stroke-width: 1.6;
     opacity: 0.55;
     pointer-events: none;
+  }
+  /* The kinds that are not the substrate. `k-geometry` and `k-any` are
+     deliberately absent: both resolve to the grey the base rule already
+     paints, and a rule that restates its default is one more place for
+     the two to drift apart. */
+  .edge-line.k-instances,
+  .wire.k-instances {
+    stroke: var(--sb-k-instances);
+  }
+  .edge-line.k-value,
+  .wire.k-value {
+    stroke: var(--sb-k-value);
   }
   .edge-hit {
     fill: none;

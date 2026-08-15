@@ -12,12 +12,17 @@
    * selection — and a third one, a 10px glyph sitting in the corner of a
    * draggable target, was the only one you could hit by accident.
    */
+  import { CATEGORY_ICONS } from "./icons.js";
   import {
     HEADER_H,
+    ICON_SIZE,
+    ICON_X,
+    ICON_Y,
     ID_Y,
     NODE_RADIUS,
     NODE_W,
     PAD,
+    TEXT_X,
     TITLE_Y,
     nodeHeight,
     paramBandY,
@@ -48,6 +53,15 @@
   } = $props();
 
   const h = $derived(nodeHeight(node, params.length));
+  /**
+   * The category glyph, or nothing. Two ways to get nothing: a type that
+   * declares no category, and a category with no icon assigned — both
+   * draw a blank corner rather than a placeholder, because a blank reads
+   * as "no category" and a question mark reads as "the icon broke".
+   */
+  const icon = $derived(node.category === undefined ? undefined : CATEGORY_ICONS[node.category]);
+  /** 256-unit Phosphor coordinates down to the box's `ICON_SIZE`. */
+  const ICON_SCALE = ICON_SIZE / 256;
 </script>
 
 <g transform="translate({node.x}, {node.y})" class:selected>
@@ -68,8 +82,23 @@
     }}
   />
   <line class="sep" x1="0" y1={HEADER_H} x2={NODE_W} y2={HEADER_H} />
-  <text class="title" x={PAD} y={TITLE_Y}>{node.label ?? node.type}</text>
-  <text class="nodeid" x={PAD} y={ID_Y}>{node.id}</text>
+  {#if icon !== undefined}
+    <!-- A `g` with a scale rather than a nested `svg`: a nested viewport
+         would clip, and there is nothing here to clip against. The path
+         is Phosphor's own fill data, so it needs no stroke width scaled
+         alongside it.
+
+         Deliberately inert (`pointer-events: none`, no `<title>`): it
+         sits on top of the body rect, and anything that swallowed events
+         here would put a 12-unit dead patch in the corner you grab the
+         box by. The category is named in full by the node menu, which
+         groups by it — that is where the set is learned, not here. -->
+    <g class="icon" transform="translate({ICON_X}, {ICON_Y}) scale({ICON_SCALE})">
+      <path d={icon} />
+    </g>
+  {/if}
+  <text class="title" x={TEXT_X} y={TITLE_Y}>{node.label ?? node.type}</text>
+  <text class="nodeid" x={TEXT_X} y={ID_Y}>{node.id}</text>
   {#each node.inputs as pin, i (pin.name)}
     <circle class="pin k-{pin.kind}" cx="0" cy={pinRowY(i)} r="4.5" />
     <circle
@@ -154,6 +183,17 @@
     stroke-width: 1;
     pointer-events: none;
   }
+  /**
+   * MONO, like everything else in the header. One step under the title's
+   * white rather than equal to it: this is a solid fill where the title
+   * is a run of strokes, so at the same value it would carry more mass
+   * than the name it belongs to and read as the louder of the two. The
+   * category is context; the name is the thing.
+   */
+  .icon {
+    fill: var(--sb-ink-mid);
+    pointer-events: none;
+  }
   .title {
     fill: var(--sb-ink-hi);
     font: 600 11px var(--sb-sans);
@@ -169,8 +209,15 @@
     stroke-width: 1;
     pointer-events: none;
   }
-  /* Kind by LIGHTNESS now. Instances are brightest: they are what a graph
-     is usually built to produce, and the pin you look for first. */
+  /**
+   * The pin dots are where the four kinds ACTUALLY differ, and so where
+   * the two kind hues are the only ones that ever land on the canvas.
+   * Every cable is geometry (445 of 445 across the graph corpus — see the
+   * note in `Canvas.svelte`), so a cable is always grey; these dots are
+   * not. `instances` and `value` occur on one node type each, which is
+   * what makes a hue on them a MARK rather than a tint. `geometry` is the
+   * substrate and `any` is a wildcard, so both stay grey.
+   */
   .k-geometry {
     fill: var(--sb-k-geometry);
   }

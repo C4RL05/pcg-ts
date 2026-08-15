@@ -28,6 +28,15 @@ export interface NodeView {
    * registered type name, since that is what the registry is keyed by.
    */
   label?: string;
+  /**
+   * The registry category this node's type belongs to, which the box
+   * draws as an icon. Copied onto the view rather than looked up while
+   * rendering: the box is redrawn on every pointermove of a drag, and the
+   * category cannot change for the life of the node — the type is fixed
+   * at creation. `undefined` for a type that declares none (third-party
+   * registrations may legally omit it), and the box then draws no icon.
+   */
+  category?: string;
   x: number;
   y: number;
   inputs: PinView[];
@@ -155,6 +164,24 @@ function pinViews(pins: readonly PinInfo[]): PinView[] {
 export function nodePinsForType(type: string): { inputs: PinView[]; outputs: PinView[] } {
   const info = getNodeType(type).info;
   return { inputs: pinViews(info.inputs), outputs: pinViews(info.outputs) };
+}
+
+/**
+ * The registry category of a node type, or `undefined` when it declares
+ * none — which is legal, and which the canvas renders as no icon.
+ *
+ * Wrapped in a try rather than a registry membership test because
+ * `getNodeType` THROWS for an unknown type, and the one caller that can
+ * hand it an unknown one is the import path: a graph naming a type this
+ * build does not have should fail on the type, with the library's own
+ * message, not on the icon it would have drawn.
+ */
+export function nodeCategory(type: string): string | undefined {
+  try {
+    return getNodeType(type).info.category;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

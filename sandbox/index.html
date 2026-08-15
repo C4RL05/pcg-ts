@@ -19,25 +19,38 @@
      * button ends up 3px 12px in one place and 2px 8px in another and the
      * bar stops reading as one thing.
      *
-     * GREYSCALE, zero hue — with ONE deliberate exception, `--sb-select`.
-     * Every other value below is r == g == b, on pure black. Nothing here
-     * is a tint of anything: the page had a blue cast in its surfaces, its
-     * ink and its accents at once, and taking it out of only some of them
-     * would read as a mistake rather than a choice.
+     * MONO AS THE BASE, with sparse colour. Every surface, rule and ink
+     * value below is r == g == b on pure black. Nothing here is a tint of
+     * anything: the page had a blue cast in its surfaces, its ink and its
+     * accents at once, and taking it out of only some of them would read
+     * as a mistake rather than a choice.
      *
-     * The exception earns itself by being the only one. On a page with no
-     * other hue, "which node am I editing" is answered from across the
-     * canvas by a colour that cannot be confused with a lightness — which
-     * is what the greyscale pass otherwise spent.
+     * THREE HUES SPEND THE WHOLE BUDGET, and they are drawn from the
+     * site's declared marks (`docs/index.html` — pure RGB, spent as marks
+     * and never on body copy). Ranked by contrast against #000000:
+     *   yellow 19.6:1 · cyan 16.8 · green 15.3 · magenta 6.7 · red 5.3 ·
+     *   blue 2.4. That is an 8x spread, so they are NOT six equal-weight
+     *   marks — blue sits under even the 3.0 large-text floor. Only the
+     *   top three are spent here, and the bottom three are left unspent:
+     *   an unspent hue is not a failure, spending one on nothing is.
+     *   · `--sb-select` GREEN — which node am I editing. The first hue,
+     *     and still the one a glance across the canvas needs most.
+     *   · `--sb-k-instances` CYAN — the terminal a graph is built to
+     *     reach. One dot on one node type in a whole graph.
+     *   · `--sb-k-value` YELLOW — a constant entering the graph. Same
+     *     rarity: one dot, one node type.
      *
-     * WHAT REPLACES COLOUR. Three signals were carried by hue and now are
-     * not, so each is carried by something else:
-     *   · state (error / warn / ok) — by BORDER BRIGHTNESS, loudest for
-     *     an error, plus the monospace face the error styles already used.
-     *   · pin kind (geometry / instances / value / any) — by LIGHTNESS,
-     *     brightest for the instances a graph is usually built to produce.
-     *   · a field vs a constant — by white against grey.
-     * This is a real loss of one dimension; it is spent deliberately.
+     * WHAT STAYS MONO, and why each is not a hue:
+     *   · state (error / warn / ok) — BORDER BRIGHTNESS, loudest for an
+     *     error, plus the monospace face the error styles already used.
+     *   · `--sb-k-geometry` — the substrate. Every input pin in the
+     *     shipped library is geometry and every edge in the graph corpus
+     *     is geometry->geometry (445 of 445, measured across `graphs/`),
+     *     so a hue here would tint the canvas rather than mark anything.
+     *   · `--sb-k-any` — a WILDCARD, not a kind. It matches whatever it
+     *     meets at `connect` time, so giving it a hue would assert a kind
+     *     it does not have. Grey is the honest answer.
+     *   · a field vs a constant — white against grey.
      *
      * `shared/Controls.svelte` is deliberately NOT converted:
      * four other demos render it, and it inherits enough from these that
@@ -73,11 +86,13 @@
       --sb-edge-warn: #8f8f8f;
       --sb-edge-ok: #5a5a5a;
 
-      /* pin kinds and the wires between them, told apart by lightness */
-      --sb-k-instances: #ffffff;
-      --sb-k-geometry: #c4c4c4;
-      --sb-k-value: #949494;
-      --sb-k-any: #6a6a6a;
+      /* Pin kinds, and the cables that carry them. The two RARE kinds
+         take a hue; the substrate and the wildcard stay grey. See the
+         note above for which is which and why. */
+      --sb-k-instances: #00ffff;            /* 16.8:1 on black */
+      --sb-k-value: #ffff00;                /* 19.6:1 on black */
+      --sb-k-geometry: #c4c4c4;             /* the substrate — mono */
+      --sb-k-any: #6a6a6a;                  /* a wildcard — mono */
       --sb-select: #00ff00;                 /* the node you are editing */
 
       /* tab bars — the sidebar's and the knob panel's, kept identical */

@@ -31,6 +31,7 @@
   import {
     STARTER_GRAPH_TEXT,
     allocateId,
+    nodeCategory,
     paletteGroups,
     paramPreviews,
     type EdgeView,
@@ -442,9 +443,11 @@
     // the pointer that asked for it rather than at a corner.
     const n = model.nodes.length;
     const spot = menuAt !== null ? canvas?.graphPointAt(menuAt.x, menuAt.y) : undefined;
+    const category = nodeCategory(type);
     model.nodes.push({
       id,
       type,
+      ...(category !== undefined ? { category } : {}),
       x: spot ? Math.round(spot.x) : 48 + (n % 4) * 36,
       y: spot ? Math.round(spot.y) : 40 + (n % 6) * 32,
       inputs: res.inputs,
