@@ -68,6 +68,32 @@ describe("standardNode validation", () => {
     ).toThrow(/param "x".*description/);
   });
 
+  it("rejects a param name containing a dot, which a panel key could not survive", () => {
+    // A panel addresses a param as "<nodeId>.<paramKey>", and a literal
+    // inside its field spec as "<nodeId>.<paramKey>.<fieldParamName>", both
+    // read from the right. Every registered name is dot-free today; this is
+    // what keeps it a rule rather than an observation.
+    expect(() =>
+      standardNode<{ "a.b": number }>({
+        type: "__test_dottedParam",
+        description: "test",
+        inputs: [],
+        outputs: [],
+        params: { "a.b": { type: "f32", default: 0, description: "x" } },
+        execute: () => ({}),
+      }),
+    ).toThrow(/param "a\.b" contains a "\."/);
+  });
+
+  it("every registered param name is dot-free", () => {
+    const dotted = listNodeTypes().flatMap((info) =>
+      Object.keys(info.params)
+        .filter((name) => name.includes("."))
+        .map((name) => `${info.type}.${name}`),
+    );
+    expect(dotted).toEqual([]);
+  });
+
   it("rejects defaults that do not match the schema type", () => {
     expect(() =>
       standardNode<{ x: number }>({

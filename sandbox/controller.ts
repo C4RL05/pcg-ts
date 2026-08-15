@@ -23,15 +23,19 @@ import {
   fieldFromJson,
   fieldToJson,
   forEachNode,
+  getFieldSpec,
   getNodeType,
   getRegisteredSubgraph,
+  inlineParamValuesOf,
   isField,
   resolveExposedParam,
   serializeGraph,
   subgraphNode,
+  withInlineParamValue,
   type DataItem,
   type ExposedParam,
   type ExposedPin,
+  type FieldBindingValue,
   type FieldSpec,
   type GpuCookStats,
   type GpuFieldResolver,
@@ -44,7 +48,7 @@ import {
   type SerializedSubgraph,
 } from "pcg-ts";
 import { PARTIAL_FUSION } from "../shared/gpu.js";
-import type { Knob, KnobPatch } from "../shared/graphUi.js";
+import type { Knob, KnobPatch, KnobTarget } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
 import {
@@ -181,6 +185,10 @@ function copyPlain(v: unknown): unknown {
   return Array.isArray(v) ? [...v] : v;
 }
 
+function isNumberArray(v: unknown): v is readonly number[] {
+  return Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "number");
+}
+
 /**
  * Bring a typed number inside what the schema declares, so a param editor
  * commits a value the graph will take.
@@ -198,6 +206,82 @@ export function clampToSchema(schema: ParamSchema, raw: number): number {
   if (schema.min !== undefined) v = Math.max(schema.min, v);
   if (schema.max !== undefined) v = Math.min(schema.max, v);
   return v;
+}
+
+/**
+ * The `ParamSchema` a field-spec knob does not have, derived from the
+ * shape of the literal its author wrote.
+ *
+ * A node param carries a registered schema; a `param` node inside a field
+ * expression carries a name and a number, and nothing else exists to
+ * describe it. The value's shape is enough to pick a widget — the same
+ * rule a targetless exposed param already uses to type itself from its
+ * default — so a graph gets a working control with no panel file at all,
+ * and a panel then refines the range.
+ *
+ * A tuple the param vocabulary cannot name — 1 or 2 components, or more
+ * than 4 — gets no schema and therefore no knob: the grammar accepts any
+ * non-empty run of numbers, `ParamType` names only vec3 and vec4, and
+ * inventing a type here would produce a widget writing values the panel
+ * cannot read back.
+ */
+function derivedFieldParamSchema(
+  name: string,
+  value: FieldBindingValue,
+): ParamSchema | undefined {
+  const description =
+    `Inline value of the field-spec param "${name}". Its type comes from the shape of the value ` +
+    "the expression carries; a panel spec supplies the range and says what turning it does.";
+  if (typeof value === "number") return { type: "f32", default: value, description };
+  if (value.length === 3) return { type: "vec3", default: [...value], description };
+  if (value.length === 4) return { type: "vec4", default: [...value], description };
+  return undefined;
+}
+
+/**
+ * The knobs hiding INSIDE one node param: every `param` node in the field
+ * expression it holds that carries its own value.
+ *
+ * Only the ones with a value. A `{"fn":"param","name":"x"}` with none is
+ * unbound — it refuses to evaluate, and standing alone that is an error
+ * state rather than a control; inside a wrapper it is the wrapper's to
+ * supply, and the wrapper's own exposed param is already a knob. Offering
+ * a widget for either would write a literal where an author deliberately
+ * left none.
+ */
+function fieldSpecKnobs(
+  node: string,
+  nodeLabel: string,
+  name: string,
+  value: unknown,
+): Knob[] {
+  if (!isField(value)) return [];
+  // The non-throwing reader: a field built by makeField carries no spec,
+  // and a param that happens to hold one is not an error here.
+  const spec = getFieldSpec(value);
+  if (spec === undefined) return [];
+  const out: Knob[] = [];
+  for (const [fieldParam, inline] of Object.entries(inlineParamValuesOf(spec))) {
+    const schema = derivedFieldParamSchema(fieldParam, inline);
+    if (schema === undefined) continue;
+    out.push({
+      key: `${node}.${name}.${fieldParam}`,
+      node,
+      nodeLabel,
+      name,
+      fieldParam,
+      schema,
+      value: copyPlain(inline),
+      // The node param holds a Field; THIS knob holds the literal standing
+      // inside it, which is exactly the constant a widget can represent.
+      isField: false,
+      // An author who wrote a value into an expression decided that number
+      // was worth turning, the same declaration a wrapper makes by exposing
+      // a param — so a panel with no spec shows it.
+      exposed: true,
+    });
+  }
+  return out;
 }
 
 function copyPinViews(pins: { inputs: PinView[]; outputs: PinView[] }): {
@@ -470,19 +554,21 @@ export class EditorController {
           continue;
         }
       }
+      const nodeLabel = view?.ref ?? n.defType ?? "";
       for (const { name, schema } of entries) {
         if (schema.type === "items") continue;
         const value = rec[name];
         out.push({
           key: `${n.id}.${name}`,
           node: n.id,
-          nodeLabel: view?.ref ?? n.defType ?? "",
+          nodeLabel,
           name,
           schema,
           value: copyPlain(value),
           isField: isField(value),
           exposed: view !== undefined,
         });
+        for (const knob of fieldSpecKnobs(n.id, nodeLabel, name, value)) out.push(knob);
       }
     }
     return out;
@@ -515,13 +601,10 @@ export class EditorController {
         continue;
       }
       try {
-        // Straight to the mirror rather than through setPlainParam: that
-        // one swallows a rejection, and here the rejection is the report.
-        this.mirror.setParam(
-          { id: knob.node } as NodeHandle<Record<string, unknown>>,
-          knob.name,
-          copyPlain(value),
-        );
+        // Straight to the write, not through setKnob: that one swallows a
+        // rejection into a returned string, and here the rejection is the
+        // report — and it must not cook per key when the patch is a dozen.
+        this.writeKnob(knob, value);
         applied++;
       } catch (err) {
         problems.push(`${key}: ${errorMessage(err)}`);
@@ -529,6 +612,68 @@ export class EditorController {
     }
     if (applied > 0) this.scheduleCook();
     return { applied, problems };
+  }
+
+  /**
+   * Write one knob's value, whichever of the two kinds it is, and cook.
+   * Returns what the graph refused, or null on success.
+   *
+   * The panel routes every commit through here rather than switching on the
+   * kind itself: which of the two a key is, is a fact about the knob, and
+   * the knob already carries it.
+   */
+  setKnob(knob: KnobTarget, value: unknown): string | null {
+    try {
+      this.writeKnob(knob, value);
+    } catch (err) {
+      return errorMessage(err);
+    }
+    this.scheduleCook();
+    return null;
+  }
+
+  /**
+   * The write itself, throwing — shared by {@link setKnob} and the patch
+   * path, which report a refusal differently and must not cook differently.
+   *
+   * A field-spec knob rewrites the literal inside the spec the param holds
+   * and sets the rebuilt field, which is the write path the field-param
+   * editor already takes: read the spec off the live Field, edit the JSON,
+   * `fieldFromJson`, `setParam`. The value is substituted into `Field.key`
+   * at construction, so the new field hashes differently and the node's
+   * memo misses exactly as it would for a plain param.
+   */
+  private writeKnob(knob: KnobTarget, value: unknown): void {
+    const handle = { id: knob.node } as NodeHandle<Record<string, unknown>>;
+    if (knob.fieldParam === undefined) {
+      this.mirror.setParam(handle, knob.name, copyPlain(value));
+      return;
+    }
+    const held = this.mirror.getParams(handle)[knob.name];
+    const spec = isField(held) ? getFieldSpec(held) : undefined;
+    if (spec === undefined) {
+      throw new Error(
+        `param "${knob.name}" of node "${knob.node}" no longer holds a field expression, so its ` +
+          `"${knob.fieldParam}" value has nowhere to be written — reopen the graph`,
+      );
+    }
+    if (typeof value !== "number" && !isNumberArray(value)) {
+      throw new Error(
+        `field-spec param "${knob.fieldParam}" takes a number or an array of numbers, got ` +
+          JSON.stringify(value),
+      );
+    }
+    let rewritten: FieldSpec;
+    try {
+      rewritten = withInlineParamValue(spec, knob.fieldParam, value);
+    } catch (err) {
+      // The grammar names the param and what the spec does supply; only
+      // this frame knows which node's spec it was reading. Reached when the
+      // spec has moved under the panel — edited in the field editor between
+      // the knob being listed and the slider being released.
+      throw new Error(`node "${knob.node}" param "${knob.name}": ${errorMessage(err)}`);
+    }
+    this.mirror.setParam(handle, knob.name, fieldFromJson(rewritten));
   }
 
   /**

@@ -33,8 +33,10 @@ import {
   fieldToJson,
   fnVariation,
   listFieldFns,
+  inlineParamValuesOf,
   paramNamesOf,
   unboundParamNamesOf,
+  withInlineParamValue,
   type FieldSpec,
 } from "./fieldJson.js";
 
@@ -1062,6 +1064,121 @@ describe("paramNamesOf", () => {
     const cyclic = { fn: "add", args: [{ fn: "param", name: "a" }] } as Record<string, unknown>;
     (cyclic.args as unknown[]).push(cyclic);
     expect(paramNamesOf(cyclic as unknown as FieldSpec)).toEqual(["a"]);
+  });
+});
+
+describe("inlineParamValuesOf / withInlineParamValue — the panel's two halves", () => {
+  const dunes: FieldSpec = {
+    fn: "mul",
+    args: [
+      {
+        fn: "fbm",
+        base: "perlinNoise",
+        opts: {
+          position: {
+            fn: "mul",
+            args: [{ fn: "position" }, { fn: "param", name: "frequency", value: 0.06 }],
+          },
+        },
+      },
+      { fn: "param", name: "amplitude", value: 18 },
+    ],
+  };
+
+  it("lists every name that supplies its own value, opts.position included", () => {
+    expect(inlineParamValuesOf(dunes)).toEqual({ amplitude: 18, frequency: 0.06 });
+  });
+
+  it("omits a name with no inline value — an unbound reference is an error, not a control", () => {
+    const spec: FieldSpec = {
+      fn: "add",
+      args: [{ fn: "param", name: "bound", value: 2 }, { fn: "param", name: "unbound" }],
+    };
+    expect(inlineParamValuesOf(spec)).toEqual({ bound: 2 });
+    expect(unboundParamNamesOf(spec)).toEqual(["unbound"]);
+    // Both halves see the same reference: it is listed as bindable, and
+    // listed as something a binder must still supply.
+    expect(paramNamesOf(spec)).toEqual(["bound", "unbound"]);
+  });
+
+  it("reads a tuple, and copies it out of the spec", () => {
+    const spec: FieldSpec = { fn: "param", name: "centre", value: [1, 2, 3] };
+    const read = inlineParamValuesOf(spec).centre as number[];
+    read[0] = 99;
+    expect(inlineParamValuesOf(spec).centre).toEqual([1, 2, 3]);
+  });
+
+  it("rewrites one name and leaves the spec it was handed alone", () => {
+    const next = withInlineParamValue(dunes, "amplitude", 30);
+    expect(inlineParamValuesOf(next)).toEqual({ amplitude: 30, frequency: 0.06 });
+    expect(inlineParamValuesOf(dunes)).toEqual({ amplitude: 18, frequency: 0.06 });
+  });
+
+  it("rewrites a name that appears twice, and each copy is its own array", () => {
+    const twice: FieldSpec = {
+      fn: "add",
+      args: [
+        { fn: "param", name: "offset", value: [0, 0, 0] },
+        { fn: "param", name: "offset", value: [1, 1, 1] },
+      ],
+    };
+    const next = withInlineParamValue(twice, "offset", [5, 6, 7]);
+    const args = next.args as Record<string, unknown>[];
+    expect(args[0].value).toEqual([5, 6, 7]);
+    expect(args[1].value).toEqual([5, 6, 7]);
+    expect(args[0].value).not.toBe(args[1].value);
+  });
+
+  it("LEAVES a value-free reference value-free — a knob must not delete a binding point", () => {
+    const spec: FieldSpec = {
+      fn: "add",
+      args: [{ fn: "param", name: "freq", value: 0.1 }, { fn: "param", name: "freq" }],
+    };
+    const next = withInlineParamValue(spec, "freq", 0.2);
+    const args = next.args as Record<string, unknown>[];
+    expect(args[0].value).toBe(0.2);
+    expect(args[1].value).toBeUndefined();
+    expect(unboundParamNamesOf(next)).toEqual(["freq"]);
+  });
+
+  it("the rewritten spec cooks to the new value", () => {
+    const ctx = testCloud(4);
+    const before = fieldFromJson({ fn: "param", name: "a", value: 2 });
+    const after = fieldFromJson(withInlineParamValue({ fn: "param", name: "a", value: 2 }, "a", 7));
+    expect(Array.from(evaluateField(before, ctx).data)).toEqual([2, 2, 2, 2]);
+    expect(Array.from(evaluateField(after, ctx).data)).toEqual([7, 7, 7, 7]);
+    // The value is substituted at construction, so the two fields key
+    // differently — which is what makes a node's memo miss on a knob turn.
+    expect(after.key).not.toBe(before.key);
+  });
+
+  it("refuses a value the grammar would not accept, naming the param", () => {
+    expect(() =>
+      withInlineParamValue({ fn: "param", name: "a", value: 1 }, "a", Number.NaN),
+    ).toThrow(/withInlineParamValue: value for param "a"/);
+  });
+
+  it("REFUSES a name that supplies nothing, rather than reporting a write it did not make", () => {
+    // The caller believes it is moving a value. A silent no-op is a knob
+    // that turns and does nothing, which is the one failure a panel cannot
+    // see — so the two cases are told apart and both named.
+    expect(() => withInlineParamValue(dunes, "nosuch", 1)).toThrow(
+      /no param "nosuch" in this spec supplies its own value.*Names this spec supplies: frequency, amplitude/s,
+    );
+    expect(() => withInlineParamValue({ fn: "param", name: "outer" }, "outer", 1)).toThrow(
+      /The name IS referenced, but with no "value" of its own/,
+    );
+  });
+
+  it("carries a name the prototype chain would otherwise swallow", () => {
+    // `__proto__` is a legal param name — non-empty and dot-free — and on a
+    // plain object it is a setter, so a bare {} would drop it and let a
+    // tuple value re-prototype the record the caller iterates.
+    const spec: FieldSpec = { fn: "param", name: "__proto__", value: [1, 2, 3] };
+    const values = inlineParamValuesOf(spec);
+    expect(Object.keys(values)).toEqual(["__proto__"]);
+    expect(values.__proto__).toEqual([1, 2, 3]);
+    expect(inlineParamValuesOf(withInlineParamValue(spec, "__proto__", 4)).__proto__).toBe(4);
   });
 });
 

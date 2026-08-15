@@ -53,7 +53,19 @@ export type VectorKey<P> = KeysOfType<P, readonly number[]>;
 export type NumberMapKey<P> = KeysOfType<P, Record<string, number>>;
 export type FlagMapKey<P> = KeysOfType<P, Record<string, boolean>>;
 
-export interface SliderControl<P> {
+/**
+ * Presentation every control kind shares.
+ *
+ * A `label` says what the row IS in two words; a `description` says what
+ * turning it does, and there is no room for that on the row itself, so the
+ * renderer hangs it off the row as hover text. Optional everywhere: a
+ * panel derived from param schemas alone has nothing to put here.
+ */
+export interface ControlNote {
+  description?: string;
+}
+
+export interface SliderControl<P> extends ControlNote {
   kind: "slider";
   key: NumberKey<P>;
   label: string;
@@ -77,7 +89,7 @@ export interface SliderControl<P> {
  * "drag between two ends" is the exception. Supplying a range in a panel
  * spec is what promotes one to a slider.
  */
-export interface NumberControl<P> {
+export interface NumberControl<P> extends ControlNote {
   kind: "number";
   key: NumberKey<P>;
   label: string;
@@ -88,14 +100,14 @@ export interface NumberControl<P> {
   unit?: string;
 }
 
-export interface TextControl<P> {
+export interface TextControl<P> extends ControlNote {
   kind: "text";
   key: ChoiceKey<P>;
   label: string;
 }
 
 /** 2–4 numeric components living in one array-valued key (a vec3 param). */
-export interface VectorControl<P> {
+export interface VectorControl<P> extends ControlNote {
   kind: "vector";
   key: VectorKey<P>;
   label: string;
@@ -104,7 +116,7 @@ export interface VectorControl<P> {
   step?: number;
 }
 
-export interface SelectControl<P> {
+export interface SelectControl<P> extends ControlNote {
   kind: "select";
   key: ChoiceKey<P>;
   label: string;
@@ -116,14 +128,14 @@ export interface SelectControl<P> {
  * "draw: [x] wireframe [x] grid". Use {@link FlagGridControl} when the
  * flags are members of one record instead.
  */
-export interface FlagsControl<P> {
+export interface FlagsControl<P> extends ControlNote {
   kind: "flags";
   label: string;
   items: readonly { key: FlagKey<P>; label: string }[];
 }
 
 /** A grid of flags that all live in ONE record-valued key. */
-export interface FlagGridControl<P> {
+export interface FlagGridControl<P> extends ControlNote {
   kind: "flagGrid";
   key: FlagMapKey<P>;
   label: string;
@@ -133,7 +145,7 @@ export interface FlagGridControl<P> {
 }
 
 /** A grid of numbers that all live in ONE record-valued key. */
-export interface NumberGridControl<P> {
+export interface NumberGridControl<P> extends ControlNote {
   kind: "numberGrid";
   key: NumberMapKey<P>;
   /** Caption above the grid; the grid has no label column of its own. */

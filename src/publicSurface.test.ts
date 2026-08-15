@@ -28,7 +28,7 @@ const ROOT_SURFACE = [
   "getFieldSpec",
   "getNodeType", "getRegisteredSubgraph", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",
-  "index", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
+  "index", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "listFieldFnInfos", "listFieldFns",
   "listNodeTypes", "listSubgraphs", "lt", "makeDeviceInstancesItem", "makeField",
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints",
@@ -43,7 +43,8 @@ const ROOT_SURFACE = [
   "spawnInstances", "splineSample", "standardNode", "sub", "subgraphContentHash",
   "subgraphNode", "surfaceSample", "sweepProfile", "tan", "transferAttribute", "transferNearest",
   "transferRaycast", "transferUv", "transformPoints", "validateGraphMeta", "valueConstant",
-  "valueNoise", "vec", "volumeSample", "worleyNoise", "writeCurveFrame", "writeTangents",
+  "valueNoise", "vec", "volumeSample", "withInlineParamValue", "worleyNoise", "writeCurveFrame",
+  "writeTangents",
 ] as const;
 
 describe("public surface: pcg-ts", () => {

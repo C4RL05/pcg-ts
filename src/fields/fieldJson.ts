@@ -137,7 +137,7 @@ export class FieldJsonError extends Error {
 // specs — a module the grammar can depend on without depending on the
 // grammar. Re-exported here unchanged: this module is still where the
 // public spec API is documented and imported from.
-export { type FieldSpec, type FieldSpecArg, getFieldSpec } from "./spec.js";
+export { type FieldBindingValue, type FieldSpec, type FieldSpecArg, getFieldSpec } from "./spec.js";
 
 /**
  * Whether a fn introduces per-element variation OF ITS OWN: `"per-element"`
@@ -940,6 +940,110 @@ export function unboundParamNamesOf(spec: FieldSpec): readonly string[] {
     if (readInlineValue(node.value) === undefined) names.add(name);
   });
   return [...names].sort();
+}
+
+/**
+ * Every `param` name in `spec` that supplies its OWN value, and the value
+ * it supplies — the complement of {@link unboundParamNamesOf}, and what a
+ * panel enumerates to offer one knob per literal an author named inside an
+ * expression.
+ *
+ * A name with no inline value is deliberately absent. That reference is
+ * waiting for a binder and refuses to evaluate without one, so it is an
+ * error state rather than a control: a widget offered for it would write a
+ * number into a spec that never asked for one, and the loud failure an
+ * author chose by writing no value would quietly become a default.
+ *
+ * A name mentioned twice with two different values reports the FIRST, and
+ * {@link withInlineParamValue} then writes both. One name is one knob
+ * within one expression, because `"<nodeId>.<paramKey>.<name>"` is the
+ * whole of what the address can say.
+ *
+ * Walks the tree the same way {@link paramNamesOf} does, `opts.position`
+ * included, and is tolerant of malformed input: it reads, it does not
+ * validate.
+ */
+export function inlineParamValuesOf(spec: FieldSpec): Readonly<Record<string, FieldBindingValue>> {
+  // Null-prototype: a param name is any non-empty dot-free string, which
+  // includes `__proto__` — and on a plain object that key is a setter, so
+  // the name would be silently dropped and a tuple value would re-prototype
+  // the record the caller iterates.
+  const values: Record<string, FieldBindingValue> = Object.create(null) as Record<
+    string,
+    FieldBindingValue
+  >;
+  eachParam(spec, (node, name) => {
+    if (Object.hasOwn(values, name)) return;
+    const value = readInlineValue(node.value);
+    if (value !== undefined) values[name] = value;
+  });
+  return values;
+}
+
+/**
+ * `spec` with the inline value of every `param` node named `name`
+ * rewritten — the write half of {@link inlineParamValuesOf}, and what a
+ * panel calls before handing the result back to {@link fieldFromJson}.
+ *
+ * A `param` node of that name carrying NO inline value is left exactly as
+ * it was. Not because writing one could delete a binding — it could not,
+ * since an outer binding and a spliced field both outrank an inline value
+ * — but because the author of a value-free reference chose the loud
+ * refusal, and quietly giving it a default is how that choice disappears.
+ * The optional key is the whole of this feature's safety; a writer that
+ * supplies it uninvited spends it.
+ *
+ * Refuses a name no node supplies, rather than returning an unchanged
+ * clone: the caller believes it is moving a value, and a write that
+ * reports success while changing nothing is the failure a panel cannot
+ * see.
+ *
+ * Deep-copies, so the spec handed in is never mutated; the caller's is
+ * usually the one a live `Field` is still carrying. The copy is a plain
+ * tree, so records held OUTSIDE the nodes — the spec of a field an outer
+ * binding spliced here — do not survive it. Nothing reachable from a knob
+ * carries one today (only a subgraph body's nodes are ever spliced), and
+ * an inline value is by definition the case where there is no outer
+ * binding to lose.
+ */
+export function withInlineParamValue(
+  spec: FieldSpec,
+  name: string,
+  value: FieldBindingValue,
+): FieldSpec {
+  const written = readInlineValue(value);
+  if (written === undefined) {
+    throw new FieldJsonError(
+      `withInlineParamValue: value for param ${JSON.stringify(name)} must be a finite number ` +
+        "(which stands as a scalar) or a non-empty array of finite numbers (which stands as the " +
+        `matching vector), got ${describeValue(value)}`,
+    );
+  }
+  const next = structuredClone(spec) as FieldSpec;
+  let rewritten = 0;
+  eachParam(next, (node, n) => {
+    if (n !== name) return;
+    if (readInlineValue(node.value) === undefined) return;
+    // A fresh copy per node: two references to one name are two
+    // independent literals in the JSON, and a shared array would make an
+    // edit to one of them silently move the other.
+    node.value = Array.isArray(written) ? [...written] : written;
+    rewritten++;
+  });
+  if (rewritten === 0) {
+    const supplied = Object.keys(inlineParamValuesOf(spec));
+    const unbound = unboundParamNamesOf(spec).filter((n) => n === name);
+    throw new FieldJsonError(
+      `withInlineParamValue: no param ${JSON.stringify(name)} in this spec supplies its own ` +
+        `value, so there is nothing to rewrite. ${
+          unbound.length > 0
+            ? `The name IS referenced, but with no "value" of its own — that reference is bound ` +
+              "from outside, and its value belongs to whoever binds it"
+            : `Names this spec supplies: ${supplied.length > 0 ? supplied.join(", ") : "(none)"}`
+        }`,
+    );
+  }
+  return next;
 }
 
 /**

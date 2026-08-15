@@ -87,8 +87,24 @@
    */
   const panel = $derived(buildKnobPanel(knobs, spec));
 
-  /** Key → the node and param it writes, so no key has to be re-split. */
-  const targets = $derived(new Map(knobs.map((k) => [k.key, { node: k.node, name: k.name }])));
+  /**
+   * Key → the slot it writes, so no key has to be re-split. A key is three
+   * parts once a knob reaches into a field spec, and the node id it starts
+   * with may itself contain dots — carrying the parts is what keeps that
+   * from ever being anybody's problem.
+   */
+  const targets = $derived(
+    new Map(
+      knobs.map((k) => [
+        k.key,
+        {
+          node: k.node,
+          name: k.name,
+          ...(k.fieldParam !== undefined ? { fieldParam: k.fieldParam } : {}),
+        },
+      ]),
+    ),
+  );
 
   /**
    * Merged rather than replaced. Swapping the whole record in invalidates
@@ -135,7 +151,7 @@
     // debounced, so they still cost one cook.
     for (const k of [key, ...(panel.mirrors[key] ?? [])]) {
       const t = targets.get(k);
-      if (t !== undefined) controller.setPlainParam(t.node, t.name, c.value);
+      if (t !== undefined) controller.setKnob(t, c.value);
     }
     onEdit();
   }

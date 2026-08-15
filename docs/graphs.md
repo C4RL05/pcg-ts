@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-51 examples, alphabetical by file:
+52 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -18,6 +18,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-filter-primitives-by-attribute.json](#basics-filter-primitives-by-attributejson) — keep whole primitives by an attribute comparison
 - [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
+- [basics-inline-field-params.json](#basics-inline-field-paramsjson) — put a field's shaping numbers on knobs without a wrapper
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
 - [basics-mask-by-species.json](#basics-mask-by-speciesjson) — let a string attribute drive a field
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
@@ -273,6 +274,24 @@ Cook it: `pcg cook graphs/basics-foreach-per-group.json --stats`
 **Outputs:** `points` (from `bundles`.`out`)
 
 Cook it: `pcg cook graphs/basics-gather-on-path.json --stats`
+
+## basics-inline-field-params.json
+
+**put a field's shaping numbers on knobs without a wrapper**
+
+The two dunes of `basics-field-params` with the wrapper deleted. A `param` reference inside a field spec may carry its own value — `{ "fn": "param", "name": "amplitude", "value": 18 }` — so a plain `transformPoints` node holds both the expression and the numbers that shape it, where before a subgraph had to exist for the sole purpose of carrying them. The value is SUBSTITUTED before the field is built, exactly as a binding is, so what cooks is the field the literal would have built, cache key included. The key is optional and that is the whole of its safety: omit it and the reference is unbound and refuses to evaluate, with the same error as ever, so a default exists only where somebody wrote one. An outer binding still wins, so wrapping this node in a subgraph that exposes `amplitude` overrides the 18 without editing it. Two details are inherited rather than invented: `frequency` multiplies the sample position instead of sitting in `opts.frequency`, because the noise options are read as plain numbers and cannot hold a spec; and the sample position is offset by a `nodeSeed`-derived vector, because a saved noise carries a literal `opts.seed` that the graph seed cannot otherwise move.
+
+**Tags:** `basics`, `fields`, `params`
+
+**Seed:** 1045
+
+**Node types:** `pointGrid`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `dunes`.`out`)
+
+Cook it: `pcg cook graphs/basics-inline-field-params.json --stats`
 
 ## basics-jitter-points.json
 

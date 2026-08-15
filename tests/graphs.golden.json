@@ -676,6 +676,46 @@
         ]
       }
     },
+    "basics-inline-field-params.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 576,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -23,
+                -3.5613,
+                -23
+              ],
+              "max": [
+                23,
+                3.3205,
+                23
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-jitter-points.json": {
       "outputs": {
         "points": [

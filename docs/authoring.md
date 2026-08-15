@@ -574,6 +574,18 @@ editing the literal would (two knob positions are two fields, never one
 served twice), and a param NAME may not contain a `.`, since an editor
 addresses a field-spec param as `<nodeId>.<paramKey>.<fieldParamName>`.
 
+**A value written there IS a knob.** The sandbox's panel enumerates every
+`param` in a node's field spec that carries one and offers a control per
+name, addressed by that three-part key; `inlineParamValuesOf(spec)` and
+`withInlineParamValue(spec, name, value)` are the read and write halves.
+The control's type comes from the value's shape — a number is `f32`, a
+3-number array `vec3`, a 4-number array `vec4` — so a graph gets a working
+knob with no extra files, and a panel spec under `graphs/panels/` then adds
+the `min`/`max` that makes it a slider and the `description` that says what
+it does. A reference with NO inline value gets no control, deliberately: it
+is an unbound reference waiting for a binder, and a widget for one would
+write a literal where its author chose to leave none.
+
 **With neither, a `param` builds but refuses to evaluate.** Its key is
 `param("amplitude")` and its WGSL kernel needs only the name, so a spec
 outside any wrapper still validates, hashes and compiles; only producing

@@ -188,7 +188,7 @@
 
     {#each section.controls as control, index (idOf(control, index))}
       {#if control.kind === "slider"}
-        <label class="row">
+        <label class="row" title={control.description}>
           <span>{control.label}</span>
           <input
             type="range"
@@ -201,7 +201,7 @@
           <em>{formatNumber(asNumber(control.key), control.step, control.unit)}</em>
         </label>
       {:else if control.kind === "number"}
-        <label class="row">
+        <label class="row" title={control.description}>
           <span>{control.label}</span>
           <input
             class="num"
@@ -214,7 +214,7 @@
           {#if control.unit !== undefined}<em class="unit">{control.unit}</em>{/if}
         </label>
       {:else if control.kind === "text"}
-        <label class="row">
+        <label class="row" title={control.description}>
           <span>{control.label}</span>
           <input
             class="num"
@@ -223,7 +223,7 @@
             onchange={(e) => typeText(control, e.currentTarget.value)} />
         </label>
       {:else if control.kind === "vector"}
-        <div class="row">
+        <div class="row" title={control.description}>
           <span>{control.label}</span>
           <div class="vec">
             {#each asVector(control.key) as component, i (i)}
@@ -239,7 +239,7 @@
           </div>
         </div>
       {:else if control.kind === "select"}
-        <label class="row">
+        <label class="row" title={control.description}>
           <span>{control.label}</span>
           <select
             value={asString(control.key)}
@@ -250,7 +250,7 @@
           </select>
         </label>
       {:else if control.kind === "flags"}
-        <div class="row">
+        <div class="row" title={control.description}>
           <span>{control.label}</span>
           {#each control.items as item (item.key)}
             <label class="check">
@@ -263,7 +263,7 @@
           {/each}
         </div>
       {:else if control.kind === "flagGrid"}
-        <div class="row stack">
+        <div class="row stack" title={control.description}>
           <span>{control.label}</span>
           <div class="checks" style="--columns: {control.columns ?? 2}">
             {#each control.items as item (item.item)}
@@ -278,7 +278,7 @@
           </div>
         </div>
       {:else if control.kind === "numberGrid"}
-        <div class="grid">
+        <div class="grid" title={control.description}>
           {#if control.note !== undefined}<div class="gridhead">{control.note}</div>{/if}
           <div class="gridrow" style="--columns: {control.columns ?? 4}">
             {#each control.items as item (item.item)}

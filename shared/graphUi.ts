@@ -33,7 +33,11 @@ import type { Control, ControlSection, ControlValue } from "./controls.js";
 
 /** One authored row. `param` names the knob; the rest is presentation. */
 export interface PanelControlSpec {
-  /** `"<nodeId>.<paramName>"`, the same key {@link Knob.key} carries. */
+  /**
+   * `"<nodeId>.<paramName>"`, or `"<nodeId>.<paramName>.<fieldParamName>"`
+   * for a literal named inside that param's field spec — the same key
+   * {@link Knob.key} carries, either way.
+   */
   readonly param: string;
   /**
    * Further knob keys this row writes with the same value.
@@ -52,6 +56,13 @@ export interface PanelControlSpec {
    */
   readonly also?: readonly string[];
   readonly label?: string;
+  /**
+   * Hover text for the row. A node param already has one in its schema and
+   * the node inspector shows it; a knob DERIVED from a field spec has no
+   * schema to carry it, so this is the only place its author can say what
+   * turning it does.
+   */
+  readonly description?: string;
   /** Supplying both promotes a typed box to a slider. */
   readonly min?: number;
   readonly max?: number;
@@ -85,21 +96,56 @@ export async function loadPanelSpec(name: string): Promise<GraphPanelSpec | unde
   return parsed as GraphPanelSpec;
 }
 
-/** One param of one node, as the controller reports it. */
-export interface Knob {
-  /** `"<nodeId>.<paramName>"` — unique within a graph, and the spec's handle. */
-  readonly key: string;
+/**
+ * Everything a WRITE needs to find the slot: the node, the param on it,
+ * and — when the knob addresses a literal inside that param's field
+ * expression — which literal.
+ *
+ * Split out from {@link Knob} because the panel keeps a key → target map
+ * and nothing else of a knob survives to the commit; carrying the parts is
+ * what lets the key stay an opaque handle instead of a thing to re-split.
+ */
+export interface KnobTarget {
   readonly node: string;
+  /** The NODE param this knob writes — the field spec's own param when {@link fieldParam} is set. */
+  readonly name: string;
+  /**
+   * Set when this knob addresses a `param` node carrying an inline value
+   * INSIDE the field spec `name` holds, rather than `name` itself. Writing
+   * it rewrites that literal in the spec and sets the rebuilt field.
+   */
+  readonly fieldParam?: string;
+}
+
+/** One param of one node, as the controller reports it. */
+export interface Knob extends KnobTarget {
+  /**
+   * `"<nodeId>.<paramName>"`, or `"<nodeId>.<paramName>.<fieldParamName>"`
+   * when {@link fieldParam} is set — unique within a graph, and the spec's
+   * handle.
+   *
+   * NOTHING SPLITS IT. Every consumer looks a whole key up in a map built
+   * from this list, and the parts each knob needs are the fields beside it,
+   * so a node id containing dots stays addressable and the three-part shape
+   * costs no parser. Where a key must be read apart, read it from the RIGHT:
+   * a field-spec param name is dot-free (`fieldJson.ts` refuses one) and so
+   * is a node param key (`standardNode` refuses one), so everything left
+   * over is the node id.
+   */
+  readonly key: string;
   /** The primitive's registered name, for the default section title. */
   readonly nodeLabel: string;
-  readonly name: string;
   readonly schema: ParamSchema;
   readonly value: unknown;
   /** Holds a Field, so no constant widget can represent it. */
   readonly isField: boolean;
   /**
-   * A subgraph's exposed param — a knob by construction. Standard-node
-   * params are not, and appear only when a panel spec names one.
+   * Declared tunable, so a panel with nothing else to go on shows it: a
+   * subgraph's exposed param, or a field-spec `param` that carries its own
+   * value. Both are an author saying this number is worth turning — one by
+   * naming it on the wrapper, one by writing it into the expression.
+   * Standard-node params are not, and appear only when a panel spec names
+   * one.
    */
   readonly exposed: boolean;
 }
@@ -179,10 +225,15 @@ function stepFor(schema: ParamSchema, min: number, max: number): number {
  */
 function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | undefined {
   const key = knob.key;
-  const label = spec?.label ?? knob.name;
+  // A field-spec knob's `name` is the node param HOLDING the expression,
+  // which several of them can share, so the literal's own name has to be in
+  // the label or two rows read identically.
+  const label =
+    spec?.label ?? (knob.fieldParam === undefined ? knob.name : `${knob.name}.${knob.fieldParam}`);
   const schema = knob.schema;
   const min = spec?.min ?? schema.min;
   const max = spec?.max ?? schema.max;
+  const note = spec?.description !== undefined ? { description: spec.description } : {};
 
   switch (schema.type) {
     case "f32":
@@ -193,6 +244,7 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
           kind: "slider",
           key,
           label,
+          ...note,
           min,
           max,
           step: spec?.step ?? stepFor(schema, min, max),
@@ -206,6 +258,7 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
         kind: "number",
         key,
         label,
+        ...note,
         ...(min !== undefined ? { min } : {}),
         ...(max !== undefined ? { max } : {}),
         ...(step !== undefined ? { step } : {}),
@@ -215,22 +268,24 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
     case "bool":
       // The name goes in the row's label column like every other row; the
       // checkbox is the value, so it carries no text of its own.
-      return { kind: "flags", label, items: [{ key, label: "" }] };
+      return { kind: "flags", label, ...note, items: [{ key, label: "" }] };
     case "enum":
       return {
         kind: "select",
         key,
         label,
+        ...note,
         options: (schema.enum ?? []).map((value) => ({ value, label: value })),
       };
     case "string":
-      return { kind: "text", key, label };
+      return { kind: "text", key, label, ...note };
     case "vec3":
     case "vec4":
       return {
         kind: "vector",
         key,
         label,
+        ...note,
         ...(min !== undefined ? { min } : {}),
         ...(max !== undefined ? { max } : {}),
         ...(spec?.step !== undefined ? { step: spec.step } : {}),

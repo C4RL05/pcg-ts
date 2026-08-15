@@ -178,6 +178,16 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
       `exposed param: name must be a non-empty string, got ${JSON.stringify(name)}`,
     );
   }
+  // The same rule `standardNode` holds registered param keys to, and for
+  // the same reason: a panel addresses this param as "<nodeId>.<name>" and
+  // reads the address from the RIGHT, so a dot in the name itself would
+  // split it where nothing can put it back together.
+  if (name.includes(".")) {
+    bad(
+      name,
+      `name contains a "."; a panel addresses an exposed param as "<nodeId>.<name>", so a dot inside the name itself would split that address in a place nothing can put back together — rename it without a dot`,
+    );
+  }
   if (!Array.isArray(decl.targets)) {
     bad(
       name,

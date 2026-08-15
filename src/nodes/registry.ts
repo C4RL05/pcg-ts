@@ -144,6 +144,20 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
   }
   const defaultParams: Record<string, unknown> = {};
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {
+    // A panel addresses a param as "<nodeId>.<paramKey>", and a param
+    // inside a field spec as "<nodeId>.<paramKey>.<fieldParamName>", both
+    // read from the RIGHT — which works only while the param key has no
+    // dot of its own. Every registered name is dot-free today; this is
+    // what keeps that a rule rather than a coincidence, the same way
+    // `fieldJson.ts` already refuses a dotted field-spec param name.
+    if (name.includes(".")) {
+      throw specError(
+        spec.type,
+        `param "${name}" contains a "."; a panel addresses a param as "<nodeId>.<paramKey>", so a ` +
+          "dot inside the key itself would split that address in a place nothing can put back " +
+          "together — rename the param without a dot",
+      );
+    }
     const bad = paramSchemaError(schema);
     if (bad !== undefined) throw specError(spec.type, `param "${name}" ${bad}`);
     defaultParams[name] = copyParamValue(schema.default);

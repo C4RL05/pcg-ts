@@ -136,6 +136,21 @@ describe("resolveExposedParam — a single target", () => {
 });
 
 describe("resolveExposedParam — bad targets", () => {
+  it("refuses a name containing a dot, which a panel key could not survive", () => {
+    // The same rule `standardNode` holds registered param keys to: a panel
+    // addresses this as "<nodeId>.<name>" and reads it from the right, so a
+    // dot in the name splits the address where nothing can rejoin it.
+    const inner = new Graph();
+    const sc = inner.add(pointScatterInBounds, undefined, "sc");
+    expect(() =>
+      resolveExposedParam(inner, {
+        name: "dune.count",
+        targets: [{ node: sc, param: "count" }],
+        description: "Anything.",
+      }),
+    ).toThrow(/exposed param "dune\.count": name contains a "\."/);
+  });
+
   it("names an inner node that does not exist and lists the ones that do", () => {
     const inner = new Graph();
     inner.add(pointScatterInBounds, undefined, "sc");
