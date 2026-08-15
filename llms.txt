@@ -274,11 +274,23 @@ graph round-trips and cooks identically. Rebuilding via
 
 A field spec is `{ "fn": <name>, ...args }`. Entries in `args` arrays
 may be nested specs, finite numbers, or number arrays (plain values wrap
-into `constant`). All 44 fns (`listFieldFns()`):
+into `constant`). All 45 fns (`listFieldFns()`):
 
 - Inputs:
   - `{ fn: "constant", value: 1 | [1, 2, 3] }`
   - `{ fn: "attribute", name: "density", tupleSize?: 1 }` (numeric attrs only)
+  - `{ fn: "attributeIs", name: "species", value: "pine" }` — the way a
+    STRING attribute drives a field, and a PREDICATE, not an accessor: 1
+    where the attribute equals the literal, 0 elsewhere, on any domain.
+    It never hands back the string-table index, which is insertion-ordered
+    and rebuilt by clone/filter/merge, so the same value sits at different
+    indices in different cells of one partitioned world. A literal the
+    geometry's table does not hold is ALL ZEROS and NOT an error — a cell
+    holding no pines legitimately has no `"pine"` to find, so throwing
+    would make the answer depend on the partition; the price is that a
+    MISSPELLED literal reads as "nothing matches". Structural mistakes do
+    still throw: a missing attribute, and a numeric one whose message
+    names `eq(attribute(name), value)` as what was meant
   - `{ fn: "position" }` — reads P (tuple 3); `{ fn: "index" }` — 0,1,2,...
   - `{ fn: "fraction" }` — normalized index `i / (count - 1)`, spanning
     [0, 1] CLOSED: exactly 0 on the first element and exactly 1 on the
@@ -938,15 +950,20 @@ Surface:
     fusion gate, since its fields still fall back per-field and one
     cause reported twice would read as two
   - `compile-error` — spec cannot lower to WGSL against the geometry's
-    attribute layout (missing or string attribute, tuple size > 4,
-    non-finite f32 constant)
+    attribute layout (missing attribute, a string attribute reached by
+    `attribute` rather than by `attributeIs`, tuple size > 4, non-finite
+    f32 constant)
   - `too-many-buffers` — kernel needs > 8 storage buffers (more than 7
     attribute inputs + the output; baseline WebGPU limit)
   - `run-plan-failed` — some member of a resident run cannot be
     compiled into the pipeline (unknown resident kind, field compile
     error, tuple/layout mismatch, missing standard attribute, buffer
     limit, a spawn over the instance budget or naming a bad
-    `assetAttr`/`colorAttr`). Counted once per rejected run; every
+    `assetAttr`/`colorAttr`, or an `attributeIs` anywhere in the run —
+    its kernel compiles and dispatches fine on the per-node path, but
+    the uniform it reads is a string-table index of the geometry being
+    cooked and a PLAN has only attribute descriptors and a count).
+    Counted once per rejected run; every
     member then cooks per-node, including surfacing the identical CPU
     error for genuinely invalid params. That is deliberate reuse: an
     over-budget or mis-named spawn adds NO new fallback reason, and

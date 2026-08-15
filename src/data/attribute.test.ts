@@ -62,6 +62,30 @@ describe("Attribute storage round-trips", () => {
     expect(attr.data[0]).toBe(attr.data[2]);
   });
 
+  it("looks a string up without interning it", () => {
+    // `internString` INSERTS on a miss, which is right for a writer and
+    // wrong for anything merely reading the column — a field resolving a
+    // literal would otherwise edit the geometry it is evaluating over,
+    // and the appended entry would renumber the table at the next
+    // `copyFrom`. `lookupString` is the read-only half.
+    const set = new AttributeSet();
+    const attr = set.add("s", "string");
+    set.resize(2);
+    attr.setString(0, "apple");
+    expect(attr.lookupString("apple")).toBe(1);
+    expect(attr.lookupString("")).toBe(0);
+    expect(attr.lookupString("banana")).toBeUndefined();
+    expect(attr.stringTable).toEqual(["", "apple"]);
+    // ...and the miss above really would have grown the table.
+    expect(attr.internString("banana")).toBe(2);
+    expect(attr.lookupString("banana")).toBe(2);
+  });
+
+  it("refuses a string lookup on a numeric attribute", () => {
+    const attr = new AttributeSet().add("n", "f32");
+    expect(() => attr.lookupString("apple")).toThrow(/not a string attribute/);
+  });
+
   it("round-trips string tuples per component", () => {
     const set = new AttributeSet();
     const attr = set.add("s", "string", 2);

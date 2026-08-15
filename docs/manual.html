@@ -906,13 +906,13 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
     <p>Note the generated id: a code-built node is named <code>&lt;type&gt;_&lt;n&gt;</code>, whereas a node loaded from JSON keeps the id you gave it. Both appear verbatim in error messages and in <code>describe()</code>, so meaningful ids in your documents pay for themselves the first time something fails.</p>
 
     <h3>listFieldFns()</h3>
-    <p>Returns the complete field-expression vocabulary as a sorted array of 44 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
-    <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>,
- <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>,
- <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>, <span class="s">"mul"</span>,
- <span class="s">"ne"</span>, <span class="s">"nodeSeed"</span>, <span class="s">"normalize"</span>, <span class="s">"param"</span>, <span class="s">"perlinNoise"</span>, <span class="s">"position"</span>,
- <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>,
- <span class="s">"sub"</span>, <span class="s">"tan"</span>, <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
+    <p>Returns the complete field-expression vocabulary as a sorted array of 45 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
+    <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"attributeIs"</span>,
+ <span class="s">"clamp"</span>, <span class="s">"component"</span>, <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"fbm"</span>,
+ <span class="s">"floor"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>, <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"lt"</span>,
+ <span class="s">"max"</span>, <span class="s">"min"</span>, <span class="s">"mul"</span>, <span class="s">"ne"</span>, <span class="s">"nodeSeed"</span>, <span class="s">"normalize"</span>, <span class="s">"param"</span>, <span class="s">"perlinNoise"</span>,
+ <span class="s">"position"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>,
+ <span class="s">"sin"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>, <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>listSubgraphs()</h3>
     <p>The third registry, and the one an agent gains most from: the <strong>named primitives</strong>. A primitive is a registered subgraph — a tested recipe with exposed params — that a graph references by name rather than rebuilding out of node types. 37 named primitives ship with the library, and <code>listSubgraphs()</code> returns them as <code>{ name, subgraph, hash, meta }</code>: the canonical payload, its content hash, and a <code>meta</code> block whose <code>title</code> and <code>description</code> say what the recipe is for and how its knobs behave.</p>
@@ -935,7 +935,7 @@ pcg nodes                      <span class="c"># -> "45 node types, by category"
 pcg nodes pointGrid
 
 <span class="c"># the field vocabulary, and one fn's allowed keys</span>
-pcg fields                     <span class="c"># -> "44 field fns"</span>
+pcg fields                     <span class="c"># -> "45 field fns"</span>
 pcg fields randomField         <span class="c"># -> usage: { fn: "randomField", key?: 0 | "salt" }</span>
 
 <span class="c"># every command takes --json and prints the machine-readable report instead</span>
@@ -1083,12 +1083,14 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
     <h4>Inputs</h4>
     <div class="codeblock"><pre><code>{ <span class="s">"fn"</span>: <span class="s">"constant"</span>,    <span class="s">"value"</span>: <span class="n">1</span> }              <span class="c">// or [1, 2, 3]</span>
 { <span class="s">"fn"</span>: <span class="s">"attribute"</span>,   <span class="s">"name"</span>: <span class="s">"density"</span>, <span class="s">"tupleSize"</span>: <span class="n">1</span> }   <span class="c">// numeric attributes only</span>
+{ <span class="s">"fn"</span>: <span class="s">"attributeIs"</span>, <span class="s">"name"</span>: <span class="s">"species"</span>, <span class="s">"value"</span>: <span class="s">"pine"</span> }   <span class="c">// string attributes: 1 where equal, else 0</span>
 { <span class="s">"fn"</span>: <span class="s">"position"</span> }                              <span class="c">// reads P, tuple 3</span>
 { <span class="s">"fn"</span>: <span class="s">"index"</span> }                                 <span class="c">// 0, 1, 2, ...</span>
 { <span class="s">"fn"</span>: <span class="s">"fraction"</span> }                              <span class="c">// index / (count - 1), [0, 1] inclusive</span>
 { <span class="s">"fn"</span>: <span class="s">"nodeSeed"</span> }                              <span class="c">// the cooking node's own seed, same on every element</span>
 { <span class="s">"fn"</span>: <span class="s">"randomField"</span>, <span class="s">"key"</span>: <span class="s">"species"</span> }            <span class="c">// per-element hash random in [0,1)</span>
 { <span class="s">"fn"</span>: <span class="s">"param"</span>,       <span class="s">"name"</span>: <span class="s">"amplitude"</span> }         <span class="c">// the value bound to that name</span></code></pre></div>
+    <p><code>attributeIs</code> is how a string attribute reaches a field, and it is a predicate rather than an accessor deliberately: a string column stores indices into a per-attribute table that clone, filter and merge rebuild, so one logical value sits at different indices in different cells of a partitioned world — a fn handing back the index would agree with itself everywhere until two cells disagreed. That same fact fixes the one rule worth memorising. <strong>A literal the geometry's table does not hold yields all zeros, not an error</strong>, because a cell holding no pines legitimately has no <code>"pine"</code> to find; the price is that a misspelled literal reads as "nothing matches" rather than as a mistake. Structural errors still throw — a missing attribute does, and so does a numeric one, naming <code>eq(attribute(name), value)</code> as the thing you meant.</p>
 
     <h4>Elementwise combinators — exact arity, scalars broadcast</h4>
     <div class="tablewrap">
@@ -1130,7 +1132,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <h3>What an agent can emit — and what it cannot</h3>
     <p>This is the boundary that matters most, because it is asymmetric and easy to get wrong in the safe-looking direction.</p>
-    <p><strong>You can emit any field the grammar describes.</strong> Those 44 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
+    <p><strong>You can emit any field the grammar describes.</strong> Those 45 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
     <p><strong>You cannot emit a code-authored field, and you cannot serialize one.</strong> A field composed with the code combinators — <code>clamp(add(0.2, mul(worleyNoise(...), 0.9)), 0, 1)</code> — cooks perfectly well but has no spec. <code>getFieldSpec</code> returns <code>undefined</code> for it, and <code>serializeGraph</code> on a graph containing one cannot represent that parameter. There is no specification for arbitrary code-authored fields, and there will not be one, because there is nothing finite to specify.</p>
     <p>Two consequences follow directly, and both are practical rather than theoretical:</p>
     <ul>
@@ -1187,10 +1189,11 @@ GraphValidationError: unknown output <span class="s">"pts"</span>; declared outp
 
     <div class="code-label">Field grammar — the fn list and the exact arity</div>
     <div class="codeblock"><pre><code>FieldJsonError: $: unknown field fn <span class="s">"perlin"</span>; valid fns: abs, acos, add, asin,
-atan, atan2, attribute, clamp, component, constant, cos, div, dot, eq, fbm,
-floor, fraction, ge, gt, index, le, length, lerp, lt, max, min, mul, ne,
-nodeSeed, normalize, param, perlinNoise, position, ramp, randomField, remap,
-select, simplexNoise, sin, sub, tan, valueNoise, vec, worleyNoise
+atan, atan2, attribute, attributeIs, clamp, component, constant, cos, div,
+dot, eq, fbm, floor, fraction, ge, gt, index, le, length, lerp, lt, max,
+min, mul, ne, nodeSeed, normalize, param, perlinNoise, position, ramp,
+randomField, remap, select, simplexNoise, sin, sub, tan, valueNoise, vec,
+worleyNoise
 
 FieldJsonError: $: fn <span class="s">"clamp"</span> expects exactly 3 args, got 2</code></pre></div>
     <p>The <code>$</code> prefix is a path into the spec: nested failures report the position of the offending sub-expression rather than only the root.</p>

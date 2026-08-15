@@ -8,6 +8,10 @@
  * arrays — plain values wrap into `constant`):
  * - `{ fn: "constant", value: 1 | [1, 2, 3] }`
  * - `{ fn: "attribute", name: "density", tupleSize?: 1 }`
+ * - `{ fn: "attributeIs", name: "species", value: "pine" }` — 1 where the
+ *   STRING attribute equals the literal, 0 elsewhere; a literal the
+ *   geometry's string table does not hold is all zeros rather than an
+ *   error (see {@link attributeIs})
  * - `{ fn: "position" }` / `{ fn: "index" }`
  * - `{ fn: "fraction" }` — normalized index, `index / (count - 1)`:
  *   exactly 0 on the first element and exactly 1 on the last (a lone
@@ -53,6 +57,7 @@ import {
   atan,
   atan2,
   attribute,
+  attributeIs,
   clamp,
   component,
   constant,
@@ -318,6 +323,30 @@ register(
       fail(`${path}.tupleSize`, "tupleSize must be a positive integer");
     }
     return attribute(spec.name, spec.tupleSize);
+  },
+);
+
+// Per-element like `attribute`, and for the same reason: it reads a
+// column. The value it compares against is fixed, but which elements
+// match is not.
+register(
+  "attributeIs",
+  "per-element",
+  ["name", "value"],
+  `{ fn: "attributeIs", name: "species", value: "pine" }`,
+  (spec, path) => {
+    if (typeof spec.name !== "string" || spec.name === "") {
+      fail(`${path}.name`, "attributeIs requires a non-empty string name");
+    }
+    // The empty string is a legal literal (it is the default entry every
+    // string table interns at index 0), so only the TYPE is checked here.
+    if (typeof spec.value !== "string") {
+      fail(
+        `${path}.value`,
+        `attributeIs requires a string value; to compare a numeric attribute write { fn: "eq", args: [{ fn: "attribute", name: "${spec.name}" }, <number>] }`,
+      );
+    }
+    return attributeIs(spec.name, spec.value);
   },
 );
 

@@ -47,7 +47,7 @@ import type {
 } from "../fields/index.js";
 import { acceptsDerivedSpecs, deviceSpec, specFallbackReason } from "../fields/spec.js";
 import { APPLY_CONST_OFFSET } from "./applyKernels.js";
-import { compileFieldSpec, paramConstValues, specKernelKey } from "./compile.js";
+import { compileFieldSpec, constSlotValues, specKernelKey } from "./compile.js";
 import {
   BUFFER_USAGE,
   MAP_MODE,
@@ -385,7 +385,14 @@ export class GpuFieldEvaluator implements GpuFieldResolver {
     // does not carry. Decided BEFORE the empty-count shortcut, so a field
     // whose params cannot be resolved falls back on an empty domain too —
     // the CPU refusal names the param, and an empty column would hide it.
-    const consts = paramConstValues(spec, kernel);
+    //
+    // `set` and not the spec alone, because an `attributeIs` slot holds a
+    // string-table index and a table belongs to ONE geometry: this is the
+    // point where the geometry is in hand and the same spec legitimately
+    // resolves to a different number per cell. Nothing about that number
+    // reaches `cacheKey`, which is the whole arrangement — the kernel is
+    // table-agnostic and the uniform carries the difference.
+    const consts = constSlotValues(spec, kernel, set);
     if ("problem" in consts) return countFallback(stats, "param-bindings");
 
     const count = set.count;

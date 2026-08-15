@@ -34,6 +34,7 @@ import { PERLIN_SALT } from "../noise/perlin.js";
 import { SIMPLEX_SALT } from "../noise/simplex.js";
 import { WORLEY_SALT } from "../noise/worley.js";
 import {
+  type AttrIsSlot,
   type CompiledFieldKernel,
   type FieldKernelAttr,
   type FieldKernelLayout,
@@ -138,6 +139,15 @@ class CompileCtx {
     return { slot, arity: this.params.arities[slot] };
   }
 
+  /** The pre-assigned uniform slot for an `attributeIs` (attribute, literal) pair. */
+  attrIsSlot(name: string, value: string): number {
+    const slot = this.params.attrIsSlots.get(attrIsKey(name, value));
+    if (slot === undefined) {
+      throw new Error(`internal: attributeIs ${attrIsKey(name, value)} was not pre-planned`);
+    }
+    return slot;
+  }
+
   /** Emit (or reuse) an SSA `let` for a canonical expression. */
   emit(expr: string, size: number): Val {
     const hit = this.valueNumbers.get(expr);
@@ -221,8 +231,10 @@ function resolveLayoutAttr(
   const attr = attrs[name];
   if (attr.type === "string") {
     throw new GpuCompileError(
-      `${path}: ${origin}attribute ${JSON.stringify(name)} has type "string"; string attributes ` +
-        "cannot be read as fields and are CPU-only — use a numeric or bool attribute",
+      `${path}: ${origin}attribute ${JSON.stringify(name)} has type "string"; a string column has ` +
+        "no numeric value to read — test it with " +
+        `{ fn: "attributeIs", name: ${JSON.stringify(name)}, value: "..." }, which is 1 where it ` +
+        "matches and 0 elsewhere, or read a numeric or bool attribute",
     );
   }
   if (expectTupleSize !== undefined && attr.tupleSize !== expectTupleSize) {
@@ -319,6 +331,79 @@ HANDLERS.set("attribute", (spec, path, ctx) => {
   const name = spec.name as string;
   const expect = spec.tupleSize as number | undefined;
   return loadAttribute(ctx, path, name, expect, "");
+});
+
+/**
+ * Validate the STRING column `attributeIs` tests. Deliberately not
+ * `resolveLayoutAttr`, which refuses strings wholesale and is right to:
+ * a string column has no numeric value, so `attribute("species")` has
+ * nothing to read. This one reads no value either — it compares an index
+ * against an index — so the refusal it needs is the mirror image, and a
+ * NUMERIC column is the mistake here. The message names `eq` for the
+ * same reason the CPU constructor does: absence of a value is data,
+ * absence of the right KIND of attribute is a bug the author can fix.
+ *
+ * No tuple cap, unlike the numeric path: only component 0 is read, so a
+ * wide string tuple costs nothing and never has to fit in a `vecN`.
+ */
+function resolveStringAttr(ctx: CompileCtx, path: string, name: string): FieldKernelAttr {
+  const attrs = ctx.layout.attributes;
+  if (!Object.hasOwn(attrs, name)) {
+    throw new GpuCompileError(
+      `${path}: attributeIs: attribute ${JSON.stringify(name)} is not in the kernel layout; ${describeLayout(ctx.layout)}`,
+    );
+  }
+  const attr = attrs[name];
+  if (attr.type !== "string") {
+    throw new GpuCompileError(
+      `${path}: attributeIs: attribute ${JSON.stringify(name)} has type ${JSON.stringify(attr.type)}, ` +
+        "but attributeIs tests a string attribute; compare a numeric attribute with " +
+        `{ fn: "eq", args: [{ fn: "attribute", name: ${JSON.stringify(name)} }, <number>] }`,
+    );
+  }
+  return attr;
+}
+
+// The literal rides a UNIFORM SLOT and is never baked, and unlike `param`
+// — where the uniform is the better of two workable lowerings — here it
+// is the only sound one. What the kernel needs is the literal's index in
+// THIS geometry's string table, and that index is a property of the
+// geometry rather than of the spec: the table is insertion-ordered and
+// rebuilt by clone, filter and merge, so two cells of one world hold
+// "pine" at different indices. The kernel cache key is spec text plus
+// each attribute's name/type/tupleSize (`evaluator.ts`) and carries no
+// table contents, so a baked index would be shared by two geometries
+// that disagree about it — the cache would serve the wrong constant, and
+// silently, which is the failure this whole design exists to prevent.
+// Riding a uniform makes the kernel table-agnostic: one kernel, one
+// index resolved per dispatch against the geometry in hand.
+//
+// Component 0 of a possibly-tuple column, matching `Attribute.getString`'s
+// default and so the CPU `attributeIs`; the stride is applied for the
+// same reason every other read applies it.
+//
+// -1 for an absent literal (filled by `constSlotValues`) needs no special
+// case here: no table index equals it, so the comparison is false on
+// every lane and the column is the zeros the CPU produces — `f32(u32)`
+// is non-negative for every bit pattern, garbage included.
+//
+// The comparison is f32 where the CPU's is integer, which is exact up to
+// 2^24 — the same bound the module doc records for `index`, and reached
+// here only by a string table holding more than 16.7 million DISTINCT
+// values on one attribute. Past it two indices could round together and
+// the device would match an element the CPU does not. Recorded rather
+// than guarded because the uniform tail is f32 for every slot kind and
+// the case is unreachable in any geometry the library can build.
+HANDLERS.set("attributeIs", (spec, path, ctx) => {
+  const name = spec.name as string;
+  const value = spec.value as string;
+  const attr = resolveStringAttr(ctx, path, name);
+  const b = ctx.binding(name);
+  const slot = ctx.attrIsSlot(name, value);
+  return ctx.emit(
+    `select(0f, 1f, f32(${b.varName}[${flatIndex(attr.tupleSize, 0)}]) == params.consts[${slot}].x)`,
+    1,
+  );
 });
 
 HANDLERS.set("position", (_spec, path, ctx) => {
@@ -816,7 +901,7 @@ function collectAttrNames(v: unknown, out: Set<string>): void {
     if (bound !== undefined) collectAttrNames(bound, out);
     return;
   }
-  if (fn === "attribute") {
+  if (fn === "attribute" || fn === "attributeIs") {
     if (typeof v.name === "string") out.add(v.name);
     return;
   }
@@ -858,16 +943,42 @@ function collectAttrNames(v: unknown, out: Set<string>): void {
  */
 const MAX_FIELD_CONST_SLOTS = 16;
 
-/** The `param` names a kernel carries, their slots, and their arities. */
+/**
+ * Slot identity of an `attributeIs` pair, and its sort key. Both halves
+ * go through `JSON.stringify`, which quotes and escapes them, so no
+ * attribute name containing a comma or a quote can forge another pair's
+ * key — the same guard the CPU constructor's field key uses.
+ */
+function attrIsKey(attr: string, value: string): string {
+  return `${JSON.stringify(attr)},${JSON.stringify(value)}`;
+}
+
+/**
+ * What a kernel carries in its uniform constant slots: the `param` names
+ * with their arities first, then the `attributeIs` pairs. Two kinds of
+ * slot in one array because they share one uniform tail, and appending
+ * the new kind leaves every pre-existing kernel's slot numbering — and so
+ * its key and its cached pipeline — exactly where it was.
+ */
 interface ParamPlan {
   /** Distinct names in SLOT ORDER: sorted, as the attribute pre-pass is. */
   readonly names: readonly string[];
   readonly slots: ReadonlyMap<string, number>;
   /** Components each slot holds — the binding's arity, 1 when unbound. */
   readonly arities: readonly number[];
+  /** Distinct `attributeIs` pairs in SLOT ORDER, sorted, after the params. */
+  readonly attrIs: readonly AttrIsSlot[];
+  /** Slot index by {@link attrIsKey}; already offset past the param slots. */
+  readonly attrIsSlots: ReadonlyMap<string, number>;
 }
 
-const EMPTY_PARAMS: ParamPlan = { names: [], slots: new Map(), arities: [] };
+const EMPTY_PARAMS: ParamPlan = {
+  names: [],
+  slots: new Map(),
+  arities: [],
+  attrIs: [],
+  attrIsSlots: new Map(),
+};
 
 /** Component count a recorded binding lowers as. */
 function bindingArity(value: number | readonly number[]): number {
@@ -933,7 +1044,24 @@ function planParams(root: FieldSpec): ParamPlan {
 function computeParamPlan(root: FieldSpec): ParamPlan {
   const bound = new Map<string, number>();
   const seen = new Set<string>();
+  // Distinct (attribute, literal) pairs, keyed so the map dedupes and the
+  // key doubles as the sort key. Two references to one pair share a slot
+  // for the same reason two references to one `param` name do: one index
+  // is one index.
+  const attrIs = new Map<string, AttrIsSlot>();
   eachSpecNode(root, (node) => {
+    if (node.fn === "attributeIs") {
+      // The grammar has already validated both halves for an authored
+      // spec; a DERIVED one reaches here through the same registration,
+      // so anything malformed is caught by `fieldFromJson` in
+      // `compileFieldSpec` before codegen runs. Guarded anyway because
+      // this pre-pass walks raw objects and a slot is not something to
+      // reserve on a `undefined`.
+      if (typeof node.name !== "string" || node.name === "") return;
+      if (typeof node.value !== "string") return;
+      attrIs.set(attrIsKey(node.name, node.value), { attr: node.name, value: node.value });
+      return;
+    }
     if (node.fn !== "param" || typeof node.name !== "string" || node.name === "") return;
     const name = node.name;
     // A name bound to a FIELD claims no slot: the expression is compiled
@@ -985,19 +1113,27 @@ function computeParamPlan(root: FieldSpec): ParamPlan {
   // compiles in place and never asks for a slot; a value-bound node
   // reads the slot this plan allocates), so the name in `slots` serves
   // exactly the references that need it.
-  if (seen.size === 0) return EMPTY_PARAMS;
+  if (seen.size === 0 && attrIs.size === 0) return EMPTY_PARAMS;
   const names = [...seen].sort();
-  if (names.length > MAX_FIELD_CONST_SLOTS) {
+  // Sorted by the same composite key that identifies them, and numbered
+  // AFTER the params: one total order over the slots, decided by the spec
+  // alone, so the same spec always emits the same text.
+  const attrIsKeys = [...attrIs.keys()].sort();
+  const total = names.length + attrIsKeys.length;
+  if (total > MAX_FIELD_CONST_SLOTS) {
     throw new GpuCompileError(
-      `this field references ${names.length} distinct params, but a kernel carries at most ` +
-        `${MAX_FIELD_CONST_SLOTS} uniform constant slots (raise MAX_FIELD_CONST_SLOTS in ` +
-        "compile.ts if an expression legitimately needs more)",
+      `this field needs ${total} uniform constant slots (${names.length} distinct params and ` +
+        `${attrIsKeys.length} distinct attributeIs literals), but a kernel carries at most ` +
+        `${MAX_FIELD_CONST_SLOTS} (raise MAX_FIELD_CONST_SLOTS in compile.ts if an expression ` +
+        "legitimately needs more)",
     );
   }
   return {
     names,
     slots: new Map(names.map((n, i) => [n, i])),
     arities: names.map((n) => bound.get(n) ?? 1),
+    attrIs: attrIsKeys.map((k) => attrIs.get(k) as AttrIsSlot),
+    attrIsSlots: new Map(attrIsKeys.map((k, i) => [k, names.length + i])),
   };
 }
 
@@ -1006,10 +1142,27 @@ const PARAM_PLANS = new WeakMap<FieldSpec, ParamPlan>();
 const PARAM_PLAN_ERRORS = new WeakMap<FieldSpec, GpuCompileError>();
 const SPEC_KEYS = new WeakMap<FieldSpec, string>();
 
-/** The params' contribution to a specialization key: names and arities, never values. */
+/**
+ * The slots' contribution to a specialization key: for a `param`, its
+ * name and arity and never its value; for an `attributeIs`, the pair
+ * whose INDEX the slot will hold and never that index. Both kinds are
+ * counted because both decide the emitted text — the slot numbering, the
+ * struct's array length, and so the uniform size — and a key that
+ * described only half the slots would name a kernel that is not the one
+ * compiled.
+ *
+ * Emitted only for the kinds actually present, so a param-free kernel's
+ * key is character for character what it was before either kind existed.
+ */
 function paramSig(plan: ParamPlan): string {
-  if (plan.names.length === 0) return "";
-  return `|params=[${plan.names.map((n, i) => `${JSON.stringify(n)}:${plan.arities[i]}`).join(",")}]`;
+  let sig = "";
+  if (plan.names.length > 0) {
+    sig += `|params=[${plan.names.map((n, i) => `${JSON.stringify(n)}:${plan.arities[i]}`).join(",")}]`;
+  }
+  if (plan.attrIs.length > 0) {
+    sig += `|attrIs=[${plan.attrIs.map((a) => attrIsKey(a.attr, a.value)).join(";")}]`;
+  }
+  return sig;
 }
 
 /**
@@ -1050,7 +1203,7 @@ function paramSig(plan: ParamPlan): string {
  */
 export function specKernelKey(spec: FieldSpec, fieldKey: string): string {
   const plan = planParams(spec);
-  if (plan.names.length === 0) return fieldKey;
+  if (plan.names.length === 0 && plan.attrIs.length === 0) return fieldKey;
   const cached = SPEC_KEYS.get(spec);
   if (cached !== undefined) return cached;
   const key = `${fieldFromJson(spec).key}${paramSig(plan)}`;
@@ -1089,6 +1242,28 @@ function sameComponents(a: readonly number[], b: readonly number[]): boolean {
  */
 export function paramConstValues(spec: FieldSpecArg, kernel: CompiledFieldKernel): ParamConstValues {
   if (kernel.constSlots === 0) return { values: [] };
+  // A kernel carrying an `attributeIs` slot cannot be filled from the
+  // spec, and saying so HERE is what makes every spec-only caller decline
+  // instead of writing a payload one slot short. The literal's slot holds
+  // its index in a particular geometry's string table, and this function
+  // is handed no geometry — deliberately, because the plan-time caller
+  // that relies on it (`run.ts`, which bakes the payload into a fused
+  // step before any geometry exists) has none to hand it.
+  // {@link constSlotValues} is the door that does.
+  if (kernel.attrIsSlots.length > 0) {
+    return {
+      problem:
+        `this kernel carries ${kernel.attrIsSlots.length} attributeIs slot(s) ` +
+        `(${kernel.attrIsSlots.map((a) => `${JSON.stringify(a.attr)} == ${JSON.stringify(a.value)}`).join(", ")}) ` +
+        "whose values are string-table indices of the geometry being cooked; fill them with " +
+        "constSlotValues, which takes that geometry's attribute set",
+    };
+  }
+  return paramSlotValues(spec, kernel);
+}
+
+/** The `param` half of the payload: {@link kernel.paramNames} in slot order. */
+function paramSlotValues(spec: FieldSpecArg, kernel: CompiledFieldKernel): ParamConstValues {
   const byName = new Map<string, readonly number[]>();
   let problem: string | undefined;
   eachSpecNode(spec, (node) => {
@@ -1119,6 +1294,81 @@ export function paramConstValues(spec: FieldSpecArg, kernel: CompiledFieldKernel
     for (let k = 0; k < APPLY_CONST_COMPONENTS; k++) {
       values.push(k < components.length ? components[k] : 0);
     }
+  }
+  return { values };
+}
+
+/**
+ * The slot index written for a literal the geometry's string table does
+ * not hold. No table index can equal it (they are 0-based and dense), so
+ * every lane compares false and the column is the zeros the CPU produces
+ * for the same absent literal. The lane is f32 and -1 is exact there, so
+ * nothing rounds.
+ */
+const ABSENT_STRING_INDEX = -1;
+
+/**
+ * The read-only slice of an attribute set a geometry-aware fill needs:
+ * find a column, ask its type, ask its table for an index. Structural on
+ * purpose — this module is codegen and imports no data types — and
+ * `AttributeSet` satisfies it as it stands.
+ *
+ * `lookupString` and not `internString`: the inserting one would append
+ * the literal to a table it is only reading, which is invisible until the
+ * next `copyFrom` compacts that table and renumbers everything after it.
+ * Resolving a field must not edit the geometry it resolves over.
+ */
+export interface StringTableSource {
+  get(name: string):
+    | { readonly type: string; lookupString(value: string): number | undefined }
+    | undefined;
+}
+
+/**
+ * The full uniform payload for a kernel's constant slots, resolved
+ * against the geometry being cooked: the `param` values exactly as
+ * {@link paramConstValues} reads them, then one string-table index per
+ * `attributeIs` slot.
+ *
+ * This is the geometry-aware counterpart, and the reason there are two:
+ * a param's value is a property of the SPEC and can be read whenever the
+ * spec is in hand, while an `attributeIs` slot holds an index into a
+ * table that belongs to one geometry. Resolving it at compile time would
+ * bake a geometry's private numbering into a kernel the cache shares
+ * across geometries — see the handler. So it is resolved here, per
+ * dispatch, where the geometry is.
+ */
+export function constSlotValues(
+  spec: FieldSpecArg,
+  kernel: CompiledFieldKernel,
+  attrs: StringTableSource,
+): ParamConstValues {
+  if (kernel.constSlots === 0) return { values: [] };
+  const params = paramSlotValues(spec, kernel);
+  if ("problem" in params) return params;
+  if (kernel.attrIsSlots.length === 0) return params;
+  const values = [...params.values];
+  for (const slot of kernel.attrIsSlots) {
+    const attr = attrs.get(slot.attr);
+    if (attr === undefined || attr.type !== "string") {
+      // Unreachable through the evaluator, which compiles the kernel
+      // against the very attribute set it then fills from — a missing or
+      // numeric column threw in `resolveStringAttr` and there is no
+      // kernel to fill. Refused rather than filled with a zero, which is
+      // a REAL index (the table's default entry) and would silently mark
+      // every untouched element as a match.
+      return {
+        problem:
+          `attributeIs ${JSON.stringify(slot.attr)}: this geometry has no string attribute of ` +
+          `that name (${attr === undefined ? "no such attribute" : `it is ${attr.type}`}), so the ` +
+          "literal has no index to resolve to",
+      };
+    }
+    // Absent is data, not an error: a cell holding no pines legitimately
+    // has no "pine" in its table, and throwing would make the result
+    // depend on how the world was partitioned. See the CPU constructor.
+    const index = attr.lookupString(slot.value) ?? ABSENT_STRING_INDEX;
+    for (let k = 0; k < APPLY_CONST_COMPONENTS; k++) values.push(k === 0 ? index : 0);
   }
   return { values };
 }
@@ -1157,9 +1407,15 @@ function normalizeRootSpec(spec: FieldSpecArg): FieldSpec {
   return spec as FieldSpec;
 }
 
-/** Storage buffer element type an attribute binds as (bool → u32). */
+/**
+ * Storage buffer element type an attribute binds as. `bool` binds as u32
+ * because the CPU stores it in a `Uint8Array` the marshaller widens;
+ * `string` binds as u32 because that is already what it IS — a string
+ * column is a `Uint32Array` of table indices, which is exactly what
+ * `attributeIs` compares. Nothing about the table crosses to the device.
+ */
 function bufferType(attr: FieldKernelAttr): GpuScalarType {
-  return attr.type === "bool" ? "u32" : (attr.type as GpuScalarType);
+  return attr.type === "bool" || attr.type === "string" ? "u32" : (attr.type as GpuScalarType);
 }
 
 /**
@@ -1180,11 +1436,16 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
 
   // Pre-pass: find every attribute the spec reads and pre-assign binding
   // slots (sorted by name) so codegen is single-pass and deterministic.
+  //
+  // String columns are eligible since `attributeIs` — the one fn that
+  // reads one — and are filtered no further than any other type: a name
+  // reached ONLY through `attribute` is still refused, by the handler,
+  // where the message can say what to write instead. Filtering it out
+  // here would trade that message for "not in the kernel layout", which
+  // is not true and not actionable.
   const attrNames = new Set<string>();
   collectAttrNames(rootSpec, attrNames);
-  const eligible = [...attrNames]
-    .filter((n) => Object.hasOwn(layout.attributes, n) && layout.attributes[n].type !== "string")
-    .sort();
+  const eligible = [...attrNames].filter((n) => Object.hasOwn(layout.attributes, n)).sort();
   // The same pre-pass for params, over the other resource a spec claims:
   // a uniform slot per distinct name, sorted the same way.
   const params = planParams(rootSpec);
@@ -1255,10 +1516,9 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
   // their slots through the same offset. A spec with no params emits the
   // header alone — character for character what it emitted before params
   // existed, which is what lets every pre-existing kernel keep its key.
+  const constSlots = params.names.length + params.attrIs.length;
   const constMembers =
-    params.names.length === 0
-      ? ""
-      : `\n  _pad0: u32,\n  consts: array<vec4<f32>, ${params.names.length}>,`;
+    constSlots === 0 ? "" : `\n  _pad0: u32,\n  consts: array<vec4<f32>, ${constSlots}>,`;
   const blocks: string[] = [
     `// Generated by pcg-ts compileFieldSpec (WGSL field kernel).
 // Dispatch: 1D, chunked; each chunk runs ceil(chunkElements / ${WORKGROUP_SIZE}) workgroups of ${WORKGROUP_SIZE}
@@ -1298,9 +1558,10 @@ ${[...ctx.lines, ...storeLines].join("\n")}
     outType,
     inputs,
     bindings: { uniforms: 0, output: outputBinding },
-    constSlots: params.names.length,
+    constSlots,
     paramNames: params.names,
-    uniformBytes: applyUniformBytes(params.names.length),
+    attrIsSlots: params.attrIs,
+    uniformBytes: applyUniformBytes(constSlots),
     usesSeed: ctx.usesSeed,
     key: `${CODEGEN_VERSION}|spec=${specKey}|layout=[${layoutKey}]`,
   };

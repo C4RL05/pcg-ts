@@ -318,6 +318,7 @@ describe("fieldFromJson", () => {
     for (const name of [
       "constant",
       "attribute",
+      "attributeIs",
       "position",
       "index",
       "fraction",
@@ -878,7 +879,7 @@ describe("variation classification", () => {
    * should see, so it fails here until someone writes it down.
    */
   const PER_ELEMENT = [
-    "attribute", "fbm", "fraction", "index", "param", "perlinNoise", "position",
+    "attribute", "attributeIs", "fbm", "fraction", "index", "param", "perlinNoise", "position",
     "randomField", "simplexNoise", "valueNoise", "worleyNoise",
   ];
 

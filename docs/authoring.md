@@ -344,20 +344,34 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 44 names at runtime.
+256 levels). `listFieldFns()` returns all 45 names at runtime.
 
 ### Inputs
 
 | fn | Spec | Result |
 | --- | --- | --- |
 | `constant` | `{ fn, value: 1 \| [1, 2, 3] }` | Same scalar/tuple for every element |
-| `attribute` | `{ fn, name: "density", tupleSize?: 1 }` | Reads a numeric attribute of the target domain (string attributes are not readable as fields; `tupleSize`, when given, must match) |
+| `attribute` | `{ fn, name: "density", tupleSize?: 1 }` | Reads a numeric attribute of the target domain (a string attribute is read by `attributeIs` instead, never by this fn; `tupleSize`, when given, must match) |
+| `attributeIs` | `{ fn, name: "species", value: "pine" }` | 1 on elements whose STRING attribute equals the literal, 0 on all the others, on any domain. A predicate, never an index accessor: the string table is insertion-ordered and rebuilt by clone/filter/merge, so one logical value sits at different indices in different cells of a partitioned world |
 | `position` | `{ fn }` | The `P` attribute (f32, tuple 3) |
 | `index` | `{ fn }` | Element index 0, 1, 2, ... |
 | `fraction` | `{ fn }` | Normalized element index, `index / (count - 1)` |
 | `nodeSeed` | `{ fn }` | The cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes. The same value on every element |
 | `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, index) |
 | `param` | `{ fn, name: "amplitude" }` | The value bound to that name, substituted where the literal would have stood. Same for every element — a value that varies per element is an attribute, not a param. An unbound `param` builds (its key and its GPU kernel need only the name) but refuses to evaluate |
+
+`attributeIs` has one rule that will surprise you, and it is forced
+rather than chosen: **a literal the geometry's string table does not
+hold yields all zeros, not an error.** Each cell of a `World` cooks its
+own geometry, so a cell holding no pines legitimately has no `"pine"` in
+its table, and filtering the last pine away does the same thing inside a
+single cook — throwing there would make the result depend on how the
+world happened to be partitioned. The price is that a MISSPELLED literal
+reads as "nothing matches" rather than as a mistake, which is the trade
+partition-independence buys. Structural errors still throw, and the line
+falls exactly there: absence of a VALUE is data, absence of an ATTRIBUTE
+is a bug. A missing attribute throws, and so does a numeric one — naming
+`eq(attribute(name), value)` as the comparison you meant to write.
 
 `fraction` spans **[0, 1] closed**: exactly 0 on the first element and
 exactly 1 on the last, matching `pointLine`'s `includeEnd: true`
@@ -2122,7 +2136,11 @@ reason in `CookStats.gpu.fallbacks`:
    all falls back with `no-spec`.
 2. The spec compiles against the geometry's attribute layout: every
    `attribute` it reads exists on the domain, is numeric (bool reads
-   compile; string attributes do not), and tuple sizes stay ≤ 4 with
+   compile; a string column compiles only through `attributeIs`, whose
+   literal rides a per-dispatch uniform rather than a baked constant —
+   the resolved table index is a property of the geometry, not of the
+   spec, and the kernel cache key does not include table contents), and
+   tuple sizes stay ≤ 4 with
    finite f32 constants → otherwise `compile-error` (the thrown
    compile diagnostics name the offending spec node; the cook just
    counts and falls back).
@@ -2288,7 +2306,12 @@ That is by design, not a bug; benchmark from cold caches.
   or naming an `assetAttr`/`colorAttr` it cannot use. Genuinely invalid
   params still surface the identical CPU error from the per-node path,
   which is why none of those spawner conditions needed a reason of its
-  own.
+  own. An `attributeIs` anywhere in the run declines here too, and for
+  a reason worth separating from the rest: its kernel compiles and
+  dispatches perfectly well — the per-node path runs it on the device.
+  What a plan cannot supply is the uniform that kernel reads, the
+  literal's index in the string table of the geometry being cooked,
+  because plan time has attribute descriptors and a count and no data.
 - `run-too-large` — the run's working set exceeds the evaluator's
   `maxResidentBytes` (default 512 MiB). The working set is
   `Σ resident slot bytes over every epoch + Σ field-temporary column

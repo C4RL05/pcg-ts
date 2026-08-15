@@ -108,8 +108,8 @@ recooks. Same seed always reproduces the same bytes.
 
 A `Field` is a deferred computation: it resolves to one column of values
 when evaluated over a domain (`EvalContext` = geometry + domain + seed).
-Inputs (`position()`, `attribute(name)`, `index()`, `fraction()`,
-`nodeSeed()`, `randomField(key)`),
+Inputs (`position()`, `attribute(name)`, `attributeIs(name, value)`,
+`index()`, `fraction()`, `nodeSeed()`, `randomField(key)`),
 combinators (arithmetic, comparisons, trig from `sin` through `atan2`,
 `clamp`/`lerp`/`remap`, `select`, `ramp`, vector ops), and noise
 (`valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise`, `fbm`) all
@@ -132,6 +132,19 @@ Raw numbers and tuples coerce to constants wherever a field is accepted
 (scalars broadcast against tuples). Evaluated columns may alias live
 attribute storage: treat them as read-only, and re-evaluate with a fresh
 context after mutating the geometry.
+
+A string attribute drives a field through `attributeIs(name, value)` — 1
+where it matches, 0 elsewhere — and through nothing else. A fn returning
+the string's table INDEX would look more general and be a determinism
+bug: the table is insertion-ordered and rebuilt by clone, filter and
+merge, so the same value sits at different indices in different cells of
+a partitioned world. The predicate resolves the index against the
+geometry in hand and never exposes it. The consequence to know: a
+literal the geometry's table does not hold yields zeros rather than an
+error, because a cell holding no pines legitimately has no `"pine"` — so
+a misspelled literal reads as "nothing matches". A missing attribute
+still throws, and so does a numeric one, naming `eq(attribute(name), n)`
+as the thing you wanted.
 
 Every noise field takes `normalized: true` for a uniform [0, 1] output
 contract — an exact affine remap of the per-noise raw range, published

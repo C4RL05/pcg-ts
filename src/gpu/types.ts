@@ -8,13 +8,27 @@ export type GpuScalarType = "f32" | "i32" | "u32";
  * size. `type` uses the data-model attribute types; `"bool"` columns are
  * marshalled as u32 storage buffers holding 0/1 and read as f32 inside
  * the kernel (mirroring the CPU bool→f32 rule for attribute fields).
- * `"string"` is accepted in the layout so geometry metadata can be
- * passed through unfiltered, but compiling a field that reads a string
- * attribute is an error — string attributes are CPU-only.
+ * `"string"` columns bind as u32 too, because that is what they already
+ * are — indices into the attribute's string table. `attributeIs` is the
+ * one fn that reads one, and it compares indices; `attribute` still
+ * refuses a string column, which has no numeric value to read.
  */
 export interface FieldKernelAttr {
   readonly type: AttrType;
   readonly tupleSize: number;
+}
+
+/**
+ * One `attributeIs` (attribute, literal) pair, and so one uniform
+ * constant slot: the slot holds that literal's index in the string table
+ * of the geometry the kernel is dispatched over. See
+ * {@link CompiledFieldKernel.attrIsSlots} for why the index is not here.
+ */
+export interface AttrIsSlot {
+  /** The string attribute the predicate tests. */
+  readonly attr: string;
+  /** The literal it is tested against. */
+  readonly value: string;
 }
 
 /**
@@ -74,21 +88,38 @@ export interface CompiledFieldKernel {
   readonly bindings: { readonly uniforms: number; readonly output: number };
   /**
    * Uniform constant slots this kernel's `PcgParams` declares — one
-   * `vec4<f32>` per distinct `param` name the spec references, 0 when it
-   * references none. A `param` costs a uniform slot and NO storage
-   * buffer, which is what makes it cheaper than the attribute idiom it
-   * replaces.
+   * `vec4<f32>` each, 0 when it declares none. One per distinct `param`
+   * name the spec references, then one per distinct `attributeIs` pair
+   * ({@link paramNames} and {@link attrIsSlots} in that order). Either
+   * kind costs a uniform slot and NO storage buffer, which is what makes
+   * a `param` cheaper than the attribute idiom it replaces.
    */
   readonly constSlots: number;
   /**
-   * The `param` names those slots hold, in SLOT ORDER (sorted by name,
-   * mirroring the attribute pre-pass, so codegen is deterministic).
+   * The `param` names the leading slots hold, in SLOT ORDER (sorted by
+   * name, mirroring the attribute pre-pass, so codegen is deterministic).
    * Values are deliberately absent: they are written into the uniform at
    * dispatch, never baked, so one compiled kernel serves every value the
    * names are bound to. Use `paramConstValues` to turn a spec's bindings
    * into the slot payload.
    */
   readonly paramNames: readonly string[];
+  /**
+   * The `attributeIs` (attribute, literal) pairs the REMAINING slots
+   * hold, in slot order (sorted, after the `param` slots), each carrying
+   * that literal's index in the string table of the geometry the kernel
+   * is dispatched over.
+   *
+   * The pair and never the index, for the same reason values are absent
+   * above and a stronger one: a string table is insertion-ordered and
+   * rebuilt by clone, filter and merge, so two geometries hold the same
+   * literal at different indices — while this kernel's cache key carries
+   * no table contents and would happily serve both. The index is resolved
+   * per dispatch by `constSlotValues`, which takes the geometry's
+   * attribute set; `paramConstValues` declines a kernel with any of these
+   * rather than write a payload it cannot know.
+   */
+  readonly attrIsSlots: readonly AttrIsSlot[];
   /**
    * Byte size of this kernel's `PcgParams` uniform: the 12-byte scalar
    * header, or the padded 16-byte header plus 16 bytes per constant slot

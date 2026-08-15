@@ -89,8 +89,10 @@ describe("code-authored twins of the parity corpus", () => {
 
   it("the corpus layout carries every attribute the twins read", () => {
     // `normal` was added to PARITY_LAYOUT (and makeParityGeometry) so
-    // the examples-forest slope field could be carried verbatim; this pins
-    // that the layout is not quietly narrowed back.
+    // the examples-forest slope field could be carried verbatim, and
+    // `species` so the corpus could carry `attributeIs` — which cannot be
+    // compiled against a layout holding no string column at all. This
+    // pins that the layout is not quietly narrowed back.
     expect(Object.keys(PARITY_LAYOUT.attributes).sort()).toEqual([
       "P",
       "active",
@@ -98,6 +100,7 @@ describe("code-authored twins of the parity corpus", () => {
       "id",
       "material",
       "normal",
+      "species",
       "uv",
     ]);
   });

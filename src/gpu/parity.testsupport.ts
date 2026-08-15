@@ -65,6 +65,10 @@ export const PARITY_LAYOUT: FieldKernelLayout = {
     active: { type: "bool", tupleSize: 1 },
     id: { type: "u32", tupleSize: 1 },
     material: { type: "i32", tupleSize: 1 },
+    // The only string column, and the only fn that reads one is
+    // `attributeIs`. It is here so the corpus can carry that fn at all: a
+    // layout without a string attribute cannot compile it.
+    species: { type: "string", tupleSize: 1 },
   },
 };
 
@@ -72,6 +76,13 @@ export const PARITY_LAYOUT: FieldKernelLayout = {
 export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   constant: { fn: "constant", value: 1 },
   attribute: { fn: "attribute", name: "density" },
+  // Parity here is EXACT rather than budgeted, on both sides: the CPU
+  // compares two table indices and writes 0 or 1, and so does the kernel.
+  // No float interior, so nothing to round. The literal is one the
+  // fixture's table holds; the absent case is measured too, on the device
+  // (see attributeIs.testsupport.ts), because it is the one whose answer
+  // comes from a uniform the compiler could not have baked.
+  attributeIs: { fn: "attributeIs", name: "species", value: "pine" },
   position: { fn: "position" },
   index: { fn: "index" },
   fraction: { fn: "fraction" },

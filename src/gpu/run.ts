@@ -677,6 +677,23 @@ export function planResidentRun(
     // simply unused — every field kernel passed an empty `consts` — so
     // this is the one place that had to change for a run to carry a
     // named value; the executor needed nothing.
+    // ...and an `attributeIs` slot is exactly the kind it cannot write.
+    // That slot holds the literal's index in the string table of the
+    // geometry being cooked, and a PLAN has no geometry —
+    // `ResidentRunContext` carries attribute descriptors and a count, not
+    // data — so there is no index to bake. Declining is not a limitation
+    // of the kernel (the per-field path dispatches the identical one, and
+    // fills the slot from the geometry it is handed); it is that consts
+    // are decided at plan time here. Moving them to execute time is a
+    // separate change; until then the run rejects and its members cook
+    // per-node, where the same field resolves on the device.
+    //
+    // Deliberately redundant: `paramConstValues` refuses such a kernel on
+    // the next line, and `slotFor` refuses a string column below. It is
+    // here for the reason rather than the refusal — a reader who deletes
+    // it still gets a rejected run, and a reader who moves the consts to
+    // execute time needs to find all three.
+    if (kernel.attrIsSlots.length > 0) throw new PlanFail("attributeIs needs a per-dispatch string table");
     const slotValues = paramConstValues(spec, kernel);
     if ("problem" in slotValues) throw new PlanFail("param bindings");
     const colIndex = cols.length;

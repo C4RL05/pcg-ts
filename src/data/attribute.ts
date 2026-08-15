@@ -135,6 +135,23 @@ export class Attribute<T extends AttrType = AttrType> {
     return idx;
   }
 
+  /**
+   * The table index for `value`, or undefined when the table does not
+   * hold it. The READ-ONLY half of {@link internString}, and it exists
+   * because that one INSERTS: anything that resolves a string while
+   * merely looking at a geometry — a field evaluating over it, notably —
+   * would otherwise edit the column it is reading, appending an entry no
+   * element uses. That edit is invisible until the next `copyFrom`
+   * compacts the table and renumbers everything after it, so two cells of
+   * one world can end up disagreeing about indices for no reason a caller
+   * could see. Callers that WANT the insertion (every writer) keep
+   * calling `internString`.
+   */
+  lookupString(value: string): number | undefined {
+    this.assertString();
+    return this.stringIndices.get(value);
+  }
+
   /** Fill elements [start, end) with a value (scalar broadcast, tuple, or string). */
   fill(value: AttrDefault, start = 0, end = this.capacity): void {
     const ts = this.tupleSize;

@@ -27,8 +27,9 @@ import type { Column, EvalContext, Field } from "./types.js";
  *   the evaluator with `acceptDerivedSpecs: true` (or author the field
  *   via `fieldFromJson`) and the same expression resolves on the device.
  * - `"compile-error"` — the spec cannot be lowered to WGSL against the
- *   geometry's attribute layout (missing or string attribute, tuple size
- *   above 4, non-finite f32 constant, ...).
+ *   geometry's attribute layout (missing attribute, a string attribute
+ *   read as a value by `attribute` rather than tested by `attributeIs`,
+ *   tuple size above 4, non-finite f32 constant, ...).
  * - `"too-many-buffers"` — the kernel would need more storage buffers
  *   than the baseline WebGPU limit guarantees (more than 7 attribute
  *   inputs plus the output).
@@ -55,7 +56,13 @@ import type { Column, EvalContext, Field } from "./types.js";
  *   error, tuple-size or layout mismatch, missing standard attribute,
  *   over the storage-buffer limit, ...). The per-node path serves —
  *   including surfacing the identical CPU error when the params are
- *   genuinely invalid.
+ *   genuinely invalid. `attributeIs` declines here for a reason worth
+ *   distinguishing from the rest: its kernel compiles and DISPATCHES
+ *   fine, and the per-node path runs it on the device. What a plan
+ *   cannot supply is the uniform it reads — the literal's index in the
+ *   string table of the geometry being cooked, where plan time has only
+ *   attribute descriptors and a count. So the run declines and its
+ *   members cook per-node, where the same field is device-resolved.
  * - `"run-too-large"` — the run's resident working set (element count ×
  *   resident attribute strides + field temporaries + readback) exceeds
  *   the evaluator's resident memory bound.

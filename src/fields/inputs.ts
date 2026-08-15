@@ -98,6 +98,81 @@ export function attribute(name: string, tupleSize?: number): Field {
   return field;
 }
 
+/**
+ * Test a STRING attribute against a literal: 1 on elements whose `name`
+ * is `value`, 0 everywhere else. The way a string column drives a field,
+ * and a predicate rather than an accessor for the reason that follows.
+ *
+ * A string column stores indices into a per-attribute table
+ * (`Attribute.stringTable`), and that table is insertion-ordered and
+ * REBUILT by ordinary work: `setAttribute` interns its whole declared
+ * list up front, while clone, filter and merge re-intern per element and
+ * so compact the table to first-encounter order over the survivors. The
+ * same logical value therefore sits at different indices depending on
+ * what happened upstream — and, under partitioned cooking, in different
+ * cells of one world. A fn that handed back the INDEX would agree with
+ * itself everywhere until two cells disagreed. The predicate resolves the
+ * index against the geometry in hand and never exposes it, so there is
+ * nothing left to disagree about.
+ *
+ * That same fact forces the uncomfortable half of the semantics: a
+ * literal ABSENT from the geometry's table yields all zeros rather than
+ * throwing. A cell holding no pines legitimately has no `"pine"` in its
+ * table, and filtering the last pine away does the same thing within one
+ * cook — so an error there would make the result depend on how the world
+ * was partitioned. The cost is that a MISSPELLED literal reads as
+ * "nothing matches"; partition-independence is an invariant and typo
+ * detection is a convenience, so the convenience loses.
+ *
+ * Structural mistakes still throw, and the line is exactly this: absence
+ * of a VALUE is data, absence of an ATTRIBUTE is a bug. A missing
+ * attribute throws, and so does a numeric one — naming `eq(attribute(…))`
+ * as the thing that author wanted.
+ *
+ * Reads component 0 of a tuple-valued string attribute, matching
+ * `Attribute.getString`'s default component. Never mutates the geometry:
+ * the lookup is `Attribute.lookupString`, not `internString`.
+ */
+export function attributeIs(name: string, value: string): Field<1> {
+  // Both halves go through JSON.stringify, which quotes and escapes them,
+  // so neither an attribute name nor a literal containing a comma or a
+  // quote can forge the key of a different (name, value) pair.
+  const key = `attrIs(${JSON.stringify(name)},${JSON.stringify(value)})`;
+  const field = makeField<1>(key, 1, (ctx) => {
+    const attr = ctx.geo.attrs[ctx.domain].require(name);
+    if (attr.type !== "string") {
+      throw new Error(
+        `attributeIs "${name}": expected a string attribute, got ${attr.type}; ` +
+          `compare a numeric attribute with eq(attribute("${name}"), value)`,
+      );
+    }
+    const n = elementCount(ctx);
+    const data = new Float32Array(n);
+    const idx = attr.lookupString(value);
+    // Absent from this geometry's table: every element is a non-match, and
+    // the zero-filled column already says so.
+    if (idx !== undefined) {
+      const ts = attr.tupleSize;
+      const src = attr.data;
+      for (let i = 0; i < n; i++) data[i] = src[i * ts] === idx ? 1 : 0;
+    }
+    return { data, tupleSize: 1 };
+  });
+  // The grammar requires a non-empty name; the value has no such rule,
+  // because "" is a real table entry — it is the default every string
+  // attribute interns at index 0, so `attributeIs(name, "")` selects the
+  // elements nobody ever wrote to.
+  if (name !== "") {
+    attachSpec(field, { fn: "attributeIs", name, value }, 1);
+  } else {
+    recordWithheld(field, {
+      kind: "ungrammatical",
+      detail: "attributeIs's `name` must not be empty",
+    });
+  }
+  return field;
+}
+
 const P_ATTR = attribute("P", 3);
 const POSITION: Field<3> = makeField("position", 3, (ctx) => P_ATTR.evaluate(ctx));
 attachSpec(POSITION, { fn: "position" }, 1);

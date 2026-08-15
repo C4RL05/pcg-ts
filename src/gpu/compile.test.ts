@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { Geometry } from "../data/index.js";
 import { makeField } from "../fields/index.js";
 import { peekFieldSpec } from "../fields/spec.js";
 import { type FieldSpec, type FieldSpecArg, fieldFromJson, listFieldFns } from "../fields/fieldJson.js";
-import { paramConstValues } from "./compile.js";
+import { constSlotValues, paramConstValues } from "./compile.js";
 import { compileFieldSpec, supportedGpuFieldFns } from "./index.js";
 import type { FieldKernelLayout } from "./index.js";
 
@@ -14,6 +15,10 @@ const LAYOUT: FieldKernelLayout = {
     active: { type: "bool", tupleSize: 1 },
     id: { type: "u32", tupleSize: 1 },
     material: { type: "i32", tupleSize: 1 },
+    // `attributeIs` is the one fn that reads a string column; `tags` is
+    // the tuple case, which the stride has to survive.
+    species: { type: "string", tupleSize: 1 },
+    tags: { type: "string", tupleSize: 2 },
   },
 };
 
@@ -237,6 +242,7 @@ describe("grammar coverage", () => {
   const MINIMAL_SPECS: Record<string, unknown> = {
     constant: { fn: "constant", value: 1 },
     attribute: { fn: "attribute", name: "density" },
+    attributeIs: { fn: "attributeIs", name: "species", value: "pine" },
     position: { fn: "position" },
     index: { fn: "index" },
     fraction: { fn: "fraction" },
@@ -776,6 +782,154 @@ describe("param field splices", () => {
     expect(k.wgsl).toContain("params.consts[0].x");
     const values = paramConstValues(merged, k);
     expect("values" in values && Array.from(values.values)).toEqual([2, 0, 0, 0]);
+  });
+});
+
+/**
+ * `attributeIs` is the one grammar fn whose uniform slot holds something
+ * the SPEC does not know: the literal's index in the string table of the
+ * geometry being cooked. These pin the two halves that makes necessary —
+ * a kernel that names the pair and never the index, and a fill that
+ * resolves the index per dispatch — plus the stride, which is where the
+ * CPU and the GPU would otherwise read different components.
+ */
+describe("attributeIs", () => {
+  /** A points geometry whose `species` table interns in the order given. */
+  const speciesGeo = (values: readonly string[]): Geometry => {
+    const geo = new Geometry();
+    const set = geo.attrs.point;
+    const species = set.add("species", "string", 1);
+    set.resize(values.length);
+    values.forEach((v, i) => species.setString(i, v));
+    return geo;
+  };
+
+  it("compares the column against a uniform slot, with no index in the text", () => {
+    const k = compileFieldSpec({ fn: "attributeIs", name: "species", value: "pine" }, LAYOUT);
+    expect(k.wgsl).toContain("let v0 = select(0f, 1f, f32(in0[i]) == params.consts[0].x);");
+    // The literal never reaches the text: it is the pair that identifies
+    // the slot, and the index belongs to a geometry, not to this kernel.
+    expect(k.wgsl).not.toContain("pine");
+    expect(k.constSlots).toBe(1);
+    expect(k.paramNames).toEqual([]);
+    expect(k.attrIsSlots).toEqual([{ attr: "species", value: "pine" }]);
+    expect(k.uniformBytes).toBe(32);
+  });
+
+  it("binds the string column as u32 — which is what it already is", () => {
+    const k = compileFieldSpec({ fn: "attributeIs", name: "species", value: "pine" }, LAYOUT);
+    expect(k.inputs).toEqual([{ name: "species", type: "u32", tupleSize: 1, binding: 1 }]);
+  });
+
+  it("reads component 0 of a tuple column, stride and all", () => {
+    // The defect this exists for: the CPU reads `data[i * tupleSize]`
+    // (matching `Attribute.getString`'s default component), so a kernel
+    // indexing the flat array by element would read element i/2's second
+    // component and disagree with the reference on every other lane.
+    const k = compileFieldSpec({ fn: "attributeIs", name: "tags", value: "wet" }, LAYOUT);
+    expect(k.wgsl).toContain("f32(in0[i * 2u]) == params.consts[0].x");
+  });
+
+  it("allocates one slot per distinct pair, sorted, after the param slots", () => {
+    const spec: FieldSpec = {
+      fn: "add",
+      args: [
+        {
+          fn: "add",
+          args: [
+            { fn: "attributeIs", name: "species", value: "pine" },
+            { fn: "attributeIs", name: "species", value: "oak" },
+          ],
+        },
+        // Repeated pair: shares the slot rather than taking a third.
+        { fn: "attributeIs", name: "species", value: "pine" },
+      ],
+    };
+    const k = compileFieldSpec(spec, LAYOUT);
+    expect(k.attrIsSlots).toEqual([
+      { attr: "species", value: "oak" },
+      { attr: "species", value: "pine" },
+    ]);
+    expect(k.constSlots).toBe(2);
+    // Params keep the leading slots, so every kernel that predates this
+    // keeps its numbering, its key and its cached pipeline.
+    const mixed = compileFieldSpec(
+      peekFieldSpec(
+        fieldFromJson(
+          { fn: "add", args: [{ fn: "param", name: "amp" }, spec] },
+          { amp: 0.5 },
+        ),
+      ) as FieldSpec,
+      LAYOUT,
+    );
+    expect(mixed.paramNames).toEqual(["amp"]);
+    expect(mixed.attrIsSlots.map((a) => a.value)).toEqual(["oak", "pine"]);
+    expect(mixed.wgsl).toContain("params.consts[0].x"); // amp
+    expect(mixed.wgsl).toContain("params.consts[1].x"); // oak
+    expect(mixed.wgsl).toContain("params.consts[2].x"); // pine
+  });
+
+  it("puts the pair in the key, so two literals are two kernels", () => {
+    const pine = compileFieldSpec({ fn: "attributeIs", name: "species", value: "pine" }, LAYOUT);
+    const oak = compileFieldSpec({ fn: "attributeIs", name: "species", value: "oak" }, LAYOUT);
+    expect(pine.key).not.toBe(oak.key);
+    expect(pine.key).toContain('attrIs=["species","pine"]');
+  });
+
+  it("resolves the index against the geometry, not the kernel", () => {
+    // THE soundness case. Two geometries answer the same query and hold
+    // "pine" at different table indices — the ordinary consequence of
+    // insertion order, which clone/filter/merge rewrite. They share one
+    // kernel (its key carries no table contents, so they would share it
+    // whether or not that were safe), and the difference lives entirely
+    // in the payload. A literal baked at compile time would give both
+    // geometries whichever index was interned first and be wrong for the
+    // other; this test fails outright in that world, because the two
+    // payloads below would be equal.
+    const spec: FieldSpec = { fn: "attributeIs", name: "species", value: "pine" };
+    const k = compileFieldSpec(spec, LAYOUT);
+
+    const oakFirst = speciesGeo(["oak", "pine"]);
+    const pineFirst = speciesGeo(["pine", "oak"]);
+    // The disagreement is built deliberately, not hoped for.
+    expect(oakFirst.attrs.point.require("species").stringTable).toEqual(["", "oak", "pine"]);
+    expect(pineFirst.attrs.point.require("species").stringTable).toEqual(["", "pine", "oak"]);
+
+    const a = constSlotValues(spec, k, oakFirst.attrs.point);
+    const b = constSlotValues(spec, k, pineFirst.attrs.point);
+    expect("values" in a && Array.from(a.values)).toEqual([2, 0, 0, 0]);
+    expect("values" in b && Array.from(b.values)).toEqual([1, 0, 0, 0]);
+  });
+
+  it("fills an absent literal with -1, which no table index equals", () => {
+    const spec: FieldSpec = { fn: "attributeIs", name: "species", value: "birch" };
+    const k = compileFieldSpec(spec, LAYOUT);
+    const geo = speciesGeo(["oak", "pine"]);
+    const filled = constSlotValues(spec, k, geo.attrs.point);
+    expect("values" in filled && Array.from(filled.values)).toEqual([-1, 0, 0, 0]);
+    // And the lookup did not intern it: resolving a field must never edit
+    // the geometry it resolves over.
+    expect(geo.attrs.point.require("species").stringTable).toEqual(["", "oak", "pine"]);
+  });
+
+  it("declines the spec-only fill rather than writing a payload it cannot know", () => {
+    // What makes the fused/resident planner decline: it fills its consts
+    // at PLAN time, where no geometry exists.
+    const spec: FieldSpec = { fn: "attributeIs", name: "species", value: "pine" };
+    const k = compileFieldSpec(spec, LAYOUT);
+    const refused = paramConstValues(spec, k);
+    expect("problem" in refused && refused.problem).toMatch(
+      /attributeIs slot\(s\) \("species" == "pine"\).*constSlotValues/s,
+    );
+  });
+
+  it("names eq when the attribute is numeric, and the layout when it is missing", () => {
+    expect(() => compileFieldSpec({ fn: "attributeIs", name: "density", value: "pine" }, LAYOUT)).toThrow(
+      /attribute "density" has type "f32".*\{ fn: "eq", args: \[\{ fn: "attribute", name: "density" \}, <number>\] \}/s,
+    );
+    expect(() => compileFieldSpec({ fn: "attributeIs", name: "nope", value: "pine" }, LAYOUT)).toThrow(
+      /attribute "nope" is not in the kernel layout/,
+    );
   });
 });
 

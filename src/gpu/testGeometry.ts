@@ -6,11 +6,19 @@
 import { Geometry } from "../data/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 
+/** The `species` values the fixture cycles through, in interning order. */
+const SPECIES = ["pine", "oak", "birch"] as const;
+
 /**
  * Points-only geometry with the corpus attributes: `P` (f32x3 in
  * [-8, 8]), `density` (f32 in [0, 1]), `normal` (f32x3, unit length),
  * `uv` (f32x2 in [0, 1]), `active` (bool), `id` (u32), `material` (i32,
- * mixed signs).
+ * mixed signs), `species` (string, cycling through {@link SPECIES}).
+ *
+ * `species` is dense rather than sparse on purpose: `attributeIs` is a
+ * predicate, and a fixture where one literal matched a handful of lanes
+ * would measure mostly zeros. Every third point matches each value, so
+ * the mismatching lanes are a mix of the other two rather than all one.
  */
 export function makeParityGeometry(count: number): Geometry {
   const geo = new Geometry();
@@ -22,6 +30,7 @@ export function makeParityGeometry(count: number): Geometry {
   const active = set.add("active", "bool", 1);
   const id = set.add("id", "u32", 1);
   const material = set.add("material", "i32", 1);
+  const species = set.add("species", "string", 1);
   set.resize(count);
   for (let i = 0; i < count; i++) {
     for (let k = 0; k < 3; k++) {
@@ -45,6 +54,7 @@ export function makeParityGeometry(count: number): Geometry {
     active.data[i] = i % 3 === 0 ? 1 : 0;
     id.data[i] = hashCombine(404, i);
     material.data[i] = (hashCombine(505, i) | 0) % 1000;
+    species.setString(i, SPECIES[i % SPECIES.length]);
   }
   return geo;
 }

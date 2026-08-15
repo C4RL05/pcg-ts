@@ -90,11 +90,28 @@ write it to an int attribute with one extra node.
   phase 42 wearing a new costume, and it would pass every test we have
   until two cells disagreed.
 - The safe form is a PREDICATE — `attributeIs(name, "pine")` → 0/1 —
-  which never exposes the index. It also compiles to the GPU cleanly:
-  the literal resolves against the geometry's string table HOST-SIDE at
-  kernel build time, so the kernel compares a u32 column to a constant
-  and the hazard disappears because the index never leaves the host.
-- Cost: the fixed five-site grammar change `ne` and `fraction` both paid.
+  which never exposes the index. **In progress; see
+  `PLAN-attribute-is.md` for the worked design.**
+- This entry used to say it "compiles to the GPU cleanly: the literal
+  resolves against the string table host-side at kernel BUILD time".
+  The first half is right and the second is a bug. The kernel cache key
+  is spec text plus each attribute's name/type/tupleSize
+  (`evaluator.ts:346-368`) and does NOT include table contents, so a
+  literal baked at build time would be shared by two geometries whose
+  tables differ. The resolved index belongs to the geometry, not the
+  spec: it has to ride a per-dispatch uniform.
+- Which is the part the old cost estimate missed. `ParamPlan` is derived
+  from the SPEC ALONE (`computeParamPlan`, `compile.ts:933`, admits only
+  `fn === "param"`), and the fused path bakes its consts at plan time
+  (`run.ts:680-692`) where no geometry exists. So this needs a
+  geometry-aware slot on the per-field path and a declared decline on the
+  fused one — not just a new fn.
+- Cost: the grammar change itself is SIX sites, not the five this entry
+  claimed — constructor, registration (now including `variation`), spec
+  emission, WGSL lowering, the parity minimal spec, and the docs'
+  closed-set block. Each is pinned by a test, `compile.test.ts`'s
+  `supportedGpuFieldFns() === listFieldFns()` most sharply: there is no
+  such thing as a CPU-only field fn.
 
 **A knob that reaches into a field spec.** `nodeSeed` shipped and the
 corpus has been rewritten around it: 38 noise specs across 23 graphs now

@@ -75,12 +75,28 @@ export function dispatchTask(
   runs = 1,
 ): RunnerTask {
   if (kernel.constSlots > 0) {
+    // Both kinds of slot, named by kind: a `param` is missing a VALUE the
+    // caller bound, an `attributeIs` is missing an INDEX only a geometry
+    // has, and an author who has to extend this protocol needs to know
+    // which of the two they are looking at.
+    const holders: string[] = [];
+    if (kernel.paramNames.length > 0) {
+      holders.push(`param(s) ${kernel.paramNames.map((n) => JSON.stringify(n)).join(", ")}`);
+    }
+    if (kernel.attrIsSlots.length > 0) {
+      holders.push(
+        `attributeIs literal(s) ${kernel.attrIsSlots
+          .map((a) => `${JSON.stringify(a.attr)} == ${JSON.stringify(a.value)}`)
+          .join(", ")}`,
+      );
+    }
     throw new Error(
       `dispatchTask("${name}"): this kernel declares ${kernel.constSlots} uniform constant slot(s) ` +
-        `for param(s) ${kernel.paramNames.map((n) => JSON.stringify(n)).join(", ")}, and the device ` +
+        `for ${holders.join(" and ")}, and the device ` +
         "runner protocol writes only the 12-byte {count, seed, chunkOffset} header — it cannot carry " +
-        "their values. Dispatch param kernels through GpuFieldEvaluator (see params.testsupport.ts), " +
-        "or extend RunnerTask and deviceRunner.mjs to write the slots at APPLY_CONST_OFFSET",
+        "their values. Dispatch such kernels through GpuFieldEvaluator (see params.testsupport.ts and " +
+        "attributeIs.testsupport.ts), or extend RunnerTask and deviceRunner.mjs to write the slots at " +
+        "APPLY_CONST_OFFSET",
     );
   }
   const set = geo.attrs.point;

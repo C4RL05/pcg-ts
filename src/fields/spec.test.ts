@@ -49,7 +49,16 @@ import {
   tan,
   vec,
 } from "./combinators.js";
-import { attribute, constant, fraction, index, nodeSeed, position, randomField } from "./inputs.js";
+import {
+  attribute,
+  attributeIs,
+  constant,
+  fraction,
+  index,
+  nodeSeed,
+  position,
+  randomField,
+} from "./inputs.js";
 import {
   type FieldSpec,
   deviceSpec,
@@ -102,6 +111,11 @@ function fixture(seed: number): EvalContext {
   for (let i = 0; i < COUNT; i++) flag.set(i, i % 3 === 0 ? 1 : 0);
   const tag = set.add("tag", "u32", 1);
   for (let i = 0; i < COUNT; i++) tag.data[i] = (i * 7) % 11;
+  // A string column, for the one fn that reads one. Three values plus the
+  // default, so a predicate over it is neither all zeros nor all ones.
+  const species = set.add("species", "string");
+  const NAMES = ["pine", "oak", "birch"];
+  for (let i = 0; i < COUNT; i++) species.setString(i, NAMES[i % 3]);
   return { geo, domain: "point", seed };
 }
 
@@ -205,6 +219,12 @@ const CASES: Case[] = [
   { name: "attribute with tupleSize", make: () => attribute("normal", 3) },
   { name: "attribute bool storage", make: () => attribute("flag") },
   { name: "attribute u32 storage", make: () => attribute("tag") },
+  { name: "attributeIs a value the table holds", make: () => attributeIs("species", "oak") },
+  // The absent literal is a spec case as much as a semantic one: it is
+  // the column the two descriptions must agree on when the answer is all
+  // zeros, which is the answer a partitioned cook produces most often.
+  { name: "attributeIs a value the table lacks", make: () => attributeIs("species", "cypress") },
+  { name: "attributeIs the default entry", make: () => attributeIs("species", "") },
   { name: "position", make: () => position() },
   { name: "index", make: () => index() },
   { name: "fraction", make: () => fraction() },
@@ -501,6 +521,7 @@ describe("no spec is derived when none can be", () => {
     { name: "ramp with a negative-zero stop", make: () => ramp(attribute("density"), [[-0, 1], [1, 2]]) },
     { name: "noise with a negative-zero frequency", make: () => valueNoise({ frequency: -0 }) },
     { name: "attribute with an empty name", make: () => attribute(""), evaluable: false },
+    { name: "attributeIs with an empty name", make: () => attributeIs("", "pine"), evaluable: false },
     { name: "attribute with a fractional tupleSize", make: () => attribute("density", 2.5), evaluable: false },
     { name: "attribute with a zero tupleSize", make: () => attribute("density", 0), evaluable: false },
     { name: "randomField with a non-finite key", make: () => randomField(NaN) },

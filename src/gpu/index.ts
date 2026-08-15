@@ -36,6 +36,7 @@
  *   tolerance.
  */
 export {
+  type AttrIsSlot,
   type CompiledFieldKernel,
   type FieldKernelAttr,
   type FieldKernelLayout,

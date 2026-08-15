@@ -57,12 +57,16 @@ describe("layout and GPU-constraint errors", () => {
     expect(e.message).toContain("the layout declares no attributes");
   });
 
-  it("string attributes are CPU-only", () => {
+  it("a string attribute read as a value points at attributeIs", () => {
+    // It used to say "CPU-only", which stopped being true when
+    // `attributeIs` learned to lower: a string column IS readable on the
+    // device now, just not as a number. So the message names the fn that
+    // reads it rather than sending the author back to the CPU.
     const e = compileError({ fn: "attribute", name: "tag" });
     expect(e).toBeInstanceOf(GpuCompileError);
     expect(e.message).toContain('attribute "tag"');
-    expect(e.message).toContain("string attributes");
-    expect(e.message).toContain("CPU-only");
+    expect(e.message).toContain("no numeric value to read");
+    expect(e.message).toContain('{ fn: "attributeIs", name: "tag", value: "..." }');
   });
 
   it("attribute tupleSize mismatch names both sizes", () => {

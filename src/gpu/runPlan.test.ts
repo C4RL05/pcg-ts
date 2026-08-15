@@ -449,6 +449,72 @@ describe("resident run planning: only AUTHORED specs are fusable", () => {
   });
 });
 
+describe("resident run planning: attributeIs needs a geometry a plan does not have", () => {
+  /** A cloud carrying a string column, which is the only thing this needs. */
+  const STRING_LAYOUT: ResidentRunContext["attributes"] = {
+    P: { type: "f32", tupleSize: 3 },
+    species: { type: "string", tupleSize: 1 },
+  };
+
+  it("declines the run and says so, rather than baking an index it cannot know", () => {
+    const isPine = field({ fn: "attributeIs", name: "species", value: "pine" });
+    // The kernel is not the problem, and this is the line that says so:
+    // the identical spec compiles against the identical layout. What a
+    // plan cannot do is FILL the uniform slot the kernel reads, because
+    // the value in it is the literal's index in the string table of a
+    // geometry — and `ResidentRunContext` carries attribute descriptors
+    // and a count, never data. The per-node path dispatches this same
+    // kernel and fills the slot from the geometry it is handed.
+    const kernel = compileFieldSpec(getFieldSpec(isPine) as FieldSpec, { attributes: STRING_LAYOUT });
+    expect(kernel.attrIsSlots).toEqual([{ attr: "species", value: "pine" }]);
+    expect(kernel.wgsl).toContain("params.consts[0].x");
+
+    expect(
+      rejection(
+        [
+          member(
+            "setAttribute",
+            { name: "isPine", type: "f32", tupleSize: 1, value: isPine },
+            "sa",
+          ),
+        ],
+        32,
+        STRING_LAYOUT,
+      ),
+    ).toBe("run-plan-failed");
+  });
+
+  it("rejects the whole run, not just the member that carries it", () => {
+    // The same rule every other plan failure follows: a run is planned or
+    // it is not, so a partially fused plan can never be left behind.
+    const members = [
+      member("transformPoints", { translate: [1, 0, 0], rotateEuler: [0, 0, 0], scale: [1, 1, 1] }, "xf"),
+      member(
+        "setAttribute",
+        {
+          name: "isPine",
+          type: "f32",
+          tupleSize: 1,
+          value: field({ fn: "attributeIs", name: "species", value: "pine" }),
+        },
+        "sa",
+      ),
+    ];
+    expect(rejection(members, 32, STRING_LAYOUT)).toBe("run-plan-failed");
+    // ...and the same chain WITHOUT the predicate plans as one run, so
+    // nothing above can be explained by the chain's shape.
+    const ok = [
+      members[0],
+      member(
+        "setAttribute",
+        { name: "isPine", type: "f32", tupleSize: 1, value: field({ fn: "fraction" }) },
+        "sa",
+      ),
+    ];
+    expect(plan(ok, 32, STRING_LAYOUT).members).toHaveLength(2);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // phase 26: the device-resident spawner terminal
 
