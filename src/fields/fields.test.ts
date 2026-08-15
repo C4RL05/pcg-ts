@@ -4,6 +4,7 @@ import { pointIdentities } from "../data/identity.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { capture } from "./capture.js";
 import { add, mul } from "./combinators.js";
+import { fieldFromJson } from "./fieldJson.js";
 import { attribute, constant, fraction, index, position, randomField, resolveField } from "./inputs.js";
 import {
   type Column,
@@ -252,11 +253,11 @@ describe("structural keys", () => {
 });
 
 describe("memoization", () => {
-  function countingField(): { field: Field; calls: () => number } {
+  function countingField(key = "counting", fill = 1): { field: Field; calls: () => number } {
     let calls = 0;
-    const field = makeField("counting", 1, (ctx): Column => {
+    const field = makeField(key, 1, (ctx): Column => {
       calls++;
-      return { data: new Float32Array(elementCount(ctx)).fill(1), tupleSize: 1 };
+      return { data: new Float32Array(elementCount(ctx)).fill(fill), tupleSize: 1 };
     });
     return { field, calls: () => calls };
   }
@@ -278,10 +279,54 @@ describe("memoization", () => {
     expect(calls()).toBe(2);
   });
 
-  it("caches by instance within a context", () => {
+  it("returns the same column for a repeated instance", () => {
     const ctx = pointCtx(3);
     const f = randomField(9);
     expect(evaluateField(f, ctx)).toBe(evaluateField(f, ctx));
+  });
+
+  it("caches by KEY, so two equal-keyed instances evaluate once", () => {
+    // The property that matters, and the one instance-keying did not
+    // give: a tree parsed from JSON shares no instances at all, because
+    // `fieldFromJson` constructs a fresh combinator per occurrence. Two
+    // separately built copies of the same expression are this pair.
+    const ctx = pointCtx(3);
+    const a = countingField("shared");
+    const b = countingField("shared");
+    const first = evaluateField(a.field, ctx);
+    expect(evaluateField(b.field, ctx)).toBe(first);
+    expect(a.calls()).toBe(1);
+    expect(b.calls()).toBe(0);
+  });
+
+  it("does not share across different keys", () => {
+    const ctx = pointCtx(3);
+    const a = countingField("left", 1);
+    const b = countingField("right", 2);
+    expect(Array.from(evaluateField(a.field, ctx).data)).toEqual([1, 1, 1]);
+    expect(Array.from(evaluateField(b.field, ctx).data)).toEqual([2, 2, 2]);
+    expect(a.calls()).toBe(1);
+    expect(b.calls()).toBe(1);
+  });
+
+  it("shares a duplicated subexpression built twice from JSON", () => {
+    // The motivating case, end to end: the serialized seed-shift idiom
+    // computes `x - floor(x)` with `x` spelled out on both sides, so the
+    // multiply chain under it exists twice in the spec. Deduping it is
+    // what halved the cook of `graphs/examples-gpu-fields`.
+    const seed = 123456789;
+    const x = { fn: "mul", args: [{ fn: "mul", args: [{ fn: "nodeSeed" }, 2 ** -32] }, 1021] };
+    const field = fieldFromJson({ fn: "sub", args: [x, { fn: "floor", args: [x] }] });
+    const col = evaluateField(field, pointCtx(4, seed));
+
+    // Rounded step by step, because every combinator computes in f64 and
+    // stores f32 — collapsing this into one f64 expression would assert a
+    // number the field never produces. The seed is chosen so the product
+    // exceeds 1 and `floor` actually has something to take off.
+    const scaled = Math.fround(Math.fround(Math.fround(seed) * 2 ** -32) * 1021);
+    expect(scaled).toBeGreaterThan(1);
+    const expected = Math.fround(scaled - Math.fround(Math.floor(scaled)));
+    expect(Array.from(col.data)).toEqual([expected, expected, expected, expected]);
   });
 });
 
