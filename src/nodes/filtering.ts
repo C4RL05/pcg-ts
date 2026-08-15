@@ -16,7 +16,12 @@
  * goes quietly wrong.
  */
 import type { Attribute, Geometry } from "../data/index.js";
-import type { Column } from "../fields/index.js";
+import { type Column, isField } from "../fields/index.js";
+// The non-cloning spec reader, deliberately not part of the package's
+// field surface: `staticScalar` below only ASKS whether a field is one
+// authored constant, and copying a whole spec tree to answer that would
+// cost more than the question is worth.
+import { peekFieldSpec } from "../fields/spec.js";
 import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
@@ -949,6 +954,35 @@ function localMaximumKeep(
   return kept;
 }
 
+/**
+ * The one number a field-capable scalar param stands for when it is
+ * statically uniform, or undefined when it is a real expression.
+ *
+ * A plain number is one. So is a field whose WHOLE spec is a `constant`,
+ * which is the same literal spelled the other way — it is the spec an
+ * editor seeds when a knob is flipped to field mode, so it is the FIRST
+ * thing a caller cooks — and a value cannot mean two things depending on
+ * which of the two spellings carried it.
+ *
+ * The distinction this keeps is between a graph LITERAL and DATA. A
+ * `constant` spec is authored, fixed before any point exists, and reading
+ * it here decides nothing from the cook's numbers; a field that reads an
+ * attribute, a position or a random is data, and is deliberately NOT
+ * resolved here even when every value it returns is identical.
+ */
+function staticScalar(value: FieldParam): number | undefined {
+  if (typeof value === "number") return value;
+  if (!isField(value)) return undefined;
+  const spec = peekFieldSpec(value);
+  if (spec === undefined || spec.fn !== "constant") return undefined;
+  const literal = spec.value;
+  if (typeof literal === "number") return literal;
+  // A 1-tuple constant is the scalar spelling with brackets round it.
+  return Array.isArray(literal) && literal.length === 1 && typeof literal[0] === "number"
+    ? literal[0]
+    : undefined;
+}
+
 /** Minimum-distance pruning: greedy, or the partition-safe local maximum. */
 export const selfPrune = standardNode<SelfPruneParams>({
   type: "selfPrune",
@@ -971,7 +1005,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
       min: 0,
       acceptsField: true,
       description:
-        "Minimum allowed distance between two kept points, in world units. As a FIELD it is a per-point radius, evaluated on the input's points, and two points conflict when they are closer than the LARGER of their two radii (never the smaller, which would let a big point be crowded by a small one, and never the sum, which would double the spacing of an evenly-sized cloud and so disagree with the same number passed plainly). A per-point radius that is 0, negative or NaN claims no room of its own, but such a point can still be pruned by a bigger neighbour. A PLAIN 0 (or less) turns the node off: every point survives, topology included, and `priority` is not evaluated, whichever mode is set. A field never takes that shortcut — it always outputs a point cloud, so what the output IS never depends on the numbers that come back. This is also the HALO WIDTH a cell needs under mode 'localMaximum', and as a field that width is the GLOBAL MAXIMUM the field can return anywhere in the world — not each point's own radius, since a big point reaches that far into its neighbours, and NOT the largest radius present in the cell's cloud, which is circular: the cloud a cell sees has already been clipped by the very halo you are trying to size, so the big neighbour that would have set the width is precisely the one it cannot see. Bound the field instead of measuring it — a constant times the range of whatever drives it (e.g. a noise field is in [-1, 1], so `2 + 3 * noise` maxes at 5; a radius read from an attribute maxes at that attribute's maximum over the WHOLE world, not over this cell) — and pass that bound as the halo. Overestimating costs a wider query; underestimating silently keeps pairs closer than the field asked for, at the seams only.",
+        "Minimum allowed distance between two kept points, in world units. As a FIELD it is a per-point radius, evaluated on the input's points, and two points conflict when they are closer than the LARGER of their two radii (never the smaller, which would let a big point be crowded by a small one, and never the sum, which would double the spacing of an evenly-sized cloud and so disagree with the same number passed plainly). A per-point radius that is 0, negative or NaN claims no room of its own, but such a point can still be pruned by a bigger neighbour. A minDistance of 0 or less turns the node off: every point survives, topology included, and `priority` is not evaluated, whichever mode is set. That is a property of the VALUE, so both spellings of it get there — a plain 0 and a `constant` field of 0 are one graph literal written two ways, and they cook to the same geometry. A field that READS anything (an attribute, a position, a random) never takes that shortcut, even when every value it returns is 0: it always outputs a point cloud, so what the output IS depends on the graph and never on the numbers that come back. This is also the HALO WIDTH a cell needs under mode 'localMaximum', and as a field that width is the GLOBAL MAXIMUM the field can return anywhere in the world — not each point's own radius, since a big point reaches that far into its neighbours, and NOT the largest radius present in the cell's cloud, which is circular: the cloud a cell sees has already been clipped by the very halo you are trying to size, so the big neighbour that would have set the width is precisely the one it cannot see. Bound the field instead of measuring it — a constant times the range of whatever drives it (e.g. a noise field is in [-1, 1], so `2 + 3 * noise` maxes at 5; a radius read from an attribute maxes at that attribute's maximum over the WHOLE world, not over this cell) — and pass that bound as the halo. Overestimating costs a wider query; underestimating silently keeps pairs closer than the field asked for, at the seams only.",
     },
     priority: {
       type: "f32",
@@ -999,11 +1033,14 @@ export const selfPrune = standardNode<SelfPruneParams>({
     const pd = P.data;
     const ps = P.tupleSize;
     const n = geo.pointCount;
-    // A plain non-positive minDistance turns the node off, as it always
-    // has: the input passes through cloned, topology and all. A FIELD
-    // never takes this path, even when every value it returns is 0 —
-    // whether the output carries topology must not depend on the data.
-    const uniform = typeof params.minDistance === "number" ? params.minDistance : undefined;
+    // A non-positive minDistance turns the node off, as it always has:
+    // the input passes through cloned, topology and all. It is the VALUE
+    // that turns it off, so both spellings of the same literal reach here
+    // — a plain 0 and a `constant` field of 0 are one graph, and used to
+    // be two geometries. A field that could VARY still never takes this
+    // path, even when every value it returns is 0: whether the output
+    // carries topology must not depend on the data, only on the graph.
+    const uniform = staticScalar(params.minDistance);
     if (uniform !== undefined && !(uniform > 0)) {
       // Nothing to prune; pass a cloned input through.
       return { out: [makeGeometryItem(cloneGeometry(geo))] };

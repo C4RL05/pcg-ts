@@ -12,6 +12,31 @@
 import { type Spec, attr, call, param, position, tunableFbm, vec } from "./expr.js";
 import { definePrimitive } from "./define.js";
 
+/** Fewest bins `transform/gather-on-path` will cut a path into. */
+const MIN_BINS = 1;
+
+/** Smallest grid pitch `transform/snap-to-grid` will divide a position by. */
+const MIN_CELL_SIZE = 1e-6;
+
+/**
+ * A knob that is about to be DIVIDED BY, clamped to the same bound its
+ * schema declares.
+ *
+ * A declared `min` binds a PLAIN value only — `paramValueError` says so:
+ * a field value is the caller's business, and `serializeParamValue` never
+ * reaches the range check for one. So a bound alone is a promise the
+ * implementation does not keep the moment a knob is flipped to field
+ * mode, and both divisors below used to take whatever came: a `bins` of 0
+ * sent every point of a path to the same infinite parameter, and a
+ * `cellSize` of 0 snapped every position to NaN, each under a cook
+ * reporting success. Guarding the divisor at the point of use is what
+ * makes the bound true of every value that can arrive, however it is
+ * spelled — the property the bound was only pretending to provide.
+ */
+function guarded(name: string, least: number): Spec {
+  return call("max", param(name), least);
+}
+
 /**
  * Where a point of a path is heading when it gathers: the centre of the
  * bin its own `curveU` falls in.
@@ -24,8 +49,8 @@ import { definePrimitive } from "./define.js";
  */
 const BIN_CENTRE: Spec = call(
   "div",
-  call("add", call("floor", call("mul", attr("curveU", 1), param("bins"))), 0.5),
-  param("bins"),
+  call("add", call("floor", call("mul", attr("curveU", 1), guarded("bins", MIN_BINS))), 0.5),
+  guarded("bins", MIN_BINS),
 );
 
 /** Register every `transform/*` primitive. Call once, from the family index. */
@@ -99,8 +124,11 @@ export function registerTransformPrimitives(): void {
             "sub",
             call(
               "mul",
-              call("floor", call("add", call("div", position(), param("cellSize")), 0.5)),
-              param("cellSize"),
+              call(
+                "floor",
+                call("add", call("div", position(), guarded("cellSize", MIN_CELL_SIZE)), 0.5),
+              ),
+              guarded("cellSize", MIN_CELL_SIZE),
             ),
             position(),
           ),
@@ -115,8 +143,9 @@ export function registerTransformPrimitives(): void {
         name: "cellSize",
         targets: [],
         default: 4,
-        description: "Grid pitch in world units, the same on all three axes. Must be greater than 0.",
+        description: `Grid pitch in world units, the same on all three axes. It is the DIVISOR of the snap, so it must be greater than 0 — declared as well as said: a plain value below ${MIN_CELL_SIZE} is refused by name, and a FIELD delivering one — which no declared bound can refuse — is clamped to ${MIN_CELL_SIZE} at the point of use rather than dividing by it. That clamp is the limit the pitch was heading for anyway: a millionth-of-a-unit grid moves a point by at most half of that, so a pitch of 0 or less leaves the cloud where it is instead of snapping every position to NaN. The clamp is a floor and nothing more: a field that returns NaN still snaps to NaN, because there is no value to floor it to.`,
         acceptsField: true,
+        min: MIN_CELL_SIZE,
       },
     ],
   });
@@ -150,7 +179,7 @@ export function registerTransformPrimitives(): void {
         targets: [],
         default: 6,
         description:
-          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. Field-capable like every knob here, but keep it UNIFORM unless you mean otherwise: a bin count that varies per point stops partitioning the path, because neighbouring points then head for the centres of bins that do not line up. A field over something constant along each path — a per-path attribute, say — is the coherent way to vary it; a field over `curveU` or position is not.",
+          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. Field-capable like every knob here, but keep it UNIFORM unless you mean otherwise: a bin count that varies per point stops partitioning the path, because neighbouring points then head for the centres of bins that do not line up. A field over something constant along each path — a per-path attribute, say — is the coherent way to vary it; a field over `curveU` or position is not. Guarded at the point of use, because it is the DIVISOR that turns a 0..1 parameter into a bin: anything below the declared minimum of 1 is read as exactly 1 — one bin, the whole path gathering onto a single spot — and that covers the values a bound cannot refuse, since a field's are never range-checked. A plain value below 1 is still an error rather than a clamp.",
         min: 1,
         acceptsField: true,
       },

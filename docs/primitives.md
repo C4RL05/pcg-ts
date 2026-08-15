@@ -676,7 +676,7 @@ Run it: `pcg run transform/displace-by-noise`
 
 Slides every point of a path along the curve it already sits on, toward the centre of its own bin, so an even distribution becomes clumps with bare runs between them — hedgerows, rock piles, bundled cables, knots in a crowd. Nothing is created or deleted: the count, the attributes and the polyline topology all survive, and each point is RE-EVALUATED on the curve rather than stepped along its tangent, so it stays exactly on the path however hard the path bends. Each point's target is the centre of the bin its own `curveU` falls into — `bins` equal bins per path — and `amount` is how far of the way there it travels, so 0 changes nothing and 1 collapses every bin onto a single spot. PRECONDITION: the input must carry `curveU` (f32, tuple 1) as well as polyline topology, so it has to have come from a sampler that writes one — `pathResample`, `splineSample`, `place/along-curve`, `place/radial-on-curve` or `shape/path-meander`. A path built straight out of `pointsToPath` has no parameterization to gather along, and the cook fails naming `curveU` rather than guessing one. The point sitting exactly at the end of a path does not move: its bin centre lies past the end and clamps back onto it. `curveU` and `tangent` are rewritten to where each point LANDS, so a second gather bins the new positions and not the old ones. Fully deterministic: two instances with the same params clump identically, and there is no seed — the clumps are where the bins are, not where a draw put them. Reads and writes `P`; every other attribute arrives untouched.
 
-**Content hash:** `a6d1dddfb6894390`
+**Content hash:** `99afd454caeffa25`
 
 **Tags:** `transform`, `curve`, `path`, `spacing`
 
@@ -689,7 +689,7 @@ Slides every point of a path along the curve it already sits on, toward the cent
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `amount` | f32 | `0.7` | 0..1 |  | yes | *(nothing — the body's field expressions read it by name)* | How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other. |
-| `bins` | f32 | `6` | >= 1 |  | yes | *(nothing — the body's field expressions read it by name)* | How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. Field-capable like every knob here, but keep it UNIFORM unless you mean otherwise: a bin count that varies per point stops partitioning the path, because neighbouring points then head for the centres of bins that do not line up. A field over something constant along each path — a per-path attribute, say — is the coherent way to vary it; a field over `curveU` or position is not. |
+| `bins` | f32 | `6` | >= 1 |  | yes | *(nothing — the body's field expressions read it by name)* | How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. Field-capable like every knob here, but keep it UNIFORM unless you mean otherwise: a bin count that varies per point stops partitioning the path, because neighbouring points then head for the centres of bins that do not line up. A field over something constant along each path — a per-path attribute, say — is the coherent way to vary it; a field over `curveU` or position is not. Guarded at the point of use, because it is the DIVISOR that turns a 0..1 parameter into a bin: anything below the declared minimum of 1 is read as exactly 1 — one bin, the whole path gathering onto a single spot — and that covers the values a bound cannot refuse, since a field's are never range-checked. A plain value below 1 is still an error rather than a clamp. |
 
 Run it: `pcg run transform/gather-on-path`
 
@@ -722,7 +722,7 @@ Run it: `pcg run transform/relax-spacing`
 
 Snaps every point to the nearest corner of a regular 3D grid of the given pitch, so scattered positions become tile-aligned. Note that snapping can land two points on the SAME corner: follow it with `selfPrune` at a distance just under the pitch if the duplicates matter. Fully deterministic. Reads and writes `P`; leaves every other attribute alone, including `scale`.
 
-**Content hash:** `602df0a0be5e1894`
+**Content hash:** `fb6cdc17c05250bf`
 
 **Tags:** `transform`, `grid`, `align`
 
@@ -734,7 +734,7 @@ Snaps every point to the nearest corner of a regular 3D grid of the given pitch,
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `cellSize` | f32 | `4` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Grid pitch in world units, the same on all three axes. Must be greater than 0. |
+| `cellSize` | f32 | `4` | >= 0.000001 |  | yes | *(nothing — the body's field expressions read it by name)* | Grid pitch in world units, the same on all three axes. It is the DIVISOR of the snap, so it must be greater than 0 — declared as well as said: a plain value below 0.000001 is refused by name, and a FIELD delivering one — which no declared bound can refuse — is clamped to 0.000001 at the point of use rather than dividing by it. That clamp is the limit the pitch was heading for anyway: a millionth-of-a-unit grid moves a point by at most half of that, so a pitch of 0 or less leaves the cloud where it is instead of snapping every position to NaN. The clamp is a floor and nothing more: a field that returns NaN still snaps to NaN, because there is no value to floor it to. |
 
 Run it: `pcg run transform/snap-to-grid`
 

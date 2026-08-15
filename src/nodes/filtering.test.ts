@@ -1054,6 +1054,39 @@ describe("selfPrune", () => {
     expect(geo.pointCount).toBe(3);
   });
 
+  it("spells minDistance 0 the same plainly and as a constant field", async () => {
+    // The pass-through is a property of the VALUE, so both spellings of
+    // the same literal have to reach it. A constant field is a graph
+    // literal like any other — it is not data — so honouring it here
+    // leaves the invariant it looks like it breaks exactly where it was:
+    // no field whose values COULD vary takes this path, and what the
+    // output IS still never depends on the numbers that came back.
+    const path = networkAt(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+      ],
+      [[0, 1, 2, 3]],
+    );
+    const run = async (minDistance: number | ReturnType<typeof attribute>): Promise<Geometry> =>
+      firstGeo(
+        (await runNode(selfPrune, { minDistance } as never, { in: [makeGeometryItem(path)] })).out,
+      );
+    const plain = await run(0);
+    expect([plain.pointCount, plain.vertexCount, plain.primitiveCount]).toEqual([4, 4, 1]);
+    expect(snapshotGeometry(await run(constant(0))), "constant field").toEqual(
+      snapshotGeometry(plain),
+    );
+    // A field that could vary still outputs a point cloud, whatever the
+    // numbers turn out to be: this one is 0 everywhere and the topology
+    // goes anyway, because the shape of the output must not be a
+    // function of the data.
+    const varying = await run(attribute("seed"));
+    expect([varying.pointCount, varying.vertexCount, varying.primitiveCount]).toEqual([4, 0, 0]);
+  });
+
   describe("permutation equivariance", () => {
     // The visit order is priority DESCENDING then IDENTITY ascending, so
     // reordering the input can only reorder the output. Against the old

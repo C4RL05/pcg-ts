@@ -788,6 +788,70 @@ describe("transform/", () => {
     }
   });
 
+  /** Every scalar of every point column, so a NaN anywhere is caught. */
+  function pointScalars(g: ReturnType<typeof geo>, names: readonly string[]): number[] {
+    const out: number[] = [];
+    for (const name of names) {
+      const col = g.attrs.point.require(name);
+      for (let i = 0; i < g.pointCount; i++) {
+        for (let k = 0; k < col.tupleSize; k++) out.push(col.get(i, k));
+      }
+    }
+    return out;
+  }
+
+  it("gather-on-path reads a sub-1 bins as one bin, whoever delivers it", async () => {
+    // A declared bound binds a PLAIN value only — `paramValueError` says
+    // field values are the caller's business — and `bins` is the DIVISOR
+    // of the bin centre, so an out-of-range one arriving as a `constant`
+    // spec — the shape an editor seeds when a knob goes to field mode —
+    // divided by zero under a cook reporting SUCCESS: the bin centre came
+    // out infinite, `pathPointAt` clamped it, and all 24 points landed on
+    // the far end of the path with curveU 1. The recipe guards its own
+    // divisor, so the whole sub-1 range means what the bound named: one
+    // bin, and the gather is a gather rather than a collapse.
+    const oneBin = geo(await cookOne("transform/gather-on-path", { bins: 1 }));
+    for (const value of [0, 0.001, 0.5, -3]) {
+      const g = geo(await cookOne("transform/gather-on-path", { bins: { fn: "constant", value } }));
+      expect(g.pointCount, `bins ${value} count`).toBe(SAMPLED_CURVE_POINTS);
+      for (const v of pointScalars(g, ["P", "curveU"])) {
+        expect(Number.isFinite(v), `bins ${value} produced ${v}`).toBe(true);
+      }
+      expect(snapshotGeometry(g), `bins ${value} is one bin`).toEqual(snapshotGeometry(oneBin));
+    }
+    // Not everything on the same spot: the collapse is what went wrong.
+    const spread = new Set(pointScalars(oneBin, ["curveU"]));
+    expect(spread.size).toBeGreaterThan(1);
+    // A plain out-of-range value is still refused by the bound: the guard
+    // is for what a field can deliver, not a licence to pass anything.
+    await expect(cookOne("transform/gather-on-path", { bins: 0 })).rejects.toThrow(
+      /bins.*below the minimum 1/,
+    );
+  });
+
+  it("snap-to-grid refuses a pitch of 0, and clamps one a field delivers", async () => {
+    // The description always claimed "must be greater than 0" and nothing
+    // enforced it: a PLAIN 0 divided every position by zero and snapped
+    // all of them to NaN under a successful cook.
+    await expect(cookOne("transform/snap-to-grid", { cellSize: 0 })).rejects.toThrow(
+      /cellSize.*below the minimum/,
+    );
+    // The bound alone does not reach a field, so the divisor is guarded
+    // at the point of use too, at the same number the bound declares.
+    const smallest = geo(await cookOne("transform/snap-to-grid", { cellSize: 1e-6 }));
+    for (const value of [0, -4]) {
+      const g = geo(
+        await cookOne("transform/snap-to-grid", { cellSize: { fn: "constant", value } }),
+      );
+      for (const v of pointScalars(g, ["P"])) {
+        expect(Number.isFinite(v), `cellSize ${value} produced ${v}`).toBe(true);
+      }
+      expect(snapshotGeometry(g), `cellSize ${value} is the smallest pitch`).toEqual(
+        snapshotGeometry(smallest),
+      );
+    }
+  });
+
   it("relax-spacing keeps the count and raises the nearest-neighbour distance", async () => {
     const before = geo(await cookOne("transform/relax-spacing", { strength: 0 }));
     const after = geo(await cookOne("transform/relax-spacing", { radius: 6, strength: 0.5 }));
