@@ -112,6 +112,33 @@ GPU pipeline cache nearly grew without limit.
 foldable subtree, return the original field rather than an identical
 rebuild — most fields have nothing to fold and must not pay a re-parse.
 
+## What verification changed (2026-08-15, after `1a09b60`)
+
+Two corrections, both from an independent pass. This section is the
+record; the code is the authority.
+
+**A threshold was missing, and the design above is what omitted it.** The
+fold is a pessimization below roughly 300–1000 elements, because a miss
+costs a fixed ~89 µs while the saving is per element — and the streaming
+regime lives under that line, deriving a seed per cell so that past a
+handful of cells every cell misses. Measured at 16 elements per resolve
+it was **16.8× slower**. `MIN_ELEMENTS_TO_FOLD = 1024` now gates the miss
+path (after the cache lookup, not before). The measurement table lives on
+that constant.
+
+The design above was written from one measurement — a 40 000-point
+one-shot cook — which is the far end of the range where the fold wins
+biggest. That is the general lesson: a single benchmark chosen because it
+motivated the work will confirm the work.
+
+**The golden is not a byte gate**, so this document's claim that "the
+50-graph golden diff is what enforces it" was wrong.
+`tests/graphs.golden.json` pins counts, attribute presence, type,
+tupleSize, batch shape and `P` bounds within 1e-3. `tests/foldCorpus.test.ts`
+is the real gate: every field expression in every shipped graph, folded
+and unfolded, compared element by element under `Object.is`, with throw
+parity for the ones a bare point cloud cannot satisfy.
+
 ## What must be tested
 
 - Each of the four tables above is a claim; the byte-equality one is the
