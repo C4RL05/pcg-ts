@@ -293,10 +293,24 @@ into `constant`). All 44 fns (`listFieldFns()`):
     value on every element. It exists because a serialized field expression
     bakes its numbers, so a saved noise carries `opts.seed` as a literal and
     the graph seed re-rolls every scatter while moving no noise at all. The
-    fix enters through an ARGUMENT position — fold it into `opts.position`
-    (`add(position, vec(mul(nodeSeed, 1e-6), 0, 0))`), since `opts.seed` is
-    read as a plain number and cannot hold a spec. Scale it down: a node
-    seed is a full uint32. It lands in an f32 column, so it is a
+    fix enters through an ARGUMENT position — fold it into `opts.position`,
+    since `opts.seed` is read as a plain number and cannot hold a spec.
+    Fold it BOUNDED, per axis
+    `A * (fract(nodeSeed * 2^-32 * K) - W0)`, wrapping the outside of
+    whatever position the noise already sampled: `A ≈ 32 / opts.frequency`
+    (a ~32-cell shift, decorrelating without leaving the range where an
+    f32 resolves a lattice cell), `K ∈ {1021, 3067, 8191}` one per noise
+    on a node so they do not move together, and `W0` the fold's value at
+    that graph's default seed to nine significant figures, which makes the
+    offset exactly zero there — so a saved graph keeps cooking the bytes it
+    already cooks and only gains a working seed box. Build it from
+    `add`/`sub`/`mul`/`floor` only (bit-exact CPU/GPU; `div` inside a
+    `floor` flips the floor), and never the unbounded `mul(nodeSeed, 1e-6)`
+    — that reaches ~1.3e4 world units and degrades to ~73 f32 steps per
+    period at frequency 14. Never fold it inside a `forEach` body, whose
+    seed varies per item. See `docs/authoring.md` "The seed-shift idiom"
+    and `examples/graphs/basics-reseed-a-noise.json`. It lands in an f32
+    column, so it is a
     decorrelation source and not an integer to compare. Not in `Field.key`
     (fixed at construction, while the seed arrives at evaluation) and it
     does not need to be — the executor's node memo key already carries the

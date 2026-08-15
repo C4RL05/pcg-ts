@@ -42,6 +42,24 @@ import { describeExample, loadCorpus } from "../src/docs/examples.js";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const GOLDEN_PATH = fileURLToPath(new URL("./corpus.golden.json", import.meta.url));
 
+/**
+ * Timeout for the two tests that cook a graph MORE THAN ONCE.
+ *
+ * `CORPUS_TIME_LIMIT_MS` is the budget this file actually enforces, and it
+ * is enforced per cook — so a test performing several cooks cannot live
+ * under vitest's 5 s default, which is shorter than the budget it is
+ * supposed to be checking against. That mismatch stayed invisible while
+ * the heaviest corpus graph cooked in well under a second; it stops being
+ * invisible the moment one of them gets meaningfully heavier, and then it
+ * fails as a timeout with nothing to read rather than as a budget
+ * violation naming the graph. The budget test above is what catches a real
+ * regression; this constant only keeps that signal from being pre-empted by
+ * a timeout that was never a deliberate budget. Partition safety cooks with
+ * `budgetMs: 0`, which yields after every node, so it is the slower of the
+ * two — hence the multiple rather than a doubling.
+ */
+const MULTI_COOK_TIMEOUT_MS = CORPUS_TIME_LIMIT_MS * 4;
+
 const corpus = loadCorpus(ROOT);
 const golden = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as CorpusGolden;
 
@@ -207,7 +225,7 @@ describe("example corpus", () => {
             ].join("\n"),
           );
         }
-      });
+      }, MULTI_COOK_TIMEOUT_MS);
 
       it("cooks identically fully partitioned as straight through (partition safety)", async () => {
         // THE OTHER HALF OF "WHATEVER THE COOK ORDER". The test above
@@ -242,7 +260,7 @@ describe("example corpus", () => {
             ].join("\n"),
           );
         }
-      });
+      }, MULTI_COOK_TIMEOUT_MS);
     });
   }
 });

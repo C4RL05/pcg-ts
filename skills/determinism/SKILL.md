@@ -77,8 +77,16 @@ move:
 3. Move the position it samples **by the node seed**, with `{ "fn": "nodeSeed" }`
    folded into `opts.position`. This is (2) with the offset supplied from
    inside the spec, and it is what makes a SAVED noise answer to the graph's
-   seed box — scaled down (`mul(nodeSeed, 1e-6)`), because a node seed is a
-   full uint32. See `examples/graphs/basics-reseed-a-noise.json`.
+   seed box. Fold it BOUNDED — per axis
+   `A * (fract(nodeSeed * 2^-32 * K) - W0)`, built from `add`/`sub`/`mul`/`floor`
+   only, with `A ≈ 32 / opts.frequency`, `K ∈ {1021, 3067, 8191}` one per noise
+   on a node, and `W0` the fold's value at that graph's default seed so the
+   offset is exactly zero there and the saved output does not move. The
+   unbounded `mul(nodeSeed, 1e-6)` is the trap: fine at frequency 0.045,
+   ~73 f32 steps per noise period at frequency 14. Not inside a `forEach`
+   body, whose seed varies per item. See `docs/authoring.md` "The seed-shift
+   idiom" and `examples/graphs/basics-reseed-a-noise.json`, and note that
+   every noise-bearing corpus graph now carries this fold.
 
 That is why noise-bearing primitives expose `frequency` and `variant` rather
 than a seed: `variant` is added to the sample position and walks to an

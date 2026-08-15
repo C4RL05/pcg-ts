@@ -179,14 +179,45 @@ attachSpec(NODE_SEED, { fn: "nodeSeed" }, 1);
  * moves nothing about it. `opts.seed` is read as a plain number and
  * cannot hold a spec; `opts.position` is an ordinary argument position
  * and can — so this is what an author folds into the SAMPLE POSITION to
- * make a frozen noise re-roll with the graph:
+ * make a frozen noise re-roll with the graph.
+ *
+ * Fold it BOUNDED. The offset per axis is
+ * `A * (fract(nodeSeed * 2^-32 * K) - W0)`, added outside whatever
+ * position the noise already sampled — one axis of it, with the shared
+ * `nodeSeed * 2^-32` written out both times because JSON has no way to
+ * name a subexpression:
  *
  * ```json
- * { "fn": "perlinNoise", "opts": { "frequency": 0.05, "position":
- *   { "fn": "add", "args": [{ "fn": "position" },
- *     { "fn": "vec", "args": [
- *       { "fn": "mul", "args": [{ "fn": "nodeSeed" }, 1e-6] }, 0, 0] }] } } }
+ * { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [
+ *   { "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" },
+ *     2.3283064365386963e-10] }, 1021] },
+ *   { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args":
+ *     [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] },
+ *   0.245422363] }, 1600] }
  * ```
+ *
+ * `2.3283064365386963e-10` is 2^-32, and scaling by a power of two is
+ * exact, so the fold reads the seed's HIGH bits — the ones a hash
+ * actually randomizes — rather than the low bits an f32 column has
+ * already rounded away. `A` (1600 here) is about `32 / opts.frequency`,
+ * a shift of roughly 32 noise cells: far enough to decorrelate, near
+ * enough that an f32 still resolves a lattice cell at the sample point.
+ * `K` differs per noise on one node (1021, 3067, 8191) so several
+ * noises on the same node do not move in lockstep. `W0` is the
+ * expression's own value at that graph's default seed, which makes the
+ * offset exactly `+0` there — so folding this into a saved graph leaves
+ * what it already cooks bit-identical and only adds an effect to the
+ * seed box.
+ *
+ * Two rules, both load-bearing. Build it from `add`/`sub`/`mul`/`floor`
+ * and nothing else: those four are bit-exact across CPU and GPU, while
+ * `div` is within a range-ULP and `sin` far worse, and a one-ULP
+ * disagreement INSIDE a `floor` moves the offset by a whole unit rather
+ * than a ULP. And do not write the unbounded `mul(nodeSeed, 1e-6)`: it
+ * reaches ~1.3e4 world units, which is harmless at frequency 0.045 and
+ * leaves ~73 f32 steps per noise period at frequency 14 — a field that
+ * still cooks, still looks plausible, and rounds differently on CPU and
+ * GPU. `docs/authoring.md` carries the derivation.
  *
  * Two properties worth stating, because both are easy to assume wrongly:
  *

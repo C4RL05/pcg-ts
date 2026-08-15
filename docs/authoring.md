@@ -388,16 +388,121 @@ would:
 ```json
 { "fn": "perlinNoise", "opts": { "frequency": 0.05, "position":
   { "fn": "add", "args": [{ "fn": "position" },
-    { "fn": "vec", "args": [
-      { "fn": "mul", "args": [{ "fn": "nodeSeed" }, 1e-6] }, 0, 0] }] } } }
+    { "fn": "vec", "args": [0, 0, 0] }] } } }
 ```
 
-Scale it down like that. A node seed is a full uint32, and an unscaled
-offset lands the sample point where an f32 no longer resolves a lattice
-cell. For the same reason the value is a DECORRELATION SOURCE rather
-than an integer: it arrives in an f32 column, so seeds above 2^24 round
-to the nearest representable multiple and will not compare equal to the
-seed `Graph.describe()` reports.
+Each zero stands where a per-axis seed shift goes, and the next section
+derives it. Three literal zeros are not a placeholder for nothing,
+though: the shift the corpus uses evaluates to exactly this at each
+graph's own default seed, which is why folding it into a saved graph
+changes none of its output. Writing the shift carelessly is the failure
+worth naming — it gives a noise that re-rolls into a staircase. The
+value itself is
+a DECORRELATION SOURCE rather than an integer: it arrives in an f32
+column, so seeds above 2^24 round to the nearest representable multiple
+and will not compare equal to the seed `Graph.describe()` reports.
+
+#### The seed-shift idiom
+
+Every noise-bearing graph in `examples/graphs` spells the offset the
+same way, and the shape is not arbitrary. Per axis:
+
+```
+offset = A * (fract(nodeSeed * 2^-32 * K) - W0)
+```
+
+which in the grammar is (one axis, `K = 1021`, `W0` for this graph and
+node, `A = 1600`):
+
+```json
+{ "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [
+  { "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" },
+    2.3283064365386963e-10] }, 1021] },
+  { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args":
+    [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] },
+  0.245422363] }, 1600] }
+```
+
+It always wraps the OUTSIDE of `opts.position`: where the noise already
+sampled a computed position, that expression becomes the first argument
+of the `add`.
+
+**`2^-32` first, and only `add`/`sub`/`mul`/`floor`.** Multiplying by
+`2.3283064365386963e-10` is exact — a power of two only moves the
+exponent — so `u = nodeSeed * 2^-32` keeps every bit the f32 column
+holds and the fold reads the seed's HIGH bits. That matters because the
+low bits are already gone: over 20 000 graph seeds, 99.6% of node seeds
+exceed 2^24, and the obvious `fract(S / 1024)` yields only 281 distinct
+values where `fract(S * 2^-32 * 1021)` yields 25 107.
+
+`div` is deliberately absent. The textbook modulo `x - K * floor(x / K)`
+puts a `div` inside a `floor`, and `div` is only within one range-ULP
+across CPU and GPU while those four ops are bit-exact — inside a
+`floor`, a one-ULP disagreement is not a one-ULP output difference, it
+flips the floor and moves the offset by a whole unit. `fract(sin(x)*K)`,
+the classic hash, is worse for the same reason: `sin` is budgeted at
+several range-ULP and the `fract` amplifies that to O(1).
+
+**`A` is tied to the noise's own frequency**, `A ≈ 32 / opts.frequency`
+rounded tidy (`opts.frequency` defaults to 1 when absent). Steps of f32
+resolution per noise period at the shifted sample magnitude work out to
+about `2^23 / k` when `A = k / f`, so the frequency cancels and the
+budget is the same at every frequency: `k = 8` is the decorrelation
+floor (below it the shift is often under one cell), `k = 128` is where
+steps-per-period falls to ~2^16. `k = 32` sits two octaves inside both.
+This is why a single fixed offset scale cannot be copied between
+graphs — the same constant that is comfortable at frequency 0.045 is a
+staircase at frequency 14.
+
+**`K` differs per noise on one node.** There is only one `nodeSeed` per
+node, so two folds of it can never be truly independent; what is
+available is a joint distribution indistinguishable from one. Measured
+over 40 000 graph seeds, `K ∈ {1021, 3067, 8191}` gives worst pairwise
+`|r|` 0.003 and a 12x12 chi-square of 160 against a 143-d.f. critical
+value of 172 — at the noise floor. Small integer multipliers
+(`fract(u)`, `fract(3u)`) are the trap: they lie on straight lines,
+`|r|` 0.339. Slot 0 uses `[1021, 3067, 8191]` for x/y/z, slot 1 rotates
+to `[3067, 8191, 1021]`, slot 2 to `[8191, 1021, 3067]`. Specs that are
+byte-identical today share one slot — giving them separate offsets would
+change what the graph means, not how it answers the seed.
+
+**`W0` is what makes this free.** It is the fold's own value at the
+graph's default seed:
+
+```
+nodeSeed(G, id)           = hashCombine(G, hashString(id))
+inner graph seed          = hashCombine(nodeSeed(G, wrapperId), hashString("subgraph"))
+W0 = fround(t - floor(t)),  t = fround(fround(fround(S) * 2**-32) * K)
+```
+
+written to **nine** significant figures, which uniquely determines an
+f32 (eight is not enough — it fails about one case in 160). Subtracting
+it makes the offset exactly `+0` at the default seed, so folding this
+into a saved graph leaves its output bit-identical and adds only an
+effect to the seed box. Re-baking the graph's seed later leaves `W0`
+stale, and a stale `W0` costs exactly one thing: no seed is the identity
+any more. The offset stays inside `[-A, A]` and the noise stays
+well-conditioned, so the constant is an optimization, not an invariant.
+
+**It is not free on the CPU.** The offset is constant over the domain,
+but the grammar has no way to say so: every op in it materializes a
+full-length column, so one folded noise costs roughly a dozen extra
+passes over the domain, and one carrying three axes on a large point
+count is measurable. Across the corpus it disappears into the noise —
+the rig cooks within measurement error of its unfolded self — but
+`examples-gpu-fields`, which is ten noise specs over ~1.6 M attribute
+elements, cooks about twice as long on the CPU path (0.61 s to 1.22 s).
+Roughly a third of that is the offset arithmetic and the rest is the
+`add`/`vec` that carries it into the sample position. On the GPU path it
+is a handful of extra ALU ops inside a kernel that was already running,
+which is to say free. Budget for it on a CPU-cooked graph with many
+noises over many points; ignore it everywhere else.
+
+**Never fold `nodeSeed` inside a `forEach` body** if the default output
+must not move. `forEach` seeds its body as
+`hashCombine(nodeSeed, hashString("forEach"), itemKey)` and `itemKey` is
+content-derived, so one baked `W0` could zero at most one iteration.
+Bodies that need per-item variation already have `randomField`.
 
 Two more properties follow from where the seed comes from. It is the
 NODE's seed, so two nodes in one graph get different values and renaming

@@ -83,22 +83,26 @@ write it to an int attribute with one extra node.
   and the hazard disappears because the index never leaves the host.
 - Cost: the fixed five-site grammar change `ne` and `fraction` both paid.
 
-**A knob that reaches into a field spec.** `nodeSeed` shipped, so a
-saved noise can now re-roll with the graph seed — but only by being
-EDITED to fold `{"fn":"nodeSeed"}` into its `opts.position`. A panel knob
-still addresses `"<nodeId>.<param>"` and cannot reach INTO a field spec,
-so the 20 corpus graphs that carry a literal `opts.seed` stay deaf to the
-seed box until each one is rewritten. `param` is the closest thing to an
-answer (a name inside a spec, bound from outside) and the subgraph
-binding already supplies it — so the honest shape of this is probably
-"expose a plain node's field-spec `param` names on the panel", not a new
-mechanism.
-- The rig is still the named consumer. Its four `*Variant` params folded
-  into the noise seed host-side; frozen, they are numbers in a spec.
-  `nodeSeed` gives them back as ONE re-roll for the whole node, not four
-  independent ones — a per-shape variant needs four different offsets,
-  which today means four different scale constants around one
-  `nodeSeed`, or four `param` names bound from a wrapper.
+**A knob that reaches into a field spec.** `nodeSeed` shipped and the
+corpus has been rewritten around it: 38 noise specs across 23 graphs now
+fold a bounded seed shift into `opts.position`, zero at each graph's own
+default seed, so the seed box moves the shapes as well as the scatters.
+What is still missing is the part an EDIT cannot supply. A panel knob
+addresses `"<nodeId>.<param>"` and cannot reach INTO a field spec, so a
+graph gains a working seed box only by being rewritten, and a knob that
+is not the seed still cannot touch a noise at all. `param` is the
+closest thing to an answer (a name inside a spec, bound from outside)
+and the subgraph binding already supplies it — so the honest shape of
+this is probably "expose a plain node's field-spec `param` names on the
+panel", not a new mechanism.
+- The rig showed what the shape costs. Its four `*Variant` params folded
+  into the noise seed host-side; frozen, they were numbers in a spec.
+  There is one `nodeSeed` per node, so independence has to come from a
+  different constant per noise rather than from separate seeds: the
+  corpus uses a distinct multiplier per slot (1021 / 3067 / 8191), which
+  measures as indistinguishable from independent but is still one draw
+  wearing three hats. Four genuinely independent per-shape variants
+  still want four `param` names bound from a wrapper.
 
 **A per-item cache for `forEach`.** The loop shipped; this is the one
 piece of it deliberately left out, and the measurement is the expensive
