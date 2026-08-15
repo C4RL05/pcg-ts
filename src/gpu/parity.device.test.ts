@@ -2,17 +2,25 @@
  * Device parity suite: bit-exactness of hash/u32 streams, measured
  * per-family float tolerances vs the CPU reference, and run-to-run
  * determinism — all executed in the plain-Node device runner. Budgets
- * are asserted tight, with the measured value on the reference adapter
+ * are asserted against the measured sweep on the reference adapter
  * (RTX 5090, D3D12) recorded next to each; see `PARITY_CASES` in
- * `corpus.ts`.
+ * `corpus.testsupport.ts` for the derivation.
+ *
+ * Two budgets per family, asserted together because they fail for
+ * different reasons: `rangeUlp` is the worst lane (an extreme-value
+ * statistic that climbs as more lanes are sampled — so it is swept
+ * across element counts here, never measured at one), and `meanAbs` is
+ * the mean absolute divergence (sample-size stable to 1.04x across two
+ * decades of count — so it moves only when the interior really changes).
  *
  * Each float family is measured twice: once for the AUTHORED spec
  * (`fieldFromJson` JSON) and once for the code-authored twin carrying a
- * DERIVED spec, against the same budget. `corpus.test.ts` pins that the
+ * DERIVED spec, against the same budgets. `corpus.test.ts` pins that the
  * two compile to the byte-identical kernel, so any divergence between
  * the two measurements is a CPU-side difference, not a codegen one.
  */
 import { describe, expect, it } from "vitest";
+import type { Geometry } from "../data/index.js";
 import { evaluateField, type Column } from "../fields/index.js";
 import { fieldFromJson, getFieldSpec, type FieldSpec, type FieldSpecArg } from "../fields/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
@@ -23,13 +31,28 @@ import {
   PARITY_CASES,
   PARITY_COUNT,
   PARITY_SEED,
+  PARITY_SWEEP_COUNTS,
+  type ParityCase,
 } from "./corpus.testsupport.js";
 import { decodeRun, dispatchTask, runDeviceTasks, type RunnerTask } from "./runnerClient.js";
-import { deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
+import {
+  DEVICE_MEASUREMENT_TIMEOUT_MS,
+  deviceSuiteName,
+  testDevice,
+} from "./gpuDevice.testsupport.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
 
-function cpuColumn(spec: FieldSpecArg, count: number, seed: number): Column {
-  const geo = makeCorpusGeometry(count);
+/**
+ * CPU reference for one spec over `geo` (whose point count IS the
+ * element count — `evaluateField` reads the domain, not a parameter).
+ *
+ * The geometry is a parameter rather than built here on purpose: this
+ * runs once per family per count, and rebuilding a 262 144-point fixture
+ * 19 times was costing more than the device dispatches it is compared
+ * against. `makeCorpusGeometry` is deterministic, so sharing one
+ * instance across families changes no measured value.
+ */
+function cpuColumn(geo: Geometry, spec: FieldSpecArg, seed: number): Column {
   // Every spec in this suite is an object spec (never a bare number).
   return evaluateField(fieldFromJson(spec as FieldSpec), { geo, domain: "point", seed });
 }
@@ -75,13 +98,28 @@ function ulpDistance(a: number, b: number): number {
  *   cannot (a tiny absolute error at an output near 0 spans a huge ULP
  *   count).
  * - `rangeUlp`: absolute error scaled to ULP units at the top of the
- *   family's output range — `|cpu - gpu| / (2^-23 · max|cpu|)`. This is
- *   the documented tolerance metric: for outputs near the range it
- *   coincides with ULP distance; near zero it reflects the absolute
- *   error fairly.
+ *   family's output range — `|cpu - gpu| / (2^-23 · max|cpu|)`. The
+ *   budgeted tail metric: for outputs near the range it coincides with
+ *   ULP distance; near zero it reflects the absolute error fairly. It is
+ *   a max over lanes, so it grows with the element count — which is why
+ *   the count-sensitive families are swept rather than spot-measured.
+ *   Two things to know when reading a swept series: `unit` comes from
+ *   THAT count's own `max|cpu|`, so the unit shifts slightly between
+ *   counts (worley f1's range moves 0.34% from 262k to 1M — sub-1%, but
+ *   not zero); and for a multi-component column `range` is the max over
+ *   ALL components, so a small-magnitude component would be scored in
+ *   the largest one's units. No non-`exact` family is vec-valued today.
+ * - `meanAbs`: mean of `|cpu - gpu|` over lanes, in absolute units. The
+ *   budgeted interior metric, and the one that is stable under sample
+ *   size (≤ 1.04x across 10k → 1M for every sampled family). A
+ *   regression that shifts the whole distribution moves this even when
+ *   the worst lane still fits under a widened max budget.
  * - Infinity for a NaN vs number mismatch.
  */
-function measureParity(cpu: Column, gpu: Column): { maxUlp: number; rangeUlp: number; range: number } {
+function measureParity(
+  cpu: Column,
+  gpu: Column,
+): { maxUlp: number; rangeUlp: number; meanAbs: number; range: number; nanLanes: number } {
   // Shape BEFORE values, or the comparator scores a short column as
   // perfect: the loops run to `cpu.data.length` and index `gpu.data[i]`,
   // and for a truncated GPU column that is `undefined` — which is not
@@ -99,23 +137,93 @@ function measureParity(cpu: Column, gpu: Column): { maxUlp: number; rangeUlp: nu
   const unit = 2 ** -23 * (range === 0 ? 1 : range);
   let maxUlpSeen = 0;
   let rangeUlp = 0;
+  let sumAbs = 0;
+  let nanLanes = 0;
   for (let i = 0; i < cpu.data.length; i++) {
     const c = cpu.data[i];
     const g = gpu.data[i];
     const d = ulpDistance(c, g);
     if (d > maxUlpSeen) maxUlpSeen = d;
-    // A one-sided NaN is an infinite divergence, never a skipped lane:
-    // Math.abs(NaN - x) is NaN and `NaN > rangeUlp` is false, so without
-    // this branch a NaN-producing lane would silently pass the budget.
+    // Two ways a lane can produce NaN from non-NaN arithmetic, and both
+    // would be SILENT: `NaN > budget` is false, so a NaN divergence
+    // passes every budget. One is a one-sided NaN (Math.abs(NaN - x) is
+    // NaN); the other is two equal infinities (Math.abs(Inf - Inf) is
+    // NaN), which is agreement, not divergence — and which poisons the
+    // MEAN even though it leaves the max alone, since the sum carries it
+    // to every lane. Neither is reachable from these families' ranges
+    // today; both are one edit away.
+    if (Number.isNaN(c) || Number.isNaN(g)) nanLanes++;
     const abs =
       Number.isNaN(c) || Number.isNaN(g)
         ? Number.isNaN(c) && Number.isNaN(g)
           ? 0
           : Number.POSITIVE_INFINITY
-        : Math.abs(c - g) / unit;
-    if (abs > rangeUlp) rangeUlp = abs;
+        : Object.is(c, g)
+          ? 0
+          : Math.abs(c - g);
+    sumAbs += abs;
+    if (abs / unit > rangeUlp) rangeUlp = abs / unit;
   }
-  return { maxUlp: maxUlpSeen, rangeUlp, range };
+  return {
+    maxUlp: maxUlpSeen,
+    rangeUlp,
+    meanAbs: cpu.data.length === 0 ? 0 : sumAbs / cpu.data.length,
+    range,
+    // Counted, not just scored: a lane that is NaN on BOTH sides scores
+    // zero divergence and passes every budget including `exact` — it is
+    // agreement between two non-answers. The corpus geometry cannot
+    // produce one today (P is in [-8, 8], density in [0, 1)), which is
+    // exactly why it would go unnoticed if a spec change ever did.
+    nanLanes,
+  };
+}
+
+/**
+ * The budget check both measured passes and the count sweep share, so
+ * one family can never be held to a different rule in one of them.
+ * Returns the reasons this measurement busts its budgets (empty = pass).
+ */
+function budgetFailures(
+  pc: ParityCase,
+  m: { maxUlp: number; rangeUlp: number; meanAbs: number; nanLanes: number },
+  where: string,
+): string[] {
+  const out: string[] = [];
+  // Before any budget: no family in this table has a domain that reaches
+  // NaN, so a NaN lane means the expression changed, not that the device
+  // disagreed — and a both-NaN lane would otherwise score as agreement.
+  if (m.nanLanes > 0) {
+    out.push(`${pc.name}${where}: ${m.nanLanes} NaN lane(s); no family here has a NaN domain`);
+  }
+  if (pc.exact === true) {
+    if (m.maxUlp !== 0) out.push(`${pc.name}${where}: expected bit-exact, measured maxUlp ${m.maxUlp}`);
+    return out;
+  }
+  // Comparisons against a budget are one-sided, so a non-finite metric
+  // passes silently. Reject it explicitly instead: Infinity means a NaN
+  // or infinite lane, and NaN means the measurement itself broke.
+  if (!Number.isFinite(m.rangeUlp) || !Number.isFinite(m.meanAbs)) {
+    out.push(`${pc.name}${where}: non-finite measurement (rangeUlp ${m.rangeUlp}, meanAbs ${m.meanAbs})`);
+  }
+  if (m.rangeUlp > pc.budget) {
+    out.push(`${pc.name}${where}: rangeUlp ${m.rangeUlp.toFixed(2)} > budget ${pc.budget}`);
+  }
+  if (m.meanAbs > pc.meanAbs) {
+    out.push(`${pc.name}${where}: meanAbs ${m.meanAbs.toExponential(3)} > budget ${pc.meanAbs.toExponential(3)}`);
+  }
+  return out;
+}
+
+/** One measured family's log line, in the form the table's comments use. */
+function parityLine(
+  pc: ParityCase,
+  m: { maxUlp: number; rangeUlp: number; meanAbs: number; range: number },
+): string {
+  return (
+    `${pc.name}: rangeUlp=${m.rangeUlp.toFixed(2)} meanAbs=${m.meanAbs.toExponential(3)}` +
+    ` maxUlp=${m.maxUlp} range=${m.range.toPrecision(4)}` +
+    ` (${pc.exact === true ? "exact" : `budgets ${pc.budget} / ${pc.meanAbs.toExponential(1)}`})`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -156,13 +264,17 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     }
     const results = runDeviceTasks(tasks);
     expect(results.every((r) => r.errors.length === 0)).toBe(true);
+    // One fixture per count, shared across the 16 (spec, seed) pairs that
+    // read it: the CPU reference needs a geometry whose point count IS
+    // the dispatched count, and building 80 of them is pure overhead.
+    const geoByCount = new Map(BITEXACT_COUNTS.map((c) => [c, makeCorpusGeometry(c)]));
     for (const result of results) {
       const [name, c, s] = result.name.split("|");
       const kernel = kernels.get(name)!;
       const count = Number(c.slice(1));
       const seed = Number(s.slice(1));
       const gpu = decodeRun(kernel, result.runs![0]);
-      const cpu = cpuColumn(BITEXACT_SPECS[name], count, seed);
+      const cpu = cpuColumn(geoByCount.get(count)!, BITEXACT_SPECS[name], seed);
       expectBytesEqual(cpu, gpu, result.name);
     }
   });
@@ -187,7 +299,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
       const count = counts[i];
       expect(results[i].errors, `count ${count}`).toEqual([]);
       const gpu = decodeRun(kernel, results[i].runs![0]);
-      const cpu = cpuColumn(spec, count, PARITY_SEED);
+      const cpu = cpuColumn(makeCorpusGeometry(count), spec, PARITY_SEED);
       // The advertised range, asserted on BOTH sides: exactly 0 at the
       // first element and exactly 1 at the last (0 when there is only
       // one). No lane may be NaN at any count.
@@ -233,24 +345,21 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     for (let i = 0; i < PARITY_CASES.length; i++) {
       const pc = PARITY_CASES[i];
       const result = results[i];
+      // Positional pairing: the runner returns results in task order,
+      // and a reordering would measure one family against another's CPU
+      // column — silently, since every budget here is of the same order.
+      expect(result.name, `result ${i} pairing`).toBe(pc.name);
       expect(result.errors, pc.name).toEqual([]);
       const gpu = decodeRun(kernels[i], result.runs![0]);
-      const cpu = cpuColumn(pc.spec, PARITY_COUNT, PARITY_SEED);
+      const cpu = cpuColumn(geo, pc.spec, PARITY_SEED);
       const m = measureParity(cpu, gpu);
-      lines.push(
-        `${pc.name}: rangeUlp=${m.rangeUlp.toFixed(2)} maxUlp=${m.maxUlp} range=${m.range.toPrecision(4)}` +
-          ` (${pc.exact === true ? "exact" : `budget ${pc.budget}`})`,
-      );
-      if (pc.exact === true) {
-        if (m.maxUlp !== 0) over.push(`${pc.name}: expected bit-exact, measured maxUlp ${m.maxUlp}`);
-      } else if (m.rangeUlp > pc.budget) {
-        over.push(`${pc.name}: measured rangeUlp ${m.rangeUlp.toFixed(2)} > budget ${pc.budget}`);
-      }
+      lines.push(parityLine(pc, m));
+      over.push(...budgetFailures(pc, m, ""));
     }
     // Measured tolerance table (phase-21 documentation source):
-    console.log(`[parity ${testDevice!.label}]\n${lines.join("\n")}`);
+    console.log(`[parity ${testDevice!.label} @${PARITY_COUNT}]\n${lines.join("\n")}`);
     expect(over, "families exceeding their measured budget").toEqual([]);
-  });
+  }, DEVICE_MEASUREMENT_TIMEOUT_MS);
 
   it("code-authored (derived-spec) twins stay within the same measured budgets", () => {
     // The comparison a user who wrote `mul(position(), 0.1)` actually
@@ -279,23 +388,65 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     for (let i = 0; i < PARITY_CASES.length; i++) {
       const pc = PARITY_CASES[i];
       const result = results[i];
+      // Positional pairing: the runner returns results in task order,
+      // and a reordering would measure one family against another's CPU
+      // column — silently, since every budget here is of the same order.
+      expect(result.name, `result ${i} pairing`).toBe(pc.name);
       expect(result.errors, pc.name).toEqual([]);
       const gpu = decodeRun(kernels[i], result.runs![0]);
       const cpu = evaluateField(fields[i], { geo, domain: "point", seed: PARITY_SEED });
       const m = measureParity(cpu, gpu);
-      lines.push(
-        `${pc.name}: rangeUlp=${m.rangeUlp.toFixed(2)} maxUlp=${m.maxUlp} range=${m.range.toPrecision(4)}` +
-          ` (${pc.exact === true ? "exact" : `budget ${pc.budget}`})`,
+      lines.push(parityLine(pc, m));
+      over.push(...budgetFailures(pc, m, ""));
+    }
+    console.log(`[parity derived ${testDevice!.label} @${PARITY_COUNT}]\n${lines.join("\n")}`);
+    expect(over, "derived-spec families exceeding their measured budget").toEqual([]);
+  }, DEVICE_MEASUREMENT_TIMEOUT_MS);
+
+  it("count-sensitive families hold their budgets across element counts", () => {
+    // `rangeUlp` is a max over lanes, so measuring it at ONE element
+    // count measures the cloud size as much as it measures the family:
+    // a bigger cloud of the same distribution reaches further into the
+    // same tail. That is not hypothetical — it is how five budgets came
+    // to be exceeded by an unchanged compiler (valueNoise 6.53 at 10k,
+    // 8.02 at 65k, 10.44 at 1M, against a budget of 8). Noise seeds ride
+    // in the spec, so seed is inert here and count was the only unpinned
+    // axis; sweeping it is what makes a budget a statement about the
+    // family. `meanAbs` is swept alongside for the opposite reason: it
+    // must NOT move (≤ 1.04x across two decades), so any shift in it is
+    // a real change in the interior rather than a deeper tail.
+    const cases = PARITY_CASES.filter((pc) => pc.countSensitive === true);
+    expect(cases.length, "count-sensitive families in the table").toBeGreaterThan(0);
+    const kernels = cases.map((pc) => compileFieldSpec(pc.spec, CORPUS_LAYOUT));
+    const swept = cases.map(() => ({ ru: [] as string[], ma: [] as string[] }));
+    const over: string[] = [];
+    for (const count of PARITY_SWEEP_COUNTS) {
+      const geo = makeCorpusGeometry(count);
+      const results = runDeviceTasks(
+        cases.map((pc, i) => dispatchTask(pc.name, kernels[i], geo, count, PARITY_SEED)),
       );
-      if (pc.exact === true) {
-        if (m.maxUlp !== 0) over.push(`${pc.name}: expected bit-exact, measured maxUlp ${m.maxUlp}`);
-      } else if (m.rangeUlp > pc.budget) {
-        over.push(`${pc.name}: measured rangeUlp ${m.rangeUlp.toFixed(2)} > budget ${pc.budget}`);
+      for (let i = 0; i < cases.length; i++) {
+        const pc = cases[i];
+        expect(results[i].name, `result ${i} pairing @${count}`).toBe(pc.name);
+        expect(results[i].errors, `${pc.name} @${count}`).toEqual([]);
+        const gpu = decodeRun(kernels[i], results[i].runs![0]);
+        const cpu = cpuColumn(geo, pc.spec, PARITY_SEED);
+        const m = measureParity(cpu, gpu);
+        swept[i].ru.push(m.rangeUlp.toFixed(2));
+        swept[i].ma.push(m.meanAbs.toExponential(2));
+        over.push(...budgetFailures(pc, m, ` @${count}`));
       }
     }
-    console.log(`[parity derived ${testDevice!.label}]\n${lines.join("\n")}`);
-    expect(over, "derived-spec families exceeding their measured budget").toEqual([]);
-  });
+    const lines = cases.map(
+      (pc, i) =>
+        `${pc.name}: rangeUlp ${swept[i].ru.join("/")} (budget ${pc.budget})` +
+        ` meanAbs ${swept[i].ma.join("/")} (budget ${pc.meanAbs.toExponential(1)})`,
+    );
+    console.log(
+      `[parity counts ${testDevice!.label} @${PARITY_SWEEP_COUNTS.join("/")}]\n${lines.join("\n")}`,
+    );
+    expect(over, "families exceeding a budget at some element count").toEqual([]);
+  }, DEVICE_MEASUREMENT_TIMEOUT_MS);
 
   it("audit residual probes: NaN min/max, normalize extremes, lattice overflow, subnormals", () => {
     // Deliberately-pathological inputs from the phase-19 audit's residual

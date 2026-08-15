@@ -21,8 +21,13 @@ import {
   DERIVED_FIELDS,
   MINIMAL_SPECS,
   PARITY_CASES,
+  PARITY_COUNT,
+  PARITY_SWEEP_COUNTS,
   corpusSpecs,
 } from "./corpus.testsupport.js";
+
+/** Grammar fns whose output is a hash lattice — the count-sensitive ones. */
+const NOISE_FNS = new Set(["valueNoise", "perlinNoise", "simplexNoise", "worleyNoise", "fbm"]);
 import { dispatchTask } from "./runnerClient.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
 
@@ -95,6 +100,89 @@ describe("code-authored twins of the parity corpus", () => {
       "normal",
       "uv",
     ]);
+  });
+});
+
+describe("parity budget shape", () => {
+  /** True when `spec` reads any noise anywhere in its tree. */
+  function usesNoise(spec: unknown): boolean {
+    if (Array.isArray(spec)) return spec.some(usesNoise);
+    if (spec === null || typeof spec !== "object") return false;
+    const node = spec as { fn?: unknown; args?: unknown; base?: unknown };
+    if (typeof node.fn === "string" && NOISE_FNS.has(node.fn)) return true;
+    return usesNoise(node.args);
+  }
+
+  it("every family reading a noise is marked countSensitive", () => {
+    // The defect this flag exists for: a noise family's worst lane is an
+    // extreme-value statistic that climbs with the element count, so a
+    // budget measured at one count is a statement about that cloud size
+    // and not about the family. Five noise budgets were exceeded that
+    // way by an unchanged compiler. Adding a noise family without
+    // sweeping it would re-open exactly that hole, so the pin is
+    // structural rather than a list someone has to remember to extend.
+    const missing = PARITY_CASES.filter(
+      (pc) => pc.exact !== true && usesNoise(pc.spec) && pc.countSensitive !== true,
+    ).map((pc) => pc.name);
+    expect(missing, "noise families missing countSensitive").toEqual([]);
+  });
+
+  it("the countSensitive set is exactly the measured growing families", () => {
+    // The structural pin above covers the noise families. Four more grow
+    // with count WITHOUT reading a noise (measured 10k → 1M: ramp +17%,
+    // sin/cos +10%, tan +15%, length/normalize +33%), and nothing about
+    // their specs says so — so they are pinned by name. Dropping the flag
+    // from one of them would silently do two things at once: remove it
+    // from the count sweep, and relax its budget derivation from 1.5x
+    // headroom to 1.25x. Neither would fail any other test.
+    expect(PARITY_CASES.filter((pc) => pc.countSensitive === true).map((pc) => pc.name).sort()).toEqual(
+      [
+        "composite",
+        "fbm perlin",
+        "fbm simplex",
+        "fbm value",
+        "fbm worley",
+        "length/normalize",
+        "perlinNoise normalized",
+        "perlinNoise raw",
+        "ramp",
+        "simplexNoise normalized",
+        "simplexNoise raw",
+        "sin/cos",
+        "tan",
+        "valueNoise normalized",
+        "valueNoise raw",
+        "worley exact f2-f1",
+        "worley f1",
+        "worley f2",
+        "worley f2-f1 normalized",
+      ].sort(),
+    );
+  });
+
+  it("every non-exact family carries both budgets, and exact families carry neither", () => {
+    // `rangeUlp` and `meanAbs` are asserted together because they fail
+    // for different reasons (a deeper tail vs a shifted interior); a
+    // family with only one of them is half-measured. A zero `meanAbs` on
+    // a non-exact family would also be an un-meetable knife edge.
+    for (const pc of PARITY_CASES) {
+      if (pc.exact === true) {
+        expect(pc.budget, `${pc.name}: exact family budget`).toBe(0);
+        expect(pc.meanAbs, `${pc.name}: exact family meanAbs`).toBe(0);
+      } else {
+        expect(pc.budget, `${pc.name}: rangeUlp budget`).toBeGreaterThan(0);
+        expect(pc.meanAbs, `${pc.name}: meanAbs budget`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("the swept counts bracket the pinned count", () => {
+    // The sweep exists to move the measurement OFF a single cloud size.
+    // Counts that all sat below PARITY_COUNT (or all above it) would
+    // leave the pinned count on the edge of the measured range instead
+    // of inside it.
+    expect(Math.min(...PARITY_SWEEP_COUNTS)).toBeLessThan(PARITY_COUNT);
+    expect(Math.max(...PARITY_SWEEP_COUNTS)).toBeGreaterThan(PARITY_COUNT);
   });
 });
 

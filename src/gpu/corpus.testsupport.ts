@@ -290,112 +290,313 @@ export function corpusSpecs(): Array<{ name: string; spec: FieldSpecArg }> {
 // ---------------------------------------------------------------------------
 // measured float-parity table
 //
-// Per-family max-ULP budgets vs the CPU reference, measured on the
-// reference adapter (RTX 5090, D3D12, Dawn) over PARITY_COUNT dense
-// hash-derived inputs at PARITY_SEED, then rounded up minimally. Each
-// case's comment records the measured (rangeUlp, raw maxUlp) pair — raw
-// maxUlp inflation on smooth families comes from lanes near output
-// zero-crossings, where the CPU's f64 interior survives cancellation
-// that f32 cannot (rangeUlp is the honest metric there). A different
-// adapter exceeding one is a finding, not noise.
+// Per-family budgets vs the CPU reference, measured on the reference
+// adapter (RTX 5090, D3D12, Dawn) at PARITY_SEED over the corpus
+// geometry, SWEPT across element counts 10 000 / 65 536 / 262 144 /
+// 1 000 000. Every case records that sweep below, which is what makes
+// each budget checkable rather than asserted.
+//
+// The four-count sweep is the DERIVATION, taken with a throwaway
+// out-of-process probe (the 1M pass evaluates 38M CPU lanes — 36
+// families, one of them a vec3 — and is not something to pay for on
+// every test run). What the suite re-checks on every run is
+// PARITY_COUNT for every family, plus PARITY_SWEEP_COUNTS for the
+// count-sensitive ones. Re-deriving means re-running the probe; the
+// numbers below are what it must reproduce.
+//
+// Two metrics, kept together because they fail for different reasons:
+//
+// - `budget` bounds `rangeUlp` — the worst lane, |cpu - gpu| scaled to
+//   ULP units at the top of the family's output range. It is an
+//   EXTREME-VALUE statistic: sample more lanes and it climbs, because a
+//   bigger cloud reaches further into the tail of the same distribution.
+//   What it catches is a lane going structurally wrong.
+// - `meanAbs` bounds the mean of |cpu - gpu| over lanes, in absolute
+//   units. It is SAMPLE-SIZE STABLE: over the sweep it moves by at most
+//   1.04x for every family whose mean is a sampling statistic (fbm
+//   simplex 1.004x, valueNoise 1.026x, ramp 1.032x — the worst).
+//   `fraction` is the sole exception and its own row says why. What this
+//   catches is a shift in the interior, which a widened max budget would
+//   sleep through.
+//
+// Why the counts are swept at all: these budgets were originally
+// max-over-lanes values measured at exactly 10 000 elements, which made
+// them tuned to a cloud size rather than principled. Noise seeds ride in
+// the spec, so seed is inert here and count was the only unpinned axis —
+// and FIVE families already exceeded their own budget at ordinary point
+// counts with nothing having regressed (six rows: valueNoise raw and
+// normalized measure identically). valueNoise 6.53 at 10k, 8.02 at 65k,
+// 10.44 at 1M against a budget of 8; fbm simplex 19.02 → 32.18 against
+// 24; fbm value 4.32 → 6.16 against 6; perlin raw 7.69 → 10.63 against
+// 10; composite 8.78 → 17.05 against 12. Three of the six fail by
+// 65 536, four by 262 144, all six by 1M.
+//
+// Budget derivation — one rule, checkable against the numbers on each
+// case:
+//
+// - `budget` = the first value on the ladder {1, 2, 4, 6, 8, 10, 12, 16,
+//   20, 24, 32, 40, 48, 64, 96, 128, 192, 256, 384, 512, 640} at or
+//   above N x the largest rangeUlp measured anywhere in the sweep, with
+//   N = 1.5 for families whose maximum GROWS with count and N = 1.25 for
+//   families whose maximum has SATURATED. The ladder is spelled out so
+//   "rounded up to something readable" is checkable rather than a matter
+//   of taste; it is what makes every budget re-derivable from the
+//   numbers on its own row.
+//
+//   The growth split is measured, not judged. Comparing the 1M value to
+//   the 10k value, the growing families gain 4.7% (perlin normalized) to
+//   94% (composite), while the saturated ones move between -4.4% (dot)
+//   and +0.6% (asin) — no trend, just sampling wobble. A saturated
+//   family's error is bounded by the op's own absolute-error allowance
+//   (asin/acos are the clearest case), so sampling more lanes cannot
+//   find a worse one.
+//
+//   1.5x follows the measured growth law: the extreme value grows
+//   roughly logarithmically in the count, at +0.1 to +2 rangeUlp per
+//   decade for most families and +2.6 (simplex raw), +4.1 (composite),
+//   +6.3 (fbm simplex) for the steep ones. Divide each budget's headroom
+//   by its own slope and every family has at least 2.8 more decades of
+//   count before it would trip — valueNoise is the tightest at 2.8, fbm
+//   simplex has 5.1 — which is far enough to be a property of the family
+//   and near enough that a distribution shift still trips it.
+// - `meanAbs` = the smallest two-significant-digit value at or above
+//   1.25x the largest meanAbs in the sweep. 1.25x, not 1.5x, because the
+//   statistic's own sample-size drift is <= 1.04x; the rest of the
+//   margin is for adapter-to-adapter difference, not for growth.
+//
+// `countSensitive` marks the growing families: they take the 1.5x rule
+// and they are re-measured at every PARITY_SWEEP_COUNTS by
+// parity.device.test.ts, so the count axis cannot drift unpinned again.
+//
+// A different adapter exceeding a budget is a finding, not noise. Raw
+// `maxUlp` is logged but never budgeted for a non-`exact` family: it
+// inflates at output zero-crossings, where the CPU's f64 interior
+// survives cancellation that f32 cannot.
+//
+// SCOPE, measured rather than assumed: a budget bounds the family AS
+// PARAMETERISED HERE, not the grammar fn in general. The noise options
+// move it, and not always in the direction you would guess — at 1M
+// elements, `{fn:"simplexNoise"}` with default options measures
+// rangeUlp 48.86 against this table's 22.56 at frequency 0.4, while
+// `{fn:"valueNoise"}` measures 5.64 against this table's 10.44. Read a
+// row as "this expression, this adapter, this count range", and measure
+// again before quoting one at a different frequency.
+//
+// What is NOT parameter-dependent, at 1M elements: the divergence stays
+// rounding-class. `select(gt(perlinNoise, 0))` flips 0 lanes in
+// 1 000 000; worley's worst lane is 8.3e-7 absolute, where picking a
+// different cell would move f1 by O(0.1); `normalized: true` damps the
+// error rather than amplifying it; and fbm does not compound
+// disproportionately with octaves.
 
-/** One measured float-parity family: an authored spec and its budget. */
+/** One measured float-parity family: an authored spec and its budgets. */
 export interface ParityCase {
   readonly name: string;
   readonly spec: FieldSpecArg;
-  /** Assert raw maxUlp 0 (bit-exact family) instead of a rangeUlp budget. */
+  /** Assert raw maxUlp 0 (bit-exact family) instead of the budgets. */
   readonly exact?: boolean;
-  /** rangeUlp budget (error in ULP units at the family's output range). */
+  /** rangeUlp budget (worst lane, in ULP units at the output range top). */
   readonly budget: number;
+  /** Mean |cpu - gpu| budget, in absolute units — the stable sentinel. */
+  readonly meanAbs: number;
+  /**
+   * This family's rangeUlp grows with element count, so it takes the
+   * 1.5x headroom rule and is swept across PARITY_SWEEP_COUNTS.
+   */
+  readonly countSensitive?: boolean;
 }
 
-/** Element count and seed every parity measurement is taken at. */
-export const PARITY_COUNT = 10_000;
+/**
+ * Element count every per-family budget is asserted at, and the seed.
+ *
+ * 65 536 rather than the 10 000 this table was first measured at: 10k is
+ * smaller than an ordinary point cloud, and it under-sampled the
+ * extreme-value tail badly enough that five families passed only because
+ * of the count — valueNoise measures 8.02 here against its old budget of
+ * 8. The move costs ~5.5 s per measured pass (7.8 s vs 2.2 s), nearly
+ * all of it the CPU reference rather than the device.
+ */
+export const PARITY_COUNT = 65_536;
 export const PARITY_SEED = 1;
+
+/**
+ * Counts every `countSensitive` family is re-measured at, which is what
+ * makes its budget a statement about the family rather than about one
+ * cloud size.
+ *
+ * These BRACKET `PARITY_COUNT` rather than including it: the two
+ * measured passes above already measure every family at the pinned
+ * count, so re-measuring it here would buy nothing and cost the most
+ * expensive thing in this suite — the CPU reference evaluation, which
+ * runs ~3.8x slower inside a vitest worker than in the plain-Node
+ * device runner (measured, not assumed).
+ *
+ * The ceiling is 131 072 because the cost is linear in it and the
+ * information is logarithmic: this sweep spans 1.1 decades of count,
+ * which is enough to catch a family whose worst lane starts climbing,
+ * while 262 144 cost 16 s more per test run for 0.3 decades more span.
+ * Nothing in the DERIVATION depends on the ceiling — the budgets are
+ * anchored at a 1 000 000-element measurement taken out of process and
+ * recorded per case — so raising it re-checks, it does not re-derive.
+ */
+export const PARITY_SWEEP_COUNTS: readonly number[] = [10_000, 131_072];
 
 const P = { fn: "position" } as const;
 const PX = { fn: "component", args: [P], index: 0 } as const;
 const PY = { fn: "component", args: [P], index: 1 } as const;
 
+// Every `rangeUlp a/b/c/d` below is the sweep at 10k/65k/262k/1M.
 export const PARITY_CASES: ParityCase[] = [
-  // measured 0, 0 — double rounding innocuous for + - ×.
-  { name: "arith add/sub/mul", spec: EXTENDED_SPECS.arithChain, exact: true, budget: 0 },
-  // measured 0.76, 2 — f32 division within the 2.5-ULP WGSL bound.
-  { name: "div", spec: EXTENDED_SPECS.divChain, budget: 1 },
-  // measured 0.50, 1 — one f32 division of two exact integers, so it
-  // sits in the `div` family and takes its budget rather than claiming
-  // bit-exactness (the CPU divides in f64 and rounds once; WGSL promises
-  // only 2.5 ULP). The count sweep — including the degenerate counts,
+  // rangeUlp 0 and maxUlp 0 at every count — double rounding is
+  // innocuous for + - ×.
+  { name: "arith add/sub/mul", spec: EXTENDED_SPECS.arithChain, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0.76/0.76/0.75/0.75 — saturated: one f32 division, bounded
+  // by the 2.5-ULP WGSL bound and not by how many lanes are sampled.
+  // budget 1 = 1.31x the sweep max; meanAbs 2.0e-8 = 1.27x of 1.58e-8.
+  { name: "div", spec: EXTENDED_SPECS.divChain, budget: 1, meanAbs: 2.0e-8 },
+  // rangeUlp 0.50/0.50/0.50/0.50 — one f32 division of two exact
+  // integers, so it sits in the `div` family and takes its budget rather
+  // than claiming bit-exactness (the CPU divides in f64 and rounds once;
+  // WGSL promises only 2.5 ULP). budget 1 = 2.00x the sweep max.
+  // meanAbs is NOT a sampling statistic here — `fraction` is a function
+  // of the COUNT itself, and its mean wanders by 1420x over the sweep
+  // (1.03e-8 at 1M, 1.2e-10 at 65k) without meaning anything — so the
+  // 1.25x rule is meaningless for it. It takes the CORRECTLY-ROUNDED
+  // bound instead: half an ULP at the top of [0, 1] is 5.96e-8, which
+  // this adapter meets with 5.8x to spare on the worst count measured.
+  // That is deliberately stricter than the WGSL guarantee, which is 2.5
+  // ULP (2.98e-7): an adapter spending its full allowance here would
+  // trip this budget, and that is a finding worth seeing rather than
+  // noise to absorb. The count sweep — including the degenerate counts,
   // which ARE bit-exact — is pinned separately in parity.device.test.ts.
-  { name: "fraction", spec: { fn: "fraction" }, budget: 1 },
-  // measured 0.50, 3529 — CPU-formula lerp; maxUlp spike at zero crossings.
-  { name: "lerp", spec: { fn: "lerp", args: [PX, PY, { fn: "attribute", name: "density" }] }, budget: 1 },
-  // measured 0, 0.
-  { name: "clamp/min/max", spec: { fn: "clamp", args: [PX, { fn: "min", args: [PY, 0] }, { fn: "max", args: [{ fn: "abs", args: [PY] }, 1] }] }, exact: true, budget: 0 },
-  // measured 0, 0.
-  { name: "floor", spec: { fn: "floor", args: [PX] }, exact: true, budget: 0 },
-  // measured 0, 0 over a non-degenerate span.
-  { name: "remap", spec: EXTENDED_SPECS.remapField, budget: 1 },
-  // measured 1.09, 12288 — baked f32 stop constants vs CPU f64 segments.
-  { name: "ramp", spec: EXTENDED_SPECS.rampMultiStop, budget: 2 },
-  // measured 0, 0 away from knife edges.
-  { name: "select/compare", spec: EXTENDED_SPECS.selectAway, exact: true, budget: 0 },
-  // measured 6.50, 18432 over inputs in [-8, 8].
-  { name: "sin/cos", spec: EXTENDED_SPECS.trigChain, budget: 8 },
-  // measured 19.48, 4681 over inputs in [-1.45, 1.45].
-  { name: "tan", spec: { fn: "tan", args: [{ fn: "remap", args: [PX, -8, 8, -1.45, 1.45] }] }, budget: 24 },
-  // measured 503.99, 4623155 — ≈ 6.7e-5 absolute, the WGSL asin bound.
-  { name: "asin", spec: EXTENDED_SPECS.inverseTrig, budget: 512 },
-  // measured 359.09, 721 — same absolute-error class as asin.
-  { name: "acos", spec: { fn: "acos", args: [{ fn: "clamp", args: [{ fn: "attribute", name: "density" }, -0.9, 0.9] }] }, budget: 384 },
-  // measured 64.52, 2231.
-  { name: "atan2", spec: EXTENDED_SPECS.atanFamily, budget: 80 },
-  // measured 67.06, 2195.
-  { name: "atan", spec: { fn: "atan", args: [PX] }, budget: 80 },
-  // measured 1.50, 3 — sqrt/1-sqrt correctly rounded on this adapter.
-  { name: "length/normalize", spec: EXTENDED_SPECS.lengthNormalize, budget: 2 },
-  // measured 0.70, 305 — f32 dot accumulation vs CPU f64.
-  { name: "dot", spec: EXTENDED_SPECS.dotField, budget: 1 },
-  // measured 6.53, 208.
-  { name: "valueNoise raw", spec: { fn: "valueNoise", opts: { seed: 7, frequency: 0.35 } }, budget: 8 },
-  // measured 6.53, 208.
-  { name: "valueNoise normalized", spec: EXTENDED_SPECS.valueNoiseNorm, budget: 8 },
-  // measured 7.69, 50034 (raw spikes at the noise's zero crossings).
-  { name: "perlinNoise raw", spec: { fn: "perlinNoise", opts: { seed: 3, frequency: 0.5 } }, budget: 10 },
-  // measured 4.21, 10.
-  { name: "perlinNoise normalized", spec: EXTENDED_SPECS.perlinNoiseNorm, budget: 6 },
-  // measured 17.46, 76712.
-  { name: "simplexNoise raw", spec: { fn: "simplexNoise", opts: { seed: 11, frequency: 0.4 } }, budget: 24 },
-  // measured 8.55, 72.
-  { name: "simplexNoise normalized", spec: EXTENDED_SPECS.simplexNoiseNorm, budget: 12 },
-  // measured 5.16, 89.
-  { name: "worley f1", spec: EXTENDED_SPECS.worleyF1, budget: 8 },
-  // measured 4.71, 22.
-  { name: "worley f2", spec: EXTENDED_SPECS.worleyF2, budget: 8 },
-  // measured 9.42, 41868.
-  { name: "worley f2-f1 normalized", spec: EXTENDED_SPECS.worleyF2F1Norm, budget: 12 },
-  // measured 9.28, 43836.
-  { name: "worley exact f2-f1", spec: EXTENDED_SPECS.worleyExact, budget: 12 },
-  // measured 4.32, 29.
-  { name: "fbm value", spec: EXTENDED_SPECS.fbmValue, budget: 6 },
-  // measured 4.84, 12.
-  { name: "fbm perlin", spec: EXTENDED_SPECS.fbmPerlin, budget: 6 },
-  // measured 19.02, 212992.
-  { name: "fbm simplex", spec: EXTENDED_SPECS.fbmSimplex, budget: 24 },
-  // measured 4.81, 16.
-  { name: "fbm worley", spec: EXTENDED_SPECS.fbmWorley, budget: 6 },
-  // measured 9.77, 50.
-  { name: "composite", spec: EXTENDED_SPECS.composite, budget: 12 },
+  { name: "fraction", spec: { fn: "fraction" }, budget: 1, meanAbs: 6.0e-8 },
+  // rangeUlp 0.50/0.50/0.50/0.50, saturated; maxUlp 57138 at 1M is the
+  // usual zero-crossing spike. budget 1 = 1.99x; meanAbs 7.3e-8 = 1.27x.
+  { name: "lerp", spec: { fn: "lerp", args: [PX, PY, { fn: "attribute", name: "density" }] }, budget: 1, meanAbs: 7.3e-8 },
+  // rangeUlp 0 and maxUlp 0 at every count.
+  { name: "clamp/min/max", spec: { fn: "clamp", args: [PX, { fn: "min", args: [PY, 0] }, { fn: "max", args: [{ fn: "abs", args: [PY] }, 1] }] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and maxUlp 0 at every count.
+  { name: "floor", spec: { fn: "floor", args: [PX] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and meanAbs 0 at every count, over a non-degenerate span:
+  // this remap divides by 16, so the one division is exact. Budgeted at
+  // the `div` family's bound rather than at 0 anyway — the family is one
+  // f32 division, and pinning it to an accident of these constants would
+  // fail the moment the span stopped being a power of two. meanAbs takes
+  // the same correctly-rounded bound `fraction` does (half an ULP at
+  // 1.0). Both budgets are therefore loose here BY CONSTRUCTION: for
+  // this row they assert the family's arithmetic class, and the exact-0
+  // measurement is what the comment carries.
+  { name: "remap", spec: EXTENDED_SPECS.remapField, budget: 1, meanAbs: 6.0e-8 },
+  // rangeUlp 1.09/1.27/1.27/1.27 — baked f32 stop constants vs CPU f64
+  // segments; maxUlp 9.2e6 at 1M at segment zero crossings.
+  // budget 2 = 1.57x the sweep max; meanAbs 3.8e-9 = 1.27x of 3.00e-9.
+  { name: "ramp", spec: EXTENDED_SPECS.rampMultiStop, budget: 2, meanAbs: 3.8e-9, countSensitive: true },
+  // rangeUlp 0 and maxUlp 0 at every count, away from knife edges.
+  { name: "select/compare", spec: EXTENDED_SPECS.selectAway, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 6.50/6.50/7.13/7.13 over inputs in [-8, 8].
+  // budget 12 = 1.68x the sweep max; meanAbs 3.2e-7 = 1.28x of 2.51e-7.
+  { name: "sin/cos", spec: EXTENDED_SPECS.trigChain, budget: 12, meanAbs: 3.2e-7, countSensitive: true },
+  // rangeUlp 19.48/22.34/22.34/22.34 over inputs in [-1.45, 1.45].
+  // budget 40 = 1.79x the sweep max; meanAbs 6.5e-7 = 1.25x of 5.20e-7.
+  { name: "tan", spec: { fn: "tan", args: [{ fn: "remap", args: [PX, -8, 8, -1.45, 1.45] }] }, budget: 40, meanAbs: 6.5e-7, countSensitive: true },
+  // rangeUlp 503.99/506.04/506.89/506.98 — saturated (1.006x over two
+  // decades): the worst lane is ≈ 6.8e-5 absolute, which matches the WGSL
+  // asin absolute-error class, so more lanes cannot find a worse one.
+  // budget 640 = 1.26x the sweep max; meanAbs 3.9e-5 = 1.25x of the
+  // measured mean 3.11e-5. The old budget of 512 sat 1.01x above the
+  // measurement, which is a knife edge rather than a bound.
+  { name: "asin", spec: EXTENDED_SPECS.inverseTrig, budget: 640, meanAbs: 3.9e-5 },
+  // rangeUlp 359.09/360.97/360.96/360.96 — same absolute-error class as
+  // asin, equally saturated. budget 512 = 1.42x; meanAbs 3.8e-5 = 1.28x.
+  { name: "acos", spec: { fn: "acos", args: [{ fn: "clamp", args: [{ fn: "attribute", name: "density" }, -0.9, 0.9] }] }, budget: 512, meanAbs: 3.8e-5 },
+  // rangeUlp 64.52/64.33/64.33/64.32 — saturated.
+  // budget 96 = 1.49x the sweep max; meanAbs 9.2e-6 = 1.25x of 7.34e-6.
+  { name: "atan2", spec: EXTENDED_SPECS.atanFamily, budget: 96, meanAbs: 9.2e-6 },
+  // rangeUlp 67.06/67.06/67.06/67.06 — saturated, flat to four
+  // significant figures.
+  // budget 96 = 1.43x the sweep max; meanAbs 1.1e-5 = 1.36x of 8.10e-6.
+  { name: "atan", spec: { fn: "atan", args: [PX] }, budget: 96, meanAbs: 1.1e-5 },
+  // rangeUlp 1.50/2.00/2.00/2.00 — sqrt / 1-over-sqrt correctly rounded
+  // on this adapter, but the worst lane grows 1.33x over the sweep and
+  // the old budget of 2 was EXACTLY the measurement from 65k up.
+  // budget 4 = 2.00x the sweep max; meanAbs 2.0e-7 = 1.27x of 1.58e-7.
+  { name: "length/normalize", spec: EXTENDED_SPECS.lengthNormalize, budget: 4, meanAbs: 2.0e-7, countSensitive: true },
+  // rangeUlp 0.70/0.69/0.68/0.67 — saturated (f32 dot accumulation vs
+  // CPU f64). budget 1 = 1.43x; meanAbs 7.4e-8 = 1.25x of 5.91e-8.
+  { name: "dot", spec: EXTENDED_SPECS.dotField, budget: 1, meanAbs: 7.4e-8 },
+  // rangeUlp 6.53/8.02/10.26/10.44 — the family that exposed the whole
+  // problem: the old budget of 8 was measured at 10k and is exceeded at
+  // 65k by an unchanged compiler. budget 16 = 1.53x the sweep max
+  // (1.99x at the pinned count); meanAbs 7.0e-8 = 1.26x of 5.57e-8.
+  { name: "valueNoise raw", spec: { fn: "valueNoise", opts: { seed: 7, frequency: 0.35 } }, budget: 16, meanAbs: 7.0e-8, countSensitive: true },
+  // Identical numbers to the raw case: `normalized` is an affine remap
+  // of the same lattice, so it damps rather than amplifies.
+  { name: "valueNoise normalized", spec: EXTENDED_SPECS.valueNoiseNorm, budget: 16, meanAbs: 7.0e-8, countSensitive: true },
+  // rangeUlp 7.69/8.25/8.86/10.63 (old budget 10, exceeded at 1M);
+  // maxUlp 6.2e5 at 1M at the noise's zero crossings.
+  // budget 16 = 1.50x the sweep max; meanAbs 7.6e-8 = 1.25x of 6.07e-8.
+  { name: "perlinNoise raw", spec: { fn: "perlinNoise", opts: { seed: 3, frequency: 0.5 } }, budget: 16, meanAbs: 7.6e-8, countSensitive: true },
+  // rangeUlp 4.21/4.44/4.43/4.41 — normalization damps here too.
+  // budget 8 = 1.80x the sweep max; meanAbs 3.8e-8 = 1.26x of 3.02e-8.
+  { name: "perlinNoise normalized", spec: EXTENDED_SPECS.perlinNoiseNorm, budget: 8, meanAbs: 3.8e-8, countSensitive: true },
+  // rangeUlp 17.46/20.84/21.23/22.56 — the steepest of the single-octave
+  // bases (+2.6 rangeUlp per decade of count).
+  // budget 40 = 1.77x the sweep max; meanAbs 2.6e-7 = 1.30x of 2.00e-7.
+  { name: "simplexNoise raw", spec: { fn: "simplexNoise", opts: { seed: 11, frequency: 0.4 } }, budget: 40, meanAbs: 2.6e-7, countSensitive: true },
+  // rangeUlp 8.55/9.81/10.33/10.85.
+  // budget 20 = 1.84x the sweep max; meanAbs 1.3e-7 = 1.30x of 1.00e-7.
+  { name: "simplexNoise normalized", spec: EXTENDED_SPECS.simplexNoiseNorm, budget: 20, meanAbs: 1.3e-7, countSensitive: true },
+  // rangeUlp 5.16/5.80/5.80/6.00 — which is 8.3e-7 ABSOLUTE at the worst
+  // lane of 1M, and that is the proof the cell walk never picks a
+  // different cell: a different cell would move f1 by O(0.1), not by
+  // 1e-6. The divergence is the distance arithmetic inside one cell.
+  // budget 10 = 1.67x the sweep max; meanAbs 1.5e-7 = 1.26x of 1.19e-7.
+  { name: "worley f1", spec: EXTENDED_SPECS.worleyF1, budget: 10, meanAbs: 1.5e-7, countSensitive: true },
+  // rangeUlp 4.71/4.97/5.30/5.71.
+  // budget 10 = 1.75x the sweep max; meanAbs 1.5e-7 = 1.27x of 1.19e-7.
+  { name: "worley f2", spec: EXTENDED_SPECS.worleyF2, budget: 10, meanAbs: 1.5e-7, countSensitive: true },
+  // rangeUlp 9.42/10.17/9.96/10.64 — the f2-f1 difference cancels, which
+  // is why maxUlp reaches 5.7e6 at 1M while rangeUlp stays in this band.
+  // budget 16 = 1.50x the sweep max; meanAbs 9.0e-8 = 1.26x of 7.14e-8.
+  { name: "worley f2-f1 normalized", spec: EXTENDED_SPECS.worleyF2F1Norm, budget: 16, meanAbs: 9.0e-8, countSensitive: true },
+  // rangeUlp 9.28/9.72/10.14/10.38 — `exact: true` (the full 5x5x5 walk)
+  // is the same error class as the pruned walk, not a worse one.
+  // budget 16 = 1.54x the sweep max; meanAbs 2.3e-7 = 1.31x of 1.76e-7.
+  { name: "worley exact f2-f1", spec: EXTENDED_SPECS.worleyExact, budget: 16, meanAbs: 2.3e-7, countSensitive: true },
+  // rangeUlp 4.32/5.02/6.16/6.12 (old budget 6, exceeded at 262k). Five
+  // octaves do NOT compound disproportionately: the sum stays in the
+  // single-octave error class because the gain series damps it.
+  // budget 10 = 1.62x the sweep max; meanAbs 7.8e-8 = 1.26x of 6.18e-8.
+  { name: "fbm value", spec: EXTENDED_SPECS.fbmValue, budget: 10, meanAbs: 7.8e-8, countSensitive: true },
+  // rangeUlp 4.84/4.70/4.95/5.90.
+  // budget 10 = 1.70x the sweep max; meanAbs 5.1e-8 = 1.26x of 4.05e-8.
+  { name: "fbm perlin", spec: EXTENDED_SPECS.fbmPerlin, budget: 10, meanAbs: 5.1e-8, countSensitive: true },
+  // rangeUlp 19.02/25.67/32.18/31.67 — the widest budget of any noise
+  // family, and the steepest growth (+6.3 rangeUlp per decade): three RAW
+  // simplex octaves, summed without the normalization that damps the
+  // others. Old budget 24, exceeded at 65k.
+  // budget 64 = 1.99x the sweep max; meanAbs 4.6e-7 = 1.26x of 3.64e-7.
+  { name: "fbm simplex", spec: EXTENDED_SPECS.fbmSimplex, budget: 64, meanAbs: 4.6e-7, countSensitive: true },
+  // rangeUlp 4.81/4.66/5.10/5.10 — the flattest fbm (1.06x over the
+  // sweep). budget 8 = 1.57x the sweep max; meanAbs 4.7e-8 = 1.27x.
+  { name: "fbm worley", spec: EXTENDED_SPECS.fbmWorley, budget: 8, meanAbs: 4.7e-8, countSensitive: true },
+  // rangeUlp 8.78/9.30/11.48/17.05 — steeper than any of its parts
+  // (1.94x over the sweep, the worst in the table) because the ramp's
+  // middle segment has slope 2.33 and multiplies the perlin error by it.
+  // Old budget 12, exceeded at 1M. budget 32 = 1.88x the sweep max
+  // (3.44x at the pinned count); meanAbs 7.4e-8 = 1.26x of 5.88e-8.
+  { name: "composite", spec: EXTENDED_SPECS.composite, budget: 32, meanAbs: 7.4e-8, countSensitive: true },
   // -- examples-forest, classified into the families above ------------------
-  // attribute read (a component of P, no arithmetic): measured 0, 0.
-  { name: "forest height", spec: EXTENDED_SPECS.forestHeight, exact: true, budget: 0 },
-  // add/sub over an attribute read: measured 0, 0.
-  { name: "forest slope", spec: EXTENDED_SPECS.forestSlope, exact: true, budget: 0 },
-  // remap (of a bit-exact hash stream): measured 0.67, 1 — inside the
-  // remap family's budget of 1, so no widening.
-  { name: "forest size", spec: EXTENDED_SPECS.forestSize, budget: 1 },
-  // compare: measured 0, 0.
-  { name: "forest species", spec: EXTENDED_SPECS.forestSpecies, exact: true, budget: 0 },
+  // attribute read (a component of P, no arithmetic): 0 at every count.
+  { name: "forest height", spec: EXTENDED_SPECS.forestHeight, exact: true, budget: 0, meanAbs: 0 },
+  // add/sub over an attribute read: 0 at every count.
+  { name: "forest slope", spec: EXTENDED_SPECS.forestSlope, exact: true, budget: 0, meanAbs: 0 },
+  // remap (of a bit-exact hash stream): rangeUlp 0.67 at every count,
+  // saturated — inside the remap family's budget of 1, so no widening.
+  // meanAbs 2.4e-8 = 1.26x of 1.91e-8.
+  { name: "forest size", spec: EXTENDED_SPECS.forestSize, budget: 1, meanAbs: 2.4e-8 },
+  // compare: 0 at every count.
+  { name: "forest species", spec: EXTENDED_SPECS.forestSpecies, exact: true, budget: 0, meanAbs: 0 },
 ];
 
 // ---------------------------------------------------------------------------

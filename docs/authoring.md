@@ -2568,36 +2568,66 @@ byte-identical. Everything else matches within measured per-op-family
 budgets, in range-ULP units — |cpu−gpu| / (2⁻²³ · max|cpu|), i.e. ULPs
 at the top of the family's output range (raw max-ULP is misleading at
 output zero-crossings, where the CPU's f64 interior survives
-cancellation that f32 cannot). Measured on discrete desktop hardware
-(D3D12/Dawn) over 10 000 dense hash-derived inputs; budgets are the
-measured values rounded up minimally, and a different adapter may
-exceed them:
+cancellation that f32 cannot).
 
-| family | measured rangeUlp | budget |
-|---|---|---|
-| arith add/sub/mul | 0 | bit-exact |
-| clamp/min/max, floor, select/compare | 0 | bit-exact |
-| div | 0.76 | 1 |
-| lerp | 0.50 | 1 |
-| remap | 0.00 | 1 |
-| ramp (multi-stop) | 1.09 | 2 |
-| dot | 0.70 | 1 |
-| length/normalize (incl. sqrt) | 1.50 | 2 |
-| sin/cos over [−8, 8] | 6.50 | 8 |
-| tan over [−1.45, 1.45] | 19.48 | 24 |
-| asin over [−0.9, 0.9] | 503.99 | 512 |
-| acos over [−0.9, 0.9] | 359.09 | 384 |
-| atan | 67.06 | 80 |
-| atan2 | 64.52 | 80 |
-| valueNoise raw / normalized | 6.53 / 6.53 | 8 / 8 |
-| perlinNoise raw / normalized | 7.69 / 4.21 | 10 / 6 |
-| simplexNoise raw / normalized | 17.46 / 8.55 | 24 / 12 |
-| worley f1 / f2 | 5.16 / 4.71 | 8 / 8 |
-| worley f2−f1 normalized / exact f2−f1 | 9.42 / 9.28 | 12 / 12 |
-| fbm value / perlin / simplex / worley | 4.32 / 4.84 / 19.02 / 4.81 | 6 / 6 / 24 / 6 |
-| composite (ramp∘perlin × (random+attr)) | 9.77 | 12 |
+`rangeUlp` is a **max over lanes**, so it is an extreme-value
+statistic: a bigger cloud of the same distribution reaches further into
+the same tail, and the worst lane climbs with the element count on its
+own. Every family below is therefore measured across a sweep of counts
+(10 000 → 1 000 000 on discrete desktop hardware, D3D12/Dawn) rather
+than at one, and each budget carries headroom over the largest value in
+that sweep: **1.5×** where the maximum grows with count, **1.25×**
+where it has saturated because the op's own absolute-error bound (not
+the sample size) is what limits it. Families in the first group are
+re-measured at more than one count on every test run.
 
-asin/acos absolute error is ≈ 6.7e-5 — the WGSL-specified
+| family | rangeUlp, 10k → 1M | budget | mean \|cpu−gpu\| budget |
+|---|---|---|---|
+| arith add/sub/mul | 0 | bit-exact | — |
+| clamp/min/max, floor, select/compare | 0 | bit-exact | — |
+| div | 0.76 → 0.75 | 1 | 2.0e-8 |
+| lerp | 0.50 → 0.50 | 1 | 7.3e-8 |
+| remap | 0.00 → 0.00 | 1 | 6.0e-8 |
+| fraction (a function of the count itself) | 0.50 → 0.50 | 1 | 6.0e-8 |
+| ramp (multi-stop) | 1.09 → 1.27 | 2 | 3.8e-9 |
+| dot | 0.70 → 0.67 | 1 | 7.4e-8 |
+| length/normalize (incl. sqrt) | 1.50 → 2.00 | 4 | 2.0e-7 |
+| sin/cos over [−8, 8] | 6.50 → 7.13 | 12 | 3.2e-7 |
+| tan over [−1.45, 1.45] | 19.48 → 22.34 | 40 | 6.5e-7 |
+| asin over [0, 0.9] | 503.99 → 506.98 | 640 | 3.9e-5 |
+| acos over [0, 0.9] | 359.09 → 360.96 | 512 | 3.8e-5 |
+| atan | 67.06 → 67.06 | 96 | 1.1e-5 |
+| atan2 | 64.52 → 64.32 | 96 | 9.2e-6 |
+| valueNoise raw / normalized | 6.53 → 10.44 (both) | 16 / 16 | 7.0e-8 |
+| perlinNoise raw / normalized | 7.69 → 10.63 / 4.21 → 4.41 | 16 / 8 | 7.6e-8 / 3.8e-8 |
+| simplexNoise raw / normalized | 17.46 → 22.56 / 8.55 → 10.85 | 40 / 20 | 2.6e-7 / 1.3e-7 |
+| worley f1 / f2 | 5.16 → 6.00 / 4.71 → 5.71 | 10 / 10 | 1.5e-7 |
+| worley f2−f1 normalized / exact f2−f1 | 9.42 → 10.64 / 9.28 → 10.38 | 16 / 16 | 9.0e-8 / 2.3e-7 |
+| fbm value / perlin / simplex / worley | 4.32 → 6.12 / 4.84 → 5.90 / 19.02 → 31.67 / 4.81 → 5.10 | 10 / 10 / 64 / 8 | 7.8e-8 / 5.1e-8 / 4.6e-7 / 4.7e-8 |
+| composite (ramp∘perlin × (random+attr)) | 8.78 → 17.05 | 32 | 7.4e-8 |
+
+The last column is the second budget each family carries: the **mean**
+absolute divergence over lanes. Unlike the max it is stable under
+sample size — across 10k → 1M it moves by at most 1.04× for every
+family above — so it is the one that trips when the interior of the
+distribution actually changes, which a max budget wide enough to
+survive a large cloud would not notice. The two are asserted together
+because they fail for different reasons.
+
+Noise divergence is a rounding-class difference, not a behavioural
+one: `select(gt(perlinNoise, 0))` flips 0 lanes in 1 000 000, worley's
+worst lane is 8.3e-7 absolute where picking a different cell would move
+f1 by O(0.1), `normalized: true` damps the error rather than amplifying
+it, and fbm does not compound disproportionately across octaves.
+
+Each row bounds **that expression**, not the grammar fn in general —
+the noise options move it, and not always in the direction you would
+guess. At 1M elements `valueNoise()` with default options measures 5.64
+against the 10.44 tabulated for frequency 0.35, while `simplexNoise()`
+measures 48.86 against the 22.56 tabulated for frequency 0.4. Measure
+before quoting a row at a different frequency.
+
+asin/acos absolute error is ≈ 6.8e-5 — the WGSL-specified
 absolute-error class for those builtins. Branchy ops (select,
 compares, ramp segments, worley cell walks) may flip at knife-edge
 inputs whose operands differ within tolerance.
@@ -2635,9 +2665,9 @@ for power-of-two amounts; and any rotation built by `quatFromBasis`
 `rot`) lands in the budgeted class by construction.
 
 **Every budget on this page was measured on one adapter** (discrete
-desktop, D3D12/Dawn) and is the measured value rounded up minimally.
-Another adapter exceeding one is a finding worth reporting upstream,
-not expected noise.
+desktop, D3D12/Dawn) and carries the headroom described above over the
+largest measured value. Another adapter exceeding one is a finding
+worth reporting upstream, not expected noise.
 
 Out-of-domain inputs are garbage-in/garbage-out — measured and
 documented, not patched: NaN through `min`/`max` may return the

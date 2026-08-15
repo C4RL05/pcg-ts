@@ -68,3 +68,17 @@ export function deviceSuiteName(base: string): string {
  * the number only ever applies on a developer machine with a GPU.
  */
 export const DEVICE_HOOK_TIMEOUT_MS = 40_000;
+
+/**
+ * Timeout for a device test that measures a whole family table against
+ * the CPU reference.
+ *
+ * Same reasoning as the hook budget, different work: these tests are
+ * dominated not by the device but by the CPU-side `evaluateField` they
+ * compare against, which runs several times slower inside a vitest
+ * worker than in the plain-Node runner (measured ~3.8x). The parity
+ * suite evaluates 36 families at 65 536 elements twice and 19 of them at
+ * two swept counts, so the default 5 s is not a budget it can respect.
+ * A ceiling for a hung device, not a performance assertion.
+ */
+export const DEVICE_MEASUREMENT_TIMEOUT_MS = 120_000;
