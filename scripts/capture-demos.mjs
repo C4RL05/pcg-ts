@@ -335,9 +335,14 @@ function pageInstrumentation() {
       const spans = row.querySelectorAll("span");
       if (spans.length >= 2) out[text(spans[0])] = text(spans[1]);
     }
-    // Svelte panels: .stat = <span>label</span><b>value</b>
-    for (const row of document.querySelectorAll(".panel .stat")) {
-      const k = row.querySelector("span");
+    // Sandbox toolbar: .status holds one .stat per reading. Read the
+    // label and the value BY TAG rather than by position — the markup
+    // emits them in either order (`labelFirst` puts the <i> first for a
+    // count, last for a unit like "21.4 ms"), so an index would pick up
+    // the value as the key on half of them. A stat with an empty label
+    // renders no <i> at all and is skipped: it has no name to file under.
+    for (const row of document.querySelectorAll(".status .stat")) {
+      const k = row.querySelector("i");
       const v = row.querySelector("b");
       if (k && v) out[text(k)] = text(v);
     }
@@ -536,6 +541,23 @@ async function captureDemo(browser, encPage, origin, demo, log) {
 
     // (2) the demo's own instrumentation says the cook is done
     await waitForPredicate(page, demo.ready, 180_000);
+
+    // Every page this script drives carries readings — that is the whole
+    // premise of `pageInstrumentation`. So an EMPTY set here does not mean
+    // "this page is quiet", it means both scrapers missed, and the failure
+    // is silent in the worst possible place: `settleAt` compares
+    // successive stat snapshots, and a signal that is constantly `{}`
+    // reads as a page that has already stopped moving. The capture then
+    // photographs a scene mid-cook and reports it as stable. That is how
+    // a renamed class turns into wrong committed screenshots rather than
+    // into a crash, so it is checked here rather than trusted.
+    if (Object.keys(await page.evaluate(() => window.__capStats())).length === 0) {
+      throw new Error(
+        `${demo.id}: __capStats() found no readings. The scrapers look for ` +
+          `".pcg-overlay .pcg-stat" and ".status .stat" — one of those hooks has ` +
+          `moved. Fix the selector in pageInstrumentation() before trusting a capture.`,
+      );
+    }
 
     // (3) a stable frame
     const stability = await settleAt(page, size.css, demo.animated === true, log);
