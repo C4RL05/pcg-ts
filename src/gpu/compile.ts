@@ -25,7 +25,7 @@
  */
 import { opaqueParam, paramSpecOf, paramValue } from "../fields/spec.js";
 import type { FieldSpec, FieldSpecArg } from "../fields/fieldJson.js";
-import { fieldFromJson } from "../fields/fieldJson.js";
+import { fieldFromJson, fieldFromJsonValueFree } from "../fields/fieldJson.js";
 import { hashCombine, hashString } from "../random/hash.js";
 import { APPLY_CONST_COMPONENTS, applyUniformBytes } from "./applyKernels.js";
 import { NOISE_RAW_RANGES, type NoiseRange, hash2 } from "../noise/util.js";
@@ -1200,13 +1200,18 @@ function paramSig(plan: ParamPlan): string {
  * (`peekFieldSpec`'s contract); a different value means a different
  * `fieldFromJson` call and so a different spec object, whose key then
  * comes out IDENTICAL and hits the same kernel.
+ *
+ * The rebuild is `fieldFromJsonValueFree` rather than `fieldFromJson`
+ * because a value written INSIDE the node (`{fn: "param", name, value}`)
+ * would otherwise be read back by it — the one kind of bound value a
+ * value-free rebuild does not shed on its own. See that function.
  */
 export function specKernelKey(spec: FieldSpec, fieldKey: string): string {
   const plan = planParams(spec);
   if (plan.names.length === 0 && plan.attrIs.length === 0) return fieldKey;
   const cached = SPEC_KEYS.get(spec);
   if (cached !== undefined) return cached;
-  const key = `${fieldFromJson(spec).key}${paramSig(plan)}`;
+  const key = `${fieldFromJsonValueFree(spec).key}${paramSig(plan)}`;
   SPEC_KEYS.set(spec, key);
   return key;
 }
@@ -1430,9 +1435,12 @@ export function compileFieldSpec(spec: FieldSpecArg, layout: FieldKernelLayout):
   const rootSpec = normalizeRootSpec(spec);
   // Full grammar validation plus the canonical structural key (spec JSON
   // key order and defaulted options do not affect it). Built with NO
-  // bindings, so a `param` contributes `param("name")` and the key stays
-  // value-free — see `specKernelKey`.
-  const field = fieldFromJson(rootSpec);
+  // bindings AND with inline values ignored, so a `param` contributes
+  // `param("name")` and the key stays value-free — see `specKernelKey`.
+  // This key becomes `CompiledFieldKernel.key`, which `run.ts` keys its
+  // unbounded pipeline map on, so a value leaking into it is a pipeline
+  // per knob position and not merely a duplicated string.
+  const field = fieldFromJsonValueFree(rootSpec);
 
   // Pre-pass: find every attribute the spec reads and pre-assign binding
   // slots (sorted by name) so codegen is single-pass and deterministic.

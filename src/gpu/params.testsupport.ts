@@ -352,6 +352,84 @@ async function main(): Promise<void> {
       chunkedPromise !== null && bytesEqual(evaluateField(chunkedField, ctx), await chunkedPromise),
   };
 
+  // -- 3c. INLINE values ---------------------------------------------------
+  // A value written into the spec node (`{fn:"param",name,value}`) instead
+  // of handed in as a binding. It is stamped through the same channel, so
+  // the claim is that the device path needs no knowledge of it at all:
+  // same uniform slot, same bytes, and — the part that is NOT free — the
+  // same one kernel across values. The kernel key is rebuilt from the spec,
+  // and this is the one bound value the spec still carries, so a rebuild
+  // that read it would compile a pipeline per knob position.
+  const inlineSpec = (value: number): FieldSpec => ({
+    fn: "mul",
+    args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "amp", value }],
+  });
+  const inlineEv = new GpuFieldEvaluator(device);
+  const inlineStats = createGpuCookStats();
+  const inlineKeys = new Set<string>();
+  let inlineBitExact = true;
+  let inlineEqualsBound = true;
+  for (let i = 0; i < 50; i++) {
+    const value = i * 0.017;
+    const field = fieldFromJson(inlineSpec(value));
+    inlineKeys.add(field.key);
+    const promise = inlineEv.resolveField(field, ctx, inlineStats);
+    if (promise === null) {
+      inlineBitExact = false;
+      break;
+    }
+    const gpuColumn = await promise;
+    if (!bytesEqual(evaluateField(field, ctx), gpuColumn)) inlineBitExact = false;
+    // Inline and bound are the same expression carrying the same number,
+    // so they must be the same device bytes; anything else would mean one
+    // of the two routes reaches the uniform differently.
+    const boundPromise = inlineEv.resolveField(fieldFromJson(sweepSpec, { amp: value }), ctx, inlineStats);
+    if (boundPromise === null || !bytesEqual(await boundPromise, gpuColumn)) inlineEqualsBound = false;
+  }
+  const inline = {
+    distinctFieldKeys: inlineKeys.size,
+    bitExact: inlineBitExact,
+    equalsBound: inlineEqualsBound,
+    kernelCacheSize: inlineEv.kernelCacheSize,
+    pipelineCacheSize: inlineEv.pipelineCacheSize,
+    pipelinesCompiled: inlineStats.pipelinesCompiled,
+    fallbacks: inlineStats.fallbacks,
+  };
+
+  // The same two-member run as section 3, with nothing bound: the values
+  // come from the specs themselves. A resident run reads its slot payload
+  // from `paramValue`, which an inline value stamps exactly as a binding
+  // does, so this is the check that "stamp it the same way" really does
+  // buy the fused path with no further change.
+  const inlineFusedGraph = (target: number): Graph => {
+    const g = new Graph(5);
+    const din = g.add(dataInput);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(COUNT))]);
+    const a = g.add(setAttribute, { name: "scaled", value: fieldFromJson(inlineSpec(target)) });
+    const b = g.add(setAttribute, {
+      name: "flat",
+      value: fieldFromJson({ fn: "param", name: "amp", value: target }),
+    });
+    g.connect(din, "out", a, "in");
+    g.connect(a, "out", b, "in");
+    g.output(b, "out", "out");
+    return g;
+  };
+  const inlineGpuCook = await cook(inlineFusedGraph(0.375), { gpu: ev });
+  const inlineFusedStats = inlineGpuCook.stats.gpu ?? createGpuCookStats();
+  const inlineCpuRun = readAttrs(await cook(inlineFusedGraph(0.375)));
+  const inlineGpuRun = readAttrs(inlineGpuCook);
+  const inlineFused = {
+    residentRuns: inlineFusedStats.residentRuns,
+    fusedNodes: inlineFusedStats.fusedNodes,
+    fallbacks: inlineFusedStats.fallbacks,
+    scaledBitExact: attrBytesEqual(inlineCpuRun.scaled, inlineGpuRun.scaled),
+    flatBitExact: attrBytesEqual(inlineCpuRun.flat, inlineGpuRun.flat),
+    // The same run cooked with the value bound instead of written in: the
+    // two routes must leave the same bytes behind.
+    equalsBoundRun: attrBytesEqual(inlineGpuRun.scaled, gpuRun.scaled),
+  };
+
   // -- 5. FIELD bindings ---------------------------------------------------
   // The other kind of binding: a Field spliced into the expression where
   // the reference stands. It lowers the opposite way to a value — compiled
@@ -584,6 +662,8 @@ async function main(): Promise<void> {
       parity,
       sweep,
       fused,
+      inline,
+      inlineFused,
       chunked,
       spliced,
       splicedFused,

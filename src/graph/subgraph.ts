@@ -6,7 +6,12 @@ import { type FieldSpec, isDerivedSpec, peekFieldSpec } from "../fields/spec.js"
 // boundary: this is the grammar itself, which the graph layer needs
 // because a body's field expressions are rebuilt against a wrapper's
 // exposed values at cook time and building is the only door a value has.
-import { type FieldBindings, fieldFromJson, paramNamesOf } from "../fields/fieldJson.js";
+import {
+  type FieldBindings,
+  fieldFromJson,
+  paramNamesOf,
+  unboundParamNamesOf,
+} from "../fields/fieldJson.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";
@@ -398,6 +403,14 @@ interface BodyFieldRef {
   readonly spec: FieldSpec;
   /** Names this spec references, sorted and deduplicated. */
   readonly names: readonly string[];
+  /**
+   * The subset of {@link names} this spec does NOT supply itself — the
+   * ones a `param` node mentions without carrying an inline value. Those
+   * are what a wrapper must declare; a self-supplied name is bindable but
+   * not required, so it is bound when declared and left to its own value
+   * when not.
+   */
+  readonly needs: readonly string[];
 }
 
 /** What one body's field expressions read, as of one {@link Graph.version}. */
@@ -452,7 +465,13 @@ function bodyScan(body: Graph): BodyScan {
       if (spec === undefined) continue;
       const read = paramNamesOf(spec);
       if (read.length === 0) continue;
-      const ref: BodyFieldRef = { node: state.id, param, spec, names: read };
+      const ref: BodyFieldRef = {
+        node: state.id,
+        param,
+        spec,
+        names: read,
+        needs: unboundParamNamesOf(spec),
+      };
       if (isDerivedSpec(spec)) {
         derivedRefs.push(ref);
         continue;
@@ -544,10 +563,16 @@ function bindingValue(value: unknown): number | readonly number[] | Field | unde
  * typo shows its near-miss.
  *
  * Re-checked per cook because the body can be edited afterwards.
+ *
+ * A reference carrying its own inline value is not read here: it needs no
+ * declaration, because it already has the number ({@link BodyFieldRef}'s
+ * `needs`). It stays bindable — a wrapper that DOES declare the name
+ * overrides it, which is the whole precedence — so the only thing skipped
+ * is the refusal.
  */
 function checkBodyReferences(scan: BodyScan, declared: ReadonlySet<string>): void {
   for (const ref of scan.refs) {
-    for (const name of ref.names) {
+    for (const name of ref.needs) {
       if (declared.has(name)) continue;
       throw new GraphValidationError(
         `the body's field expression at ${refLabel(ref)} reads {"fn": "param", "name": ${JSON.stringify(name)}}, ` +

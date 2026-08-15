@@ -328,15 +328,25 @@ into `constant`). All 45 fns (`listFieldFns()`):
     does not need to be — the executor's node memo key already carries the
     node seed, so every node recooks when the graph seed moves
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
-  - `{ fn: "param", name: "amplitude" }` — the value bound to that name by
-    an enclosing wrapper's exposed param of the same name (every
-    `subgraph` and `forEach` exposed param binds into its body's field
-    scope), substituted where the literal would have stood, so the field is
-    exactly the field the literal would have built. Uniform over the cook:
-    a value that varies per element is an attribute, not a param. Unbound
-    it still builds — its key and its GPU kernel need only the name — but
-    refuses to evaluate, naming the name and the fix. Only argument
-    positions can hold one (`args` entries, noise `opts.position`);
+  - `{ fn: "param", name: "amplitude", value?: 0.5 }` — the value bound to
+    that name by an enclosing wrapper's exposed param of the same name
+    (every `subgraph` and `forEach` exposed param binds into its body's
+    field scope), substituted where the literal would have stood, so the
+    field is exactly the field the literal would have built. Uniform over
+    the cook: a value that varies per element is an attribute, not a param.
+    The optional `value` is the spec's OWN fallback, taken when nothing
+    binds the name — so a PLAIN node's expression is tunable without a
+    subgraph wrapped around it purely to carry the number, and the same
+    spec still works wrapped, because a binder wins over it. A name is
+    subgraph-scoped when bound from outside (one exposed `freq` drives
+    every body spec that mentions it) and node-scoped when written inline
+    (each spec carries its own): a binding belongs to the binder, a literal
+    to the expression. The inline value is the one binding that survives
+    serialization, being written in the spec rather than beside it. With
+    neither, the reference still builds — its key and its GPU kernel need
+    only the name — but refuses to evaluate, naming the name and the fix.
+    A name may not contain a `.`. Only argument positions can hold one
+    (`args` entries, noise `opts.position`);
     `opts.frequency`/`seed`/`offset` are read as plain numbers, so a
     tunable frequency multiplies `opts.position` instead
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):

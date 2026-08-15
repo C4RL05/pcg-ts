@@ -20,7 +20,8 @@ import {
   subgraphNode,
 } from "../graph/index.js";
 import { dataInput } from "../runtime/dataInput.js";
-import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
+import { fieldFromJson, fieldToJson, type FieldSpec } from "../fields/fieldJson.js";
+import type { Field } from "../fields/index.js";
 import { forEachNode } from "./forEach.js";
 import { pointGrid, setAttribute } from "./index.js";
 import {
@@ -306,5 +307,123 @@ describe("a targetless exposed param under forEach", () => {
     const src2: NodeHandle<{ items: DataCollection }> = { id: "src" };
     reloaded.setParam(src2, "items", carriers(3));
     expect(amps((await cook(reloaded)).outputs.out)).toEqual(before);
+  });
+});
+
+/**
+ * The same knob without a wrapper: a `param` node carrying its own
+ * `value`, which is what makes a PLAIN node's field expression tunable.
+ * The wrapper existed only to hold a number, and a spec that holds its own
+ * needs none — while a wrapper that does exist still wins, so the two
+ * mechanisms compose in the one order that makes sense.
+ */
+describe("a param that carries its own value", () => {
+  /** `amp * index` with the slope written into the reference itself. */
+  const selfRamp = (value: number): FieldSpec => ({
+    fn: "mul",
+    args: [{ fn: "param", name: "amp", value }, { fn: "index" }],
+  });
+
+  /** A plain three-point graph, no subgraph anywhere. */
+  function plainGraph(spec: FieldSpec): Graph {
+    const g = new Graph(7);
+    const grid = g.add(pointGrid, { countX: 3, countY: 1, countZ: 1 }, "grid");
+    const sa = g.add(setAttribute, { name: "amp", value: fieldFromJson(spec) }, "sa");
+    g.connect(grid, "out", sa, "in");
+    g.output(sa, "out", "out");
+    return g;
+  }
+
+  it("cooks standalone, with no wrapper to carry the value", async () => {
+    expect(amps((await cook(plainGraph(selfRamp(2)))).outputs.out)).toEqual([0, 2, 4]);
+    expect(amps((await cook(plainGraph(selfRamp(0.5)))).outputs.out)).toEqual([0, 0.5, 1]);
+  });
+
+  it("survives serialization, where a bound value does not", async () => {
+    const json = serializeGraph(plainGraph(selfRamp(2)));
+    // Additive: the format is unchanged, and a `value` key is simply
+    // allowed inside a `param` node. Bumping would move `hashableGraph`
+    // and break every pinned `ref` hash for a purely additive key.
+    expect(json.formatVersion).toBe(1);
+    const value = (json.nodes.find((n: SerializedNode) => n.id === "sa") as SerializedNode).params
+      ?.value as FieldSpec;
+    expect(value).toEqual(selfRamp(2));
+    // Reloaded from actual JSON text, so nothing rides on object identity.
+    const reloaded = deserializeGraph(JSON.parse(JSON.stringify(json)) as SerializedGraph);
+    expect(amps((await cook(reloaded)).outputs.out)).toEqual([0, 2, 4]);
+  });
+
+  it("produces exactly what the wrapper-with-an-exposed-param produced", async () => {
+    // The migration claim: rewriting a graph from "wrap it to carry the
+    // number" to "write the number in" is a rewrite of the plumbing and
+    // not of the output.
+    const wrapped = new Graph(7);
+    wrapped.output(wrapped.add(rampDef(rampBody()), { amp: 2 }, "sub"), "out", "out");
+    const viaWrapper = amps((await cook(wrapped)).outputs.out);
+    const viaInline = amps((await cook(plainGraph(selfRamp(2)))).outputs.out);
+    expect(viaInline).toEqual(viaWrapper);
+    expect(Object.is(viaInline[1], viaWrapper[1])).toBe(true);
+  });
+
+  it("is overridden by a subgraph that exposes the same name", async () => {
+    // Precedence, through the real seam: `withExposedParams` rebuilds the
+    // body's expression against the instance's value, and the rebuild's
+    // binding beats the value written in the spec.
+    const inner = new Graph(11);
+    const grid = inner.add(pointGrid, { countX: 3, countY: 1, countZ: 1 }, "grid");
+    const sa = inner.add(setAttribute, { name: "amp", value: fieldFromJson(selfRamp(2)) }, "sa");
+    inner.connect(grid, "out", sa, "in");
+
+    const graph = new Graph(7);
+    const sub = graph.add(rampDef(inner), { amp: 10 }, "sub");
+    graph.output(sub, "out", "out");
+    expect(amps((await cook(graph)).outputs.out)).toEqual([0, 10, 20]);
+    graph.setParam(sub, "amp", 3);
+    expect(amps((await cook(graph)).outputs.out)).toEqual([0, 3, 6]);
+    // And the body is left exactly as it was found: the restore puts the
+    // self-supplied expression back, so the inner graph still cooks — and
+    // still serializes — as the author wrote it.
+    expect(amps((await cook(inner)).outputs.out ?? [])).toEqual([]);
+    const restored = inner.require("sa").params.value;
+    expect(fieldToJson(restored as Field)).toEqual(selfRamp(2));
+  });
+
+  it("needs no declaration when the body supplies itself", async () => {
+    // A wrapper that exposes NOTHING must still cook a body whose
+    // expression carries its own value: a reference nothing has to supply
+    // is not a reference the wrapper forgot. Before inline values, every
+    // `param` in a body was a declaration the wrapper owed.
+    const inner = new Graph(11);
+    const grid = inner.add(pointGrid, { countX: 3, countY: 1, countZ: 1 }, "grid");
+    const sa = inner.add(setAttribute, { name: "amp", value: fieldFromJson(selfRamp(2)) }, "sa");
+    inner.connect(grid, "out", sa, "in");
+
+    const bare = subgraphNode(inner, [], [{ name: "out", node: { id: "sa" }, pin: "out" }], []);
+    const graph = new Graph(7);
+    graph.output(graph.add(bare, {}, "sub"), "out", "out");
+    expect(amps((await cook(graph)).outputs.out)).toEqual([0, 2, 4]);
+  });
+
+  it("still refuses a body reference that supplies nothing", async () => {
+    // The refusal is unchanged where it was earned: one reference with a
+    // value and one without, and only the bare one is owed a declaration.
+    const inner = new Graph(11);
+    const grid = inner.add(pointGrid, { countX: 3, countY: 1, countZ: 1 }, "grid");
+    const sa = inner.add(
+      setAttribute,
+      {
+        name: "amp",
+        value: fieldFromJson({
+          fn: "add",
+          args: [selfRamp(2), { fn: "param", name: "bias" }],
+        }),
+      },
+      "sa",
+    );
+    inner.connect(grid, "out", sa, "in");
+
+    expect(() => subgraphNode(inner, [], [{ name: "out", node: { id: "sa" }, pin: "out" }], [])).toThrow(
+      /reads \{"fn": "param", "name": "bias"\}, but this wrapper exposes no param "bias"/,
+    );
   });
 });

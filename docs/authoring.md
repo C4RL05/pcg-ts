@@ -550,7 +550,31 @@ and it would serve stale bytes. Substituting instead makes invalidation
 exact and free: turning a knob recooks precisely the nodes whose fields
 read that name, exactly as editing the number in the JSON would.
 
-**Unbound, a `param` builds but refuses to evaluate.** Its key is
+**Or from the reference itself: `{"fn": "param", "name": "freq", "value":
+0.05}`.** The optional `value` is the spec's own fallback, and it exists
+because a wrapper whose only job is to carry a number is a wrapper that
+should not have to exist — with one, a PLAIN node's expression is tunable
+where it stands. It composes in the one order that makes sense: a binding
+wins, and the inline value is what a name falls back to. So the same spec
+is tunable standalone and still wrappable, and a wrapper that exposes
+`freq` overrides every inline `freq` in its body.
+
+That asymmetry is deliberate and worth stating: a name is
+SUBGRAPH-scoped when bound from outside — one exposed `freq` drives every
+body spec that mentions it — and NODE-scoped when written inline, each
+spec carrying its own. A binding belongs to the binder; a literal belongs
+to the expression.
+
+The inline value is also the one binding that survives a save, for the
+plainest of reasons: it is written in the spec rather than beside it. A
+graph with one reopens supplying itself, where a graph whose values came
+from a wrapper reopens needing that wrapper again. Two other rules follow
+from what the key must carry: the value moves `Field.key` exactly as
+editing the literal would (two knob positions are two fields, never one
+served twice), and a param NAME may not contain a `.`, since an editor
+addresses a field-spec param as `<nodeId>.<paramKey>.<fieldParamName>`.
+
+**With neither, a `param` builds but refuses to evaluate.** Its key is
 `param("amplitude")` and its WGSL kernel needs only the name, so a spec
 outside any wrapper still validates, hashes and compiles; only producing
 a column needs a value. The refusal names the name and the call that

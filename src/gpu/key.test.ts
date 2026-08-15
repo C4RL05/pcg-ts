@@ -65,4 +65,34 @@ describe("specialization key", () => {
     const b = compileFieldSpec({ fn: "constant", value: 2 }, LAYOUT);
     expect(b.key).not.toBe(a.key);
   });
+
+  it("ignores a param's value, inline or bound", () => {
+    // A param lowers to a uniform SLOT, so every value of a name compiles
+    // the same kernel — and `run.ts` keys its unbounded pipeline map on
+    // this key, so a value in it is a pipeline per knob position rather
+    // than a duplicated string. A BOUND value never reaches here (it lives
+    // beside the spec node); an INLINE one is written in the node, so it
+    // has to be shed deliberately.
+    const withValue = (value: number) => ({
+      fn: "mul",
+      args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "amp", value }],
+    });
+    const a = compileFieldSpec(withValue(1), LAYOUT);
+    const b = compileFieldSpec(withValue(2), LAYOUT);
+    expect(b.key).toBe(a.key);
+    expect(b.wgsl).toBe(a.wgsl);
+    // ...and it is the same kernel the bound form compiles, since the two
+    // are the same expression carrying the same number.
+    const bare = compileFieldSpec(
+      { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "amp" }] },
+      LAYOUT,
+    );
+    expect(a.key).toBe(bare.key);
+    // The NAME still moves it: it decides the slot and so the emitted text.
+    const renamed = compileFieldSpec(
+      { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "other", value: 1 }] },
+      LAYOUT,
+    );
+    expect(renamed.key).not.toBe(a.key);
+  });
 });

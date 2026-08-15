@@ -48,6 +48,23 @@ interface ScenarioOutput {
     rebindFlatBitExact: boolean;
     rebindChangedBytes: boolean;
   };
+  inline: {
+    distinctFieldKeys: number;
+    bitExact: boolean;
+    equalsBound: boolean;
+    kernelCacheSize: number;
+    pipelineCacheSize: number;
+    pipelinesCompiled: number;
+    fallbacks: Record<string, number>;
+  };
+  inlineFused: {
+    residentRuns: number;
+    fusedNodes: number;
+    fallbacks: Record<string, number>;
+    scaledBitExact: boolean;
+    flatBitExact: boolean;
+    equalsBoundRun: boolean;
+  };
   chunked: { resolved: boolean; bitExact: boolean };
   spliced: Array<{
     name: string;
@@ -202,6 +219,43 @@ describe.skipIf(testDevice === null)(deviceSuiteName("param uniform slots"), () 
     expect(f.rebindChangedBytes, "the two bindings must actually differ").toBe(true);
     expect(f.rebindScaledBitExact).toBe(true);
     expect(f.rebindFlatBitExact).toBe(true);
+  });
+
+  it("an INLINE value rides the same slot as a binding, byte for byte", () => {
+    const i = scenario.inline;
+    expect(i.fallbacks).toEqual({});
+    expect(i.bitExact).toBe(true);
+    // The value is written in the spec rather than handed in, and it must
+    // still be the value the uniform carries — same bytes as binding the
+    // same number, or the two routes disagree about what the graph says.
+    expect(i.equalsBound).toBe(true);
+  });
+
+  it("fifty INLINE values compile one kernel and one pipeline", () => {
+    const i = scenario.inline;
+    // The premise: fifty distinct field keys, which is the correctness
+    // half — the CPU memo would serve one value's column for another if
+    // the key did not move.
+    expect(i.distinctFieldKeys).toBe(50);
+    // And the memory half. This is the one place an inline value is NOT
+    // free: it lives IN the spec, so the value-free rebuild the kernel key
+    // comes from has to be told to ignore it (`fieldFromJsonValueFree`).
+    // Without that this is 50 kernels and 50 pipelines in unbounded Maps.
+    expect(i.kernelCacheSize).toBe(1);
+    expect(i.pipelineCacheSize).toBe(1);
+    expect(i.pipelinesCompiled).toBe(1);
+  });
+
+  it("a fused run carries an INLINE value through step.consts, bit-exactly", () => {
+    const f = scenario.inlineFused;
+    expect(f.fallbacks).toEqual({});
+    expect(f.residentRuns).toBe(1);
+    expect(f.fusedNodes).toBe(2);
+    expect(f.scaledBitExact, "field kernel with an input AND a const slot").toBe(true);
+    expect(f.flatBitExact, "field kernel with a const slot and no input").toBe(true);
+    // Nothing about the fused path knows an inline value from a bound one:
+    // both reach the run's slot payload through `paramValue`.
+    expect(f.equalsBoundRun).toBe(true);
   });
 
   it("survives a chunk seam: the slots are written once, chunkOffset per chunk", () => {

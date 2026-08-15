@@ -21,10 +21,13 @@
  *   into a noise's `opts.position` to make a saved noise re-roll with the
  *   graph seed, which its literal `opts.seed` cannot
  * - `{ fn: "randomField", key?: 0 | "salt" }`
- * - `{ fn: "param", name: "amplitude" }` — the value bound to that name,
- *   substituted at build time as if the literal had been written; a
- *   binding may also be a `Field`, and is then spliced in where the
- *   reference stands (see {@link fieldFromJson}'s `bindings`)
+ * - `{ fn: "param", name: "amplitude", value?: 0.5 }` — the value bound to
+ *   that name, substituted at build time as if the literal had been
+ *   written; a binding may also be a `Field`, and is then spliced in where
+ *   the reference stands (see {@link fieldFromJson}'s `bindings`). The
+ *   optional `value` is the spec's OWN fallback, taken when nothing binds
+ *   the name — which is what makes a plain node's expression tunable
+ *   without a subgraph wrapped around it purely to carry the number
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
  *   lt, le, gt, ge, eq, ne, dot, atan2 (2 args); abs, floor, length,
  *   normalize, sin, cos, tan, asin, acos, atan (1 arg); clamp, lerp,
@@ -94,6 +97,7 @@ import {
   vec,
 } from "./index.js";
 import {
+  type FieldBindingValue,
   type FieldSpec,
   MAX_SPEC_DEPTH,
   attachAuthoredSpec,
@@ -457,6 +461,56 @@ function unboundParam(name: string): Field {
   });
 }
 
+/**
+ * Whether the build in flight must IGNORE the inline value a `param` node
+ * carries. Module state for the same reason {@link currentBindings} is,
+ * and read at exactly one place — see {@link fieldFromJsonValueFree} for
+ * the one caller that needs it and why nothing else does.
+ */
+let ignoreInlineValues = false;
+
+/**
+ * A `param` node's inline value, or undefined when it carries none. Total:
+ * it reads, it does not validate, so the stamping walk in
+ * {@link fieldFromJson} can ask the same question of an already-parsed
+ * node without a path to blame.
+ *
+ * The tuple is COPIED for the reason a binding's is (see the stamping walk
+ * in {@link fieldFromJson}): the field's key is fixed from these numbers at
+ * construction, and a spec object a caller still holds a reference to must
+ * not be able to move them afterwards.
+ */
+function readInlineValue(v: unknown): FieldBindingValue | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (isNumberArray(v)) return [...v];
+  return undefined;
+}
+
+/**
+ * The validating half of {@link readInlineValue}: the same value, but a
+ * `value` key the grammar cannot read is a hard error naming the path
+ * rather than a silently ignored key.
+ *
+ * The admitted shapes are `constant`'s, because that is what an inline
+ * value IS — the literal an author would otherwise have written in this
+ * position, moved inside the reference so the name survives for a binder
+ * to override.
+ */
+function inlineParamValue(
+  spec: Record<string, unknown>,
+  path: string,
+): FieldBindingValue | undefined {
+  if (spec.value === undefined) return undefined;
+  const value = readInlineValue(spec.value);
+  if (value !== undefined) return value;
+  fail(
+    `${path}.value`,
+    `param ${JSON.stringify(spec.name)}: an inline value must be a finite number (which stands as a ` +
+      "scalar) or a non-empty array of finite numbers (which stands as the matching vector) — the same " +
+      "shapes a binding takes; omit the key entirely for a param that only a binder supplies",
+  );
+}
+
 // A named value standing where a literal would: the value is
 // SUBSTITUTED here, so the field this returns is the field the literal
 // would have produced, key included. That is not an optimization but the
@@ -478,37 +532,63 @@ function unboundParam(name: string): Field {
 // a position. The classification is a property of the fn, decided before
 // any binding is in hand, so the only sound answer is the one that holds
 // for every value the name can take.
-register("param", "per-element", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) => {
-  const name = spec.name;
-  if (typeof name !== "string" || name === "") {
-    fail(`${path}.name`, "param requires a non-empty string name");
-  }
-  if (currentBindings === undefined || !Object.hasOwn(currentBindings, name)) {
-    // Nothing bound in THIS call, but the node may still carry the spec
-    // of a field a previous one spliced here (see `fieldFromJson`). That
-    // is the value-free rebuild `specKernelKey` performs to key a kernel:
-    // a spliced field decides the emitted WGSL, so it must be rebuilt,
-    // where a spliced literal must not.
-    const bound = paramSpecOf(spec as unknown as FieldSpec);
-    if (bound !== undefined) return buildSpec(bound as Record<string, unknown>, `${path}<${name}>`);
-    return unboundParam(name);
-  }
-  const value = currentBindings[name];
-  if (isField(value)) return detachedBinding(value);
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      fail(`${path}.name`, `param ${JSON.stringify(name)} is bound to ${String(value)}; a binding must be finite`);
+register(
+  "param",
+  "per-element",
+  ["name", "value"],
+  `{ fn: "param", name: "amplitude", value?: 0.5 }`,
+  (spec, path) => {
+    const name = spec.name;
+    if (typeof name !== "string" || name === "") {
+      fail(`${path}.name`, "param requires a non-empty string name");
     }
-    return constant(value);
-  }
-  if (isNumberArray(value)) return constant(value);
-  fail(
-    `${path}.name`,
-    `param ${JSON.stringify(name)} is bound to ${describeValue(value)}; a binding must be a finite ` +
-      "number (which binds as a scalar), a non-empty array of finite numbers (which binds as the matching " +
-      "vector), or a Field (which is spliced in where the reference stands)",
-  );
-});
+    if (name.includes(".")) {
+      fail(
+        `${path}.name`,
+        `param name ${JSON.stringify(name)} contains a "."; a knob addresses a field-spec param as ` +
+          `"<nodeId>.<paramKey>.<fieldParamName>", so a dot inside the name itself would split that ` +
+          "address in a place nothing can put back together — rename the param without a dot",
+      );
+    }
+    // Read (and validated) on EVERY build, bound or not: a malformed
+    // inline value is a fact about the spec, and a spec that parses only
+    // while something happens to override it is a graph that breaks the
+    // day the override goes away.
+    const inline = inlineParamValue(spec, path);
+    if (currentBindings === undefined || !Object.hasOwn(currentBindings, name)) {
+      // Nothing bound in THIS call, but the node may still carry the spec
+      // of a field a previous one spliced here (see `fieldFromJson`). That
+      // is the value-free rebuild `specKernelKey` performs to key a kernel:
+      // a spliced field decides the emitted WGSL, so it must be rebuilt,
+      // where a spliced literal must not.
+      const bound = paramSpecOf(spec as unknown as FieldSpec);
+      if (bound !== undefined) return buildSpec(bound as Record<string, unknown>, `${path}<${name}>`);
+      // The spec's own value, and last of the three: an outer binding wins
+      // over it, and so does a field an outer binding already spliced
+      // here. Substituted exactly as a binding is — `constant` and not a
+      // named stand-in — because that is what puts the value in
+      // `Field.key`, and two knob positions that key alike would be handed
+      // each other's columns by `evaluateField`'s per-context memo.
+      if (inline !== undefined && !ignoreInlineValues) return constant(inline);
+      return unboundParam(name);
+    }
+    const value = currentBindings[name];
+    if (isField(value)) return detachedBinding(value);
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
+        fail(`${path}.name`, `param ${JSON.stringify(name)} is bound to ${String(value)}; a binding must be finite`);
+      }
+      return constant(value);
+    }
+    if (isNumberArray(value)) return constant(value);
+    fail(
+      `${path}.name`,
+      `param ${JSON.stringify(name)} is bound to ${describeValue(value)}; a binding must be a finite ` +
+        "number (which binds as a scalar), a non-empty array of finite numbers (which binds as the matching " +
+        "vector), or a Field (which is spliced in where the reference stands)",
+    );
+  },
+);
 
 register("randomField", "per-element", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
   const key = spec.key;
@@ -838,6 +918,31 @@ export function paramNamesOf(spec: FieldSpec): readonly string[] {
 }
 
 /**
+ * @internal The subset of {@link paramNamesOf} that some reference leaves
+ * for a BINDER to supply: a name is listed as soon as one `param` node
+ * mentioning it carries no inline value of its own.
+ *
+ * The two lists are different questions and both are asked. "What may I
+ * bind?" is every name — an outer binding overrides an inline value, so a
+ * self-supplied name is still bindable. "What MUST somebody supply?" is
+ * this one, and it is what a wrapper checks its declarations against
+ * (`checkBodyReferences` in `src/graph/subgraph.ts`): refusing a body
+ * expression that supplies its own value would make an inline value
+ * unusable inside a subgraph, which is the one place the corpus keeps
+ * most of its expressions.
+ *
+ * A name mentioned twice, once with a value and once without, is listed:
+ * the value-free reference is as unbound as it ever was.
+ */
+export function unboundParamNamesOf(spec: FieldSpec): readonly string[] {
+  const names = new Set<string>();
+  eachParam(spec, (node, name) => {
+    if (readInlineValue(node.value) === undefined) names.add(name);
+  });
+  return [...names].sort();
+}
+
+/**
  * Add the bindings a build resolved to the message of a failure the
  * FIELD CONSTRUCTORS raised. A tuple mismatch is reported by whichever
  * combinator broadcast the substituted constant ("add: incompatible
@@ -891,6 +996,19 @@ function withBindingContext(err: unknown, spec: FieldSpec, bindings: FieldBindin
  * round-trips `{fn: "param", name}` rather than the value or the field it
  * stood for — and a name nothing bound builds a field that refuses to
  * evaluate rather than one that quietly reads zero.
+ *
+ * A `param` node may also carry its own `value`, and then the precedence
+ * is: a binding here, else a field an earlier call spliced onto this node,
+ * else the node's own value, else the refusal. So a binder always wins and
+ * the inline value is the fallback — which is what lets one expression be
+ * tunable standalone AND still be wrapped in a subgraph that exposes the
+ * same name.
+ *
+ * That fallback is the one binding that SURVIVES SERIALIZATION, and for
+ * the plainest of reasons: it is written in the spec rather than beside
+ * it. `fieldToJson` re-emits it with the rest of the node, where a value
+ * this call was handed exists only in a side table and reloads as the
+ * unbound refusal.
  */
 export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field {
   if (!isPlainObject(spec)) {
@@ -917,7 +1035,10 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
   // building the tree, so `fieldToJson` returns the author's exact JSON
   // rather than a canonicalized derivation of it.
   const authored = structuredClone(spec) as FieldSpec;
-  if (bindings !== undefined) {
+  // A bare block, and no longer conditional on `bindings`: an inline value
+  // is stamped by the same walk, so a build with nothing bound has a
+  // record to leave too. The block is what scopes `spliced`.
+  {
     // The values ride the CLONE's nodes — the objects the attached spec
     // is made of, and the ones a derived parent structure-shares — so
     // whatever later reads this field's spec (the WGSL compiler, the run
@@ -931,10 +1052,54 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
     // with something undescribable in it is undescribable however the
     // rest was written.
     let spliced: "derived" | "opaque" | undefined;
-    eachParam(authored, (node, name) => {
-      if (!Object.hasOwn(bindings, name)) return;
-      const value = bindings[name];
+    // The clone's `param` nodes paired with the ones they were cloned
+    // FROM, because the two carry different halves of what the build just
+    // decided. The value to stamp is written in the CLONE (it came from
+    // the JSON); whether the handler USED it — rather than a field an
+    // earlier call spliced onto that very node — is recorded beside the
+    // ORIGINAL, and a fresh clone carries no side-table record of its own.
+    //
+    // Two walks of ONE walker rather than a second walker that recurses
+    // over both trees: `structuredClone` reproduces the tree's shape and
+    // its sharing exactly, so the two visit the same nodes in the same
+    // order, and a walker that could drift from itself does not exist. The
+    // length check is what makes that an assertion instead of an
+    // assumption; a mismatch stamps nothing, which is what this call did
+    // before an inline value was a thing it could stamp.
+    const origins: Array<Record<string, unknown>> = [];
+    const targets: Array<Record<string, unknown>> = [];
+    eachParam(spec, (node) => origins.push(node));
+    eachParam(authored, (node) => targets.push(node));
+    const paired = origins.length === targets.length;
+    for (let i = 0; i < targets.length; i++) {
+      const node = targets[i];
+      const name = node.name as string;
       const target = node as unknown as FieldSpec;
+      if (bindings === undefined || !Object.hasOwn(bindings, name)) {
+        // An INLINE value is stamped through the same channel a binding's
+        // is, which is the whole of why the parts that read only a spec
+        // need no further change: `paramValue` is what the WGSL compiler
+        // fills its uniform slot from and what the domain-constant fold
+        // recovers to rebuild a subtree. The value is ALSO still written
+        // in the node — unlike a binding's, which lives only here — so an
+        // inline value is the one binding that survives serialization.
+        //
+        // Only when the handler actually took it, though. A node an
+        // earlier call spliced a FIELD onto builds that field again here
+        // (`paramSpecOf` outranks the inline value), so stamping the
+        // literal would tell the compiler and the fold to substitute a
+        // number this field never computed — a wrong answer where the
+        // unstamped node is merely a declined one. An OPAQUE node is not
+        // skipped, and must not be: nothing can rebuild what it stood for,
+        // so the handler falls through to the inline value and the stamp
+        // describes exactly the field that came out.
+        if (ignoreInlineValues || !paired) continue;
+        if (paramSpecOf(origins[i] as unknown as FieldSpec) !== undefined) continue;
+        const inline = readInlineValue(node.value);
+        if (inline !== undefined) attachParamValue(target, inline);
+        continue;
+      }
+      const value = bindings[name];
       if (isField(value)) {
         // A FIELD rides the same channel as a value and for the same
         // reason, but records the field's SPEC rather than its numbers:
@@ -946,7 +1111,7 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
         if (bound === undefined) {
           attachOpaqueParam(target);
           spliced = "opaque";
-          return;
+          continue;
         }
         // A field that IS a constant binds as the constant. The built
         // field is the same object and the same key either way, so this
@@ -961,7 +1126,7 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
         const literal = constantSpecValue(bound);
         if (literal !== undefined) {
           attachParamValue(target, literal);
-          return;
+          continue;
         }
         attachParamSpec(target, bound);
         // Transitive: a bound field may itself have been built with
@@ -971,12 +1136,12 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
         const inherited = splicedProvenance(bound);
         if (inherited === "opaque") {
           spliced = "opaque";
-          return;
+          continue;
         }
         if ((isDerivedSpec(bound) || inherited === "derived") && spliced === undefined) {
           spliced = "derived";
         }
-        return;
+        continue;
       }
       // Copied, never referenced: the field's key was fixed from this
       // value at construction, so a caller who later mutates the array
@@ -985,11 +1150,37 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
       // never produced. The copy is what makes the record as immutable as
       // the key it belongs to.
       attachParamValue(target, typeof value === "number" ? value : [...value]);
-    });
+    }
     if (spliced !== undefined) recordSplicedProvenance(authored, spliced);
   }
   attachAuthoredSpec(field, authored, deepestLevel);
   return field;
+}
+
+/**
+ * @internal Build `spec` with every INLINE `param` value ignored, so the
+ * result's key describes the expression and not the numbers standing in
+ * it. `specKernelKey` in `src/gpu/compile.ts` is the one caller, and the
+ * kernel-cache invariant it keeps is the only reason this exists: one
+ * kernel serves every value of a name (the value goes into a uniform
+ * slot), so a key that carried the value would add a Map entry per slider
+ * tick.
+ *
+ * A BOUND value never needed this. It lives in a side table keyed on the
+ * spec node, and the `param` handler consults that table only for the
+ * spliced-FIELD case — so rebuilding an already-built spec with no
+ * bindings drops the numbers by construction. An inline value is written
+ * INTO the node, which is exactly what makes it survive serialization, and
+ * therefore also what would carry it into a rebuild that must not see it.
+ */
+export function fieldFromJsonValueFree(spec: FieldSpec): Field {
+  const outer = ignoreInlineValues;
+  ignoreInlineValues = true;
+  try {
+    return fieldFromJson(spec);
+  } finally {
+    ignoreInlineValues = outer;
+  }
 }
 
 /** The refusal's shared opening — one prefix, four continuations. */

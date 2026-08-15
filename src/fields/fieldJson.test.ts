@@ -29,10 +29,12 @@ import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
 import {
   FieldJsonError,
   fieldFromJson,
+  fieldFromJsonValueFree,
   fieldToJson,
   fnVariation,
   listFieldFns,
   paramNamesOf,
+  unboundParamNamesOf,
   type FieldSpec,
 } from "./fieldJson.js";
 
@@ -625,8 +627,8 @@ describe("param bindings", () => {
       /param requires a non-empty string name/,
     );
     expect(() => fieldFromJson({ fn: "param", name: "" })).toThrow(/non-empty string name/);
-    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1 })).toThrow(
-      /unknown key "value" for fn "param"/,
+    expect(() => fieldFromJson({ fn: "param", name: "a", nmae: 1 } as unknown as FieldSpec)).toThrow(
+      /unknown key "nmae" for fn "param"/,
     );
   });
 
@@ -674,6 +676,217 @@ describe("param bindings", () => {
     };
     expect(() => fieldFromJson(deep(256), { amp: 1 })).not.toThrow();
     expect(() => fieldFromJson(deep(257), { amp: 1 })).toThrow(/nesting deeper than 256 levels/);
+  });
+});
+
+/**
+ * The third way a name gets a value: written INTO the spec node. A `param`
+ * that carries its own `value` is self-supplied, which is what makes a
+ * plain node's expression tunable without a subgraph wrapped around it
+ * purely to hold the number.
+ *
+ * The whole feature is a precedence and a key. The precedence — binding,
+ * then splice, then inline, then the refusal — is what keeps a self-tuned
+ * node still wrappable. The key is the sharp part: an inline value must
+ * reach `Field.key` exactly as a binding's does, because `evaluateField`
+ * memoizes per context ON THE KEY, so two values that keyed alike would be
+ * handed each other's columns.
+ */
+describe("param — an inline value", () => {
+  const AMP: FieldSpec = { fn: "param", name: "amp" };
+  const inline = (value: number | readonly number[]): FieldSpec => ({
+    fn: "param",
+    name: "amp",
+    value,
+  });
+
+  it("omitting the key preserves the unbound refusal, word for word", () => {
+    // The premise of "strictly additive": every graph that has no `value`
+    // in it behaves as it did, including the exact text of the error. This
+    // is asserted rather than assumed because the handler now has a branch
+    // that could have swallowed it.
+    const unbound = fieldFromJson(AMP);
+    expect(unbound.key).toBe('param("amp")');
+    expect(() => evaluateField(unbound, testCloud())).toThrow(FieldJsonError);
+    expect(() => evaluateField(unbound, testCloud())).toThrow(
+      /^param "amp": nothing bound this name, so the field has no value to evaluate\. Build it with fieldFromJson\(spec, \{ "amp": <number \| number\[\] \| Field> \}\); an unbound param is buildable — its key and its GPU kernel need only the name — but never evaluable$/,
+    );
+    // An explicit `undefined` is the absence of the key, not a value: JSON
+    // has no way to write one, but a spec assembled in code does.
+    expect(fieldFromJson({ fn: "param", name: "amp", value: undefined }).key).toBe('param("amp")');
+  });
+
+  it("supplies itself: the field IS the field the literal builds", () => {
+    const self = fieldFromJson(inline(1.25));
+    expect(self.key).toBe(constant(1.25).key);
+    const ctx = testCloud();
+    expect(Array.from(evaluateField(self, ctx).data)).toEqual(
+      Array.from(evaluateField(constant(1.25), ctx).data),
+    );
+    // A tuple stands as the matching vector, exactly as a binding's does.
+    const vec = fieldFromJson(inline([1, 2, 3]));
+    expect(vec.key).toBe(constant([1, 2, 3]).key);
+    expect(vec.tupleSize).toBe(3);
+  });
+
+  it("carries the value into Field.key, so two values cannot collide", () => {
+    // THE correctness point. `evaluateField` memoizes per context keyed on
+    // `field.key`, so if these two keyed alike the second lookup would be
+    // served the first's column — silently, and only when both appear in
+    // one cook.
+    const a = fieldFromJson(inline(0.05));
+    const b = fieldFromJson(inline(0.1));
+    expect(a.key).not.toBe(b.key);
+
+    // Demonstrated as the bug it would be, not just as a string
+    // inequality: one context, both fields, and the columns must differ.
+    const ctx = testCloud();
+    expect(evaluateField(a, ctx).data[0]).toBeCloseTo(0.05, 6);
+    expect(evaluateField(b, ctx).data[0]).toBeCloseTo(0.1, 6);
+
+    // And the same holds nested, where the key is composed rather than the
+    // whole of it — a node's memo key is what this ultimately moves.
+    const nest = (v: number): FieldSpec => ({ fn: "mul", args: [{ fn: "position" }, inline(v)] });
+    expect(fieldFromJson(nest(0.05)).key).not.toBe(fieldFromJson(nest(0.1)).key);
+  });
+
+  it("an outer binding wins, and the inline value is the fallback", () => {
+    const spec = inline(0.05);
+    expect(fieldFromJson(spec, { amp: 2 }).key).toBe(constant(2).key);
+    expect(fieldFromJson(spec, { amp: [1, 2, 3] }).key).toBe(constant([1, 2, 3]).key);
+    // A binding for some OTHER name leaves this one on its own value.
+    expect(fieldFromJson(spec, { other: 2 }).key).toBe(constant(0.05).key);
+    // A spliced FIELD wins too, and stays won: the spec records the
+    // splice, so a later value-free rebuild follows the expression rather
+    // than falling back to the number underneath it.
+    const spliced = fieldFromJson(spec, { amp: fraction() });
+    expect(spliced.key).toBe(fraction().key);
+    expect(fieldFromJson(peekFieldSpec(spliced) as FieldSpec).key).toBe(fraction().key);
+  });
+
+  it("round-trips the value, which a binding's cannot", () => {
+    // The property worth naming: an inline value is written IN the spec,
+    // where a binding's lives beside it in a side table — so this one
+    // survives a save and reopens supplying itself.
+    const spec: FieldSpec = { fn: "mul", args: [{ fn: "position" }, inline(0.05)] };
+    const built = fieldFromJson(spec);
+    expect(fieldToJson(built)).toEqual(spec);
+    const reloaded = fieldFromJson(JSON.parse(JSON.stringify(fieldToJson(built))) as FieldSpec);
+    expect(reloaded.key).toBe(built.key);
+    // ...where the same expression bound from outside reopens unbound.
+    const bound = fieldFromJson({ fn: "mul", args: [{ fn: "position" }, AMP] }, { amp: 0.05 });
+    expect(fieldFromJson(fieldToJson(bound)).key).not.toBe(bound.key);
+  });
+
+  it("is stamped as a binding is, so paramValue sees it", () => {
+    // The one line that buys the GPU uniform payload and the
+    // domain-constant fold: both read `paramValue`, and neither knows
+    // where the number came from.
+    const node = (peekFieldSpec(fieldFromJson(inline(0.05))) as FieldSpec) ;
+    expect(paramValue(node)).toBe(0.05);
+    const tuple = peekFieldSpec(fieldFromJson(inline([1, 2, 3]))) as FieldSpec;
+    expect(paramValue(tuple)).toEqual([1, 2, 3]);
+    // Copied, never referenced — the key was fixed from these numbers.
+    const source: number[] = [1, 2, 3];
+    const stamped = peekFieldSpec(fieldFromJson(inline(source))) as FieldSpec;
+    source[0] = 99;
+    expect(paramValue(stamped)).toEqual([1, 2, 3]);
+    // A binding still wins in the stamp too, or the device would write the
+    // value the CPU did not use.
+    const overridden = peekFieldSpec(fieldFromJson(inline(0.05), { amp: 2 })) as FieldSpec;
+    expect(paramValue(overridden)).toBe(2);
+    // And a spliced field records a SPEC rather than a number, unchanged.
+    const splicedNode = peekFieldSpec(fieldFromJson(inline(0.05), { amp: fraction() })) as FieldSpec;
+    expect(paramValue(splicedNode)).toBeUndefined();
+    expect(paramSpecOf(splicedNode)).toEqual({ fn: "fraction" });
+  });
+
+  it("is not stamped where a spliced field outranked it", () => {
+    // The stamp must describe the field that came OUT, and the handler
+    // prefers a field an earlier call spliced onto this node. A spec
+    // carrying both — the reference bound to a Field, and a `value` the
+    // author wrote as its standalone fallback — rebuilds as the spliced
+    // expression, so stamping the literal would tell the WGSL compiler to
+    // write a number into a uniform this kernel never reads, and tell the
+    // fold to bake a per-element expression into a constant.
+    const built = fieldFromJson(inline(1), { amp: fraction() });
+    const rebuilt = fieldFromJson(peekFieldSpec(built) as FieldSpec);
+    expect(rebuilt.key).toBe(fraction().key);
+    expect(paramValue(peekFieldSpec(rebuilt) as FieldSpec)).toBeUndefined();
+
+    // Nested, where the mistake would be a wrong column rather than a
+    // wrong root: the rebuild varies per element, so nothing may fold it.
+    const spec: FieldSpec = { fn: "mul", args: [inline(1), 2] };
+    const nested = fieldFromJson(spec, { amp: fraction() });
+    const nestedAgain = fieldFromJson(peekFieldSpec(nested) as FieldSpec);
+    expect(nestedAgain.key).toBe(fieldFromJson({ fn: "mul", args: [{ fn: "fraction" }, 2] }).key);
+    const col = evaluateField(nestedAgain, testCloud(4));
+    expect(Array.from(col.data)).toEqual([0, 2 / 3, 4 / 3, 2].map(Math.fround));
+    // The literal it must NOT have become is `1 * 2` everywhere.
+    expect(col.data[0]).not.toBe(col.data[1]);
+  });
+
+  it("stays out of the value-free rebuild, which keys the GPU kernel", () => {
+    // One kernel serves every value of a name (the value rides a uniform
+    // slot), so the key a kernel cache uses must not move with it. A bound
+    // value never reached that rebuild — it lives beside the node — but an
+    // inline one is IN the node, so it has to be told.
+    expect(fieldFromJsonValueFree(inline(0.05)).key).toBe(fieldFromJsonValueFree(inline(0.1)).key);
+    expect(fieldFromJsonValueFree(inline(0.05)).key).toBe('param("amp")');
+    // ...while an ordinary build still substitutes.
+    expect(fieldFromJson(inline(0.05)).key).toBe(constant(0.05).key);
+  });
+
+  it("refuses a value the grammar could not have written as a literal", () => {
+    expect(() => fieldFromJson(inline(Number.NaN))).toThrow(/\$\.value: param "amp": an inline value/);
+    expect(() => fieldFromJson({ fn: "param", name: "amp", value: [] })).toThrow(
+      /an inline value must be a finite number .* or a non-empty array of finite numbers/s,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "amp", value: "0.5" })).toThrow(
+      /omit the key entirely for a param that only a binder supplies/,
+    );
+    // Validated even when a binding overrides it: a spec that parses only
+    // while something happens to shadow it breaks the day it is unwrapped.
+    expect(() => fieldFromJson(inline(Number.POSITIVE_INFINITY), { amp: 1 })).toThrow(
+      /an inline value must be a finite number/,
+    );
+  });
+
+  it("refuses a dot in a param name", () => {
+    // A panel addresses a field-spec param as
+    // "<nodeId>.<paramKey>.<fieldParamName>", so a dot inside the name
+    // would split that address somewhere nothing can put back together.
+    // No registered node param name contains one today, which is a fact
+    // about current data — this is what makes it a rule.
+    expect(() => fieldFromJson({ fn: "param", name: "a.b" })).toThrow(
+      /\$\.name: param name "a\.b" contains a "\."/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "a.b" })).toThrow(
+      /"<nodeId>\.<paramKey>\.<fieldParamName>".*rename the param without a dot/s,
+    );
+    // Refused wherever it appears, and whatever it carries.
+    expect(() =>
+      fieldFromJson({ fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "a.b", value: 1 }] }),
+    ).toThrow(/\$\.args\[1\]\.name: param name "a\.b"/);
+    expect(() => fieldFromJson({ fn: "param", name: "a.b" }, { "a.b": 1 })).toThrow(/contains a "\."/);
+    // A name with no dot is untouched, dots elsewhere included.
+    expect(() => fieldFromJson({ fn: "attributeIs", name: "species", value: "a.b" })).not.toThrow();
+  });
+
+  it("unboundParamNamesOf lists only what a binder must still supply", () => {
+    const spec: FieldSpec = {
+      fn: "add",
+      args: [{ fn: "param", name: "amp", value: 1 }, { fn: "param", name: "freq" }],
+    };
+    expect(paramNamesOf(spec)).toEqual(["amp", "freq"]);
+    expect(unboundParamNamesOf(spec)).toEqual(["freq"]);
+    // One name mentioned twice, once bare, is still owed: the bare
+    // reference is as unbound as it ever was.
+    const mixed: FieldSpec = {
+      fn: "add",
+      args: [{ fn: "param", name: "amp", value: 1 }, { fn: "param", name: "amp" }],
+    };
+    expect(unboundParamNamesOf(mixed)).toEqual(["amp"]);
   });
 });
 

@@ -629,6 +629,35 @@ describe("folding through a param", () => {
     }
   });
 
+  it("folds a param that supplies its own value, like the number it carries", () => {
+    // An INLINE value is stamped through the same channel a binding's is,
+    // so the fold needs no knowledge of it: `paramValue` answers, the
+    // reference reads domain-constant, and the rebuild re-supplies the
+    // number. This is the second of the two paths the stamp buys (the
+    // WGSL uniform payload is the other).
+    const inline = (v: number): FieldSpec => ({
+      fn: "mul",
+      args: [{ fn: "param", name: "amp", value: v }, seedShift(1021, 0.2, 1600)],
+    });
+    const shift = seedShiftStaged(SEED, 1021, 0.2, 1600);
+
+    const three = fieldFromJson(inline(3));
+    expect(fieldToJson(foldDomainConstants(three, SEED, FOLD_ANY_SIZE)))
+      .toEqual({ fn: "constant", value: Math.fround(3 * shift) });
+    // Two values fold to two numbers, which is the same statement the key
+    // makes: nothing here may serve one value's fold for another's.
+    expect(fieldToJson(foldDomainConstants(fieldFromJson(inline(5)), SEED, FOLD_ANY_SIZE)))
+      .toEqual({ fn: "constant", value: Math.fround(5 * shift) });
+    // And the fold changed the cost, not the answer.
+    expect(outcome(foldDomainConstants(fieldFromJson(inline(5)), SEED, FOLD_ANY_SIZE), spreadCtx(2)))
+      .toBe(outcome(fieldFromJson(inline(5)), spreadCtx(2)));
+
+    // An outer binding still wins into the fold, because it won at build
+    // time — the fold only ever re-supplies what the field was made with.
+    expect(fieldToJson(foldDomainConstants(fieldFromJson(inline(3), { amp: 5 }), SEED, FOLD_ANY_SIZE)))
+      .toEqual({ fn: "constant", value: Math.fround(5 * shift) });
+  });
+
   it("declines a param nothing bound, leaving the refusal exactly as it was", () => {
     const field = fieldFromJson(structuredClone(scaled) as FieldSpec);
     expect(foldDomainConstants(field, SEED, FOLD_ANY_SIZE)).toBe(field);
