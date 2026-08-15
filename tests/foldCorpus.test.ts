@@ -87,18 +87,69 @@ interface Case {
   readonly graph: string;
   readonly node: string;
   readonly spec: FieldSpec;
+  /** What a wrapping subgraph binds this body expression's params to. */
+  readonly bindings?: Record<string, number | readonly number[]>;
+}
+
+/** A JSON node, as much of one as this file reads. */
+interface GraphNode {
+  readonly id?: string;
+  readonly params?: Record<string, unknown>;
+  readonly subgraph?: {
+    readonly params?: { name?: string; default?: unknown }[];
+    readonly graph?: { nodes?: GraphNode[] };
+  };
+}
+
+/** A binding a field expression can take: the values, not the fields. */
+function bindable(v: unknown): number | readonly number[] | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "number" && Number.isFinite(x))) {
+    return v as readonly number[];
+  }
+  return undefined;
+}
+
+/**
+ * Every field expression in a node list, and — for a SUBGRAPH node — the
+ * expressions in its body along with what the wrapper binds their `param`
+ * references to.
+ *
+ * Bound, because that is how the graph cooks them: `withExposedParams`
+ * calls `fieldFromJson(spec, bindings)` per cook, and the fold now folds
+ * THROUGH those references. An unbound rebuild would exercise the
+ * decline instead, which is the path this suite covered before and is no
+ * longer the interesting one.
+ */
+function collect(nodes: readonly GraphNode[] | undefined, graph: string, cases: Case[]): void {
+  for (const node of nodes ?? []) {
+    for (const spec of specsIn(node.params)) {
+      cases.push({ graph, node: String(node.id ?? "?"), spec });
+    }
+    const sub = node.subgraph;
+    if (sub === undefined) continue;
+    // The node's own values over the exposure's defaults — the same
+    // precedence the wrapper applies, so what is bound here is what a cook
+    // would bind.
+    const bindings: Record<string, number | readonly number[]> = {};
+    for (const exposed of sub.params ?? []) {
+      const value = bindable(exposed.default);
+      if (typeof exposed.name === "string" && value !== undefined) bindings[exposed.name] = value;
+    }
+    for (const [name, raw] of Object.entries(node.params ?? {})) {
+      const value = bindable(raw);
+      if (value !== undefined) bindings[name] = value;
+    }
+    const body: Case[] = [];
+    collect(sub.graph?.nodes, graph, body);
+    for (const c of body) cases.push({ ...c, bindings: c.bindings ?? bindings });
+  }
 }
 
 const cases: Case[] = [];
 for (const entry of loadGraphs(ROOT)) {
-  const json = JSON.parse(readFileSync(`${ROOT}${entry.path}`, "utf8")) as {
-    nodes?: { id?: string; params?: unknown }[];
-  };
-  for (const node of json.nodes ?? []) {
-    for (const spec of specsIn(node.params)) {
-      cases.push({ graph: entry.path, node: String(node.id ?? "?"), spec });
-    }
-  }
+  const json = JSON.parse(readFileSync(`${ROOT}${entry.path}`, "utf8")) as { nodes?: GraphNode[] };
+  collect(json.nodes, entry.path, cases);
 }
 
 describe(`field expressions across ${GRAPHS_DIR}/ fold without changing a byte`, () => {
@@ -111,12 +162,13 @@ describe(`field expressions across ${GRAPHS_DIR}/ fold without changing a byte`,
 
   let built = 0;
   let actuallyFolded = 0;
+  let foldedThroughParam = 0;
 
   for (const [i, c] of cases.entries()) {
     it(`${c.graph} node "${c.node}" [${i}]`, () => {
       let field;
       try {
-        field = fieldFromJson(c.spec);
+        field = fieldFromJson(c.spec, c.bindings);
       } catch {
         // A spec that does not stand alone — an unbound `param`, most
         // often, since bindings live outside the spec. Not this suite's
@@ -133,7 +185,10 @@ describe(`field expressions across ${GRAPHS_DIR}/ fold without changing a byte`,
       ] as const) {
         const ctx = variedCtx(count, seed);
         const folded = foldDomainConstants(field, seed, FOLD_ANY_SIZE);
-        if (folded !== field) actuallyFolded++;
+        if (folded !== field) {
+          actuallyFolded++;
+          if (JSON.stringify(c.spec).includes('"fn":"param"')) foldedThroughParam++;
+        }
 
         const a = tryEvaluate(field, ctx);
         const b = tryEvaluate(folded, ctx);
@@ -172,5 +227,11 @@ describe(`field expressions across ${GRAPHS_DIR}/ fold without changing a byte`,
     // a real defect and not a reason to lower the number.
     expect(built).toBeGreaterThan(20);
     expect(actuallyFolded).toBeGreaterThan(10);
+    // And on an expression carrying a `param`, which the corpus reaches
+    // only through a subgraph body cooked with its wrapper's bindings.
+    // Zero here means the fold has gone back to refusing them, or that
+    // this file stopped binding — either way the shipped param
+    // expressions are no longer covered at the byte level.
+    expect(foldedThroughParam).toBeGreaterThan(0);
   });
 });

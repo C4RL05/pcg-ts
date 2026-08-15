@@ -25,6 +25,15 @@
  * A field carrying no spec — a hand-written `makeField` closure — is
  * returned untouched, because nothing can name what it computes.
  *
+ * **A bound `param` folds like the number it stands for.** The value a
+ * reference was substituted with is recoverable from the spec node it was
+ * stamped on ({@link paramBindings}), so the rebuild can re-supply it and
+ * a chain built out of one is as domain-constant as any other. Baking it
+ * into a literal cannot go stale: substitution happens at BUILD time, so
+ * the value is already fixed in the field this was handed, and rebinding
+ * a param builds a new field — a new cache key — rather than moving the
+ * old one's value.
+ *
  * Applied at the CPU resolve seam only (`resolveOnAllowingNonFinite` in
  * `src/nodes/util.ts`), and deliberately not on the GPU path: `nodeSeed`
  * already lowers to a uniform there and the compiler already value-numbers
@@ -33,8 +42,8 @@
  * eligibility turns on.
  */
 import { createPointCloud } from "../data/index.js";
-import { fieldFromJson, fnVariation } from "./fieldJson.js";
-import { type FieldSpec, isSpecNumber, peekFieldSpec } from "./spec.js";
+import { type FieldBindings, fieldFromJson, fnVariation, paramNamesOf } from "./fieldJson.js";
+import { type FieldBindingValue, type FieldSpec, isSpecNumber, paramValue, peekFieldSpec } from "./spec.js";
 import { type EvalContext, type Field, evaluateField } from "./types.js";
 
 /**
@@ -149,8 +158,30 @@ function positionOpt(spec: FieldSpec): unknown {
  * five noises are the only fns that accept an `opts` at all and all five
  * are classified per-element, so a node with a position option never
  * reaches this test as a candidate.
+ *
+ * `param` is the one case decided by a VALUE rather than by the registry,
+ * and necessarily so. {@link fnVariation} answers per FN, before any
+ * binding exists, so it has to answer for every value the name can take —
+ * and one of those is a `Field`, a noise or a position spliced in where
+ * the reference stands, which varies per element. `"per-element"` is the
+ * only sound per-fn answer and it stays that way. Here, though, the node
+ * itself is in hand and so is what was bound to it: a stamped
+ * {@link paramValue} is a number or a tuple ({@link FieldBindingValue}
+ * admits nothing else), and a number does not vary over a domain. A
+ * `Field` binding stamps no value — it records a SPEC instead
+ * (`attachParamSpec`) — so it reads as unstamped here and stays
+ * per-element, which is exactly right: the fold cannot see through a
+ * spliced expression from the reference alone.
+ *
+ * That last case is unreachable today, because {@link paramBindings}
+ * declines the whole field before any walk begins when a stamp is
+ * missing. It is still tested for here rather than assumed from the
+ * caller: this predicate decides what may be replaced by a number, and a
+ * rule that answers on its own terms cannot drift apart from the gate
+ * that currently makes it redundant.
  */
 function isDomainConstant(spec: FieldSpec): boolean {
+  if (spec.fn === "param") return paramValue(spec) !== undefined;
   if (fnVariation(spec.fn) !== "uniform") return false;
   const args = spec.args;
   if (args === undefined) return true;
@@ -197,8 +228,16 @@ function isWorthFolding(spec: FieldSpec): boolean {
  * nodes; a throw that reaches this frame is a bug in the fold, and it
  * should fail loudly rather than be swallowed as a decline.
  */
-function foldToLiteral(spec: FieldSpec, ctx: EvalContext): FieldSpec | undefined {
-  const col = evaluateField(fieldFromJson(spec), ctx);
+function foldToLiteral(
+  spec: FieldSpec,
+  ctx: EvalContext,
+  bindings: FieldBindings | undefined,
+): FieldSpec | undefined {
+  // The same bindings the whole rebuild uses: a subtree may be
+  // domain-constant BECAUSE of a param, and building it without the value
+  // would evaluate an unbound reference rather than the number it stands
+  // for.
+  const col = evaluateField(fieldFromJson(spec, bindings), ctx);
   const values: number[] = [];
   for (let k = 0; k < col.tupleSize; k++) {
     const v = col.data[k];
@@ -221,17 +260,17 @@ function foldToLiteral(spec: FieldSpec, ctx: EvalContext): FieldSpec | undefined
  * cost of a rule that is no longer one sentence: what the seam sees for
  * an expression the fold could not take is exactly what the author wrote.
  */
-function rewrite(spec: FieldSpec, ctx: EvalContext): FieldSpec {
+function rewrite(spec: FieldSpec, ctx: EvalContext, bindings: FieldBindings | undefined): FieldSpec {
   if (isDomainConstant(spec) && isWorthFolding(spec)) {
-    return foldToLiteral(spec, ctx) ?? spec;
+    return foldToLiteral(spec, ctx, bindings) ?? spec;
   }
   const args = Array.isArray(spec.args) ? spec.args : undefined;
-  const nextArgs = args?.map((a) => (isSpec(a) ? rewrite(a, ctx) : a));
+  const nextArgs = args?.map((a) => (isSpec(a) ? rewrite(a, ctx, bindings) : a));
   const argsChanged = args !== undefined && nextArgs !== undefined &&
     nextArgs.some((a, i) => a !== args[i]);
 
   const position = positionOpt(spec);
-  const nextPosition = isSpec(position) ? rewrite(position, ctx) : position;
+  const nextPosition = isSpec(position) ? rewrite(position, ctx, bindings) : position;
   const positionChanged = nextPosition !== position;
 
   if (!argsChanged && !positionChanged) return spec;
@@ -241,38 +280,109 @@ function rewrite(spec: FieldSpec, ctx: EvalContext): FieldSpec {
   return out as unknown as FieldSpec;
 }
 
+/** Two stamps for one name: the same number, or the same tuple. */
+function sameBinding(a: FieldBindingValue, b: FieldBindingValue): boolean {
+  if (typeof a === "number" || typeof b === "number") return Object.is(a, b);
+  return a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+}
+
 /**
- * Does this spec reference a `param` anywhere?
+ * What every `param` reference in `spec` was bound to, by name — or
+ * undefined to DECLINE the whole field, folds and rebuild together.
  *
- * A field built with bindings carries the REFERENCE in its spec and the
- * bound value outside it, keyed on the spec node (see `attachParamValue`)
- * — so rebuilding that spec through `fieldFromJson` without the bindings
- * produces an unbound param, a field that refuses to evaluate. The fold
- * has no bindings to pass and no business inventing them, so a spec that
- * mentions one is left alone entirely. Classifying `param` as per-element
- * keeps it out of any FOLD; this keeps it out of the REBUILD too, which
- * is the part that would break.
+ * A param is substituted at BUILD time: the REFERENCE stays in the spec
+ * so it serializes as one, while the value rides beside the node in a
+ * side table (`attachParamValue`, keyed per node so it survives
+ * composition). Rebuilding that spec with no bindings would therefore
+ * produce an unbound param — a field that refuses to evaluate — which is
+ * why this module once declined every spec that mentioned one.
+ *
+ * The values are recoverable, though, and something already recovers
+ * them: `paramSlotValues` in `src/gpu/compile.ts` fills its uniform slots
+ * from `paramValue`, not from any subgraph object. What makes the same
+ * move work here is that {@link peekFieldSpec} hands back the field's OWN
+ * spec object rather than a defensive copy, so the nodes the fold walks
+ * are the stamped ones; and {@link rewrite} structure-shares every node it
+ * does not replace, so the `param` leaves in the rewritten tree are those
+ * same objects again.
+ *
+ * Two ways to decline, and both are the same sentence — this cannot
+ * reproduce the build, so it must not attempt one:
+ *
+ * - An UNSTAMPED node. Nothing bound the name, and the rebuild would be
+ *   the same unbound param refusing in the same words — so declining
+ *   reaches that place without spending the rewrite. Or the binding was a
+ *   `Field`, which records a spec to SPLICE rather than a value to
+ *   substitute; the parser can rebuild from that record, but the map this
+ *   returns is keyed by name and the spliced spec has its own params,
+ *   under names chosen by whoever wrote it. Rebuilding through this map
+ *   would let an outer name capture an inner one and substitute a number
+ *   the inner expression never saw. Bindings that are not visible cannot
+ *   be reproduced, so the field is left exactly as the author wrote it,
+ *   which is what its behavior already was.
+ * - TWO stamps for ONE name. {@link FieldBindings} is keyed by name, so
+ *   the rebuild can carry only one value per name. Within a single
+ *   `fieldFromJson` call every reference to a name gets the same binding,
+ *   but composition can put two independently built subtrees under one
+ *   spec (`mul(fieldFromJson(s, {a: 1}), fieldFromJson(s, {a: 2}))`), and
+ *   there the name means two different numbers. Picking one would change
+ *   what the field computes, so this declines instead.
  */
-function hasParamReference(spec: FieldSpec): boolean {
-  if (spec.fn === "param") return true;
+function paramBindings(spec: FieldSpec, into: Record<string, FieldBindingValue>): boolean {
+  if (spec.fn === "param") {
+    const name = spec.name;
+    // A nameless reference is a spec the parser refuses, so it can only be
+    // reached by walking one the fold was handed rather than one it built.
+    // Nothing to key a binding on, and nothing worth a second guess.
+    if (typeof name !== "string" || name === "") return false;
+    const value = paramValue(spec);
+    if (value === undefined) return false;
+    const seen = into[name];
+    if (seen !== undefined && !sameBinding(seen, value)) return false;
+    into[name] = value;
+    return true;
+  }
   if (Array.isArray(spec.args)) {
     for (const a of spec.args) {
-      if (isSpec(a) && hasParamReference(a)) return true;
+      if (isSpec(a) && !paramBindings(a, into)) return false;
     }
   }
   const position = positionOpt(spec);
-  return isSpec(position) && hasParamReference(position);
+  return !isSpec(position) || paramBindings(position, into);
 }
 
 function foldOnce(field: Field, spec: FieldSpec, seed: number): Field {
-  if (hasParamReference(spec)) return field;
+  // Null-prototype, because a param name is an author's string and
+  // `"__proto__"`, `"constructor"` and `"toString"` are among the strings
+  // they may write. On a plain object every one of them answers a lookup
+  // that should have missed, so the conflict test above reads an
+  // inherited value as a second stamp and declines a field that folds
+  // perfectly well. Losing the fold is the whole cost — the decline is
+  // still a decline — which is exactly why it would never have been
+  // noticed.
+  const collected = Object.create(null) as Record<string, FieldBindingValue>;
+  if (!paramBindings(spec, collected)) return field;
+  // Cross-checked against the PARSER's own walk, not trusted from this
+  // module's. `paramBindings` visits `args` entries and `opts.position`,
+  // which is every field-valued position the grammar has — but that is a
+  // fact about the registry as it stands, and the day a fn puts a spec
+  // somewhere else this walk would miss a reference while the rebuild
+  // still needed its value, turning a legal cook into an unbound-param
+  // throw. `paramNamesOf` reads the same tree through `walkSpecNodes`,
+  // which such a fn would have to teach; a name it found and this did not
+  // is that drift, and declining keeps the cost a missed fold.
+  if (paramNamesOf(spec).length !== Object.keys(collected).length) return field;
+  // Undefined rather than an empty map when the spec names no param, so a
+  // param-free field takes the exact build path it took before this
+  // module could see through one.
+  const bindings: FieldBindings | undefined = Object.keys(collected).length > 0 ? collected : undefined;
   // ONE context for the whole walk, so the sub-chains a spec repeats (the
   // seed shift appears once per axis) are evaluated once between them —
   // `evaluateField` memoizes per context object, keyed on the field key.
   const ctx: EvalContext = { geo: ONE_POINT, domain: "point", seed };
-  const rewritten = rewrite(spec, ctx);
+  const rewritten = rewrite(spec, ctx, bindings);
   if (rewritten === spec) return field;
-  return fieldFromJson(rewritten);
+  return fieldFromJson(rewritten, bindings);
 }
 
 /**

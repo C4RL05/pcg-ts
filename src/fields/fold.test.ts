@@ -9,8 +9,10 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { resolveOn } from "../nodes/util.js";
+import { add } from "./combinators.js";
 import { fieldFromJson, fieldToJson, fnVariation, listFieldFns, type FieldSpec } from "./fieldJson.js";
 import { foldDomainConstants } from "./fold.js";
+import { paramValue, peekFieldSpec } from "./spec.js";
 import { type Column, type EvalContext, type Field, evaluateField, makeField } from "./types.js";
 
 const SEED = 0x9e3779b9;
@@ -169,18 +171,23 @@ describe("domain-constant folding", () => {
     expect(foldDomainConstants(opaque, SEED, FOLD_ANY_SIZE)).toBe(opaque);
   });
 
-  it("leaves a spec that references a param alone", () => {
-    // The binding rides OUTSIDE the spec, keyed on the spec node, so a
-    // rebuild without it would produce an unbound param — a field that
-    // refuses to evaluate at all. The chain beside the reference is
-    // foldable; the reference is what makes the whole field untouchable.
+  it("folds a chain built out of a bound param", () => {
+    // The binding rides OUTSIDE the spec, keyed on the spec node — but it
+    // is READABLE there, so the rebuild can re-supply it and the reference
+    // folds like the number it was substituted with. A param bound to a
+    // scalar cannot vary over a domain, so the whole chain is one number.
     const field = fieldFromJson(
       { fn: "mul", args: [seedShift(1021, 0.2, 1600), { fn: "param", name: "amp" }] },
       { amp: 3 },
     );
+    const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
 
-    expect(foldDomainConstants(field, SEED, FOLD_ANY_SIZE)).toBe(field);
-    expect(() => values(foldDomainConstants(field, SEED, FOLD_ANY_SIZE), spreadCtx(2))).not.toThrow();
+    expect(folded).not.toBe(field);
+    expect(fieldToJson(folded)).toEqual({
+      fn: "constant",
+      value: Math.fround(seedShiftStaged(SEED, 1021, 0.2, 1600) * 3),
+    });
+    expect(values(folded, spreadCtx(2))).toEqual(values(field, spreadCtx(2)));
   });
 
   it("folds per seed, and remembers the answer per (field, seed)", () => {
@@ -433,7 +440,7 @@ describe("domain-constant folding, differentially", () => {
     expect(subject(mixed, ctx)).toBe(reference(mixed, ctx));
   });
 
-  it("refuses a param wherever it hides, including inside a noise's position", () => {
+  it("agrees with the unfolded resolve wherever a param hides, noise position included", () => {
     const hidden: FieldSpec[] = [
       { fn: "param", name: "a" },
       { fn: "mul", args: [{ fn: "param", name: "a" }, 2] },
@@ -463,12 +470,28 @@ describe("domain-constant folding, differentially", () => {
         ],
       },
     ];
+    let rewritten = 0;
     for (const spec of hidden) {
-      const field = fieldFromJson(structuredClone(spec) as FieldSpec, { a: 3 });
-      expect([JSON.stringify(spec), foldDomainConstants(field, 9, FOLD_ANY_SIZE)]).toEqual([JSON.stringify(spec), field]);
-      // And it still evaluates: an unbound param refuses to.
-      expect(render(foldDomainConstants(field, 9, FOLD_ANY_SIZE), variedCtx(3, "point", 9))).not.toContain("throw:");
+      const ctx = variedCtx(3, "point", 9);
+      // The reference is a field the fold has never been handed, built the
+      // way the graph builds it — with the bindings, since the value is
+      // what the reference stands for.
+      const bound = () => fieldFromJson(structuredClone(spec) as FieldSpec, { a: 3 });
+      const field = bound();
+      const folded = foldDomainConstants(field, 9, FOLD_ANY_SIZE);
+      if (folded !== field) rewritten++;
+      const got = render(folded, ctx);
+      expect([JSON.stringify(spec), got]).toEqual([JSON.stringify(spec), render(bound(), ctx)]);
+      // And it still evaluates: a rebuild that dropped the binding would
+      // hand back an unbound param, which refuses to.
+      expect([JSON.stringify(spec), got.includes("throw:")]).toEqual([JSON.stringify(spec), false]);
     }
+    // Teeth: every assertion above passes if the fold declines everything,
+    // which is exactly what it used to do with a param in sight. All but
+    // the first rewrite — that one is a BARE reference with nothing
+    // composed under it, and a fold that saved a leaf would be a re-parse
+    // spent on nothing.
+    expect(rewritten).toBe(hidden.length - 1);
   });
 
   it("throws what the unfolded resolve throws, and no sooner", () => {
@@ -496,6 +519,186 @@ describe("domain-constant folding, differentially", () => {
         ]);
       }
     }
+  });
+});
+
+/**
+ * Seeing through a `param`, and the four ways of not seeing through one.
+ *
+ * The value a reference was substituted with is recorded beside the spec
+ * node, so the fold can re-supply it to the rebuild and treat the
+ * reference as the number it stands for. That holds only while the value
+ * is RECOVERABLE and UNAMBIGUOUS, and the interesting half of this block
+ * is the cases where it is neither — every one of which must come back as
+ * the original field, untouched.
+ */
+describe("folding through a param", () => {
+  /** `amp * seedShift(...)`: domain-constant exactly when `amp` is. */
+  const scaled: FieldSpec = { fn: "mul", args: [{ fn: "param", name: "amp" }, seedShift(1021, 0.2, 1600)] };
+
+  /** What a field evaluates to, or the refusal it raises, as one string. */
+  function outcome(field: Field, ctx: EvalContext): string {
+    try {
+      const col = evaluateField(field, ctx);
+      return Array.from(col.data).map((v) => (Object.is(v, -0) ? "-0" : String(v))).join(",");
+    } catch (e) {
+      return `throw:${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  it("substitutes the value THIS field was built with", () => {
+    // One spec object, two builds, two bindings. `fieldFromJson` stamps a
+    // clone per call, so the two never share a record — and the fold is
+    // keyed on the field INSTANCE, so neither can be served the other's
+    // number. This is the whole cache-soundness question: a param is
+    // substituted at build time, so rebinding produces a new field rather
+    // than moving a value under an existing one.
+    const spec: FieldSpec = { fn: "mul", args: [{ fn: "param", name: "amp" }, seedShift(1021, 0.2, 1600)] };
+    const three = fieldFromJson(spec, { amp: 3 });
+    const five = fieldFromJson(spec, { amp: 5 });
+    const shift = seedShiftStaged(SEED, 1021, 0.2, 1600);
+
+    expect(fieldToJson(foldDomainConstants(three, SEED, FOLD_ANY_SIZE)))
+      .toEqual({ fn: "constant", value: Math.fround(3 * shift) });
+    expect(fieldToJson(foldDomainConstants(five, SEED, FOLD_ANY_SIZE)))
+      .toEqual({ fn: "constant", value: Math.fround(5 * shift) });
+    // And each still says what its own unfolded field says.
+    expect(outcome(foldDomainConstants(five, SEED, FOLD_ANY_SIZE), spreadCtx(2)))
+      .toBe(outcome(fieldFromJson(spec, { amp: 5 }), spreadCtx(2)));
+  });
+
+  it("folds a tuple binding as the tuple it is", () => {
+    const spec: FieldSpec = { fn: "add", args: [{ fn: "param", name: "off" }, { fn: "vec", args: [1, 2, 3] }] };
+    const field = fieldFromJson(spec, { off: [10, 20, 30] });
+    const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
+
+    expect(fieldToJson(folded)).toEqual({ fn: "constant", value: [11, 22, 33] });
+    expect(outcome(folded, spreadCtx(2))).toBe(outcome(field, spreadCtx(2)));
+  });
+
+  it("folds one name read twice, which is what the rig writes", () => {
+    // `graphs/examples-rig.json` reads `wanderScale` from two sibling
+    // expressions in one spec. Bindings are keyed by NAME, so both
+    // references resolve to the one value — the case that makes a
+    // name-keyed rebuild sound rather than a coincidence.
+    const spec: FieldSpec = {
+      fn: "add",
+      args: [
+        { fn: "mul", args: [{ fn: "param", name: "s" }, seedShift(1021, 0.2, 1600)] },
+        { fn: "mul", args: [{ fn: "param", name: "s" }, seedShift(3067, 0.3, 900)] },
+      ],
+    };
+    const field = fieldFromJson(spec, { s: 0.25 });
+    const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
+
+    expect(folded).not.toBe(field);
+    expect(outcome(folded, spreadCtx(3))).toBe(outcome(fieldFromJson(spec, { s: 0.25 }), spreadCtx(3)));
+  });
+
+  it("folds a Field binding that is a constant, which binds as its value", () => {
+    // `fieldFromJson` records a constant-valued FIELD as the literal it
+    // carries, so this arrives here stamped like a number and folds like
+    // one. The sandbox's "field mode" seeds a knob with exactly this.
+    const field = fieldFromJson(scaled, { amp: fieldFromJson({ fn: "constant", value: 4 }) });
+    const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
+
+    expect(fieldToJson(folded)).toEqual({
+      fn: "constant",
+      value: Math.fround(4 * seedShiftStaged(SEED, 1021, 0.2, 1600)),
+    });
+  });
+
+  it("folds a param whose name is one of Object's", () => {
+    // A param name is an author's string, and some of the strings they
+    // may write already mean something to a plain JS object. Collected
+    // into one, they read back as a stamp nobody made and the field
+    // declines — a fold lost to a name, and lost silently, since a
+    // decline is never wrong.
+    for (const name of ["__proto__", "constructor", "toString"]) {
+      const spec: FieldSpec = { fn: "mul", args: [{ fn: "param", name }, seedShift(1021, 0.2, 1600)] };
+      // Computed, so `__proto__` is an own property rather than a write to
+      // the prototype — which is how the binding reaches the builder too.
+      const field = fieldFromJson(spec, { [name]: 2 });
+      const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
+
+      expect([name, fieldToJson(folded)]).toEqual([name, {
+        fn: "constant",
+        value: Math.fround(2 * seedShiftStaged(SEED, 1021, 0.2, 1600)),
+      }]);
+      expect([name, outcome(folded, spreadCtx(2))]).toEqual([name, outcome(fieldFromJson(spec, { [name]: 2 }), spreadCtx(2))]);
+    }
+  });
+
+  it("declines a param nothing bound, leaving the refusal exactly as it was", () => {
+    const field = fieldFromJson(structuredClone(scaled) as FieldSpec);
+    expect(foldDomainConstants(field, SEED, FOLD_ANY_SIZE)).toBe(field);
+
+    // Why declining is enough rather than merely convenient: a rebuild of
+    // this spec is a rebuild of the same unbound reference, so it refuses
+    // in the same words. Declining reaches that place without spending the
+    // rewrite, and keeps the refusal's identity in one implementation.
+    const rebuilt = fieldFromJson(structuredClone(scaled) as FieldSpec);
+    expect(outcome(field, spreadCtx(2))).toBe(outcome(rebuilt, spreadCtx(2)));
+    expect(outcome(field, spreadCtx(2))).toContain("nothing bound this name");
+  });
+
+  it("declines a param bound to a Field, whose value the spec cannot show", () => {
+    // A field binding is SPLICED, not substituted: the spec records the
+    // expression to inline, never a value, so `paramValue` is empty here
+    // and the reference stays per-element. Baking it would be a wrong
+    // answer, not a slow one — this binding varies per point.
+    const field = fieldFromJson(scaled, { amp: fieldFromJson({ fn: "component", args: [{ fn: "position" }], index: 0 }) });
+
+    expect(foldDomainConstants(field, SEED, FOLD_ANY_SIZE)).toBe(field);
+    const varying = outcome(field, spreadCtx(3)).split(",");
+    expect(varying[0]).not.toBe(varying[1]);
+  });
+
+  it("declines a param bound to a field the grammar cannot name", () => {
+    // The dangerous one. `attachOpaqueParam` records that SOMETHING was
+    // bound without recording what, so a rebuild would hand back an
+    // unbound param and turn a legal cook into a throw. The decline is
+    // what stands between the two, and the second assertion is what that
+    // rebuild would have done.
+    const opaque = makeField("opaque", 1, (ctx) => ({
+      data: Float32Array.from({ length: ctx.geo.attrs.point.count }, (_, i) => i + 1),
+      tupleSize: 1,
+    }));
+    const field = fieldFromJson(scaled, { amp: opaque });
+
+    expect(foldDomainConstants(field, SEED, FOLD_ANY_SIZE)).toBe(field);
+    expect(outcome(field, spreadCtx(3))).not.toContain("throw:");
+    const spec = peekFieldSpec(field);
+    expect(spec).toBeDefined();
+    expect(outcome(fieldFromJson(spec as FieldSpec), spreadCtx(3))).toContain("nothing bound this name");
+  });
+
+  it("declines when one name carries two values", () => {
+    // Composition can put two independently built subtrees under one spec,
+    // and the stamps ride the NODES, so both survive into it. A
+    // name-keyed rebuild can carry only one value per name, and either
+    // choice changes what half the expression computes.
+    const side = (k: number): FieldSpec => ({
+      fn: "mul",
+      args: [{ fn: "param", name: "amp" }, seedShift(k, 0.2, 1600)],
+    });
+    const one = fieldFromJson(structuredClone(side(1021)) as FieldSpec, { amp: 3 });
+    const two = fieldFromJson(structuredClone(side(3067)) as FieldSpec, { amp: 5 });
+    const composed = add(one, two);
+
+    // The premise, asserted rather than assumed: the composed spec really
+    // does carry both stamps, so the conflict is what the walk meets.
+    const spec = peekFieldSpec(composed) as FieldSpec;
+    const args = spec.args as FieldSpec[];
+    expect([
+      paramValue((args[0].args as FieldSpec[])[0]),
+      paramValue((args[1].args as FieldSpec[])[0]),
+    ]).toEqual([3, 5]);
+
+    expect(foldDomainConstants(composed, SEED, FOLD_ANY_SIZE)).toBe(composed);
+    const shift = (k: number) => seedShiftStaged(SEED, k, 0.2, 1600);
+    expect(outcome(composed, spreadCtx(1)))
+      .toBe(String(Math.fround(Math.fround(3 * shift(1021)) + Math.fround(5 * shift(3067)))));
   });
 });
 

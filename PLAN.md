@@ -35,19 +35,6 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
-**Let the domain-constant fold see through `param`.** The fold
-(`src/fields/fold.ts`) refuses any field whose spec mentions a `param`
-anywhere, so a graph that uses field params — the rig, most of all — gets
-none of it. The reason is structural, not an oversight: a param is
-substituted at BUILD time, so its value lives in the built closure and in
-`Field.key` while the authored spec still says `{"fn":"param"}`.
-Rebuilding from that spec without the bindings yields an unbound param,
-which is a field that refuses to evaluate. Nothing records the bindings
-alongside the field for the fold to pass back to `fieldFromJson`, and
-inventing a place to keep them is the actual work. Worth it when someone
-measures a param-heavy graph and wants the ~10% back; the two facts to
-re-derive are on the fold's own module doc.
-
 **Primitive identity, so primitive-domain randomness stops being
 index-keyed.** Point-domain randomness is keyed on position bits and a
 seed attribute (`src/data/identity.ts`), so it survives a renumbering.
@@ -195,6 +182,32 @@ transcripts are not. Fixing it means either generating them or asserting
 them, and both are real work.
 
 ## Stretch — surveyed and NOT scheduled
+
+- **Lowering the fold's element threshold so a param-bearing graph pays
+  for itself.** Measured 2026-08-15, right after `src/fields/fold.ts`
+  learned to see through a bound `param` — it recovers each reference's
+  substituted value from the stamp beside its spec node and re-supplies it
+  to the rebuild, which is what the old backlog entry here asked for.
+  **Recommendation: do not schedule.** The mechanism works and pays where
+  it applies: the rig's own spine-wander expression — three bound params
+  over twelve seed-shift chains — resolved across 40 000 points goes 89.2
+  ms → 85.5 ms warm (medians of 24 cooks per side, interleaved
+  process-by-process; p25–p75 87.3–92.8 against 77.5–88.8, and -4% to -7%
+  across repeats of the whole experiment) and 109.1 ms → 101.1 ms cold,
+  which is the steadier number at -7 to -8% every time because a cold
+  process pays the fold's miss as well as its saving. Byte-identical
+  output either way. But no SHIPPED graph is in that regime.
+  `examples-rig.json` resolves that expression over its
+  130-point spine and `basics-field-params.json` over 576 points, both
+  under `MIN_ELEMENTS_TO_FOLD` (1024), so the whole-graph cook does not
+  move: two runs of the same interleaved experiment gave +0.6% and -1.8%
+  warm, -2.7% and -3.2% cold — a difference whose SIGN is not repeatable
+  is the definition of noise. The "~10% back" the old entry promised is
+  therefore not available to the corpus as it stands, and the threshold is
+  not the thing to move for it: it exists because a fold MISS is a fixed
+  cost against a per-element saving, and without it a 16-point streamed
+  cell measured 16.8x SLOWER. The win arrives on its own the first time a
+  param-bearing expression lands on a domain of thousands.
 
 - **Rescaling the shared noise convention so an amplitude knob reaches
   its stated bound.** Measured 2026-08-09 across all 34 primitives.
