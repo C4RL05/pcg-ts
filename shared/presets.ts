@@ -3,7 +3,7 @@
  * The graph corpus under `graphs/` as a pickable list.
  *
  * Those 40 files already exist as the corpus the preview page renders and
- * `scripts/gen-examples.mjs` catalogs; each carries its own `meta` block
+ * `scripts/gen-graphs.mjs` catalogs; each carries its own `meta` block
  * with a title and a description. The sandbox picks from the same set, so
  * a preset is not a new artefact to maintain — adding a graph to the
  * corpus adds it to the menu.

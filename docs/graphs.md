@@ -1,6 +1,6 @@
 # Example corpus
 
-Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-examples.mjs` — do not edit by hand. The same index, machine-readable, is in [graphs.json](./graphs.json). For the graph JSON format see [authoring.md](./authoring.md); for the node types these graphs use, [nodes.md](./nodes.md); for the primitives they reference, [primitives.md](./primitives.md).
+Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.mjs` — do not edit by hand. The same index, machine-readable, is in [graphs.json](./graphs.json). For the graph JSON format see [authoring.md](./authoring.md); for the node types these graphs use, [nodes.md](./nodes.md); for the primitives they reference, [primitives.md](./primitives.md).
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 

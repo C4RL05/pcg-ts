@@ -5,7 +5,7 @@
  * WHY IT LIVES UNDER `src/` AND NOT IN `scripts/` — the same reason
  * node-reference.ts does, and its comment carries the full argument. Two
  * callers must render from the same code or the drift test drifts from
- * the generator it guards: `scripts/gen-examples.mjs` (writes the files)
+ * the generator it guards: `scripts/gen-graphs.mjs` (writes the files)
  * and `graphIndex.test.ts` (compares the committed files against a fresh
  * render). The test must run on a fresh clone with no build, so it
  * imports this module from source; the script is plain ESM with no
@@ -244,7 +244,7 @@ function renderMarkdown(entries: readonly ExampleEntry[]): string {
       GRAPHS_DIR +
       "`](../" +
       GRAPHS_DIR +
-      ") by `node scripts/gen-examples.mjs` — do not edit by hand. " +
+      ") by `node scripts/gen-graphs.mjs` — do not edit by hand. " +
       "The same index, machine-readable, is in [graphs.json](./graphs.json). " +
       "For the graph JSON format see [authoring.md](./authoring.md); for the node " +
       "types these graphs use, [nodes.md](./nodes.md); for the primitives they " +

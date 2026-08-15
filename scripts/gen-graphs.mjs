@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Generate the example index (docs/graphs.md + docs/graphs.json) from
- * the corpus files under `graphs/` — their own `meta` blocks plus
+ * the graph files under `graphs/` — their own `meta` blocks plus
  * what each graph structurally contains.
  *
- * Usage: node scripts/gen-examples.mjs
+ * Usage: node scripts/gen-graphs.mjs
  *
- * This script is I/O only — read the corpus, write the files, say what it
+ * This script is I/O only — read the graphs, write the files, say what it
  * wrote. The rendering lives in src/docs/graphIndex.ts (imported here from
  * dist) so the drift test in src/docs/graphIndex.test.ts renders through the
  * exact same code and cannot drift from it.
@@ -15,7 +15,7 @@
  * the rendering. The index is derived from the JSON text, so a graph
  * naming an unregistered node type or an unresolvable primitive would
  * index perfectly while failing to load — a passing generator over a
- * broken corpus, the same failure mode gen-primitives avoids by going
+ * broken set of graphs, the same failure mode gen-primitives avoids by going
  * through the registry. Loading each graph proves the index describes
  * something that exists. (`dist/docs/index.js` registers the shipped
  * primitives on import, which is what makes `ref` nodes resolvable here.)
@@ -42,9 +42,9 @@ async function importDist(relative) {
     if (code === "ERR_MODULE_NOT_FOUND" && message.includes("dist")) {
       console.error(
         [
-          `gen-examples: ${relative.replace("../", "")} not found — the library is not built.`,
+          `gen-graphs: ${relative.replace("../", "")} not found — the library is not built.`,
           "Run `npm run build` first, then re-run:",
-          "  node scripts/gen-examples.mjs",
+          "  node scripts/gen-graphs.mjs",
         ].join("\n"),
       );
       process.exit(1);
@@ -63,28 +63,28 @@ for (const [module, name, exported] of [
   ["dist/docs/index.js", "renderExampleIndex", docs.renderExampleIndex],
 ]) {
   if (typeof exported !== "function") {
-    console.error(`gen-examples: ${module} does not export ${name}(); rebuild with \`npm run build\`.`);
+    console.error(`gen-graphs: ${module} does not export ${name}(); rebuild with \`npm run build\`.`);
     process.exit(1);
   }
 }
 
-const corpus = docs.loadGraphs(root);
-if (corpus.length === 0) {
+const graphs = docs.loadGraphs(root);
+if (graphs.length === 0) {
   console.error(
-    `gen-examples: no ${docs.GRAPH_PREFIXES.map((p) => `${p}*.json`).join(" / ")} files under ${
+    `gen-graphs: no ${docs.GRAPH_PREFIXES.map((p) => `${p}*.json`).join(" / ")} files under ${
       docs.GRAPHS_DIR
     } — nothing to index.`,
   );
   process.exit(1);
 }
 
-for (const entry of corpus) {
+for (const entry of graphs) {
   try {
     lib.deserializeGraph(entry.json);
   } catch (err) {
     console.error(
       [
-        `gen-examples: ${entry.path} does not load, so it must not be indexed as if it did.`,
+        `gen-graphs: ${entry.path} does not load, so it must not be indexed as if it did.`,
         `  ${err && err.message ? err.message : String(err)}`,
       ].join("\n"),
     );
@@ -92,14 +92,14 @@ for (const entry of corpus) {
   }
 }
 
-const { json, markdown } = docs.renderExampleIndex(corpus.map(docs.describeExample));
+const { json, markdown } = docs.renderExampleIndex(graphs.map(docs.describeExample));
 
 const docsDir = join(root, "docs");
 mkdirSync(docsDir, { recursive: true });
 writeFileSync(join(docsDir, "graphs.json"), json);
 writeFileSync(join(docsDir, "graphs.md"), markdown);
 console.log(
-  `gen-examples: wrote docs/graphs.md and docs/graphs.json (${corpus.length} ${
-    corpus.length === 1 ? "example" : "examples"
+  `gen-graphs: wrote docs/graphs.md and docs/graphs.json (${graphs.length} ${
+    graphs.length === 1 ? "example" : "examples"
   })`,
 );

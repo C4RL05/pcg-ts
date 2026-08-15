@@ -10,7 +10,7 @@
  * This pins them together. It renders through the same module the
  * generator uses (src/docs/graphIndex.ts, imported here from source so
  * `npm test` works on a fresh clone with no build) and compares the
- * bytes. If it fails, the fix is `npm run build && npm run docs:examples`,
+ * bytes. If it fails, the fix is `npm run build && npm run docs:graphs`,
  * not relaxing the test.
  */
 import { readFileSync } from "node:fs";
@@ -58,7 +58,7 @@ function drift(file: string, committed: string, generated: string): string {
     `docs/${file} is stale: the example corpus changed but the generated`,
     "index was not regenerated. Run:",
     "",
-    "  npm run build && npm run docs:examples",
+    "  npm run build && npm run docs:graphs",
     "",
     firstDifference(committed, generated),
   ].join("\n");
