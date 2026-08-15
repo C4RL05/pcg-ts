@@ -2,12 +2,13 @@
  * Field specs: the declarative JSON description of a field, and the
  * symbol channel that carries one on a constructed `Field`.
  *
- * This module sits below both `src/fields` (whose constructors DERIVE a
- * spec from their inputs' specs) and `src/nodes/fieldJson.ts` (whose
+ * This module sits below both the field constructors (which DERIVE a
+ * spec from their inputs' specs) and `./fieldJson.ts` (whose
  * `fieldFromJson` REMEMBERS the author's original spec). At runtime it
  * imports nothing but `./types.js` so the combinators can attach specs
- * without `src/fields` ever depending on `src/nodes`; the resolver
- * interface it forwards in {@link resolverView} is a type-only import.
+ * without reaching back up into the grammar that parses them; the
+ * resolver interface it forwards in {@link resolverView} is a type-only
+ * import.
  *
  * Two provenances, one channel:
  *
@@ -57,7 +58,7 @@ export const FIELD_SPEC: unique symbol = Symbol("pcg-ts.fieldSpec");
  * refuse to PRODUCE deeper: a spec the parser would reject is worse than
  * no spec at all, because `serializeGraph` would then write a graph
  * `deserializeGraph` cannot read back. One constant, imported by
- * `src/nodes/fieldJson.ts`, so the two ends cannot drift apart.
+ * `src/fields/fieldJson.ts`, so the two ends cannot drift apart.
  */
 export const MAX_SPEC_DEPTH = 256;
 

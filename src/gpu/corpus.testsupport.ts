@@ -48,7 +48,7 @@ import {
   vec,
 } from "../fields/index.js";
 import { fbm, perlinNoise, simplexNoise, valueNoise, worleyNoise } from "../noise/index.js";
-import type { FieldSpecArg } from "../nodes/fieldJson.js";
+import type { FieldSpecArg } from "../fields/fieldJson.js";
 import type { FieldKernelLayout } from "./types.js";
 
 /** Layout matching the geometry `makeCorpusGeometry` builds. */

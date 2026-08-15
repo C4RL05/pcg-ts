@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { mul, position, type ResidentMemberDesc, type ResidentRunContext } from "../fields/index.js";
-import { fieldFromJson, getFieldSpec, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, getFieldSpec, type FieldSpec } from "../fields/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
 import { planResidentRun } from "./run.js";
 

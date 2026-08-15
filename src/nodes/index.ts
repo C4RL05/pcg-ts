@@ -1,11 +1,17 @@
 /**
- * Standard node library: registry and authoring layer, declarative field
- * JSON, graph JSON serialization, and the standard nodes (sources,
- * samplers, point ops, filtering, attribute ops, value plumbing).
- * Importing this module registers every standard node type.
+ * Standard node library: registry and authoring layer, graph JSON
+ * serialization, and the standard nodes (sources, samplers, point ops,
+ * filtering, attribute ops, value plumbing). Importing this module
+ * registers every standard node type.
  */
 export * from "./registry.js";
-export * from "./fieldJson.js";
+// The field grammar lives in `src/fields/fieldJson.ts` (it is a field
+// constructor, not a node), but `src/fields/index.ts` deliberately does
+// NOT re-export it: that barrel is what the grammar itself imports, and
+// pulling it back in would close a cycle. Re-exported from here instead,
+// which is where the package has always published `fieldFromJson` and
+// friends — the names and the entry point are unchanged.
+export * from "../fields/fieldJson.js";
 export * from "./subgraphParams.js";
 export * from "./serialize.js";
 // The factory only: `ITERATION_MODE`/`MAX_ITERATIONS` and the internals

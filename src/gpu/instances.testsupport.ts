@@ -32,7 +32,7 @@ import type { DeviceInstanceBatch, DeviceTransformsHandle } from "../fields/inde
 import { hashCombine, hashFloat } from "../random/index.js";
 import { dataInput } from "../runtime/dataInput.js";
 import { orientAlongVector, transformPoints } from "../nodes/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import { MAX_INSTANCES, buildInstanceBatches, spawnInstances } from "../spawn/index.js";
 import { BUFFER_USAGE, MAP_MODE, type GpuDeviceLike } from "./device.js";
 import { deviceTransformsBuffer } from "./deviceTransforms.js";

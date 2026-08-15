@@ -14,7 +14,7 @@ import {
   type NodeHandle,
   type ParamSchema,
 } from "../graph/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import { getNodeType, hasNodeType } from "../nodes/registry.js";
 import type { ParamPatch } from "./types.js";
 

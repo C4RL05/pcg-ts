@@ -29,6 +29,15 @@
  *   exact?: false } }`
  * - `{ fn: "fbm", base: "perlinNoise", opts?: { ...noise opts, octaves?,
  *   lacunarity?, gain? } }`
+ *
+ * It lives in `src/fields` because a parsed spec IS a field, and nothing
+ * about it is a node. The cost is that naming the noises means importing
+ * `src/noise`, which is itself built on `src/fields` — so the two
+ * directories reference each other. That stays acyclic because the edge
+ * lands on modules that never come back: `src/fields/index.ts` does not
+ * re-export this file (the package publishes it through
+ * `src/nodes/index.ts`), so nothing `src/noise` imports can reach the
+ * grammar.
  */
 import {
   type Field,
@@ -73,7 +82,7 @@ import {
   sub,
   tan,
   vec,
-} from "../fields/index.js";
+} from "./index.js";
 import {
   type FieldSpec,
   MAX_SPEC_DEPTH,
@@ -91,7 +100,7 @@ import {
   splicedProvenance,
   withheldOver,
   withheldReason,
-} from "../fields/spec.js";
+} from "./spec.js";
 import { NOISE_BASES, WORLEY_OUTPUTS } from "../noise/bases.js";
 import {
   type FbmOpts,
@@ -109,11 +118,12 @@ export class FieldJsonError extends Error {
   }
 }
 
-// The spec type and its accessors live in `src/fields/spec.ts` so the
-// field constructors can derive specs without `src/fields` depending on
-// `src/nodes`. Re-exported here unchanged: this module is still where
-// the public spec API is documented and imported from.
-export { type FieldSpec, type FieldSpecArg, getFieldSpec } from "../fields/spec.js";
+// The spec type and its accessors live beside this module in `spec.ts`,
+// which the field constructors import to derive specs from their inputs'
+// specs — a module the grammar can depend on without depending on the
+// grammar. Re-exported here unchanged: this module is still where the
+// public spec API is documented and imported from.
+export { type FieldSpec, type FieldSpecArg, getFieldSpec } from "./spec.js";
 
 interface FnDef {
   /** Spec keys allowed besides `fn`. */

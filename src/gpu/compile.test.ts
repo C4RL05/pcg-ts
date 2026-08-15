@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeField } from "../fields/index.js";
 import { peekFieldSpec } from "../fields/spec.js";
-import { type FieldSpec, type FieldSpecArg, fieldFromJson, listFieldFns } from "../nodes/fieldJson.js";
+import { type FieldSpec, type FieldSpecArg, fieldFromJson, listFieldFns } from "../fields/fieldJson.js";
 import { paramConstValues } from "./compile.js";
 import { compileFieldSpec, supportedGpuFieldFns } from "./index.js";
 import type { FieldKernelLayout } from "./index.js";

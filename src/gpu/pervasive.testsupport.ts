@@ -11,7 +11,7 @@ import { create } from "webgpu";
 import { Geometry, createTriangleMesh } from "../data/index.js";
 import { evaluateField, type Column, type EvalContext, type Field } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem, type CookResult, type NodeDef } from "../graph/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import {
   jitterPoints,
   orientAlongVector,

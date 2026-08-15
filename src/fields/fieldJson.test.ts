@@ -16,14 +16,14 @@ import {
   sin,
   type EvalContext,
   type Field,
-} from "../fields/index.js";
+} from "./index.js";
 import {
   deviceSpec,
   paramSpecOf,
   paramValue,
   peekFieldSpec,
   specFallbackReason,
-} from "../fields/spec.js";
+} from "./spec.js";
 import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
 import {
   FieldJsonError,

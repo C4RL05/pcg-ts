@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FieldJsonError } from "../nodes/fieldJson.js";
+import { FieldJsonError } from "../fields/fieldJson.js";
 import { GpuCompileError, compileFieldSpec } from "./index.js";
 import type { FieldKernelLayout } from "./index.js";
 

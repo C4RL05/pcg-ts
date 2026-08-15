@@ -31,7 +31,7 @@ import type {
 } from "../fields/index.js";
 import { createGpuCookStats } from "../fields/index.js";
 import { resolverView } from "../fields/spec.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import {
   jitterPoints,
   orientAlongVector,

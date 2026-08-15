@@ -15,7 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { fbm, perlinNoise, simplexNoise, valueNoise, worleyNoise } from "../noise/index.js";
-import { fieldFromJson, listFieldFns } from "../nodes/fieldJson.js";
+import { fieldFromJson, listFieldFns } from "./fieldJson.js";
 import {
   abs,
   acos,
@@ -303,7 +303,7 @@ describe("derived spec round-trip", () => {
    * `constant` — correctly, because that is what was built. The fn exists
    * for JSON, where there are no variables, and it is reachable only
    * through `fieldFromJson`, which is where its round trip is pinned
-   * (`src/nodes/fieldJson.test.ts`).
+   * (`src/fields/fieldJson.test.ts`).
    *
    * So the invariant this asserts is "every DERIVABLE fn is covered
    * here", with the one exception named rather than skip-listed: a fn

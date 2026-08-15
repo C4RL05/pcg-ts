@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { type EvalContext, type Field, evaluateField, mul, position } from "../fields/index.js";
 import type { FieldSpec } from "../fields/spec.js";
-import { fieldFromJson, getFieldSpec, listFieldFns } from "../nodes/fieldJson.js";
+import { fieldFromJson, getFieldSpec, listFieldFns } from "../fields/fieldJson.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { NOISE_BASES, WORLEY_OUTPUTS } from "./bases.js";
 import { fbm } from "./fbm.js";

@@ -22,7 +22,7 @@ import {
   type SubgraphSpec,
 } from "../graph/index.js";
 import { ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
-import { type FieldSpec, fieldFromJson, fieldToJson } from "./fieldJson.js";
+import { type FieldSpec, fieldFromJson, fieldToJson } from "../fields/fieldJson.js";
 import { forEachNode } from "./forEach.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./registry.js";
 import { type ExposedParamDecl, resolveExposedParam } from "./subgraphParams.js";

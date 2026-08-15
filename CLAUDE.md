@@ -37,8 +37,14 @@ Core (reachable from `import "pcg-ts"`):
 - `src/data` — attribute storage (SoA typed arrays), domains, promote/transfer
 - `src/random` — PCG32 RNG, seed hashing (no `Math.random` anywhere)
 - `src/fields` — `Field<T>`, combinators, evaluation context, and the
-  serializable field-expression spec the GPU compiler consumes
-- `src/noise` — value/perlin/simplex/worley/fbm noise as fields
+  serializable field-expression spec the GPU compiler consumes, including
+  the JSON grammar (`fieldJson.ts`) that parses and re-emits it
+- `src/noise` — value/perlin/simplex/worley/fbm noise as fields.
+  `fields` and `noise` reference each other on purpose: noise is built as
+  fields, and the grammar has to name the noises to parse them. It stays
+  acyclic because `src/fields/index.ts` does not re-export the grammar —
+  the package publishes it through `src/nodes/index.ts` — so nothing
+  `src/noise` imports can reach back into it. Keep it that way
 - `src/graph` — nodes, pins, data collections, scheduler, caching, subgraphs
 - `src/runtime` — grid levels, partitioned cooking, streaming, invalidation
 - `src/nodes` — standard node library (samplers, point ops, attribute ops)

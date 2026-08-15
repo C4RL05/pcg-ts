@@ -20,7 +20,7 @@ import {
 import { resolverView } from "../fields/spec.js";
 import { Graph, cook, makeGeometryItem, subgraphNode } from "../graph/index.js";
 import { setAttribute } from "../nodes/attributes.js";
-import { fieldFromJson } from "../nodes/fieldJson.js";
+import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/dataInput.js";
 import { World } from "../runtime/world.js";
 import type { GpuDeviceLike } from "./device.js";

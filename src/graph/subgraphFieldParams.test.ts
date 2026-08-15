@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { constant, isField, mul } from "../fields/index.js";
-import { fieldFromJson } from "../nodes/fieldJson.js";
+import { fieldFromJson } from "../fields/fieldJson.js";
 import { type DataCollection, makeValueItem } from "./data.js";
 import { CookCancelledError } from "./errors.js";
 import { cook } from "./execute.js";

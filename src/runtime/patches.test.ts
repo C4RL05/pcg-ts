@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Geometry } from "../data/index.js";
 import { Graph, GraphValidationError, cook, subgraphNode, type NodeHandle } from "../graph/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import { transformPoints, type TransformPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
 import { resolveExposedParam } from "../nodes/subgraphParams.js";

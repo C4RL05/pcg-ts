@@ -35,7 +35,7 @@
 import { create } from "webgpu";
 import { type Column, createGpuCookStats, evaluateField, makeField } from "../fields/index.js";
 import { type CookResult, Graph, cook, makeGeometryItem } from "../graph/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import { setAttribute } from "../nodes/index.js";
 import { dataInput } from "../runtime/dataInput.js";
 import type { GpuDeviceLike } from "./device.js";

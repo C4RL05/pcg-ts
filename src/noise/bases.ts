@@ -4,7 +4,7 @@
  *
  * ONE table, read by both ends of the round trip — the spec DERIVERS
  * (`fbm`, and the factories themselves through `makeNoiseField`) and the
- * spec PARSER (`src/nodes/fieldJson.ts`). Two copies could drift, and a
+ * spec PARSER (`src/fields/fieldJson.ts`). Two copies could drift, and a
  * deriver that accepts a name the parser does not produces a spec
  * `fieldFromJson` rejects: a graph that saves and cannot be reopened.
  *

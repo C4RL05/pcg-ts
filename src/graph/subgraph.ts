@@ -6,7 +6,7 @@ import { type FieldSpec, isDerivedSpec, peekFieldSpec } from "../fields/spec.js"
 // boundary: this is the grammar itself, which the graph layer needs
 // because a body's field expressions are rebuilt against a wrapper's
 // exposed values at cook time and building is the only door a value has.
-import { type FieldBindings, fieldFromJson, paramNamesOf } from "../nodes/fieldJson.js";
+import { type FieldBindings, fieldFromJson, paramNamesOf } from "../fields/fieldJson.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";

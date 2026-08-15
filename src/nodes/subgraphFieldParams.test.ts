@@ -20,7 +20,7 @@ import {
   subgraphNode,
 } from "../graph/index.js";
 import { dataInput } from "../runtime/dataInput.js";
-import { fieldFromJson, type FieldSpec } from "./fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import { forEachNode } from "./forEach.js";
 import { pointGrid, setAttribute } from "./index.js";
 import {

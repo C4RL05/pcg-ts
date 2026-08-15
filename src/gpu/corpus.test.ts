@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { deviceSpec } from "../fields/spec.js";
-import { getFieldSpec, listFieldFns } from "../nodes/fieldJson.js";
+import { getFieldSpec, listFieldFns } from "../fields/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
 import {
   CORPUS_LAYOUT,

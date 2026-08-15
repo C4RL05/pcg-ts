@@ -11,7 +11,7 @@ import { randomField, type GpuFieldResolver } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem, subgraphNode } from "../graph/index.js";
 import { setAttribute } from "../nodes/index.js";
 import { acceptsDerivedSpecs } from "../fields/spec.js";
-import { fieldFromJson } from "../nodes/fieldJson.js";
+import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
 import { makeCorpusGeometry } from "./testGeometry.js";

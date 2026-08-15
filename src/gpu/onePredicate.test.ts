@@ -61,7 +61,7 @@ import {
 } from "../nodes/index.js";
 import { forEachNode } from "../nodes/forEach.js";
 import { resolveOnMaybeGpu } from "../nodes/util.js";
-import { fieldFromJson } from "../nodes/fieldJson.js";
+import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { planResidentRun } from "./run.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
@@ -643,7 +643,7 @@ describe("fieldFromJson never changes a live field's provenance", () => {
     // second stamping site, would make the claim testable, and this fails
     // until someone writes that test.
     const source = readFileSync(
-      fileURLToPath(new URL("../nodes/fieldJson.ts", import.meta.url)),
+      fileURLToPath(new URL("../fields/fieldJson.ts", import.meta.url)),
       "utf8",
     );
     // The declaration is generic (`function detachedLeaf<N ...>(`), so it

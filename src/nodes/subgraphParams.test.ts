@@ -13,7 +13,7 @@ import {
   defineNode,
   subgraphNode,
 } from "../graph/index.js";
-import { fieldFromJson } from "./fieldJson.js";
+import { fieldFromJson } from "../fields/fieldJson.js";
 import {
   filterByDensity,
   jitterPoints,

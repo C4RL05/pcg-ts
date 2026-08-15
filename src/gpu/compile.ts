@@ -24,8 +24,8 @@
  * written as raw u32 and exact everywhere.
  */
 import { opaqueParam, paramSpecOf, paramValue } from "../fields/spec.js";
-import type { FieldSpec, FieldSpecArg } from "../nodes/fieldJson.js";
-import { fieldFromJson } from "../nodes/fieldJson.js";
+import type { FieldSpec, FieldSpecArg } from "../fields/fieldJson.js";
+import { fieldFromJson } from "../fields/fieldJson.js";
 import { hashCombine, hashString } from "../random/hash.js";
 import { APPLY_CONST_COMPONENTS, applyUniformBytes } from "./applyKernels.js";
 import { NOISE_RAW_RANGES, type NoiseRange, hash2 } from "../noise/util.js";

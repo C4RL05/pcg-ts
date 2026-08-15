@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { evaluateField, type Column } from "../fields/index.js";
-import { fieldFromJson, getFieldSpec, type FieldSpec, type FieldSpecArg } from "../nodes/fieldJson.js";
+import { fieldFromJson, getFieldSpec, type FieldSpec, type FieldSpecArg } from "../fields/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
 import {
   CORPUS_LAYOUT,

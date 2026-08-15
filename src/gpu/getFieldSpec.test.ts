@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { add, constant, makeField, mul, position } from "../fields/index.js";
 import { perlinNoise } from "../noise/index.js";
-import { type FieldSpec, fieldFromJson, getFieldSpec } from "../nodes/fieldJson.js";
+import { type FieldSpec, fieldFromJson, getFieldSpec } from "../fields/fieldJson.js";
 import { compileFieldSpec } from "./index.js";
 
 describe("getFieldSpec", () => {

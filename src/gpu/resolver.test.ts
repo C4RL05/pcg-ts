@@ -19,7 +19,7 @@ import {
   type ResidentMemberDesc,
   type ResidentRunContext,
 } from "../fields/index.js";
-import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
+import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import type { GpuBufferLike, GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
 import { makeCorpusGeometry } from "./testGeometry.js";
