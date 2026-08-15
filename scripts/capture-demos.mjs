@@ -214,9 +214,12 @@ const DEMOS = [
   },
   {
     // The corpus's largest graph, drawn the way it is worth looking at:
-    // no overlay, because 82 node boxes over a truss is a wall, and
-    // normals, because the geometry is the subject and a key light on a
-    // dark studio flattens 8,000 overlapping tubes into one silhouette.
+    // no overlay, because 78 node boxes over a truss is a wall, and
+    // normals, because the geometry is the subject. Normals earned their
+    // place back when this was 8,282 instanced cylinders and a key light
+    // flattened them into one silhouette; the parts are swept surfaces
+    // now, so lit reads properly — but normals still separates twelve
+    // pale tubes from each other where one material cannot.
     id: "01-sandbox-rig",
     path: "01-sandbox/?graph=examples-rig",
     manualOnly: true,

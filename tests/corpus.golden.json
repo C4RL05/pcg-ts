@@ -1941,16 +1941,49 @@
       "outputs": {
         "braces": [
           {
-            "kind": "instances",
+            "kind": "geometry",
             "tags": [],
-            "residency": "cpu",
-            "instances": 180,
-            "batches": [
-              {
-                "assetId": "tube",
-                "count": 180
-              }
-            ]
+            "counts": {
+              "point": 1728,
+              "vertex": 8832,
+              "primitive": 2944,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "stationId:i32",
+                "strutId:i32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0297,
+                6.43,
+                -1.1356
+              ],
+              "max": [
+                17.0635,
+                8.0933,
+                1.1703
+              ]
+            }
           }
         ],
         "chains": [
@@ -1969,44 +2002,140 @@
         ],
         "danglers": [
           {
-            "kind": "instances",
+            "kind": "geometry",
             "tags": [],
-            "residency": "cpu",
-            "instances": 3200,
-            "batches": [
-              {
-                "assetId": "tube",
-                "count": 3200
-              }
-            ]
+            "counts": {
+              "point": 34200,
+              "vertex": 163200,
+              "primitive": 54400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "cableU:f32",
+                "cableId:i32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -15.1425,
+                3.8008,
+                -0.8939
+              ],
+              "max": [
+                17.0368,
+                7.5622,
+                0.8245
+              ]
+            }
           }
         ],
         "drapes": [
           {
-            "kind": "instances",
+            "kind": "geometry",
             "tags": [],
-            "residency": "cpu",
-            "instances": 1386,
-            "batches": [
-              {
-                "assetId": "tube",
-                "count": 1386
-              }
-            ]
+            "counts": {
+              "point": 14175,
+              "vertex": 69552,
+              "primitive": 23184,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "edgeLength:f32",
+                "chordPick:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string",
+                "edgeLength:f32",
+                "chordPick:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0285,
+                -2.0437,
+                -0.6978
+              ],
+              "max": [
+                17.0288,
+                7.6343,
+                0.726
+              ]
+            }
           }
         ],
         "frames": [
           {
-            "kind": "instances",
+            "kind": "geometry",
             "tags": [],
-            "residency": "cpu",
-            "instances": 48,
-            "batches": [
-              {
-                "assetId": "tube",
-                "count": 48
-              }
-            ]
+            "counts": {
+              "point": 432,
+              "vertex": 2304,
+              "primitive": 768,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "stationId:i32",
+                "strutId:i32",
+                "framePhase:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0376,
+                6.4448,
+                -1.1028
+              ],
+              "max": [
+                16.3117,
+                8.0638,
+                1.0911
+              ]
+            }
           }
         ],
         "parts": [
@@ -2078,47 +2207,835 @@
         ],
         "truss": [
           {
-            "kind": "instances",
+            "kind": "geometry",
             "tags": [],
-            "residency": "cpu",
-            "instances": 180,
-            "batches": [
-              {
-                "assetId": "tube",
-                "count": 180
-              }
-            ]
+            "counts": {
+              "point": 1728,
+              "vertex": 8832,
+              "primitive": 2944,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "stationId:i32",
+                "strutId:i32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0085,
+                6.4199,
+                -1.1447
+              ],
+              "max": [
+                17.0461,
+                8.1093,
+                1.179
+              ]
+            }
           }
         ],
         "wraps": [
           {
-            "kind": "instances",
+            "kind": "geometry",
             "tags": [
-              "wrapId=0",
-              "wrapId=1",
-              "wrapId=10",
-              "wrapId=11",
-              "wrapId=12",
-              "wrapId=13",
-              "wrapId=14",
-              "wrapId=15",
-              "wrapId=2",
-              "wrapId=3",
-              "wrapId=4",
-              "wrapId=5",
-              "wrapId=6",
-              "wrapId=7",
-              "wrapId=8",
+              "wrapId=0"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0072,
+                6.2509,
+                -1.5642
+              ],
+              "max": [
+                17.0667,
+                7.9818,
+                1.5821
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=1"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9904,
+                6.3008,
+                -1.3064
+              ],
+              "max": [
+                17.0408,
+                7.9625,
+                1.1309
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=2"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0253,
+                6.3455,
+                -1.3641
+              ],
+              "max": [
+                17.0296,
+                8.3533,
+                1.3114
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=3"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0056,
+                6.1803,
+                -1.6724
+              ],
+              "max": [
+                17.0773,
+                8.5139,
+                1.6359
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=4"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0228,
+                6.2577,
+                -1.3433
+              ],
+              "max": [
+                16.9874,
+                8.2437,
+                1.3256
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=5"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0222,
+                6.1636,
+                -1.1255
+              ],
+              "max": [
+                16.9724,
+                8.1869,
+                1.4596
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=6"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9888,
+                6.3064,
+                -1.383
+              ],
+              "max": [
+                17.0479,
+                8.0704,
+                1.161
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=7"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9869,
+                6.6793,
+                -1.5435
+              ],
+              "max": [
+                17.0248,
+                8.4178,
+                1.3457
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=8"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9981,
+                6.2477,
+                -1.3275
+              ],
+              "max": [
+                16.9967,
+                8.1303,
+                1.3329
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
               "wrapId=9"
             ],
-            "residency": "cpu",
-            "instances": 2384,
-            "batches": [
-              {
-                "assetId": "tube",
-                "count": 2384
-              }
-            ]
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9957,
+                6.7964,
+                -1.1798
+              ],
+              "max": [
+                16.9784,
+                7.7697,
+                1.3816
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=10"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0245,
+                6.0497,
+                -0.6477
+              ],
+              "max": [
+                17.0448,
+                8.5167,
+                1.3432
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=11"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0017,
+                6.3332,
+                -1.3793
+              ],
+              "max": [
+                16.966,
+                8.095,
+                1.2054
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=12"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9937,
+                6.2045,
+                -1.3621
+              ],
+              "max": [
+                16.9829,
+                8.2768,
+                1.1542
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=13"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0251,
+                6.1459,
+                -1.3531
+              ],
+              "max": [
+                16.965,
+                8.1623,
+                1.442
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=14"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.9895,
+                6.4932,
+                -1.3791
+              ],
+              "max": [
+                17.0523,
+                8.3501,
+                1.2971
+              ]
+            }
+          },
+          {
+            "kind": "geometry",
+            "tags": [
+              "wrapId=15"
+            ],
+            "counts": {
+              "point": 1368,
+              "vertex": 7200,
+              "primitive": 2400,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "curveNormal:f32x3",
+                "curveBinormal:f32x3",
+                "wphase:f32",
+                "wturns:f32",
+                "wspread:f32",
+                "wofs:f32",
+                "normal:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -17.0158,
+                6.2838,
+                -1.4112
+              ],
+              "max": [
+                17.0319,
+                8.2205,
+                1.3532
+              ]
+            }
           }
         ]
       }

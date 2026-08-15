@@ -3,11 +3,12 @@
   "seed": 3,
   "meta": {
     "title": "a suspended rig, built from curves",
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Nothing is drawn as a surface — everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on — this graph predates `sweepProfile` and has not been rewired to it yet. Eight declared outputs, one per part, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.",
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Everything that was drawn as a tube is a real surface now: `sweepProfile` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at `pathSegments` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine `extend` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: `pathSegments` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut is tagged with a `strutId` before it is moved, the four are merged, and `pointsToPath` groups them back into four paths — the same idiom the frames, the chains and the fringe already use, and it leaves the chord radius a single knob rather than one knob mirrored into four. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: `connectPoints` writes `edgeLength` on the primitive domain and the pick lands there too, so `filterPrimitivesByAttribute` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.",
     "tags": [
       "examples",
       "curves",
       "foreach",
+      "surface",
       "instancing",
       "rig"
     ]
@@ -242,19 +243,21 @@
       }
     },
     {
-      "id": "trussChords",
-      "type": "mergePoints",
-      "params": {}
-    },
-    {
-      "id": "trussBraces",
-      "type": "mergePoints",
-      "params": {}
-    },
-    {
-      "id": "trussCorners",
-      "type": "mergePoints",
-      "params": {}
+      "id": "trussTag0",
+      "type": "setAttribute",
+      "params": {
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 0
+        },
+        "values": [],
+        "stringValue": "",
+        "seed": 0
+      }
     },
     {
       "id": "trussMove0",
@@ -306,12 +309,251 @@
       }
     },
     {
-      "id": "trussSolid0",
-      "type": "pathSegments",
+      "id": "trussTag2",
+      "type": "setAttribute",
       "params": {
-        "axis": "+y",
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 1
+        },
+        "values": [],
+        "stringValue": "",
+        "seed": 0
+      }
+    },
+    {
+      "id": "trussMove2",
+      "type": "transformPoints",
+      "params": {
+        "translate": {
+          "fn": "add",
+          "args": [
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "constant",
+                  "value": -0.425
+                },
+                {
+                  "fn": "attribute",
+                  "name": "curveNormal",
+                  "tupleSize": 3
+                }
+              ]
+            },
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "constant",
+                  "value": 0.42500000000000004
+                },
+                {
+                  "fn": "attribute",
+                  "name": "curveBinormal",
+                  "tupleSize": 3
+                }
+              ]
+            }
+          ]
+        },
+        "rotateEuler": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "trussTag4",
+      "type": "setAttribute",
+      "params": {
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 2
+        },
+        "values": [],
+        "stringValue": "",
+        "seed": 0
+      }
+    },
+    {
+      "id": "trussMove4",
+      "type": "transformPoints",
+      "params": {
+        "translate": {
+          "fn": "add",
+          "args": [
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "constant",
+                  "value": -0.4250000000000001
+                },
+                {
+                  "fn": "attribute",
+                  "name": "curveNormal",
+                  "tupleSize": 3
+                }
+              ]
+            },
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "constant",
+                  "value": -0.425
+                },
+                {
+                  "fn": "attribute",
+                  "name": "curveBinormal",
+                  "tupleSize": 3
+                }
+              ]
+            }
+          ]
+        },
+        "rotateEuler": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "trussTag6",
+      "type": "setAttribute",
+      "params": {
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 3
+        },
+        "values": [],
+        "stringValue": "",
+        "seed": 0
+      }
+    },
+    {
+      "id": "trussMove6",
+      "type": "transformPoints",
+      "params": {
+        "translate": {
+          "fn": "add",
+          "args": [
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "constant",
+                  "value": 0.42499999999999993
+                },
+                {
+                  "fn": "attribute",
+                  "name": "curveNormal",
+                  "tupleSize": 3
+                }
+              ]
+            },
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "constant",
+                  "value": -0.4250000000000001
+                },
+                {
+                  "fn": "attribute",
+                  "name": "curveBinormal",
+                  "tupleSize": 3
+                }
+              ]
+            }
+          ]
+        },
+        "rotateEuler": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "trussCorners",
+      "type": "mergePoints",
+      "params": {}
+    },
+    {
+      "id": "trussChordPath",
+      "type": "pointsToPath",
+      "params": {
+        "closed": false,
+        "groupAttr": "strutId",
+        "orderAttr": ""
+      }
+    },
+    {
+      "id": "trussChordSkin",
+      "type": "sweepProfile",
+      "params": {
+        "profile": "circle",
+        "sides": 8,
         "radius": 0.055,
-        "extend": 0.055
+        "frame": "upHint",
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "roll": 0,
+        "joint": "miter",
+        "miterLimit": 4,
+        "caps": true
+      }
+    },
+    {
+      "id": "trussTag1",
+      "type": "setAttribute",
+      "params": {
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 0
+        },
+        "values": [],
+        "stringValue": "",
+        "seed": 0
       }
     },
     {
@@ -468,70 +710,20 @@
       }
     },
     {
-      "id": "trussSolid1",
-      "type": "pathSegments",
+      "id": "trussTag3",
+      "type": "setAttribute",
       "params": {
-        "axis": "+y",
-        "radius": 0.03,
-        "extend": 0.03
-      }
-    },
-    {
-      "id": "trussMove2",
-      "type": "transformPoints",
-      "params": {
-        "translate": {
-          "fn": "add",
-          "args": [
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": -0.425
-                },
-                {
-                  "fn": "attribute",
-                  "name": "curveNormal",
-                  "tupleSize": 3
-                }
-              ]
-            },
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": 0.42500000000000004
-                },
-                {
-                  "fn": "attribute",
-                  "name": "curveBinormal",
-                  "tupleSize": 3
-                }
-              ]
-            }
-          ]
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 1
         },
-        "rotateEuler": [
-          0,
-          0,
-          0
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ]
-      }
-    },
-    {
-      "id": "trussSolid2",
-      "type": "pathSegments",
-      "params": {
-        "axis": "+y",
-        "radius": 0.055,
-        "extend": 0.055
+        "values": [],
+        "stringValue": "",
+        "seed": 0
       }
     },
     {
@@ -688,70 +880,20 @@
       }
     },
     {
-      "id": "trussSolid3",
-      "type": "pathSegments",
+      "id": "trussTag5",
+      "type": "setAttribute",
       "params": {
-        "axis": "+y",
-        "radius": 0.03,
-        "extend": 0.03
-      }
-    },
-    {
-      "id": "trussMove4",
-      "type": "transformPoints",
-      "params": {
-        "translate": {
-          "fn": "add",
-          "args": [
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": -0.4250000000000001
-                },
-                {
-                  "fn": "attribute",
-                  "name": "curveNormal",
-                  "tupleSize": 3
-                }
-              ]
-            },
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": -0.425
-                },
-                {
-                  "fn": "attribute",
-                  "name": "curveBinormal",
-                  "tupleSize": 3
-                }
-              ]
-            }
-          ]
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 2
         },
-        "rotateEuler": [
-          0,
-          0,
-          0
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ]
-      }
-    },
-    {
-      "id": "trussSolid4",
-      "type": "pathSegments",
-      "params": {
-        "axis": "+y",
-        "radius": 0.055,
-        "extend": 0.055
+        "values": [],
+        "stringValue": "",
+        "seed": 0
       }
     },
     {
@@ -908,70 +1050,20 @@
       }
     },
     {
-      "id": "trussSolid5",
-      "type": "pathSegments",
+      "id": "trussTag7",
+      "type": "setAttribute",
       "params": {
-        "axis": "+y",
-        "radius": 0.03,
-        "extend": 0.03
-      }
-    },
-    {
-      "id": "trussMove6",
-      "type": "transformPoints",
-      "params": {
-        "translate": {
-          "fn": "add",
-          "args": [
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": 0.42499999999999993
-                },
-                {
-                  "fn": "attribute",
-                  "name": "curveNormal",
-                  "tupleSize": 3
-                }
-              ]
-            },
-            {
-              "fn": "mul",
-              "args": [
-                {
-                  "fn": "constant",
-                  "value": -0.4250000000000001
-                },
-                {
-                  "fn": "attribute",
-                  "name": "curveBinormal",
-                  "tupleSize": 3
-                }
-              ]
-            }
-          ]
+        "name": "strutId",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "constant",
+          "value": 3
         },
-        "rotateEuler": [
-          0,
-          0,
-          0
-        ],
-        "scale": [
-          1,
-          1,
-          1
-        ]
-      }
-    },
-    {
-      "id": "trussSolid6",
-      "type": "pathSegments",
-      "params": {
-        "axis": "+y",
-        "radius": 0.055,
-        "extend": 0.055
+        "values": [],
+        "stringValue": "",
+        "seed": 0
       }
     },
     {
@@ -1128,30 +1220,36 @@
       }
     },
     {
-      "id": "trussSolid7",
-      "type": "pathSegments",
+      "id": "trussBraces",
+      "type": "mergePoints",
+      "params": {}
+    },
+    {
+      "id": "trussBracePath",
+      "type": "pointsToPath",
       "params": {
-        "axis": "+y",
+        "closed": false,
+        "groupAttr": "strutId",
+        "orderAttr": ""
+      }
+    },
+    {
+      "id": "trussBraceSkin",
+      "type": "sweepProfile",
+      "params": {
+        "profile": "circle",
+        "sides": 8,
         "radius": 0.03,
-        "extend": 0.03
-      }
-    },
-    {
-      "id": "trussChordSpawn",
-      "type": "spawnInstances",
-      "params": {
-        "assetId": "tube",
-        "assetAttr": "",
-        "colorAttr": ""
-      }
-    },
-    {
-      "id": "trussBraceSpawn",
-      "type": "spawnInstances",
-      "params": {
-        "assetId": "tube",
-        "assetAttr": "",
-        "colorAttr": ""
+        "frame": "upHint",
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "roll": 0,
+        "joint": "miter",
+        "miterLimit": 4,
+        "caps": true
       }
     },
     {
@@ -1225,21 +1323,22 @@
       }
     },
     {
-      "id": "trussSolid",
-      "type": "pathSegments",
+      "id": "trussFrameSkin",
+      "type": "sweepProfile",
       "params": {
-        "axis": "+y",
+        "profile": "circle",
+        "sides": 8,
         "radius": 0.03,
-        "extend": 0.03
-      }
-    },
-    {
-      "id": "trussSpawn",
-      "type": "spawnInstances",
-      "params": {
-        "assetId": "tube",
-        "assetAttr": "",
-        "colorAttr": ""
+        "frame": "upHint",
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "roll": 0,
+        "joint": "miter",
+        "miterLimit": 4,
+        "caps": true
       }
     },
     {
@@ -2334,12 +2433,22 @@
               }
             },
             {
-              "id": "wrapSolid",
-              "type": "pathSegments",
+              "id": "wrapSkin",
+              "type": "sweepProfile",
               "params": {
-                "axis": "+y",
+                "profile": "circle",
+                "sides": 8,
                 "radius": 0.035,
-                "extend": 0
+                "frame": "upHint",
+                "up": [
+                  0,
+                  1,
+                  0
+                ],
+                "roll": 0,
+                "joint": "miter",
+                "miterLimit": 4,
+                "caps": true
               }
             }
           ],
@@ -2460,7 +2569,7 @@
                 "out"
               ],
               "to": [
-                "wrapSolid",
+                "wrapSkin",
                 "in"
               ]
             }
@@ -2482,7 +2591,7 @@
         "outputs": [
           {
             "name": "out",
-            "node": "wrapSolid",
+            "node": "wrapSkin",
             "pin": "out"
           }
         ],
@@ -2491,7 +2600,7 @@
             "name": "cableRadius",
             "targets": [
               {
-                "node": "wrapSolid",
+                "node": "wrapSkin",
                 "param": "radius"
               }
             ],
@@ -2501,20 +2610,6 @@
             "max": 0.2
           }
         ]
-      }
-    },
-    {
-      "id": "wrapMerged",
-      "type": "mergePoints",
-      "params": {}
-    },
-    {
-      "id": "wrapSpawn",
-      "type": "spawnInstances",
-      "params": {
-        "assetId": "tube",
-        "assetAttr": "",
-        "colorAttr": ""
       }
     },
     {
@@ -3139,21 +3234,22 @@
       }
     },
     {
-      "id": "danglerDanglerTube",
-      "type": "pathSegments",
+      "id": "danglerDanglerSkin",
+      "type": "sweepProfile",
       "params": {
-        "axis": "+y",
+        "profile": "circle",
+        "sides": 8,
         "radius": 0.035,
-        "extend": 0
-      }
-    },
-    {
-      "id": "danglerDanglerSpawn",
-      "type": "spawnInstances",
-      "params": {
-        "assetId": "tube",
-        "assetAttr": "",
-        "colorAttr": ""
+        "frame": "upHint",
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "roll": 0,
+        "joint": "miter",
+        "miterLimit": 4,
+        "caps": true
       }
     },
     {
@@ -3322,41 +3418,44 @@
       }
     },
     {
-      "id": "drapeDrapeTube",
-      "type": "pathSegments",
-      "params": {
-        "axis": "+y",
-        "radius": 0.035,
-        "extend": 0
-      }
-    },
-    {
-      "id": "drapeDrapeSpawn",
-      "type": "spawnInstances",
-      "params": {
-        "assetId": "tube",
-        "assetAttr": "",
-        "colorAttr": ""
-      }
-    },
-    {
       "id": "drapeLong",
-      "type": "filterByAttribute",
+      "type": "filterPrimitivesByAttribute",
       "params": {
         "attribute": "edgeLength",
         "comparison": "ge",
         "value": 4,
-        "stringValue": ""
+        "stringValue": "",
+        "unreferencedPoints": "keep"
       }
     },
     {
       "id": "drapeSome",
-      "type": "filterByAttribute",
+      "type": "filterPrimitivesByAttribute",
       "params": {
         "attribute": "chordPick",
         "comparison": "lt",
         "value": 0.16,
-        "stringValue": ""
+        "stringValue": "",
+        "unreferencedPoints": "drop"
+      }
+    },
+    {
+      "id": "drapeDrapeSkin",
+      "type": "sweepProfile",
+      "params": {
+        "profile": "circle",
+        "sides": 8,
+        "radius": 0.035,
+        "frame": "upHint",
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "roll": 0,
+        "joint": "miter",
+        "miterLimit": 4,
+        "caps": true
       }
     }
   ],
@@ -3427,27 +3526,17 @@
         "out"
       ],
       "to": [
-        "trussMove0",
+        "trussTag0",
         "in"
       ]
     },
     {
       "from": [
+        "trussTag0",
+        "out"
+      ],
+      "to": [
         "trussMove0",
-        "out"
-      ],
-      "to": [
-        "trussSolid0",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid0",
-        "out"
-      ],
-      "to": [
-        "trussChords",
         "in"
       ]
     },
@@ -3464,6 +3553,126 @@
     {
       "from": [
         "trussStation",
+        "out"
+      ],
+      "to": [
+        "trussTag2",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussTag2",
+        "out"
+      ],
+      "to": [
+        "trussMove2",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussMove2",
+        "out"
+      ],
+      "to": [
+        "trussCorners",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussStation",
+        "out"
+      ],
+      "to": [
+        "trussTag4",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussTag4",
+        "out"
+      ],
+      "to": [
+        "trussMove4",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussMove4",
+        "out"
+      ],
+      "to": [
+        "trussCorners",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussStation",
+        "out"
+      ],
+      "to": [
+        "trussTag6",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussTag6",
+        "out"
+      ],
+      "to": [
+        "trussMove6",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussMove6",
+        "out"
+      ],
+      "to": [
+        "trussCorners",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussCorners",
+        "out"
+      ],
+      "to": [
+        "trussChordPath",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussChordPath",
+        "out"
+      ],
+      "to": [
+        "trussChordSkin",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussStation",
+        "out"
+      ],
+      "to": [
+        "trussTag1",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussTag1",
         "out"
       ],
       "to": [
@@ -3477,16 +3686,6 @@
         "out"
       ],
       "to": [
-        "trussSolid1",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid1",
-        "out"
-      ],
-      "to": [
         "trussBraces",
         "in"
       ]
@@ -3497,43 +3696,13 @@
         "out"
       ],
       "to": [
-        "trussMove2",
+        "trussTag3",
         "in"
       ]
     },
     {
       "from": [
-        "trussMove2",
-        "out"
-      ],
-      "to": [
-        "trussSolid2",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid2",
-        "out"
-      ],
-      "to": [
-        "trussChords",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussMove2",
-        "out"
-      ],
-      "to": [
-        "trussCorners",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussStation",
+        "trussTag3",
         "out"
       ],
       "to": [
@@ -3547,16 +3716,6 @@
         "out"
       ],
       "to": [
-        "trussSolid3",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid3",
-        "out"
-      ],
-      "to": [
         "trussBraces",
         "in"
       ]
@@ -3567,43 +3726,13 @@
         "out"
       ],
       "to": [
-        "trussMove4",
+        "trussTag5",
         "in"
       ]
     },
     {
       "from": [
-        "trussMove4",
-        "out"
-      ],
-      "to": [
-        "trussSolid4",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid4",
-        "out"
-      ],
-      "to": [
-        "trussChords",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussMove4",
-        "out"
-      ],
-      "to": [
-        "trussCorners",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussStation",
+        "trussTag5",
         "out"
       ],
       "to": [
@@ -3617,16 +3746,6 @@
         "out"
       ],
       "to": [
-        "trussSolid5",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid5",
-        "out"
-      ],
-      "to": [
         "trussBraces",
         "in"
       ]
@@ -3637,87 +3756,57 @@
         "out"
       ],
       "to": [
-        "trussMove6",
+        "trussTag7",
         "in"
       ]
     },
     {
       "from": [
-        "trussMove6",
+        "trussTag7",
         "out"
       ],
       "to": [
-        "trussSolid6",
+        "trussMove7",
         "in"
       ]
     },
     {
       "from": [
-        "trussSolid6",
+        "trussMove7",
         "out"
       ],
       "to": [
-        "trussChords",
+        "trussBraces",
         "in"
       ]
     },
     {
       "from": [
-        "trussMove6",
+        "trussBraces",
         "out"
       ],
       "to": [
+        "trussBracePath",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "trussBracePath",
+        "out"
+      ],
+      "to": [
+        "trussBraceSkin",
+        "in"
+      ]
+    },
+    {
+      "from": [
         "trussCorners",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussStation",
         "out"
       ],
       "to": [
-        "trussMove7",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussMove7",
-        "out"
-      ],
-      "to": [
-        "trussSolid7",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid7",
-        "out"
-      ],
-      "to": [
-        "trussBraces",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussChords",
-        "out"
-      ],
-      "to": [
-        "trussChordSpawn",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussBraces",
-        "out"
-      ],
-      "to": [
-        "trussBraceSpawn",
+        "trussPhase",
         "in"
       ]
     },
@@ -3747,17 +3836,7 @@
         "out"
       ],
       "to": [
-        "trussSolid",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussSolid",
-        "out"
-      ],
-      "to": [
-        "trussSpawn",
+        "trussFrameSkin",
         "in"
       ]
     },
@@ -3929,26 +4008,6 @@
       "to": [
         "wrapWraps",
         "frame"
-      ]
-    },
-    {
-      "from": [
-        "wrapWraps",
-        "out"
-      ],
-      "to": [
-        "wrapMerged",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "wrapMerged",
-        "out"
-      ],
-      "to": [
-        "wrapSpawn",
-        "in"
       ]
     },
     {
@@ -4143,26 +4202,6 @@
     },
     {
       "from": [
-        "danglerDanglerPath",
-        "out"
-      ],
-      "to": [
-        "danglerDanglerTube",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "danglerDanglerTube",
-        "out"
-      ],
-      "to": [
-        "danglerDanglerSpawn",
-        "in"
-      ]
-    },
-    {
-      "from": [
         "spineSpine",
         "out"
       ],
@@ -4213,20 +4252,20 @@
     },
     {
       "from": [
+        "danglerDanglerPath",
+        "out"
+      ],
+      "to": [
+        "danglerDanglerSkin",
+        "in"
+      ]
+    },
+    {
+      "from": [
         "drapeSag",
         "out"
       ],
       "to": [
-        "drapeDrapeTube",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "drapeDrapeTube",
-        "out"
-      ],
-      "to": [
         "drapeLong",
         "in"
       ]
@@ -4247,35 +4286,25 @@
         "out"
       ],
       "to": [
-        "drapeDrapeSpawn",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "trussCorners",
-        "out"
-      ],
-      "to": [
-        "trussPhase",
+        "drapeDrapeSkin",
         "in"
       ]
     }
   ],
   "outputs": [
     {
-      "id": "trussChordSpawn",
-      "pin": "instances",
+      "id": "trussChordSkin",
+      "pin": "out",
       "name": "truss"
     },
     {
-      "id": "trussBraceSpawn",
-      "pin": "instances",
+      "id": "trussBraceSkin",
+      "pin": "out",
       "name": "braces"
     },
     {
-      "id": "trussSpawn",
-      "pin": "instances",
+      "id": "trussFrameSkin",
+      "pin": "out",
       "name": "frames"
     },
     {
@@ -4284,8 +4313,8 @@
       "name": "parts"
     },
     {
-      "id": "wrapSpawn",
-      "pin": "instances",
+      "id": "wrapWraps",
+      "pin": "out",
       "name": "wraps"
     },
     {
@@ -4294,13 +4323,13 @@
       "name": "chains"
     },
     {
-      "id": "danglerDanglerSpawn",
-      "pin": "instances",
+      "id": "danglerDanglerSkin",
+      "pin": "out",
       "name": "danglers"
     },
     {
-      "id": "drapeDrapeSpawn",
-      "pin": "instances",
+      "id": "drapeDrapeSkin",
+      "pin": "out",
       "name": "drapes"
     },
     {

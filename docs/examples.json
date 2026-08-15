@@ -1122,21 +1122,23 @@
     "file": "examples-rig.json",
     "path": "examples/graphs/examples-rig.json",
     "title": "a suspended rig, built from curves",
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Nothing is drawn as a surface — everything solid ends at `pathSegments`, which emits one oriented instance per segment for a unit cylinder to land on — this graph predates `sweepProfile` and has not been rewired to it yet. Eight declared outputs, one per part, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.",
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a `forEach`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Everything that was drawn as a tube is a real surface now: `sweepProfile` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at `pathSegments` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine `extend` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: `pathSegments` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut is tagged with a `strutId` before it is moved, the four are merged, and `pointsToPath` groups them back into four paths — the same idiom the frames, the chains and the fringe already use, and it leaves the chord radius a single knob rather than one knob mirrored into four. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: `connectPoints` writes `edgeLength` on the primitive domain and the pick lands there too, so `filterPrimitivesByAttribute` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — but not the noises: a serialized noise carries its seed as a literal, so the spine keeps its wander and the clusters keep their shape. That is true of every corpus graph with a noise in it, not just this one.",
     "tags": [
       "examples",
       "curves",
       "foreach",
+      "surface",
       "instancing",
       "rig"
     ],
     "seed": 3,
-    "nodeCount": 82,
+    "nodeCount": 78,
     "nodeTypes": [
       "connectPoints",
       "copyToPoints",
       "filterByAttribute",
       "filterByDensity",
+      "filterPrimitivesByAttribute",
       "forEach",
       "jitterPoints",
       "mergePoints",
@@ -1150,6 +1152,7 @@
       "setAttribute",
       "spawnInstances",
       "subgraph",
+      "sweepProfile",
       "transferAttribute",
       "transformPoints",
       "writeCurveFrame"
@@ -1158,18 +1161,18 @@
     "outputs": [
       {
         "name": "truss",
-        "node": "trussChordSpawn",
-        "pin": "instances"
+        "node": "trussChordSkin",
+        "pin": "out"
       },
       {
         "name": "braces",
-        "node": "trussBraceSpawn",
-        "pin": "instances"
+        "node": "trussBraceSkin",
+        "pin": "out"
       },
       {
         "name": "frames",
-        "node": "trussSpawn",
-        "pin": "instances"
+        "node": "trussFrameSkin",
+        "pin": "out"
       },
       {
         "name": "parts",
@@ -1178,8 +1181,8 @@
       },
       {
         "name": "wraps",
-        "node": "wrapSpawn",
-        "pin": "instances"
+        "node": "wrapWraps",
+        "pin": "out"
       },
       {
         "name": "chains",
@@ -1188,13 +1191,13 @@
       },
       {
         "name": "danglers",
-        "node": "danglerDanglerSpawn",
-        "pin": "instances"
+        "node": "danglerDanglerSkin",
+        "pin": "out"
       },
       {
         "name": "drapes",
-        "node": "drapeDrapeSpawn",
-        "pin": "instances"
+        "node": "drapeDrapeSkin",
+        "pin": "out"
       },
       {
         "name": "spinePoints",

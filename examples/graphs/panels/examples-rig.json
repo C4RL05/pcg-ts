@@ -29,34 +29,15 @@
       "controls": [
         { "param": "trussCells.count", "label": "stations", "min": 8, "max": 120, "step": 2 },
         {
-          "param": "trussSolid0.radius",
-          "also": [
-            "trussSolid0.extend",
-            "trussSolid2.radius",
-            "trussSolid2.extend",
-            "trussSolid4.radius",
-            "trussSolid4.extend",
-            "trussSolid6.radius",
-            "trussSolid6.extend"
-          ],
+          "param": "trussChordSkin.radius",
           "label": "chord",
           "min": 0.01,
           "max": 0.2,
           "step": 0.005
         },
         {
-          "param": "trussSolid1.radius",
-          "also": [
-            "trussSolid1.extend",
-            "trussSolid3.radius",
-            "trussSolid3.extend",
-            "trussSolid5.radius",
-            "trussSolid5.extend",
-            "trussSolid7.radius",
-            "trussSolid7.extend",
-            "trussSolid.radius",
-            "trussSolid.extend"
-          ],
+          "param": "trussBraceSkin.radius",
+          "also": ["trussFrameSkin.radius"],
           "label": "brace",
           "min": 0.005,
           "max": 0.12,
@@ -79,7 +60,7 @@
         { "param": "wrapCells.count", "label": "wrap steps", "min": 20, "max": 400, "step": 10 },
         {
           "param": "wrapWraps.cableRadius",
-          "also": ["danglerDanglerTube.radius", "drapeDrapeTube.radius"],
+          "also": ["danglerDanglerSkin.radius", "drapeDrapeSkin.radius"],
           "label": "cable radius",
           "min": 0.005,
           "max": 0.2,
