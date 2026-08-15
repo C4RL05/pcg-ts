@@ -83,12 +83,30 @@ const MAX_SEEDS_PER_FIELD = 8;
 /**
  * Domain size below which folding is not attempted at all.
  *
- * A fold MISS costs about 89 µs — it re-parses the whole tree through
- * `fieldFromJson`, plus one parse per subtree it replaces — while the
- * saving is per element. So there is a break-even domain size, and under
- * it this optimization is a pessimization.
+ * A fold MISS re-parses the whole tree through `fieldFromJson` plus one
+ * parse per subtree it replaces, while the saving is per element. So
+ * there is a break-even domain size, and under it this optimization is a
+ * pessimization.
  *
- * That is not a corner case, it is the library's streaming regime. A
+ * **The miss cost is PER SUBTREE, roughly 20-25 µs each** — an earlier
+ * version of this comment quoted one spec's total, 89 µs, as though it
+ * were a constant. That distinction is the whole justification for
+ * thresholding on element count ALONE, so it is worth stating rather than
+ * leaving as arithmetic someone has to redo. Measured across expressions
+ * carrying 1 / 2 / 4 / 8 / 16 foldable chains, the miss costs 49.8 / 54.5
+ * / 99.2 / 200.8 / 378.4 µs and the break-even lands at 256 / 1024 / 1024
+ * / 1024 / 1024 elements.
+ *
+ * Both sides scale with the number of foldable subtrees, so they cancel
+ * and break-even is INVARIANT in it. A gate weighing `subtrees x
+ * elements` — the obvious-looking refinement, and one that was proposed
+ * and measured before being dropped — would fold more aggressively
+ * exactly where folding costs more, which is backwards. Only the
+ * single-subtree case pays below 1024, and one case is not worth a
+ * special path.
+ *
+ * Nor is falling under the threshold a corner case — it is the library's
+ * streaming regime. A
  * hierarchical cook derives a seed per CELL, and the per-field cache
  * holds {@link MAX_SEEDS_PER_FIELD} seeds, so past a handful of cells
  * every cell is a miss. Measured on one shared field resolved over 4000
@@ -101,12 +119,14 @@ const MAX_SEEDS_PER_FIELD = 8;
  *                 4096      83.7 ms     41.5 ms    2.0x faster
  *                40000     834.5 ms    278.0 ms    3.0x faster
  *
- * 1024 sits above the measured crossover (somewhere in 300–1000) rather
- * than on it, because the two sides are not symmetric: past the crossover
- * the fold wins by a ratio that keeps growing, while under it a wrong
- * guess multiplies the cost of the small cooks that happen thousands of
- * times. A missed fold costs a fraction of one resolve; a taken one on a
- * 16-point cell costs 17 of them.
+ * 1024 sits AT the crossover for every expression carrying more than one
+ * foldable chain, and above it for the single-chain case that pays from
+ * 256. Rounding that way rather than down is deliberate, because the two
+ * sides are not symmetric: past the crossover the fold wins by a ratio
+ * that keeps growing, while under it a wrong guess multiplies the cost of
+ * the small cooks that happen thousands of times. A missed fold costs a
+ * fraction of one resolve; a taken one on a 16-point cell costs 17 of
+ * them.
  *
  * The one-shot 40k cook this was originally measured on sits at the far
  * end of that table, which is exactly why the first version shipped
