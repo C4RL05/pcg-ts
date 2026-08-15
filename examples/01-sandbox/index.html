@@ -5,9 +5,110 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>pcg-ts — 01 sandbox</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #0d1117; overflow: hidden; }
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
     /* The editor is a full-bleed overlay now, so there is nothing
        floating over the scene to hide at any width. */
+
+    /**
+     * The overlay's shared vocabulary.
+     *
+     * Here rather than in a component because Svelte scopes styles to the
+     * component that renders the markup, and the toolbar, the sidebar, the
+     * node menu and the modal are four components drawing one surface.
+     * They had each spelled the same colour out by hand, which is how a
+     * button ends up 3px 12px in one place and 2px 8px in another and the
+     * bar stops reading as one thing.
+     *
+     * GREYSCALE, zero hue — with ONE deliberate exception, `--sb-select`.
+     * Every other value below is r == g == b, on pure black. Nothing here
+     * is a tint of anything: the page had a blue cast in its surfaces, its
+     * ink and its accents at once, and taking it out of only some of them
+     * would read as a mistake rather than a choice.
+     *
+     * The exception earns itself by being the only one. On a page with no
+     * other hue, "which node am I editing" is answered from across the
+     * canvas by a colour that cannot be confused with a lightness — which
+     * is what the greyscale pass otherwise spent.
+     *
+     * WHAT REPLACES COLOUR. Three signals were carried by hue and now are
+     * not, so each is carried by something else:
+     *   · state (error / warn / ok) — by BORDER BRIGHTNESS, loudest for
+     *     an error, plus the monospace face the error styles already used.
+     *   · pin kind (geometry / instances / value / any) — by LIGHTNESS,
+     *     brightest for the instances a graph is usually built to produce.
+     *   · a field vs a constant — by white against grey.
+     * This is a real loss of one dimension; it is spent deliberately.
+     *
+     * `examples/shared/Controls.svelte` is deliberately NOT converted:
+     * four other demos render it, and it inherits enough from these that
+     * the sandbox reads as one surface anyway.
+     */
+    :root {
+      /* surfaces */
+      --sb-panel: rgba(0, 0, 0, 0.92);      /* over the live render */
+      --sb-solid: rgba(0, 0, 0, 0.97);      /* over the render AND itself */
+      --sb-well: #0c0c0c;                   /* inside an input */
+      --sb-raised: #1a1a1a;                 /* a button at rest */
+      --sb-raised-hi: #2e2e2e;              /* a button under the pointer */
+
+      /* lines. Two tiers: one between PANELS, a softer one between rows. */
+      --sb-rule: #2b2b2b;
+      --sb-rule-soft: #1c1c1c;
+      --sb-edge: #3f3f3f;                   /* the border of a control */
+
+      /* ink, brightest to faintest */
+      --sb-ink-hi: #ffffff;
+      --sb-ink: #e8e8e8;
+      --sb-ink-mid: #b6b6b6;
+      --sb-ink-dim: #909090;
+      --sb-ink-faint: #6e6e6e;
+      --sb-ink-ghost: #4f4f4f;
+      --sb-action: #ffffff;                 /* text on a button */
+      --sb-figure: #ffffff;                 /* a number worth reading */
+      --sb-danger: #ffffff;                 /* loud by weight, not by hue */
+
+      /* state, told apart by how bright the border is */
+      --sb-alert-bg: #121212;
+      --sb-edge-err: #ffffff;
+      --sb-edge-warn: #8f8f8f;
+      --sb-edge-ok: #5a5a5a;
+
+      /* pin kinds and the wires between them, told apart by lightness */
+      --sb-k-instances: #ffffff;
+      --sb-k-geometry: #c4c4c4;
+      --sb-k-value: #949494;
+      --sb-k-any: #6a6a6a;
+      --sb-select: #00ff00;                 /* the node you are editing */
+
+      /* tab bars — the sidebar's and the knob panel's, kept identical */
+      --sb-tab: #101010;
+      --sb-tab-on: #262626;
+      --sb-tab-on-edge: #4a4a4a;
+
+      /* native widget tint (sliders, checkboxes) and the focus ring */
+      --sb-accent: #ffffff;
+      --sb-focus: #ffffff;
+      --sb-grid-bg: #0a0a0a;
+
+      /* type. Three sizes, and no fourth: 11 names things, 12 is prose and
+         controls, 14 titles a panel. */
+      --sb-mono: ui-monospace, monospace;
+      --sb-sans: system-ui, sans-serif;
+      --sb-t-meta: 11px;
+      --sb-t-body: 12px;
+      --sb-t-title: 14px;
+
+      /**
+       * geometry — TWO radii, and no third.
+       *
+       * The page had 4, 5, 6, 8 and 10 in it, most of them a pixel apart
+       * and none of them meaning anything by being different. One radius
+       * for things you click or type into, one for floating surfaces.
+       */
+      --sb-radius: 4px;                     /* buttons, inputs, tabs */
+      --sb-radius-lg: 8px;                  /* panels, menus, the modal */
+      --sb-btn-pad: 3px 10px;
+    }
   </style>
 </head>
 <body>

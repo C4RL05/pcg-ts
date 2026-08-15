@@ -1,21 +1,20 @@
 <script lang="ts">
   /**
    * The loaded graph at a glance — its title, what it is for, and the
-   * knobs worth turning — as a column of the editor overlay. Named for
-   * the job rather than for the widgets, because it is half prose: this
-   * is the panel you READ to learn what a graph does, and the node
-   * inspector beside it is the one you OPEN to edit a single node.
+   * knobs worth turning. Named for the job rather than for the widgets,
+   * because it is half prose: this is the pane you READ to learn what a
+   * graph does, and the node inspector behind the other tab is the one
+   * you OPEN to edit a single node.
    *
    * `Knob` stays the word for one tunable param (`shared/graphUi.ts`) —
-   * the data, not the column.
+   * the data, not the pane.
    *
    * It used to be a floating card, which worked until the overlay went
    * full-bleed and translucent: anything behind that canvas shows through
    * it, and a card of controls came out as ghost text under the nodes.
-   * In the column it
-   * is legible, it scrolls with its own bar, and the scene is still right
-   * there behind the overlay. Rendered by the shared spec-driven
-   * renderer, which is what that renderer was generalised for.
+   * Pure content now — Sidebar owns the backing that makes it legible and
+   * the scroll it rides. Rendered by the shared spec-driven renderer,
+   * which is what that renderer was generalised for.
    *
    * The rows are the exposed params of the graph's subgraph nodes, laid
    * out by a panel spec when the graph ships one and grouped by node when
@@ -228,32 +227,23 @@
 </div>
 
 <style>
-  .overview {
-    flex: 0 0 296px;
-    min-height: 0;
-    overflow-y: auto;
-    box-sizing: border-box;
-    padding: 10px 12px;
-    background: rgba(13, 17, 23, 0.94);
-    border-left: 1px solid #223047;
-    backdrop-filter: blur(6px);
-  }
   .graph-title {
     margin: 0 0 4px;
-    font-size: 14px;
+    font-size: var(--sb-t-title);
     font-weight: 600;
-    color: #f0f4fa;
+    color: var(--sb-ink-hi);
     line-height: 1.3;
   }
   .note {
     margin: 0 0 6px;
-    color: #8b98ab;
-    font-size: 12px;
+    color: var(--sb-ink-dim);
+    font-size: var(--sb-t-body);
+    line-height: 1.5;
   }
   code {
-    color: #9ecbff;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
+    color: var(--sb-action);
+    font-family: var(--sb-mono);
+    font-size: var(--sb-t-meta);
   }
   .share {
     display: flex;
@@ -261,19 +251,19 @@
     align-items: center;
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid #223047;
+    border-top: 1px solid var(--sb-rule);
   }
   .share button {
-    padding: 3px 10px;
-    background: #1d2a3f;
-    color: #9ecbff;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 12px system-ui, sans-serif;
+    padding: var(--sb-btn-pad);
+    background: var(--sb-raised);
+    color: var(--sb-action);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-sans);
     cursor: pointer;
   }
   .share button:hover:not(:disabled) {
-    background: #24334c;
+    background: var(--sb-raised-hi);
   }
   .share button:disabled {
     opacity: 0.45;
@@ -284,11 +274,11 @@
     padding: 3px 4px;
     background: none;
     border: none;
-    color: #6f7c8f;
-    font-size: 11px;
+    color: var(--sb-ink-faint);
+    font-size: var(--sb-t-meta);
   }
   .share button.link:hover {
-    color: #aeb9c9;
+    color: var(--sb-ink-mid);
     background: none;
   }
   .url {
@@ -296,56 +286,56 @@
     box-sizing: border-box;
     margin-top: 6px;
     padding: 4px 6px;
-    background: #161d29;
-    color: #9ecbff;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 11px ui-monospace, monospace;
+    background: var(--sb-well);
+    color: var(--sb-action);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-meta) var(--sb-mono);
   }
   .patch {
     margin: 6px 0 0;
     padding: 6px 8px;
     max-height: 160px;
     overflow: auto;
-    background: #0e1621;
-    border: 1px solid #223047;
-    border-radius: 4px;
-    color: #9fd0b0;
-    font: 11px/1.45 ui-monospace, monospace;
+    background: #0a0a0a;
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius);
+    color: var(--sb-ink-mid);
+    font: var(--sb-t-meta) / 1.45 var(--sb-mono);
     white-space: pre-wrap;
     word-break: break-word;
   }
   .hint {
     margin: 6px 0 0;
-    color: #6f7c8f;
-    font-size: 11px;
+    color: var(--sb-ink-faint);
+    font-size: var(--sb-t-meta);
   }
   .warn {
     margin: 8px 0 0;
     padding: 6px 8px;
-    background: #33261a;
-    border: 1px solid #7a5a2e;
-    border-radius: 6px;
-    color: #f0c869;
-    font-size: 11px;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-warn);
+    border-radius: var(--sb-radius);
+    color: var(--sb-ink);
+    font-size: var(--sb-t-meta);
   }
   .skipped {
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid #223047;
-    color: #6f7c8f;
-    font-size: 11px;
+    border-top: 1px solid var(--sb-rule);
+    color: var(--sb-ink-faint);
+    font-size: var(--sb-t-meta);
   }
   .skipped summary {
     cursor: pointer;
-    color: #8b98ab;
+    color: var(--sb-ink-dim);
   }
   .skipped div {
     margin-top: 4px;
   }
   .skipped b {
-    color: #aeb9c9;
-    font-family: ui-monospace, monospace;
+    color: var(--sb-ink-mid);
+    font-family: var(--sb-mono);
     font-weight: 400;
   }
 </style>

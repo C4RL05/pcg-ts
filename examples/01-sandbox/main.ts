@@ -22,10 +22,8 @@ import {
   GridHelper,
   Group,
   LineBasicMaterial,
-  Mesh,
   MeshNormalMaterial,
   MeshStandardMaterial,
-  PlaneGeometry,
   type Object3D,
 } from "three";
 import { createFpsMeter } from "../shared/fps.js";
@@ -46,48 +44,69 @@ import Editor from "./Editor.svelte";
 
 // -- scene -----------------------------------------------------------------
 
+/**
+ * GREYSCALE, and pure black behind it. The shared look is a cool sky over
+ * a warm sun on a dark blue ground, which reads blue everywhere; this page
+ * asks for neither cast. The lights have to be neutral for it to hold —
+ * grey materials under a blue lamp are still blue.
+ */
 const { scene, camera, controls, start } = createScene({
   cameraPosition: [20, 15, 20],
   target: [0, 2, 0],
+  background: 0x000000,
+  lights: { sky: 0xffffff, ground: 0x2a2a2a, sun: 0xffffff },
 });
 
 /**
- * The floor is rebuilt to fit whatever the graph made, so nothing here is
+ * THE LINES ARE THE FLOOR. There is no ground plane under them any more.
+ *
+ * There used to be a lit slab beneath the grid, and on a pure black page
+ * it was the one surface that read as a colour: a MeshStandardMaterial is
+ * not its hex, it is its hex times whatever the lights do to it, so the
+ * darkest floor that still looked deliberate was still visibly lighter
+ * than everything around it. Deleted rather than made transparent — an
+ * invisible mesh is still submitted, still lit, and still something to
+ * keep in sync with the plan.
+ *
+ * The grid is rebuilt to fit whatever the graph made, so nothing here is
  * a fixed size. What ships as the initial 30×30 is only what stands
  * before the first cook lands.
  */
-const groundMaterial = new MeshStandardMaterial({ color: 0x1a2230, roughness: 1 });
-const ground = new Mesh(new PlaneGeometry(1, 1), groundMaterial);
-ground.rotation.x = -Math.PI / 2;
-scene.add(ground);
-let grid = new GridHelper(30, 30, 0x2c3a52, 0x1e2939);
+let grid = new GridHelper(30, 30, 0x3a3a3a, 0x242424);
 scene.add(grid);
-let groundKey = "";
+let gridKey = "";
 
 /**
- * Resize the floor and grid to the measured content.
+ * Resize the grid to the measured content.
  *
- * The plane is a unit geometry under a scale so that following the
- * content costs a transform rather than an allocation, but a GridHelper
- * bakes its divisions into a buffer and has to be rebuilt. That is why
- * the plan is compared as a key first: a knob that nudges the extent
- * without crossing a snap boundary must not rebuild geometry on every
- * cook.
+ * A GridHelper bakes its divisions into a buffer and has to be rebuilt,
+ * which is why the plan is compared as a key first: a knob that nudges
+ * the extent without crossing a snap boundary must not rebuild geometry
+ * on every cook. Position is a transform either way, so it is set every
+ * time.
  */
 function applyGround(plan: GroundPlan): void {
-  ground.scale.set(plan.size, plan.size, 1);
-  ground.position.set(plan.x, plan.y, plan.z);
   const key = `${plan.size}/${plan.divisions}`;
-  if (key !== groundKey) {
-    groundKey = key;
+  if (key !== gridKey) {
+    gridKey = key;
     scene.remove(grid);
     grid.dispose();
-    grid = new GridHelper(plan.size, plan.divisions, 0x2c3a52, 0x1e2939);
+    grid = new GridHelper(plan.size, plan.divisions, 0x3a3a3a, 0x242424);
     scene.add(grid);
   }
   grid.position.set(plan.x, plan.y + plan.lift, plan.z);
 }
 
+/**
+ * COLOURED, on a page whose chrome is greyscale. The two are different
+ * layers and the greyscale belongs to only one of them: the toolbar,
+ * the panels and the node boxes are neutral so that nothing in the UI
+ * competes with the render, which is the opposite reason from anything
+ * to do with the scene. Placeholder assets ARE the render — greying
+ * them throws away the one signal that separates one spawned batch
+ * from the next, and next to per-output hues it reads as unfinished
+ * geometry rather than as a decision.
+ */
 const assets = createPlaceholderAssets();
 const outputGroup = new Group();
 scene.add(outputGroup);
@@ -98,6 +117,11 @@ let drawn: Object3D[] = [];
  * preview page keeps its daylight one: choosing a material is renderer
  * work, and the two pages are judged against different things. These
  * match the dark studio of `shared/scene.ts`.
+ *
+ * `vertexColors` is still honoured where a graph wrote a colour attribute
+ * — that is the graph's own data showing through, not this page's
+ * palette, and blanking it would be hiding a cook result rather than
+ * styling a page.
  */
 /**
  * One hue per OUTPUT, because a graph declares outputs to name its parts.

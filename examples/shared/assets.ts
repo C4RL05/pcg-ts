@@ -103,15 +103,49 @@ export interface PlaceholderAssets {
   fallbackFor(assetId: string): InstancedAsset;
 }
 
+/** Options for {@link createPlaceholderAssets}. */
+export interface PlaceholderOptions {
+  /**
+   * Drop all hue: placeholders come out as greys told apart by
+   * BRIGHTNESS rather than by colour.
+   *
+   * The distinctness is the point, not the palette. An invented asset's
+   * colour is hashed from its id so two species never collide, and with
+   * hue gone that whole job falls to lightness — which is why this is a
+   * flag here rather than a saturation of 0 applied at the call site.
+   *
+   * NO CALLER TODAY, and it covers only `cone` / `box` / `sphere` plus
+   * the invented ramp — the rig vocabulary below (`tube`, `chainLink`,
+   * `rod`, `bar`, `panel`, `clamp`) keeps its hues either way. The
+   * greyscale in this page is the CHROME; the scene is meant to have
+   * colour in it. Anything turning this on again owes the six a grey
+   * each, chosen for brightness separation rather than converted from
+   * their hues — a luminance conversion collapses `cone` and `box` to
+   * within a few percent of each other.
+   */
+  mono?: boolean;
+}
+
 /** Build the placeholder assets (see the two pivot conventions above). */
-export function createPlaceholderAssets(): PlaceholderAssets {
+export function createPlaceholderAssets(opts: PlaceholderOptions = {}): PlaceholderAssets {
+  const mono = opts.mono === true;
   const mat = (color: number): MeshStandardMaterial =>
     new MeshStandardMaterial({ color, roughness: 0.75 });
+  // Three greys far enough apart to read as three things under one light.
   const known: AssetMap = {
     // Standing: base on y = 0, for a prop placed AT a point.
-    cone: { geometry: new ConeGeometry(0.22, 0.9, 10).translate(0, 0.45, 0), material: mat(0x7fc79a) },
-    box: { geometry: new BoxGeometry(0.42, 0.42, 0.42).translate(0, 0.21, 0), material: mat(0x6fb1ff) },
-    sphere: { geometry: new SphereGeometry(0.3, 14, 10).translate(0, 0.3, 0), material: mat(0xf4d35e) },
+    cone: {
+      geometry: new ConeGeometry(0.22, 0.9, 10).translate(0, 0.45, 0),
+      material: mat(mono ? 0xb0b0b0 : 0x7fc79a),
+    },
+    box: {
+      geometry: new BoxGeometry(0.42, 0.42, 0.42).translate(0, 0.21, 0),
+      material: mat(mono ? 0xe4e4e4 : 0x6fb1ff),
+    },
+    sphere: {
+      geometry: new SphereGeometry(0.3, 14, 10).translate(0, 0.3, 0),
+      material: mat(mono ? 0x8a8a8a : 0xf4d35e),
+    },
 
     // Spanning: centred, one unit on +Y, for `pathSegments` to stretch
     // across a segment. `tube` is the workhorse — a chord, a brace, a
@@ -163,10 +197,17 @@ export function createPlaceholderAssets(): PlaceholderAssets {
       // across runs, platforms and cook orders like everything else here.
       const hash = hashString(assetId);
       const unit = ((hash >>> 8) & 0xffff) / 0xffff;
+      // The same hashed byte either picks a hue or picks a lightness. In
+      // mono the range stops well short of both ends: pure black loses the
+      // silhouette against the floor, pure white loses the shading that
+      // says which way the geometry faces.
+      const tone = ((hash >>> 4) & 0xff) / 0xff;
       const asset: InstancedAsset = {
         geometry: shapes[hash % shapes.length](unit),
         material: new MeshStandardMaterial({
-          color: new Color().setHSL(((hash >>> 4) & 0xff) / 0xff, 0.55, 0.55),
+          color: mono
+            ? new Color().setHSL(0, 0, 0.42 + 0.46 * tone)
+            : new Color().setHSL(tone, 0.55, 0.55),
           roughness: 0.75,
         }),
       };

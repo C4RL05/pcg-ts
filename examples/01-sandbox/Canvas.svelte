@@ -18,24 +18,30 @@
    */
   import NodeBox from "./NodeBox.svelte";
   import { NODE_W, nodeHeight, pinRowY } from "./layout.js";
-  import type { EdgeView, NodeView, StructureModel } from "./model.js";
+  import type { EdgeView, NodeView, ParamPreview, StructureModel } from "./model.js";
 
   let {
     model,
     selectedId,
+    previews,
     onSelect,
     onMove,
     onConnect,
     onDeleteEdge,
-    onDeleteNode,
   }: {
     model: StructureModel;
     selectedId: string | null;
+    /**
+     * Node id → the param rows its box shows. Handed down rather than read
+     * here: it is rebuilt once per param revision by the component that
+     * owns that revision, and rebuilding it per node per frame would put a
+     * walk of the graph inside a drag.
+     */
+    previews: ReadonlyMap<string, readonly ParamPreview[]>;
     onSelect: (id: string | null) => void;
     onMove: (id: string, x: number, y: number) => void;
     onConnect: (edge: EdgeView) => void;
     onDeleteEdge: (index: number) => void;
-    onDeleteNode: (id: string) => void;
   } = $props();
 
   let svgEl: SVGSVGElement | undefined = $state();
@@ -55,6 +61,10 @@
 
   const MIN_ZOOM = 0.2;
   const MAX_ZOOM = 2.5;
+  /** One graph unit to one screen pixel — the size the boxes were drawn at. */
+  const ACTUAL = 1;
+  /** Breathing room between the framed content and the viewport edge. */
+  const PAD = 40;
 
   /** Pointer position in graph units — the space node x/y live in. */
   function toGraph(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -91,27 +101,75 @@
     return toGraph({ clientX, clientY });
   }
 
-  /** Frame every node, so a pan that wandered off is one click from home. */
-  export function resetView(): void {
-    if (!svgEl || model.nodes.length === 0) {
-      view = { x: 0, y: 0, z: 1 };
-      return;
-    }
-    const r = svgEl.getBoundingClientRect();
+  /** The nodes' bounding box in graph units, or null when there are none. */
+  function contentBounds(): { minX: number; minY: number; w: number; h: number } | null {
+    if (model.nodes.length === 0) return null;
     const minX = Math.min(...model.nodes.map((n) => n.x));
     const minY = Math.min(...model.nodes.map((n) => n.y));
     const maxX = Math.max(...model.nodes.map((n) => n.x + NODE_W));
-    const maxY = Math.max(...model.nodes.map((n) => n.y + nodeHeight(n)));
-    const pad = 40;
-    const z = Math.min(
-      MAX_ZOOM,
-      Math.max(MIN_ZOOM, Math.min((r.width - pad * 2) / (maxX - minX), (r.height - pad * 2) / (maxY - minY))),
+    const maxY = Math.max(
+      ...model.nodes.map((n) => n.y + nodeHeight(n, previews.get(n.id)?.length ?? 0)),
     );
-    view = {
-      z,
-      x: (r.width - (maxX - minX) * z) / 2 - minX * z,
-      y: (r.height - (maxY - minY) * z) / 2 - minY * z,
-    };
+    return { minX, minY, w: maxX - minX, h: maxY - minY };
+  }
+
+  /** Put the content in the middle of the viewport at zoom `z`. */
+  function centreAt(
+    z: number,
+    b: { minX: number; minY: number; w: number; h: number },
+    r: DOMRect,
+  ): void {
+    view = { z, x: (r.width - b.w * z) / 2 - b.minX * z, y: (r.height - b.h * z) / 2 - b.minY * z };
+  }
+
+  /** The zoom at which the whole graph just fits, ignoring the clamps. */
+  function fitZoom(b: { w: number; h: number }, r: DOMRect): number {
+    return Math.min((r.width - PAD * 2) / b.w, (r.height - PAD * 2) / b.h);
+  }
+
+  /**
+   * Frame the graph, so a pan that wandered off is one click from home.
+   *
+   * `preferActual` opens at 1:1 WHEN THE GRAPH FITS THERE, and only falls
+   * back to shrinking when it does not. That is what a load wants: most
+   * graphs are a handful of nodes and have no business being scaled at
+   * all, and a box drawn at the size it was designed at is the one that
+   * reads best. The big pipelines still get fitted, because the
+   * alternative is opening on a corner of something you cannot navigate.
+   *
+   * The "fit" button passes nothing and always fits, because a control
+   * named fit that declines to fit is a broken control.
+   */
+  export function resetView(opts: { preferActual?: boolean } = {}): void {
+    if (!svgEl) return;
+    const b = contentBounds();
+    if (b === null) {
+      view = { x: 0, y: 0, z: ACTUAL };
+      return;
+    }
+    const r = svgEl.getBoundingClientRect();
+    const fit = fitZoom(b, r);
+    // `fit >= ACTUAL` is exactly "the content fits at 1:1 with its padding".
+    if (opts.preferActual === true && fit >= ACTUAL) {
+      centreAt(ACTUAL, b, r);
+      return;
+    }
+    centreAt(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit)), b, r);
+  }
+
+  /**
+   * Back to 1:1, whatever the graph's size. Centred on the content rather
+   * than on wherever the view had drifted, so it is a way HOME and not
+   * just a scale change — the same promise "fit" makes, at a fixed zoom.
+   */
+  export function actualSize(): void {
+    if (!svgEl) return;
+    const b = contentBounds();
+    if (b === null) {
+      view = { x: 0, y: 0, z: ACTUAL };
+      return;
+    }
+    centreAt(ACTUAL, b, svgEl.getBoundingClientRect());
   }
 
   /**
@@ -165,8 +223,20 @@
       return;
     }
     if (dragNode) {
+      /**
+       * UNCLAMPED, both axes. These used to be floored at graph
+       * coordinate 4, which put a wall along the top and left edges: a
+       * node could be dragged down and right forever but never above the
+       * first row it was laid out in.
+       *
+       * The floor made sense when the canvas was a scrolled oversized
+       * SVG, where a negative coordinate was genuinely unreachable. It
+       * pans and zooms now — the origin is not a corner, it is just a
+       * place — so negative coordinates are as visible as any other, and
+       * `resetView` measures the real min/max so "fit" frames them.
+       */
       const p = toGraph(e);
-      onMove(dragNode.id, Math.max(4, p.x - dragNode.offX), Math.max(4, p.y - dragNode.offY));
+      onMove(dragNode.id, p.x - dragNode.offX, p.y - dragNode.offY);
     }
     if (wire) {
       const p = toGraph(e);
@@ -223,20 +293,24 @@
         >
           <title>{edge.from}.{edge.fromPin} → {edge.to}.{edge.toPin} — click to disconnect</title>
         </path>
+        <!-- Casing under the line, painted first so the line sits on it. -->
+        <path class="edge-casing" {d} />
         <path class="edge-line" {d} />
       </g>
     {/if}
   {/each}
   {#if wire}
-    <path class="wire" class:live={wire.hover !== null} d={curve({ x: wire.x1, y: wire.y1 }, { x: wire.x2, y: wire.y2 })} />
+    {@const wd = curve({ x: wire.x1, y: wire.y1 }, { x: wire.x2, y: wire.y2 })}
+    <path class="edge-casing" d={wd} />
+    <path class="wire" class:live={wire.hover !== null} d={wd} />
   {/if}
   {#each model.nodes as node (node.id)}
     <NodeBox
       {node}
       selected={node.id === selectedId}
+      params={previews.get(node.id)}
       onSelect={() => onSelect(node.id)}
       onBodyDown={(e) => startBodyDrag(node, e)}
-      onDelete={() => onDeleteNode(node.id)}
       onOutDown={(e, pinName, i) => startWire(node, pinName, i, e)}
       onInEnter={(pinName) => {
         if (wire) wire.hover = { to: node.id, toPin: pinName };
@@ -247,6 +321,12 @@
     />
   {/each}
   </g>
+  <!-- Outside the view transform: an empty canvas has no content to be
+       positioned relative to, and a hint that pans away from the viewport
+       is a hint nobody reads. -->
+  {#if model.nodes.length === 0}
+    <text class="blank" x="50%" y="50%">press Tab to add a node</text>
+  {/if}
 </svg>
 
 <style>
@@ -260,11 +340,46 @@
     user-select: none;
     touch-action: none;
   }
+  /**
+   * ONE COLOUR, deliberately. Colouring a wire by the kind it carries —
+   * to match the pin dots, which do differ — was tried and removed: every
+   * input pin in the shipped node library is `geometry`, and the other
+   * kinds (`value`, `instances`, `any`) appear only on outputs that
+   * nothing accepts. They are terminal, so every EDGE is geometry and the
+   * palette painted all of them the same. Before re-adding it, check that
+   * a node exists whose input pin is not geometry.
+   */
+  /**
+   * A black casing under every wire, so a cable stays readable where it
+   * crosses something bright.
+   *
+   * The graph is drawn OVER the live render, and the render is white
+   * points on black — so a mid-grey cable is legible over the empty parts
+   * of the scene and disappears the moment it passes through the scatter.
+   * Two strokes of the same path, the wider dark one painted first, is the
+   * trick a map uses to keep a label off its own coastline.
+   *
+   * It costs nothing where it is not needed: black on the black page is
+   * invisible, so the casing only shows up against bright content.
+   */
+  .edge-casing {
+    fill: none;
+    stroke: #000000;
+    stroke-width: 4;
+    pointer-events: none;
+  }
+  /* Keep pace with the line, which thickens to 2.4 under the pointer. */
+  .edge:hover .edge-casing {
+    stroke-width: 5;
+  }
+  /* The opacity composites against the CASING now, not against whatever
+     the wire happens to be crossing — so a cable is one colour along its
+     whole length instead of washing out over the bright half. */
   .edge-line {
     fill: none;
-    stroke: #4c8dff;
+    stroke: var(--sb-k-geometry);
     stroke-width: 1.6;
-    opacity: 0.85;
+    opacity: 0.55;
     pointer-events: none;
   }
   .edge-hit {
@@ -274,17 +389,41 @@
     pointer-events: stroke;
     cursor: pointer;
   }
+  /* Same reasoning as the node box's: `tabindex="-1"`, so clicking focuses
+     it and Chrome paints its rounded `outline: auto` ring along the wire,
+     and no keyboard path exists that the ring would serve. */
+  .edge-hit:focus {
+    outline: none;
+  }
+  /* Hovering an edge offers to CUT it. That used to be a red; with hue
+     gone it is white and noticeably thicker, so the signal is weight
+     rather than warmth. */
   .edge:hover .edge-line {
-    stroke: #ff9ca8;
+    stroke: #ffffff;
+    stroke-width: 2.4;
+    opacity: 1;
   }
   .wire {
     fill: none;
-    stroke: #8b98ab;
+    stroke: var(--sb-ink-dim);
     stroke-width: 1.6;
     stroke-dasharray: 5 4;
+    opacity: 0.55;
     pointer-events: none;
   }
+  /* Over a pin it will actually connect to. Dashed-and-faint means "going
+     nowhere yet"; solid, white and full strength means releasing here
+     makes the connection. */
   .wire.live {
-    stroke: #b8f5c8;
+    stroke: #ffffff;
+    stroke-dasharray: none;
+    stroke-width: 2.4;
+    opacity: 1;
+  }
+  .blank {
+    fill: var(--sb-ink-ghost);
+    font: var(--sb-t-body) var(--sb-sans);
+    text-anchor: middle;
+    pointer-events: none;
   }
 </style>

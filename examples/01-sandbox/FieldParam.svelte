@@ -153,17 +153,17 @@
   .modes button {
     flex: 1;
     padding: 2px 0;
-    background: #131a26;
-    color: #8b98ab;
-    border: 1px solid #223047;
-    border-radius: 5px;
-    font: 11px system-ui, sans-serif;
+    background: #101010;
+    color: var(--sb-ink-dim);
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-meta) var(--sb-sans);
     cursor: pointer;
   }
   .modes button.active {
-    background: #1d2a3f;
-    color: #9ecbff;
-    border-color: #33405a;
+    background: var(--sb-raised);
+    color: var(--sb-action);
+    border-color: var(--sb-edge);
   }
   .vec {
     display: flex;
@@ -174,11 +174,11 @@
     min-width: 0;
     box-sizing: border-box;
     padding: 3px 6px;
-    background: #161d29;
-    color: #dbe4f0;
-    border: 1px solid #33405a;
-    border-radius: 5px;
-    font: 12px ui-monospace, monospace;
+    background: var(--sb-well);
+    color: var(--sb-ink);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-mono);
   }
   textarea {
     width: 100%;
@@ -186,22 +186,24 @@
     resize: vertical;
     padding: 6px;
     background: #0a0e14;
-    color: #9ecbff;
-    border: 1px solid #223047;
-    border-radius: 5px;
-    font: 11px/1.5 ui-monospace, monospace;
+    color: var(--sb-action);
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
   }
   .apply-row {
     margin-top: 4px;
     text-align: right;
   }
+  /* The commit control: solid white, so the one button that CHANGES the
+     graph is the brightest thing in the row. */
   .apply {
-    padding: 2px 10px;
-    background: #16321f;
-    color: #b8f5c8;
-    border: 1px solid #2f9e5f;
-    border-radius: 5px;
-    font: 11px system-ui, sans-serif;
+    padding: var(--sb-btn-pad);
+    background: #ffffff;
+    color: #000000;
+    border: 1px solid #ffffff;
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-meta) var(--sb-sans);
     cursor: pointer;
   }
   .reads {
@@ -216,11 +218,11 @@
   .error {
     margin-top: 4px;
     padding: 5px 7px;
-    background: #33161c;
-    border: 1px solid #a04455;
-    border-radius: 5px;
-    color: #ffb9c2;
-    font: 10px/1.5 ui-monospace, monospace;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-err);
+    border-radius: var(--sb-radius);
+    color: #ffffff;
+    font: 10px/1.5 var(--sb-mono);
     white-space: pre-wrap;
     word-break: break-word;
   }

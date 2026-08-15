@@ -29,6 +29,26 @@ export interface SceneOptions {
   fog?: { near: number; far: number };
   /** Camera far plane (default 2000). */
   far?: number;
+  /**
+   * Scene background, and the fog colour that has to match it (default
+   * {@link BACKGROUND}). Optional because every demo but one wants the
+   * shared dark blue; the sandbox asks for pure black.
+   */
+  background?: number;
+  /**
+   * Light colours. The default is a cool sky over a warm sun, which is
+   * what gives the shared look its blue cast — a page that wants a
+   * NEUTRAL render has to say so here, because no amount of grey in the
+   * materials survives being lit by a tinted lamp.
+   */
+  lights?: {
+    /** Hemisphere light, sky side (default 0xa8bce0). */
+    sky?: number;
+    /** Hemisphere light, ground side (default 0x232a33). */
+    ground?: number;
+    /** Key light (default 0xfff1dc). */
+    sun?: number;
+  };
 }
 
 /** Handle returned by {@link createScene}. */
@@ -49,8 +69,9 @@ export function createScene(opts: SceneOptions = {}): ExampleScene {
   document.body.appendChild(renderer.domElement);
 
   const scene = new Scene();
-  scene.background = new Color(BACKGROUND);
-  if (opts.fog) scene.fog = new Fog(BACKGROUND, opts.fog.near, opts.fog.far);
+  const background = opts.background ?? BACKGROUND;
+  scene.background = new Color(background);
+  if (opts.fog) scene.fog = new Fog(background, opts.fog.near, opts.fog.far);
 
   const camera = new PerspectiveCamera(
     55,
@@ -63,9 +84,13 @@ export function createScene(opts: SceneOptions = {}): ExampleScene {
   const [tx, ty, tz] = opts.target ?? [0, 0, 0];
   camera.lookAt(tx, ty, tz);
 
-  const hemi = new HemisphereLight(0xa8bce0, 0x232a33, 0.9);
+  const hemi = new HemisphereLight(
+    opts.lights?.sky ?? 0xa8bce0,
+    opts.lights?.ground ?? 0x232a33,
+    0.9,
+  );
   scene.add(hemi);
-  const sun = new DirectionalLight(0xfff1dc, 1.6);
+  const sun = new DirectionalLight(opts.lights?.sun ?? 0xfff1dc, 1.6);
   sun.position.set(60, 90, 35);
   scene.add(sun);
 

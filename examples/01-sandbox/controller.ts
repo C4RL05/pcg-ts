@@ -49,6 +49,7 @@ import { makeRecooker } from "../shared/recook.js";
 import { topoLayout } from "./layout.js";
 import {
   nodePinsForType,
+  paramPreviews,
   type NodeView,
   type PinView,
   type StructureModel,
@@ -648,7 +649,15 @@ export class EditorController {
       to: c.to[0],
       toPin: c.to[1],
     }));
-    topoLayout(nodes, edges);
+    // Laid out at the height the boxes will actually be drawn at. The
+    // mirror is live by now, so the preview rows can be counted here
+    // rather than left for the editor to correct on the next relayout —
+    // otherwise every imported graph opens with its columns overlapping.
+    topoLayout(
+      nodes,
+      edges,
+      new Map(nodes.map((n) => [n.id, paramPreviews(this.paramViews(n.id, n.type)).length])),
+    );
     return { structure: { seed: json.seed >>> 0, nodes, edges } };
   }
 

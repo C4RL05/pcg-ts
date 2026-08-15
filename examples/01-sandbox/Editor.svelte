@@ -32,7 +32,9 @@
     STARTER_GRAPH_TEXT,
     allocateId,
     paletteGroups,
+    paramPreviews,
     type EdgeView,
+    type ParamPreview,
     type StructureModel,
   } from "./model.js";
 
@@ -75,6 +77,13 @@
    * a boolean because the useful question is not "graph or no graph" but
    * whether the scene is behind it: all of it while you place nodes
    * against what they make, none of it when the graph IS the work.
+   *
+   * `graph` hides the CANVAS AND THE SIDEBAR, never the toolbar. The bar
+   * carries the graph picker, the seed, the cook path and the whole
+   * readout line — none of which stop being useful when you are looking
+   * at the render, and one of which is how you get back. Hiding the
+   * overlay wholesale meant the only way out of the scene view was the
+   * space bar, with nothing on screen to say so.
    */
   const VIEWS = [
     { id: "scene", label: "scene", scrim: 0, graph: false },
@@ -150,6 +159,23 @@
   const selectedNode = $derived(model.nodes.find((n) => n.id === selectedId) ?? null);
 
   /**
+   * What every node box prints in its param band, rebuilt once per
+   * revision. Here rather than in the boxes because `paramViews` reads
+   * the live graph: per box it would be one walk per node per render, and
+   * renders happen on every pointermove of a drag.
+   *
+   * It reads each node's `id` and `type` and nothing else, so MOVING a
+   * node — which writes x and y — does not invalidate it. That is the
+   * whole reason dragging stays free.
+   */
+  const previews = $derived.by((): Map<string, readonly ParamPreview[]> => {
+    void paramsRev;
+    return new Map(
+      model.nodes.map((n) => [n.id, paramPreviews(controller.paramViews(n.id, n.type))]),
+    );
+  });
+
+  /**
    * Narrow-screen treatment (viewing-grade, not a mobile editor): the
    * overlay collapses to the toolbar's first row, and the palette and
    * param columns become slide-over drawers so the node canvas gets the
@@ -161,7 +187,8 @@
   /** Canvas component ref, for the toolbar's "fit" button and node placement. */
   let canvas = $state<
     | {
-        resetView: () => void;
+        resetView: (opts?: { preferActual?: boolean }) => void;
+        actualSize: () => void;
         graphPointAt: (x: number, y: number) => { x: number; y: number };
       }
     | undefined
@@ -175,29 +202,45 @@
   let menuAt = $state<{ x: number; y: number } | null>(null);
   let pointer = { x: 0, y: 0 };
 
-  /** Refit when the overlay appears: it was not measurable while hidden. */
+  /**
+   * Refit when the canvas appears: it was not measurable while hidden.
+   * Leaving the graph closes the node menu with it — it is summoned at the
+   * pointer and floats above everything, so a menu left open would hang
+   * over the bare scene with nothing to add a node to.
+   */
   $effect(() => {
     if (view.graph) frameGraph();
+    else menuAt = null;
   });
 
   let collapsed = $state(narrowScreen().matches);
-  let inspectorOpen = $state(false);
+  /**
+   * Narrow screens only: the floating panels would cover a phone's whole
+   * canvas, so there they are a drawer rather than an overlay. At desktop
+   * widths this styles nothing and both panels are simply up.
+   */
+  let panelsOpen = $state(false);
+
+  /**
+   * The node panel appears BECAUSE something is selected — there is no
+   * separate "which panel" state to keep in step any more. Clearing the
+   * selection takes the panel away with it.
+   */
+  function select(id: string | null): void {
+    selectedId = id;
+  }
 
   $effect(() => {
     const mql = narrowScreen();
     const onChange = (e: MediaQueryListEvent): void => {
       collapsed = e.matches;
-      // Leaving the narrow range also resets the drawers, so one left open
+      // Leaving the narrow range also resets the drawer, so one left open
       // does not silently reappear the next time the range is entered.
-      if (!e.matches) inspectorOpen = false;
+      if (!e.matches) panelsOpen = false;
     };
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   });
-
-  function toggleInspector(): void {
-    inspectorOpen = !inspectorOpen;
-  }
 
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   function showToast(text: string, kind: "error" | "info" = "info"): void {
@@ -275,7 +318,7 @@
       return;
     }
     model = res.structure;
-    selectedId = null;
+    select(null);
     paramsRev++;
     captureBaseline();
     frameGraph();
@@ -288,7 +331,7 @@
    * the fit measures the canvas, which has not laid out the new nodes yet.
    */
   function frameGraph(): void {
-    void tick().then(() => canvas?.resetView());
+    void tick().then(() => canvas?.resetView({ preferActual: true }));
   }
 
   /**
@@ -407,7 +450,7 @@
       inputs: res.inputs,
       outputs: res.outputs,
     });
-    selectedId = id;
+    select(id);
     paramsRev++;
   }
 
@@ -452,7 +495,7 @@
     }
     model.nodes = model.nodes.filter((n) => n.id !== id);
     model.edges = model.edges.filter((e) => e.from !== id && e.to !== id);
-    if (selectedId === id) selectedId = null;
+    if (selectedId === id) select(null);
     paramsRev++;
   }
 
@@ -462,7 +505,13 @@
   }
 
   function relayout(): void {
-    topoLayout(model.nodes, model.edges);
+    // The row heights the boxes actually have — a column stacked on the
+    // pre-preview height would tuck each box into the one below it.
+    topoLayout(
+      model.nodes,
+      model.edges,
+      new Map([...previews].map(([id, rows]) => [id, rows.length])),
+    );
     frameGraph();
   }
 
@@ -476,7 +525,7 @@
     const res = controller.importText(text);
     if ("error" in res) return res.error;
     model = res.structure;
-    selectedId = null;
+    select(null);
     importLabel = label;
     awaitingImportCook = true;
     paramsRev++;
@@ -561,6 +610,24 @@
       bridge.frame?.();
       return;
     }
+    /**
+     * Ctrl+0 (Cmd+0) puts the GRAPH back to 100%, the chord that resets a
+     * page's zoom everywhere else. `preventDefault` is what stops the
+     * browser doing its own reset on top; if the chord ever stops being
+     * preventable, the "100%" button is the same action.
+     *
+     * No `isTyping` guard, unlike the bare keys above: Ctrl+0 means
+     * nothing inside a text field, so there is nothing to yield to and
+     * the shortcut should still work with focus in a param box. A modal
+     * hands it back to the browser, and so does the scene view, where
+     * there is no graph to zoom.
+     */
+    if (e.key === "0" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (modal !== null || !view.graph) return;
+      e.preventDefault();
+      canvas?.actualSize();
+      return;
+    }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (modal !== null) return;
     if (isTyping(target)) return;
@@ -593,7 +660,7 @@
      one element rather than an opacity smeared over the editor's parts. -->
 <div class="scrim" style="opacity: {view.scrim}" aria-hidden="true"></div>
 
-<div class="editor" class:collapsed hidden={!view.graph}>
+<div class="editor" class:collapsed class:bare={!view.graph}>
   <Toolbar
     seed={model.seed}
     {status}
@@ -605,6 +672,7 @@
     onImport={() => (modal = "import")}
     onLayout={relayout}
     onFit={() => canvas?.resetView()}
+    onActual={() => canvas?.actualSize()}
     onFrame={() => bridge.frame?.()}
     onCookPath={(p) => bridge.setCookPath?.(p)}
     onShading={(m) => bridge.setShading?.(m)}
@@ -620,48 +688,62 @@
       {/each}
     </div>
   {/if}
-  <div class="body">
+  <!-- The graph half. Hidden in the scene view, which is also what stops
+       it taking the pointer: `display: none` cannot be clicked, so the
+       render underneath orbits normally with no click-through needed. -->
+  <div class="body" hidden={!view.graph}>
     <div class="canvas-wrap" class:through={sceneHasPointer}>
       <Canvas
         bind:this={canvas}
         {model}
         {selectedId}
-        onSelect={(id) => (selectedId = id)}
+        {previews}
+        onSelect={select}
         onMove={moveNode}
         onConnect={connectEdge}
         onDeleteEdge={deleteEdge}
-        onDeleteNode={deleteNode}
       />
     </div>
-    <Overview
-      {controller}
-      rev={paramsRev}
-      spec={panelSpec}
-      title={graphTitle}
-      {baseline}
-      seed={model.seed}
-      {loadedSeed}
-      onEdit={() => paramsRev++}
-      onReset={resetKnobs}
-      {shareUrl} />
-    <Inspector
-      {controller}
-      node={selectedNode}
-      {paramsRev}
-      open={inspectorOpen}
-      onPlain={onPlainParam}
-      onFieldApply={onFieldParam}
-      onDelete={deleteNode}
-    />
-    <!-- Narrow-screen drawer toggle for the param columns, floating over
+    <!-- Two floating cards over the canvas rather than one docked column.
+         The graph's knobs are always up, because a graph always has some;
+         the node's params only exist when a node is selected, and a panel
+         that is empty most of the time is a panel asking for the width
+         back. Left and right so they cannot collide, and inset from the
+         edges so each reads as sitting ON the canvas rather than as
+         another edge of the window. -->
+    <div class="panel graph" class:open={panelsOpen}>
+      <Overview
+        {controller}
+        rev={paramsRev}
+        spec={panelSpec}
+        title={graphTitle}
+        {baseline}
+        seed={model.seed}
+        {loadedSeed}
+        onEdit={() => paramsRev++}
+        onReset={resetKnobs}
+        {shareUrl} />
+    </div>
+    {#if selectedNode}
+      <div class="panel node" class:open={panelsOpen}>
+        <Inspector
+          {controller}
+          node={selectedNode}
+          {paramsRev}
+          onPlain={onPlainParam}
+          onFieldApply={onFieldParam}
+          onDelete={deleteNode} />
+      </div>
+    {/if}
+    <!-- Narrow-screen drawer toggle for the param column, floating over
          the canvas edge. display: none outside the media query. The label
          "params" is chosen to dodge the capture tooling's
          click-button-by-substring needles. -->
     <button
       class="drawer-tab right"
-      aria-label="toggle the param inspector drawer"
-      aria-expanded={inspectorOpen}
-      onclick={toggleInspector}
+      aria-label="toggle the param drawer"
+      aria-expanded={panelsOpen}
+      onclick={() => (panelsOpen = !panelsOpen)}
     >
       params
     </button>
@@ -705,12 +787,9 @@
     z-index: 10;
     display: flex;
     flex-direction: column;
-    color: #dbe4f0;
-    font: 13px/1.45 system-ui, sans-serif;
+    color: var(--sb-ink);
+    font: 13px/1.45 var(--sb-sans);
     pointer-events: none;
-  }
-  .editor[hidden] {
-    display: none;
   }
   /* Only the parts take the pointer; the overlay itself is a frame, and
      so is the row inside it — otherwise the row would swallow whatever
@@ -749,7 +828,10 @@
     position: fixed;
     inset: 0;
     z-index: 9;
-    background: #05070b;
+    /* Pure black, and it has to be: at opacity 1 this IS the background of
+       the graph-only view, so any tint here would be the one colour left
+       on the page — and it would be the largest surface on it. */
+    background: #000000;
     pointer-events: none;
     transition: opacity 0.18s ease;
   }
@@ -761,6 +843,10 @@
        toolbar. Visually inert at desktop widths. */
     position: relative;
   }
+  /* `display: flex` above would otherwise beat the [hidden] default. */
+  .body[hidden] {
+    display: none;
+  }
   /* No scrollbars: the canvas pans and zooms itself. */
   .canvas-wrap {
     flex: 1;
@@ -768,14 +854,45 @@
     min-height: 0;
     overflow: hidden;
   }
+  /**
+   * A floating card over the canvas. AUTO HEIGHT — it is as tall as what
+   * is in it, capped at the viewport so a forty-knob graph scrolls inside
+   * its own card rather than running off the bottom of the window.
+   *
+   * Absolute against `.body`, which is the region below the toolbar, so a
+   * panel can never ride up over the bar. Inset from the edges rather than
+   * flush: the gap is what makes it read as sitting ON the canvas instead
+   * of being another edge of the window.
+   */
+  .panel {
+    position: absolute;
+    top: 12px;
+    z-index: 12;
+    width: 300px;
+    max-height: calc(100% - 24px);
+    box-sizing: border-box;
+    overflow-y: auto;
+    padding: 10px 12px 12px;
+    background: var(--sb-panel);
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius-lg);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+  }
+  .panel.graph {
+    left: 12px;
+  }
+  .panel.node {
+    right: 12px;
+  }
   .cook-errors {
     max-height: 64px;
     overflow-y: auto;
     padding: 4px 12px;
-    border-bottom: 1px solid #402734;
-    background: #1c1218;
-    color: #ff9ca8;
-    font: 11px/1.5 ui-monospace, monospace;
+    border-bottom: 1px solid var(--sb-edge-err);
+    background: var(--sb-alert-bg);
+    color: var(--sb-danger);
+    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
     white-space: pre-wrap;
   }
   .toast {
@@ -787,22 +904,27 @@
     max-height: 110px;
     overflow-y: auto;
     padding: 8px 14px;
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--sb-radius-lg);
+    font-size: var(--sb-t-body);
     line-height: 1.4;
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
   }
+  /* The two toasts differ by BORDER BRIGHTNESS and by face, not by hue:
+     an error is bordered white and set in monospace at a smaller size, an
+     acknowledgement is bordered mid-grey and set in the body face. That
+     second cue matters more than usual here — with the greens and reds
+     gone, a border alone would be a thin thing to tell them apart by. */
   .toast.info {
-    background: #16321f;
-    border: 1px solid #2f9e5f;
-    color: #b8f5c8;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-ok);
+    color: var(--sb-ink);
   }
   .toast.error {
-    background: #33161c;
-    border: 1px solid #a04455;
-    color: #ffb9c2;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
+    background: var(--sb-alert-bg);
+    border: 1px solid var(--sb-edge-err);
+    color: #ffffff;
+    font-family: var(--sb-mono);
+    font-size: var(--sb-t-meta);
   }
   /* Desktop: the drawer tabs do not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */
@@ -828,6 +950,11 @@
       height: 44px;
       overflow: hidden;
     }
+    /* Scene view: the sheet is only the bar, so it stops reserving half
+       the screen for a graph that is not being drawn. */
+    .editor.bare {
+      height: auto;
+    }
     .drawer-tab {
       display: block;
       position: absolute;
@@ -836,22 +963,50 @@
       /* Above the drawers (z-index 15) so a second tap can close them. */
       z-index: 16;
       padding: 10px 6px;
-      background: rgba(29, 42, 63, 0.92);
-      color: #9ecbff;
-      border: 1px solid #33405a;
-      font: 11px system-ui, sans-serif;
+      background: rgba(26, 26, 26, 0.94);
+      color: var(--sb-action);
+      border: 1px solid var(--sb-edge);
+      font: var(--sb-t-meta) var(--sb-sans);
       cursor: pointer;
     }
     .drawer-tab.right {
       right: 0;
       border-right: none;
-      border-radius: 6px 0 0 6px;
+      border-radius: var(--sb-radius) 0 0 var(--sb-radius);
     }
     /* The collapsed overlay is a title bar only; the tabs would otherwise
        poke into it, because .body still has a few clipped pixels and the
        tabs anchor to its vertical center. */
     .editor.collapsed .drawer-tab {
       display: none;
+    }
+    /**
+     * A phone has no room for two cards floating beside a canvas, so the
+     * panels stop floating and become one full-width drawer that the
+     * "params" tab slides in. They stack — graph first, then the node if
+     * one is selected — and share the height rather than overlapping.
+     */
+    .panel {
+      left: 8px;
+      right: 8px;
+      width: auto;
+      z-index: 15;
+      max-height: calc(50% - 16px);
+      transform: translateX(105%);
+      /* Hidden when closed so the off-screen panel can't take focus or
+         intercept hit-testing. */
+      visibility: hidden;
+      transition:
+        transform 0.2s ease,
+        visibility 0.2s;
+    }
+    .panel.node {
+      top: auto;
+      bottom: 8px;
+    }
+    .panel.open {
+      transform: none;
+      visibility: visible;
     }
   }
 </style>
