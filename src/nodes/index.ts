@@ -11,7 +11,25 @@ export * from "./registry.js";
 // pulling it back in would close a cycle. Re-exported from here instead,
 // which is where the package has always published `fieldFromJson` and
 // friends — the names and the entry point are unchanged.
-export * from "../fields/fieldJson.js";
+//
+// Named rather than `export *`, for the reason `src/fields/index.ts` is:
+// the registry also records how each fn VARIES across a domain
+// (`fnVariation`), which the domain-constant fold reads and nothing
+// outside the library does. A wildcard would publish that as API, where a
+// consumer could come to depend on it and freeze it.
+export {
+  FieldJsonError,
+  fieldFromJson,
+  fieldToJson,
+  getFieldSpec,
+  listFieldFnInfos,
+  listFieldFns,
+  paramNamesOf,
+  type FieldBindings,
+  type FieldFnInfo,
+  type FieldSpec,
+  type FieldSpecArg,
+} from "../fields/fieldJson.js";
 export * from "./subgraphParams.js";
 export * from "./serialize.js";
 // The factory only: `ITERATION_MODE`/`MAX_ITERATIONS` and the internals

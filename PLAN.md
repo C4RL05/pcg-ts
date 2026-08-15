@@ -35,6 +35,19 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+**Let the domain-constant fold see through `param`.** The fold
+(`src/fields/fold.ts`) refuses any field whose spec mentions a `param`
+anywhere, so a graph that uses field params — the rig, most of all — gets
+none of it. The reason is structural, not an oversight: a param is
+substituted at BUILD time, so its value lives in the built closure and in
+`Field.key` while the authored spec still says `{"fn":"param"}`.
+Rebuilding from that spec without the bindings yields an unbound param,
+which is a field that refuses to evaluate. Nothing records the bindings
+alongside the field for the fold to pass back to `fieldFromJson`, and
+inventing a place to keep them is the actual work. Worth it when someone
+measures a param-heavy graph and wants the ~10% back; the two facts to
+re-derive are on the fold's own module doc.
+
 **Primitive identity, so primitive-domain randomness stops being
 index-keyed.** Point-domain randomness is keyed on position bits and a
 seed attribute (`src/data/identity.ts`), so it survives a renumbering.
@@ -282,9 +295,10 @@ them, and both are real work.
   worth doing the next time `src/fields/spec.ts` is open for another
   purpose.
 
-- **Give `04-infinite-world` a GPU evaluator.** It has `09-gpu-world`'s
-  shape authored with combinators, so it became the natural showcase
-  once v0.9 landed — but it is example work, not library work.
+- **Give `demos/infinite-world` a GPU evaluator.** It has
+  `demos/gpu-world`'s shape authored with combinators, so it became the
+  natural showcase once v0.9 landed — but it is demo work, not library
+  work.
 
 Full survey: `notes/research/v09-device-keys-survey.md` in the private
 repo.

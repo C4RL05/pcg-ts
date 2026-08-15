@@ -130,9 +130,33 @@ export class FieldJsonError extends Error {
 // public spec API is documented and imported from.
 export { type FieldSpec, type FieldSpecArg, getFieldSpec } from "./spec.js";
 
+/**
+ * Whether a fn introduces per-element variation OF ITS OWN: `"per-element"`
+ * for the ones whose value can differ between two elements of the same
+ * domain (the leaves that read an element — position, index, fraction, an
+ * attribute, a per-element draw — and the noises, which sample one), and
+ * `"uniform"` for the ones that only combine what they are given.
+ *
+ * Read by the domain-constant fold in `fold.ts`, which evaluates a
+ * subexpression once instead of once per element when its own fn
+ * introduces no variation and every argument is likewise uniform. That is
+ * why it is a property of the fn and not of a call: the classification is
+ * what licenses evaluating the expression against a one-element geometry,
+ * so it must be answerable without looking at what it computes over.
+ */
+export type FnVariation = "per-element" | "uniform";
+
 interface FnDef {
   /** Spec keys allowed besides `fn`. */
   readonly keys: readonly string[];
+  /**
+   * REQUIRED, and required rather than defaulted on purpose: a default
+   * would silently classify the next fn somebody registers, and if the
+   * default were "uniform" that is a wrong answer no test asks about —
+   * a field folded to one value for a whole domain. See
+   * {@link FnVariation}, and the completeness test in fieldJson.test.ts.
+   */
+  readonly variation: FnVariation;
   /** Usage sketch shown in errors. */
   readonly usage: string;
   build(spec: Record<string, unknown>, path: string): Field;
@@ -232,21 +256,48 @@ function buildSpec(spec: Record<string, unknown>, path: string): Field {
   }
 }
 
-function register(name: string, keys: readonly string[], usage: string, build: FnDef["build"]): void {
-  FNS.set(name, { keys, usage, build });
+function register(
+  name: string,
+  variation: FnVariation,
+  keys: readonly string[],
+  usage: string,
+  build: FnDef["build"],
+): void {
+  FNS.set(name, { keys, variation, usage, build });
 }
 
-function registerFixed(name: string, arity: number, make: (fields: Field[]) => Field): void {
+/**
+ * `variation` is named at every call site rather than assumed from the
+ * shape: an elementwise combinator over its arguments is uniform, but
+ * nothing about "fixed arity" says so, and a per-element fn registered
+ * through here would otherwise inherit a classification nobody chose.
+ */
+function registerFixed(
+  name: string,
+  variation: FnVariation,
+  arity: number,
+  make: (fields: Field[]) => Field,
+): void {
   const argNames = Array.from({ length: arity }, (_, i) => `arg${i}`).join(", ");
-  register(name, ["args"], `{ fn: "${name}", args: [${argNames}] }`, (spec, path) => {
+  register(name, variation, ["args"], `{ fn: "${name}", args: [${argNames}] }`, (spec, path) => {
     const args = requireArgs(spec, path, arity);
     return make(args.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
   });
 }
 
+/**
+ * @internal How a registered fn varies across a domain, or undefined for
+ * a name the grammar does not know. The fold in `fold.ts` treats an
+ * unknown name the way it treats a per-element one — it can only fold
+ * what the registry vouches for.
+ */
+export function fnVariation(fn: string): FnVariation | undefined {
+  return FNS.get(fn)?.variation;
+}
+
 // -- inputs ----------------------------------------------------------------
 
-register("constant", ["value"], `{ fn: "constant", value: 1 | [1, 2, 3] }`, (spec, path) => {
+register("constant", "uniform", ["value"], `{ fn: "constant", value: 1 | [1, 2, 3] }`, (spec, path) => {
   const v = spec.value;
   if (typeof v === "number" && Number.isFinite(v)) return constant(v);
   if (isNumberArray(v)) return constant(v);
@@ -255,6 +306,7 @@ register("constant", ["value"], `{ fn: "constant", value: 1 | [1, 2, 3] }`, (spe
 
 register(
   "attribute",
+  "per-element",
   ["name", "tupleSize"],
   `{ fn: "attribute", name: "density", tupleSize?: 1 }`,
   (spec, path) => {
@@ -293,12 +345,19 @@ function detachedLeaf<N extends number>(shared: Field<N>, spec: FieldSpec): Fiel
   return copy;
 }
 
-register("position", [], `{ fn: "position" }`, () => detachedLeaf(position(), { fn: "position" }));
-register("index", [], `{ fn: "index" }`, () => detachedLeaf(index(), { fn: "index" }));
-register("fraction", [], `{ fn: "fraction" }`, () =>
+register("position", "per-element", [], `{ fn: "position" }`, () =>
+  detachedLeaf(position(), { fn: "position" }),
+);
+register("index", "per-element", [], `{ fn: "index" }`, () =>
+  detachedLeaf(index(), { fn: "index" }),
+);
+register("fraction", "per-element", [], `{ fn: "fraction" }`, () =>
   detachedLeaf(fraction(), { fn: "fraction" }),
 );
-register("nodeSeed", [], `{ fn: "nodeSeed" }`, () =>
+// UNIFORM, and the only leaf that is: the node seed is one number for the
+// whole cook, which is exactly what makes the seed-shift idiom built on it
+// worth folding.
+register("nodeSeed", "uniform", [], `{ fn: "nodeSeed" }`, () =>
   detachedLeaf(nodeSeed(), { fn: "nodeSeed" }),
 );
 
@@ -384,7 +443,13 @@ function unboundParam(name: string): Field {
 // binding as for a number — and what stands in is a private copy that
 // delegates to it (see `detachedBinding`), so several references to one
 // name still share its per-context column.
-register("param", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) => {
+//
+// PER-ELEMENT, conservatively and necessarily: a binding may be a FIELD
+// spliced in where the reference stands, and that field may be a noise or
+// a position. The classification is a property of the fn, decided before
+// any binding is in hand, so the only sound answer is the one that holds
+// for every value the name can take.
+register("param", "per-element", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) => {
   const name = spec.name;
   if (typeof name !== "string" || name === "") {
     fail(`${path}.name`, "param requires a non-empty string name");
@@ -416,7 +481,7 @@ register("param", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) =
   );
 });
 
-register("randomField", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
+register("randomField", "per-element", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
   const key = spec.key;
   if (key === undefined) return randomField();
   if (typeof key === "number" || typeof key === "string") return randomField(key);
@@ -425,42 +490,47 @@ register("randomField", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spe
 
 // -- combinators -----------------------------------------------------------
 
-registerFixed("add", 2, (f) => add(f[0], f[1]));
-registerFixed("sub", 2, (f) => sub(f[0], f[1]));
-registerFixed("mul", 2, (f) => mul(f[0], f[1]));
-registerFixed("div", 2, (f) => div(f[0], f[1]));
-registerFixed("min", 2, (f) => min(f[0], f[1]));
-registerFixed("max", 2, (f) => max(f[0], f[1]));
-registerFixed("abs", 1, (f) => abs(f[0]));
-registerFixed("floor", 1, (f) => floor(f[0]));
-registerFixed("clamp", 3, (f) => clamp(f[0], f[1], f[2]));
-registerFixed("lerp", 3, (f) => lerp(f[0], f[1], f[2]));
-registerFixed("remap", 5, (f) => remap(f[0], f[1], f[2], f[3], f[4]));
-registerFixed("select", 3, (f) => select(f[0], f[1], f[2]));
-registerFixed("lt", 2, (f) => lt(f[0], f[1]));
-registerFixed("le", 2, (f) => le(f[0], f[1]));
-registerFixed("gt", 2, (f) => gt(f[0], f[1]));
-registerFixed("ge", 2, (f) => ge(f[0], f[1]));
-registerFixed("eq", 2, (f) => eq(f[0], f[1]));
-registerFixed("ne", 2, (f) => ne(f[0], f[1]));
-registerFixed("dot", 2, (f) => dot(f[0], f[1]));
-registerFixed("length", 1, (f) => length(f[0]));
-registerFixed("normalize", 1, (f) => normalize(f[0]));
-registerFixed("sin", 1, (f) => sin(f[0]));
-registerFixed("cos", 1, (f) => cos(f[0]));
-registerFixed("tan", 1, (f) => tan(f[0]));
-registerFixed("asin", 1, (f) => asin(f[0]));
-registerFixed("acos", 1, (f) => acos(f[0]));
-registerFixed("atan", 1, (f) => atan(f[0]));
-registerFixed("atan2", 2, (f) => atan2(f[0], f[1]));
+// All UNIFORM: an elementwise combinator's value at an element is a
+// function of its arguments' values at that element and of nothing else,
+// so it varies exactly as much as they do — which is what makes "every
+// argument is uniform" a sufficient test for the whole subtree.
+registerFixed("add", "uniform", 2, (f) => add(f[0], f[1]));
+registerFixed("sub", "uniform", 2, (f) => sub(f[0], f[1]));
+registerFixed("mul", "uniform", 2, (f) => mul(f[0], f[1]));
+registerFixed("div", "uniform", 2, (f) => div(f[0], f[1]));
+registerFixed("min", "uniform", 2, (f) => min(f[0], f[1]));
+registerFixed("max", "uniform", 2, (f) => max(f[0], f[1]));
+registerFixed("abs", "uniform", 1, (f) => abs(f[0]));
+registerFixed("floor", "uniform", 1, (f) => floor(f[0]));
+registerFixed("clamp", "uniform", 3, (f) => clamp(f[0], f[1], f[2]));
+registerFixed("lerp", "uniform", 3, (f) => lerp(f[0], f[1], f[2]));
+registerFixed("remap", "uniform", 5, (f) => remap(f[0], f[1], f[2], f[3], f[4]));
+registerFixed("select", "uniform", 3, (f) => select(f[0], f[1], f[2]));
+registerFixed("lt", "uniform", 2, (f) => lt(f[0], f[1]));
+registerFixed("le", "uniform", 2, (f) => le(f[0], f[1]));
+registerFixed("gt", "uniform", 2, (f) => gt(f[0], f[1]));
+registerFixed("ge", "uniform", 2, (f) => ge(f[0], f[1]));
+registerFixed("eq", "uniform", 2, (f) => eq(f[0], f[1]));
+registerFixed("ne", "uniform", 2, (f) => ne(f[0], f[1]));
+registerFixed("dot", "uniform", 2, (f) => dot(f[0], f[1]));
+registerFixed("length", "uniform", 1, (f) => length(f[0]));
+registerFixed("normalize", "uniform", 1, (f) => normalize(f[0]));
+registerFixed("sin", "uniform", 1, (f) => sin(f[0]));
+registerFixed("cos", "uniform", 1, (f) => cos(f[0]));
+registerFixed("tan", "uniform", 1, (f) => tan(f[0]));
+registerFixed("asin", "uniform", 1, (f) => asin(f[0]));
+registerFixed("acos", "uniform", 1, (f) => acos(f[0]));
+registerFixed("atan", "uniform", 1, (f) => atan(f[0]));
+registerFixed("atan2", "uniform", 2, (f) => atan2(f[0], f[1]));
 
-register("vec", ["args"], `{ fn: "vec", args: [x, y, z] }`, (spec, path) => {
+register("vec", "uniform", ["args"], `{ fn: "vec", args: [x, y, z] }`, (spec, path) => {
   const args = requireArgs(spec, path, "variadic");
   return vec(...args.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
 });
 
 register(
   "component",
+  "uniform",
   ["args", "index"],
   `{ fn: "component", args: [tupleField], index: 0 }`,
   (spec, path) => {
@@ -475,6 +545,7 @@ register(
 
 register(
   "ramp",
+  "uniform",
   ["args", "stops"],
   `{ fn: "ramp", args: [scalarField], stops: [[0, 0], [1, 1]] }`,
   (spec, path) => {
@@ -565,9 +636,15 @@ function parseNoiseOpts(
   return { opts, raw: rawOpts };
 }
 
+// PER-ELEMENT, all five of them: a noise samples a POSITION, which is the
+// per-element leaf by definition, and it keeps doing so when `opts.position`
+// names another expression — the fold recurses INTO that option (a seed
+// shift added to the sample position is exactly the fold's target) without
+// ever folding the noise itself.
 for (const name of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
   register(
     name,
+    "per-element",
     ["opts"],
     `{ fn: "${name}", opts?: { seed?, frequency?, offset?: [x,y,z], position?, normalized? } }`,
     (spec, path) => NOISE_FACTORIES[name](parseNoiseOpts(spec, path, []).opts),
@@ -576,6 +653,7 @@ for (const name of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
 
 register(
   "worleyNoise",
+  "per-element",
   ["opts"],
   `{ fn: "worleyNoise", opts?: { seed?, frequency?, offset?, position?, normalized?, output?: "f1" | "f2" | "f2-f1", exact? } }`,
   (spec, path) => {
@@ -599,6 +677,7 @@ register(
 
 register(
   "fbm",
+  "per-element",
   ["base", "opts"],
   `{ fn: "fbm", base: "perlinNoise", opts?: { seed?, frequency?, offset?, position?, normalized?, octaves?, lacunarity?, gain? } }`,
   (spec, path) => {

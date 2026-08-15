@@ -30,6 +30,7 @@ import {
   FieldJsonError,
   fieldFromJson,
   fieldToJson,
+  fnVariation,
   listFieldFns,
   paramNamesOf,
   type FieldSpec,
@@ -863,5 +864,37 @@ describe("param binding immutability", () => {
     expect(field.key).toBe(constant([1, 2, 3]).key);
     expect(fieldToJson(field)).toEqual(before);
     expect(Array.from(evaluateField(field, testCloud(2)).data)).toEqual([1, 2, 3, 1, 2, 3]);
+  });
+});
+
+describe("variation classification", () => {
+  /**
+   * The fns whose value can differ between two elements of the same
+   * domain. Pinned by NAME rather than counted, because the cost of a
+   * wrong answer is asymmetric: classifying a per-element fn as uniform
+   * makes the domain-constant fold collapse a whole column to whatever it
+   * happened to evaluate to on one synthetic point, silently and with no
+   * error anywhere. Adding a fn to this list is a decision a reviewer
+   * should see, so it fails here until someone writes it down.
+   */
+  const PER_ELEMENT = [
+    "attribute", "fbm", "fraction", "index", "param", "perlinNoise", "position",
+    "randomField", "simplexNoise", "valueNoise", "worleyNoise",
+  ];
+
+  it("every registered fn carries an explicit answer", () => {
+    const unclassified = listFieldFns().filter(
+      (fn) => !["per-element", "uniform"].includes(fnVariation(fn) as string),
+    );
+    expect(unclassified, `unclassified fns: ${unclassified.join(", ")}`).toEqual([]);
+  });
+
+  it("classifies exactly the reviewed set as per-element", () => {
+    const perElement = listFieldFns().filter((fn) => fnVariation(fn) === "per-element");
+    expect(perElement).toEqual(PER_ELEMENT);
+  });
+
+  it("has no answer for a name the grammar does not know", () => {
+    expect(fnVariation("notAFn")).toBeUndefined();
   });
 });

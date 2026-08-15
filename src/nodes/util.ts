@@ -24,6 +24,10 @@ import {
 // library (see the module doc there), and the seams that own the POLICY
 // are this file and the fused-run terminal in `src/graph/execute.ts`.
 import { countNonFiniteElements, firstNonFinite } from "../fields/finite.js";
+// Directly for a different reason: the fold is built ON the field grammar,
+// which `../fields/index.js` deliberately does not re-export (importing it
+// there would close a cycle — see that barrel).
+import { foldDomainConstants } from "../fields/fold.js";
 import type { DataCollection, GeometryItem } from "../graph/index.js";
 import type { PositionView } from "../spatial/index.js";
 
@@ -260,6 +264,14 @@ export function resolveOn(
  * That documented-and-tested pair IS the bar. Adding a fifth param means
  * the same argument in the same shape: a stated meaning for NaN that a
  * throw would delete. Absent that, the param is guarded.
+ *
+ * This is also the single funnel EVERY CPU field resolve goes through
+ * ({@link resolveOn} calls it and then guards the column), which is why
+ * the domain-constant fold is applied here and nowhere else: one seam to
+ * reason about, and one place where "the field the CPU resolves" is
+ * decided. The fold is bit-exact by construction and returns the field
+ * unchanged whenever there is nothing to fold, so this line changes what
+ * a resolve COSTS and never what it produces — see `src/fields/fold.ts`.
  */
 export function resolveOnAllowingNonFinite(
   geo: Geometry,
@@ -267,7 +279,7 @@ export function resolveOnAllowingNonFinite(
   value: FieldLike,
   seed: number,
 ): Column {
-  const field: Field = isField(value) ? value : resolveField(value);
+  const field: Field = isField(value) ? foldDomainConstants(value, seed) : resolveField(value);
   return evaluateField(field, { geo, domain, seed });
 }
 
