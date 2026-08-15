@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-50 examples, alphabetical by file:
+51 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -19,6 +19,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
+- [basics-mask-by-species.json](#basics-mask-by-speciesjson) — let a string attribute drive a field
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
 - [basics-mesh-primitive.json](#basics-mesh-primitivejson) — build a mesh a saved graph can cook
 - [basics-neighborhood-count.json](#basics-neighborhood-countjson) — measure how crowded each point is
@@ -290,6 +291,24 @@ Cook it: `pcg cook graphs/basics-gather-on-path.json --stats`
 **Outputs:** `points` (from `jitter`.`out`)
 
 Cook it: `pcg cook graphs/basics-jitter-points.json --stats`
+
+## basics-mask-by-species.json
+
+**let a string attribute drive a field**
+
+`attributeIs` is the only way a field can read a STRING attribute: it resolves to 1 on the elements whose named string attribute equals the literal and 0 on every other one, so `species` — itself painted spatially here, because `setAttribute`'s string mode takes a field as the selector into `values` and this one is a noise — becomes an ordinary scalar field. It is a PREDICATE rather than an index on purpose. A string column stores positions in a per-geometry table that clone, filter and merge rebuild to first-encounter order, so the same value sits at different indices depending on what happened upstream, and in different cells of one partitioned world; the predicate resolves the index against the geometry in hand and never exposes it. The same fact makes a literal that is absent from the table read as all zeros instead of throwing — a cell holding no pines legitimately has no `pine`, so a misspelled literal reads as 'nothing matches'. Feeding the 0/1 column to `lerp` as the blend factor is what makes the point: both endpoints are continuous fields of `moisture` and both are evaluated for every point, and the mask chooses between them. It is a mask, not a branch — swap the `lerp` for a `mul` and the same column gates instead. The `remap` on the selector is only bookkeeping: Perlin's values bunch around the middle of its range, so a bare `moisture * 3` would put nearly nine points in ten in the middle band, and stretching the band the noise actually occupies across the three names is what makes the split roughly even. It needs no clamp of its own: `setAttribute` floors the selector and clamps it into range, and NaN picks entry 0, so no per-point value can miss.
+
+**Tags:** `basics`, `fields`, `attributes`, `strings`
+
+**Seed:** 1049
+
+**Node types:** `pointScatterInBounds`, `setAttribute`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `size`.`out`)
+
+Cook it: `pcg cook graphs/basics-mask-by-species.json --stats`
 
 ## basics-merge-points.json
 

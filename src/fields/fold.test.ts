@@ -3,7 +3,7 @@
  * the fold changes what a resolve COSTS and never what it produces, so
  * most of these are equality-of-bytes and identity-of-field assertions
  * rather than assertions about speed. The corpus-wide version of the same
- * claim is `tests/graphs.test.ts`, which diffs 50 graphs against a golden
+ * claim is `tests/graphs.test.ts`, which diffs every graph in the corpus against a golden
  * that this optimization must not move.
  */
 import { describe, expect, it } from "vitest";

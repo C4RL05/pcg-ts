@@ -9,8 +9,8 @@
  * golden as proof. That was an overclaim. `tests/graphs.golden.json` pins
  * element counts, attribute presence, type and tuple size, batch shape,
  * and `P` bounds within a 1e-3 tolerance — it is a SHAPE gate, not a byte
- * gate, and a one-ULP drift in a colour or a scale would pass all fifty
- * files. The two float-exact tests in the suite compare a cook against
+ * gate, and a one-ULP drift in a colour or a scale would pass every
+ * file. The two float-exact tests in the suite compare a cook against
  * another cook of the same code, so both sides are folded and neither can
  * see a fold-induced change.
  *

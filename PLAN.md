@@ -169,6 +169,21 @@ polyline geometries cannot be combined — which blocks mixing authored
 and procedural networks (a hand-placed trail plus a generated one). Was
 ranked #3 in the stage-5 design's missing list.
 
+**`docs/pages/` is a committed build that no gate regenerates or
+checks.** 100 tracked files produced by `npm run examples:pages`, which
+neither `npm run docs` nor CI runs — so it drifts from source silently and
+nothing notices. Adding `graphs/basics-mask-by-species.json` proved it:
+the sandbox enumerates graphs with `import.meta.glob` at BUILD time
+(`shared/presets.ts:33-34`), so until the site was rebuilt by hand,
+`docs/graphs.md` advertised 51 graphs while the hosted tool offered 50.
+The rebuild is cheap and small — 408 ms, 27 files, because vite
+content-hashes per graph so untouched graphs keep their chunks — which is
+what makes the absence of a gate hard to justify. Either `npm run docs`
+should include it, or a test should assert the built manifest covers every
+graph in `graphs/`. The second is better: it fails on the drift rather
+than papering over it, and it is the same "prose nothing tests" defect
+this file records twice below.
+
 **Documentation that quotes measured output has no assertion behind
 it.** Phase 44's docs pass found the manual's Part II transcripts had
 silently become fiction — 1008 points where the library now produces
