@@ -248,6 +248,33 @@
     ]
   },
   {
+    "file": "basics-filter-primitives-by-attribute.json",
+    "path": "examples/graphs/basics-filter-primitives-by-attribute.json",
+    "title": "keep whole primitives by an attribute comparison",
+    "description": "`filterByAttribute` one domain up. `connectPoints` writes each edge's length onto the PRIMITIVE domain as `edgeLength`, and `filterPrimitivesByAttribute` compares that column with the same six operators and keeps WHOLE PRIMITIVES: vertices, vertex and primitive columns, and the points they share all survive, so a network that goes in comes out a network. Every point filter would rebuild the point domain instead and the topology would go with it. The same column can be read after a sampler has flattened it onto points — that is how such graphs were written before this node existed — and the difference is that everything downstream then pays for the edges that were always going to be dropped.",
+    "tags": [
+      "basics",
+      "filter",
+      "primitives",
+      "topology"
+    ],
+    "seed": 1047,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "connectPoints",
+      "filterPrimitivesByAttribute",
+      "pointScatterInBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "network",
+        "node": "short",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-foreach-per-group.json",
     "path": "examples/graphs/basics-foreach-per-group.json",
     "title": "treat each group on its own",

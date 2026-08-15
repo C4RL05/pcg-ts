@@ -176,8 +176,9 @@ function describeContents(geo: Geometry): string {
  * Two properties come from compacting rather than copying `P` wholesale,
  * and both matter more than the copy costs:
  *
- * - **Unreferenced points never reach the buffer.** A cell out of
- *   `filterPrimitivesByBounds` keeps its halo points by default, and a
+ * - **Unreferenced points never reach the buffer.** Either primitive
+ *   filter — `filterPrimitivesByBounds`, `filterPrimitivesByAttribute` —
+ *   keeps the points its dropped primitives left behind by default, and a
  *   geometry can carry a cloud alongside a mesh. Either would inflate
  *   the bounding sphere and break frustum culling for the whole object.
  * - **Non-finite positions never reach it either**, because a primitive

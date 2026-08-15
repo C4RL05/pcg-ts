@@ -8,6 +8,8 @@ import {
   filterByAttribute,
   filterByBounds,
   filterByDensity,
+  filterPrimitivesByAttribute,
+  type FilterPrimitivesByAttributeParams,
   filterPrimitivesByBounds,
   type FilterPrimitivesByBoundsParams,
   pointGrid,
@@ -683,6 +685,339 @@ describe("filterByAttribute", () => {
     await expect(
       runNode(filterByAttribute, { attribute: "P" }, { in: [makeGeometryItem(cloud)] }),
     ).rejects.toThrow(/tuple size 3/);
+  });
+});
+
+// filterPrimitivesByAttribute: the same comparison, one domain up
+
+/** `networkAt` plus the f32 PRIMITIVE column this filter tests. */
+function networkWithEdgeLengths(
+  positions: number[][],
+  prims: number[][],
+  lengths: number[],
+): Geometry {
+  const geo = networkAt(positions, prims);
+  const attr = geo.attrs.primitive.add("edgeLength", "f32", 1, 0);
+  lengths.forEach((v, p) => attr.set(p, v));
+  return geo;
+}
+
+describe("filterPrimitivesByAttribute", () => {
+  const line = [
+    [-2, 0, 0],
+    [-1, 0, 0],
+    [0, 0, 0],
+    [1, 0, 0],
+    [2, 0, 0],
+  ];
+  const roads = [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 4],
+    [2, 4, 0],
+  ];
+  /** One length per road, chosen so every comparison has a distinct answer. */
+  const lengths = [1, 2, 3, 4, 5];
+
+  /** Run the node and return the output geometry. */
+  async function kept(
+    geo: Geometry,
+    params: Partial<FilterPrimitivesByAttributeParams>,
+  ): Promise<Geometry> {
+    const out = await runNode(filterPrimitivesByAttribute, params, { in: [makeGeometryItem(geo)] });
+    return firstGeo(out.out);
+  }
+
+  it("compares a numeric primitive attribute with every operator", async () => {
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    const answer = async (comparison: string, value: number) =>
+      kindsOf(await kept(geo, { attribute: "edgeLength", comparison, value }));
+    expect(await answer("eq", 3)).toEqual(["road2"]);
+    expect(await answer("ne", 3)).toEqual(["road0", "road1", "road3", "road4"]);
+    expect(await answer("lt", 3)).toEqual(["road0", "road1"]);
+    expect(await answer("le", 3)).toEqual(["road0", "road1", "road2"]);
+    expect(await answer("gt", 3)).toEqual(["road3", "road4"]);
+    expect(await answer("ge", 3)).toEqual(["road2", "road3", "road4"]);
+  });
+
+  it("answers exactly what filterByAttribute answers, one domain down", async () => {
+    // The property that makes the two nodes one idea: promote the primitive
+    // column onto the points it covers and the point filter agrees, road
+    // for road. Anything else means moving a filter between domains
+    // silently changes what a graph means.
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    for (const comparison of ["eq", "ne", "lt", "le", "gt", "ge"]) {
+      const prims = kindsOf(await kept(geo, { attribute: "edgeLength", comparison, value: 3 }));
+      const asPoints: string[] = [];
+      const edge = geo.attrs.primitive.require("edgeLength");
+      const kind = geo.attrs.primitive.require("roadKind");
+      // The same comparison, spelled by hand on a one-point-per-primitive
+      // cloud, is what filterByAttribute would decide about each road.
+      const cloud = cloudWith(
+        Array.from({ length: geo.primitiveCount }, (_, p) => [p, 0, 0]),
+        { edgeLength: Array.from({ length: geo.primitiveCount }, (_, p) => edge.get(p)) },
+      );
+      const survivors = await runNode(
+        filterByAttribute,
+        { attribute: "edgeLength", comparison, value: 3 },
+        { in: [makeGeometryItem(cloud)] },
+      );
+      for (const [x] of positionsOf(firstGeo(survivors.out))) asPoints.push(kind.getString(x));
+      expect(prims).toEqual(asPoints);
+    }
+  });
+
+  it("keeps the topology, and every vertex, primitive and detail column with it", async () => {
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    const out = await kept(geo, { attribute: "edgeLength", comparison: "ge", value: 3 });
+    expect(kindsOf(out)).toEqual(["road2", "road3", "road4"]);
+    expect(out.primitiveCount).toBe(3);
+    expect(out.vertexCount).toBe(7); // 2 + 2 + 3
+    expect(Array.from(out.primVertexStart)).toEqual([0, 2, 4]);
+    expect(Array.from(out.primVertexCount)).toEqual([2, 2, 3]);
+    const sourceVertex = out.attrs.vertex.require("sourceVertex");
+    expect(Array.from({ length: out.vertexCount }, (_, v) => sourceVertex.get(v))).toEqual([
+      4, 5, 6, 7, 8, 9, 10,
+    ]);
+    expect(primXs(out)).toEqual([
+      [0, 1],
+      [1, 2],
+      [0, 2, -2],
+    ]);
+    expect(out.attrs.detail.require("region").getString(0)).toBe("north");
+    // NO identity column rides along: the output's primitive domain holds
+    // exactly what the input's did, so no per-partition number can leak
+    // into a fingerprint.
+    expect(out.attrs.primitive.names()).toEqual(geo.attrs.primitive.names());
+  });
+
+  it("reads every numeric column type, and NaN passes only 'ne'", async () => {
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    // A bool and a signed column, because "f32/i32/u32/bool" is a promise
+    // and one f32 fixture would not tell a real read from a coincidence.
+    const paved = geo.attrs.primitive.add("paved", "bool", 1, 0);
+    [1, 0, 1, 0, 1].forEach((v, p) => paved.set(p, v));
+    const grade = geo.attrs.primitive.add("grade", "i32", 1, 0);
+    [-3, -1, 0, 2, 4].forEach((v, p) => grade.set(p, v));
+    expect(await kindsOfKept({ attribute: "paved", comparison: "ge", value: 1 })).toEqual([
+      "road0",
+      "road2",
+      "road4",
+    ]);
+    expect(await kindsOfKept({ attribute: "paved", comparison: "eq", value: 0 })).toEqual([
+      "road1",
+      "road3",
+    ]);
+    expect(await kindsOfKept({ attribute: "grade", comparison: "lt", value: 0 })).toEqual([
+      "road0",
+      "road1",
+    ]);
+    // -0 and 0 are the same number to ===, which is the one place f32
+    // equality surprises an author.
+    expect(await kindsOfKept({ attribute: "grade", comparison: "eq", value: -0 })).toEqual([
+      "road2",
+    ]);
+
+    async function kindsOfKept(params: Partial<FilterPrimitivesByAttributeParams>) {
+      return kindsOf(await kept(geo, params));
+    }
+
+    // A NaN satisfies no comparison, so it survives 'ne' alone — the same
+    // rule filterByExpression states for a predicate that fails to compute.
+    const withNaN = networkWithEdgeLengths(line, roads, [1, Number.NaN, 3, 4, 5]);
+    for (const comparison of ["eq", "lt", "le", "gt", "ge"]) {
+      expect(kindsOf(await kept(withNaN, { attribute: "edgeLength", comparison, value: 2 })))
+        .not.toContain("road1");
+    }
+    expect(kindsOf(await kept(withNaN, { attribute: "edgeLength", comparison: "ne", value: 2 })))
+      .toContain("road1");
+  });
+
+  it("filters by primtype, which is the one primitive attribute always present", async () => {
+    // A mixed geometry, so 'eq polyline' has to actually READ the column
+    // rather than be constantly true or constantly false.
+    const geo = networkAt(line, roads);
+    const primtype = geo.attrs.primitive.require("primtype");
+    primtype.setString(1, "poly");
+    primtype.setString(3, "poly");
+    expect(kindsOf(await kept(geo, { attribute: "primtype", comparison: "eq", stringValue: "polyline" }))).toEqual([
+      "road0",
+      "road2",
+      "road4",
+    ]);
+    expect(kindsOf(await kept(geo, { attribute: "primtype", comparison: "ne", stringValue: "polyline" }))).toEqual([
+      "road1",
+      "road3",
+    ]);
+    await expect(
+      kept(geo, { attribute: "primtype", comparison: "lt", stringValue: "poly" }),
+    ).rejects.toThrow(/only comparisons "eq" and "ne"/);
+  });
+
+  it("leaves the point domain untouched by default and drops leftovers on request", async () => {
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    const before = snapshotGeometry(geo);
+    const untouched = await kept(geo, { attribute: "edgeLength", comparison: "ge", value: 3 });
+    expect(positionsOf(untouched)).toEqual(positionsOf(geo));
+    expect(Array.from(untouched.vertexToPoint)).toEqual([2, 3, 3, 4, 2, 4, 0]);
+    expect(snapshotGeometry(geo)).toEqual(before);
+
+    const dropped = await kept(geo, {
+      attribute: "edgeLength",
+      comparison: "ge",
+      value: 3,
+      unreferencedPoints: "drop",
+    });
+    // Point 1 (x = -1) is referenced only by road0 and road1, both gone.
+    expect(positionsOf(dropped)).toEqual([
+      [-2, 0, 0],
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    expect(Array.from(dropped.vertexToPoint)).toEqual([1, 2, 2, 3, 1, 3, 0]);
+    expect(primXs(dropped)).toEqual([
+      [0, 1],
+      [1, 2],
+      [0, 2, -2],
+    ]);
+  });
+
+  it("'drop' also takes points that never had a primitive, as documented", async () => {
+    // The cost the param description names: a cloud carrying both a
+    // network and unrelated scatter loses the scatter.
+    const withScatter = networkWithEdgeLengths([...line, [9, 0, 9]], roads, lengths);
+    const pick = { attribute: "edgeLength", comparison: "ge", value: 0 };
+    const keepAll = await kept(withScatter, pick);
+    expect(positionsOf(keepAll)).toContainEqual([9, 0, 9]);
+    const dropped = await kept(withScatter, { ...pick, unreferencedPoints: "drop" });
+    expect(dropped.primitiveCount).toBe(5);
+    expect(positionsOf(dropped)).not.toContainEqual([9, 0, 9]);
+  });
+
+  it("splits equal whole: cells filter their own primitives to the same set", async () => {
+    // The partition question. Ownership is assigned by first vertex under
+    // halfOpen, exactly as connectPoints prescribes; each cell then runs
+    // THIS node over what it owns. The union must be the whole-region
+    // answer, road for road and value for value, because the test reads a
+    // primitive's own column and never its index or its neighbours — a
+    // polyline whose points span two cells is emitted whole by the one
+    // cell owning its start, so it is compared exactly once.
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    const pick = { attribute: "edgeLength", comparison: "gt", value: 1 };
+    const whole = await kept(geo, pick);
+
+    const cellOf = async (min: number, max: number) => {
+      const owned = firstGeo(
+        (
+          await runNode(
+            filterPrimitivesByBounds,
+            { boundsMin: [min, -10, -10], boundsMax: [max, 10, 10], vertex: "first" },
+            { in: [makeGeometryItem(geo)] },
+          )
+        ).out,
+      );
+      return kept(owned, pick);
+    };
+    const left = await cellOf(-3, 0);
+    const right = await cellOf(0, 3);
+    // Concatenated rather than sorted, because the left cell's primitives
+    // precede the right cell's in input order and each cell preserves that
+    // order: the two cells reproduce the whole-region ORDER, not merely
+    // the whole-region set.
+    expect([...kindsOf(left), ...kindsOf(right)]).toEqual(kindsOf(whole));
+    const lengthsOf = (g: Geometry) => {
+      const a = g.attrs.primitive.require("edgeLength");
+      return Array.from({ length: g.primitiveCount }, (_, p) => a.get(p));
+    };
+    expect([...lengthsOf(left), ...lengthsOf(right)]).toEqual(lengthsOf(whole));
+  });
+
+  it("is unmoved by the order the points arrived in", async () => {
+    // Permuting the cloud permutes nothing the test reads, so the same
+    // roads survive in the same order.
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    const order = shuffledOrder(line.length, 7);
+    const permuted = networkWithEdgeLengths(
+      Array.from(order, (i) => line[i]),
+      roads.map((pr) => pr.map((p) => order.indexOf(p))),
+      lengths,
+    );
+    const pick = { attribute: "edgeLength", comparison: "ge", value: 3 };
+    expect(kindsOf(await kept(permuted, pick))).toEqual(kindsOf(await kept(geo, pick)));
+  });
+
+  it("passes a primitive-less input through as an empty result rather than failing", async () => {
+    const cloud = cloudAt(line);
+    cloud.attrs.primitive.add("edgeLength", "f32", 1, 0);
+    const out = await kept(cloud, { attribute: "edgeLength", comparison: "ge", value: 0 });
+    expect(out.primitiveCount).toBe(0);
+    expect(out.pointCount).toBe(5);
+  });
+
+  it("names the node, the attribute, the domain and the way out when the name is a POINT attribute", async () => {
+    // The near-miss this node exists to end: the graph that filtered a
+    // primitive column after a sampler flattened it onto points.
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    const chordPick = geo.attrs.point.add("chordPick", "f32", 1, 0);
+    chordPick.set(0, 0.5);
+    await expect(kept(geo, { attribute: "chordPick" })).rejects.toThrow(
+      /filterPrimitivesByAttribute: primitive attribute "chordPick" not found; available: primtype, roadKind, edgeLength — but "chordPick" IS a f32 POINT attribute here, which is the likeliest mix-up/,
+    );
+    await expect(kept(geo, { attribute: "chordPick" })).rejects.toThrow(
+      /promoteAttribute \(name "chordPick", from "point", to "primitive"\).*filterByAttribute/s,
+    );
+    // And the mirror, so the pair reads as one idea from either side.
+    await expect(
+      runNode(filterByAttribute, { attribute: "edgeLength" }, { in: [makeGeometryItem(geo)] }),
+    ).rejects.toThrow(
+      /filterByAttribute: point attribute "edgeLength" not found;.*IS a f32 PRIMITIVE attribute here.*filterPrimitivesByAttribute/s,
+    );
+  });
+
+  it("names the param, the value and the way out on every bad param", async () => {
+    const geo = networkWithEdgeLengths(line, roads, lengths);
+    await expect(kept(geo, { attribute: "nowhere" })).rejects.toThrow(
+      /filterPrimitivesByAttribute: primitive attribute "nowhere" not found; available: primtype, roadKind, edgeLength$/,
+    );
+    await expect(kept(geo, { attribute: "edgeLength", comparison: "GT" })).rejects.toThrow(
+      /filterPrimitivesByAttribute: comparison must be one of eq, ne, lt, le, gt, ge, got "GT"/,
+    );
+    await expect(
+      kept(geo, { attribute: "edgeLength", unreferencedPoints: "maybe" }),
+    ).rejects.toThrow(
+      /filterPrimitivesByAttribute: unreferencedPoints must be "keep" or "drop", got "maybe"/,
+    );
+    // A vector column is not a decision, on either domain.
+    geo.attrs.primitive.add("midpoint", "f32", 3, 0);
+    await expect(kept(geo, { attribute: "midpoint" })).rejects.toThrow(
+      /filterPrimitivesByAttribute: primitive attribute "midpoint" has tuple size 3 \(f32x3\)/,
+    );
+  });
+
+  it("diagnoses a dropped topology rather than reporting a missing name", async () => {
+    // A filter one node too late reads a primitive domain that a
+    // point-removing node emptied, and "not found" alone would send the
+    // author looking for a typo.
+    const cloud = cloudAt(line);
+    await expect(kept(cloud, { attribute: "edgeLength" })).rejects.toThrow(
+      /primitive attribute "edgeLength" not found; available: \(none\) — and this geometry has no primitives at all, so either none was ever built .* or a node between the builder and here removed points and the topology went with them/,
+    );
+  });
+
+  it("refuses an unknown comparison on the point filter too, instead of answering as ge", async () => {
+    // It used to fall through the chain and quietly mean "ge".
+    const cloud = cloudWith([[0, 0, 0]], { level: [1] });
+    await expect(
+      runNode(
+        filterByAttribute,
+        { attribute: "level", comparison: "greaterThan" },
+        { in: [makeGeometryItem(cloud)] },
+      ),
+    ).rejects.toThrow(
+      /filterByAttribute: comparison must be one of eq, ne, lt, le, gt, ge, got "greaterThan"/,
+    );
   });
 });
 

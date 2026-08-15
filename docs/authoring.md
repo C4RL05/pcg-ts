@@ -1086,15 +1086,16 @@ group id (whole numbers, typically written with `setAttribute` at type
 This is the one that bites first. Every filter node that can remove
 points routes through `gatherPoints`, which rebuilds the point domain
 from the survivors and drops primitive topology with it. `mergePoints`
-and `partitionByAttribute` drop it the same way. Two filter-category
-nodes are exempt, for unrelated reasons: `projectToPlane` moves points
-without removing any, and `filterPrimitivesByBounds` removes whole
-*primitives* rather than points — the one node in the library that takes
-topology as its subject instead of its casualty (see "Owning primitives
-instead of destroying them", below). So "filter" is not quite the
+and `partitionByAttribute` drop it the same way. Three filter-category
+nodes are exempt, for two unrelated reasons: `projectToPlane` moves
+points without removing any, and `filterPrimitivesByBounds` and
+`filterPrimitivesByAttribute` remove whole *primitives* rather than
+points — the two nodes in the library that take topology as their
+subject instead of its casualty (see "Owning primitives instead of
+destroying them", below). So "filter" is not quite the
 boundary: **removing or recombining points** is. The category decides
 nothing in either direction — `partitionByAttribute` is categorised
-`attribute` and drops topology, while both exemptions above are
+`attribute` and drops topology, while all three exemptions above are
 categorised `filter` — and the test is **can** remove, not did:
 `filterByAttribute` drops topology even when its predicate keeps every
 point, because it routes through `gatherPoints` regardless.
@@ -1167,13 +1168,14 @@ filterByBounds, filterByAttribute, filterByExpression, selfPrune,
 partitionByAttribute — and mergePoints does the same when it
 concatenates clouds. Category is not the rule: projectToPlane is
 categorised "filter" but preserves topology, and filterByAttribute drops
-it even when its predicate keeps every point. filterPrimitivesByBounds
-is never the culprit for a DROPPED topology — it filters the PRIMITIVE
-domain and preserves the topology of everything it keeps — but it can
-empty that domain by rejecting every primitive, so if one is upstream,
-check its boundsMin/boundsMax, vertex and mode before you move anything.
-Fix by moving pointsToPath after those nodes, so the path is built over
-the points that survive.
+it even when its predicate keeps every point. The primitive filters,
+filterPrimitivesByBounds and filterPrimitivesByAttribute, are never the
+culprit for a DROPPED topology — they filter the PRIMITIVE domain and
+preserve the topology of everything they keep — but either can empty
+that domain by rejecting every primitive, so if one is upstream, check
+its bounds/vertex/mode or its attribute/comparison/value before you move
+anything. Fix by moving pointsToPath after those nodes, so the path is
+built over the points that survive.
 ```
 
 ### Sampling a path, and keeping one
@@ -1469,14 +1471,15 @@ full.
 ### Owning primitives instead of destroying them
 
 `filterPrimitivesByBounds` keeps or drops **whole primitives** by testing
-their vertices against an axis-aligned box, and it is the one filter in
-the library that **preserves topology**: the survivors keep their
-vertices, their vertex and primitive attributes, and the points they
-share. A network goes in and a network comes out. Every point filter
+their vertices against an axis-aligned box, and it is one of the two
+filters in the library that **preserve topology**: the survivors keep
+their vertices, their vertex and primitive attributes, and the points
+they share. A network goes in and a network comes out. Every point filter
 rebuilds the point domain from the survivors and the primitives go with
 it; this one filters the *primitive* domain instead, and that single
 difference is the whole node. It is the exception to the rule the
-previous section states, and the only one.
+previous section states, and `filterPrimitivesByAttribute` — the section
+after this one — is the only other.
 
 **`vertex` is the param to get right**, because two of its four values
 are ownership rules and two are selections:
@@ -1573,6 +1576,64 @@ a cell too sparse to make an edge is a legitimate, silent case in a
 partitioned cook. Why the halo width is exactly `radius` is in "Content
 that must NOT vary per cell" below; `docs/nodes.md`'s `connectPoints`
 entry states the same bound per param.
+
+### Keeping primitives by what they carry
+
+`filterPrimitivesByAttribute` is `filterByAttribute` one domain up: the
+same six comparisons, the same numeric/string split, the same scalar-only
+rule — applied to a **primitive** attribute, keeping whole primitives and
+preserving their topology exactly as `filterPrimitivesByBounds` does. It
+is that node's sibling, and the only difference between them is what they
+ask about a primitive: a value it carries, rather than where its vertices
+lie. String attributes still compare against `stringValue` under `eq` and
+`ne` alone, and `primtype` is one of them, so `primtype eq polyline`
+narrows a mixed geometry to its curves.
+
+Where it sits in the chain is the point of it:
+
+- **Filter before the sampler, not after it.** A primitive attribute —
+  `connectPoints`' edge length, a promoted density, anything
+  `promoteAttribute` lifted — can also be read *after* a sampler has
+  flattened it onto points, because every sampler carries primitive
+  columns down ("Sampling a path, and keeping one" above), and
+  `filterByAttribute` then works. That is how these graphs were written
+  before this node existed. The cost is that the flattening, and
+  everything downstream of it, runs on primitives that were always going
+  to be discarded; filtering here discards them while they are still
+  primitives, so the work that follows is proportional to what survives
+  rather than to what was proposed.
+- **Orphaned points are kept, not tidied.** `unreferencedPoints` means
+  here exactly what it means above: `keep` (the default) leaves the point
+  domain untouched, so every index, attribute and identity is still the
+  input's and anything computed per point upstream still lines up;
+  `drop` removes every point no surviving primitive references, renumbers
+  the topology onto what remains, and takes unrelated scatter with it.
+- **It partitions with nothing extra to arrange.** The test reads one
+  primitive's own value — not its index, not its neighbours, not how many
+  primitives there are — so the survivors and their order are the input's
+  however the cook was partitioned, and no index column is emitted for a
+  per-partition number to leak into a fingerprint. A polyline whose
+  points span two cells is emitted whole by the single cell that owns its
+  first vertex — `filterPrimitivesByBounds` at `vertex: "first"` and
+  `halfOpen`, above — so this node tests it exactly once, and with its
+  complete value.
+
+Naming an attribute that turns out to live on the **point** domain is
+refused rather than guessed at, and the message carries both ways out:
+lift the column with `promoteAttribute` and filter here, or filter the
+points with `filterByAttribute` and accept that the topology goes with
+them. `filterByAttribute` carries the mirror-image message — a name
+that is only on the primitives would have had its carriers filtered out
+from under it — so whichever of the pair you reach for first, the error
+names the other. An empty primitive domain that still carries the named
+column is an empty result here too, never an error — the sparse cell of a
+partitioned cook. A geometry with no primitive columns at all is refused
+and told which nodes drop a topology, because that is a network that was
+never built or one a point filter took away, not a cell with nothing in
+it. `examples/graphs/basics-filter-primitives-by-attribute.json`
+is the whole thing in three nodes: scatter, `connectPoints` writing an
+`edgeLength`, then this node keeping the short edges — fewer than half
+the trails come out, and what comes out is still a network.
 
 ## Staged pipelines
 

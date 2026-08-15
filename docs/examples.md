@@ -4,7 +4,7 @@ Generated from the graphs in [`examples/graphs`](../examples/graphs) by `node sc
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-48 examples, alphabetical by file:
+49 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -15,6 +15,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-filter-by-attribute.json](#basics-filter-by-attributejson) — keep points by an attribute comparison
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
 - [basics-filter-by-expression.json](#basics-filter-by-expressionjson) — keep points with a predicate expression
+- [basics-filter-primitives-by-attribute.json](#basics-filter-primitives-by-attributejson) — keep whole primitives by an attribute comparison
 - [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
@@ -216,6 +217,24 @@ Cook it: `pcg cook examples/graphs/basics-filter-by-density.json --stats`
 **Outputs:** `points` (from `keep`.`out`)
 
 Cook it: `pcg cook examples/graphs/basics-filter-by-expression.json --stats`
+
+## basics-filter-primitives-by-attribute.json
+
+**keep whole primitives by an attribute comparison**
+
+`filterByAttribute` one domain up. `connectPoints` writes each edge's length onto the PRIMITIVE domain as `edgeLength`, and `filterPrimitivesByAttribute` compares that column with the same six operators and keeps WHOLE PRIMITIVES: vertices, vertex and primitive columns, and the points they share all survive, so a network that goes in comes out a network. Every point filter would rebuild the point domain instead and the topology would go with it. The same column can be read after a sampler has flattened it onto points — that is how such graphs were written before this node existed — and the difference is that everything downstream then pays for the edges that were always going to be dropped.
+
+**Tags:** `basics`, `filter`, `primitives`, `topology`
+
+**Seed:** 1047
+
+**Node types:** `connectPoints`, `filterPrimitivesByAttribute`, `pointScatterInBounds`
+
+**Primitives:** *(none)*
+
+**Outputs:** `network` (from `short`.`out`)
+
+Cook it: `pcg cook examples/graphs/basics-filter-primitives-by-attribute.json --stats`
 
 ## basics-foreach-per-group.json
 

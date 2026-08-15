@@ -24,7 +24,7 @@ const ROOT_SURFACE = [
   "describeSubgraphPins", "deserializeGraph", "div", "dot", "elementCount", "eq",
   "evaluateField", "extrudePolygon", "fbm", "fieldFromJson", "fieldToJson", "filterByAttribute",
   "filterByBounds", "filterByDensity", "filterByExpression", "filterByTag",
-  "filterPrimitivesByBounds", "firstGeometry", "floor", "forEachNode", "fraction", "ge",
+  "filterPrimitivesByAttribute", "filterPrimitivesByBounds", "firstGeometry", "floor", "forEachNode", "fraction", "ge",
   "getFieldSpec",
   "getNodeType", "getRegisteredSubgraph", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",

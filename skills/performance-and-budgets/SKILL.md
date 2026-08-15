@@ -225,8 +225,12 @@ skill: a filter rebuilds the point domain and drops polyline topology, so a
 graph that needs a path or a network filters first and builds the topology
 after. Here cost and correctness point the same way, which is convenient
 until the filter is a cell clip and cannot move; then ownership goes on the
-primitive domain instead, via `filterPrimitivesByBounds`. Order for cost,
-then check you have not broken topology.
+primitive domain instead, via `filterPrimitivesByBounds`. When the test is
+a value the primitive carries rather than a boundary,
+`filterPrimitivesByAttribute` is the same move for the same reason: it
+thins the network while it is still a network, so a sweep or a sampler
+downstream pays for what survives and not for what was proposed. Order for
+cost, then check you have not broken topology.
 
 **When a stage exceeds its budget, shrink the stage.** The staged pipeline
 holds itself to 1000 instances across a stage's declared outputs

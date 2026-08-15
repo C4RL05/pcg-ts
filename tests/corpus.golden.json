@@ -391,6 +391,50 @@
         ]
       }
     },
+    "basics-filter-primitives-by-attribute.json": {
+      "outputs": {
+        "network": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 140,
+              "vertex": 668,
+              "primitive": 334,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "edgeLength:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -29.6138,
+                0,
+                -28.9573
+              ],
+              "max": [
+                28.9166,
+                0,
+                29.9294
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-foreach-per-group.json": {
       "outputs": {
         "groups": [

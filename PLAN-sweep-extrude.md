@@ -199,10 +199,11 @@ Five things, and all five constrain the representation:
    and states the fix.
 3. **`promoteAttribute`** — any topology, via `forEachContribution`
    (`promote.ts:14-54`).
-4. **`filterPrimitivesByBounds`** — the only topology-preserving filter
-   in the library (`src/nodes/filtering.ts:268`), backed by
-   `gatherPrimitives` (`util.ts:491-549`), which carries point, vertex,
-   primitive and detail attributes.
+4. **`filterPrimitivesByBounds`** — at the time of writing the only
+   topology-preserving filter in the library (`src/nodes/filtering.ts:268`),
+   backed by `gatherPrimitives` (`util.ts:491-549`), which carries point,
+   vertex, primitive and detail attributes. `filterPrimitivesByAttribute`
+   joined it in Unit B's first half, sharing the same helpers — see below.
 5. **`toBufferGeometry`** and the CLI SVG renderer
    (`src/cli/render.ts:454`, `:484`).
 
@@ -262,11 +263,19 @@ would have missed.
 1 386. Both read *primitive* attributes that `pathSegments` carried onto
 its output *points* (`carryPrimitiveAttributes`, `util.ts:423-462`).
 Post-sweep the equivalent filter must run on the **polyline primitive
-domain, before the sweep** — and the only primitive-domain filter in the
-library is `filterPrimitivesByBounds` (`filtering.ts:268`), which is
-bounds-only. Without a companion node the swept drapes do 7.24x the work
-and 7.24x the memory. **This is a required companion specified by a
-consumer, not by taste.**
+domain, before the sweep** — and when this was written the only
+primitive-domain filter in the library was `filterPrimitivesByBounds`
+(`filtering.ts:268`), which is bounds-only. Without a companion node the
+swept drapes do 7.24x the work and 7.24x the memory. **This is a required
+companion specified by a consumer, not by taste.**
+
+BUILT. `filterPrimitivesByAttribute` shipped as Unit B's first half, for
+exactly this reason. One correction to the trace above: `drapeLong` and
+`drapeSome` do not read `pathResample`'s flatten — `drapeSag` and
+`drapeDrapeTube` intervene, so what they actually gate is the SEGMENT
+cloud `pathSegments` produces. The conclusion is unchanged and the ratio
+is the measured one, but the rewire replaces a filter on tube instances,
+not one on resampled path points.
 
 **(b) `mergePoints` destroys topology** (`src/nodes/pointOps.ts:303`,
 "Topology (vertices/primitives) is not carried"). The rig has four:

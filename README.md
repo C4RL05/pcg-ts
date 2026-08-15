@@ -325,10 +325,11 @@ first point, and there is no `closed` attribute to write or read, so
 nothing can disagree with the geometry. And **a path that passes through
 a filter stops being a path** — as does a network: every filter that can
 remove a point rebuilds the point domain from the survivors and drops
-topology with it, as do `mergePoints` and `partitionByAttribute`. Two
-filters are exempt — `projectToPlane`, which removes nothing, and
-`filterPrimitivesByBounds`, which removes whole primitives rather than
-points and so trims a network instead of demolishing it. Nothing warns
+topology with it, as do `mergePoints` and `partitionByAttribute`. Three
+filters are exempt — `projectToPlane`, which removes nothing, and the two
+primitive filters, `filterPrimitivesByBounds` and
+`filterPrimitivesByAttribute`, which remove whole primitives rather than
+points and so trim a network instead of demolishing it. Nothing warns
 where the loss happens, so build the path or the network after the last
 filter. The full contract is in docs/authoring.md —
 [Paths](./docs/authoring.md#paths) for closure and ordering,

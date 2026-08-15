@@ -165,8 +165,9 @@ topology (`polyline` primitives over the points), not an attribute. Every
 filter node that can remove a point rebuilds the point domain from the
 survivors and drops that topology with it, and so do `mergePoints` and
 `partitionByAttribute`; the exemptions are `projectToPlane`, which clones
-and removes nothing, and `filterPrimitivesByBounds`, which removes whole
-primitives rather than points. Nothing warns where the loss happens. What you get instead is a path consumer several
+and removes nothing, and the two primitive filters,
+`filterPrimitivesByBounds` and `filterPrimitivesByAttribute`, which remove
+whole primitives rather than points. Nothing warns where the loss happens. What you get instead is a path consumer several
 nodes later reporting that it found no polylines — naming a node that is not
 the one at fault. **Filter first, build the topology after.** The same
 ordering applies to every path op and to the `curve` pin of the
@@ -185,8 +186,8 @@ now a point cloud, with nothing downstream necessarily complaining. Two
 fixes, both in `docs/authoring.md` ("Networks: the primitive domain is the
 edge domain"): clip *before* connecting when the clip is an authoring
 choice, or — when it is a partition boundary — hand the clip to
-`filterPrimitivesByBounds`, the one filter that trims topology instead of
-dropping it, on the unwidened rectangle at `vertex: "first"`. That makes
+`filterPrimitivesByBounds`, which trims topology instead of dropping it,
+on the unwidened rectangle at `vertex: "first"`. That makes
 the partitioned cook a serializable graph rather than host TypeScript:
 `filterByBounds(widened, halfOpen)` → `connectPoints` →
 `filterPrimitivesByBounds(unwidened, first, halfOpen)`. Only `first` and

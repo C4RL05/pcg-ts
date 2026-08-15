@@ -160,9 +160,11 @@ to the primitive domain and to `filterPrimitivesByBounds`, which keeps the
 edges whose lower-keyed first vertex lies in the unwidened rectangle. Only
 its `vertex` values `first` and `last` are ownership rules — each reads a
 single vertex, so exactly one cell claims each edge; `all` and `any` are
-selections and tile nothing. See `docs/authoring.md`, "Networks: the
-primitive domain is the edge domain", and the node's entry in
-`docs/nodes.md`.
+selections and tile nothing. Its sibling `filterPrimitivesByAttribute`
+needs no ownership rule at all — it tests one primitive's own value, so
+the survivors and their order are the input's however the cook was
+split. See `docs/authoring.md`, "Networks: the primitive domain is the
+edge domain", and the nodes' entries in `docs/nodes.md`.
 
 **Verify it with the three questions a single-graph test cannot ask.**
 Byte-comparing one cook against itself proves nothing here; each of these

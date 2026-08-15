@@ -480,7 +480,7 @@ export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometr
  *
  * The counterpart of {@link gatherPoints}, and deliberately the only one of
  * the pair that preserves topology — which is the whole reason
- * `filterPrimitivesByBounds` exists.
+ * `filterPrimitivesByBounds` and `filterPrimitivesByAttribute` exist.
  *
  * With `dropUnreferenced` the point domain is compacted to the points some
  * surviving primitive still references, in ascending source order (the
@@ -649,7 +649,7 @@ export function polylineArcTables(geo: Geometry, nodeType: string): PolylineArcT
         ? `the input is a plain point cloud (${geo.pointCount} points, 0 primitives)`
         : `the input has ${geo.primitiveCount} primitives but no usable polyline among them (a polyline needs primtype "polyline" and at least 2 vertices)`;
     throw new Error(
-      `${nodeType}: input has no polyline primitives — ${what}. Build a path in-graph with pointsToPath (or createPolyline in TypeScript). If one WAS built upstream, a node between it and ${nodeType} dropped the topology: any node that can REMOVE points rebuilds the point domain from the survivors and the primitives go with it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and mergePoints does the same when it concatenates clouds. Category is not the rule: projectToPlane is categorised "filter" but preserves topology, and filterByAttribute drops it even when its predicate keeps every point. filterPrimitivesByBounds is never the culprit for a DROPPED topology — it filters the PRIMITIVE domain and preserves the topology of everything it keeps — but it can empty that domain by rejecting every primitive, so if one is upstream, check its boundsMin/boundsMax, vertex and mode before you move anything. Fix by moving pointsToPath after those nodes, so the path is built over the points that survive.`,
+      `${nodeType}: input has no polyline primitives — ${what}. Build a path in-graph with pointsToPath (or createPolyline in TypeScript). If one WAS built upstream, a node between it and ${nodeType} dropped the topology: any node that can REMOVE points rebuilds the point domain from the survivors and the primitives go with it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and mergePoints does the same when it concatenates clouds. Category is not the rule: projectToPlane is categorised "filter" but preserves topology, and filterByAttribute drops it even when its predicate keeps every point. The primitive filters, filterPrimitivesByBounds and filterPrimitivesByAttribute, are never the culprit for a DROPPED topology — they filter the PRIMITIVE domain and preserve the topology of everything they keep — but either can empty that domain by rejecting every primitive, so if one is upstream, check its bounds/vertex/mode or its attribute/comparison/value before you move anything. Fix by moving pointsToPath after those nodes, so the path is built over the points that survive.`,
     );
   }
   return tables;

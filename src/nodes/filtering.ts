@@ -4,11 +4,18 @@
  *
  * Every POINT filter here outputs points only: it rebuilds the point
  * domain from the survivors, and the topology describing the points that
- * are gone goes with it. {@link filterPrimitivesByBounds} is the one
- * exception in the library, and it earns it by filtering the PRIMITIVE
- * domain instead — see its description.
+ * are gone goes with it. {@link filterPrimitivesByBounds} and
+ * {@link filterPrimitivesByAttribute} are the exceptions in the library,
+ * and they earn it by filtering the PRIMITIVE domain instead — see their
+ * descriptions.
+ *
+ * Each primitive filter is the twin of a point filter and shares its
+ * decision rather than restating it: the box test with filterByBounds,
+ * the comparison with filterByAttribute. Two filters that disagree about
+ * a face, or about what `ge` means on a bool, are how a partitioned cook
+ * goes quietly wrong.
  */
-import type { Geometry } from "../data/index.js";
+import type { Attribute, Geometry } from "../data/index.js";
 import type { Column } from "../fields/index.js";
 import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
@@ -115,6 +122,26 @@ function requireBoundaryRule(nodeType: string, boundary: string): boolean {
     );
   }
   return boundary === "inclusive";
+}
+
+/**
+ * Returns whether points no surviving primitive references are DROPPED.
+ *
+ * Shared by both primitive filters, for the reason
+ * {@link insideBoxPredicate} is shared by both bounds filters: what
+ * happens to the points a dropped primitive leaves behind is one decision,
+ * and two nodes answering it differently would mean a network survives one
+ * filter with its halo and the next without it.
+ */
+function requireUnreferencedPointsRule(nodeType: string, value: string): boolean {
+  if (value !== "keep" && value !== "drop") {
+    throw new Error(
+      `${nodeType}: unreferencedPoints must be "keep" or "drop", got ${JSON.stringify(value)}; ` +
+        '"keep" leaves the point domain untouched (indices, attributes and identities stay the input\'s, and unreferenced points remain as isolated leftovers), ' +
+        '"drop" removes every point no surviving primitive references and renumbers the topology onto the rest',
+    );
+  }
+  return value === "drop";
 }
 
 /**
@@ -268,7 +295,7 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
   type: "filterPrimitivesByBounds",
   category: "filter",
   description:
-    "Keeps or drops WHOLE PRIMITIVES by testing their vertices against the axis-aligned box [boundsMin, boundsMax], and it is the ONLY filter in this library that PRESERVES TOPOLOGY: the survivors keep their vertices, their vertex and primitive attributes, and the points they share, so a network that goes in comes out a network. Every point filter — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune — rebuilds the point domain from the survivors and the primitives go with it; this node filters the PRIMITIVE domain instead, which is what makes the difference. It exists to complete the partitioned network cook connectPoints prescribes, whose last step no node could perform: widen the cell's rectangle by `radius` and clip the CLOUD to it with filterByBounds ('halfOpen'), run connectPoints, then run THIS node on the UNWIDENED rectangle with vertex 'first' and the same 'halfOpen' boundary. Each cell then emits exactly the edges it owns, the cells tile the whole-region network with no duplicate and no gap, and the recipe is a serializable graph rather than a TypeScript script. `vertex` decides what 'in the box' means for a primitive: 'first' and 'last' consult ONE vertex, which is what makes them OWNERSHIP rules — every primitive has exactly one first vertex, so exactly one box of a tiling claims it — while 'all' and 'any' are SELECTIONS and do not tile ('any' claims a straddling primitive from every box it reaches, 'all' from none of them). connectPoints emits each edge's lower-keyed endpoint FIRST, so with vertex 'first' this node's owner and that node's canonical edge order are the same choice by construction. For a polyline from any other source — pointsToPath, resamplePath, createPolyline — the first vertex is simply the path's START point: still exactly one owner per path, so the tiling is still exact, but the owner is the cell holding the start rather than the cell holding most of the road, and that one cell emits the whole path however far it runs. `mode` 'outside' is the exact complement of 'inside' under whichever vertex rule and boundary are active, so running both over one input reproduces its primitives exactly once; combined with `vertex` that spans the four quantifiers — 'all'+'inside' keeps primitives lying entirely inside, 'any'+'outside' those lying entirely outside, 'any'+'inside' those touching the box, 'all'+'outside' those not entirely within it. `boundary` is filterByBounds' rule with the same meaning and the same reason to prefer 'halfOpen' wherever ownership matters. POINTS: by default (unreferencedPoints 'keep') the point domain is passed through untouched — same points, same indices, same attributes, same identities — so a partition cell keeps its halo points as isolated leftovers; 'drop' removes every point no surviving primitive references and renumbers the topology onto what is left, which is how a clean network comes out. A geometry with no primitives is not an error but an empty result: a cell too sparse to make an edge is a legitimate, silent case in a partitioned cook. Primitives of any kind are handled, polylines and polys alike — this reads vertices, never `primtype`.",
+    "Keeps or drops WHOLE PRIMITIVES by testing their vertices against the axis-aligned box [boundsMin, boundsMax], and it is one of the two filters in this library that PRESERVE TOPOLOGY (filterPrimitivesByAttribute, which tests a value a primitive carries rather than where its vertices lie, is the other): the survivors keep their vertices, their vertex and primitive attributes, and the points they share, so a network that goes in comes out a network. Every point filter — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune — rebuilds the point domain from the survivors and the primitives go with it; this node filters the PRIMITIVE domain instead, which is what makes the difference. It exists to complete the partitioned network cook connectPoints prescribes, whose last step no node could perform: widen the cell's rectangle by `radius` and clip the CLOUD to it with filterByBounds ('halfOpen'), run connectPoints, then run THIS node on the UNWIDENED rectangle with vertex 'first' and the same 'halfOpen' boundary. Each cell then emits exactly the edges it owns, the cells tile the whole-region network with no duplicate and no gap, and the recipe is a serializable graph rather than a TypeScript script. `vertex` decides what 'in the box' means for a primitive: 'first' and 'last' consult ONE vertex, which is what makes them OWNERSHIP rules — every primitive has exactly one first vertex, so exactly one box of a tiling claims it — while 'all' and 'any' are SELECTIONS and do not tile ('any' claims a straddling primitive from every box it reaches, 'all' from none of them). connectPoints emits each edge's lower-keyed endpoint FIRST, so with vertex 'first' this node's owner and that node's canonical edge order are the same choice by construction. For a polyline from any other source — pointsToPath, resamplePath, createPolyline — the first vertex is simply the path's START point: still exactly one owner per path, so the tiling is still exact, but the owner is the cell holding the start rather than the cell holding most of the road, and that one cell emits the whole path however far it runs. `mode` 'outside' is the exact complement of 'inside' under whichever vertex rule and boundary are active, so running both over one input reproduces its primitives exactly once; combined with `vertex` that spans the four quantifiers — 'all'+'inside' keeps primitives lying entirely inside, 'any'+'outside' those lying entirely outside, 'any'+'inside' those touching the box, 'all'+'outside' those not entirely within it. `boundary` is filterByBounds' rule with the same meaning and the same reason to prefer 'halfOpen' wherever ownership matters. POINTS: by default (unreferencedPoints 'keep') the point domain is passed through untouched — same points, same indices, same attributes, same identities — so a partition cell keeps its halo points as isolated leftovers; 'drop' removes every point no surviving primitive references and renumbers the topology onto what is left, which is how a clean network comes out. A geometry with no primitives is not an error but an empty result: a cell too sparse to make an edge is a legitimate, silent case in a partitioned cook. Primitives of any kind are handled, polylines and polys alike — this reads vertices, never `primtype`.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -332,14 +359,7 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
           '"all" and "any" test every vertex and are selections — neither tiles, since a primitive straddling a seam is claimed by every cell under "any" and by none under "all"',
       );
     }
-    const drop = params.unreferencedPoints;
-    if (drop !== "keep" && drop !== "drop") {
-      throw new Error(
-        `${who}: unreferencedPoints must be "keep" or "drop", got ${JSON.stringify(drop)}; ` +
-          '"keep" leaves the point domain untouched (indices, attributes and identities stay the input\'s, and unreferenced points remain as isolated leftovers), ' +
-          '"drop" removes every point no surviving primitive references and renumbers the topology onto the rest',
-      );
-    }
+    const drop = requireUnreferencedPointsRule(who, params.unreferencedPoints);
     // Named here rather than left to `require("P")`, which would report a
     // bare attribute name and leave an agent hunting for the node.
     const P = geo.attrs.point.get("P");
@@ -391,9 +411,169 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
       }
       if (inside === wantInside) keep.push(p);
     }
-    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop === "drop"))] };
+    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop))] };
   },
 });
+
+// The attribute comparison, defined once and read by both domains.
+
+/** The comparison set both attribute filters offer, in menu order. */
+const COMPARISONS = ["eq", "ne", "lt", "le", "gt", "ge"] as const;
+
+/** One of {@link COMPARISONS}, once {@link requireComparison} has checked it. */
+type Comparison = (typeof COMPARISONS)[number];
+
+/** `f32x3`, or just `bool` when the tuple is 1 — the golden's spelling. */
+function shapeOf(attr: Attribute): string {
+  return attr.tupleSize === 1 ? attr.type : `${attr.type}x${attr.tupleSize}`;
+}
+
+/**
+ * Check the comparison BEFORE the geometry is consulted, so a typo is
+ * reported as a typo rather than as whatever the attribute lookup happens
+ * to say next.
+ *
+ * The enum in a param schema is metadata for an editor, not a runtime
+ * guard, so an unchecked comparison used to fall through the chain to the
+ * `ge` arm and answer a question nobody asked.
+ */
+function requireComparison(nodeType: string, comparison: string): Comparison {
+  if (!(COMPARISONS as readonly string[]).includes(comparison)) {
+    throw new Error(
+      `${nodeType}: comparison must be one of ${COMPARISONS.join(", ")}, got ${JSON.stringify(comparison)}; ` +
+        "eq (equal), ne (not equal), lt (<), le (<=), gt (>), ge (>=) — and a string attribute allows only eq and ne",
+    );
+  }
+  return comparison as Comparison;
+}
+
+/**
+ * The sentence that turns "not found" into a fix when the name IS in this
+ * geometry, on another domain.
+ *
+ * The POINT/PRIMITIVE confusion is not a slip, it is the idiom these two
+ * nodes replace: before a primitive-domain filter existed, the only way to
+ * test a primitive attribute was to let a sampler flatten it onto points
+ * (samplers carry primitive columns down automatically) and then reach for
+ * filterByAttribute. Graphs written that way are everywhere, so the
+ * message names the other node by name rather than merely listing what is
+ * available.
+ */
+function otherDomainHint(
+  geo: Geometry,
+  domain: "point" | "primitive",
+  name: string,
+): string {
+  const twin = domain === "point" ? "primitive" : "point";
+  for (const other of [twin, "vertex", "detail"] as const) {
+    const found = geo.attrs[other].get(name);
+    if (!found) continue;
+    const shape = shapeOf(found);
+    if (other !== twin) {
+      return (
+        ` — but "${name}" IS a ${shape} ${other} attribute here, so move it onto the ${domain} domain first ` +
+        `with promoteAttribute (name "${name}", from "${other}", to "${domain}")`
+      );
+    }
+    return domain === "primitive"
+      ? ` — but "${name}" IS a ${shape} POINT attribute here, which is the likeliest mix-up: this node keeps whole ` +
+          `PRIMITIVES and reads the PRIMITIVE domain, which is what lets a filtered network stay a network. Either ` +
+          `lift the column with promoteAttribute (name "${name}", from "point", to "primitive") and filter here, or ` +
+          `filter the points with filterByAttribute — same comparisons, but it rebuilds the point domain and the ` +
+          `topology goes with it, so it only reads right once a sampler has already flattened the primitives to points`
+      : ` — but "${name}" IS a ${shape} PRIMITIVE attribute here: filterByAttribute filters POINTS and outputs a ` +
+          `point cloud, so the primitives carrying "${name}" would not survive it in any case. Keep whole primitives ` +
+          `with filterPrimitivesByAttribute, which reads the primitive domain directly and preserves topology, or ` +
+          `push the column down with promoteAttribute (name "${name}", from "primitive", to "point") if points are ` +
+          `genuinely what you want`;
+  }
+  return "";
+}
+
+/**
+ * Resolve the scalar column an attribute filter compares, on ITS OWN
+ * domain, naming the node, the attribute, the domain and the way out.
+ */
+function requireFilterAttribute(
+  nodeType: string,
+  geo: Geometry,
+  domain: "point" | "primitive",
+  name: string,
+): Attribute {
+  const set = domain === "point" ? geo.attrs.point : geo.attrs.primitive;
+  const attr = set.get(name);
+  if (!attr) {
+    // No primitives AND no primitive columns is a different diagnosis from
+    // a misspelling: the topology was dropped upstream, or never built.
+    // Every point-removing node rebuilds the point domain and takes the
+    // primitives with it, so a filter placed one node too late reads an
+    // empty domain and would otherwise be told only that a name is missing.
+    const gone =
+      domain === "primitive" && geo.primitiveCount === 0 && set.names().length === 0
+        ? ` — and this geometry has no primitives at all, so either none was ever built (pointsToPath, connectPoints, meshPrimitive) or a node between the builder and here removed points and the topology went with them (filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute, mergePoints)`
+        : "";
+    throw new Error(
+      `${nodeType}: ${domain} attribute "${name}" not found; available: ${set.names().join(", ") || "(none)"}` +
+        `${otherDomainHint(geo, domain, name)}${gone}`,
+    );
+  }
+  if (attr.tupleSize !== 1) {
+    throw new Error(
+      `${nodeType}: ${domain} attribute "${name}" has tuple size ${attr.tupleSize} (${shapeOf(attr)}); ` +
+        "only scalar (tuple 1) attributes can be filtered — comparing a vector yields a vector of flags rather " +
+        "than a decision. Copy the one component you mean onto a scalar column upstream (setAttribute) and filter that.",
+    );
+  }
+  return attr;
+}
+
+/**
+ * THE comparison, built once per cook and shared by both attribute
+ * filters: given an element index on the filter's own domain, does its
+ * value satisfy the test?
+ *
+ * One definition across the two nodes for the reason
+ * {@link insideBoxPredicate} is one: `ge` on a bool, `eq` against a NaN
+ * and the string/numeric split are the decisions they both exist to make,
+ * and a graph that moves a filter from the point domain to the primitive
+ * domain must not change its answer.
+ */
+function comparisonPredicate(
+  nodeType: string,
+  domain: "point" | "primitive",
+  attr: Attribute,
+  comparison: Comparison,
+  value: number,
+  stringValue: string,
+): (i: number) => boolean {
+  if (attr.type === "string") {
+    if (comparison !== "eq" && comparison !== "ne") {
+      throw new Error(
+        `${nodeType}: ${domain} attribute "${attr.name}" is a string, and string attributes support only ` +
+          `comparisons "eq" and "ne", got "${comparison}"; the right-hand side is the stringValue param, and an ` +
+          "ordering test needs a numeric column",
+      );
+    }
+    const wantEqual = comparison === "eq";
+    return (i: number): boolean => (attr.getString(i) === stringValue) === wantEqual;
+  }
+  const rhs = value;
+  const data = attr.data;
+  switch (comparison) {
+    case "eq":
+      return (i: number): boolean => data[i] === rhs;
+    case "ne":
+      return (i: number): boolean => data[i] !== rhs;
+    case "lt":
+      return (i: number): boolean => data[i] < rhs;
+    case "le":
+      return (i: number): boolean => data[i] <= rhs;
+    case "gt":
+      return (i: number): boolean => data[i] > rhs;
+    default:
+      return (i: number): boolean => data[i] >= rhs;
+  }
+}
 
 /** Params of {@link filterByAttribute}. */
 export interface FilterByAttributeParams {
@@ -408,19 +588,20 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
   type: "filterByAttribute",
   category: "filter",
   description:
-    "Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried.",
+    "Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried, so the topology describing the points that are gone goes with them — to keep whole primitives by a primitive attribute and preserve the network, use filterPrimitivesByAttribute, which is this node at the primitive domain.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
     attribute: {
       type: "string",
       default: "density",
-      description: "Name of the point attribute to test. Must exist with tuple size 1.",
+      description:
+        "Name of the POINT attribute to test. Must exist on the point domain with tuple size 1. A name that exists on the primitive domain instead is refused with the fix, since filtering a primitive column here means letting a sampler flatten it onto points first.",
     },
     comparison: {
       type: "enum",
       default: "ge",
-      enum: ["eq", "ne", "lt", "le", "gt", "ge"],
+      enum: [...COMPARISONS],
       description:
         "Comparison operator: eq (equal), ne (not equal), lt (<), le (<=), gt (>), ge (>=). String attributes allow only eq and ne.",
     },
@@ -436,51 +617,85 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
     },
   },
   execute({ inputs, params }) {
-    const geo = requireGeometry(inputs, "in", "filterByAttribute");
-    const attr = geo.attrs.point.get(params.attribute);
-    if (!attr) {
-      throw new Error(
-        `filterByAttribute: point attribute "${params.attribute}" not found; available: ${geo.attrs.point.names().join(", ")}`,
-      );
-    }
-    if (attr.tupleSize !== 1) {
-      throw new Error(
-        `filterByAttribute: attribute "${params.attribute}" has tuple size ${attr.tupleSize}; only scalar (tuple 1) attributes can be filtered`,
-      );
-    }
-    const cmp = params.comparison;
+    const who = "filterByAttribute";
+    const geo = requireGeometry(inputs, "in", who);
+    const cmp = requireComparison(who, params.comparison);
+    const attr = requireFilterAttribute(who, geo, "point", params.attribute);
+    // Built once per cook, never per point — the SoA rule stands.
+    const pass = comparisonPredicate(who, "point", attr, cmp, params.value, params.stringValue);
     const keep: number[] = [];
-    if (attr.type === "string") {
-      if (cmp !== "eq" && cmp !== "ne") {
-        throw new Error(
-          `filterByAttribute: string attribute "${params.attribute}" supports only comparisons "eq" and "ne", got "${cmp}"`,
-        );
-      }
-      for (let i = 0; i < geo.pointCount; i++) {
-        const match = attr.getString(i) === params.stringValue;
-        if (match === (cmp === "eq")) keep.push(i);
-      }
-    } else {
-      const rhs = params.value;
-      const data = attr.data;
-      for (let i = 0; i < geo.pointCount; i++) {
-        const v = data[i];
-        const pass =
-          cmp === "eq"
-            ? v === rhs
-            : cmp === "ne"
-              ? v !== rhs
-              : cmp === "lt"
-                ? v < rhs
-                : cmp === "le"
-                  ? v <= rhs
-                  : cmp === "gt"
-                    ? v > rhs
-                    : v >= rhs;
-        if (pass) keep.push(i);
-      }
+    for (let i = 0; i < geo.pointCount; i++) {
+      if (pass(i)) keep.push(i);
     }
     return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+  },
+});
+
+/** Params of {@link filterPrimitivesByAttribute}. */
+export interface FilterPrimitivesByAttributeParams {
+  attribute: string;
+  comparison: string;
+  value: number;
+  stringValue: string;
+  unreferencedPoints: string;
+}
+
+/** Keep whole primitives by comparing a primitive attribute, preserving topology. */
+export const filterPrimitivesByAttribute = standardNode<FilterPrimitivesByAttributeParams>({
+  type: "filterPrimitivesByAttribute",
+  category: "filter",
+  description:
+    "Keeps WHOLE PRIMITIVES whose named PRIMITIVE attribute satisfies a comparison, and preserves topology: the survivors keep their vertices, their vertex and primitive attributes, and the points they share, so a network that goes in comes out a network. It is filterByAttribute at the primitive domain — the same six comparisons, the same numeric/string split, the same scalar-only rule — and filterPrimitivesByBounds' sibling, differing only in what it asks about a primitive (a value it carries, rather than where its vertices lie). Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value`; string attributes compare against `stringValue` and allow only 'eq' and 'ne', which includes `primtype`, so 'primtype eq polyline' is how a mixed geometry is narrowed to its curves. WHY IT MATTERS WHERE THE FILTER SITS: a primitive attribute — connectPoints' edge length, a promoted density, anything promoteAttribute lifted onto the primitive domain — can also be read AFTER a sampler has flattened it onto points, because every sampler carries primitive columns down onto the points it makes; filterByAttribute then works, and that is how such graphs were written before this node existed. The cost is that the flattening, and everything downstream of it, runs on primitives that were always going to be discarded. Filtering here instead discards them while they are still primitives, so the work that follows is proportional to what survives rather than to what was proposed. POINTS: by default (unreferencedPoints 'keep') the point domain is passed through untouched — same points, same indices, same attributes, same identities — so anything computed per point upstream still lines up and a partition cell keeps its halo; 'drop' removes every point no surviving primitive references and renumbers the topology onto what is left, which is how a clean network comes out. DETERMINISM: the test reads one primitive's own value and nothing else — not its index, not its neighbours, not how many primitives there are — so the survivors and their order are the input's however the cook was partitioned, and no index column is emitted for a per-partition number to leak through. An EMPTY primitive domain that still carries the named column is an empty result rather than an error, as in filterPrimitivesByBounds: a cell too sparse to make a primitive is a legitimate, silent case in a partitioned cook. A geometry with no primitive columns at all is refused instead, and told so — that is a topology never built or dropped upstream, not a sparse cell.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    attribute: {
+      type: "string",
+      default: "edgeLength",
+      description:
+        "Name of the PRIMITIVE attribute to test. Must exist on the primitive domain with tuple size 1. The default names connectPoints' own convention for its `lengthAttr`, which is the commonest key here; `primtype` is always present once a geometry has topology and is tested with 'eq'/'ne' against stringValue. A name that exists on the POINT domain instead is refused with the fix, since that is the shape of the idiom this node replaces.",
+    },
+    comparison: {
+      type: "enum",
+      default: "ge",
+      enum: [...COMPARISONS],
+      description:
+        "Comparison operator: eq (equal), ne (not equal), lt (<), le (<=), gt (>), ge (>=). String attributes allow only eq and ne. Identical to filterByAttribute's, deliberately: moving a filter between the two domains must not change what it means.",
+    },
+    value: {
+      type: "f32",
+      default: 0,
+      description: "Right-hand side for numeric attributes. Ignored for string attributes.",
+    },
+    stringValue: {
+      type: "string",
+      default: "",
+      description: "Right-hand side for string attributes. Ignored for numeric attributes.",
+    },
+    unreferencedPoints: {
+      type: "enum",
+      default: "keep",
+      enum: ["keep", "drop"],
+      description:
+        "What happens to points no surviving primitive references, exactly as in filterPrimitivesByBounds. 'keep' (the default) leaves the point domain completely untouched: same points in the same order, so every point index, attribute and identity is still the input's. 'drop' removes them and renumbers the topology onto the points that remain, in ascending input order, which yields a clean network with nothing dangling; the cost is that point indices move. Note that 'drop' also drops points that had NO primitive to begin with, so a cloud carrying both a network and unrelated scatter loses the scatter.",
+    },
+  },
+  execute({ inputs, params }) {
+    const who = "filterPrimitivesByAttribute";
+    const geo = requireGeometry(inputs, "in", who);
+    // Params before the attribute lookup, so a misspelled comparison is
+    // reported as a misspelled comparison rather than as whatever the
+    // domain happens to be missing.
+    const cmp = requireComparison(who, params.comparison);
+    const drop = requireUnreferencedPointsRule(who, params.unreferencedPoints);
+    const attr = requireFilterAttribute(who, geo, "primitive", params.attribute);
+    const pass = comparisonPredicate(who, "primitive", attr, cmp, params.value, params.stringValue);
+    const keep: number[] = [];
+    const nPrims = geo.primitiveCount;
+    for (let p = 0; p < nPrims; p++) {
+      if (pass(p)) keep.push(p);
+    }
+    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop))] };
   },
 });
 
