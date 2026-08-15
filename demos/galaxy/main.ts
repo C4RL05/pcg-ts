@@ -670,7 +670,7 @@ function showCard(spec: SystemSpec, dist: number): void {
 // -- overlay ---------------------------------------------------------------
 
 const overlay = createOverlay({
-  title: "03 · galaxy",
+  title: "galaxy",
   info:
     "An infinite deterministic spiral galaxy: unbounded halo + dust level above streamed " +
     "100u star cells. Drag to look, W/A/S/D + Q/E to fly (Shift boosts, wheel scales speed). " +

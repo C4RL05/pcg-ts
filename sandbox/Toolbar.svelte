@@ -189,7 +189,7 @@
     aria-expanded={!collapsed}
     onclick={onToggle}
     onkeydown={onTitleKeydown}
-  >01 · sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
+  >sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
 
   <!-- Grouped by what a control acts ON — the loaded graph, the node
        canvas, the render, the cook — with a hairline between groups.

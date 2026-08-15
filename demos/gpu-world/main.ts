@@ -489,7 +489,7 @@ function buildWorld(): void {
 // -- overlay ---------------------------------------------------------------
 
 const overlay = createOverlay({
-  title: "04 · gpu world",
+  title: "gpu world",
   info:
     "A world streamed around a flying camera. Each cell's instance matrices are composed in a " +
     "WGSL kernel and drawn straight from that GPU buffer — they never exist on the CPU. Switch " +

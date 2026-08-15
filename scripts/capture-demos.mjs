@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * capture-demos.mjs — regenerate docs/manual-assets/*.jpg and docs/thumbs/*.jpg
- * from the sandbox (sandbox/) and the three hosted demos (demos/*/).
+ * from the sandbox (`sandbox/`) and the three hosted demos under `demos/`.
+ * (Spelling that second path as a glob would end this comment early — the
+ * star-slash closes it — and the file stops parsing. It did once.)
  *
  * Run with `npm run capture` (optionally `-- --only=sandbox,galaxy` / `--no-build`).
  *
@@ -239,8 +241,16 @@ const DEMOS = [
       // Two clicks from `scene + graph` reaches `scene`. Shading is a
       // redraw and cycling the view touches no cook, so neither moves the
       // status line and neither needs waiting on.
-      clickButtonByText("view ·");
-      clickButtonByText("view ·");
+      //
+      // Selected by CLASS, not by its text. This read `view ·` once, and a
+      // purely cosmetic change to the button's markup — the separator moved
+      // into a span — silently stopped matching, so the rig figure failed to
+      // capture with "no button matching". The class is what the button IS;
+      // its label is presentation and will move again.
+      const view = document.querySelector(".toolbar button.view");
+      if (!view) throw new Error("no .toolbar button.view to cycle the view with");
+      view.click();
+      view.click();
       await new Promise((r) => setTimeout(r, 400));
       return true;
     },
@@ -371,16 +381,14 @@ function pageInstrumentation() {
     return true;
   };
 
-  window.clickButtonByText = (needle) => {
-    for (const b of document.querySelectorAll("button")) {
-      if (text(b).toLowerCase().includes(needle.toLowerCase())) {
-        if (b.disabled) throw new Error(`button "${needle}" is disabled`);
-        b.click();
-        return true;
-      }
-    }
-    throw new Error(`no button matching "${needle}"`);
-  };
+  // There was a `clickButtonByText` here and it is deliberately gone. Its
+  // last caller cycled the sandbox view by matching the label "view ·",
+  // and a cosmetic markup change — the separator moving into a span —
+  // silently stopped matching, so a figure failed to capture for a reason
+  // that had nothing to do with the figure. Select a control by the class
+  // that says what it IS (`button.view`, `.path.cook`, `.path.shade`);
+  // those classes exist for this tooling and are documented as such where
+  // they are declared. A label is presentation and will move again.
 }
 
 const MIME = {

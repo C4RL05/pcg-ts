@@ -370,7 +370,7 @@ document.addEventListener("visibilitychange", () => {
 // -- overlay ---------------------------------------------------------------
 
 const overlay = createOverlay({
-  title: "02 · infinite world",
+  title: "infinite world",
   info: "Unbounded landmark level + world-anchored rock cells streamed around a flying camera. Steer with A/D or arrow keys.",
 });
 
