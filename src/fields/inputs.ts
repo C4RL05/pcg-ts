@@ -51,8 +51,9 @@ export function resolveField(v: FieldLike): Field {
 /**
  * Read a named attribute of the context's domain. Numeric attributes are
  * returned as zero-copy views of the attribute storage; bool attributes
- * are copied to 0/1 floats; string attributes are not readable as fields.
- * When `tupleSize` is given, the attribute's tuple size must match.
+ * are copied to 0/1 floats. A string attribute has no numeric column to
+ * return and is refused here — {@link attributeIs} is how one drives a
+ * field. When `tupleSize` is given, the attribute's tuple size must match.
  */
 export function attribute(name: string, tupleSize?: number): Field {
   // JSON.stringify quotes and escapes the name, so keys stay
@@ -62,7 +63,15 @@ export function attribute(name: string, tupleSize?: number): Field {
   const field = makeField(key, tupleSize, (ctx) => {
     const attr = ctx.geo.attrs[ctx.domain].require(name);
     if (attr.type === "string") {
-      throw new Error(`attribute "${name}": string attributes cannot be read as fields`);
+      // THE message an author hits, not the one in the GPU compiler: that
+      // path declines with `compile-error` and the node re-resolves here,
+      // so a fix named only over there is a fix nobody is shown.
+      throw new Error(
+        `attribute "${name}": a string attribute has no numeric column to read; ` +
+          `test it with attributeIs("${name}", "<value>"), which is 1 where it matches ` +
+          `and 0 elsewhere. Reading the table INDEX is deliberately not offered — it is ` +
+          `insertion-ordered and differs between cells of a partitioned world.`,
+      );
     }
     if (tupleSize !== undefined && attr.tupleSize !== tupleSize) {
       throw new Error(

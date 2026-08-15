@@ -730,7 +730,9 @@ of it:
   hardware; the full table lives in [llms.txt](./llms.txt) and
   [docs/authoring.md](./docs/authoring.md)): add/sub/mul and
   clamp/min/max/floor/select/compares are bit-exact; div, lerp, remap,
-  and dot ≤ 1; ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
+  and dot ≤ 1 — note `fraction` is a DIVISION (`index / (count - 1)`) and
+  lands in that class, so it is the one input that does not inherit
+  `index`'s exactness; ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
   atan/atan2 ≤ 80, asin/acos ≤ 512 (an absolute-error class per the
   WGSL spec); noise families ≤ 6–24 depending on base and mode.
 - On a single device, results are run-to-run **byte-identical**.

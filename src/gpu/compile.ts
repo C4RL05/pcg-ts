@@ -1389,7 +1389,7 @@ function validateLayout(layout: FieldKernelLayout): void {
       throw new GpuCompileError(
         `kernel layout attribute ${JSON.stringify(name)}: unknown type ${JSON.stringify(
           (attr as { type?: unknown })?.type,
-        )}; valid types: "f32", "i32", "u32", "bool" ("string" is accepted but CPU-only)`,
+        )}; valid types: "f32", "i32", "u32", "bool", "string" (a string column binds as u32 and is readable only through attributeIs)`,
       );
     }
     const ts = (attr as { tupleSize?: unknown }).tupleSize;

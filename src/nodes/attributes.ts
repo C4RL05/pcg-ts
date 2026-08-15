@@ -148,9 +148,11 @@ export const setAttribute = standardNode<SetAttributeParams>({
         );
       }
       // No aliasing snapshot needed here: the selector column can only view
-      // numeric storage (string attributes are not readable as fields), and
-      // replace() either reuses string storage or allocates fresh — it never
-      // resets a numeric buffer the column could alias.
+      // NUMERIC storage, and replace() either reuses string storage or
+      // allocates fresh — it never resets a numeric buffer the column could
+      // alias. Still true now that `attributeIs` reads string attributes,
+      // and for a second reason: it builds a fresh 0/1 column rather than
+      // handing back a view, so there is nothing of the table's to alias.
       const attr = set.replace(params.name, "string", ts);
       // Intern each list entry once up front; the loop then writes plain
       // table indices — no per-element string work.
