@@ -17,8 +17,14 @@ Four foundations, each carried through the whole library:
   spawners as first-class graph terminals. GPU cooking ships (WebGPU):
   the serializable field grammar lowers to WGSL compute kernels, eligible
   runs fuse into device-resident pipelines, and instance transforms can
-  stay on the device. Every path falls back to the CPU with a
-  machine-readable reason rather than producing different bytes.
+  stay on the device. Every path that cannot run on the GPU falls back to
+  the CPU with a machine-readable reason rather than silently doing
+  something else. The CPU is the reference and the GPU is a documented
+  approximation: elementwise arithmetic is bit-exact, and the noise
+  interiors round in f32 within published per-family tolerances (see the
+  parity table in `README.md`). "Byte-identical" is a promise about the
+  same path re-run — same seed, any cook order, any budget, any
+  platform — not about CPU and GPU agreeing to the last bit.
 - **Fields.** A node output can be a deferred function of evaluation
   context (`Field<T>`), resolved only when it lands on a domain. Node
   params accept `T | Field<T>`. Anonymous attributes carry intermediate

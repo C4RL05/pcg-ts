@@ -1077,6 +1077,13 @@ What the library promises:
   PCG32 and murmur-style hash combining (`hashCombine`), never
   `Math.random`. Same graph + same seed produce byte-identical results
   across runs and platforms.
+- **On the CPU.** Every promise in this chapter is about the CPU path,
+  which is the reference. Cooking on the GPU device is bit-exact for
+  elementwise arithmetic and a documented approximation for the noise
+  interiors, which round in f32 — see the per-family tolerance table
+  above. That is the one place "identical" means "within a published
+  budget" rather than "the same bytes", and it is why the CPU stays the
+  reference rather than the fallback.
 - **Order and path independence.** Per-point randomness is hashed from
   (seed, index, axis), per-cell seeds from (world seed, level, coords).
   Cook order, streaming order, cancellation, eviction, and recooks never
