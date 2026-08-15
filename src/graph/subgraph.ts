@@ -13,7 +13,12 @@ import { GraphValidationError } from "./errors.js";
 import { cook, withExclusiveGraph } from "./execute.js";
 import type { Graph, NodeHandle } from "./graph.js";
 import { defineNode, type NodeDef, type PinDef, type PinKind } from "./node.js";
-import { type ParamSchema, type ParamType, type ParamValue, paramValueError } from "./params.js";
+import {
+  type ParamSchema,
+  type ParamType,
+  type ParamValue,
+  liveParamValueError,
+} from "./params.js";
 // The spec map lives one module over so `graph.ts` can read it without
 // importing this one back; see subgraphLink.ts.
 import { subgraphSpecs } from "./subgraphLink.js";
@@ -651,24 +656,13 @@ function fieldNotBindableMessage(exp: ExposedParam, readers: string): string {
 
 /**
  * First way a plain (non-field) value fails the merged schema, or
- * `undefined` when it is legal. Two runtime-only exemptions match what
- * serialization already treats as legal, so the cook accepts exactly the
- * values a native node accepts: `items` holds live DataItems injected per
- * cook (the schema's "must be empty" rule is a SERIALIZATION rule), and a
- * field-capable vec param takes a scalar that broadcasts to its arity.
+ * `undefined` when it is legal. The shared live-graph rule, which carries
+ * the two runtime-only exemptions this seam needs — an `items` param
+ * holding live DataItems, and a field-capable vec param taking a scalar
+ * broadcast — so an exposed param accepts exactly what `Graph.setParam`
+ * accepts on the inner node it writes to.
  */
-function exposedValueError(schema: ParamSchema, value: unknown): string | undefined {
-  if (schema.type === "items") return undefined;
-  if (
-    (schema.type === "vec3" || schema.type === "vec4") &&
-    schema.acceptsField === true &&
-    typeof value === "number" &&
-    Number.isFinite(value)
-  ) {
-    return undefined;
-  }
-  return paramValueError(schema, value);
-}
+const exposedValueError = liveParamValueError;
 
 /**
  * Names the exposed param, the violation, and what the value drives —

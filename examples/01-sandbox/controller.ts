@@ -179,6 +179,25 @@ function copyPlain(v: unknown): unknown {
   return Array.isArray(v) ? [...v] : v;
 }
 
+/**
+ * Bring a typed number inside what the schema declares, so a param editor
+ * commits a value the graph will take.
+ *
+ * `Graph.setParam` refuses an out-of-range or non-integer value now — it
+ * names the node, the param and the bound, which is right for an API and
+ * wrong for a number box, where the same keystroke is on its way somewhere
+ * legal. Every numeric widget in this editor clamps through here first, so
+ * the refusal is the last line rather than the first.
+ */
+export function clampToSchema(schema: ParamSchema, raw: number): number {
+  let v = raw;
+  if (schema.type === "i32" || schema.type === "u32") v = Math.round(v);
+  if (schema.type === "u32") v = Math.max(0, v);
+  if (schema.min !== undefined) v = Math.max(schema.min, v);
+  if (schema.max !== undefined) v = Math.min(schema.max, v);
+  return v;
+}
+
 function copyPinViews(pins: { inputs: PinView[]; outputs: PinView[] }): {
   inputs: PinView[];
   outputs: PinView[];
@@ -510,14 +529,25 @@ export class EditorController {
     return { applied, problems };
   }
 
-  /** Set a plain (non-field) param on the live graph. */
-  setPlainParam(id: string, key: string, value: unknown): void {
+  /**
+   * Set a plain (non-field) param on the live graph, returning what the
+   * graph refused or null on success.
+   *
+   * It used to swallow the throw, on the reading that the only way to get
+   * one was a node vanishing between the UI event and the commit. That is
+   * no longer the only way — `setParam` checks the value against the param
+   * schema — and a silently dropped write leaves a widget showing a number
+   * the graph does not have. So it reports, and the caller decides where
+   * to put it.
+   */
+  setPlainParam(id: string, key: string, value: unknown): string | null {
     try {
       this.mirror.setParam({ id } as NodeHandle<Record<string, unknown>>, key, copyPlain(value));
-    } catch {
-      return; // node vanished between UI event and commit
+    } catch (err) {
+      return errorMessage(err);
     }
     this.scheduleCook();
+    return null;
   }
 
   /**

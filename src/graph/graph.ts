@@ -1,8 +1,11 @@
+import { isField } from "../fields/index.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphCycleError, GraphValidationError } from "./errors.js";
 import type { NodeDef, PinDef } from "./node.js";
-import { wrappedGraphOf } from "./subgraphLink.js";
+import { defParamSchemas } from "./paramSchemaLink.js";
+import { liveParamValueError, type ParamSchema } from "./params.js";
+import { subgraphSpecs, wrappedGraphOf } from "./subgraphLink.js";
 
 /**
  * Reference to a node instance in a graph. Carries the param type of its
@@ -56,6 +59,48 @@ export interface NodeState {
 
 function findPin(pins: readonly PinDef[], name: string): PinDef | undefined {
   return pins.find((p) => p.name === name);
+}
+
+/**
+ * The declared schema of one param of `def`, from whichever side authored
+ * it: the registry for a standard node (see paramSchemaLink.ts), the
+ * recorded exposed params for a subgraph node. `undefined` when the def
+ * declares no schema for that name — a hand-rolled `defineNode`, or a
+ * param name the def does not have.
+ */
+function schemaOf(def: NodeDef<Record<string, unknown>>, key: string): ParamSchema | undefined {
+  const declared = defParamSchemas.get(def);
+  if (declared !== undefined) return declared[key];
+  return subgraphSpecs.get(def)?.params.find((p) => p.name === key)?.schema;
+}
+
+/**
+ * Refuse a param value the schema that declares it does not allow. Runs
+ * at the mutation that introduces the value — `add` and `setParam` — so
+ * a bad value is reported where it was written rather than at the next
+ * serialization, which may be in another process or may never happen.
+ *
+ * Names the node, the type, the param, the value and what would be
+ * legal, in the voice `connect` uses for a bad pin. A def that declares
+ * no schema is not checked; see {@link schemaOf}.
+ */
+function checkParamValue(
+  id: string,
+  def: NodeDef<Record<string, unknown>>,
+  key: string,
+  value: unknown,
+  where: string,
+): void {
+  const schema = schemaOf(def, key);
+  if (schema === undefined) return;
+  const bad = isField(value)
+    ? schema.acceptsField === true
+      ? undefined
+      : "holds a Field but the param is not field-capable; pass a plain value, or move the expression to a param whose schema declares acceptsField"
+    : liveParamValueError(schema, value);
+  if (bad !== undefined) {
+    throw new GraphValidationError(`${where}: node "${id}" (type "${def.type}") param "${key}": ${bad}`);
+  }
 }
 
 function listPins(pins: readonly PinDef[]): string {
@@ -327,10 +372,17 @@ export class Graph {
    * graph's exclusive section and a re-entrant call is indistinguishable
    * there from a genuinely concurrent one — so it would hang rather than
    * report anything.
+   *
+   * Each overriding param is checked against its declared schema, exactly
+   * as {@link Graph.setParam} checks it — a value illegal to set is
+   * illegal to start with. Defaults are not rechecked: `standardNode`
+   * validated them at registration. Nothing is inserted when one is
+   * refused, and the auto-id counter does not advance.
    */
   add<P>(def: NodeDef<P>, params?: Partial<P>, id?: string): NodeHandle<P> {
     checkNoWrapCycle(this, def as unknown as object, id);
     let nodeId: string;
+    let advanceTo: number | undefined;
     if (id !== undefined) {
       if (this._nodes.has(id)) {
         throw new GraphValidationError(`node id "${id}" already exists`);
@@ -342,8 +394,15 @@ export class Graph {
         nodeId = `${def.type}_${n}`;
         n++;
       } while (this._nodes.has(nodeId));
-      this.typeCounts.set(def.type, n);
+      advanceTo = n;
     }
+    if (params !== undefined) {
+      const d = def as unknown as NodeDef<Record<string, unknown>>;
+      for (const key of Object.keys(params as object)) {
+        checkParamValue(nodeId, d, key, (params as Record<string, unknown>)[key], "add");
+      }
+    }
+    if (advanceTo !== undefined) this.typeCounts.set(def.type, advanceTo);
     const merged = {
       ...(def.defaultParams as object),
       ...(params as object | undefined),
@@ -500,8 +559,25 @@ export class Graph {
     this._version++;
   }
 
-  /** Set one param and mark the node dirty. */
+  /**
+   * Set one param and mark the node dirty.
+   *
+   * The value is checked against the param's declared schema first, and a
+   * violation throws `GraphValidationError` naming the node, the param,
+   * the value and what would be legal. The check belongs here rather than
+   * only at the JSON boundary: a graph that is built, patched and cooked
+   * in memory — a host, the sandbox, an agent driving this API — would
+   * otherwise carry a value nothing ever refuses, and the damage would
+   * surface at a node far from the write, or not at all.
+   *
+   * What it does NOT check is a `Field`, beyond the param being
+   * field-capable: a field is a recipe with no number to bound until it
+   * lands on a domain, which is what the finiteness guard at the param
+   * seam is for.
+   */
   setParam<P, K extends keyof P & string>(handle: NodeHandle<P>, key: K, value: P[K]): void {
+    const node = this.require(handle.id);
+    checkParamValue(node.id, node.def, key, value, "setParam");
     this._setParamQuiet(handle, key, value);
     this._version++;
   }
@@ -510,6 +586,14 @@ export class Graph {
    * @internal Param write that does not count as a user edit (no version
    * bump) — used by subgraph plumbing, whose effects are already covered
    * by the wrapping node's memo key (outer seed and input revs).
+   *
+   * Deliberately UNCHECKED, unlike {@link Graph.setParam}. Every caller
+   * is a write-cook-restore around an inner graph: the write half carries
+   * a value the wrapper already validated at its own seam (an exposed
+   * param, a `forEach` step key), and the restore half puts back the
+   * value that was there before — which was checked on its way in.
+   * Checking again would cost a schema switch per param per cook, and per
+   * ITERATION in `forEach`, to re-derive an answer already known.
    */
   _setParamQuiet<P, K extends keyof P & string>(
     handle: NodeHandle<P>,

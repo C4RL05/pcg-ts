@@ -394,8 +394,13 @@ describe("a body field expression reading an exposed param — cooking", () => {
       { name: "amp", targets: [], schema: f32 },
     ]);
     const graph = new Graph(7);
-    const sub = graph.add(def, { amp: constant(2) }, "sub");
+    const sub = graph.add(def, undefined, "sub");
     graph.output(sub, "out", "out");
+    // Through the unchecked door: `add` and `setParam` both refuse a Field
+    // on a param that is not field-capable now. The refusal under test is
+    // the cook-time one, which alone can name the READING route — the body
+    // expression that would have spliced the value in.
+    graph._setParamQuiet(sub, "amp", constant(2));
 
     await expect(cook(graph)).rejects.toThrow(
       /subgraph exposed param "amp" holds a Field, and the body's field expression at "p"\.amount reads it by name, but its schema does not accept one/,
@@ -605,7 +610,9 @@ describe("a body field expression reading an exposed param — the body after a 
     graph.output(sub, "out", "out");
     // Past the exposed schema's own check would still leave the binding
     // impossible; both refusals name the reading slot.
-    graph.setParam(sub, "amp", Number.NaN);
+    // Through the unchecked door, so the cook-time refusal is the one that
+    // answers: `setParam` rejects NaN against the same schema up front.
+    graph._setParamQuiet(sub, "amp", Number.NaN);
 
     // The schema's own check catches it first, and still names the route
     // the value would have taken — an empty target list must not leave the

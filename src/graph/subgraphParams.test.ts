@@ -460,7 +460,11 @@ describe("subgraphNode exposed params — cooking", () => {
     const sub = graph.add(def, undefined, "sub");
     graph.output(sub, "out", "out");
 
-    graph.setParam(sub, "amount", constant(0.5));
+    // Planted through the deliberately unchecked door: `setParam` now
+    // refuses a Field on a param that is not field-capable up front. What
+    // is under test is the SECOND line — the cook-time refusal at the
+    // exposed-param seam, the only one that can name WHICH target refuses.
+    graph._setParamQuiet(sub, "amount", constant(0.5));
     await expect(cook(graph)).rejects.toThrow(
       /exposed param "amount" holds a Field, but it is not field-capable: inner target "plain"\.amount takes plain values only; field-capable targets of "amount": "capable"\.amount/,
     );
@@ -483,7 +487,11 @@ describe("subgraphNode exposed params — cooking", () => {
     const sub = graph.add(def, { amount: 4 }, "sub");
     graph.output(sub, "out", "out");
 
-    graph.setParam(sub, "amount", -5);
+    // Through the unchecked door: `setParam` refuses -5 against the same
+    // merged schema now, so reaching the cook-time refusal — the one that
+    // names the inner slot the value would have been written to — needs a
+    // write that skips it.
+    graph._setParamQuiet(sub, "amount", -5);
     // Named at the level the author set it, not as an inner node's
     // complaint about a value it was handed.
     await expect(cook(graph)).rejects.toThrow(

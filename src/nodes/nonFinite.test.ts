@@ -269,20 +269,23 @@ describe("the isField gate", () => {
    * here would cost several times more for no coverage — a plain value's
    * finiteness is decidable from the 1-4 raw numbers it is made of, and
    * `paramValueError` (`src/graph/params.ts`) already decides it at every
-   * boundary that has a schema. The third assertion below is that boundary,
-   * refusing the very value the first one lets through.
+   * boundary that has a schema — which, since `Graph.setParam` began
+   * checking, is every door a plain value has. The last two assertions are
+   * those doors, refusing the very value the first one lets through.
    *
-   * What the first assertion pins is therefore a HOLE, not a feature:
-   * `Graph.setParam` validates nothing, so a plain non-finite value patched
-   * straight onto a node still reaches a column. That is a known defect in
-   * the PLAIN-value story and wants its own fix at `setParam`; a full column
-   * scan standing in for one would be the wrong shape and the wrong cost.
+   * The first assertion therefore no longer describes anything an author
+   * can do. It reaches the gate through `_setParamQuiet`, the one write
+   * that is deliberately unchecked, because the gate is still a real
+   * decision worth pinning: widen it to scan plain values and this cook
+   * starts throwing; delete it and the field half below stops throwing.
    */
   it("ignores a plain non-finite param, refuses the same value as a field", async () => {
     const { graph, src } = cloudGraph();
     const move = graph.add(transformPoints, {}, "move");
-    // Straight past every schema boundary — this is the setParam hole.
-    graph.setParam(move, "translate", [Number.POSITIVE_INFINITY, 0, 0]);
+    // The unchecked door. `setParam` refuses this value now (asserted
+    // below), so a plain non-finite value can only reach a column through
+    // a write that skips the schema — which is what the gate then ignores.
+    graph._setParamQuiet(move, "translate", [Number.POSITIVE_INFINITY, 0, 0]);
     graph.connect(src, "out", move, "in");
     graph.output(move, "out", "out");
     const result = await cook(graph);
@@ -308,8 +311,17 @@ describe("the isField gate", () => {
       elements: CLOUD_POINTS,
     });
 
-    // Where the plain value IS checked: the serialization boundary, which
-    // names the node and the param and never needs a column to do it.
+    // Where the plain value IS checked. First at the mutation that
+    // introduces it, which is the door an author actually goes through —
+    // no cook, no column, no serialization needed to find out.
+    const { graph: viaSet } = cloudGraph();
+    const moveSet = viaSet.add(transformPoints, {}, "move");
+    expect(() => viaSet.setParam(moveSet, "translate", [Number.POSITIVE_INFINITY, 0, 0])).toThrow(
+      /setParam: node "move" \(type "transformPoints"\) param "translate": expected an array of 3 finite numbers/,
+    );
+
+    // And again at the serialization boundary, which names the node and the
+    // param and never needs a column to do it either.
     let boundary: unknown;
     try {
       deserializeGraph({

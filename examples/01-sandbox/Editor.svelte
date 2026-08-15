@@ -499,9 +499,10 @@
     return null;
   }
 
-  function onPlainParam(id: string, key: string, value: unknown): void {
-    controller.setPlainParam(id, key, value);
+  function onPlainParam(id: string, key: string, value: unknown): string | null {
+    const err = controller.setPlainParam(id, key, value);
     paramsRev++;
+    return err;
   }
 
   function onFieldParam(id: string, key: string, text: string): string | null {

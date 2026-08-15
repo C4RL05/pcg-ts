@@ -145,30 +145,6 @@ now policed by `COUNT_CLAIMS` in `src/docs/site.ts` (19 claims). The
 transcripts are not. Fixing it means either generating them or asserting
 them, and both are real work.
 
-**`Graph.setParam` validates nothing.** `paramValueError`
-(`src/graph/params.ts`) refuses a non-finite `f32`/`i32`/`u32` and any
-non-finite component of a `vec3`/`vec4`, and it is called from exactly
-three places: deserialization (`src/nodes/serialize.ts`), exposed-param
-resolution (`src/graph/subgraph.ts`) and World/worker patches
-(`src/runtime/patches.ts`). `Graph.setParam` calls `_setParamQuiet` and
-bumps the version with no schema check at all, so the plain-param
-finiteness refusal is a SERIALIZATION-boundary check rather than a
-cook-time one and a TypeScript author can set a plain NaN and cook it.
-- Surfaced by the non-finite guard, which deliberately does NOT close it:
-  that guard scans FIELD-resolved columns, and a plain value's finiteness
-  is decidable from the 1-4 raw numbers it is made of. A full column scan
-  standing in for a 4-number check would cost about 6x more on the rig
-  for no coverage a schema check would not give.
-- Not a blind close, either. `filterByBounds.boundsMin`/`boundsMax`
-  document ±Infinity as the intended spelling for an unbounded axis, and
-  `requireBounds3`'s own error tells the author to write
-  `[ctx.min[0], -Infinity, ctx.min[1]]`. JSON has no `Infinity` literal,
-  so that value can ONLY arrive through the one door that does not check:
-  the gap and the feature are the same gap. Closing it needs a way for
-  `ParamSchema` to say "infinite is meaningful here" (or those two params
-  named as exceptions), which is the design work this entry is waiting
-  for a caller to justify.
-
 ## Stretch — surveyed and NOT scheduled
 
 - **Rescaling the shared noise convention so an amplitude knob reaches

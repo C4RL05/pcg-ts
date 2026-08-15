@@ -59,7 +59,8 @@ export interface SerializedExposedPin {
 
 /**
  * One exposed-param declaration in a serialized subgraph payload: the
- * AUTHORED part only. `type`, `enum` and `acceptsField` are deliberately
+ * AUTHORED part only. `type`, `enum`, `acceptsField` and `acceptsInfinite`
+ * are deliberately
  * absent — they are re-derived from the targets' registered schemas on
  * load, so a payload cannot carry a schema that lies about what the inner
  * params accept, and there is no duplicated truth to drift.
@@ -214,6 +215,7 @@ const DERIVED_EXPOSED_PARAM_KEYS: Readonly<Record<string, string>> = {
   type: "derived from the targets' registered schemas; remove it",
   enum: "derived from the targets' registered schemas; remove it",
   acceptsField: "derived from the targets' registered schemas; remove it",
+  acceptsInfinite: "derived from the targets' registered schemas; remove it",
 };
 
 function fail(message: string): never {

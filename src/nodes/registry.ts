@@ -17,6 +17,9 @@ import {
   type ResidentDesc,
   paramSchemaError,
 } from "../graph/index.js";
+// Reached by MODULE rather than through the graph layer's index: the link
+// is internal plumbing between the two layers, not API. See its header.
+import { defParamSchemas } from "../graph/paramSchemaLink.js";
 
 /**
  * A node definition plus registry metadata, passed to {@link standardNode}.
@@ -96,6 +99,7 @@ function copySchema(schema: ParamSchema): ParamSchema {
     acceptsField?: boolean;
     min?: number;
     max?: number;
+    acceptsInfinite?: boolean;
   } = {
     type: schema.type,
     default: copyParamValue(schema.default),
@@ -105,6 +109,7 @@ function copySchema(schema: ParamSchema): ParamSchema {
   if (schema.acceptsField !== undefined) copy.acceptsField = schema.acceptsField;
   if (schema.min !== undefined) copy.min = schema.min;
   if (schema.max !== undefined) copy.max = schema.max;
+  if (schema.acceptsInfinite !== undefined) copy.acceptsInfinite = schema.acceptsInfinite;
   return copy;
 }
 
@@ -158,6 +163,11 @@ export function standardNode<P>(spec: NodeSpec<P>): NodeDef<P> {
   for (const [name, schema] of Object.entries<ParamSchema>(spec.params)) {
     params[name] = copySchema(schema);
   }
+  // Publish the schemas to the graph layer, which cannot import this one,
+  // so `Graph.add` and `Graph.setParam` can refuse a value at the write.
+  // The registry's own copies — the same objects `listNodeTypes` copies
+  // again for callers — so the two can never describe different bounds.
+  defParamSchemas.set(def, params);
   registry.set(spec.type, {
     def: def as unknown as NodeDef<Record<string, unknown>>,
     info: {

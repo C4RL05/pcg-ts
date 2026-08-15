@@ -357,7 +357,8 @@
           0,
           0
         ],
-        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded."
+        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+        "acceptsInfinite": true
       },
       "boundsMax": {
         "type": "vec3",
@@ -366,7 +367,8 @@
           1,
           1
         ],
-        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane."
+        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane.",
+        "acceptsInfinite": true
       },
       "mode": {
         "type": "enum",
@@ -544,7 +546,8 @@
           0,
           0
         ],
-        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world)."
+        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+        "acceptsInfinite": true
       },
       "boundsMax": {
         "type": "vec3",
@@ -553,7 +556,8 @@
           1,
           1
         ],
-        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin."
+        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin.",
+        "acceptsInfinite": true
       },
       "vertex": {
         "type": "enum",
@@ -1170,7 +1174,8 @@
           0,
           0
         ],
-        "description": "Minimum corner of the query window, in world units — INCLUSIVE. Read only to choose which lattice cells to visit and to clip; it never moves a point. In \"xz\" mode the Y component is ignored."
+        "description": "Minimum corner of the query window, in world units — INCLUSIVE. Read only to choose which lattice cells to visit and to clip; it never moves a point. In \"xz\" mode the Y component is ignored, and -Infinity is the honest thing to write there: a World \"xz\" cell is a column with no vertical extent. An axis this mode DOES read must still be finite — the window chooses which cells to visit, so it has to be bounded — and an infinity never survives JSON, so a graph that must serialize needs a finite window.",
+        "acceptsInfinite": true
       },
       "boundsMax": {
         "type": "vec3",
@@ -1179,7 +1184,8 @@
           100,
           100
         ],
-        "description": "Maximum corner of the query window, in world units — EXCLUSIVE, so abutting windows neither drop nor duplicate a point on their shared face. Read only to choose which lattice cells to visit and to clip. In \"xz\" mode the Y component is ignored. A window with max <= min on a read axis emits nothing."
+        "description": "Maximum corner of the query window, in world units — EXCLUSIVE, so abutting windows neither drop nor duplicate a point on their shared face. Read only to choose which lattice cells to visit and to clip. In \"xz\" mode the Y component is ignored and may be +Infinity, subject to the notes on boundsMin. A window with max <= min on a read axis emits nothing.",
+        "acceptsInfinite": true
       },
       "seed": {
         "type": "u32",

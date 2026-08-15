@@ -56,6 +56,7 @@ interface CanonicalSchema {
   readonly acceptsField?: boolean;
   readonly min?: number;
   readonly max?: number;
+  readonly acceptsInfinite?: boolean;
 }
 
 interface CanonicalNodeType {
@@ -84,6 +85,7 @@ function canonicalSchema(schema: ParamSchema): CanonicalSchema {
     ...(schema.acceptsField !== undefined ? { acceptsField: schema.acceptsField } : {}),
     ...(schema.min !== undefined ? { min: schema.min } : {}),
     ...(schema.max !== undefined ? { max: schema.max } : {}),
+    ...(schema.acceptsInfinite !== undefined ? { acceptsInfinite: schema.acceptsInfinite } : {}),
   };
 }
 
@@ -116,10 +118,14 @@ function formatDefault(value: ParamValue): string {
 function formatRange(schema: ParamSchema): string {
   const hasMin = schema.min !== undefined;
   const hasMax = schema.max !== undefined;
-  if (hasMin && hasMax) return `${schema.min}..${schema.max}`;
-  if (hasMin) return `>= ${schema.min}`;
-  if (hasMax) return `<= ${schema.max}`;
-  return "";
+  // `acceptsInfinite` is part of the range a param admits, so it belongs in
+  // the range cell rather than a column of its own — and it is the LIVE
+  // range: a graph carrying an infinity cannot be serialized.
+  const infinite = schema.acceptsInfinite === true ? " (±Infinity ok, but never serializes)" : "";
+  if (hasMin && hasMax) return `${schema.min}..${schema.max}${infinite}`;
+  if (hasMin) return `>= ${schema.min}${infinite}`;
+  if (hasMax) return `<= ${schema.max}${infinite}`;
+  return infinite.trim();
 }
 
 function formatPins(pins: readonly { name: string; kind: PinKind; multi?: boolean }[]): string {

@@ -384,7 +384,11 @@ describe("exposed params — what serialization refuses", () => {
 
   it("refuses a value that violates the exposed schema", () => {
     const { graph, sub } = build();
-    graph.setParam(sub, "count", -3);
+    // Through the unchecked door: `setParam` refuses -3 against the same
+    // exposed schema now, and what this pins is that SERIALIZATION refuses
+    // it too — the boundary a value reaching the graph any other way still
+    // has to cross.
+    graph._setParamQuiet(sub, "count", -3);
     expect(() => serializeGraph(graph)).toThrow(
       /node "sub" param "count": -3 is below the minimum 0/,
     );
@@ -392,7 +396,8 @@ describe("exposed params — what serialization refuses", () => {
 
   it("refuses a Field on an exposed param that is not field-capable", () => {
     const { graph, sub } = build();
-    graph.setParam(sub, "count", fieldFromJson({ fn: "constant", value: 3 }));
+    // Through the unchecked door, for the same reason as above.
+    graph._setParamQuiet(sub, "count", fieldFromJson({ fn: "constant", value: 3 }));
     expect(() => serializeGraph(graph)).toThrow(
       /node "sub" param "count": holds a Field but the param is not field-capable/,
     );

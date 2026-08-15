@@ -217,10 +217,12 @@ function requireFiniteColumn(col: Column, nodeType: string, param: string): Colu
  * materializes a full `count * tupleSize` column, so scanning plain values
  * too would cost about 6x more on the rig for zero coverage: a plain
  * value's finiteness is decidable from the 1-4 raw numbers it is made of,
- * and `paramValueError` already decides it at every boundary that has a
- * schema (deserialization, exposed params, World patches). `Graph.setParam`
- * checking nothing is a real hole, but it is a hole in the PLAIN-value
- * story and wants its own fix, not a full column scan standing in for one.
+ * and the schema check already decides it at every door a plain value has
+ * — deserialization, exposed params, World patches, and since the check
+ * moved onto the mutation itself, `Graph.add` and `Graph.setParam` too.
+ * That last one used to be the gap this comment named, and closing it
+ * there rather than here is why: a 4-number check belongs where the 4
+ * numbers are written, not behind a full column scan standing in for one.
  *
  * Use {@link resolveOnAllowingNonFinite} for the params whose non-finite
  * values are DATA rather than a broken recipe.

@@ -122,6 +122,14 @@ export function applyParamPatches(
       ) {
         value = new Array<number>(schema.type === "vec3" ? 3 : 4).fill(value);
       }
+      // `paramValueError`, not the live rule `Graph.setParam` applies, and
+      // the difference is deliberate: a patch is JSON that must survive
+      // `postMessage` unchanged, so a param declaring `acceptsInfinite`
+      // takes ±Infinity through an imperative `LevelDef.bind` and NOT
+      // through a patch. `JSON.stringify(Infinity)` is `null`, so the
+      // spelling a patch would need does not exist. A level that wants an
+      // unbounded axis binds it in place — such a level cooks locally,
+      // which is the same answer this file already gives for `items`.
       const bad = paramValueError(schema, value);
       if (bad !== undefined) fail(`${at}: ${bad}`);
       if (Array.isArray(value)) value = [...(value as unknown[])];

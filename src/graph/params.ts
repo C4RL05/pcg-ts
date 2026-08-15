@@ -72,6 +72,22 @@ export interface ParamSchema {
   readonly min?: number;
   /** Inclusive upper bound (componentwise for vec types). */
   readonly max?: number;
+  /**
+   * Whether ±Infinity is a MEANINGFUL plain value for this param, not a
+   * broken one — an axis of a box that should not be bounded is the case
+   * this exists for (`filterByBounds.boundsMin`, whose own description
+   * says to write `-Infinity` there). `f32`, `vec3` and `vec4` only. NaN
+   * is never admitted, and a declared `min`/`max` still binds, so a
+   * bounded param admits only the infinity its bounds leave room for.
+   *
+   * A LIVE-graph permission only. JSON has no infinity literal —
+   * `JSON.stringify(Infinity)` is `null` — so {@link paramValueError},
+   * which is the serialization rule, ignores this flag and keeps refusing
+   * the value: a graph that saved one would fail to load. Which is why
+   * the gap and the feature are the same gap, and why the two checks are
+   * two functions.
+   */
+  readonly acceptsInfinite?: boolean;
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -155,6 +171,14 @@ export function paramSchemaError(schema: ParamSchema): string | undefined {
     default:
       return `has unknown type "${(schema as { type: string }).type}"`;
   }
+  if (
+    schema.acceptsInfinite === true &&
+    schema.type !== "f32" &&
+    schema.type !== "vec3" &&
+    schema.type !== "vec4"
+  ) {
+    return `declares acceptsInfinite but has type "${schema.type}"; only f32, vec3 and vec4 have an infinity that means anything (an integer type has none, and no other type is a number)`;
+  }
   for (const bound of ["min", "max"] as const) {
     const b = schema[bound];
     if (b === undefined) continue;
@@ -177,10 +201,20 @@ export function paramSchemaError(schema: ParamSchema): string | undefined {
  * {@link ParamSchema.acceptsField}.
  */
 export function paramValueError(schema: ParamSchema, value: unknown): string | undefined {
+  return valueError(schema, value, false);
+}
+
+/**
+ * The body of {@link paramValueError}, with the one axis the two callers
+ * disagree on: whether ±Infinity counts as a number. See
+ * {@link ParamSchema.acceptsInfinite} for why serialization always says no.
+ */
+function valueError(schema: ParamSchema, value: unknown, allowInfinite: boolean): string | undefined {
+  const okNumber = (v: unknown): v is number =>
+    typeof v === "number" && (allowInfinite ? !Number.isNaN(v) : Number.isFinite(v));
+  const finite = allowInfinite ? "" : " finite";
   const numberError = (label: string): string | undefined =>
-    typeof value !== "number" || !Number.isFinite(value)
-      ? `expected ${label}, got ${JSON.stringify(value)}`
-      : undefined;
+    !okNumber(value) ? `expected ${label}, got ${JSON.stringify(value)}` : undefined;
   const boundsError = (nums: readonly number[]): string | undefined => {
     for (const v of nums) {
       if (schema.min !== undefined && v < schema.min) {
@@ -194,7 +228,7 @@ export function paramValueError(schema: ParamSchema, value: unknown): string | u
   };
   switch (schema.type) {
     case "f32":
-      return numberError("a finite number") ?? boundsError([value as number]);
+      return numberError(`a${finite} number`) ?? boundsError([value as number]);
     case "i32": {
       const bad = numberError("an integer");
       if (bad !== undefined) return bad;
@@ -227,12 +261,8 @@ export function paramValueError(schema: ParamSchema, value: unknown): string | u
     case "vec3":
     case "vec4": {
       const size = schema.type === "vec3" ? 3 : 4;
-      if (
-        !Array.isArray(value) ||
-        value.length !== size ||
-        !value.every((v) => typeof v === "number" && Number.isFinite(v))
-      ) {
-        return `expected an array of ${size} finite numbers, got ${JSON.stringify(value)}`;
+      if (!Array.isArray(value) || value.length !== size || !value.every(okNumber)) {
+        return `expected an array of ${size}${finite} numbers, got ${JSON.stringify(value)}`;
       }
       return boundsError(value as number[]);
     }
@@ -248,4 +278,53 @@ export function paramValueError(schema: ParamSchema, value: unknown): string | u
         : undefined;
   }
   return undefined;
+}
+
+/**
+ * @internal First way a plain (non-field) `value` violates `schema` on a
+ * LIVE graph — `Graph.add`, `Graph.setParam`, an exposed param resolved
+ * into a subgraph body — as a message tail, or `undefined` when it is
+ * legal.
+ *
+ * The rules of {@link paramValueError}, minus the ones that are about the
+ * JSON rather than about the cook, plus the one the JSON cannot express:
+ *
+ * - an `items` param holds live {@link DataItem}s, injected per cook by a
+ *   level's `bind` or by a host; "must be an empty array" is a statement
+ *   about the serialized form, not about the graph;
+ * - a field-capable NUMERIC param takes any constant a Field could
+ *   evaluate to — `FieldLike` in `src/fields` is `number | number[] |
+ *   Field` — so a scalar on a `vec3` broadcasts across the tuple and a
+ *   tuple on an `f32` is a constant column (`setAttribute.value` with
+ *   `tupleSize: 3`, whose arity another param decides). Arity is checked
+ *   by the NODE against the domain it lands on, exactly as it must be for
+ *   a real field; the component rules and the bounds still apply here;
+ * - `acceptsInfinite` admits ±Infinity, which JSON has no literal for.
+ *
+ * One function rather than a rule per caller, so what `setParam` accepts
+ * and what an exposed param accepts cannot drift apart.
+ */
+export function liveParamValueError(schema: ParamSchema, value: unknown): string | undefined {
+  const t = schema.type;
+  if (t === "items") return undefined;
+  const allowInfinite = schema.acceptsInfinite === true;
+  if (schema.acceptsField === true) {
+    const vec = t === "vec3" || t === "vec4";
+    const scalar = t === "f32" || t === "i32" || t === "u32";
+    const components =
+      vec && typeof value === "number"
+        ? [value]
+        : scalar && Array.isArray(value) && value.length > 0
+          ? (value as readonly unknown[])
+          : undefined;
+    if (components !== undefined) {
+      const element: ParamSchema = { ...schema, type: vec ? "f32" : t, default: 0 };
+      for (const c of components) {
+        const bad = valueError(element, c, allowInfinite);
+        if (bad !== undefined) return bad;
+      }
+      return undefined;
+    }
+  }
+  return valueError(schema, value, allowInfinite);
 }

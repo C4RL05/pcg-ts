@@ -158,14 +158,19 @@ function applySeed(
 // ---------------------------------------------------------------------------
 
 function paramRow(name: string, schema: ParamSchema): string[] {
+  // `acceptsInfinite` widens what the param admits, so it reads as part of
+  // the range — same placement `docs/nodes.md` gives it, because an agent
+  // reading this catalog and one reading that one must not be told
+  // different things about the same param.
+  const infinite = schema.acceptsInfinite === true ? " (±Infinity ok)" : "";
   const range =
     schema.min !== undefined && schema.max !== undefined
-      ? `${schema.min}..${schema.max}`
+      ? `${schema.min}..${schema.max}${infinite}`
       : schema.min !== undefined
-        ? `>= ${schema.min}`
+        ? `>= ${schema.min}${infinite}`
         : schema.max !== undefined
-          ? `<= ${schema.max}`
-          : "";
+          ? `<= ${schema.max}${infinite}`
+          : infinite.trim();
   return [
     name,
     schema.type,

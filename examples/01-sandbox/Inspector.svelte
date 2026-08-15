@@ -7,6 +7,7 @@
    * the constant/field toggle (FieldParam).
    */
   import FieldParam from "./FieldParam.svelte";
+  import { clampToSchema } from "./controller.js";
   import type { EditorController, ParamView } from "./controller.js";
   import type { NodeView } from "./model.js";
 
@@ -28,7 +29,8 @@
      * At desktop widths it has no styled effect.
      */
     open?: boolean;
-    onPlain: (id: string, key: string, value: unknown) => void;
+    /** Returns what the graph refused, or null; most rows ignore it. */
+    onPlain: (id: string, key: string, value: unknown) => string | null;
     onFieldApply: (id: string, key: string, text: string) => string | null;
     onDelete: (id: string) => void;
   } = $props();
@@ -48,14 +50,10 @@
   const asNumber = (v: unknown): number => (typeof v === "number" ? v : 0);
   const asBool = (v: unknown): boolean => v === true;
 
-  function clampNumber(view: ParamView, raw: number): number {
-    let v = raw;
-    if (view.schema.type === "i32" || view.schema.type === "u32") v = Math.round(v);
-    if (view.schema.type === "u32") v = Math.max(0, v);
-    if (view.schema.min !== undefined) v = Math.max(view.schema.min, v);
-    if (view.schema.max !== undefined) v = Math.min(view.schema.max, v);
-    return v;
-  }
+  // One clamp for both param editors — see clampToSchema. Two copies of
+  // this were how the field-param widget came to have none.
+  const clampNumber = (view: ParamView, raw: number): number =>
+    clampToSchema(view.schema, raw);
 
   function commitNumber(view: ParamView, e: Event): void {
     if (!node) return;
@@ -138,7 +136,7 @@
           {:else if view.schema.acceptsField}
             <FieldParam
               {view}
-              onPlain={(value) => node && onPlain(node.id, view.key, value)}
+              onPlain={(value) => (node ? onPlain(node.id, view.key, value) : null)}
               onField={(text) => (node ? onFieldApply(node.id, view.key, text) : null)}
             />
           {:else if view.schema.type === "f32" || view.schema.type === "i32" || view.schema.type === "u32"}

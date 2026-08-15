@@ -286,14 +286,16 @@ export const pointScatterInWorld = standardNode<PointScatterInWorldParams>({
     boundsMin: {
       type: "vec3",
       default: [0, 0, 0],
+      acceptsInfinite: true,
       description:
-        "Minimum corner of the query window, in world units — INCLUSIVE. Read only to choose which lattice cells to visit and to clip; it never moves a point. In \"xz\" mode the Y component is ignored.",
+        "Minimum corner of the query window, in world units — INCLUSIVE. Read only to choose which lattice cells to visit and to clip; it never moves a point. In \"xz\" mode the Y component is ignored, and -Infinity is the honest thing to write there: a World \"xz\" cell is a column with no vertical extent. An axis this mode DOES read must still be finite — the window chooses which cells to visit, so it has to be bounded — and an infinity never survives JSON, so a graph that must serialize needs a finite window.",
     },
     boundsMax: {
       type: "vec3",
       default: [100, 100, 100],
+      acceptsInfinite: true,
       description:
-        "Maximum corner of the query window, in world units — EXCLUSIVE, so abutting windows neither drop nor duplicate a point on their shared face. Read only to choose which lattice cells to visit and to clip. In \"xz\" mode the Y component is ignored. A window with max <= min on a read axis emits nothing.",
+        "Maximum corner of the query window, in world units — EXCLUSIVE, so abutting windows neither drop nor duplicate a point on their shared face. Read only to choose which lattice cells to visit and to clip. In \"xz\" mode the Y component is ignored and may be +Infinity, subject to the notes on boundsMin. A window with max <= min on a read axis emits nothing.",
     },
     seed: {
       type: "u32",

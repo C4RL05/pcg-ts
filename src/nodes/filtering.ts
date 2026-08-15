@@ -238,12 +238,14 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
     boundsMin: {
       type: "vec3",
       default: [0, 0, 0],
+      acceptsInfinite: true,
       description:
-        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded.",
+        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
     },
     boundsMax: {
       type: "vec3",
       default: [1, 1, 1],
+      acceptsInfinite: true,
       description:
         "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane.",
     },
@@ -307,12 +309,14 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
     boundsMin: {
       type: "vec3",
       default: [0, 0, 0],
+      acceptsInfinite: true,
       description:
         "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
     },
     boundsMax: {
       type: "vec3",
       default: [1, 1, 1],
+      acceptsInfinite: true,
       description:
         "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin.",
     },

@@ -190,6 +190,9 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
   const firstTarget = decl.targets[0];
 
   let acceptsField = first.acceptsField === true;
+  // ANDed like acceptsField, and for the same soundness reason: the
+  // wrapping schema must never admit a value one target would reject.
+  let acceptsInfinite = first.acceptsInfinite === true;
   let min = first.min;
   let max = first.max;
   for (let i = 1; i < schemas.length; i++) {
@@ -208,6 +211,7 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
       );
     }
     acceptsField &&= schema.acceptsField === true;
+    acceptsInfinite &&= schema.acceptsInfinite === true;
     if (schema.min !== undefined) min = min === undefined ? schema.min : Math.max(min, schema.min);
     if (schema.max !== undefined) max = max === undefined ? schema.max : Math.min(max, schema.max);
   }
@@ -269,6 +273,7 @@ export function resolveExposedParam(inner: Graph, decl: ExposedParamDecl): Expos
     ...(acceptsField ? { acceptsField: true } : {}),
     ...(min !== undefined ? { min } : {}),
     ...(max !== undefined ? { max } : {}),
+    ...(acceptsInfinite ? { acceptsInfinite: true } : {}),
   };
   const schemaBad = paramSchemaError(schema);
   if (schemaBad !== undefined) bad(name, schemaBad);

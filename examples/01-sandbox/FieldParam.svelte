@@ -6,6 +6,7 @@
    * validation errors are shown verbatim below it.
    */
   import { paramNamesOf, type FieldSpec } from "pcg-ts";
+  import { clampToSchema } from "./controller.js";
   import type { ParamView } from "./controller.js";
 
   let {
@@ -14,7 +15,8 @@
     onField,
   }: {
     view: ParamView;
-    onPlain: (value: unknown) => void;
+    /** Returns what the graph refused, or null — shown in the error slot. */
+    onPlain: (value: unknown) => string | null;
     onField: (text: string) => string | null;
   } = $props();
 
@@ -57,24 +59,42 @@
     const current = view.mode === "constant" ? view.value : undefined;
     const d = view.schema.default;
     const value = current !== undefined && current !== null ? current : Array.isArray(d) ? [...d] : d;
-    onPlain(value);
+    error = onPlain(value);
   }
 
   function apply(): void {
     error = onField(text);
   }
 
+  /**
+   * The vector this param currently stands for, always at the schema's
+   * arity. A field-capable vec param legally holds a SCALAR — it broadcasts
+   * across the tuple — so reading its components straight off the value
+   * gives one box for a vec3, and editing that one box used to commit a
+   * 1-long array. Expand the broadcast instead: what is shown and what is
+   * committed then both have the arity the schema declares.
+   */
+  const arity = $derived(view.schema.type === "vec4" ? 4 : 3);
+  const components = $derived.by((): number[] => {
+    const n = asNumbers(view.value ?? view.schema.default);
+    if (n.length === arity) return n;
+    return new Array<number>(arity).fill(n.length === 1 ? n[0] : 0);
+  });
+
   function commitScalar(e: Event): void {
     const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
-    if (Number.isFinite(v)) onPlain(v);
+    // Clamped before it is committed: `min`/`max` on the input element are
+    // advisory (typing is not constrained), and setParam refuses what the
+    // schema does not admit.
+    if (Number.isFinite(v)) error = onPlain(clampToSchema(view.schema, v));
   }
 
   function commitComponent(index: number, e: Event): void {
     const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
     if (!Number.isFinite(v)) return;
-    const next = asNumbers(view.value);
-    next[index] = v;
-    onPlain(next);
+    const next = [...components];
+    next[index] = clampToSchema(view.schema, v);
+    error = onPlain(next);
   }
 </script>
 
@@ -86,8 +106,15 @@
   {#if mode === "constant"}
     {#if view.schema.type === "vec3" || view.schema.type === "vec4"}
       <div class="vec">
-        {#each asNumbers(view.value ?? view.schema.default) as comp, i}
-          <input type="number" step="any" value={comp} onchange={(e) => commitComponent(i, e)} />
+        {#each components as comp, i}
+          <input
+            type="number"
+            step="any"
+            min={view.schema.min}
+            max={view.schema.max}
+            value={comp}
+            onchange={(e) => commitComponent(i, e)}
+          />
         {/each}
       </div>
     {:else}
