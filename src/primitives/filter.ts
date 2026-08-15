@@ -48,6 +48,7 @@ export function registerFilterPrimitives(): void {
         default: 0.02,
         description:
           "Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across.",
+        acceptsField: true,
       },
       {
         name: "variant",
@@ -55,6 +56,7 @@ export function registerFilterPrimitives(): void {
         default: 0,
         description:
           "Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces.",
+        acceptsField: true,
       },
       {
         name: "seed",
@@ -89,12 +91,14 @@ export function registerFilterPrimitives(): void {
           "Where the cut falls on the 0..1 noise — but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.32 (keeps everything) and 0.68 (keeps nothing). Four octaves of normalized fBm come out bell-shaped around 0.5 with a standard deviation near 0.065, never at the ends: the theoretical 0..1 is the nominal range of the term, not the values it takes. Measured on a wide 2D spread: 0.42 keeps ~89%, 0.46 ~75%, 0.50 ~50%, 0.55 ~23%, 0.59 ~9%. So a threshold of 0.8 does not keep a fifth, it keeps NOTHING, and 0.2 does not keep four fifths, it keeps everything. `frequency`, `variant` and how widely the points sample the field move the two ends by a few hundredths.",
         min: 0,
         max: 1,
+        acceptsField: true,
       },
       {
         name: "frequency",
         targets: [],
         default: 0.02,
         description: "Feature size: the noise sample position is multiplied by this, so smaller means larger regions.",
+        acceptsField: true,
       },
       {
         name: "variant",
@@ -102,6 +106,7 @@ export function registerFilterPrimitives(): void {
         default: 0,
         description:
           "Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically.",
+        acceptsField: true,
       },
     ],
   });
@@ -142,7 +147,8 @@ export function registerFilterPrimitives(): void {
         targets: [],
         default: [0, 0, 0],
         description:
-          "World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted.",
+          "World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted, and the origin is [0, 0, 0]. Field-capable, and resolved on the incoming points: a field moves the centre PER POINT, so distance can be measured from a per-cluster origin rather than from one place. A field may be scalar and broadcasts across all three axes when it is; a plain [x, y, z] is the ordinary case.",
+        acceptsField: true,
       },
       {
         name: "radius",

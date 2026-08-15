@@ -9,7 +9,10 @@
  * description, optionally a default, optionally NARROWED bounds); `type`,
  * `enum` and `acceptsField` are derived from the targets' own registered
  * schemas and are not overridable, so an exposed param can never claim a
- * capability its inner params do not have.
+ * capability its inner params do not have. With NO targets the same three
+ * are still derived, from the only two facts left: the SHAPE of the
+ * default, and that a Field can always be spliced into the expression
+ * that reads the name.
  */
 import { isField } from "../fields/index.js";
 import {
@@ -51,9 +54,9 @@ export interface ExposedParamDecl {
    * (`{"fn": "param", "name": "…"}`) instead of one that writes into a
    * param slot. There is then no inner schema to borrow, so `default`
    * becomes required and its SHAPE decides the type: a number is f32, a
-   * 3-number array vec3, a 4-number array vec4. Such a param is never
-   * field-capable — the value is substituted into the expression as a
-   * literal, and a Field is not a literal.
+   * 3-number array vec3, a 4-number array vec4. Such a param is always
+   * field-capable — a Field substitutes into the expression as readily as
+   * a number, spliced in where the reference stands.
    */
   readonly targets: readonly ExposedParamTargetDecl[];
   /**
@@ -303,17 +306,18 @@ function derivedType(value: ParamValue): ParamType | undefined {
  * deriving one from `3` would promise a rounding the grammar never
  * performs.
  *
- * Never field-capable, for the reason the whole mechanism substitutes: the
- * value is written INTO the expression before it is built, and a Field is
- * not something a literal position can hold.
+ * ALWAYS field-capable, and derived rather than authored like every other
+ * part of an exposed schema. A read name is substituted into the
+ * expression before it is built, and a `Field` substitutes there as
+ * readily as a number does — `fieldFromJson` splices it in where the
+ * reference stands, so the body cooks the expression an author would have
+ * written around it. There is therefore no targetless param that refuses
+ * a Field, nothing for an author to assert or to get wrong, and no second
+ * place for the fact to drift: a declaration's `acceptsField` is accepted
+ * here as the true assertion it is, exactly as it is checked against the
+ * targets when there are any.
  */
 function resolveTargetless(name: string, decl: ExposedParamDecl): ExposedParam {
-  if (decl.acceptsField === true) {
-    bad(
-      name,
-      'declares acceptsField: true and no targets; a targetless param is read by the body\'s field expressions as {"fn": "param", "name": …}, and that value is substituted as a LITERAL before the expression is built — a Field cannot stand in a literal position. Drop the assertion, or give the param a field-capable inner target',
-    );
-  }
   const value = decl.default;
   if (value === undefined) {
     bad(
@@ -336,6 +340,7 @@ function resolveTargetless(name: string, decl: ExposedParamDecl): ExposedParam {
     // Copied, so no two instances of the def share one mutable tuple.
     default: type === "f32" ? (value as number) : [...(value as readonly number[])],
     description: decl.description,
+    acceptsField: true,
     ...(decl.min !== undefined ? { min: decl.min } : {}),
     ...(decl.max !== undefined ? { max: decl.max } : {}),
   };

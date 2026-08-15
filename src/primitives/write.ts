@@ -79,6 +79,7 @@ export function registerWritePrimitives(): void {
         default: 0.02,
         description:
           "Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across.",
+        acceptsField: true,
       },
       {
         name: "variant",
@@ -86,6 +87,7 @@ export function registerWritePrimitives(): void {
         default: 0,
         description:
           "Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this.",
+        acceptsField: true,
       },
     ],
   });
@@ -118,12 +120,14 @@ export function registerWritePrimitives(): void {
         targets: [],
         default: 0.7,
         description: "Smallest size a point can get, as a multiple of the asset's own size.",
+        acceptsField: true,
       },
       {
         name: "max",
         targets: [],
         default: 1.4,
         description: "Largest size a point can get, as a multiple of the asset's own size.",
+        acceptsField: true,
       },
       {
         name: "seed",

@@ -229,4 +229,30 @@ describe("the assertion is not stored in the recipe", () => {
     // registers and can never be deserialized again.
     expect(Object.keys(stored).sort()).toEqual(["default", "description", "min", "name", "targets"]);
   });
+
+  it("REQUIRES the assertion on a targetless knob, where it cannot be checked", () => {
+    // With no targets there is nothing to check the assertion against —
+    // such a knob is field-capable by construction, since a Field splices
+    // into the expression that reads its name. An optional assertion
+    // would therefore be unfalsifiable, so it is required instead: the
+    // line is load-bearing, and the recipe states the capability an agent
+    // reads before setting the knob.
+    const bindOnly = {
+      name: "amount",
+      targets: [],
+      description: "Read by a field expression in the body.",
+      default: 1,
+    } as const;
+    expect(() => define(freshName(), [bindOnly])).toThrow(
+      /exposed param "amount" has no targets and does not declare acceptsField: true/,
+    );
+    // Refused BEFORE the declaration is resolved, so the message is about
+    // the missing assertion rather than about this fixture's body having
+    // no expression to read the name. The positive case is the shipped
+    // catalog itself: 26 targetless knobs, all of which register at
+    // import — this file's fixture has no field reading one.
+    expect(() => define(freshName(), [{ ...bindOnly, acceptsField: true }])).toThrow(
+      /needs at least one inner target/,
+    );
+  });
 });

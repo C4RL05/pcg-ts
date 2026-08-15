@@ -60,6 +60,7 @@ export function registerTransformPrimitives(): void {
         default: 4,
         description:
           "How far points move along Y. It SCALES the displacement but does not bound it: on a cloud spanning many noise periods the peak is about 0.42 * amount, so the default 4 lifts and drops by roughly 1.7 units, and for a peak of h world units ask for amount around 2.4 * h. Exactly linear in amount — doubling it doubles every displacement — and the mean stays within 1% of 0, so the average height does not move. This is a FRACTION OF A NOMINAL RANGE, not of the displacement you get: the value scales a noise term whose range is +/-1 in principle, and four octaves of normalized fBm only ever reach the middle of it. How much of it depends on how much FIELD the cloud spans — extent x `frequency`, not the point count. Measured at amount 4: a 600-unit spread peaks at 0.42 to 0.49 of amount at every frequency from 0.01 up, while a 30-unit patch at the default frequency 0.05 spans barely one period and peaks at only 0.25, whether it holds 100 points or 20,000. On a small patch, either raise `frequency` or scale `amount` up to compensate.",
+        acceptsField: true,
       },
       {
         name: "frequency",
@@ -67,6 +68,7 @@ export function registerTransformPrimitives(): void {
         default: 0.05,
         description:
           "Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves.",
+        acceptsField: true,
       },
       {
         name: "variant",
@@ -74,6 +76,7 @@ export function registerTransformPrimitives(): void {
         default: 0,
         description:
           "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
+        acceptsField: true,
       },
     ],
   });
@@ -113,6 +116,7 @@ export function registerTransformPrimitives(): void {
         targets: [],
         default: 4,
         description: "Grid pitch in world units, the same on all three axes. Must be greater than 0.",
+        acceptsField: true,
       },
     ],
   });
@@ -146,17 +150,19 @@ export function registerTransformPrimitives(): void {
         targets: [],
         default: 6,
         description:
-          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. It is one value for the whole cook, which is what a bin count has to be: neighbouring points on different bin counts stop partitioning the path and head for targets that do not line up.",
+          "How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. Field-capable like every knob here, but keep it UNIFORM unless you mean otherwise: a bin count that varies per point stops partitioning the path, because neighbouring points then head for the centres of bins that do not line up. A field over something constant along each path — a per-path attribute, say — is the coherent way to vary it; a field over `curveU` or position is not.",
         min: 1,
+        acceptsField: true,
       },
       {
         name: "amount",
         targets: [],
         default: 0.7,
         description:
-          "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. It is uniform over the cook. To gather one end of a path harder than the other, run the primitive on a partition of the points rather than looking for a per-point dial here.",
+          "How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other.",
         min: 0,
         max: 1,
+        acceptsField: true,
       },
     ],
   });
@@ -214,6 +220,7 @@ export function registerTransformPrimitives(): void {
         default: 0.5,
         description:
           "How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates.",
+        acceptsField: true,
       },
     ],
   });

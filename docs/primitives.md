@@ -110,9 +110,9 @@ Scatters candidates through a box and keeps each one with a probability read fro
 | `boundsMax` | vec3 | `[100,0,100]` |  |  |  | scatter.boundsMax | Maximum corner of the box to fill, in world units. |
 | `boundsMin` | vec3 | `[0,0,0]` |  |  |  | scatter.boundsMin | Minimum corner of the box to fill, in world units. |
 | `count` | i32 | `4000` | >= 0 |  |  | scatter.count | Candidates scattered before thinning. Roughly half survive. |
-| `frequency` | f32 | `0.02` |  |  |  | thin.frequency | Feature size of the clumps: smaller means broader clumps. |
+| `frequency` | f32 | `0.02` |  |  | yes | thin.frequency | Feature size of the clumps: smaller means broader clumps. |
 | `seed` | u32 | `0` |  |  |  | scatter.seed, thin.seed | Re-rolls both the candidate positions and which of them survive. It does NOT move the clumps; `variant` does that. |
-| `variant` | f32 | `0` |  |  |  | thin.variant | Offset added to the noise sample position — the only way to give two instances different CLUMPS rather than different points in the same clumps. |
+| `variant` | f32 | `0` |  |  | yes | thin.variant | Offset added to the noise sample position — the only way to give two instances different CLUMPS rather than different points in the same clumps. |
 
 Run it: `pcg run fill/scatter-by-density`
 
@@ -190,11 +190,11 @@ Fills a box with a jittered grid of points and keeps only the cells where a 3D n
 | `boundsMax` | vec3 | `[32,32,32]` |  |  |  | vol.boundsMax | Maximum corner of the box to fill. IGNORED when the `in` pin is connected. |
 | `boundsMin` | vec3 | `[0,0,0]` |  |  |  | vol.boundsMin | Minimum corner of the box to fill. IGNORED when the `in` pin is connected. |
 | `cellSize` | f32 | `2` |  |  |  | vol.cellSize | Grid resolution in world units. The candidate count is floor(extent / cellSize) per axis — at least 1, whole cells only, no partial cell at the far edge — multiplied together, so halving it costs EIGHT times as many points only where the region is fully three-dimensional: over a flat region — a plane, or any scatter with a constant Y — it is four times, and along a line twice. Measured on the default 32-unit box: cellSize 8 gives 64 candidates, 4 gives 512, 2 gives 4096, 1 gives 32768, exactly 8x per halving because 32 divides by all of them. Measured on the same box arriving through the `in` pin, where a scatter's extent lands just under 32 and every axis loses its last whole cell: 27, 343, 3375, 29791 (3, 7, 15 and 31 per axis), with the ratios running 12.7x, 9.8x, 8.8x down toward 8. The threshold then takes some away; this is the count BEFORE it. |
-| `frequency` | f32 | `0.05` |  |  |  | *(nothing — the body's field expressions read it by name)* | Feature size: smaller means larger, smoother caverns. |
+| `frequency` | f32 | `0.05` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Feature size: smaller means larger, smoother caverns. |
 | `jitter` | f32 | `0.5` | 0..1 |  | yes | vol.jitter | How far each point may wander from its own lattice node: 0 is a hard lattice, 1 is fully irregular. The offset is uniform on each axis, exactly linear in the value, and bounded by HALF A CELL structurally rather than statistically — a point never leaves the cell it was generated in, at any jitter, so neighbours keep their grid order, never cross, and stay at least (1 - jitter) * cell apart. Build non-overlap on that. What that bound is NOT is half of the `cellSize` you typed, and the difference surprises: the grid divides the extent into floor(extent / `cellSize`) whole cells, so the real cell is extent / that — equal to `cellSize` only when the extent is a whole multiple of it, wider otherwise. Measured on the default 32-unit box at cellSize 2 (16 whole cells of exactly 2): +/-1.0 at jitter 1. Measured with the bounds taken from the `in` pin, where the extent lands just under 32 and leaves 15 cells of 2.13: +/-1.066 — 0.53 of the number typed, and still exactly half of its own cell. |
 | `seed` | u32 | `0` |  |  |  | vol.seed | Re-rolls the per-cell jitter. It does NOT move the carve pattern; `variant` does that. |
-| `threshold` | f32 | `0.5` | 0..1 |  |  | *(nothing — the body's field expressions read it by name)* | Where the cut falls on the 0..1 noise. Higher leaves less material, but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.35 (solid) and 0.68 (empty) — four octaves of normalized fBm are bell-shaped around 0.5 and never near the ends. Measured on the default 32-unit box at cellSize 2: 0.3 keeps 100% of the grid, 0.45 keeps 85%, 0.5 keeps 65%, 0.55 keeps 41%, 0.6 keeps 18%, 0.65 keeps 3.6%, 0.7 keeps nothing. The centre of that band is NOT fixed at 0.5 the way the flat filters' is: the box times `frequency` decides how much of the field is sampled, and a small window sits wherever its own patch of noise happens to sit (the same box read as a 2D spread has 0.5 keeping half rather than two thirds). Sweep in steps of 0.02, not 0.1. |
-| `variant` | f32 | `0` |  |  |  | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll of the carve pattern. |
+| `threshold` | f32 | `0.5` | 0..1 |  | yes | *(nothing — the body's field expressions read it by name)* | Where the cut falls on the 0..1 noise. Higher leaves less material, but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.35 (solid) and 0.68 (empty) — four octaves of normalized fBm are bell-shaped around 0.5 and never near the ends. Measured on the default 32-unit box at cellSize 2: 0.3 keeps 100% of the grid, 0.45 keeps 85%, 0.5 keeps 65%, 0.55 keeps 41%, 0.6 keeps 18%, 0.65 keeps 3.6%, 0.7 keeps nothing. The centre of that band is NOT fixed at 0.5 the way the flat filters' is: the box times `frequency` decides how much of the field is sampled, and a small window sits wherever its own patch of noise happens to sit (the same box read as a 2D spread has 0.5 keeping half rather than two thirds). Sweep in steps of 0.02, not 0.1. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll of the carve pattern. |
 
 Run it: `pcg run fill/volume-by-noise`
 
@@ -287,7 +287,7 @@ Keeps the points whose distance to a centre satisfies a comparison — 'le' for 
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `center` | vec3 | `[0,0,0]` |  |  |  | *(nothing — the body's field expressions read it by name)* | World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted. |
+| `center` | vec3 | `[0,0,0]` |  |  | yes | *(nothing — the body's field expressions read it by name)* | World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted, and the origin is [0, 0, 0]. Field-capable, and resolved on the incoming points: a field moves the centre PER POINT, so distance can be measured from a per-cluster origin rather than from one place. A field may be scalar and broadcasts across all three axes when it is; a plain [x, y, z] is the ordinary case. |
 | `comparison` | enum | `"le"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | keep.comparison | How the distance is tested: 'le' keeps what is inside the radius, 'ge' keeps what is outside it. |
 | `radius` | f32 | `10` | >= 0 |  |  | keep.value | The distance the comparison is made against, in world units. |
 
@@ -311,9 +311,9 @@ Keeps only the points where a normalized noise field rises above a threshold —
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `frequency` | f32 | `0.02` |  |  |  | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means larger regions. |
-| `threshold` | f32 | `0.5` | 0..1 |  |  | *(nothing — the body's field expressions read it by name)* | Where the cut falls on the 0..1 noise — but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.32 (keeps everything) and 0.68 (keeps nothing). Four octaves of normalized fBm come out bell-shaped around 0.5 with a standard deviation near 0.065, never at the ends: the theoretical 0..1 is the nominal range of the term, not the values it takes. Measured on a wide 2D spread: 0.42 keeps ~89%, 0.46 ~75%, 0.50 ~50%, 0.55 ~23%, 0.59 ~9%. So a threshold of 0.8 does not keep a fifth, it keeps NOTHING, and 0.2 does not keep four fifths, it keeps everything. `frequency`, `variant` and how widely the points sample the field move the two ends by a few hundredths. |
-| `variant` | f32 | `0` |  |  |  | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically. |
+| `frequency` | f32 | `0.02` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means larger regions. |
+| `threshold` | f32 | `0.5` | 0..1 |  | yes | *(nothing — the body's field expressions read it by name)* | Where the cut falls on the 0..1 noise — but the noise only reaches the MIDDLE of that range, so the whole knob lives between about 0.32 (keeps everything) and 0.68 (keeps nothing). Four octaves of normalized fBm come out bell-shaped around 0.5 with a standard deviation near 0.065, never at the ends: the theoretical 0..1 is the nominal range of the term, not the values it takes. Measured on a wide 2D spread: 0.42 keeps ~89%, 0.46 ~75%, 0.50 ~50%, 0.55 ~23%, 0.59 ~9%. So a threshold of 0.8 does not keep a fifth, it keeps NOTHING, and 0.2 does not keep four fifths, it keeps everything. `frequency`, `variant` and how widely the points sample the field move the two ends by a few hundredths. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll. Two instances with the same value mask identically. |
 
 Run it: `pcg run filter/mask-by-noise`
 
@@ -335,9 +335,9 @@ Writes a normalized noise field into the standard `density` attribute and keeps 
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `frequency` | f32 | `0.02` |  |  |  | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across. |
+| `frequency` | f32 | `0.02` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means broader clumps. 0.02 gives clumps tens of world units across. |
 | `seed` | u32 | `0` |  |  |  | thin.seed | Re-rolls which points survive within the same pattern. It does NOT move the pattern; `variant` does that. |
-| `variant` | f32 | `0` |  |  |  | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the only way to give two instances different PATTERNS. Any two different values are unrelated; the same value always reproduces. |
 
 Run it: `pcg run filter/thin-by-density`
 
@@ -484,7 +484,7 @@ Places points at even arc-length steps along every path of the supplied `curve`,
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `count` | i32 | `24` | >= 2 |  |  | resample.count | Points per path: exactly this many come out whatever the path's length, evenly spaced at length / (count - 1), and both ends are always occupied. At least 2 (3 on a closed path). For a fixed pitch in world units instead, resample with `place/along-curve` in 'spacing' mode first and feed the result in here. |
-| `spread` | f32 | `1` | >= 0 |  |  | *(nothing — the body's field expressions read it by name)* | How much of a full turn around the curve the fan covers, as a fraction: 1 spreads uniformly over the whole circle, 0.25 over a quarter turn, and 0 aims every point the same way — straight along the transported `curveNormal`, which is a smooth ribbon rather than a fan, and the one setting that does NOT vary between two instances. The angle is drawn uniformly over 0..spread turns, so it is one-sided: the fan opens from the normal in one direction only, and a spread of 0.5 covers a half turn from it rather than a quarter turn either side. Values above 1 wrap and buy nothing. |
+| `spread` | f32 | `1` | >= 0 |  | yes | *(nothing — the body's field expressions read it by name)* | How much of a full turn around the curve the fan covers, as a fraction: 1 spreads uniformly over the whole circle, 0.25 over a quarter turn, and 0 aims every point the same way — straight along the transported `curveNormal`, which is a smooth ribbon rather than a fan, and the one setting that does NOT vary between two instances. The angle is drawn uniformly over 0..spread turns, so it is one-sided: the fan opens from the normal in one direction only, and a spread of 0.5 covers a half turn from it rather than a quarter turn either side. Values above 1 wrap and buy nothing. |
 
 Run it: `pcg run place/radial-on-curve`
 
@@ -559,11 +559,11 @@ Builds an open PATH — polyline topology — that runs along X and wanders off 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `center` | vec3 | `[0,0,0]` |  |  | yes | place.translate | Where the shape sits, in world units. |
 | `count` | i32 | `33` | >= 2 |  |  | line.count, even.count | Points along the path, and the number of corners the wander is drawn from. A dozen or more before the wander reads as a curve rather than a zig-zag. |
-| `frequency` | f32 | `3` |  |  |  | *(nothing — the body's field expressions read it by name)* | How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves. |
+| `frequency` | f32 | `3` |  |  | yes | *(nothing — the body's field expressions read it by name)* | How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves. |
 | `rotate` | vec3 | `[0,0,0]` |  |  | yes | place.rotateEuler | Rotation in degrees per world axis, applied about the origin before the shape is moved into place. |
 | `size` | vec3 | `[40,1,40]` |  |  | yes | place.scale | Extent in world units: X is the end-to-end length, Z scales the wander. A bare number is not accepted here: pass three numbers [40,1,40], or {"fn":"constant","value":40}. |
-| `variant` | f32 | `0` |  |  |  | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field. |
-| `wander` | f32 | `0.15` |  |  |  | *(nothing — the body's field expressions read it by name)* | How far the path strays from the straight line between its ends. 0 is a straight line; above that the peak deviation is about 0.22 * wander * `size.z`, exactly linear in both — so at the default `size` [40,1,40], 0.15 strays about 1.3 units to each side and 0.5 about 4.4. Inverted, for a peak of a fraction f of `size.z`, ask for wander around 4.6 * f. This is a FRACTION OF A NOMINAL RANGE, not of the deviation you get: the value scales a noise term whose range is +/-1 in principle, but four octaves of normalized fBm sampled along one line only cover part of it, and `frequency` and `variant` move that coverage (measured 0.13 to 0.31 of wander * `size.z` across the usable range). The wander is sideways only — the path is a height field along X, so it NEVER doubles back on itself at any wander; for a curve that turns back, build the corners yourself and run `pointsToPath` over them. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field. |
+| `wander` | f32 | `0.15` |  |  | yes | *(nothing — the body's field expressions read it by name)* | How far the path strays from the straight line between its ends. 0 is a straight line; above that the peak deviation is about 0.22 * wander * `size.z`, exactly linear in both — so at the default `size` [40,1,40], 0.15 strays about 1.3 units to each side and 0.5 about 4.4. Inverted, for a peak of a fraction f of `size.z`, ask for wander around 4.6 * f. This is a FRACTION OF A NOMINAL RANGE, not of the deviation you get: the value scales a noise term whose range is +/-1 in principle, but four octaves of normalized fBm sampled along one line only cover part of it, and `frequency` and `variant` move that coverage (measured 0.13 to 0.31 of wander * `size.z` across the usable range). The wander is sideways only — the path is a height field along X, so it NEVER doubles back on itself at any wander; for a curve that turns back, build the corners yourself and run `pointsToPath` over them. |
 
 Run it: `pcg run shape/path-meander`
 
@@ -590,7 +590,7 @@ Places points evenly around a circle in the XZ plane, optionally sweeping only p
 | `includeEnd` | bool | `false` |  |  |  | line.includeEnd | Whether the last point lands exactly on the end of the sweep. Leave it false for a full circle: the end is the start, so a point there would sit on top of the first one. Set it true for a partial sweep pinned at both ends (a quarter arc whose corners must be occupied). It never changes how many points come out, only where the last one sits. |
 | `rotate` | vec3 | `[0,0,0]` |  |  | yes | place.rotateEuler | Rotation in degrees per world axis, applied about the origin before the shape is moved into place. |
 | `size` | vec3 | `[8,8,8]` |  |  | yes | place.scale | Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {"fn":"constant","value":8} for a uniform one. Unequal components give an ellipse or an ellipsoid. |
-| `sweep` | f32 | `1` | 0..1 |  |  | *(nothing — the body's field expressions read it by name)* | How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc. |
+| `sweep` | f32 | `1` | 0..1 |  | yes | *(nothing — the body's field expressions read it by name)* | How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc. |
 
 Run it: `pcg run shape/ring`
 
@@ -642,7 +642,7 @@ Winds points outward from the origin over a given number of turns in the XZ plan
 | `count` | i32 | `160` | >= 1 |  |  | line.count | Points along the spiral, evenly spaced in angle (so they crowd near the centre). |
 | `rotate` | vec3 | `[0,0,0]` |  |  | yes | place.rotateEuler | Rotation in degrees per world axis, applied about the origin before the shape is moved into place. |
 | `size` | vec3 | `[8,8,8]` |  |  | yes | place.scale | Size of the shape in world units — a radius for the round ones. A bare number is not accepted here: pass three numbers [8,8,8], or {"fn":"constant","value":8} for a uniform one. Unequal components give an ellipse or an ellipsoid. |
-| `turns` | f32 | `3` | >= 0 |  |  | *(nothing — the body's field expressions read it by name)* | How many full revolutions the spiral makes between the centre and the outer radius. |
+| `turns` | f32 | `3` | >= 0 |  | yes | *(nothing — the body's field expressions read it by name)* | How many full revolutions the spiral makes between the centre and the outer radius. |
 
 Run it: `pcg run shape/spiral`
 
@@ -664,9 +664,9 @@ Displaces every point along +Y by a noise field centred on zero, so a flat scatt
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `amount` | f32 | `4` |  |  |  | *(nothing — the body's field expressions read it by name)* | How far points move along Y. It SCALES the displacement but does not bound it: on a cloud spanning many noise periods the peak is about 0.42 * amount, so the default 4 lifts and drops by roughly 1.7 units, and for a peak of h world units ask for amount around 2.4 * h. Exactly linear in amount — doubling it doubles every displacement — and the mean stays within 1% of 0, so the average height does not move. This is a FRACTION OF A NOMINAL RANGE, not of the displacement you get: the value scales a noise term whose range is +/-1 in principle, and four octaves of normalized fBm only ever reach the middle of it. How much of it depends on how much FIELD the cloud spans — extent x `frequency`, not the point count. Measured at amount 4: a 600-unit spread peaks at 0.42 to 0.49 of amount at every frequency from 0.01 up, while a 30-unit patch at the default frequency 0.05 spans barely one period and peaks at only 0.25, whether it holds 100 points or 20,000. On a small patch, either raise `frequency` or scale `amount` up to compensate. |
-| `frequency` | f32 | `0.05` |  |  |  | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves. |
-| `variant` | f32 | `0` |  |  |  | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field. |
+| `amount` | f32 | `4` |  |  | yes | *(nothing — the body's field expressions read it by name)* | How far points move along Y. It SCALES the displacement but does not bound it: on a cloud spanning many noise periods the peak is about 0.42 * amount, so the default 4 lifts and drops by roughly 1.7 units, and for a peak of h world units ask for amount around 2.4 * h. Exactly linear in amount — doubling it doubles every displacement — and the mean stays within 1% of 0, so the average height does not move. This is a FRACTION OF A NOMINAL RANGE, not of the displacement you get: the value scales a noise term whose range is +/-1 in principle, and four octaves of normalized fBm only ever reach the middle of it. How much of it depends on how much FIELD the cloud spans — extent x `frequency`, not the point count. Measured at amount 4: a 600-unit spread peaks at 0.42 to 0.49 of amount at every frequency from 0.01 up, while a 30-unit patch at the default frequency 0.05 spans barely one period and peaks at only 0.25, whether it holds 100 points or 20,000. On a small patch, either raise `frequency` or scale `amount` up to compensate. |
+| `frequency` | f32 | `0.05` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means longer, gentler waves. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field. |
 
 Run it: `pcg run transform/displace-by-noise`
 
@@ -688,8 +688,8 @@ Slides every point of a path along the curve it already sits on, toward the cent
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `amount` | f32 | `0.7` | 0..1 |  |  | *(nothing — the body's field expressions read it by name)* | How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. It is uniform over the cook. To gather one end of a path harder than the other, run the primitive on a partition of the points rather than looking for a per-point dial here. |
-| `bins` | f32 | `6` | >= 1 |  |  | *(nothing — the body's field expressions read it by name)* | How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. It is one value for the whole cook, which is what a bin count has to be: neighbouring points on different bin counts stop partitioning the path and head for targets that do not line up. |
+| `amount` | f32 | `0.7` | 0..1 |  | yes | *(nothing — the body's field expressions read it by name)* | How far of the way to its bin centre each point travels, 0..1: 0 leaves the distribution exactly as it arrived, 1 collapses every bin onto a single point, and the travel is exactly linear in between — 0.5 halves every gap to the centre. Field-capable, resolved on the points BEFORE they move, so a field over `curveU` can gather one end of a path harder than the other. |
+| `bins` | f32 | `6` | >= 1 |  | yes | *(nothing — the body's field expressions read it by name)* | How many clumps each path gets: its 0..1 parameter is cut into this many equal bins and every point heads for the centre of its own. Fewer bins means fewer, fatter clumps further apart, and the clumps land at (i + 0.5) / bins along each path — a fixed lattice, not a random one, so two paths of different lengths clump at the same RELATIVE places. It is per path rather than per world unit, so a long path and a short one both get `bins` clumps; for a fixed clump pitch, resample to a `spacing` first and scale this with the length. A fractional value leaves a short last bin at the far end. Field-capable like every knob here, but keep it UNIFORM unless you mean otherwise: a bin count that varies per point stops partitioning the path, because neighbouring points then head for the centres of bins that do not line up. A field over something constant along each path — a per-path attribute, say — is the coherent way to vary it; a field over `curveU` or position is not. |
 
 Run it: `pcg run transform/gather-on-path`
 
@@ -712,7 +712,7 @@ Nudges every point away from the centroid of its neighbours, so crowded regions 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `radius` | f32 | `4` | >= 0 |  |  | nbr.radius | How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move. |
-| `strength` | f32 | `0.5` |  |  |  | *(nothing — the body's field expressions read it by name)* | How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates. |
+| `strength` | f32 | `0.5` |  |  | yes | *(nothing — the body's field expressions read it by name)* | How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates. |
 
 Run it: `pcg run transform/relax-spacing`
 
@@ -734,7 +734,7 @@ Snaps every point to the nearest corner of a regular 3D grid of the given pitch,
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `cellSize` | f32 | `4` |  |  |  | *(nothing — the body's field expressions read it by name)* | Grid pitch in world units, the same on all three axes. Must be greater than 0. |
+| `cellSize` | f32 | `4` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Grid pitch in world units, the same on all three axes. Must be greater than 0. |
 
 Run it: `pcg run transform/snap-to-grid`
 
@@ -802,8 +802,8 @@ Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the 
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `frequency` | f32 | `0.02` |  |  |  | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across. |
-| `variant` | f32 | `0` |  |  |  | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this. |
+| `frequency` | f32 | `0.02` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this. |
 
 Run it: `pcg run write/density-from-noise`
 
@@ -913,8 +913,8 @@ Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per poin
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `max` | f32 | `1.4` |  |  |  | *(nothing — the body's field expressions read it by name)* | Largest size a point can get, as a multiple of the asset's own size. |
-| `min` | f32 | `0.7` |  |  |  | *(nothing — the body's field expressions read it by name)* | Smallest size a point can get, as a multiple of the asset's own size. |
+| `max` | f32 | `1.4` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Largest size a point can get, as a multiple of the asset's own size. |
+| `min` | f32 | `0.7` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Smallest size a point can get, as a multiple of the asset's own size. |
 | `seed` | u32 | `0` |  |  |  | scaleAttr.seed | Re-rolls which point gets which size. 0 uses the node's own derived seed. |
 
 Run it: `pcg run write/random-scale`

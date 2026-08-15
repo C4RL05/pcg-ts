@@ -110,8 +110,8 @@ reaches a number living inside a field expression, which has no param slot
 to write into. With no targets there is no inner schema to borrow: the
 `default` is required and its SHAPE gives the type (a number f32, a
 3-number array vec3, a 4-number array vec4, and nothing else), and the
-param is never field-capable, because the value is substituted into the
-expression as a LITERAL and a Field is not one.
+param is always field-capable: a Field binding is SPLICED into the
+expression where the reference stands, so the knob can vary per element.
 
 Complete minimal example (deserializes and cooks as-is):
 
@@ -638,9 +638,11 @@ Three rules an agent needs before choosing one:
    attribute plumbing (a `setAttribute` upstream, `removeAttribute`
    downstream) is the older, and a targetless param the spec reads as
    `{ fn: "param", name }` is the newer and is what every shipped
-   primitive now uses. Which one is right is a domain question: a
-   value that varies PER ELEMENT is an attribute, one uniform over the
-   cook is a param.
+   primitive now uses. Which one is right is a domain question: a value
+   the GRAPH computes is an attribute, one a CALLER supplies is a param.
+   A targetless param takes a Field as its value too — it is spliced into
+   the expression that reads the name — so "uniform over the cook" is not
+   the dividing line.
 
 ## Key invariants and contracts
 

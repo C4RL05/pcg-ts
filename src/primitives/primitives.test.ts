@@ -20,6 +20,7 @@ import {
   type SerializedNode,
   cook,
   deserializeGraph,
+  describeSubgraphParams,
   getRegisteredSubgraph,
   listSubgraphs,
 } from "../index.js";
@@ -423,6 +424,52 @@ describe("the shipped vocabulary", () => {
         );
         expect(p.default, `${entry.name}.${p.name}`).toBeDefined();
       }
+    }
+  });
+
+  // The other half of what a targetless knob is: it takes a FIELD. A
+  // binding is spliced into the expression that reads it, so the knob
+  // varies per element — which is the capability the deleted
+  // parameter-attribute idiom used to buy, and the reason its deletion
+  // was allowed to be a regression only until this route existed.
+  it("materializes every targetless knob field-capable", () => {
+    const flat: string[] = [];
+    for (const entry of listSubgraphs()) {
+      const targetless = (entry.subgraph.params ?? []).filter((p) => p.targets.length === 0);
+      if (targetless.length === 0) continue;
+      const graph = deserializeGraph(driverGraph(entry.name, [{ id: "main" }]));
+      const described = describeSubgraphParams(graph.require("main").def) ?? [];
+      for (const p of targetless) {
+        const found = described.find((d) => d.name === p.name);
+        if (found?.schema.acceptsField !== true) flat.push(`${entry.name}.${p.name}`);
+      }
+    }
+    expect(flat).toEqual([]);
+  });
+
+  it("drives a knob with a field, and a constant field is the scalar exactly", async () => {
+    // Two claims in one cook set. A VARYING field reaches inside the
+    // expression and changes the result — the capability. A field whose
+    // value happens not to vary produces the bytes the plain number
+    // produces, byte for byte — the guarantee that the route replaces
+    // the old idiom rather than approximating it.
+    const cases = [
+      { name: "transform/displace-by-noise", param: "amount", scalar: 4 },
+      { name: "filter/inside-radius", param: "center", scalar: [3, 0, 5] },
+    ] as const;
+    for (const { name, param, scalar } of cases) {
+      const cooked = async (value: unknown): Promise<unknown> =>
+        snapshotCollection((await cookGraph(driverGraph(name, [{ id: "main", params: { [param]: value } }]))).main_out);
+      const plain = await cooked(scalar);
+      const constantField = Array.isArray(scalar)
+        ? { fn: "vec", args: [...scalar] }
+        : { fn: "constant", value: scalar };
+      expect(await cooked(constantField), `${name}.${param} constant field`).toEqual(plain);
+
+      const varying = Array.isArray(scalar)
+        ? { fn: "vec", args: [{ fn: "mul", args: [{ fn: "fraction" }, 6] }, 0, 5] }
+        : { fn: "mul", args: [{ fn: "fraction" }, 8] };
+      expect(await cooked(varying), `${name}.${param} varying field`).not.toEqual(plain);
     }
   });
 });

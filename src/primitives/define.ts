@@ -26,6 +26,16 @@
  *    registered schemas; remove it") — so it is checked HERE, at
  *    registration, which is import time for the shipped catalog.
  *
+ *    A TARGETLESS knob has no targets to check against: it is field-capable
+ *    by construction, because a `Field` splices into the expression that
+ *    reads its name exactly where a number substitutes. The assertion would
+ *    therefore be unfalsifiable — so it is REQUIRED instead. Every
+ *    targetless declaration in this catalog must say `acceptsField: true`,
+ *    and omitting it is an error naming the knob. That keeps the line
+ *    load-bearing (delete one and registration fails) and keeps the recipe
+ *    stating what an agent reading it needs to know, rather than leaving
+ *    the capability visible only after materialization.
+ *
  * The assertion pass materializes the recipe once through
  * `deserializeGraph` before handing it to `registerSubgraph`, which
  * materializes it again to canonicalize. That is a deliberate second
@@ -208,6 +218,12 @@ export function definePrimitive(name: string, spec: PrimitiveSpec): RegisteredSu
     // would have found them.
     const inner = deserializeGraph(graph);
     for (const p of params) {
+      if (p.targets.length === 0 && p.acceptsField !== true) {
+        fail(
+          name,
+          `exposed param "${p.name}" has no targets and does not declare acceptsField: true; a targetless knob is read by the body's field expressions, where a Field splices in exactly as a number substitutes, so it IS field-capable — say so in the recipe, since that is what an agent reads before setting it`,
+        );
+      }
       try {
         resolveExposedParam(inner, {
           name: p.name,

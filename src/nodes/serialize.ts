@@ -671,9 +671,11 @@ function checkExposedParamDeclaration(
     fail(
       exposed.targets.length === 0
         ? // No targets means the value's only route into the body is
-          // substitution into a field expression, as a literal — which a
-          // Field can never be, whatever the schema claims.
-          `${where} claims to be field-capable, but it has no targets: its value reaches the body only by substitution into a field expression, as a literal, and a Field is not one — ${door}`
+          // substitution into a field expression — which takes a Field as
+          // readily as a number, splicing it in where the reference
+          // stands. So a targetless param is ALWAYS field-capable and the
+          // only way to fail here is to record less than that.
+          `${where} is recorded as taking plain values only, but it has no targets: its value reaches the body by substitution into a field expression, where a Field is spliced in exactly as a number would be, so reloading this graph would derive a field-capable param and the saved node and the loaded one would not behave alike — ${door}`
         : held.acceptsField === true
           ? `${where} claims to be field-capable, but not every target is: field-capable targets are ${resolved.targets.filter((t) => t.acceptsField === true).map(slotLabel).join(", ") || "(none)"}; a Field set on it would reach a target that takes plain values only — ${door}`
           : `${where} is recorded as taking plain values only, but every one of its targets (${targets}) accepts a Field; reloading this graph would derive a field-capable param, so the saved node and the loaded one would not behave alike — ${door}`,

@@ -154,6 +154,7 @@ export function registerShapePrimitives(): void {
         description: "How far round to go: 1 is a closed circle, 0.5 a half-circle, 0.25 a quarter arc.",
         min: 0,
         max: 1,
+        acceptsField: true,
       },
       {
         name: "includeEnd",
@@ -209,6 +210,7 @@ export function registerShapePrimitives(): void {
         default: 3,
         description: "How many full revolutions the spiral makes between the centre and the outer radius.",
         min: 0,
+        acceptsField: true,
       },
       ...placementParams(),
     ],
@@ -333,6 +335,7 @@ export function registerShapePrimitives(): void {
         default: 0.15,
         description:
           "How far the path strays from the straight line between its ends. 0 is a straight line; above that the peak deviation is about 0.22 * wander * `size.z`, exactly linear in both — so at the default `size` [40,1,40], 0.15 strays about 1.3 units to each side and 0.5 about 4.4. Inverted, for a peak of a fraction f of `size.z`, ask for wander around 4.6 * f. This is a FRACTION OF A NOMINAL RANGE, not of the deviation you get: the value scales a noise term whose range is +/-1 in principle, but four octaves of normalized fBm sampled along one line only cover part of it, and `frequency` and `variant` move that coverage (measured 0.13 to 0.31 of wander * `size.z` across the usable range). The wander is sideways only — the path is a height field along X, so it NEVER doubles back on itself at any wander; for a curve that turns back, build the corners yourself and run `pointsToPath` over them.",
+        acceptsField: true,
       },
       {
         name: "frequency",
@@ -340,6 +343,7 @@ export function registerShapePrimitives(): void {
         default: 3,
         description:
           "How many bends over the length of the path, roughly: the noise sample position is multiplied by this, so smaller means longer, lazier curves.",
+        acceptsField: true,
       },
       {
         name: "variant",
@@ -347,6 +351,7 @@ export function registerShapePrimitives(): void {
         default: 0,
         description:
           "Offset added to the noise sample position — the per-instance re-roll, and the ONLY one: no seed can move a noise field.",
+        acceptsField: true,
       },
       ...placementParams(
         'Extent in world units: X is the end-to-end length, Z scales the wander. A bare number is not accepted here: pass three numbers [40,1,40], or {"fn":"constant","value":40}.',

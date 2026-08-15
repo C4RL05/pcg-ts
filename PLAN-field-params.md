@@ -343,9 +343,24 @@ sentence in `authoring.md`, not a blocker.
 - Every exposed param binds; `targets` is optional fan-out (§3).
 - A bind-only param is **not** field-capable in v1 — a Field cannot be a
   uniform, and `checkExposedValues` (`subgraph.ts:702-706`) already
-  refuses it with a good message. The v2 path is clear: compile a
+  refuses it with a good message. ~~The v2 path is clear: compile a
   field-valued binding to a nested column as `run.ts compileParam`
-  (`run.ts:636-691`) already does.
+  (`run.ts:636-691`) already does.~~ **Superseded, and the predicted
+  mechanism was the wrong one.** A field binding is SPLICED into the
+  expression where the reference stands: the `param` handler returns the
+  bound field, so `Field.key` composes and invalidation stays exact, and
+  the bound field's SPEC rides the authored clone's node beside the value
+  channel `attachParamValue` already used. The compiler then compiles it
+  IN PLACE. A nested column would have been the attribute idiom
+  re-implemented inside the compiler — an extra buffer, an extra
+  dispatch, and machinery the per-field evaluator does not have (it
+  compiles one kernel per field); splicing costs neither, and fuses the
+  bound field's math into the reading kernel. What DID have to be
+  re-decided is provenance: an authored root can now hang a code-composed
+  or undescribable sub-expression off it, so `deviceSpec` reads a record
+  of the worst provenance any binding spliced in. A targetless param is
+  therefore always field-capable, derived rather than authored — no new
+  authorable key, no `formatVersion` question, and no content hash moved.
 - No `formatVersion` bump for the grammar (§6).
 
 **Open — needs a call.**

@@ -17,6 +17,13 @@ import {
   type EvalContext,
   type Field,
 } from "../fields/index.js";
+import {
+  deviceSpec,
+  paramSpecOf,
+  paramValue,
+  peekFieldSpec,
+  specFallbackReason,
+} from "../fields/spec.js";
 import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
 import {
   FieldJsonError,
@@ -558,7 +565,9 @@ describe("param bindings", () => {
 
   it("rejects a binding the grammar could not have accepted as a literal", () => {
     expect(() => fieldFromJson(AMP, { amp: Number.NaN })).toThrow(/bound to NaN; a binding must be finite/);
-    expect(() => fieldFromJson(AMP, { amp: [] })).toThrow(/must be a finite number .* or a non-empty array/);
+    expect(() => fieldFromJson(AMP, { amp: [] })).toThrow(
+      /must be a finite\s+number .* a non-empty array of finite numbers .* or a Field/s,
+    );
     expect(() => fieldFromJson(AMP, { amp: "big" as unknown as number })).toThrow(
       /param "amp" is bound to a string/,
     );
@@ -598,6 +607,149 @@ describe("param bindings", () => {
     };
     expect(() => fieldFromJson(deep(256), { amp: 1 })).not.toThrow();
     expect(() => fieldFromJson(deep(257), { amp: 1 })).toThrow(/nesting deeper than 256 levels/);
+  });
+});
+
+/**
+ * The binding that is not a literal. A `Field` is SPLICED in where the
+ * reference stands, which is what lets a named value vary per element —
+ * the capability the per-point attribute column used to buy at the cost
+ * of three nodes and a storage buffer.
+ *
+ * Everything the value bindings promise has to keep holding: the key
+ * composes (so invalidation stays exact), the attached spec keeps the
+ * REFERENCE (so a save cannot bake the field in), and provenance still
+ * decides device eligibility — now for the spliced sub-expression too,
+ * which lives beside the spec rather than inside it.
+ */
+describe("param bindings — a Field", () => {
+  const AMP: FieldSpec = { fn: "param", name: "amp" };
+  const SCALED: FieldSpec = { fn: "mul", args: [{ fn: "position" }, AMP] };
+
+  it("splices the field in, so the result is the expression written around it", () => {
+    const bound = fieldFromJson({ fn: "attribute", name: "density" });
+    const spliced = fieldFromJson(SCALED, { amp: bound });
+    expect(spliced.key).toBe(mul(position(), bound).key);
+
+    const ctx = testCloud();
+    expect(Array.from(evaluateField(spliced, ctx).data)).toEqual(
+      Array.from(evaluateField(mul(position(), bound), ctx).data),
+    );
+  });
+
+  it("carries the bound field's key, so a rebind moves the memo key", () => {
+    const a = fieldFromJson({ fn: "fraction" });
+    const b = fieldFromJson({ fn: "index" });
+    expect(fieldFromJson(SCALED, { amp: a }).key).not.toBe(fieldFromJson(SCALED, { amp: b }).key);
+    expect(fieldFromJson(SCALED, { amp: a }).key).toContain(a.key);
+    // Content-addressed, exactly as a value binding is: two structurally
+    // equal fields are one key and share a cache entry legitimately.
+    expect(fieldFromJson(SCALED, { amp: a }).key).toBe(
+      fieldFromJson(SCALED, { amp: fieldFromJson({ fn: "fraction" }) }).key,
+    );
+  });
+
+  it("a constant-valued field binds as the VALUE, slot and all", () => {
+    // The bridge between the two kinds of binding, and the reason the
+    // route can replace the attribute idiom without moving a byte: a
+    // field that happens not to vary is the scalar case, and is recorded
+    // as one — which is what keeps a panel dragging a slider in "field"
+    // mode (its editor seeds `{fn:"constant",value:…}`) on ONE kernel
+    // instead of specializing a pipeline per tick.
+    const viaField = fieldFromJson(AMP, { amp: fieldFromJson({ fn: "constant", value: 1.25 }) });
+    expect(viaField.key).toBe(fieldFromJson(AMP, { amp: 1.25 }).key);
+    const spec = peekFieldSpec(viaField) as FieldSpec;
+    expect(paramValue(spec)).toBe(1.25);
+    expect(paramSpecOf(spec)).toBeUndefined();
+    // A tuple constant the same way, and a real expression NOT this way.
+    const vecSpec = peekFieldSpec(
+      fieldFromJson(AMP, { amp: fieldFromJson({ fn: "constant", value: [1, 2, 3] }) }),
+    ) as FieldSpec;
+    expect(paramValue(vecSpec)).toEqual([1, 2, 3]);
+    const exprSpec = peekFieldSpec(
+      fieldFromJson(AMP, { amp: fieldFromJson({ fn: "fraction" }) }),
+    ) as FieldSpec;
+    expect(paramValue(exprSpec)).toBeUndefined();
+    expect(paramSpecOf(exprSpec)).toEqual({ fn: "fraction" });
+  });
+
+  it("round-trips the REFERENCE, never the field it stood for", () => {
+    const bound = fieldFromJson({ fn: "fbm", base: "perlinNoise", opts: { frequency: 0.5 } });
+    const spliced = fieldFromJson(SCALED, { amp: bound });
+    expect(fieldToJson(spliced)).toEqual(SCALED);
+    expect(JSON.stringify(fieldToJson(spliced))).not.toContain("fbm");
+  });
+
+  it("splices into opts.position too, the other field-valued position", () => {
+    const spec: FieldSpec = { fn: "perlinNoise", opts: { position: AMP } };
+    const bound = fieldFromJson({ fn: "mul", args: [{ fn: "position" }, 3] });
+    expect(fieldFromJson(spec, { amp: bound }).key).toBe(perlinNoise({ position: bound }).key);
+  });
+
+  it("keeps the arity failure legible, naming the Field that did not fit", () => {
+    const bound = fieldFromJson({ fn: "vec", args: [1, 2, 3] });
+    expect(() => fieldFromJson({ fn: "add", args: [AMP, [1, 2]] }, { amp: bound })).toThrow(
+      /incompatible tuple sizes/,
+    );
+    expect(() => fieldFromJson({ fn: "add", args: [AMP, [1, 2]] }, { amp: bound })).toThrow(
+      /this spec binds "amp" = a Field of tuple size 3/,
+    );
+  });
+
+  it("inherits the bound field's provenance, so the device gate still holds", () => {
+    // An AUTHORED field spliced into an authored spec stays authored: the
+    // whole expression is describable, so it may lower.
+    const authored = fieldFromJson({ fn: "fraction" });
+    expect(deviceSpec(fieldFromJson(SCALED, { amp: authored }), false)).toEqual(SCALED);
+
+    // A field the CONSTRUCTORS composed is admitted only on the flag —
+    // the same rule a code-composed root gets, applied through the
+    // splice, so a graph that never asked for the device does not get it.
+    const derived = mul(fraction(), 2);
+    const withDerived = fieldFromJson(SCALED, { amp: derived });
+    expect(deviceSpec(withDerived, false)).toBeUndefined();
+    expect(specFallbackReason(withDerived)).toBe("derived-spec");
+    expect(deviceSpec(withDerived, true)).toEqual(SCALED);
+
+    // And a field nothing can name makes the whole expression unnameable,
+    // exactly as an opaque leaf inside a derived tree does.
+    const opaque = makeField("opaque", 1, (ctx) => ({
+      data: new Float32Array(ctx.geo.attrs[ctx.domain].count).fill(2),
+      tupleSize: 1,
+    }));
+    const withOpaque = fieldFromJson(SCALED, { amp: opaque });
+    expect(deviceSpec(withOpaque, false)).toBeUndefined();
+    expect(deviceSpec(withOpaque, true)).toBeUndefined();
+    expect(specFallbackReason(withOpaque)).toBe("no-spec");
+    // It still COOKS: an undescribable binding is a CPU cook, not a refusal.
+    expect(Array.from(evaluateField(withOpaque, testCloud(2)).data)).toEqual(
+      Array.from(evaluateField(mul(position(), opaque), testCloud(2)).data),
+    );
+  });
+
+  it("inherits provenance THROUGH a spliced field's own bindings", () => {
+    // The walk must not stop one level down. Both roots below are
+    // authored, and only the innermost binding is not — if that did not
+    // propagate, a code-composed expression would reach the device on a
+    // resolver that never advertised the flag.
+    const inner = fieldFromJson({ fn: "mul", args: [{ fn: "param", name: "j" }, 2] }, {
+      j: mul(fraction(), 2),
+    });
+    const outer = fieldFromJson(SCALED, { amp: inner });
+    expect(deviceSpec(outer, false)).toBeUndefined();
+    expect(specFallbackReason(outer)).toBe("derived-spec");
+    expect(deviceSpec(outer, true)).toEqual(SCALED);
+
+    // And opaque outranks derived through the same chain.
+    const opaqueInner = fieldFromJson({ fn: "param", name: "j" }, {
+      j: makeField("opaque_nested", 1, (ctx) => ({
+        data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
+        tupleSize: 1,
+      })),
+    });
+    const opaqueOuter = fieldFromJson(SCALED, { amp: opaqueInner });
+    expect(deviceSpec(opaqueOuter, true)).toBeUndefined();
+    expect(specFallbackReason(opaqueOuter)).toBe("no-spec");
   });
 });
 

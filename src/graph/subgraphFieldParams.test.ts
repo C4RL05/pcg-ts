@@ -170,13 +170,16 @@ describe("a body field expression reading an exposed param — declaration", () 
     );
   });
 
-  it("refuses a targetless param claiming field capability", () => {
+  it("accepts a targetless param declaring field capability", () => {
+    // The capability is real on this route: a Field is SPLICED into the
+    // expression where the reference stands, so the declaration is
+    // describing what binding does rather than claiming what it cannot.
     const { inner, h } = ampBody("bind_decl_targetless_field");
     expect(() =>
       subgraphNode(inner, [], [{ name: "out", node: h, pin: "out" }], [
         { name: "amp", targets: [], schema: { ...f32, acceptsField: true } },
       ]),
-    ).toThrow(/exposed param "amp" has no targets and claims to accept a Field/);
+    ).not.toThrow();
   });
 
   it("still refuses a targetless param when nothing in the body reads anything", () => {
@@ -324,25 +327,78 @@ describe("a body field expression reading an exposed param — cooking", () => {
     expect(innermost.inner.getParams(innermost.h).amount).toBe(innermost.authored);
   });
 
-  it("refuses a Field, because a literal position cannot hold one", async () => {
-    const { inner, h } = ampBody("bind_cook_field");
-    // Field-capable through its TARGET, and read by the body as well: the
-    // route that cannot carry a Field is the one that decides.
-    const sink = probeNode("bind_cook_field_sink");
-    const g = inner.add(sink.def, undefined, "q");
+  it("splices a Field into the expression that reads the name", async () => {
+    const { inner, probe, h, authored } = ampBody("bind_cook_field");
     const def = subgraphNode(inner, [], [{ name: "out", node: h, pin: "out" }], [
-      {
-        name: "amp",
-        targets: [{ node: g, param: "amount", acceptsField: true }],
-        schema: { ...f32, acceptsField: true },
-      },
+      { name: "amp", targets: [], schema: { ...f32, acceptsField: true } },
+    ]);
+    const graph = new Graph(7);
+    const bound = fieldFromJson({ fn: "attribute", name: "density" });
+    const sub = graph.add(def, { amp: bound }, "sub");
+    graph.output(sub, "out", "out");
+
+    const result = await cook(graph);
+    // The field the body cooked with is the field the author would have
+    // written around the binding — key for key. That is the whole
+    // mechanism: the bound field's key composes in exactly where a
+    // number's value would have, so the body node's memo key moves with
+    // it and a per-element value reaches inside a field expression.
+    const expected = `F(${fieldFromJson(AMP_SPEC, { amp: bound }).key})`;
+    expect(probe.seen).toEqual([expected]);
+    expect(valueOf(result.outputs.out)).toBe(expected);
+    expect(expected).toContain(bound.key);
+    // And the body is left exactly as it was found, rebuild and all.
+    expect(inner.getParams(h).amount).toBe(authored);
+  });
+
+  it("invalidates on a field binding exactly as it does on a number", async () => {
+    // The measurement behind the claim that a field binding costs nothing
+    // in memoization: an EQUAL expression is a cache hit (the composed
+    // key is content-addressed all the way down), a DIFFERENT one is a
+    // recook, and neither is decided by object identity.
+    const { inner, probe, h } = ampBody("bind_cook_field_memo");
+    const def = subgraphNode(inner, [], [{ name: "out", node: h, pin: "out" }], [
+      { name: "amp", targets: [], schema: { ...f32, acceptsField: true } },
+    ]);
+    const graph = new Graph(7);
+    const sub = graph.add(def, { amp: fieldFromJson({ fn: "fraction" }) }, "sub");
+    graph.output(sub, "out", "out");
+
+    expect((await cook(graph)).stats).toMatchObject({ cooked: 1, cached: 0 });
+    expect(probe.seen.length).toBe(1);
+
+    // A different OBJECT describing the same expression: nothing to
+    // recompute, and the WRAPPER itself serves its cache — the executor
+    // hashes a Field as `F(key)`, so an equal expression does not move
+    // the outer param hash any more than an equal number does.
+    graph.setParam(sub, "amp", fieldFromJson({ fn: "fraction" }));
+    expect((await cook(graph)).stats).toMatchObject({ cooked: 0, cached: 1 });
+    expect(probe.seen.length).toBe(1);
+
+    // A different expression moves the key and only then does it recook.
+    graph.setParam(sub, "amp", fieldFromJson({ fn: "index" }));
+    expect((await cook(graph)).stats).toMatchObject({ cooked: 1, cached: 0 });
+    expect(probe.seen.length).toBe(2);
+    expect(probe.seen[1]).not.toBe(probe.seen[0]);
+
+    // And a plain number after a field: the two kinds of binding share
+    // one key space, so switching between them is an ordinary edit.
+    graph.setParam(sub, "amp", 3);
+    expect((await cook(graph)).stats).toMatchObject({ cooked: 1, cached: 0 });
+    expect(probe.seen[2]).toBe(ampKey(3));
+  });
+
+  it("refuses a Field the declaration does not admit, naming both routes", async () => {
+    const { inner, h } = ampBody("bind_cook_field_plain");
+    const def = subgraphNode(inner, [], [{ name: "out", node: h, pin: "out" }], [
+      { name: "amp", targets: [], schema: f32 },
     ]);
     const graph = new Graph(7);
     const sub = graph.add(def, { amp: constant(2) }, "sub");
     graph.output(sub, "out", "out");
 
     await expect(cook(graph)).rejects.toThrow(
-      /subgraph exposed param "amp" holds a Field, but the body's field expression at "p"\.amount reads it by name/,
+      /subgraph exposed param "amp" holds a Field, and the body's field expression at "p"\.amount reads it by name, but its schema does not accept one/,
     );
     // Refused BEFORE anything was written: the body is untouched.
     expect(isField(inner.getParams(h).amount)).toBe(true);

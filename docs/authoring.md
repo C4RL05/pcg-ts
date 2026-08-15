@@ -232,11 +232,14 @@ into the body's field scope, so a spec can read
 `{ "fn": "param", "name": ... }` directly (see
 [the grammar](#the-field-expression-grammar) below) — and the choice
 between them is a domain question rather than a matter of taste: **a
-value that varies PER ELEMENT is an attribute; a value uniform over the
-cook is a param.** The idiom is still the only route for a number the
-graph itself produced — a measurement, a transferred value, anything
-whose answer differs point to point — because that is a column, and a
-param is one number for the whole cook. For a number a caller types, the
+value the GRAPH computes is an attribute; a value a CALLER supplies is a
+param.** The idiom is still the only route for a number the graph itself
+produced — a measurement, a transferred value, anything whose answer a
+node upstream had to work out — because that is a column, and a column
+is what a node writes. A caller's value goes in as a param whether it is
+one number or varies per element: a param accepts a `Field` too, and the
+field is spliced into the expression that reads the name, so it is the
+expression the author would have written around it. For a number a caller types, the
 param route costs no plumbing at all, where the idiom costs a
 `setAttribute` per value and a `removeAttribute` to clear up after them,
 a `count`-element f32 column each, and one of the seven usable
@@ -646,10 +649,13 @@ therefore still affects the cook. It has no inner schema to borrow, so
 `f32`, a 3-number array `vec3`, a 4-number array `vec4`. Nothing else —
 `i32` and `u32` are not derivable, because a field expression has no
 integers and deriving one from `3` would promise a rounding the grammar
-never performs. And such a param is never field-capable: the value is
-substituted into the expression before the field is built, and a `Field`
-cannot stand in a literal position, so `acceptsField: true` on a
-targetless declaration is refused rather than quietly ANDed away.
+never performs. And such a param is always field-capable, derived rather
+than authored like the rest of its schema: the value is substituted into
+the expression before the field is built, and a `Field` substitutes there
+as readily as a number — it is spliced in where the reference stands, so
+the body cooks the expression an author would have written around it.
+That is how a knob varies PER ELEMENT without any plumbing: pass a noise
+to a primitive's `amount` and the amount follows the noise.
 
 The body may only read names its own wrapper declares. An undeclared one
 is refused at wrap time — naming the slot holding the expression, the

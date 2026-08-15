@@ -20,13 +20,20 @@
  *    leave one kernel and one pipeline behind. `field.key` carries the
  *    value (the CPU memo contract), so a cache keyed on it would grow
  *    once per value — and both caches are unbounded Maps.
+ * 4. **The other kind of binding.** A `Field` bound to a name is SPLICED
+ *    into the expression where the reference stands, so it lowers the
+ *    opposite way: compiled in place, no uniform slot, its attributes
+ *    bound like any other. Everything above is therefore re-measured for
+ *    it — parity per field, parity fused, and the cache, which must not
+ *    grow when one expression is rebound (two DIFFERENT expressions are
+ *    two kernels by necessity: they are different WGSL).
  *
  * Test-only: bundled by params.device.test.ts with esbuild and executed
  * in a plain Node child process (see deviceRunner.mjs for why no vitest
  * worker may touch Dawn), reporting observations as JSON on stdout.
  */
 import { create } from "webgpu";
-import { type Column, createGpuCookStats, evaluateField } from "../fields/index.js";
+import { type Column, createGpuCookStats, evaluateField, makeField } from "../fields/index.js";
 import { type CookResult, Graph, cook, makeGeometryItem } from "../graph/index.js";
 import { fieldFromJson, type FieldSpec } from "../nodes/fieldJson.js";
 import { setAttribute } from "../nodes/index.js";
@@ -345,6 +352,222 @@ async function main(): Promise<void> {
       chunkedPromise !== null && bytesEqual(evaluateField(chunkedField, ctx), await chunkedPromise),
   };
 
+  // -- 5. FIELD bindings ---------------------------------------------------
+  // The other kind of binding: a Field spliced into the expression where
+  // the reference stands. It lowers the opposite way to a value — compiled
+  // in place, no uniform slot — so everything measured above has to be
+  // re-measured for it rather than argued from it.
+  const splicedEv = new GpuFieldEvaluator(device);
+  const SPLICE_SPEC: FieldSpec = {
+    fn: "mul",
+    args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "amp" }],
+  };
+  const splicedCases: Array<{
+    name: string;
+    bound: FieldSpec;
+    written: FieldSpec;
+    cpuExact: boolean;
+  }> = [
+    {
+      name: "field over an attribute",
+      bound: { fn: "attribute", name: "density" },
+      written: { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "attribute", name: "density" }] },
+      cpuExact: true,
+    },
+    {
+      name: "field over position",
+      bound: { fn: "component", args: [{ fn: "position" }], index: 1 },
+      written: {
+        fn: "mul",
+        args: [
+          { fn: "attribute", name: "density" },
+          { fn: "component", args: [{ fn: "position" }], index: 1 },
+        ],
+      },
+      cpuExact: true,
+    },
+    {
+      name: "constant-valued field is the scalar",
+      bound: { fn: "constant", value: 0.375 },
+      written: { fn: "mul", args: [{ fn: "attribute", name: "density" }, 0.375] },
+      cpuExact: true,
+    },
+    {
+      // A bound field whose own ops round: `fraction` divides, so the CPU
+      // (f64 divide, then a store to f32) and the device (f32 divide) may
+      // land a ULP apart. That is the pre-existing division rounding the
+      // parity suite budgets, arriving through the splice rather than
+      // being caused by it — which `equalsWritten` is what separates:
+      // spliced and hand-written must be the SAME GPU bytes even where
+      // neither matches the CPU exactly.
+      name: "field that divides",
+      bound: { fn: "fraction" },
+      written: { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "fraction" }] },
+      cpuExact: false,
+    },
+  ];
+  const spliced: Array<{
+    name: string;
+    resolved: boolean;
+    bitExact: boolean;
+    cpuExact: boolean;
+    maxRelDiff: number;
+    equalsWritten: boolean;
+  }> = [];
+  for (const c of splicedCases) {
+    const field = fieldFromJson(SPLICE_SPEC, { amp: fieldFromJson(c.bound) });
+    const promise = splicedEv.resolveField(field, ctx);
+    if (promise === null) {
+      spliced.push({
+        name: c.name,
+        resolved: false,
+        bitExact: false,
+        cpuExact: c.cpuExact,
+        maxRelDiff: Number.POSITIVE_INFINITY,
+        equalsWritten: false,
+      });
+      continue;
+    }
+    const gpuColumn = await promise;
+    // The claim in full: the spliced expression is the expression an
+    // author would have WRITTEN around the bound field — same GPU bytes —
+    // and the CPU agrees with both wherever the ops involved are exact.
+    const writtenPromise = splicedEv.resolveField(fieldFromJson(c.written), ctx);
+    const cpuColumn = evaluateField(field, ctx);
+    spliced.push({
+      name: c.name,
+      resolved: true,
+      bitExact: bytesEqual(cpuColumn, gpuColumn),
+      cpuExact: c.cpuExact,
+      maxRelDiff: maxRelDiff(cpuColumn, gpuColumn),
+      equalsWritten: writtenPromise !== null && bytesEqual(await writtenPromise, gpuColumn),
+    });
+  }
+
+  // Cache behaviour, which differs from a value binding BY NECESSITY: a
+  // spliced expression decides the emitted text, so two different ones
+  // are two kernels. What must NOT happen is growth per rebind of the
+  // same expression — that would be the leak the two-keys design exists
+  // to prevent, arriving through the other door.
+  const spliceCacheEv = new GpuFieldEvaluator(device);
+  const spliceStats = createGpuCookStats();
+  const spliceKeys = new Set<string>();
+  let spliceSweepBitExact = true;
+  for (let i = 0; i < 25; i++) {
+    const field = fieldFromJson(SPLICE_SPEC, { amp: fieldFromJson({ fn: "attribute", name: "density" }) });
+    spliceKeys.add(field.key);
+    const promise = spliceCacheEv.resolveField(field, ctx, spliceStats);
+    if (promise === null) {
+      spliceSweepBitExact = false;
+      break;
+    }
+    if (!bytesEqual(evaluateField(field, ctx), await promise)) spliceSweepBitExact = false;
+  }
+  const sameExpressionCaches = {
+    distinctFieldKeys: spliceKeys.size,
+    bitExact: spliceSweepBitExact,
+    kernelCacheSize: spliceCacheEv.kernelCacheSize,
+    pipelineCacheSize: spliceCacheEv.pipelineCacheSize,
+    pipelinesCompiled: spliceStats.pipelinesCompiled,
+  };
+  // The shape a PANEL produces: its field editor seeds
+  // `{fn:"constant",value:…}`, so dragging a slider in that mode sends a
+  // new constant SPEC every tick. Those must fold back onto the value
+  // channel — one kernel, one pipeline, the uniform rebound — or the
+  // capability restored here would leak a pipeline per tick.
+  const constEv = new GpuFieldEvaluator(device);
+  const constStats = createGpuCookStats();
+  const constKeys = new Set<string>();
+  let constBitExact = true;
+  for (let i = 0; i < 40; i++) {
+    const field = fieldFromJson(SPLICE_SPEC, {
+      amp: fieldFromJson({ fn: "constant", value: i * 0.031 }),
+    });
+    constKeys.add(field.key);
+    const promise = constEv.resolveField(field, ctx, constStats);
+    if (promise === null) {
+      constBitExact = false;
+      break;
+    }
+    if (!bytesEqual(evaluateField(field, ctx), await promise)) constBitExact = false;
+  }
+  const constantSpecCaches = {
+    distinctFieldKeys: constKeys.size,
+    bitExact: constBitExact,
+    kernelCacheSize: constEv.kernelCacheSize,
+    pipelineCacheSize: constEv.pipelineCacheSize,
+    pipelinesCompiled: constStats.pipelinesCompiled,
+  };
+
+  // Three genuinely different bound expressions through one reading spec.
+  const distinctEv = new GpuFieldEvaluator(device);
+  for (const bound of [
+    { fn: "attribute", name: "density" },
+    { fn: "fraction" },
+    { fn: "index" },
+  ] as FieldSpec[]) {
+    await distinctEv.resolveField(fieldFromJson(SPLICE_SPEC, { amp: fieldFromJson(bound) }), ctx);
+  }
+  const distinctExpressionCaches = {
+    kernelCacheSize: distinctEv.kernelCacheSize,
+    pipelineCacheSize: distinctEv.pipelineCacheSize,
+  };
+
+  // A spliced binding inside a RESIDENT RUN. The run planner compiles a
+  // field-valued node param through its own path (`compileParam`), so
+  // "the per-field path lowers it" is not evidence that the fused one
+  // does — and a run that declined would be a silent residency loss
+  // rather than a failure.
+  const splicedFusedGraph = (bound: FieldSpec): Graph => {
+    const g = new Graph(5);
+    const din = g.add(dataInput);
+    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(COUNT))]);
+    const a = g.add(setAttribute, {
+      name: "scaled",
+      value: fieldFromJson(SPLICE_SPEC, { amp: fieldFromJson(bound) }),
+    });
+    const b = g.add(setAttribute, {
+      name: "flat",
+      value: fieldFromJson({ fn: "param", name: "amp" }, { amp: fieldFromJson(bound) }),
+    });
+    g.connect(din, "out", a, "in");
+    g.connect(a, "out", b, "in");
+    g.output(b, "out", "out");
+    return g;
+  };
+  // Division-free on purpose: what this measures is the PLUMBING (a
+  // spliced expression reaching a resident member's field kernel), and a
+  // bound field that divides would mix the parity suite's f32 rounding
+  // budget into a bit-exactness claim about that plumbing.
+  const FUSED_BOUND: FieldSpec = { fn: "component", args: [{ fn: "position" }], index: 1 };
+  const splicedGpuCook = await cook(splicedFusedGraph(FUSED_BOUND), { gpu: ev });
+  const splicedFusedStats = splicedGpuCook.stats.gpu ?? createGpuCookStats();
+  const splicedCpuRun = readAttrs(await cook(splicedFusedGraph(FUSED_BOUND)));
+  const splicedGpuRun = readAttrs(splicedGpuCook);
+  const splicedFused = {
+    residentRuns: splicedFusedStats.residentRuns,
+    fusedNodes: splicedFusedStats.fusedNodes,
+    fallbacks: splicedFusedStats.fallbacks,
+    scaledBitExact: attrBytesEqual(splicedCpuRun.scaled, splicedGpuRun.scaled),
+    flatBitExact: attrBytesEqual(splicedCpuRun.flat, splicedGpuRun.flat),
+  };
+
+  // A binding nothing can describe (a `makeField` closure) must decline
+  // rather than lower: there is no spec to splice, so the whole
+  // expression is a CPU expression — and it still COOKS there.
+  const opaqueStats = createGpuCookStats();
+  const opaqueBound = makeField("device_opaque", 1, (c) => ({
+    data: new Float32Array(c.geo.attrs[c.domain].count).fill(0.5),
+    tupleSize: 1,
+  }));
+  const opaqueField = fieldFromJson(SPLICE_SPEC, { amp: opaqueBound });
+  const opaqueResolved = splicedEv.resolveField(opaqueField, ctx, opaqueStats);
+  const opaque = {
+    declined: opaqueResolved === null,
+    fallbacks: opaqueStats.fallbacks,
+    cpuCooked: evaluateField(opaqueField, ctx).data.length === COUNT,
+  };
+
   // -- 4. an unbound param never reaches the device ------------------------
   const unboundStats = createGpuCookStats();
   const unbound = ev.resolveField(fieldFromJson(sweepSpec), ctx, unboundStats);
@@ -362,6 +585,12 @@ async function main(): Promise<void> {
       sweep,
       fused,
       chunked,
+      spliced,
+      splicedFused,
+      sameExpressionCaches,
+      constantSpecCaches,
+      distinctExpressionCaches,
+      opaque,
       unbound: {
         declined: unbound === null,
         fallbacks: unboundStats.fallbacks,

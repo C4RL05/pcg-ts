@@ -81,6 +81,95 @@ const SPEC_DEPTH = new WeakMap<FieldSpec, number>();
 export type FieldBindingValue = number | readonly number[];
 
 /**
+ * @internal The SPEC of the field each `param` node was bound to, for the
+ * bindings that carry a `Field` rather than a literal.
+ *
+ * The sibling of {@link PARAM_VALUES}, held outside the node for the same
+ * reason and keyed the same way (per NODE, so a binding survives
+ * composition). The difference is what it means downstream: a value binds
+ * to a UNIFORM SLOT, one per name, shared by every value the name takes;
+ * a field binds to the EXPRESSION ITSELF, spliced in where the reference
+ * stands, so the reading kernel computes the bound field inline instead
+ * of reading a column somebody else wrote.
+ *
+ * The reference stays in the spec either way — `fieldToJson` round-trips
+ * `{fn: "param", name}` and never the thing it stood for — while
+ * `Field.key` carries the bound field's key by ordinary composition,
+ * which is what moves the reading node's memo key when the binding
+ * changes.
+ */
+const PARAM_SPECS = new WeakMap<FieldSpec, FieldSpec>();
+
+/**
+ * @internal `param` nodes bound to a field that carries NO spec (a
+ * `makeField` closure, or anything composed over one). Recorded rather
+ * than left absent because "bound to something undescribable" and "not
+ * bound at all" must not look alike: the first is a legal cook that has
+ * to stay on the CPU, the second is the refusal an unbound reference
+ * raises.
+ */
+const PARAM_OPAQUE = new WeakSet<FieldSpec>();
+
+/**
+ * @internal How a spliced binding constrains the whole expression, worst
+ * case, recorded on the AUTHORED root at build time.
+ *
+ * A spec's provenance normally answers for the whole tree, because the
+ * tree is the spec. A field binding breaks that: the reference is in the
+ * spec, the field it stands for is not, so an authored root can now have
+ * a code-composed (or undescribable) sub-expression hanging off it.
+ * {@link deviceSpec} reads this so the eligibility answer still covers
+ * everything the kernel would compute — computed once here rather than
+ * walked per call, since it is decided at the one moment the bindings are
+ * known.
+ */
+type SplicedProvenance = "derived" | "opaque";
+
+const SPLICED = new WeakMap<FieldSpec, SplicedProvenance>();
+
+/** @internal Record that `node`'s binding is the field described by `spec`. */
+export function attachParamSpec(node: FieldSpec, spec: FieldSpec): void {
+  PARAM_SPECS.set(node, spec);
+}
+
+/** @internal Record that `node`'s binding is a field with no spec at all. */
+export function attachOpaqueParam(node: FieldSpec): void {
+  PARAM_OPAQUE.add(node);
+}
+
+/**
+ * @internal The spec spliced in at this `param` node, or undefined — which
+ * means the node binds a literal (see {@link paramValue}), binds an
+ * undescribable field (see {@link opaqueParam}), or binds nothing.
+ */
+export function paramSpecOf(node: FieldSpec): FieldSpec | undefined {
+  return PARAM_SPECS.get(node);
+}
+
+/** @internal Was this `param` node bound to a field carrying no spec? */
+export function opaqueParam(node: FieldSpec): boolean {
+  return PARAM_OPAQUE.has(node);
+}
+
+/** @internal Record the worst provenance any binding spliced into `root`. */
+export function recordSplicedProvenance(root: FieldSpec, p: SplicedProvenance): void {
+  SPLICED.set(root, p);
+}
+
+/**
+ * @internal What a spec carries from ITS own spliced bindings, so the
+ * record composes when a spliced field was itself built with bindings.
+ *
+ * Without this the walk stops one level down: an authored root whose
+ * binding is authored but whose binding's binding is code-composed would
+ * read as fully authored, and the derived sub-expression would reach the
+ * device on a resolver that never advertised the flag.
+ */
+export function splicedProvenance(spec: FieldSpec): SplicedProvenance | undefined {
+  return SPLICED.get(spec);
+}
+
+/**
  * @internal The value each `param` spec NODE was bound to, held OUTSIDE
  * the node for exactly the reason {@link DERIVED_SPECS} and
  * {@link SPEC_DEPTH} are: `checkKeys` in `fieldJson.ts` rejects every key
@@ -234,6 +323,19 @@ export function attachAuthoredSpec(field: Field, spec: FieldSpec, depth: number)
 }
 
 /**
+ * @internal Put `spec` on `field` WITHOUT deciding its provenance: the
+ * spec object is already in (or out of) `DERIVED_SPECS` and already has a
+ * recorded depth, because it belongs to another field that this one
+ * delegates to. The two `attach*` functions above both assert a
+ * provenance, which is exactly what a carrier must not do — a copy of an
+ * authored field must not mark its spec derived, and a copy of a derived
+ * one must not promote it.
+ */
+export function carrySpec(field: Field, spec: FieldSpec): void {
+  (field as unknown as Record<symbol, unknown>)[FIELD_SPEC] = spec;
+}
+
+/**
  * @internal The field's spec without the defensive copy — for hot paths
  * (device eligibility, spec composition) that only read it. The returned
  * object is the field's own; treat it as immutable.
@@ -269,6 +371,19 @@ export function peekFieldSpec(field: Field): FieldSpec | undefined {
 export function deviceSpec(field: Field, acceptDerivedSpecs: boolean): FieldSpec | undefined {
   const spec = readSpec(field);
   if (spec === undefined) return undefined;
+  // A spliced binding is part of what the kernel would compute but not
+  // part of the spec object, so the root's own provenance does not answer
+  // for it. An undescribable one disqualifies outright — there is nothing
+  // to lower — and a code-composed one is admitted on exactly the flag a
+  // code-composed root is. Recorded only on the root a `fieldFromJson`
+  // call stamped: a constructor composing OVER such a field derives a new
+  // spec that carries no record, and then the compiler meets a `param`
+  // node it can neither read a value from nor lower, and declines with
+  // "param-bindings". Conservative on that path rather than silently
+  // wrong on it.
+  const spliced = SPLICED.get(spec);
+  if (spliced === "opaque") return undefined;
+  if (spliced === "derived" && !acceptDerivedSpecs) return undefined;
   if (acceptDerivedSpecs) return spec;
   return DERIVED_SPECS.has(spec) ? undefined : spec;
 }
@@ -287,7 +402,12 @@ export function deviceSpec(field: Field, acceptDerivedSpecs: boolean): FieldSpec
  * a derived spec is eligible and never reaches a fallback count.
  */
 export function specFallbackReason(field: Field): "no-spec" | "derived-spec" {
-  return readSpec(field) === undefined ? "no-spec" : "derived-spec";
+  const spec = readSpec(field);
+  if (spec === undefined) return "no-spec";
+  // A field spliced into a binding that cannot describe itself makes the
+  // whole expression undescribable, exactly as an opaque leaf does inside
+  // a derived tree — so it reports as the population it belongs to.
+  return SPLICED.get(spec) === "opaque" ? "no-spec" : "derived-spec";
 }
 
 /**

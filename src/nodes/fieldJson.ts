@@ -14,8 +14,9 @@
  *   element gives 0)
  * - `{ fn: "randomField", key?: 0 | "salt" }`
  * - `{ fn: "param", name: "amplitude" }` — the value bound to that name,
- *   substituted at build time as if the literal had been written (see
- *   {@link fieldFromJson}'s `bindings`)
+ *   substituted at build time as if the literal had been written; a
+ *   binding may also be a `Field`, and is then spliced in where the
+ *   reference stands (see {@link fieldFromJson}'s `bindings`)
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
  *   lt, le, gt, ge, eq, ne, dot, atan2 (2 args); abs, floor, length,
  *   normalize, sin, cos, tan, asin, acos, atan (1 arg); clamp, lerp,
@@ -77,9 +78,18 @@ import {
   type FieldSpec,
   MAX_SPEC_DEPTH,
   attachAuthoredSpec,
+  attachOpaqueParam,
+  attachParamSpec,
   attachParamValue,
   attachSpec,
+  carrySpec,
+  isDerivedSpec,
+  paramSpecOf,
   peekFieldSpec,
+  recordSplicedProvenance,
+  recordWithheld,
+  splicedProvenance,
+  withheldOver,
   withheldReason,
 } from "../fields/spec.js";
 import { NOISE_BASES, WORLEY_OUTPUTS } from "../noise/bases.js";
@@ -284,6 +294,46 @@ register("fraction", [], `{ fn: "fraction" }`, () =>
 let currentBindings: FieldBindings | undefined;
 
 /**
+ * A private stand-in for a field bound to a `param` name, for exactly the
+ * reason {@link detachedLeaf} makes one for a shared singleton: this call
+ * ends by STAMPING its authored spec on whatever it built, and when the
+ * whole spec is one bare `{fn: "param"}` the thing it built is the
+ * caller's own field. Handing it back would overwrite that field's spec
+ * with the REFERENCE — so `fieldToJson` on the caller's field would
+ * return `{fn: "param", name}`, a spec that reloads as an unbound param
+ * and refuses to evaluate. The value a caller holds must not be edited by
+ * being read.
+ *
+ * Indistinguishable in everything the library keys on: same `key` (so the
+ * composed key is the same string either way), same `tupleSize`, the same
+ * spec object carried across unchanged (so composition structure-shares
+ * it and its provenance is untouched), and evaluation delegates through
+ * `evaluateField`, which memoizes per context — so several references to
+ * one name share the bound field's column rather than recomputing it.
+ */
+/**
+ * The value a bound field stands for when its whole spec is one
+ * `constant`, or undefined when it is a real expression. Copied for the
+ * same reason a tuple binding is: the record must be as immutable as the
+ * key computed from it.
+ */
+function constantSpecValue(spec: FieldSpec): number | readonly number[] | undefined {
+  if (spec.fn !== "constant") return undefined;
+  const v = spec.value;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (isNumberArray(v)) return [...v];
+  return undefined;
+}
+
+function detachedBinding(bound: Field): Field {
+  const copy = makeField(bound.key, bound.tupleSize, (ctx) => evaluateField(bound, ctx));
+  const spec = peekFieldSpec(bound);
+  if (spec === undefined) recordWithheld(copy, withheldOver(bound));
+  else carrySpec(copy, spec);
+  return copy;
+}
+
+/**
  * The refusal an UNBOUND `param` evaluates to. Buildable but not
  * evaluable is the point: the structural key and the WGSL kernel need
  * only the name (the GPU lowers a param to a uniform slot, so it compiles
@@ -295,7 +345,7 @@ function unboundParam(name: string): Field {
   return makeField(`param(${quoted})`, undefined, () => {
     throw new FieldJsonError(
       `param ${quoted}: nothing bound this name, so the field has no value to evaluate. ` +
-        `Build it with fieldFromJson(spec, { ${JSON.stringify(name)}: <number | number[]> }); ` +
+        `Build it with fieldFromJson(spec, { ${JSON.stringify(name)}: <number | number[] | Field> }); ` +
         "an unbound param is buildable — its key and its GPU kernel need only the name — but never evaluable",
     );
   });
@@ -308,15 +358,31 @@ function unboundParam(name: string): Field {
 // what `stableValueHash` hashes a field as, so a value arriving later
 // (an `EvalContext` variable, say) would never move a node's param hash
 // and the node would serve stale bytes for the new value.
+//
+// A FIELD binds the same way, one level up: the bound field takes the
+// reference's place, so the expression comes out as if it had been
+// written around it. Its key composes into this field's key exactly as a
+// literal's value does, so invalidation stays as exact for a field
+// binding as for a number — and what stands in is a private copy that
+// delegates to it (see `detachedBinding`), so several references to one
+// name still share its per-context column.
 register("param", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) => {
   const name = spec.name;
   if (typeof name !== "string" || name === "") {
     fail(`${path}.name`, "param requires a non-empty string name");
   }
   if (currentBindings === undefined || !Object.hasOwn(currentBindings, name)) {
+    // Nothing bound in THIS call, but the node may still carry the spec
+    // of a field a previous one spliced here (see `fieldFromJson`). That
+    // is the value-free rebuild `specKernelKey` performs to key a kernel:
+    // a spliced field decides the emitted WGSL, so it must be rebuilt,
+    // where a spliced literal must not.
+    const bound = paramSpecOf(spec as unknown as FieldSpec);
+    if (bound !== undefined) return buildSpec(bound as Record<string, unknown>, `${path}<${name}>`);
     return unboundParam(name);
   }
   const value = currentBindings[name];
+  if (isField(value)) return detachedBinding(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       fail(`${path}.name`, `param ${JSON.stringify(name)} is bound to ${String(value)}; a binding must be finite`);
@@ -327,7 +393,8 @@ register("param", ["name"], `{ fn: "param", name: "amplitude" }`, (spec, path) =
   fail(
     `${path}.name`,
     `param ${JSON.stringify(name)} is bound to ${describeValue(value)}; a binding must be a finite ` +
-      "number (which binds as a scalar) or a non-empty array of finite numbers (which binds as the matching vector)",
+      "number (which binds as a scalar), a non-empty array of finite numbers (which binds as the matching " +
+      "vector), or a Field (which is spliced in where the reference stands)",
   );
 });
 
@@ -579,8 +646,18 @@ export function listFieldFnInfos(): FieldFnInfo[] {
  * as a scalar and an array as the matching vector — in both cases
  * exactly what writing that literal in the same position would have
  * produced.
+ *
+ * A `Field` binds too, and is the one binding that is not a literal: it
+ * is SPLICED into the expression where the reference stands, so the
+ * result is the expression the author would have written around it. That
+ * is what lets a named value VARY per element — a noise driving a
+ * primitive's knob — where a number is necessarily uniform over the
+ * cook. Everything else follows unchanged: the composed key carries the
+ * bound field's key, so a rebind moves the reading node's memo key, and
+ * the attached spec still round-trips the reference rather than the
+ * field it stood for.
  */
-export type FieldBindings = Readonly<Record<string, number | readonly number[]>>;
+export type FieldBindings = Readonly<Record<string, number | readonly number[] | Field>>;
 
 /**
  * Visit every spec node in a tree, once each. The field-valued positions
@@ -650,7 +727,12 @@ function withBindingContext(err: unknown, spec: FieldSpec, bindings: FieldBindin
   const shown = bound
     .map((n) => {
       const v = bindings[n];
-      return `${JSON.stringify(n)} = ${typeof v === "number" ? "a scalar" : `a ${v.length}-tuple`}`;
+      const shape = isField(v)
+        ? `a Field of tuple size ${v.tupleSize ?? "unknown until it lands on a domain"}`
+        : typeof v === "number"
+          ? "a scalar"
+          : `a ${v.length}-tuple`;
+      return `${JSON.stringify(n)} = ${shape}`;
     })
     .join(", ");
   const wrapped = new FieldJsonError(
@@ -675,10 +757,14 @@ function withBindingContext(err: unknown, spec: FieldSpec, bindings: FieldBindin
  * ({@link paramNamesOf} lists what a spec needs). Binding SUBSTITUTES:
  * the field comes out as if the literal had been written, so `Field.key`
  * carries the value and a rebind moves the cook's memo key exactly the
- * way editing the literal would. The spec attached to the field keeps the
- * reference, so `fieldToJson` round-trips `{fn: "param", name}` rather
- * than the value it stood for — and a name nothing bound builds a field
- * that refuses to evaluate rather than one that quietly reads zero.
+ * way editing the literal would. A `Field` binding substitutes the same
+ * way one level up — the field itself stands where the reference did —
+ * so a named value can vary per element instead of only over the cook,
+ * and the composed key carries the bound field's key. The spec attached
+ * to the field keeps the reference either way, so `fieldToJson`
+ * round-trips `{fn: "param", name}` rather than the value or the field it
+ * stood for — and a name nothing bound builds a field that refuses to
+ * evaluate rather than one that quietly reads zero.
  */
 export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field {
   if (!isPlainObject(spec)) {
@@ -712,17 +798,69 @@ export function fieldFromJson(spec: FieldSpec, bindings?: FieldBindings): Field 
     // planner) recovers the arity it must lower and the value it must
     // write into the uniform. See `attachParamValue` for why they cannot
     // live inside the node.
+    //
+    // Worst provenance any SPLICED field contributes, recorded on the
+    // root so `deviceSpec` can answer for the whole expression rather
+    // than for the spec object alone. Opaque outranks derived: a tree
+    // with something undescribable in it is undescribable however the
+    // rest was written.
+    let spliced: "derived" | "opaque" | undefined;
     eachParam(authored, (node, name) => {
       if (!Object.hasOwn(bindings, name)) return;
       const value = bindings[name];
+      const target = node as unknown as FieldSpec;
+      if (isField(value)) {
+        // A FIELD rides the same channel as a value and for the same
+        // reason, but records the field's SPEC rather than its numbers:
+        // what the compiler must recover here is the expression to
+        // splice, not a payload to write into a uniform. The spec object
+        // is the field's own and is immutable by contract, so it is
+        // recorded as-is where a mutable tuple is copied.
+        const bound = peekFieldSpec(value);
+        if (bound === undefined) {
+          attachOpaqueParam(target);
+          spliced = "opaque";
+          return;
+        }
+        // A field that IS a constant binds as the constant. The built
+        // field is the same object and the same key either way, so this
+        // changes no byte on the CPU — but on the device it is the
+        // difference between a uniform slot every value shares and a
+        // kernel specialized per value. That case is not hypothetical: a
+        // panel toggling a knob to "field" mode seeds the editor with
+        // `{fn: "constant", value: <default>}`, so a slider dragged in
+        // that mode would compile a pipeline per tick into a Map with no
+        // bound. It also carries `-0` and subnormals exactly, where a
+        // baked literal may be flushed.
+        const literal = constantSpecValue(bound);
+        if (literal !== undefined) {
+          attachParamValue(target, literal);
+          return;
+        }
+        attachParamSpec(target, bound);
+        // Transitive: a bound field may itself have been built with
+        // bindings, and what IT spliced is just as much part of what this
+        // expression computes. Reading the record back is what keeps the
+        // walk from stopping one level down.
+        const inherited = splicedProvenance(bound);
+        if (inherited === "opaque") {
+          spliced = "opaque";
+          return;
+        }
+        if ((isDerivedSpec(bound) || inherited === "derived") && spliced === undefined) {
+          spliced = "derived";
+        }
+        return;
+      }
       // Copied, never referenced: the field's key was fixed from this
       // value at construction, so a caller who later mutates the array
       // they passed would leave the recorded arity and the key describing
       // different numbers — and the device would then write bytes the CPU
       // never produced. The copy is what makes the record as immutable as
       // the key it belongs to.
-      attachParamValue(node as unknown as FieldSpec, typeof value === "number" ? value : [...value]);
+      attachParamValue(target, typeof value === "number" ? value : [...value]);
     });
+    if (spliced !== undefined) recordSplicedProvenance(authored, spliced);
   }
   attachAuthoredSpec(field, authored, deepestLevel);
   return field;

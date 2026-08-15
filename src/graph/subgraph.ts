@@ -1,4 +1,4 @@
-import { isField } from "../fields/index.js";
+import { type Field, isField } from "../fields/index.js";
 import { type FieldSpec, isDerivedSpec, peekFieldSpec } from "../fields/spec.js";
 // The field grammar's parser, reached by MODULE and not through
 // `../nodes/index.js`. It imports only `../fields` and `../noise`, so
@@ -511,8 +511,16 @@ const TARGETLESS_PARAM_TYPES: ReadonlySet<ParamType> = new Set<ParamType>(["f32"
  * Finite throughout, because that is what the grammar's literals are: a
  * NaN reaching a spec would fail one layer in, where the message can no
  * longer say which exposed param it came from.
+ *
+ * A `Field` binds as itself. It is the one binding that is not a literal:
+ * `fieldFromJson` splices it into the expression where the reference
+ * stands, so the value can vary per element instead of only per cook —
+ * which is what a knob driving a noise-shaped amount needs, and what the
+ * per-point attribute column this replaces used to buy at the cost of
+ * three nodes and a storage buffer.
  */
-function bindingValue(value: unknown): number | readonly number[] | undefined {
+function bindingValue(value: unknown): number | readonly number[] | Field | undefined {
+  if (isField(value)) return value;
   const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
   if (finite(value)) return value;
   if (Array.isArray(value) && value.length > 0 && value.every(finite)) {
@@ -625,19 +633,19 @@ function fieldNotAcceptedMessage(exp: ExposedParam): string {
 }
 
 /**
- * Names the exposed param, the body slots that read it, and the way out.
+ * Names the exposed param, the body slots that read it, and the way out,
+ * for a Field handed to a name whose SCHEMA does not admit one.
  *
- * A read name is SUBSTITUTED into the expression before the body cooks —
- * that is what puts the value in the field's key and so in the body node's
- * memo key — and a Field is not something a literal position can hold: it
- * is a function of the element the expression lands on, decided one layer
- * further in than the substitution happens.
+ * The read route itself can carry a Field — it is spliced into the
+ * expression where the reference stands — so the refusal is about the
+ * declaration rather than the mechanism: a schema that says "plain values
+ * only" is what a saved graph and a UI panel both act on, and honouring a
+ * Field it does not advertise would make the two disagree.
  */
 function fieldNotBindableMessage(exp: ExposedParam, readers: string): string {
   return (
-    `subgraph exposed param "${exp.name}" holds a Field, but the body's field expression at ${readers} reads it by name: ` +
-    "a read value is substituted into that expression as a literal before the body cooks, and a Field is not a literal — it is a function of the element it lands on. " +
-    `Set a plain ${exp.schema.type} value, or write the varying part into the body's own expression (reading an attribute) instead of passing it in`
+    `subgraph exposed param "${exp.name}" holds a Field, and the body's field expression at ${readers} reads it by name, but its schema does not accept one: ` +
+    `set a plain ${exp.schema.type} value, or declare the param field-capable — build it with resolveExposedParam, which derives the capability (a param with no targets is always field-capable, since a Field splices into the expression exactly where a number would)`
   );
 }
 
@@ -915,12 +923,15 @@ export function prepareWrapper(
             "give it an inner target to derive that type from, or declare it as one of those",
         );
       }
-      if (exp.schema.acceptsField === true) {
-        throw new GraphValidationError(
-          `exposed param "${exp.name}" has no targets and claims to accept a Field; its only route into the body is substitution into a field expression as a LITERAL, and a Field is not a literal — ` +
-            "drop the capability, or give it a field-capable inner target",
-        );
-      }
+      // A targetless param IS field-capable, and there is nothing here to
+      // check: its one route into the body is substitution into a field
+      // expression, and a Field substitutes there as readily as a number
+      // — it is spliced in where the reference stands rather than written
+      // as a literal. The capability is derived from that fact rather
+      // than authored (`resolveExposedParam`), so a declaration reaching
+      // this layer without it merely under-claims: it cooks, refusing
+      // Fields, and `serializeGraph` refuses to SAVE it, naming the
+      // resolver that would have derived it.
     }
     if (readByBody && !BINDABLE_PARAM_TYPES.has(exp.schema.type)) {
       throw new GraphValidationError(
@@ -1009,15 +1020,18 @@ export function checkExposedValues(
     const value = params[exp.name];
     const readByBody = scan.names.has(exp.name);
     if (isField(value)) {
-      // Checked BEFORE the schema's own field capability, because a name a
-      // field expression reads refuses a Field however capable the targets
-      // are — the two routes disagree, and the one that cannot carry it
-      // decides.
-      if (readByBody) {
-        throw new GraphValidationError(fieldNotBindableMessage(exp, readersOf(scan, exp.name)));
-      }
+      // Both routes carry a Field now — `targets` write it into inner
+      // slots that accept one, the read route splices it into the body's
+      // expression — so what is left to check is the SCHEMA, which is
+      // what a saved graph, a panel and an agent all read. The message
+      // differs by route because the fix does: a target list that refuses
+      // fields is a different problem from a declaration that under-claims.
       if (exp.schema.acceptsField !== true) {
-        throw new GraphValidationError(fieldNotAcceptedMessage(exp));
+        throw new GraphValidationError(
+          readByBody && exp.targets.length === 0
+            ? fieldNotBindableMessage(exp, readersOf(scan, exp.name))
+            : fieldNotAcceptedMessage(exp),
+        );
       }
       continue;
     }
@@ -1030,7 +1044,7 @@ export function checkExposedValues(
     if (readByBody && bindingValue(value) === undefined) {
       throw new GraphValidationError(
         `subgraph exposed param "${exp.name}" holds ${JSON.stringify(value) ?? String(value)}, which cannot be substituted into the field expression at ${readersOf(scan, exp.name)} that reads it; ` +
-          "a field expression takes a number or a non-empty numeric tuple",
+          "a field expression takes a number, a non-empty numeric tuple, or a Field",
       );
     }
   }
@@ -1046,6 +1060,13 @@ export function checkExposedValues(
  * built with the value in it carries that value in `Field.key`, which is
  * what the executor hashes, so substituting at build time is the only
  * spelling under which a changed value moves a body node's memo key.
+ *
+ * A value that is itself a `Field` binds through the same rebuild, and
+ * that is the whole of what makes a bound name able to VARY per element:
+ * `fieldFromJson` splices the bound field in where the reference stands,
+ * so the expression comes out as the author would have written it around
+ * a noise. Its key composes in exactly as a number's value does, so
+ * invalidation is no less exact for it.
  *
  * Written here and only here. Wrap time is too early (the values do not
  * exist yet) and setParam time is wrong twice over: a loud write would
@@ -1128,7 +1149,7 @@ export async function withExposedParams<T>(
         // this function correct when called on its own.
         if (bound === undefined) {
           throw new GraphValidationError(
-            `subgraph exposed param "${exp.name}" cannot be substituted into the field expression at ${readersOf(scan, exp.name)} that reads it; a field expression takes a number or a non-empty numeric tuple`,
+            `subgraph exposed param "${exp.name}" cannot be substituted into the field expression at ${readersOf(scan, exp.name)} that reads it; a field expression takes a number, a non-empty numeric tuple, or a Field`,
           );
         }
         bindings[exp.name] = bound;

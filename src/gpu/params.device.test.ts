@@ -49,6 +49,37 @@ interface ScenarioOutput {
     rebindChangedBytes: boolean;
   };
   chunked: { resolved: boolean; bitExact: boolean };
+  spliced: Array<{
+    name: string;
+    resolved: boolean;
+    bitExact: boolean;
+    cpuExact: boolean;
+    maxRelDiff: number;
+    equalsWritten: boolean;
+  }>;
+  splicedFused: {
+    residentRuns: number;
+    fusedNodes: number;
+    fallbacks: Record<string, number>;
+    scaledBitExact: boolean;
+    flatBitExact: boolean;
+  };
+  sameExpressionCaches: {
+    distinctFieldKeys: number;
+    bitExact: boolean;
+    kernelCacheSize: number;
+    pipelineCacheSize: number;
+    pipelinesCompiled: number;
+  };
+  constantSpecCaches: {
+    distinctFieldKeys: number;
+    bitExact: boolean;
+    kernelCacheSize: number;
+    pipelineCacheSize: number;
+    pipelinesCompiled: number;
+  };
+  distinctExpressionCaches: { kernelCacheSize: number; pipelineCacheSize: number };
+  opaque: { declined: boolean; fallbacks: Record<string, number>; cpuCooked: boolean };
   unbound: { declined: boolean; fallbacks: Record<string, number>; cpuThrew: boolean };
 }
 
@@ -188,5 +219,82 @@ describe.skipIf(testDevice === null)(deviceSuiteName("param uniform slots"), () 
     // And the CPU it falls back to is what raises the actionable error —
     // which is the whole reason declining is the right move.
     expect(u.cpuThrew).toBe(true);
+  });
+
+  it("a FIELD binding compiles in place, bit-exactly and identically to writing it out", () => {
+    // The other kind of binding, measured rather than argued from the
+    // value case: it lowers the opposite way (an expression compiled in
+    // place, no uniform slot), so the parity claim has to be re-made.
+    expect(scenario.spliced.length).toBeGreaterThanOrEqual(4);
+    const declined = scenario.spliced.filter((c) => !c.resolved).map((c) => c.name);
+    expect(declined, declined.join(", ")).toEqual([]);
+    // Identical to the hand-written expression for EVERY case, including
+    // the one whose own ops round: that is the claim about the splice,
+    // and it is asked separately from CPU parity so the pre-existing f32
+    // division difference cannot mask it (or be mistaken for it).
+    const notWritten = scenario.spliced.filter((c) => !c.equalsWritten).map((c) => c.name);
+    expect(notWritten, `differ from the hand-written expression: ${notWritten.join(", ")}`).toEqual([]);
+    const wrong = scenario.spliced.filter((c) => c.cpuExact && !c.bitExact).map((c) => c.name);
+    expect(wrong, `differ from the CPU: ${wrong.join(", ")}`).toEqual([]);
+    // Where the bound field divides, a relative bound instead — a splice
+    // that carried the wrong expression would be off by orders of
+    // magnitude, not by a ULP.
+    for (const c of scenario.spliced) {
+      if (!c.cpuExact) expect(c.maxRelDiff, c.name).toBeLessThan(1e-6);
+    }
+  });
+
+  it("a fused run carries a spliced binding too, bit-exactly", () => {
+    // The run planner compiles a field-valued node param through its own
+    // path, so the per-field result is no evidence for this one — and a
+    // run that quietly declined would be a residency loss with nothing
+    // failing to show it.
+    const f = scenario.splicedFused;
+    expect(f.fallbacks).toEqual({});
+    expect(f.residentRuns).toBe(1);
+    expect(f.fusedNodes).toBe(2);
+    expect(f.scaledBitExact).toBe(true);
+    expect(f.flatBitExact).toBe(true);
+  });
+
+  it("rebinding one field expression does not grow either cache", () => {
+    // The leak the two-keys design exists to prevent, arriving through
+    // the other door: 25 rebinds of an EQUAL expression are one kernel
+    // and one pipeline. (Two DIFFERENT expressions are two kernels by
+    // necessity — they are different WGSL — which the next assertion
+    // pins so this one cannot be read as a promise it does not make.)
+    const s = scenario.sameExpressionCaches;
+    expect(s.bitExact).toBe(true);
+    expect(s.distinctFieldKeys).toBe(1);
+    expect(s.kernelCacheSize).toBe(1);
+    expect(s.pipelineCacheSize).toBe(1);
+    expect(s.pipelinesCompiled).toBe(1);
+    expect(scenario.distinctExpressionCaches.kernelCacheSize).toBe(3);
+    expect(scenario.distinctExpressionCaches.pipelineCacheSize).toBe(3);
+  });
+
+  it("a constant SPEC per tick still compiles one kernel, like the number it is", () => {
+    // The realistic leak, and the one a panel would cause: its field
+    // editor seeds `{fn:"constant",value:…}`, so a slider dragged in
+    // field mode sends 40 distinct SPECS. They bind through the value
+    // channel — 40 field keys, one kernel, one pipeline, the uniform
+    // rebound each time — which is what a number does and what these
+    // knobs regaining the capability must not change.
+    const c = scenario.constantSpecCaches;
+    expect(c.bitExact).toBe(true);
+    expect(c.distinctFieldKeys).toBe(40);
+    expect(c.kernelCacheSize).toBe(1);
+    expect(c.pipelineCacheSize).toBe(1);
+    expect(c.pipelinesCompiled).toBe(1);
+  });
+
+  it("a binding nothing can describe declines, and still cooks on the CPU", () => {
+    // A `makeField` closure spliced into an authored spec makes the whole
+    // expression undescribable, so it reports as the population it joined
+    // rather than claiming a spec it does not have.
+    const o = scenario.opaque;
+    expect(o.declined).toBe(true);
+    expect(o.fallbacks).toEqual({ "no-spec": 1 });
+    expect(o.cpuCooked).toBe(true);
   });
 });

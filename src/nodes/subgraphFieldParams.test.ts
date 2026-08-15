@@ -88,6 +88,9 @@ describe("a targetless exposed param feeding a body's field expression", () => {
           type: "f32",
           default: 1,
           min: 0,
+          // Derived rather than authored: a targetless param is read by
+          // the body's field expressions, and a Field splices into one.
+          acceptsField: true,
           description: "Slope of the index ramp written into the amp attribute.",
         },
         targets: [],
@@ -122,6 +125,27 @@ describe("a targetless exposed param feeding a body's field expression", () => {
     expect(amps((await cook(reloaded)).outputs.out)).toEqual([0, 2, 4]);
     // A fixed point: saving what was loaded gives the same bytes.
     expect(serializeGraph(reloaded)).toEqual(json);
+  });
+
+  it("round-trips a FIELD bound to a targetless knob, as a spec on the instance", async () => {
+    // The capability the knob advertises has to survive a save: the
+    // VALUE is a field expression on the instance, the body still keeps
+    // the reference, and reloading cooks the same numbers.
+    const def = rampDef(rampBody());
+    const graph = new Graph(7);
+    const bound: FieldSpec = { fn: "add", args: [{ fn: "fraction" }, 1] };
+    graph.output(graph.add(def, { amp: fieldFromJson(bound) }, "sub"), "out", "out");
+
+    const json = serializeGraph(graph);
+    expect(json.nodes[0].params).toEqual({ amp: bound });
+    const body = json.nodes[0].subgraph?.graph.nodes.find((n: SerializedNode) => n.id === "sa");
+    expect(body?.params.value).toEqual(RAMP);
+
+    const before = amps((await cook(graph)).outputs.out);
+    // index * (fraction + 1) over three points: 0, 1.5, 4.
+    expect(before).toEqual([0, 1.5, 4]);
+    expect(amps((await cook(deserializeGraph(json))).outputs.out)).toEqual(before);
+    expect(serializeGraph(deserializeGraph(json))).toEqual(json);
   });
 
   it("hashes stably as a registered recipe, and cooks through a pinned ref", async () => {
@@ -226,6 +250,41 @@ describe("a targetless exposed param under forEach", () => {
     // Exactly twice, component for component: one binding, applied to
     // every iteration, with the same randomness underneath.
     expect(twos).toEqual(ones.map((v) => v * 2));
+  });
+
+  it("binds a FIELD once for the whole loop, resolved per iteration", async () => {
+    // The loop wraps its WHOLE run in one `withExposedParams`, so a
+    // spliced field is installed once — but it RESOLVES against each
+    // iteration's own geometry, which is what makes a per-element binding
+    // mean anything under a loop. Each carrier holds one point at a
+    // different x, so a field over position gives each iteration its own
+    // scale from one binding.
+    const def = loopDef(noisyBody());
+    const graph = new Graph(7);
+    const src = graph.add(dataInput, { items: carriers(3) }, "src");
+    const loop = graph.add(def, { amp: 1 }, "loop");
+    graph.connect(src, "out", loop, "each");
+    graph.output(loop, "out", "out");
+    const ones = amps((await cook(graph)).outputs.out);
+
+    // `x + 1` over carriers at x = 0, 1, 2: scales of 1, 2, 3.
+    graph.setParam(
+      loop,
+      "amp",
+      fieldFromJson({
+        fn: "add",
+        args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }, 1],
+      }),
+    );
+    const scaled = amps((await cook(graph)).outputs.out);
+    // `fround` because a field column is f32: the expectation is computed
+    // in f64 here and stored in f32 there, which is the storage type and
+    // not the binding.
+    expect(scaled).toEqual(ones.map((v, i) => Math.fround(v * (i + 1))));
+    // The body is left holding the reference, exactly as after a scalar.
+    expect(serializeGraph(graph).nodes.find((n: SerializedNode) => n.id === "loop")?.params).toEqual({
+      amp: { fn: "add", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }, 1] },
+    });
   });
 
   it("round-trips as a forEach payload and cooks identically", async () => {

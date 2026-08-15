@@ -23,7 +23,7 @@
  * inside float arithmetic (f32 mantissa); as the kernel root it is
  * written as raw u32 and exact everywhere.
  */
-import { paramValue } from "../fields/spec.js";
+import { opaqueParam, paramSpecOf, paramValue } from "../fields/spec.js";
 import type { FieldSpec, FieldSpecArg } from "../nodes/fieldJson.js";
 import { fieldFromJson } from "../nodes/fieldJson.js";
 import { hashCombine, hashString } from "../random/hash.js";
@@ -345,8 +345,24 @@ HANDLERS.set("position", (_spec, path, ctx) => {
 // raises the actionable refusal), but it must still COMPILE, because the
 // key and the kernel are exactly what a compiler needs from an unbound
 // reference.
-HANDLERS.set("param", (spec, _path, ctx) => {
-  const { slot, arity } = ctx.paramSlot(spec.name as string);
+//
+// A FIELD binding lowers the other way, and has to: it is not one value
+// but an expression, so it is COMPILED IN PLACE, exactly as if the author
+// had written it here. That costs no uniform slot and no storage buffer
+// of its own — whatever attributes it reads are already in the pre-pass,
+// which walks into it (`collectAttrNames`) — and it fuses into the same
+// kernel rather than adding a dispatch, which is the improvement over the
+// per-point attribute column this route replaces. The value-free kernel
+// key rebuilds it for the same reason (`specKernelKey`): a spliced field
+// decides the emitted text, so it belongs to the kernel's identity, where
+// a spliced number deliberately does not.
+HANDLERS.set("param", (spec, path, ctx) => {
+  const name = spec.name as string;
+  const bound = paramSpecOf(spec as unknown as FieldSpec);
+  if (bound !== undefined) {
+    return compileNode(bound as unknown as Record<string, unknown>, `${path}<${name}>`, ctx);
+  }
+  const { slot, arity } = ctx.paramSlot(name);
   const read = (k: number): string => `params.consts[${slot}].${XYZW[k]}`;
   if (arity === 1) return ctx.emit(read(0), 1);
   return ctx.emit(`vec${arity}<f32>(${Array.from({ length: arity }, (_v, k) => read(k)).join(", ")})`, arity);
@@ -756,15 +772,26 @@ const NOISE_LIKE = new Set(["valueNoise", "perlinNoise", "simplexNoise", "worley
 /**
  * Collect every attribute name the spec reads (position/noise imply "P").
  *
- * `param` is deliberately absent, and inert here by construction: it has
- * no `args` and no `opts`, so the walk falls through it and adds nothing.
+ * A `param` bound to a VALUE is inert here by construction: it has no
+ * `args` and no `opts`, so the walk falls through it and adds nothing.
  * That is the saving — a named value costs a uniform slot and NOT one of
  * the seven usable storage-buffer slots, where carrying the same value in
  * an attribute column spends one per value.
+ *
+ * A `param` bound to a FIELD is not inert: the expression spliced there
+ * is compiled into this kernel, so whatever it reads is read by this
+ * kernel and has to be bound. Missing it would compile a body referencing
+ * an unbound attribute — the one failure this pre-pass exists to make
+ * impossible.
  */
 function collectAttrNames(v: unknown, out: Set<string>): void {
   if (!isPlainObject(v)) return; // numbers and number arrays read nothing
   const fn = v.fn;
+  if (fn === "param") {
+    const bound = paramSpecOf(v as unknown as FieldSpec);
+    if (bound !== undefined) collectAttrNames(bound, out);
+    return;
+  }
   if (fn === "attribute") {
     if (typeof v.name === "string") out.add(v.name);
     return;
@@ -823,10 +850,22 @@ function bindingArity(value: number | readonly number[]): number {
   return typeof value === "number" ? 1 : value.length;
 }
 
-/** Walk `args` and `opts.position`, the two field-valued positions. */
+/**
+ * Walk `args` and `opts.position`, the two field-valued positions — plus
+ * the expression spliced into a field-bound `param`, which is a third
+ * one that lives beside the spec rather than inside it. It is walked for
+ * the same reason the compiler descends into it: what it references is
+ * referenced by the kernel, so a `param` nested inside a spliced field
+ * must claim its slot and write its value like any other.
+ */
 function eachSpecNode(v: unknown, visit: (node: Record<string, unknown>) => void): void {
   if (!isPlainObject(v)) return;
   visit(v);
+  if (v.fn === "param") {
+    const bound = paramSpecOf(v as unknown as FieldSpec);
+    if (bound !== undefined) eachSpecNode(bound, visit);
+    return;
+  }
   const args = v.args;
   if (Array.isArray(args)) {
     for (const a of args) eachSpecNode(a, visit);
@@ -873,6 +912,24 @@ function computeParamPlan(root: FieldSpec): ParamPlan {
   eachSpecNode(root, (node) => {
     if (node.fn !== "param" || typeof node.name !== "string" || node.name === "") return;
     const name = node.name;
+    // A name bound to a FIELD claims no slot: the expression is compiled
+    // in place, so there is nothing for a uniform to carry.
+    if (paramSpecOf(node as unknown as FieldSpec) !== undefined) return;
+    // Bound to a field that cannot describe itself. `deviceSpec` already
+    // declines an expression whose ROOT records one, so this catches the
+    // other door: a spec COMPOSED over such an expression carries no
+    // record of its own, and admitting it here would lower the reference
+    // as an unbound uniform slot — a zero the CPU never produced, held
+    // back today only by `paramConstValues` refusing to invent a payload.
+    // Refused where the fact is known instead of relied on downstream.
+    if (opaqueParam(node as unknown as FieldSpec)) {
+      throw new GpuCompileError(
+        `param ${JSON.stringify(name)} is bound to a Field that carries no spec (a makeField ` +
+          "closure, or something composed over one), so there is nothing to compile in its place; " +
+          "this expression evaluates on the CPU — build the bound field with the grammar " +
+          "constructors or fieldFromJson if it should lower",
+      );
+    }
     seen.add(name);
     const value = paramValue(node as unknown as FieldSpec);
     if (value === undefined) return;
@@ -894,6 +951,16 @@ function computeParamPlan(root: FieldSpec): ParamPlan {
     }
     bound.set(name, arity);
   });
+  // One name, two lowerings, in one expression is LEGAL and lowers
+  // correctly. It is reachable by composing separately built fields — a
+  // knob bound to a field that was itself built with a binding of the
+  // same name, which the shipped vocabulary invites by reusing `amount`,
+  // `frequency` and `variant` across primitives — and the two references
+  // are then genuinely different values in different scopes. Nothing has
+  // to be reconciled: the lowering is decided PER NODE (a spliced node
+  // compiles in place and never asks for a slot; a value-bound node
+  // reads the slot this plan allocates), so the name in `slots` serves
+  // exactly the references that need it.
   if (seen.size === 0) return EMPTY_PARAMS;
   const names = [...seen].sort();
   if (names.length > MAX_FIELD_CONST_SLOTS) {
@@ -942,6 +1009,16 @@ function paramSig(plan: ParamPlan): string {
  * exactly the key that shipped, and only a spec that actually names a
  * param pays to rebuild itself unbound.
  *
+ * A FIELD binding sits on the other side of that line, and has to: the
+ * expression spliced in is compiled in place, so it decides the emitted
+ * text and belongs to the kernel's identity. It gets there by the same
+ * two routes — the rebuild below descends into it (`fieldFromJson`
+ * consults the spliced spec when nothing is bound), and the shortcut
+ * above returns `fieldKey`, which carries the bound field's key by
+ * composition. So two values of a number share a kernel while two
+ * different bound EXPRESSIONS do not, which is exactly the WGSL they
+ * generate.
+ *
  * Memoized on the spec object, which callers treat as immutable
  * (`peekFieldSpec`'s contract); a different value means a different
  * `fieldFromJson` call and so a different spec object, whose key then
@@ -982,6 +1059,9 @@ function sameComponents(a: readonly number[], b: readonly number[]): boolean {
  * from CPU bytes: a reference nothing bound (the CPU field throws, so the
  * device must decline and let it), and two references to one name bound
  * to different values in one expression, which one slot cannot represent.
+ *
+ * A reference bound to a FIELD is skipped: it holds no slot to fill, the
+ * expression having been compiled in place.
  */
 export function paramConstValues(spec: FieldSpecArg, kernel: CompiledFieldKernel): ParamConstValues {
   if (kernel.constSlots === 0) return { values: [] };
@@ -990,6 +1070,7 @@ export function paramConstValues(spec: FieldSpecArg, kernel: CompiledFieldKernel
   eachSpecNode(spec, (node) => {
     if (node.fn !== "param" || typeof node.name !== "string" || node.name === "") return;
     const name = node.name;
+    if (paramSpecOf(node as unknown as FieldSpec) !== undefined) return;
     const value = paramValue(node as unknown as FieldSpec);
     if (value === undefined) {
       problem ??= `param ${JSON.stringify(name)} has no bound value`;

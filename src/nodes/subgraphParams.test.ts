@@ -202,17 +202,15 @@ describe("resolveExposedParam — bad targets", () => {
     }
   });
 
-  it("rejects a targetless declaration asserting field capability", () => {
+  it("makes a targetless param field-capable, asserted or not", () => {
     const inner = new Graph();
-    expect(() =>
-      resolveExposedParam(inner, {
-        name: "amp",
-        targets: [],
-        description: "Anything.",
-        default: 1,
-        acceptsField: true,
-      }),
-    ).toThrow(/exposed param "amp": declares acceptsField: true and no targets/);
+    const decl = { name: "amp", targets: [], description: "Anything.", default: 1 } as const;
+    // Derived, not authored: there is no target to borrow the capability
+    // from, and no targetless param that refuses a Field — a binding is
+    // spliced into the expression that reads it, where a Field stands
+    // exactly as well as a number. So the assertion can only agree.
+    expect(resolveExposedParam(inner, decl).schema.acceptsField).toBe(true);
+    expect(resolveExposedParam(inner, { ...decl, acceptsField: true }).schema.acceptsField).toBe(true);
   });
 
   it("derives a targetless schema from the default's shape", () => {
@@ -224,6 +222,7 @@ describe("resolveExposedParam — bad targets", () => {
       type: "f32",
       default: 1.5,
       description: "Anything.",
+      acceptsField: true,
       min: 0,
       max: 4,
     });
@@ -231,8 +230,9 @@ describe("resolveExposedParam — bad targets", () => {
     expect(resolveExposedParam(inner, { ...decl, name: "o", default: [1, 2, 3, 4] }).schema.type).toBe(
       "vec4",
     );
-    // Never field-capable: the value is substituted as a literal.
-    expect(scalar.schema.acceptsField).toBeUndefined();
+    // Always field-capable: the value is substituted into the expression
+    // that reads it, and a Field splices in there as readily as a number.
+    expect(scalar.schema.acceptsField).toBe(true);
     // Copied, so two instances of the def cannot share one tuple.
     const tuple = [1, 2, 3];
     expect(resolveExposedParam(inner, { ...decl, name: "o", default: tuple }).schema.default).not.toBe(

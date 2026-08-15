@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeField } from "../fields/index.js";
 import { peekFieldSpec } from "../fields/spec.js";
 import { type FieldSpec, type FieldSpecArg, fieldFromJson, listFieldFns } from "../nodes/fieldJson.js";
 import { paramConstValues } from "./compile.js";
@@ -616,6 +617,121 @@ describe("param uniform slots", () => {
     // than write a zero the CPU never produced.
     const missing = paramConstValues({ fn: "param", name: "amp" }, unbound);
     expect("problem" in missing && missing.problem).toMatch(/param "amp" has no bound value/);
+  });
+});
+
+/**
+ * A `param` bound to a FIELD lowers the other way, and has to: it is an
+ * expression, not a value, so it is compiled IN PLACE. These pin what
+ * that costs and what it must not break — no uniform slot, the spliced
+ * field's attributes bound like any other, and a kernel key that carries
+ * the spliced STRUCTURE (which decides the text) while a spliced number
+ * still does not.
+ */
+describe("param field splices", () => {
+  const spliced = (spec: FieldSpec, bindings: Record<string, unknown>): FieldSpec =>
+    peekFieldSpec(fieldFromJson(spec, bindings as never)) as FieldSpec;
+
+  const SCALED: FieldSpec = { fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "amp" }] };
+
+  it("compiles the bound expression in place, with no slot and no header", () => {
+    const spec = spliced(SCALED, { amp: fieldFromJson({ fn: "fraction" }) });
+    const k = compileFieldSpec(spec, LAYOUT);
+    expect(k.constSlots).toBe(0);
+    expect(k.paramNames).toEqual([]);
+    // Character for character what a param-free kernel emits: the const
+    // tail is appended only when a slot is claimed.
+    expect(k.uniformBytes).toBe(12);
+    expect(k.wgsl).not.toContain("consts");
+    expect(k.wgsl).toContain("let v1 = f32(i) / f32(max(params.count, 2u) - 1u);");
+    // ...and identical to the same expression written out by hand.
+    expect(k.wgsl).toBe(
+      compileFieldSpec({ fn: "mul", args: [{ fn: "position" }, { fn: "fraction" }] }, LAYOUT).wgsl,
+    );
+  });
+
+  it("binds the attributes the spliced field reads, which the pre-pass must find", () => {
+    // The failure this prevents is a kernel body referencing an input the
+    // pre-pass never bound — the one thing the pre-pass exists for.
+    const spec = spliced(SCALED, { amp: fieldFromJson({ fn: "attribute", name: "density" }) });
+    const k = compileFieldSpec(spec, LAYOUT);
+    expect(k.inputs.map((i) => i.name).sort()).toEqual(["P", "density"]);
+    expect(k.wgsl).toContain("in1[i]");
+  });
+
+  it("puts the spliced structure in the kernel key, where a value never goes", () => {
+    const a = compileFieldSpec(spliced(SCALED, { amp: fieldFromJson({ fn: "fraction" }) }), LAYOUT);
+    const b = compileFieldSpec(spliced(SCALED, { amp: fieldFromJson({ fn: "index" }) }), LAYOUT);
+    // Two expressions, two kernels — they are different WGSL, so sharing
+    // a key would serve one field's text for the other's bytes.
+    expect(a.key).not.toBe(b.key);
+    // The same expression twice is one kernel, whatever object carried it.
+    expect(compileFieldSpec(spliced(SCALED, { amp: fieldFromJson({ fn: "fraction" }) }), LAYOUT).key).toBe(
+      a.key,
+    );
+    // And a VALUE binding beside a spliced one still keeps its value out
+    // of the key: only the name and arity of the uniform show up.
+    const mixed: FieldSpec = {
+      fn: "add",
+      args: [{ fn: "param", name: "amp" }, { fn: "param", name: "bias" }],
+    };
+    const one = compileFieldSpec(spliced(mixed, { amp: fieldFromJson({ fn: "fraction" }), bias: 1 }), LAYOUT);
+    const two = compileFieldSpec(spliced(mixed, { amp: fieldFromJson({ fn: "fraction" }), bias: 9 }), LAYOUT);
+    expect(one.key).toBe(two.key);
+    expect(one.paramNames).toEqual(["bias"]);
+    expect(one.constSlots).toBe(1);
+  });
+
+  it("writes the payload for the value bindings only", () => {
+    const mixed: FieldSpec = {
+      fn: "add",
+      args: [{ fn: "param", name: "amp" }, { fn: "param", name: "bias" }],
+    };
+    const spec = spliced(mixed, { amp: fieldFromJson({ fn: "fraction" }), bias: 0.25 });
+    const k = compileFieldSpec(spec, LAYOUT);
+    const values = paramConstValues(spec, k);
+    expect("values" in values && Array.from(values.values)).toEqual([0.25, 0, 0, 0]);
+  });
+
+  it("refuses a binding that carries no spec, where it is still known", () => {
+    // `deviceSpec` declines an expression whose ROOT records an opaque
+    // binding, so a root case never reaches the compiler. This is the
+    // other door: a spec COMPOSED over such an expression carries no
+    // record of its own, and lowering the reference as an unbound uniform
+    // would dispatch a zero the CPU never produced.
+    const opaque = makeField("compile_opaque", 1, (ctx) => ({
+      data: new Float32Array(ctx.geo.attrs[ctx.domain].count),
+      tupleSize: 1,
+    }));
+    const inner = fieldFromJson(SCALED, { amp: opaque });
+    const composed: FieldSpec = { fn: "add", args: [peekFieldSpec(inner) as FieldSpec, 1] };
+    expect(() => compileFieldSpec(composed, LAYOUT)).toThrow(
+      /param "amp" is bound to a Field that carries no spec/,
+    );
+  });
+
+  it("lowers one name two ways when two scopes bound it two ways", () => {
+    // Reachable by composing separately built fields, and INVITED by the
+    // shipped vocabulary, which reuses `amount`/`frequency`/`variant`
+    // across primitives: a knob bound to a field that was itself built
+    // with a binding of the same name. The two references are different
+    // values in different scopes, and nothing has to be reconciled — the
+    // lowering is decided per NODE, so the spliced one compiles in place
+    // while the value-bound one gets the slot.
+    const inner = fieldFromJson({ fn: "param", name: "amp" }, { amp: fieldFromJson({ fn: "fraction" }) });
+    const outer = fieldFromJson({ fn: "add", args: [{ fn: "param", name: "amp" }, 1] }, { amp: 2 });
+    const merged: FieldSpec = {
+      fn: "add",
+      args: [peekFieldSpec(inner) as FieldSpec, peekFieldSpec(outer) as FieldSpec],
+    };
+    const k = compileFieldSpec(merged, LAYOUT);
+    // One slot, for the one reference that needs one.
+    expect(k.paramNames).toEqual(["amp"]);
+    expect(k.constSlots).toBe(1);
+    expect(k.wgsl).toContain("let v0 = f32(i) / f32(max(params.count, 2u) - 1u);");
+    expect(k.wgsl).toContain("params.consts[0].x");
+    const values = paramConstValues(merged, k);
+    expect("values" in values && Array.from(values.values)).toEqual([2, 0, 0, 0]);
   });
 });
 

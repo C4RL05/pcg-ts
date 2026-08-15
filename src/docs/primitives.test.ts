@@ -264,9 +264,13 @@ describe("the drift check is load-bearing", () => {
  * The "Writes to" column for a param that writes to nothing.
  *
  * Rendered from a hand-built record rather than a registered primitive:
- * the branch under test is the RENDERING of an empty target list, no
- * shipped primitive has one yet, and registering another `test/` name here
- * would land in `listSubgraphs()` for whatever ran after it. A blank cell
+ * the branch under test is the RENDERING of an empty target list, and
+ * registering another `test/` name here would land in `listSubgraphs()`
+ * for whatever ran after it. (Shipped primitives DO have targetless
+ * params now — 14 of them gained one when the parameter-attribute
+ * plumbing came out — so this could read from the registry instead; it
+ * does not, because a hand-built record pins the rendering rule itself
+ * rather than whatever the catalog happens to contain.) A blank cell
  * would say "this catalog has no data about that param", which is the one
  * thing that is not true of a knob the body's fields read by name.
  */
