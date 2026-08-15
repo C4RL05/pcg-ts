@@ -26,7 +26,7 @@
  * NO `budgetMs` ANYWHERE HERE, deliberately. The executor yields AFTER
  * `cookNode` returns, so a node body is atomic under a budget and a
  * budget cannot reorder anything a node sees — partitioning in TIME is
- * `tests/corpus.test.ts`'s subject. These suites partition in SPACE,
+ * `tests/graphs.test.ts`'s subject. These suites partition in SPACE,
  * which is a different axis and the one the runtime pillar actually
  * claims. Budgeting them would buy nothing and cost a timer clamp
  * (~15 ms per node on Windows) per cook.

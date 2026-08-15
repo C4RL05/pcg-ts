@@ -75,14 +75,14 @@ function page(name: string): string {
  * Node types and field functions come straight from the live registries.
  * Primitives and corpus examples come from their generated catalogs,
  * which are themselves pinned to the live registries by
- * primitives.test.ts and examples.test.ts — so the chain still ends at
+ * primitives.test.ts and graphIndex.test.ts — so the chain still ends at
  * the code, and this file never counts anything by hand.
  */
 const TRUTH: Record<string, number> = {
   "listNodeTypes().length": listNodeTypes().length,
   "listFieldFns().length": listFieldFns().length,
   "docs/primitives.json entries": readJson("docs/primitives.json").length,
-  "docs/examples.json entries": readJson("docs/examples.json").length,
+  "docs/graphs.json entries": readJson("docs/graphs.json").length,
 };
 
 describe("site version stamps", () => {

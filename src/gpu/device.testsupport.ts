@@ -25,7 +25,7 @@ import { dataInput } from "../runtime/dataInput.js";
 import { World } from "../runtime/world.js";
 import type { GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 import { attrColumn, opaqueField } from "./testHelpers.js";
 
 function bytesEqual(a: Column, b: Column): boolean {
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
 
   // -- evaluator basics ------------------------------------------------------
   {
-    const geo = makeCorpusGeometry(65);
+    const geo = makeParityGeometry(65);
     const ctx = { geo, domain: "point" as const, seed: 5 };
     const field = fieldFromJson(SPEC);
     const stats1 = createGpuCookStats();
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
     const emptyStats = createGpuCookStats();
     const emptyCol = await evaluator.resolveField(
       field,
-      { geo: makeCorpusGeometry(0), domain: "point", seed: 5 },
+      { geo: makeParityGeometry(0), domain: "point", seed: 5 },
       emptyStats,
     )!;
 
@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     const wideOpaqueStats = createGpuCookStats();
     const wideOpaque = wideEvaluator.resolveField(opaque, ctx, wideOpaqueStats);
 
-    const strGeo = makeCorpusGeometry(8);
+    const strGeo = makeParityGeometry(8);
     strGeo.attrs.point.add("label", "string", 1);
     const strStats = createGpuCookStats();
     const strField = fieldFromJson({ fn: "attribute", name: "label" });
@@ -141,8 +141,8 @@ async function main(): Promise<void> {
 
   // -- captureAsync ----------------------------------------------------------
   {
-    const gpuGeo = makeCorpusGeometry(100);
-    const cpuGeo = makeCorpusGeometry(100);
+    const gpuGeo = makeParityGeometry(100);
+    const cpuGeo = makeParityGeometry(100);
     const field = fieldFromJson(SPEC);
     const stats = createGpuCookStats();
     const gpuName = await captureAsync(gpuGeo, "point", field, 9, evaluator, stats);
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
   {
     const g = new Graph(7);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(100))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(100))]);
     const sa = g.add(setAttribute);
     g.setParam(sa, "name", "d");
     g.setParam(sa, "value", fieldFromJson(SPEC));
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
     // Plain-value param: no provenance marker, cache survives the toggle.
     const g2 = new Graph(7);
     const din2 = g2.add(dataInput);
-    g2.setParam(din2, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+    g2.setParam(din2, "items", [makeGeometryItem(makeParityGeometry(50))]);
     const sa2 = g2.add(setAttribute);
     g2.setParam(sa2, "name", "d");
     g2.setParam(sa2, "value", 3);
@@ -203,7 +203,7 @@ async function main(): Promise<void> {
     // the reason counted.
     const g3 = new Graph(7);
     const din3 = g3.add(dataInput);
-    g3.setParam(din3, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+    g3.setParam(din3, "items", [makeGeometryItem(makeParityGeometry(50))]);
     const sa3 = g3.add(setAttribute);
     g3.setParam(sa3, "name", "d");
     g3.setParam(sa3, "value", randomField("code-authored"));
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
     const f1Col = attrColumn(f1, "d");
     const g4 = new Graph(7);
     const din4 = g4.add(dataInput);
-    g4.setParam(din4, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+    g4.setParam(din4, "items", [makeGeometryItem(makeParityGeometry(50))]);
     const sa4 = g4.add(setAttribute);
     g4.setParam(sa4, "name", "d");
     g4.setParam(sa4, "value", randomField("code-authored"));
@@ -234,7 +234,7 @@ async function main(): Promise<void> {
     });
     const g5 = new Graph(7);
     const din5 = g5.add(dataInput);
-    g5.setParam(din5, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+    g5.setParam(din5, "items", [makeGeometryItem(makeParityGeometry(50))]);
     const sa5 = g5.add(setAttribute);
     g5.setParam(sa5, "name", "d");
     g5.setParam(sa5, "value", randomField("code-authored"));
@@ -258,7 +258,7 @@ async function main(): Promise<void> {
   {
     const inner = new Graph(3);
     const din = inner.add(dataInput);
-    inner.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(40))]);
+    inner.setParam(din, "items", [makeGeometryItem(makeParityGeometry(40))]);
     const sa = inner.add(setAttribute);
     inner.setParam(sa, "name", "d");
     inner.setParam(sa, "value", fieldFromJson(SPEC));
@@ -296,7 +296,7 @@ async function main(): Promise<void> {
       });
     const graph = new Graph(1);
     const din = graph.add(dataInput);
-    graph.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(30))]);
+    graph.setParam(din, "items", [makeGeometryItem(makeParityGeometry(30))]);
     const sa = graph.add(setAttribute);
     graph.setParam(sa, "name", "d");
     graph.setParam(sa, "value", fieldFromJson(SPEC));

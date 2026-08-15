@@ -1,0 +1,69 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 1048,
+  "meta": {
+    "title": "make a saved noise re-roll with the graph seed",
+    "description": "A serialized field expression bakes its numbers, so a noise carries \`opts.seed\` as a literal and the graph's seed box moves every scatter and jitter while leaving the shape exactly where it was. \`{ \\"fn\\": \\"nodeSeed\\" }\` is the way out: it resolves to the cooking node's own seed — \`deriveNodeSeed(graph seed, node id)\`, the same number \`randomField\` hashes — and \`opts.position\` is an ordinary argument position where \`opts.seed\` is read as a plain number and cannot hold a spec. So the seed is folded into the SAMPLE POSITION instead, one \`A * (fract(nodeSeed * 2^-32 * K) - W0)\` per axis. Every part of that shape is load-bearing. Multiplying by 2^-32 is exact, so the fold reads the seed's HIGH bits rather than the low ones an f32 column has already rounded away. \`A\` is about 32 noise cells (\`32 / opts.frequency\`, so 700 here): far enough to decorrelate, near enough that an f32 still resolves a lattice cell at the sample point. \`K\` is 1021, 3067 and 8191 so the three axes do not move together. And \`W0\` is the expression's own value at seed 1048, which makes the offset exactly zero at this graph's default seed — folding this into a saved graph costs nothing until someone moves the seed. It is built from \`add\`, \`sub\`, \`mul\` and \`floor\` alone, because those four are bit-exact on CPU and GPU and a one-ULP disagreement inside a \`floor\` would move the offset by a whole unit rather than a ULP. Change the seed and this surface becomes a different surface; delete the \`add\` and it is deaf to the seed again. Every noise-bearing graph in this corpus carries the same fold, and \`docs/authoring.md\` has the derivation.",
+    "tags": ["basics", "fields", "noise", "determinism"]
+  },
+  "nodes": [
+    {
+      "id": "grid",
+      "type": "pointGrid",
+      "params": {
+        "countX": 44,
+        "countY": 1,
+        "countZ": 44,
+        "spacing": [1.4, 1, 1.4],
+        "origin": [-30, 0, -30]
+      }
+    },
+    {
+      "id": "lift",
+      "type": "transformPoints",
+      "params": {
+        "translate": {
+          "fn": "vec",
+          "args": [
+            0,
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "perlinNoise",
+                  "opts": {
+                    "seed": 5,
+                    "frequency": 0.045,
+                    "normalized": true,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        { "fn": "position" },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.891418457] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.258544922] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.741210938] }, 700] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0,
+                1,
+                -6,
+                6
+              ]
+            },
+            0
+          ]
+        }
+      }
+    }
+  ],
+  "connections": [{ "from": ["grid", "out"], "to": ["lift", "in"] }],
+  "outputs": [{ "id": "lift", "pin": "out", "name": "points" }]
+}
+`;export{e as default};

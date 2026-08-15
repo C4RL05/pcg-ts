@@ -22,7 +22,7 @@ import {
 import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import type { GpuBufferLike, GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 
 /** A device that fails loudly if the evaluator ever touches it. */
 function untouchableDevice(adapterInfo?: GpuDeviceLike["adapterInfo"]): GpuDeviceLike {
@@ -45,7 +45,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
     expect(ev.acceptDerivedSpecs).toBe(false); // the shipped default
     const stats = createGpuCookStats();
-    const geo = makeCorpusGeometry(4);
+    const geo = makeParityGeometry(4);
     const res = ev.resolveField(randomField("authored"), { geo, domain: "point", seed: 0 }, stats);
     expect(res).toBeNull();
     expect(stats).toEqual({
@@ -63,7 +63,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
   it("indescribable fields keep the reason no-spec, with the flag either way", () => {
     // `no-spec` did not become a synonym for "code-authored": it still
     // names the population no flag can rescue.
-    const geo = makeCorpusGeometry(4);
+    const geo = makeParityGeometry(4);
     for (const acceptDerivedSpecs of [false, true]) {
       const ev = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs });
       const stats = createGpuCookStats();
@@ -83,7 +83,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs: true });
     expect(ev.acceptDerivedSpecs).toBe(true);
     const stats = createGpuCookStats();
-    const geo = makeCorpusGeometry(4);
+    const geo = makeParityGeometry(4);
     expect(() =>
       ev.resolveField(randomField("authored"), { geo, domain: "point", seed: 0 }, stats),
     ).toThrow(/fake device was touched/);
@@ -93,7 +93,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
   it("string-attribute reads fall back with reason compile-error, and the failure is cached", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
     const stats = createGpuCookStats();
-    const geo = makeCorpusGeometry(4);
+    const geo = makeParityGeometry(4);
     geo.attrs.point.add("label", "string", 1);
     const field = fieldFromJson({ fn: "attribute", name: "label" });
     const ctx = { geo, domain: "point" as const, seed: 0 };
@@ -139,7 +139,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
   it("missing attributes fall back with reason compile-error", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
     const stats = createGpuCookStats();
-    const geo = makeCorpusGeometry(4);
+    const geo = makeParityGeometry(4);
     const field = fieldFromJson({ fn: "attribute", name: "nonexistent" });
     expect(ev.resolveField(field, { geo, domain: "point", seed: 0 }, stats)).toBeNull();
     expect(stats.fallbacks).toEqual({ "compile-error": 1 });
@@ -205,7 +205,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
   it("count 0 resolves to an empty column of the kernel's type without dispatching", async () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
     const stats = createGpuCookStats();
-    const geo = makeCorpusGeometry(0);
+    const geo = makeParityGeometry(0);
     const ctx = { geo, domain: "point" as const, seed: 0 };
     const f32 = await ev.resolveField(fieldFromJson({ fn: "randomField" }), ctx, stats)!;
     expect(f32.data).toBeInstanceOf(Float32Array);
@@ -232,7 +232,7 @@ describe("GpuFieldEvaluator eligibility gate (device-free)", () => {
 
   it("resolveField without a stats sink still works", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
-    const geo = makeCorpusGeometry(4);
+    const geo = makeParityGeometry(4);
     expect(ev.resolveField(randomField("x"), { geo, domain: "point", seed: 0 })).toBeNull();
   });
 
@@ -368,7 +368,7 @@ describe("param rebinding does not grow the caches", () => {
 
   it("a hundred values compile one kernel", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
-    const geo = makeCorpusGeometry(0);
+    const geo = makeParityGeometry(0);
     const ctx = { geo, domain: "point" as const, seed: 0 };
     const keys = new Set<string>();
     for (let i = 0; i < 100; i++) {
@@ -384,7 +384,7 @@ describe("param rebinding does not grow the caches", () => {
 
   it("...but a different arity is a different kernel, because the text differs", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
-    const ctx = { geo: makeCorpusGeometry(0), domain: "point" as const, seed: 0 };
+    const ctx = { geo: makeParityGeometry(0), domain: "point" as const, seed: 0 };
     ev.resolveField(fieldFromJson({ fn: "param", name: "amp" }, { amp: 1 }), ctx);
     expect(ev.kernelCacheSize).toBe(1);
     ev.resolveField(fieldFromJson({ fn: "param", name: "amp" }, { amp: [1, 2, 3] }), ctx);
@@ -396,12 +396,12 @@ describe("param rebinding does not grow the caches", () => {
     const stats = createGpuCookStats();
     // Count 4, not 0: the binding check must precede the empty-domain
     // shortcut, and this asserts it does for a populated domain too.
-    const ctx = { geo: makeCorpusGeometry(4), domain: "point" as const, seed: 0 };
+    const ctx = { geo: makeParityGeometry(4), domain: "point" as const, seed: 0 };
     expect(ev.resolveField(fieldFromJson(SPEC), ctx, stats)).toBeNull();
     expect(stats.fallbacks).toEqual({ "param-bindings": 1 });
     // ...and on an empty domain, where an empty column would have hidden it.
     const stats2 = createGpuCookStats();
-    const empty = { geo: makeCorpusGeometry(0), domain: "point" as const, seed: 0 };
+    const empty = { geo: makeParityGeometry(0), domain: "point" as const, seed: 0 };
     expect(ev.resolveField(fieldFromJson(SPEC), empty, stats2)).toBeNull();
     expect(stats2.fallbacks).toEqual({ "param-bindings": 1 });
   });
@@ -412,7 +412,7 @@ describe("param rebinding does not grow the caches", () => {
     // bytes the CPU never produced.
     const ev = new GpuFieldEvaluator(untouchableDevice(), { acceptDerivedSpecs: true });
     const stats = createGpuCookStats();
-    const ctx = { geo: makeCorpusGeometry(4), domain: "point" as const, seed: 0 };
+    const ctx = { geo: makeParityGeometry(4), domain: "point" as const, seed: 0 };
     const one = fieldFromJson({ fn: "param", name: "amp" }, { amp: 1 });
     const two = fieldFromJson({ fn: "param", name: "amp" }, { amp: 2 });
     expect(ev.resolveField(mul(one, two), ctx, stats)).toBeNull();
@@ -437,7 +437,7 @@ describe("reseeding does not grow the caches", () => {
 
   it("every seed compiles one kernel, on one field and on fresh ones", () => {
     const ev = new GpuFieldEvaluator(untouchableDevice());
-    const geo = makeCorpusGeometry(0);
+    const geo = makeParityGeometry(0);
     const spec: FieldSpec = { fn: "mul", args: [{ fn: "nodeSeed" }, 1e-6] };
     // One field object resolved under many contexts — the shape a cook
     // takes when only the graph seed moved.

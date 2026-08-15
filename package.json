@@ -39,10 +39,10 @@
     "docs/primitives.json",
     "docs/authoring.md",
     "docs/design.md",
-    "docs/examples.md",
-    "docs/examples.json",
-    "examples/graphs/basics-*.json",
-    "examples/graphs/pipeline-*.json",
+    "docs/graphs.md",
+    "docs/graphs.json",
+    "graphs/basics-*.json",
+    "graphs/pipeline-*.json",
     "skills"
   ],
   "exports": {
@@ -85,8 +85,8 @@
     "test:watch": "vitest",
     "build": "tsup",
     "check": "tsc --noEmit",
-    "examples": "vite --config examples/vite.config.ts",
-    "examples:pages": "vite build --config examples/vite.config.ts --base=./ --outDir ../docs/examples --emptyOutDir",
+    "examples": "vite",
+    "examples:pages": "vite build --base=./ --emptyOutDir",
     "capture": "node scripts/capture-demos.mjs",
     "preview": "node scripts/preview.mjs",
     "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:examples && npm run docs:site",
@@ -94,7 +94,7 @@
     "docs:primitives": "node scripts/gen-primitives.mjs",
     "docs:examples": "node scripts/gen-examples.mjs",
     "docs:site": "node scripts/gen-site.mjs",
-    "corpus:golden": "node scripts/gen-corpus-golden.mjs",
+    "graphs:golden": "node scripts/gen-graphs-golden.mjs",
     "prepublishOnly": "npm run check && npm test && npm run build && node scripts/smoke-dist.mjs"
   },
   "peerDependencies": {

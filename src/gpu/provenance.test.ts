@@ -14,7 +14,7 @@ import { acceptsDerivedSpecs } from "../fields/spec.js";
 import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 import { cpuResolveField, opaqueField } from "./testHelpers.js";
 
 const SPEC = { fn: "mul", args: [{ fn: "attribute", name: "density" }, { fn: "randomField", key: "jitter" }] };
@@ -46,7 +46,7 @@ function stubResolver(
 function makeSetAttributeGraph(value: unknown): Graph {
   const g = new Graph(7);
   const din = g.add(dataInput);
-  g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+  g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(50))]);
   const sa = g.add(setAttribute);
   g.setParam(sa, "name", "d");
   g.setParam(sa, "value", value as number);
@@ -185,7 +185,7 @@ describe("gpu memo-key provenance (stub resolver)", () => {
   it("subgraph nodes carry the marker whenever a resolver is present", async () => {
     const inner = new Graph(3);
     const din = inner.add(dataInput);
-    inner.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(20))]);
+    inner.setParam(din, "items", [makeGeometryItem(makeParityGeometry(20))]);
     const sa = inner.add(setAttribute);
     inner.setParam(sa, "name", "d");
     inner.setParam(sa, "value", fieldFromJson(SPEC));
@@ -217,7 +217,7 @@ describe("gpu memo-key provenance (stub resolver)", () => {
     // object is the one exposed, with the inner cook's discarded.
     const inner = new Graph(3);
     const din = inner.add(dataInput);
-    inner.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(10))]);
+    inner.setParam(din, "items", [makeGeometryItem(makeParityGeometry(10))]);
     const sa = inner.add(setAttribute);
     inner.setParam(sa, "name", "d");
     inner.setParam(sa, "value", fieldFromJson(SPEC));
@@ -242,8 +242,8 @@ describe("gpu memo-key provenance (stub resolver)", () => {
 describe("captureAsync (stub resolver)", () => {
   it("without a resolver it matches capture byte for byte", async () => {
     const { capture, captureAsync } = await import("../fields/index.js");
-    const a = makeCorpusGeometry(20);
-    const b = makeCorpusGeometry(20);
+    const a = makeParityGeometry(20);
+    const b = makeParityGeometry(20);
     const field = fieldFromJson(SPEC);
     const nameSync = capture(a, "point", field, 4);
     const nameAsync = await captureAsync(b, "point", field, 4);
@@ -255,8 +255,8 @@ describe("captureAsync (stub resolver)", () => {
 
   it("with a resolver it resolves through it and reports stats", async () => {
     const { capture, captureAsync, createGpuCookStats } = await import("../fields/index.js");
-    const a = makeCorpusGeometry(20);
-    const b = makeCorpusGeometry(20);
+    const a = makeParityGeometry(20);
+    const b = makeParityGeometry(20);
     const field = fieldFromJson(SPEC);
     const stub = stubResolver("stub|cap");
     const stats = createGpuCookStats();
@@ -275,7 +275,7 @@ describe("World gpu threading (stub resolver)", () => {
   function makeWorld(worldStub: GpuFieldResolver): { world: World; sa: ReturnType<Graph["add"]> } {
     const graph = new Graph(1);
     const din = graph.add(dataInput);
-    graph.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(16))]);
+    graph.setParam(din, "items", [makeGeometryItem(makeParityGeometry(16))]);
     const sa = graph.add(setAttribute);
     graph.setParam(sa, "name", "d");
     graph.setParam(sa, "value", fieldFromJson(SPEC));

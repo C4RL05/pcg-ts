@@ -55,7 +55,7 @@ the ORDER primitives come out in, even when the set is unchanged.
   improvement anywhere upstream — a reassociated sum, a faster spatial
   grid, the f32-vs-f64 difference between two spellings of the same knob
   — silently reshuffles every downstream primitive-keyed random. That is
-  exactly the class of change `tests/corpus.test.ts` says it wants to
+  exactly the class of change `tests/graphs.test.ts` says it wants to
   survive.
 - The fix is the phase-42 answer at a new domain: derive a primitive's
   identity from its ENDPOINTS' identities (order-independently, so an
@@ -180,7 +180,7 @@ them, and both are real work.
   schedule.** Recorded here so it is not picked up later on the
   premises it was written with, all three of which the survey broke:
   - *"It would extend the forest's run to its full chain."* It would
-    not. Every field in `examples/02-forest` is code-authored and
+    not. Every field in `graphs/examples-forest.json` is code-authored and
     carries no `FieldSpec`, and fusability requires all field params to
     be spec'd — so widening the resident predicate moves the forest
     from 1 fused member to 1. The benefit is zero, not small.
@@ -229,7 +229,7 @@ them, and both are real work.
     most in.
   - **The forest's entire saving is free today.** Moving
     `setAttribute("scale")` ahead of the two filters in
-    `examples/02-forest` buys the same one readback for zero library
+    `graphs/examples-forest.json` buys the same one readback for zero library
     work (different random scales, equally valid). Any estimate of this
     feature must be net of that, and net of it the benefit is close to
     nothing.
@@ -249,7 +249,7 @@ them, and both are real work.
   Full survey: `notes/research/v10-resident-filter-survey.md` in the
   private repo, including a phase breakdown if it is scheduled anyway.
 
-- ~~**Free and unscheduled:** reorder `examples/02-forest` so
+- ~~**Free and unscheduled:** reorder `graphs/examples-forest.json` so
   `setAttribute("scale")` precedes the two filters.~~ **Done**
   2026-08-08 (`0ed9290`): 2 runs / 4 members, one readback fewer, no
   library change. It captured the entire benefit the resident-filter

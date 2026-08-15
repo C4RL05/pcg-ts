@@ -1,5 +1,5 @@
 /**
- * The staged pipeline (`examples/graphs/pipeline-*.json`), and the one
+ * The staged pipeline (`graphs/pipeline-*.json`), and the one
  * property that makes it a pipeline rather than eight unrelated graphs.
  *
  * THE PROPERTY. Each stage's file is the previous stage's file plus new
@@ -17,7 +17,7 @@
  * graph, while every file still cooks, still validates, and still matches
  * its own golden. Nothing else in the suite would notice. So the structural
  * superset is checked here directly, and the bit-identity it buys is
- * checked against `corpusFingerprint` — the same float-exact hash the
+ * checked against `graphFingerprint` — the same float-exact hash the
  * determinism test uses, run across two DIFFERENT graphs instead of two
  * cooks of one — for EVERY pair, chained and edited alike.
  *
@@ -46,24 +46,24 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { DataCollection } from "../src/index.js";
-import { type CorpusGolden, cookCorpusGraph, corpusFingerprint } from "../src/docs/corpus.js";
-import { CORPUS_DIR, type CorpusFile, loadCorpus } from "../src/docs/examples.js";
+import { type GraphsGolden, cookGraph, graphFingerprint } from "../src/docs/graphGolden.js";
+import { GRAPHS_DIR, type GraphFile, loadGraphs } from "../src/docs/graphIndex.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const GOLDEN_PATH = fileURLToPath(new URL("./corpus.golden.json", import.meta.url));
+const GOLDEN_PATH = fileURLToPath(new URL("./graphs.golden.json", import.meta.url));
 
-const golden = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as CorpusGolden;
+const golden = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as GraphsGolden;
 
 const PREFIX = "pipeline-";
 
 /**
- * The whole staged set, by file name. Enumerated through `loadCorpus` — the
+ * The whole staged set, by file name. Enumerated through `loadGraphs` — the
  * same reader the index, the golden and the cook test go through — so a
  * pipeline file that fails to be picked up there fails here too, rather
  * than silently dropping out of this suite while passing that one.
  */
-const stages = new Map<string, CorpusFile>(
-  loadCorpus(ROOT)
+const stages = new Map<string, GraphFile>(
+  loadGraphs(ROOT)
     .filter((c) => c.file.startsWith(PREFIX))
     .map((c) => [c.file, c]),
 );
@@ -125,9 +125,9 @@ function graphOf(file: string): Json {
   const entry = stages.get(file);
   if (entry === undefined) {
     throw new Error(
-      `${CORPUS_DIR}/${file} is not in the corpus. The staged pipeline is enumerated by ` +
-        `loadCorpus, so either the file was renamed or its prefix is no longer listed in ` +
-        "CORPUS_PREFIXES (src/docs/examples.ts).",
+      `${GRAPHS_DIR}/${file} is not in the corpus. The staged pipeline is enumerated by ` +
+        `loadGraphs, so either the file was renamed or its prefix is no longer listed in ` +
+        "GRAPH_PREFIXES (src/docs/graphIndex.ts).",
     );
   }
   return entry.json as Json;
@@ -193,12 +193,12 @@ function outputsByName(graph: Json): Map<string, string> {
  * One stage's cook, memoized. Eight files feed three comparison loops, so
  * without this the suite cooks the same graph up to four times.
  */
-const cooks = new Map<string, Promise<Awaited<ReturnType<typeof cookCorpusGraph>>>>();
+const cooks = new Map<string, Promise<Awaited<ReturnType<typeof cookGraph>>>>();
 
-function cookOf(file: string): Promise<Awaited<ReturnType<typeof cookCorpusGraph>>> {
+function cookOf(file: string): Promise<Awaited<ReturnType<typeof cookGraph>>> {
   let pending = cooks.get(file);
   if (pending === undefined) {
-    pending = cookCorpusGraph(graphOf(file));
+    pending = cookGraph(graphOf(file));
     cooks.set(file, pending);
   }
   return pending;
@@ -206,7 +206,7 @@ function cookOf(file: string): Promise<Awaited<ReturnType<typeof cookCorpusGraph
 
 /** Float-exact fingerprint of one stage's cook. */
 function fingerprintOf(file: string): Promise<Record<string, unknown>> {
-  return cookOf(file).then((r) => corpusFingerprint(r.outputs));
+  return cookOf(file).then((r) => graphFingerprint(r.outputs));
 }
 
 /**
@@ -241,7 +241,7 @@ function authoredPointCount(file: string): number {
     | { countX: number; countY: number; countZ: number }
     | undefined;
   if (row === undefined || block === undefined) {
-    throw new Error(`${CORPUS_DIR}/${file} has no editRow/editBlock: it is not an edited stage.`);
+    throw new Error(`${GRAPHS_DIR}/${file} has no editRow/editBlock: it is not an edited stage.`);
   }
   return row.count + block.countX * block.countY * block.countZ;
 }
@@ -334,7 +334,7 @@ describe("staged pipeline", () => {
         if (problems.length > 0) {
           throw new Error(
             [
-              `${CORPUS_DIR}/${ext} is no longer a superset of ${base}:`,
+              `${GRAPHS_DIR}/${ext} is no longer a superset of ${base}:`,
               ...problems,
               "",
               "A stage may only ADD nodes. Retuning or dropping a shared one breaks the",
@@ -354,7 +354,7 @@ describe("staged pipeline", () => {
         if (dropped.length > 0) {
           throw new Error(
             [
-              `${CORPUS_DIR}/${ext} drops ${dropped.length} connection(s) of ${base}:`,
+              `${GRAPHS_DIR}/${ext} drops ${dropped.length} connection(s) of ${base}:`,
               ...dropped.map((c) => `  ${c}`),
               "",
               "Rewiring an existing edge is not extending — it changes what the earlier",
@@ -401,7 +401,7 @@ describe("staged pipeline", () => {
         if (JSON.stringify(after[name]) !== JSON.stringify(before[name])) {
           throw new Error(
             [
-              `${CORPUS_DIR}/${ext}: output "${name}" is not bit-identical to ${base}.`,
+              `${GRAPHS_DIR}/${ext}: output "${name}" is not bit-identical to ${base}.`,
               "",
               "A later stage only ADDS to an earlier one, and a node's seed is derived",
               "from the graph seed and its own id — never from its position in the DAG —",
@@ -426,7 +426,7 @@ describe("staged pipeline", () => {
         if (JSON.stringify(after[name]) !== JSON.stringify(before[name])) {
           throw new Error(
             [
-              `${CORPUS_DIR}/${ext}: output "${name}" is not bit-identical to ${base}.`,
+              `${GRAPHS_DIR}/${ext}: output "${name}" is not bit-identical to ${base}.`,
               "",
               "The authored edit layer enters at the `edits` slot, downstream of the",
               `terrain, the wall and the district pass — so "${name}" cannot depend on it.`,
@@ -482,11 +482,11 @@ describe("staged pipeline", () => {
     expect(params?.priority, 'node "lots" no longer ranks by `priority`').toBeDefined();
     delete params?.priority;
 
-    const without = lockedCount((await cookCorpusGraph(stripped)).outputs, "lots");
+    const without = lockedCount((await cookGraph(stripped)).outputs, "lots");
     if (without >= withPriority) {
       throw new Error(
         [
-          `${CORPUS_DIR}/${file}: removing \`priority\` from the \`lots\` prune changed nothing —`,
+          `${GRAPHS_DIR}/${file}: removing \`priority\` from the \`lots\` prune changed nothing —`,
           `${without} of the ${withPriority} authored plots still survive without it.`,
           "",
           "That means the graph wins its contested spots some other way (most likely the",
@@ -569,7 +569,7 @@ describe("staged pipeline", () => {
       }
       if (total > INSTANCE_BUDGET) {
         throw new Error(
-          `${CORPUS_DIR}/${file} spawns ${total} instances, over the ${INSTANCE_BUDGET} budget ` +
+          `${GRAPHS_DIR}/${file} spawns ${total} instances, over the ${INSTANCE_BUDGET} budget ` +
             "the staged set is authored to. The corpus cooks on every test run, so a stage " +
             "that outgrows its budget is shrunk — the budget is not raised.",
         );

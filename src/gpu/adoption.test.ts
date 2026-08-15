@@ -21,7 +21,7 @@ import {
 import { acceptsDerivedSpecs } from "../fields/spec.js";
 import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 import { cpuResolveField, opaqueField } from "./testHelpers.js";
 
 /**
@@ -68,7 +68,7 @@ const CASES: AdoptionCase[] = [
     build: (value) => {
       const g = new Graph(7);
       const din = g.add(dataInput);
-      g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+      g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(50))]);
       const n = g.add(transformPoints);
       g.setParam(n, "translate", value as never);
       g.connect(din, "out", n, "in");
@@ -83,7 +83,7 @@ const CASES: AdoptionCase[] = [
     build: (value) => {
       const g = new Graph(7);
       const din = g.add(dataInput);
-      g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+      g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(50))]);
       const n = g.add(jitterPoints);
       g.setParam(n, "amount", value as never);
       g.connect(din, "out", n, "in");
@@ -98,7 +98,7 @@ const CASES: AdoptionCase[] = [
     build: (value) => {
       const g = new Graph(7);
       const din = g.add(dataInput);
-      g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(50))]);
+      g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(50))]);
       const n = g.add(orientAlongVector);
       g.setParam(n, "direction", value as never);
       g.connect(din, "out", n, "in");

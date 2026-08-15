@@ -14,7 +14,7 @@ stale list is worse than no list.
 - `docs/primitives.md` — the primitive catalog (`docs/primitives.json` for machine reading).
 - `docs/nodes.md` — every node type, its pins, params, defaults and ranges (`docs/nodes.json`).
 - `docs/authoring.md` — the graph JSON spec, the field-expression grammar, worked recipes.
-- `docs/examples.md` — the single-concept example corpus, indexed by what each one teaches.
+- `docs/graphs.md` — the single-concept example corpus, indexed by what each one teaches.
 
 The CLI is `pcg` when the package is installed (`npx pcg …`), and
 `node bin/pcg.mjs …` from a clone. Both are the same entry point.
@@ -27,7 +27,7 @@ what happens when one is skipped.
 1. **Scan the primitive catalog** (`docs/primitives.md`). It opens with a
    one-line summary of every primitive. If one of those lines describes what
    you are about to build, you are done choosing.
-2. **Read one example graph** (`docs/examples.md`) close to your goal. Copy
+2. **Read one example graph** (`docs/graphs.md`) close to your goal. Copy
    its shape. `docs/authoring.md`'s "Recipes" section carries longer,
    annotated ones.
 3. **Look up the exact schema of anything you type by hand** — `pcg nodes
@@ -217,7 +217,7 @@ attributes that would fit.
 primitive→point (`max`) to bring a value back to the junction —
 `connectPoints`' `degreeAttr` and `lengthAttr` cover degree and length
 without any of that. The five moves and a runnable graph are in
-`docs/authoring.md` ("Networks"); `examples/graphs/pipeline-5-roads.json`
+`docs/authoring.md` ("Networks"); `graphs/pipeline-5-roads.json`
 runs them end to end.
 
 **Expecting the value to die at the sampler.** It does not, and planning

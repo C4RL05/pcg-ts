@@ -85,7 +85,7 @@ move:
    unbounded `mul(nodeSeed, 1e-6)` is the trap: fine at frequency 0.045,
    ~73 f32 steps per noise period at frequency 14. Not inside a `forEach`
    body, whose seed varies per item. See `docs/authoring.md` "The seed-shift
-   idiom" and `examples/graphs/basics-reseed-a-noise.json`, and note that
+   idiom" and `graphs/basics-reseed-a-noise.json`, and note that
    every noise-bearing corpus graph now carries this fold.
 
 That is why noise-bearing primitives expose `frequency` and `variant` rather

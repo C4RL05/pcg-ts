@@ -1,0 +1,45 @@
+{
+  "_comment": "Panel spec \u2014 presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "scatter",
+      "controls": [
+        {
+          "param": "scatter.count",
+          "label": "points",
+          "min": 50,
+          "max": 3000,
+          "step": 50
+        },
+        {
+          "param": "scatter.seed",
+          "label": "seed"
+        }
+      ]
+    },
+    {
+      "title": "neighbourhood",
+      "controls": [
+        {
+          "param": "crowding.radius",
+          "label": "radius",
+          "min": 0.5,
+          "max": 15,
+          "step": 0.1,
+          "unit": " m"
+        },
+        {
+          "param": "crowding.maxCount",
+          "label": "max counted",
+          "min": 0,
+          "max": 64,
+          "step": 1
+        },
+        {
+          "param": "crowding.includeSelf",
+          "label": "count self"
+        }
+      ]
+    }
+  ]
+}

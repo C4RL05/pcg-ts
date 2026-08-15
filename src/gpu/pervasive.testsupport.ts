@@ -23,7 +23,7 @@ import { hashCombine, hashFloat } from "../random/index.js";
 import { dataInput } from "../runtime/dataInput.js";
 import type { GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -172,7 +172,7 @@ async function main(): Promise<void> {
       readonly bitExact: () => Graph;
       readonly noise?: () => Graph;
     }
-    const cloud = (): Geometry => makeCorpusGeometry(10_000);
+    const cloud = (): Geometry => makeParityGeometry(10_000);
     const cases: NodeCase[] = [
       {
         name: "transformPoints",
@@ -319,7 +319,7 @@ async function main(): Promise<void> {
     });
     const seams: Record<string, unknown> = {};
     for (const count of [127, 128, 129, 1000]) {
-      const geo = makeCorpusGeometry(count);
+      const geo = makeParityGeometry(count);
       const ctx: EvalContext = { geo, domain: "point", seed: 5 };
       const cpu = evaluateField(field, ctx);
       const unchunked = await evaluator.resolveField(field, ctx)!;
@@ -380,7 +380,7 @@ async function main(): Promise<void> {
     ];
     const stepResults: Array<Record<string, unknown>> = [];
     for (const step of steps) {
-      const geo = makeCorpusGeometry(step.count);
+      const geo = makeParityGeometry(step.count);
       const ctx: EvalContext = { geo, domain: "point", seed: 21 };
       const a = await pooled.resolveField(fields[step.field], ctx)!;
       const b = await unpooled.resolveField(fields[step.field], ctx)!;
@@ -400,7 +400,7 @@ async function main(): Promise<void> {
       adapterInfo: adapter.info,
       maxElementsPerDispatch: 128,
     });
-    const geo1000 = makeCorpusGeometry(1000);
+    const geo1000 = makeParityGeometry(1000);
     const ctx1000: EvalContext = { geo: geo1000, domain: "point", seed: 33 };
     const first = await chunkedPooled.resolveField(fields.spec, ctx1000)!;
     const afterFirst = chunkedPooled.poolStats;

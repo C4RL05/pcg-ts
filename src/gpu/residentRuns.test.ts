@@ -44,7 +44,7 @@ import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { World } from "../runtime/world.js";
 import type { Geometry } from "../data/index.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 // `cpuResolveField` is the eligibility gate both fakes share (and the
 // other gpu suites' doubles with them): `accept` is the flag the fake
 // advertises, read through the production predicate, so a fake can never
@@ -199,8 +199,8 @@ const nodeCache = (g: Graph, id: ReturnType<Graph["add"]>) => g._nodes.get(id.id
 
 describe("resident run detection (recording resolver)", () => {
   it("fuses a maximal chain into one run and serves per-node bytes on plan rejection", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(40));
-    const cpu = await cook(buildChain(makeCorpusGeometry(40)).g);
+    const { g, ids } = buildChain(makeParityGeometry(40));
+    const cpu = await cook(buildChain(makeParityGeometry(40)).g);
     const rec = recordingResolver("fake|A");
     const r = await cook(g, { gpu: rec });
     // The maximal chain first, then the suffix retry narrowing it one
@@ -230,7 +230,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("a declared output on an interior member splits the run", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    const { g, ids } = buildChain(makeParityGeometry(20));
     g.output(ids.jit, "out", "tap");
     const rec = recordingResolver("fake|A");
     await cook(g, { gpu: rec });
@@ -241,7 +241,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("a multi-consumer tap splits the run", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    const { g, ids } = buildChain(makeParityGeometry(20));
     const tap = g.add(setBounds);
     g.connect(ids.jit, "out", tap, "in");
     g.output(tap, "out", "bounds");
@@ -254,7 +254,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("a non-fusable interior node bounds runs on both sides", async () => {
-    const geo = makeCorpusGeometry(20);
+    const geo = makeParityGeometry(20);
     const g = new Graph(7);
     const din = g.add(dataInput);
     g.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -278,7 +278,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("a code-authored Field param excludes the member (and short runs stay per-node)", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    const { g, ids } = buildChain(makeParityGeometry(20));
     g.setParam(ids.jit, "amount", randomField("authored")); // code-authored: derived spec
     const rec = recordingResolver("fake|A");
     const r = await cook(g, { gpu: rec });
@@ -294,7 +294,7 @@ describe("resident run detection (recording resolver)", () => {
     // never be compiled on any setting of the flag, so it must keep
     // breaking the run and keep counting the original reason — otherwise
     // a regression collapsing the two words would go unnoticed here.
-    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    const { g, ids } = buildChain(makeParityGeometry(20));
     g.setParam(ids.jit, "amount", makeField("opaque", 3, () => ({ data: new Float32Array(60), tupleSize: 3 })));
     const rec = recordingResolver("fake|A");
     const r = await cook(g, { gpu: rec });
@@ -304,7 +304,7 @@ describe("resident run detection (recording resolver)", () => {
 
     // ...and not even the wide gate admits it: `acceptDerivedSpecs`
     // widens the population that HAS a spec, it does not invent one.
-    const { g: g2, ids: ids2 } = buildChain(makeCorpusGeometry(20));
+    const { g: g2, ids: ids2 } = buildChain(makeParityGeometry(20));
     g2.setParam(ids2.jit, "amount", makeField("opaque", 3, () => ({ data: new Float32Array(60), tupleSize: 3 })));
     const wide = recordingResolver("fake|A", { acceptDerivedSpecs: true });
     const r2 = await cook(g2, { gpu: wide });
@@ -315,7 +315,7 @@ describe("resident run detection (recording resolver)", () => {
   it("acceptDerivedSpecs admits that same member to the run", async () => {
     // The fusion gate reads the same flag as the per-field seam: widen
     // one and the member joins the chain instead of breaking it.
-    const { g, ids } = buildChain(makeCorpusGeometry(20));
+    const { g, ids } = buildChain(makeParityGeometry(20));
     g.setParam(ids.jit, "amount", randomField("authored"));
     const rec = recordingResolver("fake|A", { acceptDerivedSpecs: true });
     const r = await cook(g, { gpu: rec });
@@ -326,7 +326,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("string-mode and non-point-domain setAttribute never fuse", async () => {
-    const geo = makeCorpusGeometry(20);
+    const geo = makeParityGeometry(20);
     const g = new Graph(7);
     const din = g.add(dataInput);
     g.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -350,7 +350,7 @@ describe("resident run detection (recording resolver)", () => {
     const build = (): { g: Graph; ids: Record<string, string> } => {
       const g = new Graph(7);
       const din = g.add(dataInput);
-      g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(40))]);
+      g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(40))]);
       const sa = g.add(setAttribute, { name: "d", value: fieldFromJson({ fn: "randomField", key: "k" }) });
       const jit = g.add(jitterPoints, { amount: [0.2, 0.2, 0.2] });
       const tr = g.add(transformPoints, { translate: [1, 0, 0] });
@@ -379,7 +379,7 @@ describe("resident run detection (recording resolver)", () => {
     const build = (): { g: Graph; ids: Record<string, string> } => {
       const g = new Graph(7);
       const din = g.add(dataInput);
-      g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(40))]);
+      g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(40))]);
       const sa = g.add(setAttribute, { name: "d", value: fieldFromJson({ fn: "randomField", key: "k" }) });
       const jit = g.add(jitterPoints, { amount: [0.2, 0.2, 0.2] });
       const tr = g.add(transformPoints, { translate: [1, 0, 0] });
@@ -405,7 +405,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("a single fusable node never plans a run", async () => {
-    const geo = makeCorpusGeometry(20);
+    const geo = makeParityGeometry(20);
     const g = new Graph(7);
     const din = g.add(dataInput);
     g.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -419,7 +419,7 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("an empty input geometry skips planning and cooks per-node", async () => {
-    const { g } = buildChain(makeCorpusGeometry(0));
+    const { g } = buildChain(makeParityGeometry(0));
     const rec = recordingResolver("fake|A");
     const r = await cook(g, { gpu: rec });
     expect(rec.planned).toEqual([]);
@@ -459,7 +459,7 @@ describe("resident run detection (recording resolver)", () => {
       g.setParam(
         din,
         "items",
-        [0, 1, 2, 3].map(() => makeGeometryItem(makeCorpusGeometry(4))),
+        [0, 1, 2, 3].map(() => makeGeometryItem(makeParityGeometry(4))),
       );
       const sa = g.add(setAttribute, { name: "d", value: fieldFromJson({ fn: "randomField", key: "k" }) });
       const jit = g.add(jitterPoints, { amount: [0.1, 0.1, 0.1] });
@@ -486,8 +486,8 @@ describe("resident run detection (recording resolver)", () => {
   });
 
   it("a v0.5-style resolver without run methods degrades to per-node behavior", async () => {
-    const { g } = buildChain(makeCorpusGeometry(30));
-    const cpu = await cook(buildChain(makeCorpusGeometry(30)).g);
+    const { g } = buildChain(makeParityGeometry(30));
+    const cpu = await cook(buildChain(makeParityGeometry(30)).g);
     const runless: GpuFieldResolver = {
       cacheSalt: "fake|A",
       resolveField: (field, ctx, stats) => cpuResolveField(field, ctx, stats, false),
@@ -504,8 +504,8 @@ describe("resident run detection (recording resolver)", () => {
 
 describe("resident run cache contract (CPU-backed run resolver)", () => {
   it("executes fused, caches at the terminal only, and serves repeat cooks", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(40));
-    const cpu = await cook(buildChain(makeCorpusGeometry(40)).g);
+    const { g, ids } = buildChain(makeParityGeometry(40));
+    const cpu = await cook(buildChain(makeParityGeometry(40)).g);
     const fake = cpuRunResolver("fake|A");
 
     const done: NodeDoneInfo[] = [];
@@ -543,7 +543,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("interior members hold no entry even when an earlier per-node cook left one", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(40));
+    const { g, ids } = buildChain(makeParityGeometry(40));
     await cook(g); // CPU-only first: every member gains a per-node entry
     expect(nodeCache(g, ids.sa)).toBeDefined();
     expect(nodeCache(g, ids.jit)).toBeDefined();
@@ -569,7 +569,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("an interior param edit recooks exactly the run; siblings and upstream stay cached", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(40));
+    const { g, ids } = buildChain(makeParityGeometry(40));
     const sibling = g.add(setBounds);
     g.connect(ids.din, "out", sibling, "in");
     g.output(sibling, "out", "bounds");
@@ -587,7 +587,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("declaring an interior output splits the run with downstream bytes unchanged", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(40));
+    const { g, ids } = buildChain(makeParityGeometry(40));
     const fake = cpuRunResolver("fake|A");
     const r1 = await cook(g, { gpu: fake });
     const terminalBytes = ["P", "rot", "d"].map((a) => outBytes(r1, a));
@@ -607,7 +607,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
     // The tap materializes the previous interior value (CPU reference).
     const cpu = await cook(
       (() => {
-        const twin = buildChain(makeCorpusGeometry(40));
+        const twin = buildChain(makeParityGeometry(40));
         twin.g.output(twin.ids.jit, "out", "tap");
         return twin.g;
       })(),
@@ -618,7 +618,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("gpu-off cooks never serve run entries, and the toggle round-trips", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(40));
+    const { g, ids } = buildChain(makeParityGeometry(40));
     const fake = cpuRunResolver("fake|A");
     const r1 = await cook(g, { gpu: fake });
     const bytes = outBytes(r1, "P");
@@ -635,7 +635,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("run keys carry the resolver salt", async () => {
-    const { g } = buildChain(makeCorpusGeometry(30));
+    const { g } = buildChain(makeParityGeometry(30));
     await cook(g, { gpu: cpuRunResolver("fake|A") });
     const b = await cook(g, { gpu: cpuRunResolver("fake|B") });
     expect(b.stats.cooked).toBe(4); // different device: never serve A's bytes
@@ -647,7 +647,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("cancellation from executeRun propagates as the standard cancellation error", async () => {
-    const { g } = buildChain(makeCorpusGeometry(30));
+    const { g } = buildChain(makeParityGeometry(30));
     let reads = 0;
     const signal = {
       get aborted(): boolean {
@@ -660,7 +660,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("a non-cancellation executeRun failure is an error naming the terminal", async () => {
-    const { g, ids } = buildChain(makeCorpusGeometry(30));
+    const { g, ids } = buildChain(makeParityGeometry(30));
     const fake = cpuRunResolver("fake|A");
     fake.executeRun = () => Promise.reject(new Error("device lost"));
     const err = await cook(g, { gpu: fake }).then(
@@ -673,7 +673,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
   });
 
   it("fuses inside subgraph cooks with counters routed to the outermost sink", async () => {
-    const geo = makeCorpusGeometry(25);
+    const geo = makeParityGeometry(25);
     const inner = new Graph(3);
     const din = inner.add(dataInput);
     inner.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -699,7 +699,7 @@ describe("resident run cache contract (CPU-backed run resolver)", () => {
     const makeWorld = (gpu?: GpuFieldResolver): { world: World; bytes: Uint8Array[] } => {
       const graph = new Graph(5);
       const din = graph.add(dataInput);
-      graph.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(30))]);
+      graph.setParam(din, "items", [makeGeometryItem(makeParityGeometry(30))]);
       const sa = graph.add(setAttribute, { name: "d", value: fieldFromJson({ fn: "randomField", key: "w" }) });
       const jit = graph.add(jitterPoints, { amount: [0.2, 0.2, 0.2] });
       graph.connect(din, "out", sa, "in");
@@ -811,8 +811,8 @@ function buildDemoChain(geo: Geometry, reordered = false) {
 
 describe("suffix retry: a rejected member costs its prefix, not the whole run", () => {
   it("recovers the gpu-fields tail instead of fusing nothing", async () => {
-    const cpu = await cook(buildDemoChain(makeCorpusGeometry(40)).g);
-    const { g, ids } = buildDemoChain(makeCorpusGeometry(40));
+    const cpu = await cook(buildDemoChain(makeParityGeometry(40)).g);
+    const { g, ids } = buildDemoChain(makeParityGeometry(40));
     const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
     const r = await cook(g, { gpu: fake });
 
@@ -847,7 +847,7 @@ describe("suffix retry: a rejected member costs its prefix, not the whole run", 
   });
 
   it("counts one partial fusion per cook, warm as well as cold", async () => {
-    const { g } = buildDemoChain(makeCorpusGeometry(24));
+    const { g } = buildDemoChain(makeParityGeometry(24));
     const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
     await cook(g, { gpu: fake });
     const warm = await cook(g, { gpu: fake });
@@ -864,7 +864,7 @@ describe("suffix retry: a rejected member costs its prefix, not the whole run", 
     // Two members only: the suffix is the lone `tint`, and a lone chain
     // node is not a run — so the retry gives up and NOTHING fuses. The
     // P arithmetic stays on the CPU, which is the point of the rule.
-    const geo = makeCorpusGeometry(20);
+    const geo = makeParityGeometry(20);
     const g = new Graph(9);
     const din = g.add(dataInput);
     g.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -887,7 +887,7 @@ describe("suffix retry: a rejected member costs its prefix, not the whole run", 
     // the front would pick an arbitrary suffix, and `maxResidentBytes`
     // promises the per-node path serves an over-budget run whole. So the
     // chain is planned exactly once and nothing fuses.
-    const geo = makeCorpusGeometry(20);
+    const geo = makeParityGeometry(20);
     const g = new Graph(9);
     const din = g.add(dataInput);
     g.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -908,7 +908,7 @@ describe("suffix retry: a rejected member costs its prefix, not the whole run", 
   it("narrows for a reason it has never heard of", async () => {
     // The rule is "not a size rejection", not a list of known reasons: a
     // resolver reporting its own vocabulary still gets the retry.
-    const geo = makeCorpusGeometry(20);
+    const geo = makeParityGeometry(20);
     const g = new Graph(9);
     const din = g.add(dataInput);
     g.setParam(din, "items", [makeGeometryItem(geo)]);
@@ -933,7 +933,7 @@ describe("suffix retry: a rejected member costs its prefix, not the whole run", 
     // one and the outer stats show a `run-plan-failed` per rejected
     // probe while `fusedNodes` says the tail fused: the exact lie the
     // accounting exists to prevent, one subgraph deep.
-    const inner = buildDemoChain(makeCorpusGeometry(25)).g;
+    const inner = buildDemoChain(makeParityGeometry(25)).g;
     const innerNodes = [...inner._nodes.keys()];
     const sub = subgraphNode(
       inner,
@@ -953,7 +953,7 @@ describe("suffix retry: a rejected member costs its prefix, not the whole run", 
   it("leaves a chain that plans in full exactly as it was", async () => {
     // The reordered demo chain — the authoring fix — plans on the first
     // attempt, so the retry never runs and no fallback is reported.
-    const { g, order } = buildDemoChain(makeCorpusGeometry(24), true);
+    const { g, order } = buildDemoChain(makeParityGeometry(24), true);
     const fake = cpuRunResolver("fake|R", { reject: plannerReject() });
     const r = await cook(g, { gpu: fake });
     expect(fake.planned).toEqual([order]);

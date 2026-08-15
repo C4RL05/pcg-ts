@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pcg-ts demos</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; min-height: 100%; background: #0d1117; }
+    body {
+      display: flex; justify-content: center;
+      color: #dbe4f0; font: 15px/1.5 system-ui, sans-serif;
+      padding: 48px 20px;
+    }
+    main { width: 100%; max-width: 660px; }
+    h1 { margin: 0; font-size: 26px; color: #f0f4fa; }
+    h1 code { color: #8fd0ff; font-family: ui-monospace, monospace; }
+    h2 {
+      margin: 32px 0 10px; font-size: 12px; font-weight: 600;
+      letter-spacing: 0.09em; text-transform: uppercase; color: #55617a;
+    }
+    .sub { margin: 6px 0 28px; color: #8b98ab; }
+    a.card {
+      display: block;
+      margin: 10px 0; padding: 14px 18px;
+      background: #131a26; border: 1px solid #223047; border-radius: 10px;
+      text-decoration: none; color: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    a.card:hover { border-color: #4c8dff; background: #16202f; }
+    a.card .name { font-weight: 600; color: #eaf1fa; }
+    a.card .desc { margin-top: 2px; color: #8b98ab; font-size: 13px; }
+    footer { margin-top: 28px; color: #55617a; font-size: 12px; }
+    footer code { font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1><code>pcg-ts</code> demos</h1>
+    <p class="sub">Deterministic procedural content generation — graphs, fields, spawners, and the
+      hierarchical runtime, rendered with three.js. Everything here re-cooks live from its seed.</p>
+
+    <h2>Tool</h2>
+    <a class="card" href="sandbox/">
+      <span class="name">Sandbox — graph editor</span>
+      <div class="desc">Opens any graph in <code>graphs/</code> and edits it live: palette, pin wiring
+        with real graph validation, schema-driven params, a curated overview panel, JSON round-trip,
+        and shareable links. Switch the cook path between the CPU and two GPU paths under a graph
+        that does not change.</div>
+    </a>
+
+    <h2>Demos</h2>
+    <p class="sub">A single cook is a graph in <code>graphs/</code>, opened in the sandbox. What is
+      left here needs a host: streaming worlds and a device-resident renderer.</p>
+
+    <a class="card" href="demos/infinite-world/">
+      <span class="name">Infinite world</span>
+      <div class="desc">Two-level hierarchical World streamed around a flying camera: unbounded
+        landmarks above seamless 20-unit rock cells. A GPU toggle and a `derived specs`
+        checkbox show combinator-authored fields reaching the device — and a panel explaining
+        why nothing fuses into a run here.</div>
+    </a>
+
+    <a class="card" href="demos/galaxy/">
+      <span class="name">Galaxy</span>
+      <div class="desc">An infinite deterministic spiral galaxy: log-spiral density fields,
+        streamed star cells with nebular dust, and click-to-visit planetary systems — every
+        seed grows a different galaxy.</div>
+    </a>
+
+    <a class="card" href="demos/gpu-world/">
+      <span class="name">GPU world</span>
+      <div class="desc">A streamed world drawn from instance matrices composed on the GPU and
+        never read back — one shared device behind the field evaluator and a WebGPU renderer,
+        with live readouts for retained device buffers and cell churn. Needs WebGPU.</div>
+    </a>
+
+    <footer>Run with <code>npm run examples</code> · seeds are deterministic: the same seed always
+      rebuilds the same world.</footer>
+  </main>
+</body>
+</html>

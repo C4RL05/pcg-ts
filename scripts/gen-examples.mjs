@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Generate the example index (docs/examples.md + docs/examples.json) from
- * the corpus files under `examples/graphs/` — their own `meta` blocks plus
+ * Generate the example index (docs/graphs.md + docs/graphs.json) from
+ * the corpus files under `graphs/` — their own `meta` blocks plus
  * what each graph structurally contains.
  *
  * Usage: node scripts/gen-examples.mjs
  *
  * This script is I/O only — read the corpus, write the files, say what it
- * wrote. The rendering lives in src/docs/examples.ts (imported here from
- * dist) so the drift test in src/docs/examples.test.ts renders through the
+ * wrote. The rendering lives in src/docs/graphIndex.ts (imported here from
+ * dist) so the drift test in src/docs/graphIndex.test.ts renders through the
  * exact same code and cannot drift from it.
  *
  * IT DESERIALIZES EVERY GRAPH FIRST, and that check is not redundant with
@@ -58,7 +58,7 @@ const docs = await importDist("../dist/docs/index.js");
 
 for (const [module, name, exported] of [
   ["dist/index.js", "deserializeGraph", lib.deserializeGraph],
-  ["dist/docs/index.js", "loadCorpus", docs.loadCorpus],
+  ["dist/docs/index.js", "loadGraphs", docs.loadGraphs],
   ["dist/docs/index.js", "describeExample", docs.describeExample],
   ["dist/docs/index.js", "renderExampleIndex", docs.renderExampleIndex],
 ]) {
@@ -68,11 +68,11 @@ for (const [module, name, exported] of [
   }
 }
 
-const corpus = docs.loadCorpus(root);
+const corpus = docs.loadGraphs(root);
 if (corpus.length === 0) {
   console.error(
-    `gen-examples: no ${docs.CORPUS_PREFIXES.map((p) => `${p}*.json`).join(" / ")} files under ${
-      docs.CORPUS_DIR
+    `gen-examples: no ${docs.GRAPH_PREFIXES.map((p) => `${p}*.json`).join(" / ")} files under ${
+      docs.GRAPHS_DIR
     } — nothing to index.`,
   );
   process.exit(1);
@@ -96,10 +96,10 @@ const { json, markdown } = docs.renderExampleIndex(corpus.map(docs.describeExamp
 
 const docsDir = join(root, "docs");
 mkdirSync(docsDir, { recursive: true });
-writeFileSync(join(docsDir, "examples.json"), json);
-writeFileSync(join(docsDir, "examples.md"), markdown);
+writeFileSync(join(docsDir, "graphs.json"), json);
+writeFileSync(join(docsDir, "graphs.md"), markdown);
 console.log(
-  `gen-examples: wrote docs/examples.md and docs/examples.json (${corpus.length} ${
+  `gen-examples: wrote docs/graphs.md and docs/graphs.json (${corpus.length} ${
     corpus.length === 1 ? "example" : "examples"
   })`,
 );

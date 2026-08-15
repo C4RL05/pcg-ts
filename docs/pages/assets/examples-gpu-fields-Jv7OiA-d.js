@@ -1,0 +1,675 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 1,
+  "meta": {
+    "title": "a fusable chain, on the CPU or the device",
+    "description": "Five count-preserving nodes in a strict line, every field param authored as a serialized spec rather than composed in code, so the chain is device-eligible. Switch the cook path in the toolbar: the two device paths agree bit for bit, so the hash holds across them while the time drops as the tail fuses into one resident run. The CPU hash differs, and that is not a defect: GPU floats are not byte-identical to CPU floats. Raise the point count to see why the device path exists.",
+    "tags": [
+      "gpu",
+      "fields",
+      "attributes",
+      "performance"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInBounds",
+      "params": {
+        "count": 40000,
+        "boundsMin": [
+          -30,
+          -9,
+          -30
+        ],
+        "boundsMax": [
+          30,
+          9,
+          30
+        ]
+      }
+    },
+    {
+      "id": "wobble",
+      "type": "setAttribute",
+      "params": {
+        "name": "wobble",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 3,
+        "value": {
+          "fn": "vec",
+          "args": [
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "perlinNoise",
+                  "opts": {
+                    "seed": 11,
+                    "frequency": 0.044,
+                    "offset": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "normalized": true,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        { "fn": "position" },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.0746917725] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.839447021] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.135986328] }, 700] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0,
+                1,
+                0,
+                0.9
+              ]
+            },
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "perlinNoise",
+                  "opts": {
+                    "seed": 23,
+                    "frequency": 0.044,
+                    "offset": [
+                      37,
+                      5,
+                      -19
+                    ],
+                    "normalized": true,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        { "fn": "position" },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.839447021] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.135986328] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.0746917725] }, 700] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0,
+                1,
+                0,
+                0.9
+              ]
+            },
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "perlinNoise",
+                  "opts": {
+                    "seed": 47,
+                    "frequency": 0.044,
+                    "offset": [
+                      -11,
+                      61,
+                      5
+                    ],
+                    "normalized": true,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        { "fn": "position" },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.135986328] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.0746917725] }, 700] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.839447021] }, 700] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0,
+                1,
+                0,
+                0.9
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "jitter",
+      "type": "jitterPoints",
+      "params": {
+        "amount": {
+          "fn": "attribute",
+          "name": "wobble",
+          "tupleSize": 3
+        },
+        "seed": 7
+      }
+    },
+    {
+      "id": "place",
+      "type": "transformPoints",
+      "params": {
+        "translate": [
+          0,
+          0,
+          0
+        ],
+        "rotateEuler": [
+          0,
+          14,
+          0
+        ],
+        "scale": [
+          1,
+          0.92,
+          1
+        ]
+      }
+    },
+    {
+      "id": "color",
+      "type": "setAttribute",
+      "params": {
+        "name": "color",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 3,
+        "value": {
+          "fn": "vec",
+          "args": [
+            {
+              "fn": "ramp",
+              "args": [
+                {
+                  "fn": "clamp",
+                  "args": [
+                    {
+                      "fn": "add",
+                      "args": [
+                        {
+                          "fn": "add",
+                          "args": [
+                            {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "fbm",
+                                  "base": "simplexNoise",
+                                  "opts": {
+                                    "frequency": 0.055,
+                                    "octaves": 5,
+                                    "normalized": true,
+                                    "position": {
+                                      "fn": "add",
+                                      "args": [
+                                        { "fn": "position" },
+                                        {
+                                          "fn": "vec",
+                                          "args": [
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.273765564] }, 580] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.261169434] }, 580] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.719299316] }, 580] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                0.62
+                              ]
+                            },
+                            {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "worleyNoise",
+                                  "opts": {
+                                    "frequency": 0.1155,
+                                    "output": "f2-f1",
+                                    "normalized": true,
+                                    "position": {
+                                      "fn": "add",
+                                      "args": [
+                                        { "fn": "position" },
+                                        {
+                                          "fn": "vec",
+                                          "args": [
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.261169434] }, 280] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.719299316] }, 280] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.273765564] }, 280] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                0.3
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "fn": "mul",
+                          "args": [
+                            {
+                              "fn": "randomField",
+                              "key": "sparkle"
+                            },
+                            0.08
+                          ]
+                        }
+                      ]
+                    },
+                    0,
+                    1
+                  ]
+                }
+              ],
+              "stops": [
+                [
+                  0,
+                  0.02
+                ],
+                [
+                  0.3,
+                  0.05
+                ],
+                [
+                  0.55,
+                  0.1
+                ],
+                [
+                  0.75,
+                  0.95
+                ],
+                [
+                  1,
+                  1
+                ]
+              ]
+            },
+            {
+              "fn": "ramp",
+              "args": [
+                {
+                  "fn": "clamp",
+                  "args": [
+                    {
+                      "fn": "add",
+                      "args": [
+                        {
+                          "fn": "add",
+                          "args": [
+                            {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "fbm",
+                                  "base": "simplexNoise",
+                                  "opts": {
+                                    "frequency": 0.055,
+                                    "octaves": 5,
+                                    "normalized": true,
+                                    "position": {
+                                      "fn": "add",
+                                      "args": [
+                                        { "fn": "position" },
+                                        {
+                                          "fn": "vec",
+                                          "args": [
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.273765564] }, 580] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.261169434] }, 580] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.719299316] }, 580] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                0.62
+                              ]
+                            },
+                            {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "worleyNoise",
+                                  "opts": {
+                                    "frequency": 0.1155,
+                                    "output": "f2-f1",
+                                    "normalized": true,
+                                    "position": {
+                                      "fn": "add",
+                                      "args": [
+                                        { "fn": "position" },
+                                        {
+                                          "fn": "vec",
+                                          "args": [
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.261169434] }, 280] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.719299316] }, 280] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.273765564] }, 280] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                0.3
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "fn": "mul",
+                          "args": [
+                            {
+                              "fn": "randomField",
+                              "key": "sparkle"
+                            },
+                            0.08
+                          ]
+                        }
+                      ]
+                    },
+                    0,
+                    1
+                  ]
+                }
+              ],
+              "stops": [
+                [
+                  0,
+                  0.03
+                ],
+                [
+                  0.3,
+                  0.25
+                ],
+                [
+                  0.55,
+                  0.75
+                ],
+                [
+                  0.75,
+                  0.7
+                ],
+                [
+                  1,
+                  0.97
+                ]
+              ]
+            },
+            {
+              "fn": "ramp",
+              "args": [
+                {
+                  "fn": "clamp",
+                  "args": [
+                    {
+                      "fn": "add",
+                      "args": [
+                        {
+                          "fn": "add",
+                          "args": [
+                            {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "fbm",
+                                  "base": "simplexNoise",
+                                  "opts": {
+                                    "frequency": 0.055,
+                                    "octaves": 5,
+                                    "normalized": true,
+                                    "position": {
+                                      "fn": "add",
+                                      "args": [
+                                        { "fn": "position" },
+                                        {
+                                          "fn": "vec",
+                                          "args": [
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.273765564] }, 580] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.261169434] }, 580] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.719299316] }, 580] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                0.62
+                              ]
+                            },
+                            {
+                              "fn": "mul",
+                              "args": [
+                                {
+                                  "fn": "worleyNoise",
+                                  "opts": {
+                                    "frequency": 0.1155,
+                                    "output": "f2-f1",
+                                    "normalized": true,
+                                    "position": {
+                                      "fn": "add",
+                                      "args": [
+                                        { "fn": "position" },
+                                        {
+                                          "fn": "vec",
+                                          "args": [
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.261169434] }, 280] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.719299316] }, 280] },
+                                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.273765564] }, 280] }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                0.3
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "fn": "mul",
+                          "args": [
+                            {
+                              "fn": "randomField",
+                              "key": "sparkle"
+                            },
+                            0.08
+                          ]
+                        }
+                      ]
+                    },
+                    0,
+                    1
+                  ]
+                }
+              ],
+              "stops": [
+                [
+                  0,
+                  0.1
+                ],
+                [
+                  0.3,
+                  0.55
+                ],
+                [
+                  0.55,
+                  0.8
+                ],
+                [
+                  0.75,
+                  0.25
+                ],
+                [
+                  1,
+                  0.9
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "psize",
+      "type": "setAttribute",
+      "params": {
+        "name": "psize",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "add",
+          "args": [
+            0.35,
+            {
+              "fn": "add",
+              "args": [
+                {
+                  "fn": "mul",
+                  "args": [
+                    {
+                      "fn": "randomField",
+                      "key": "size"
+                    },
+                    0.5
+                  ]
+                },
+                {
+                  "fn": "mul",
+                  "args": [
+                    {
+                      "fn": "ramp",
+                      "args": [
+                        {
+                          "fn": "worleyNoise",
+                          "opts": {
+                            "frequency": 0.077,
+                            "output": "f1",
+                            "normalized": true,
+                            "position": {
+                              "fn": "add",
+                              "args": [
+                                { "fn": "position" },
+                                {
+                                  "fn": "vec",
+                                  "args": [
+                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.950515747] }, 400] },
+                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.0315704346] }, 400] },
+                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.639251709] }, 400] }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ],
+                      "stops": [
+                        [
+                          0,
+                          1
+                        ],
+                        [
+                          0.4,
+                          0.35
+                        ],
+                        [
+                          1,
+                          0.05
+                        ]
+                      ]
+                    },
+                    1.6
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        "scatter",
+        "out"
+      ],
+      "to": [
+        "wobble",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "wobble",
+        "out"
+      ],
+      "to": [
+        "jitter",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "jitter",
+        "out"
+      ],
+      "to": [
+        "place",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "place",
+        "out"
+      ],
+      "to": [
+        "color",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "color",
+        "out"
+      ],
+      "to": [
+        "psize",
+        "in"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "psize",
+      "pin": "out",
+      "name": "points"
+    }
+  ]
+}
+`;export{e as default};

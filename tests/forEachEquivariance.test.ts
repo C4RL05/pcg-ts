@@ -14,7 +14,7 @@
  *
  * WHY THIS FILE HAD TO BE WRITTEN RATHER THAN INHERITED. No existing suite
  * catches an index-keyed forEach. `crossPartition.test.ts` never builds a
- * multi-item collection; `corpus.test.ts` partitions in TIME, and a budget
+ * multi-item collection; `graphs.test.ts` partitions in TIME, and a budget
  * cannot reorder a collection, because a node body is atomic under one. An
  * index-keyed loop would have shipped green through everything.
  *

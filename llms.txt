@@ -309,7 +309,7 @@ into `constant`). All 44 fns (`listFieldFns()`):
     — that reaches ~1.3e4 world units and degrades to ~73 f32 steps per
     period at frequency 14. Never fold it inside a `forEach` body, whose
     seed varies per item. See `docs/authoring.md` "The seed-shift idiom"
-    and `examples/graphs/basics-reseed-a-noise.json`. It lands in an f32
+    and `graphs/basics-reseed-a-noise.json`. It lands in an f32
     column, so it is a
     decorrelation source and not an integer to compare. Not in `Field.key`
     (fixed at construction, while the seed arrives at evaluation) and it
@@ -561,7 +561,7 @@ The five moves, which are the whole vocabulary:
   sample sits on exactly one primitive. See "Paths and networks" for the
   exclusions and the refusal rule.
 
-`examples/graphs/pipeline-5-roads.json` runs all five in order
+`graphs/pipeline-5-roads.json` runs all five in order
 (`roadWeight` → `roadNet` → `roadClass`/`roadKind` → `roadWidth` →
 `roadJunction`), and `place/along-curve` then walks the whole net at once,
 each edge measured on its own length — its `roadPosts` emits 42 lamps,
@@ -841,9 +841,9 @@ because `filterByBounds` there would drop the topology rather than trim it
 (see "Networks").
 Worked example with code: docs/authoring.md,
 "Content that must NOT vary per cell".
-Runnable: `examples/04-infinite-world` (its "halo" and "world-anchored"
+Runnable: `demos/infinite-world` (its "halo" and "world-anchored"
 toggles reproduce each failure live) and
-`examples/graphs/basics-scatter-in-world.json`.
+`graphs/basics-scatter-in-world.json`.
 
 ## GPU field evaluation (pcg-ts/gpu)
 
@@ -1074,7 +1074,7 @@ Device-resident runs (fusion):
 - Cost model: a CONSTANT param (plain number or number tuple) costs a
   16-byte uniform slot and NO dispatch — only field-valued params
   materialize an `n`-element column. Measured at v0.6.1 on the
-  five-node fusable chain that was then `examples/08-gpu-fields` and is
+  five-node fusable chain that was then a demo page of its own and is
   now the corpus graph `examples-gpu-fields.json`: 120 bytes per point
   (was 212) and 9 member kernels (was 12). Constant values live in the
   uniform, never in generated WGSL: the apply-kernel key encodes only
@@ -1252,7 +1252,7 @@ multi-asset since v0.8.0:
   so the idiomatic way to COMPUTE an asset key (`type: "string"` with a
   `values` list and a field-capable selector) is not resident and the
   chain breaks THERE. When it feeds the spawner directly (the recipe
-  above, and `examples/02-forest`) the run holds ONLY the spawner —
+  above, and `graphs/examples-forest.json`) the run holds ONLY the spawner —
   report fusion depth honestly: one member, not four. Resident nodes
   BETWEEN the string write and the spawn still fuse with it, so depth
   is whatever survives downstream of the break; the chain in FRONT of
@@ -1470,9 +1470,9 @@ stale and a stale skill is worse than none.
   halos), the cost asymmetry you control, the SoA rules for hot loops,
   and the optimization determinism forbids.
 
-## Example corpus (index: docs/examples.md, machine-readable: docs/examples.json)
+## Example corpus (index: docs/graphs.md, machine-readable: docs/graphs.json)
 
-50 graphs under `examples/graphs/`, each named by what it teaches and
+50 graphs under `graphs/`, each named by what it teaches and
 carrying its own `meta` block: 38 single-concept `basics-*.json`, 4
 composed `examples-*.json`, plus the 8-file staged pipeline
 `pipeline-*.json` below. Every one cooks from
@@ -1491,7 +1491,7 @@ bounds within tolerance — never float dumps, which would fight every
 legitimate change), and cooks each one TWICE to assert byte-identical
 output.
 
-### The staged pipeline (`examples/graphs/pipeline-*.json`)
+### The staged pipeline (`graphs/pipeline-*.json`)
 
 A settlement built in five stages — `pipeline-1-boundary` →
 `-2-districts` → `-3-lots` → `-4-detail` → `-5-roads` — plus
@@ -1536,8 +1536,8 @@ not raised.
 - README.md — human tour with runnable examples
 - skills/ — the three doctrine skills above (graph-authoring,
   determinism, performance-and-budgets)
-- docs/examples.md — the example corpus indexed by what each file
-  teaches; docs/examples.json is the same, machine-readable
+- docs/graphs.md — the example corpus indexed by what each file
+  teaches; docs/graphs.json is the same, machine-readable
 - docs/nodes.md — full generated node reference (pins, params, defaults, ranges)
 - docs/nodes.json — the same registry metadata, machine-readable
 - docs/primitives.md — generated catalog of the shipped primitives
@@ -1548,24 +1548,25 @@ not raised.
 - docs/design.md — why the data model has the shape it has: why there are
   four domains and not three or five, why an edge is a primitive, what a
   fifth domain would have to prove to exist
-- examples/ — FOUR vite demos, plus the graph corpus they sit beside. A
-  demo exists only where a HOST is required to show the thing; anything
-  that is one cook of one graph is a corpus file instead, because a graph
-  an agent can run teaches more than a page it has to read.
-  - 01-sandbox is not a demo but a TOOL: it opens any corpus graph by
-    `?graph=<name>`, renders it, and gives you the node canvas, the
-    per-node inspector (including field-expression specs), the authored
-    param panel, a CPU/GPU cook-path switch, a lit/normals shading
-    switch, and export/import. It is the human half of the
-    agent-and-human ergonomics claim — start here to see what a graph
-    does before writing one.
-  - 02-infinite-world streams a `World`'s grid cells around a moving
+- sandbox/ — not a demo but a TOOL: it opens any corpus graph by
+  `?graph=<name>`, renders it, and gives you the node canvas, the
+  per-node inspector (including field-expression specs), the authored
+  param panel, a CPU/GPU cook-path switch, a lit/normals shading
+  switch, and export/import. It is the human half of the
+  agent-and-human ergonomics claim — start here to see what a graph
+  does before writing one.
+- demos/ — THREE vite demos, sitting beside the sandbox and the graph
+  corpus in `graphs/`. A demo exists only where a HOST is required to
+  show the thing; anything that is one cook of one graph is a corpus
+  file instead, because a graph an agent can run teaches more than a
+  page it has to read.
+  - infinite-world streams a `World`'s grid cells around a moving
     viewpoint, coarse to fine.
-  - 03-galaxy is a streamed spiral, the one with a render loop of its own.
-  - 04-gpu-world streams a World rendering from device-resident instance
+  - galaxy is a streamed spiral, the one with a render loop of its own.
+  - gpu-world streams a World rendering from device-resident instance
     transforms, with the binding's live handle count and the evaluator
     pool's detached-buffer accounting shown side by side.
   Retired into the corpus, and named here because older docs still cite
   them: the graph editor, the GPU-fields comparison, the headless demo,
   the forest, and the rig playground. The forest and the rig are
-  `examples/graphs/examples-forest.json` and `examples-rig.json`.
+  `graphs/examples-forest.json` and `examples-rig.json`.

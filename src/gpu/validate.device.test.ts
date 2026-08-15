@@ -7,17 +7,17 @@
  */
 import { describe, expect, it } from "vitest";
 import { compileFieldSpec } from "./compile.js";
-import { CORPUS_LAYOUT, corpusSpecs } from "./corpus.testsupport.js";
+import { PARITY_LAYOUT, paritySpecs } from "./parity.testsupport.js";
 import { runDeviceTasks } from "./runnerClient.js";
 import { deviceSuiteName, testDevice } from "./gpuDevice.testsupport.js";
 
 describe.skipIf(testDevice === null)(deviceSuiteName("WGSL front-end validation"), () => {
   it("accepts every representative kernel with zero errors", () => {
-    const specs = corpusSpecs();
+    const specs = paritySpecs();
     const tasks = specs.map(({ name, spec }) => ({
       name,
       mode: "validate" as const,
-      wgsl: compileFieldSpec(spec, CORPUS_LAYOUT).wgsl,
+      wgsl: compileFieldSpec(spec, PARITY_LAYOUT).wgsl,
     }));
     const results = runDeviceTasks(tasks);
     expect(results.length).toBe(specs.length);

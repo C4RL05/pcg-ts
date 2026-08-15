@@ -1,5 +1,5 @@
 /**
- * Deterministic geometry fixture matching `CORPUS_LAYOUT`, for the
+ * Deterministic geometry fixture matching `PARITY_LAYOUT`, for the
  * device parity suites: dense, varied, hash-derived attribute values
  * (no `Math.random`), stable across runs and platforms. Test-only.
  */
@@ -12,7 +12,7 @@ import { hashCombine, hashFloat } from "../random/index.js";
  * `uv` (f32x2 in [0, 1]), `active` (bool), `id` (u32), `material` (i32,
  * mixed signs).
  */
-export function makeCorpusGeometry(count: number): Geometry {
+export function makeParityGeometry(count: number): Geometry {
   const geo = new Geometry();
   const set = geo.attrs.point;
   const P = set.add("P", "f32", 3);

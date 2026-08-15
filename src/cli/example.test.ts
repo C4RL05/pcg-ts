@@ -1,8 +1,8 @@
 /**
  * One corpus graph driven through all four CLI verbs, which is what
- * `docs/examples.md` tells a reader to do with any of them — every entry
- * in the catalog prints `Cook it: pcg cook examples/graphs/<file>.json
- * --stats`. `tests/corpus.test.ts` already cooks the whole corpus through
+ * `docs/graphs.md` tells a reader to do with any of them — every entry
+ * in the catalog prints `Cook it: pcg cook graphs/<file>.json
+ * --stats`. `tests/graphs.test.ts` already cooks the whole corpus through
  * the library, so what is left to rot is the CLI's own path to a file: an
  * argument name, a report shape, a renderer flag. That is what this
  * covers, and one graph covers it.
@@ -19,7 +19,7 @@ import { EXIT_OK, runCli } from "./index.js";
 import type { CliIo } from "./io.js";
 
 const GRAPH = fileURLToPath(
-  new URL("../../examples/graphs/examples-headless-scatter.json", import.meta.url),
+  new URL("../../graphs/examples-headless-scatter.json", import.meta.url),
 );
 
 function realFileIo(): { io: CliIo; stdout(): string; files: Record<string, string> } {
@@ -37,7 +37,7 @@ function realFileIo(): { io: CliIo; stdout(): string; files: Record<string, stri
   };
 }
 
-describe("examples/graphs/examples-headless-scatter.json through the CLI", () => {
+describe("graphs/examples-headless-scatter.json through the CLI", () => {
   it("validates, carrying its meta block", async () => {
     const io = realFileIo();
     expect(await runCli(["validate", GRAPH, "--json"], io.io)).toBe(EXIT_OK);

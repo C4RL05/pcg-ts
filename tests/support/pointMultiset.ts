@@ -7,7 +7,7 @@
  * back together out of cells, two sides of a seam. Every comparator the
  * repo already has answers a different question.
  *
- * - `corpusFingerprint` (`src/docs/corpus.ts`) is float-exact but hashes
+ * - `graphFingerprint` (`src/docs/graphGolden.ts`) is float-exact but hashes
  *   each attribute COLUMN in index order, so any reordering is a total
  *   mismatch with nothing to read. Right for determinism, unusable here.
  * - `geometryDiff` (`src/runtime/runtime.testsupport.ts`) walks the buffers

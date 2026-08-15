@@ -4,7 +4,7 @@
  * determinism — all executed in the plain-Node device runner. Budgets
  * are asserted against the measured sweep on the reference adapter
  * (RTX 5090, D3D12) recorded next to each; see `PARITY_CASES` in
- * `corpus.testsupport.ts` for the derivation.
+ * `parity.testsupport.ts` for the derivation.
  *
  * Two budgets per family, asserted together because they fail for
  * different reasons: `rangeUlp` is the worst lane (an extreme-value
@@ -15,7 +15,7 @@
  *
  * Each float family is measured twice: once for the AUTHORED spec
  * (`fieldFromJson` JSON) and once for the code-authored twin carrying a
- * DERIVED spec, against the same budgets. `corpus.test.ts` pins that the
+ * DERIVED spec, against the same budgets. `parity.test.ts` pins that the
  * two compile to the byte-identical kernel, so any divergence between
  * the two measurements is a CPU-side difference, not a codegen one.
  */
@@ -25,7 +25,7 @@ import { evaluateField, type Column } from "../fields/index.js";
 import { fieldFromJson, getFieldSpec, type FieldSpec, type FieldSpecArg } from "../fields/fieldJson.js";
 import { compileFieldSpec } from "./compile.js";
 import {
-  CORPUS_LAYOUT,
+  PARITY_LAYOUT,
   DERIVED_FIELDS,
   EXTENDED_SPECS,
   PARITY_CASES,
@@ -33,14 +33,14 @@ import {
   PARITY_SEED,
   PARITY_SWEEP_COUNTS,
   type ParityCase,
-} from "./corpus.testsupport.js";
+} from "./parity.testsupport.js";
 import { decodeRun, dispatchTask, runDeviceTasks, type RunnerTask } from "./runnerClient.js";
 import {
   DEVICE_MEASUREMENT_TIMEOUT_MS,
   deviceSuiteName,
   testDevice,
 } from "./gpuDevice.testsupport.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 
 /**
  * CPU reference for one spec over `geo` (whose point count IS the
@@ -49,7 +49,7 @@ import { makeCorpusGeometry } from "./testGeometry.js";
  * The geometry is a parameter rather than built here on purpose: this
  * runs once per family per count, and rebuilding a 262 144-point fixture
  * 19 times was costing more than the device dispatches it is compared
- * against. `makeCorpusGeometry` is deterministic, so sharing one
+ * against. `makeParityGeometry` is deterministic, so sharing one
  * instance across families changes no measured value.
  */
 function cpuColumn(geo: Geometry, spec: FieldSpecArg, seed: number): Column {
@@ -250,18 +250,18 @@ const BITEXACT_SEEDS = [0, 1, 0xdeadbeef, -7];
 // ---------------------------------------------------------------------------
 // float parity section. `PARITY_CASES` (authored specs + measured
 // per-family budgets), `DERIVED_FIELDS` (their code-authored twins), and
-// PARITY_COUNT/PARITY_SEED live in `corpus.ts`: `corpus.test.ts` has to
+// PARITY_COUNT/PARITY_SEED live in `parity.testsupport.ts`: `parity.test.ts` has to
 // pin the twins against the same authored specs this suite measures, and
 // importing one `*.test.ts` from another would re-register this whole
 // device suite inside that CPU-only one.
 
 describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
   it("hash/u32 streams are bit-exact across counts and seeds", () => {
-    const geo = makeCorpusGeometry(10_000);
+    const geo = makeParityGeometry(10_000);
     const tasks: RunnerTask[] = [];
     const kernels = new Map<string, ReturnType<typeof compileFieldSpec>>();
     for (const [name, spec] of Object.entries(BITEXACT_SPECS)) {
-      kernels.set(name, compileFieldSpec(spec, CORPUS_LAYOUT));
+      kernels.set(name, compileFieldSpec(spec, PARITY_LAYOUT));
     }
     for (const [name, kernel] of kernels) {
       for (const count of BITEXACT_COUNTS) {
@@ -275,7 +275,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // One fixture per count, shared across the 16 (spec, seed) pairs that
     // read it: the CPU reference needs a geometry whose point count IS
     // the dispatched count, and building 80 of them is pure overhead.
-    const geoByCount = new Map(BITEXACT_COUNTS.map((c) => [c, makeCorpusGeometry(c)]));
+    const geoByCount = new Map(BITEXACT_COUNTS.map((c) => [c, makeParityGeometry(c)]));
     for (const result of results) {
       const [name, c, s] = result.name.split("|");
       const kernel = kernels.get(name)!;
@@ -295,9 +295,9 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // divide-by-zero guard, where CPU `n > 1 ? n - 1 : 1` and WGSL
     // `max(count, 2u) - 1u` must land on the same divisor) and 2 (the
     // first count that actually divides).
-    const geo = makeCorpusGeometry(10_000);
+    const geo = makeParityGeometry(10_000);
     const spec: FieldSpecArg = { fn: "fraction" };
-    const kernel = compileFieldSpec(spec, CORPUS_LAYOUT);
+    const kernel = compileFieldSpec(spec, PARITY_LAYOUT);
     const counts = [1, 2, 3, 5, 63, 64, 65, 1000, 10_000];
     const results = runDeviceTasks(
       counts.map((c) => dispatchTask(`c${c}`, kernel, geo, c, PARITY_SEED)),
@@ -307,7 +307,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
       const count = counts[i];
       expect(results[i].errors, `count ${count}`).toEqual([]);
       const gpu = decodeRun(kernel, results[i].runs![0]);
-      const cpu = cpuColumn(makeCorpusGeometry(count), spec, PARITY_SEED);
+      const cpu = cpuColumn(makeParityGeometry(count), spec, PARITY_SEED);
       // The advertised range, asserted on BOTH sides: exactly 0 at the
       // first element and exactly 1 at the last (0 when there is only
       // one). No lane may be NaN at any count.
@@ -342,8 +342,8 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
   });
 
   it("float parity per op family stays within measured budgets", () => {
-    const geo = makeCorpusGeometry(PARITY_COUNT);
-    const kernels = PARITY_CASES.map((pc) => compileFieldSpec(pc.spec, CORPUS_LAYOUT));
+    const geo = makeParityGeometry(PARITY_COUNT);
+    const kernels = PARITY_CASES.map((pc) => compileFieldSpec(pc.spec, PARITY_LAYOUT));
     const tasks = PARITY_CASES.map((pc, i) =>
       dispatchTask(pc.name, kernels[i], geo, PARITY_COUNT, PARITY_SEED),
     );
@@ -373,10 +373,10 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // The comparison a user who wrote `mul(position(), 0.1)` actually
     // cares about: the GPU result of the DERIVED spec against the CPU
     // evaluation of THAT FIELD — not against a rebuild of the authored
-    // JSON. `corpus.test.ts` already pins that the two specs compile to
+    // JSON. `parity.test.ts` already pins that the two specs compile to
     // the identical kernel, so reusing the authored budgets is sound and
     // any drift here is a CPU-side difference.
-    const geo = makeCorpusGeometry(PARITY_COUNT);
+    const geo = makeParityGeometry(PARITY_COUNT);
     const fields = PARITY_CASES.map((pc) => {
       const make = DERIVED_FIELDS[pc.name];
       expect(make, `${pc.name}: no code-authored twin`).toBeDefined();
@@ -385,7 +385,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     const kernels = fields.map((field, i) => {
       const spec = getFieldSpec(field);
       expect(spec, `${PARITY_CASES[i].name}: derived spec`).toBeDefined();
-      return compileFieldSpec(spec as FieldSpec, CORPUS_LAYOUT);
+      return compileFieldSpec(spec as FieldSpec, PARITY_LAYOUT);
     });
     const tasks = PARITY_CASES.map((pc, i) =>
       dispatchTask(pc.name, kernels[i], geo, PARITY_COUNT, PARITY_SEED),
@@ -425,11 +425,11 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // a real change in the interior rather than a deeper tail.
     const cases = PARITY_CASES.filter((pc) => pc.countSensitive === true);
     expect(cases.length, "count-sensitive families in the table").toBeGreaterThan(0);
-    const kernels = cases.map((pc) => compileFieldSpec(pc.spec, CORPUS_LAYOUT));
+    const kernels = cases.map((pc) => compileFieldSpec(pc.spec, PARITY_LAYOUT));
     const swept = cases.map(() => ({ ru: [] as string[], ma: [] as string[] }));
     const over: string[] = [];
     for (const count of PARITY_SWEEP_COUNTS) {
-      const geo = makeCorpusGeometry(count);
+      const geo = makeParityGeometry(count);
       const results = runDeviceTasks(
         cases.map((pc, i) => dispatchTask(pc.name, kernels[i], geo, count, PARITY_SEED)),
       );
@@ -461,7 +461,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // list. Divergence here is documented GIGO contract, not a defect:
     // this test asserts the invariants that must hold on any adapter and
     // logs the measured divergence lines for the documentation.
-    const geo = makeCorpusGeometry(64);
+    const geo = makeParityGeometry(64);
     const P = geo.attrs.point.require("P");
     const density = geo.attrs.point.require("density");
     // Rows 0..3: normalize/length extremes (+ a control row).
@@ -486,7 +486,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
       subnormalMul: { fn: "mul", args: [{ fn: "attribute", name: "density" }, 1e-40] },
     };
     const kernels = Object.fromEntries(
-      Object.entries(probes).map(([name, spec]) => [name, compileFieldSpec(spec, CORPUS_LAYOUT)]),
+      Object.entries(probes).map(([name, spec]) => [name, compileFieldSpec(spec, PARITY_LAYOUT)]),
     );
     const results = runDeviceTasks(
       Object.entries(kernels).map(([name, kernel]) => dispatchTask(name, kernel, geo, 64, 1)),
@@ -563,14 +563,14 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
   });
 
   it("dispatches are deterministic run to run", () => {
-    const geo = makeCorpusGeometry(4096);
+    const geo = makeParityGeometry(4096);
     const picks: Array<[string, FieldSpecArg]> = [
       ["randomField", { fn: "randomField" }],
       ["fbmPerlin", EXTENDED_SPECS.fbmPerlin],
       ["worleyExact", EXTENDED_SPECS.worleyExact],
       ["composite", EXTENDED_SPECS.composite],
     ];
-    const kernels = picks.map(([, spec]) => compileFieldSpec(spec, CORPUS_LAYOUT));
+    const kernels = picks.map(([, spec]) => compileFieldSpec(spec, PARITY_LAYOUT));
     const tasks = picks.map(([name], i) => dispatchTask(name, kernels[i], geo, 4096, 42, 3));
     const results = runDeviceTasks(tasks);
     for (let i = 0; i < picks.length; i++) {

@@ -40,7 +40,7 @@ import { setAttribute } from "../nodes/index.js";
 import { dataInput } from "../runtime/dataInput.js";
 import type { GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 
 interface Bindings {
   readonly [name: string]: number | readonly number[];
@@ -198,7 +198,7 @@ async function main(): Promise<void> {
   const device = (await adapter.requestDevice()) as unknown as GpuDeviceLike;
   const ev = new GpuFieldEvaluator(device);
 
-  const geo = makeCorpusGeometry(COUNT);
+  const geo = makeParityGeometry(COUNT);
   const ctx = { geo, domain: "point" as const, seed: SEED };
 
   // -- 1. per-field parity -------------------------------------------------
@@ -288,7 +288,7 @@ async function main(): Promise<void> {
   const fusedGraph = (target: number): Graph => {
     const g = new Graph(5);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(COUNT))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(COUNT))]);
     const a = g.add(setAttribute, {
       name: "scaled",
       value: fieldFromJson(
@@ -521,7 +521,7 @@ async function main(): Promise<void> {
   const splicedFusedGraph = (bound: FieldSpec): Graph => {
     const g = new Graph(5);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(COUNT))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(COUNT))]);
     const a = g.add(setAttribute, {
       name: "scaled",
       value: fieldFromJson(SPLICE_SPEC, { amp: fieldFromJson(bound) }),

@@ -419,7 +419,7 @@ type OrientAxis = (typeof ORIENT_AXES)[number];
  * members; see the note on the executor's suffix retry below) — so both
  * will look like something to optimize. They are not.
  *
- * That chain ships as `examples/graphs/examples-gpu-fields.json`, where
+ * That chain ships as `graphs/examples-gpu-fields.json`, where
  * the tint member is the node named `color` — the name the three.js
  * adapter reads as vertex colours. It is called tint throughout this
  * file and in the fixtures that model it.

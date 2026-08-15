@@ -2,7 +2,7 @@
 /**
  * preview.mjs — render an arbitrary serialized graph and write the frames.
  *
- *   npm run preview -- examples/graphs/basics-spawn-instances.json
+ *   npm run preview -- graphs/basics-spawn-instances.json
  *   npm run preview -- my-forest.json --views hero,ground --extent 200
  *
  * ---------------------------------------------------------------------------
@@ -244,11 +244,11 @@ async function main() {
     ...(opts.grid ? { grid: true } : {}),
   };
 
-  // The vite DEV server, not a build: the aliases in examples/vite.config.ts
+  // The vite DEV server, not a build: the aliases in vite.config.ts
   // point at src/, so the preview always exercises current source, and an
   // iterate-and-look loop pays no build per cycle.
   const server = await createServer({
-    configFile: join(ROOT, "examples", "vite.config.ts"),
+    configFile: join(ROOT, "vite.config.ts"),
     logLevel: "warn",
     server: { port: 0 },
   });

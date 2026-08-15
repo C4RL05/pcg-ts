@@ -8,13 +8,19 @@ coverage/
 
 # `npm run preview` output: iteration frames plus their sidecar. These are
 # working artefacts of an authoring loop, not documentation assets — the
-# committed screenshots are the nine under docs/, produced by `npm run
+# committed screenshots are the ones under docs/, produced by `npm run
 # capture`.
 #
-# Anchored with a leading slash. Unanchored, this pattern matches a
-# directory named `preview` at ANY depth, which silently swallows the
-# preview PAGE at examples/preview/ — source that must be committed.
-/preview/
+# ALLOW-LIST, NOT A PLAIN IGNORE, and that is not fussiness. The preview
+# PAGE now lives at `preview/` (index.html + main.ts, source that must be
+# committed) and the script writes its frames, sidecars and scratch probes
+# into the same folder, because `--out` defaults to the page's own name.
+# Ignoring `/preview/` wholesale would silently swallow the page; listing
+# extensions would let the next kind of scratch file through. So: ignore
+# everything under it and re-admit exactly the two files that are source.
+/preview/*
+!/preview/index.html
+!/preview/main.ts
 
 # Scratch git worktrees used to isolate concurrent agents. These are real
 # repositories, so an unqualified `git add -A` commits one as a gitlink and

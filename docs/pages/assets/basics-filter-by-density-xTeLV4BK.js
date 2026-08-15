@@ -1,0 +1,64 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 1007,
+  "meta": {
+    "title": "thin a cloud by the density attribute",
+    "description": "The standard thinning idiom: write the standard \`density\` attribute from a 0..1 noise field, then let \`filterByDensity\` in mode 'probabilistic' keep each point with probability equal to its own density. The result is soft-edged — dense regions stay full, sparse ones fade out, with no visible boundary. Mode 'threshold' on the same input gives the hard-edged version instead.",
+    "tags": ["basics", "filter", "density", "noise"]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInBounds",
+      "params": {
+        "count": 1500,
+        "boundsMin": [-40, 0, -40],
+        "boundsMax": [40, 0, 40]
+      }
+    },
+    {
+      "id": "density",
+      "type": "setAttribute",
+      "params": {
+        "name": "density",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "fbm",
+          "base": "perlinNoise",
+          "opts": {
+            "frequency": 0.02,
+            "octaves": 4,
+            "normalized": true,
+            "position": {
+              "fn": "add",
+              "args": [
+                { "fn": "position" },
+                {
+                  "fn": "vec",
+                  "args": [
+                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.357849121] }, 1600] },
+                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.312988281] }, 1600] },
+                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.989501953] }, 1600] }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "thin",
+      "type": "filterByDensity",
+      "params": { "mode": "probabilistic", "seed": 5 }
+    }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["density", "in"] },
+    { "from": ["density", "out"], "to": ["thin", "in"] }
+  ],
+  "outputs": [{ "id": "thin", "pin": "out", "name": "points" }]
+}
+`;export{e as default};

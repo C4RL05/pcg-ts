@@ -43,8 +43,9 @@ jobs:
       - run: npm ci
 
       # BUILD FIRST. Not the obvious order, and the first CI run proved
-      # why: examples/** import the library by package NAME ("pcg-ts",
-      # "pcg-ts/three", "pcg-ts/gpu"), which resolves through the
+      # why: the browser pages (sandbox/, demos/**, preview/, shared/)
+      # import the library by package NAME ("pcg-ts", "pcg-ts/three",
+      # "pcg-ts/gpu"), which resolves through the
       # package.json exports map into dist/. A clean checkout has no
       # dist/, so `tsc --noEmit` cannot resolve them and reports 79
       # errors that never appear on a developer machine, where dist/ is

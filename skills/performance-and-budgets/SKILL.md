@@ -98,8 +98,8 @@ const b = await cook(deserializeGraph(json), { budgetMs: 0 });
 ```
 
 Run across the whole corpus at phase 40 (34 graphs then): zero differed.
-The corpus suite itself cooks every example under `CORPUS_BUDGET_MS = 8`
-(`src/docs/corpus.ts`) for the same reason — exercising the partitioned
+The corpus suite itself cooks every example under `GRAPHS_BUDGET_MS = 8`
+(`src/docs/graphGolden.ts`) for the same reason — exercising the partitioned
 path on real graphs is free and would otherwise go untested.
 
 **Know its limit, because it is narrower than it looks.** There are two

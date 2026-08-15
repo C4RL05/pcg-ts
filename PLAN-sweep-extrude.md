@@ -28,7 +28,7 @@ topology a swept surface needs (`src/data/geometry.ts:17-25`),
 primitives to three and already fan-triangulates n-gons
 (`src/three/convert.ts:357-387`), and the sandbox already draws one
 geometry's `poly` and `polyline` primitives side by side in a single
-item (`examples/shared/draw.ts:157-170`). **A node that returns a
+item (`shared/draw.ts:157-170`). **A node that returns a
 `createTriangleMesh` result is visible with no change to `src/three`
 and no change to `src/data`.**
 
@@ -114,7 +114,7 @@ produces, from params alone:
   shape `box` = six of them, faces not sharing points so uv seams are
   exact.
 
-`examples/graphs/basics-mesh-primitive.json` is a **one-node graph**: a
+`graphs/basics-mesh-primitive.json` is a **one-node graph**: a
 40x40 `xz` plane at 8x8 subdivisions, one declared output. It exists to
 say that this is the only mesh source that survives serialization —
 `dataInput` items are injected at runtime and a saved graph carries none
@@ -172,7 +172,7 @@ Two entirely separate bridges, and the mesh one already exists:
 
 `drawItem` runs the mesh exporter when `counts.poly > 0`, the line
 exporter when `counts.polyline > 0`, and suppresses the point cloud when
-either drew (`examples/shared/draw.ts:131-177`). Both run on the *same*
+either drew (`shared/draw.ts:131-177`). Both run on the *same*
 geometry, so a mesh with leftover polylines draws both.
 
 **So the bridge a swept surface needs is already built.** The one real
@@ -221,7 +221,7 @@ class of mesh the library own consumers cannot see.**
 
 ## 3. Consumer survey
 
-Measured today across all **46** graphs in `examples/graphs/`.
+Measured today across all **46** graphs in `graphs/`.
 
 ### 3.1 The rig — `examples-rig.json`
 
@@ -231,10 +231,10 @@ times: 12 at top level plus `wrapSolid` inside the `wrapWraps` `forEach`
 body. Corpus-wide `pathSegments` is **14** — those 13 plus one in
 `basics-path-segments.json`. No `src/primitives` recipe wraps it.
 
-Cook: `82 cooked, 0 cached, 78 ms` against a `CORPUS_TIME_LIMIT_MS` of
-**10 000** (`src/docs/corpus.ts`).
+Cook: `82 cooked, 0 cached, 78 ms` against a `GRAPHS_TIME_LIMIT_MS` of
+**10 000** (`src/docs/graphGolden.ts`).
 
-Instance counts are from `tests/corpus.golden.json`; ring, segment and
+Instance counts are from `tests/graphs.golden.json`; ring, segment and
 turn-angle figures I measured by cooking each `pathSegments` input.
 
 | site | asset | paths | rings | segments | instances | max turn | becomes |
@@ -248,7 +248,7 @@ turn-angle figures I measured by cooking each `pathSegments` input.
 | `chainSegments` | **chainLink** | 7 | 245 | 238 | 238 | **0.0 deg** | **stays `pathSegments`** |
 
 **12 of 13 become sweeps; one does not.** `chainSegments` places a
-discrete stadium-shaped link per segment (`examples/shared/assets.ts:57-61`
+discrete stadium-shaped link per segment (`shared/assets.ts:57-61`
 builds it with the three.js `TubeGeometry`), and a swept surface cannot
 express a chain of separate links. `pathSegments` keeps a job: *one
 oriented asset per segment*. What it loses is its second, borrowed job:
@@ -282,7 +282,7 @@ not one on resampled path points.
 `trussChords`, `trussBraces`, `trussCorners`, `wrapMerged`. Three of them
 sit *downstream of* a `pathSegments`, so with sweeps they would delete
 the very surface just built. **This is not a blocker**, because
-`examples/01-sandbox/main.ts:222-232` iterates every item of an output
+`sandbox/main.ts:222-232` iterates every item of an output
 collection and calls `drawItem` per item — a `forEach` emitting 16 mesh
 items renders fine. The three merges get deleted and each output becomes
 a multi-item collection. `PLAN.md:144-147` already carries "a
@@ -366,7 +366,7 @@ mesh out.
 | param | type | default | notes |
 |---|---|---|---|
 | `profile` | enum | `"circle"` | `circle` / `square` / `ribbon` |
-| `sides` | i32 | `8` | `circle` only. 8 matches the shipped `tube` asset, `CylinderGeometry(1,1,1,8)` (`examples/shared/assets.ts:119`) |
+| `sides` | i32 | `8` | `circle` only. 8 matches the shipped `tube` asset, `CylinderGeometry(1,1,1,8)` (`shared/assets.ts:119`) |
 | `radius` | f32, **field** | `0.05` | `circle` and `square`. Same default as `pathSegments.radius` |
 | `width` | f32, **field** | `1` | `ribbon` |
 | `frame` | enum | `"upHint"` | `upHint` / `curveFrame` / `rot` — §4.3 |
@@ -776,7 +776,7 @@ column duplicated (§6.2) and triangles rather than quads (§2.1):
 
 That last row is the one that surprises: `tube` is
 `CylinderGeometry(1, 1, 1, 8)` with caps
-(`examples/shared/assets.ts:119`), so 32 triangles per instance.
+(`shared/assets.ts:119`), so 32 triangles per instance.
 **A swept surface renders HALF the triangles the instanced fake does**,
 because it shares rings between segments and grows no caps. The trade is
 honest and it is memory for continuity: 19x the host bytes, half the
@@ -802,12 +802,12 @@ margin. I have not measured it and cannot until it is built.
 per-point attributes (`points.ts:16-25`), unchanged in shape. Nothing
 downstream of a mesh in the corpus does a neighbourhood query.
 
-**What might notice, and I have not measured it.** `corpusFingerprint`
+**What might notice, and I have not measured it.** `graphFingerprint`
 hashes every attribute column, the topology arrays and every instance
-transform (`tests/corpus.test.ts:69-73`), and the corpus determinism
+transform (`tests/graphs.test.ts:69-73`), and the corpus determinism
 tests cook each graph **twice** and fingerprint both. A 118 000-primitive
 geometry makes that about 10 MB of hashing per cook, four times per
-graph. **The measurement to take before step 5: run `tests/corpus.test.ts`
+graph. **The measurement to take before step 5: run `tests/graphs.test.ts`
 against a swept rig and read the wall clock, not the per-graph budget.**
 
 **The pipeline is free**: about 808 new triangles against a 38 ms cook.
@@ -846,7 +846,7 @@ walls, fan-triangulated caps with consistent winding, open-path refusal.
 mirroring the `filterByAttribute` comparison enum over
 `gatherPrimitives`. **S.** Plus two corpus graphs
 (`basics-sweep-profile.json`, `basics-extrude-polygon.json`) and the
-generated docs: `docs/nodes.{md,json}`, `docs/examples.*`, `llms.txt`,
+generated docs: `docs/nodes.{md,json}`, `docs/graphs.*`, `llms.txt`,
 and the `COUNT_CLAIMS` entries for "registered node types" (two, at
 `src/docs/site.ts:284-295`) and "corpus graphs" (one, at `:320-328`).
 **M.**
@@ -886,7 +886,7 @@ Every instance-shaped golden entry becomes a geometry-shaped one. **L.**
 "named primitives" `COUNT_CLAIMS` (`site.ts:296-313`) and
 `docs/primitives.*`. **S.**
 
-**Step 5d — regenerate** `tests/corpus.golden.json` and re-time the suite
+**Step 5d — regenerate** `tests/graphs.golden.json` and re-time the suite
 against the §6.6 concern. **S.**
 
 Unit A is about 12 files. Unit B is about 14 more, and every corpus
@@ -921,7 +921,7 @@ golden moves in it.
    but it is a third node type in a plan that claims to add two.
 
 5. **Is `sides = 8` the right default?** It matches the shipped `tube`
-   asset exactly (`examples/shared/assets.ts:119`), so the swept rig
+   asset exactly (`shared/assets.ts:119`), so the swept rig
    looks like the instanced rig it replaces. A higher default looks
    better and costs linearly.
 
@@ -930,7 +930,7 @@ golden moves in it.
 - **Cook time of a swept rig.** The 150-350 ms in §6.6 is an
   extrapolation from the 5.4 ms of `drapeDrapeTube`, not a measurement.
   It is the number in this document most likely to be wrong.
-- **`tests/corpus.test.ts` wall clock** with a 118 000-primitive geometry
+- **`tests/graphs.test.ts` wall clock** with a 118 000-primitive geometry
   in it, cooked four times and fingerprinted. The per-graph 10 s budget
   is not the binding constraint; the total suite runtime might be.
 - **Whether the `pathResample` ring density is the right sweep density.**

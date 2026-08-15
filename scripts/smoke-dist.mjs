@@ -177,11 +177,11 @@ const cliCases = [
     },
   },
   {
-    name: "CLI: pcg validate examples/graphs/basics-primitive-ref.json",
+    name: "CLI: pcg validate graphs/basics-primitive-ref.json",
     // A graph whose "ref" node resolves a registered primitive — validation
     // fails unless both the node AND primitive registries populated. Also a
     // corpus graph, so this same command works against a packed tarball.
-    args: [join(root, "bin/pcg.mjs"), "validate", join(root, "examples/graphs/basics-primitive-ref.json")],
+    args: [join(root, "bin/pcg.mjs"), "validate", join(root, "graphs/basics-primitive-ref.json")],
     check: (out) => {
       if (!out.includes("ok")) return "validate did not report ok";
       return undefined;

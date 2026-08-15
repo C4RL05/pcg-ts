@@ -1,0 +1,41 @@
+{
+  "_comment": "Panel spec \u2014 presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "scatter",
+      "controls": [
+        {
+          "param": "scatter.count",
+          "label": "candidates",
+          "min": 100,
+          "max": 6000,
+          "step": 100
+        },
+        {
+          "param": "scatter.seed",
+          "label": "seed"
+        }
+      ]
+    },
+    {
+      "title": "thinning",
+      "controls": [
+        {
+          "param": "thin.mode",
+          "label": "mode"
+        },
+        {
+          "param": "thin.threshold",
+          "label": "threshold",
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "param": "thin.seed",
+          "label": "seed"
+        }
+      ]
+    }
+  ]
+}

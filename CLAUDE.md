@@ -88,16 +88,34 @@ Not public API:
   deliberately absent from `package.json` `exports`
 - `tests/` — cross-module integration and determinism suites (unit tests are
   co-located as `src/**/*.test.ts`)
-- `examples/` — vite multi-page demos
 - `scripts/` — doc/catalog generators, demo capture, preview, dist smoke
+
+The browser pages. One vite app rooted at the repository root
+(`vite.config.ts`, `index.html`), because what it serves no longer shares
+a parent — these are three different kinds of thing and the old single
+`examples/` directory hid that:
+
+- `sandbox/` — a TOOL, not a demo: it opens any graph in `graphs/` and
+  edits it live. It carried a `01-` prefix once, which is exactly what
+  made it read as the first demo
+- `demos/` — `infinite-world`, `galaxy`, `gpu-world`. Unnumbered on
+  purpose: three of them encode no order. Each exists because what it
+  shows needs a host — a streamed world, a device-resident renderer
+- `graphs/` — the graph corpus: test fixtures, documentation source and
+  teaching material at once. `graphs/panels/` carries the optional
+  presentation spec the sandbox reads for a graph
+- `preview/` — the page `scripts/preview.mjs` drives. It shares its
+  directory with that script's output, which is why `.gitignore` re-admits
+  its two source files by name
+- `shared/` — chrome and helpers common to all of the above
 
 ## Commands
 
 - `npm test` — vitest run (unit + integration)
 - `npm run build` — build the library (subpath exports: `.`, `./three`)
 - `npm run check` — `tsc --noEmit`; needs a current `dist/` first, because
-  `examples/` import `pcg-ts` by package name
-- `npm run examples` — vite dev server for the examples
+  the browser pages import `pcg-ts` by package name
+- `npm run examples` — vite dev server for the sandbox and the demos
 - `npm run preview -- <graph.json>` — render any serialized graph from
   fixed camera poses (hero / ground / top) into `preview/`, with a JSON
   sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a
@@ -105,7 +123,7 @@ Not public API:
 - `npm run capture` — regenerate the committed demo screenshots
 - `npm run docs` — regenerate the catalogs under `docs/` (nodes,
   primitives, examples, site). CI fails if these are stale
-- `npm run corpus:golden` — regenerate the example-corpus golden file
+- `npm run graphs:golden` — regenerate the graph corpus' golden file
 
 ## Conventions
 

@@ -27,7 +27,7 @@ import { acceptsDerivedSpecs, resolverView } from "../fields/spec.js";
 import { Graph, cook, makeGeometryItem, type CookResult } from "../graph/index.js";
 import { setAttribute } from "../nodes/index.js";
 import { dataInput } from "../runtime/index.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 import { attrColumn, collectSourceFiles, cpuResolveField } from "./testHelpers.js";
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ function sentinelProbe(acceptDerivedSpecs: boolean): Probe {
 function derivedGraph(): { g: Graph; id: string } {
   const g = new Graph(7);
   const din = g.add(dataInput);
-  g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(16))]);
+  g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(16))]);
   const n = g.add(setAttribute, { name: "d", value: randomField("authored") as never });
   g.connect(din, "out", n, "in");
   g.output(n, "out", "out");

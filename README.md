@@ -17,7 +17,7 @@ machine-readable metadata, graphs serialize to a stable JSON format, and
 errors name the offending node, pin, or param. Agent-facing entry points:
 [llms.txt](./llms.txt), [docs/nodes.md](./docs/nodes.md),
 [docs/primitives.md](./docs/primitives.md),
-[docs/examples.md](./docs/examples.md),
+[docs/graphs.md](./docs/graphs.md),
 [docs/authoring.md](./docs/authoring.md),
 [docs/design.md](./docs/design.md), and three doctrine skills in
 [skills/](./skills) — `graph-authoring` (what to read first, primitive
@@ -251,8 +251,8 @@ at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
-reference (generated from the registry). The `01-sandbox` example
-is this section as an app: an interactive node editor built entirely on
+reference (generated from the registry). The `sandbox/` tool is
+this section as an app: an interactive node editor built entirely on
 `listNodeTypes()` (palette grouped by category), the live graph's
 validation, and `serializeGraph`/`deserializeGraph` — and it edits the
 live graph through the mutation API rather than rebuilding from JSON,
@@ -433,7 +433,7 @@ between them. Downstream ops stay anchored on their own —
 an array index, so an upstream filter that renumbers everything cannot
 move a survivor's draw. The seeded ones still need a cell-invariant seed;
 [docs/authoring.md](./docs/authoring.md) ("Content that must NOT vary per
-cell") has the full table, and `examples/02-infinite-world` reproduces
+cell") has the full table, and `demos/infinite-world` reproduces
 each failure live with a toggle.
 
 Levels use square XZ-plane cells by default; `cellMode: "xyz"` switches
@@ -486,8 +486,8 @@ a direction attribute (a surface normal, a spline tangent) into the
 standard `rot` quaternion without leaving the graph. Since v0.8.0 such
 a spawn can be device-resident too — composed on the GPU and handed to
 the renderer without a CPU round trip — not just a CPU one. See
-`examples/graphs/examples-forest.json` and
-`examples/graphs/basics-props-along-a-path.json`.
+`graphs/examples-forest.json` and
+`graphs/basics-props-along-a-path.json`.
 
 **Per-instance colour, and why you have to ask for it.** Splitting into
 more asset ids is not the only variation channel. Point `spawnInstances`'
@@ -666,7 +666,7 @@ Three things to know before reading a benchmark:
 - **Constant params ride the run uniform, not a column.** A plain
   `translate: [0, 0, 0]` costs a 16-byte uniform slot and no dispatch;
   only field-valued params materialize an `n`-element temporary. In
-  the `examples/graphs/examples-gpu-fields.json` chain that is 120 of
+  the `graphs/examples-gpu-fields.json` chain that is 120 of
   the 156 bytes per point the run used to hold (−23%) and 9 member
   kernels instead of 12. Constant *values* live in the uniform and never in the generated
   WGSL, so editing one rebinds a buffer and hits the pipeline cache
@@ -772,7 +772,7 @@ three paths — CPU, GPU per-node (fusion switched off), and one fused
 device-resident run — under a graph that does not change, and its
 status line carries the wall time, the output hash and the full
 `CookStats.gpu` counter set for whichever is selected. Open it on
-[`examples-gpu-fields`](./examples/graphs/examples-gpu-fields.json),
+[`examples-gpu-fields`](./graphs/examples-gpu-fields.json),
 a five-node fusable chain, and watch two numbers: the time moves, and
 the hash holds across the two device paths but not across the CPU.
 
@@ -932,7 +932,7 @@ resident predicate excludes `type: "string"`. So the idiomatic way to
 *compute* an asset key — `setAttribute` with `type: "string"` and a
 field-capable selector over a `values` list — is not resident, and the
 chain breaks there. Where it feeds the spawner directly, as in the
-recipe above and in `examples/graphs/examples-forest.json`, the run holds only the
+recipe above and in `graphs/examples-forest.json`, the run holds only the
 spawner: one fused member, not four. Resident nodes sitting *between*
 the string write and the spawn still fuse with it, so the depth is
 whatever survives downstream of the break, and the chain in front of
@@ -1060,12 +1060,12 @@ handle leaves the cook and goes to the renderer, never into a seed, an
 index, or a subsequent cook. What it *does* mean: if you need matrices
 that match the CPU bit for bit, do not turn `deviceInstances` on.
 
-See it live: [`examples/04-gpu-world`](./examples/04-gpu-world) streams
+See it live: [`demos/gpu-world`](./demos/gpu-world) streams
 a `World` whose cells render from instance matrices that never touch
 the CPU, showing the binding's live handle count and the evaluator
 pool's own detached-buffer accounting side by side — an independent
 second opinion on the lifetime story above. For the multi-asset shape,
-[`examples/graphs/examples-forest.json`](./examples/graphs/examples-forest.json) spawns with
+[`graphs/examples-forest.json`](./graphs/examples-forest.json) spawns with
 `assetAttr: "species"` and toggles between the CPU and device-resident
 paths, reporting the batch count and the fusion depth it actually
 achieves (one member — the spawn — for the reason above).
@@ -1127,17 +1127,17 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-The `examples/` directory contains six vite multi-page demos, each one
-something a serialized graph cannot be on its own: an infinite streaming
-world, an infinite deterministic spiral galaxy with click-to-visit star
-systems, a million-point WebGPU cook comparing CPU, per-node GPU and one
-fused device-resident run, a streamed world drawing from device-resident
-instance transforms, a suspended rig whose topology is a function of its
-params, and the sandbox — a registry-driven node-graph editor that opens
-any graph in `examples/graphs/`, edits it live and links to the result.
+`demos/` holds three vite pages, each one something a serialized graph
+cannot be on its own: an infinite streaming world, an infinite
+deterministic spiral galaxy with click-to-visit star systems, and a
+streamed world drawing from device-resident instance transforms.
+`sandbox/` beside them is a tool rather than a demo — a registry-driven
+node-graph editor that opens any graph in `graphs/`, edits it live,
+compares the CPU, per-node GPU and fused device-resident cook paths on
+it, and links to the result.
 
 A recipe that is only one cook of one graph is not a demo here; it is a
-file in `examples/graphs/`, cooked by `pcg cook`, rendered by `npm run
+file in `graphs/`, cooked by `pcg cook`, rendered by `npm run
 preview`, and editable in the sandbox:
 
 ```sh
@@ -1150,7 +1150,7 @@ npm run examples
 npm test          # vitest: unit + integration + determinism suites
 npm run build     # tsup: dist/ with subpath exports ".", "./three", "./gpu"
 npm run check     # tsc --noEmit
-npm run examples  # vite dev server for examples/
+npm run examples  # vite dev server for sandbox/ and demos/
 npm run docs:nodes  # regenerate docs/nodes.{md,json} from the registry
 ```
 

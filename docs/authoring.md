@@ -5,7 +5,7 @@ How to author pcg-ts graphs as JSON (the interchange format used by
 live in [nodes.md](./nodes.md) (generated; machine-readable twin:
 [nodes.json](./nodes.json)); at runtime the same metadata comes from
 `listNodeTypes()`. For authoring this format interactively, the
-`01-sandbox` example (`npm run examples`) is a node editor built on
+`sandbox/` tool (`npm run examples`) is a node editor built on
 the same metadata: registry palette (grouped by node `category`),
 connections checked by the live graph's validation, schema-driven param
 forms, live cook, JSON import/export, and in-place edits through the
@@ -404,7 +404,7 @@ and will not compare equal to the seed `Graph.describe()` reports.
 
 #### The seed-shift idiom
 
-Every noise-bearing graph in `examples/graphs` spells the offset the
+Every noise-bearing graph in `graphs/` spells the offset the
 same way, and the shape is not arbitrary. Per axis:
 
 ```
@@ -511,7 +511,7 @@ lives under. And it is not in `Field.key`, which is fixed at
 construction while the seed arrives at evaluation; invalidation stays
 exact anyway, because the executor's memo key carries the node seed
 itself, so every node recooks when the graph seed moves whether or not
-its fields mention this one. `examples/graphs/basics-reseed-a-noise.json`
+its fields mention this one. `graphs/basics-reseed-a-noise.json`
 is the worked example.
 
 `param` is the only fn with no TypeScript constructor, which is not an
@@ -959,7 +959,7 @@ correct.
 ## Editing live graphs
 
 JSON is the interchange format, not the only way to change a graph. A
-tool that keeps one live `Graph` (as the `01-sandbox` example does)
+tool that keeps one live `Graph` (as the `sandbox/` tool does)
 edits it in place with the mutation API and reads it back with the
 introspection API — preserving node caches that a rebuild through
 `deserializeGraph` would discard:
@@ -1771,7 +1771,7 @@ column is an empty result here too, never an error — the sparse cell of a
 partitioned cook. A geometry with no primitive columns at all is refused
 and told which nodes drop a topology, because that is a network that was
 never built or one a point filter took away, not a cell with nothing in
-it. `examples/graphs/basics-filter-primitives-by-attribute.json`
+it. `graphs/basics-filter-primitives-by-attribute.json`
 is the whole thing in three nodes: scatter, `connectPoints` writing an
 `edgeLength`, then this node keeping the short edges — fewer than half
 the trails come out, and what comes out is still a network.
@@ -1808,7 +1808,7 @@ validated against the graph's declared outputs at World construction).
 ### Staging across files (the flat superset)
 
 The shipped example of a multi-file pipeline is
-`examples/graphs/pipeline-*.json`: a settlement built as
+`graphs/pipeline-*.json`: a settlement built as
 `pipeline-1-boundary` → `-2-districts` → `-3-lots` → `-4-detail` →
 `-5-roads`, plus `-3-lots-edits`, `-4-detail-edits` and `-5-roads-edits`.
 
@@ -2300,7 +2300,7 @@ That is by design, not a bug; benchmark from cold caches.
 **Cost model.** A *constant* param — a plain number or number tuple —
 costs a 16-byte uniform slot and no dispatch; only field-valued params
 materialize an `n`-element column. In the
-`examples/graphs/examples-gpu-fields.json`
+`graphs/examples-gpu-fields.json`
 chain (five members: `setAttribute` → `jitterPoints` →
 `transformPoints` → `setAttribute` → `setAttribute`) that is 120 bytes
 per point and 9 member kernels, down from 212 bytes and 12 kernels
@@ -2526,7 +2526,7 @@ chain.** `setAttribute` fuses in numeric point-domain mode only, so the
 idiomatic way to *compute* an asset key — `type: "string"` with a
 `values` list and a field-capable selector, the recipe earlier in this
 document — is not resident, and the chain breaks there. Where it feeds
-the spawner directly, as in that recipe and in `examples/graphs/examples-forest.json`,
+the spawner directly, as in that recipe and in `graphs/examples-forest.json`,
 the run holds only the spawner: report fusion depth honestly — one
 member, not four. Resident nodes sitting *between* the string write and
 the spawn still fuse with it, so the depth is whatever survives
@@ -2664,11 +2664,11 @@ leaves the cook and goes to the renderer, never into a seed, an index,
 or a later cook. What it *does* mean: if you need instance matrices
 that match the CPU bit for bit, leave `deviceInstances` off.
 
-`examples/04-gpu-world` is the worked end-to-end version of all of the
+`demos/gpu-world` is the worked end-to-end version of all of the
 above: a streamed `World` whose cells draw from matrices that never
 touch the CPU, with the binding's handle accounting and the evaluator
 pool's detached-buffer counters shown side by side.
-`examples/graphs/examples-forest.json` is the multi-asset version — `assetAttr: "species"`
+`graphs/examples-forest.json` is the multi-asset version — `assetAttr: "species"`
 on the device-resident path, with a CPU/resident toggle, the per-asset
 batch count, and a fusion readout that does not overstate depth.
 
@@ -2881,11 +2881,11 @@ the graph you have open three ways — CPU, GPU per-node (a resolver
 whose `planRun` returns null), and one fused device-resident run — and
 its status line carries the wall time, the output hash and the full
 counter set for the selected path. Open it on
-`examples/graphs/examples-gpu-fields.json`, a five-node fusable chain,
-to read all three off one graph. `examples/04-gpu-world` covers the
+`graphs/examples-gpu-fields.json`, a five-node fusable chain,
+to read all three off one graph. `demos/gpu-world` covers the
 device-resident instancing surface: a streamed `World` drawing from
 matrices that never reach the CPU, with `poolStats.detachedBuffers`
 and the binding's own handle count shown together as a live leak meter.
-`examples/graphs/examples-forest.json` covers the multi-asset shape: `assetAttr:
+`graphs/examples-forest.json` covers the multi-asset shape: `assetAttr:
 "species"` on the device-resident path, one buffer per species, with a
 CPU/resident toggle and an honest fusion readout.

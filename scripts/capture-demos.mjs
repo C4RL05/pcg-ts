@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * capture-demos.mjs — regenerate docs/manual-assets/*.jpg and docs/thumbs/*.jpg
- * from the five browser demos in examples/.
+ * from the sandbox (sandbox/) and the three hosted demos (demos/*/).
  *
- * Run with `npm run capture` (optionally `-- --only=01,03` / `--no-build`).
+ * Run with `npm run capture` (optionally `-- --only=sandbox,galaxy` / `--no-build`).
  *
  * ---------------------------------------------------------------------------
  * WHY THIS SCRIPT EXISTS
  *
- * These 11 JPEGs are committed and are referenced from docs/manual.html and
+ * These ten JPEGs are committed and are referenced from docs/manual.html and
  * docs/index.html with hard-coded width/height attributes. They used to be
  * produced by an ad-hoc script that lived on one machine, so they drifted
  * silently whenever a demo changed. Everything below is the set of things that
@@ -36,16 +36,15 @@
  *      here that fails loudly instead.
  *
  *   2. DEMO-DECLARED COOK STATE. Every demo already publishes its own state as
- *      text: the shared overlay (examples/shared/overlay.ts) renders one
+ *      text: the shared overlay (shared/overlay.ts) renders one
  *      `.pcg-stat` per readout as `<span>label</span><span>value</span>`, and
  *      every value starts as an en dash "–" until the demo writes it. That
  *      makes the demo's own instrumentation the readiness signal — no
  *      demo-side hooks were added for this script. Per demo we wait for the
  *      specific stat that means "the cook is done": the sandbox toolbar's
- *      status line carrying a hash (01), `pending` reaching 0 for the
- *      streaming worlds (02, 03), the rig publishing `window.__rigReady`
- *      (06), and the one demo that exposes a real probe object uses it
- *      (`window.pcgWorld`, 05).
+ *      status line carrying a hash, `pending` reaching 0 for the two
+ *      streaming worlds, and, for the one page that exposes a real probe
+ *      object, the probe itself (`window.pcgWorld`, gpu-world).
  *
  *   3. A STABLE FRAME. Cook-complete is not the same as settled, so after (2)
  *      we sample repeatedly and only shoot once the picture stops changing.
@@ -54,15 +53,16 @@
  *          region covering only the 3D viewport (the overlay is excluded
  *          because its fps counter ticks every 500 ms and would never settle).
  *        - "stats-plateau": for demos that animate by design and can never be
- *          pixel-identical (03 twinkles star shaders on a clock), the demo's
- *          own non-volatile counters holding steady over several samples.
+ *          pixel-identical (the galaxy twinkles star shaders on a clock), the
+ *          demo's own non-volatile counters holding steady over several samples.
  *      Neither converging inside the budget is a hard failure.
  *
  * DETERMINISM. Every demo hard-codes its seed (1, or 42 for the galaxy), and
  * the only URL parameter any of them reads is the sandbox's `?graph=`, which
  * this script sets deliberately — so content is already reproducible. What is
- * not reproducible is the camera: 02 flies forward at 18 u/s from t=0, 05 has
- * autopilot on, and 03 cruises. Each of those is stopped through its own UI
+ * not reproducible is the camera: infinite-world flies forward at 18 u/s from
+ * t=0, gpu-world has autopilot on, and the galaxy cruises. Each is stopped
+ * through its own UI
  * *before* waiting for the world to settle, so the camera sits at its initial
  * position and the framing does not depend on how fast the machine booted.
  *
@@ -105,7 +105,7 @@ const DEBUG = process.argv.includes("--debug");
 const MANUAL_QUALITY = 0.9;
 const THUMB_QUALITY = 0.85;
 
-// Every thumbnail is 640x345 (docs/index.html declares that for all nine), and
+// Every thumbnail is 640x345 (docs/index.html declares that for every card), and
 // 1454x783 is the CSS layout that gives it its aspect ratio and the panel
 // proportions the existing thumbnails have.
 const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
@@ -117,12 +117,12 @@ const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
  * width/height attributes in docs/manual.html.
  */
 const SIZES = {
-  "01-sandbox": { css: [1454, 783], out: [1454, 783] },
-  "01-sandbox-gpu": { css: [1454, 783], out: [1454, 783] },
-  "01-sandbox-rig": { css: [1454, 783], out: [1454, 783] },
-  "02-infinite-world": { css: [1454, 783], out: [1454, 783] },
-  "03-galaxy": { css: [1454, 783], out: [1454, 783] },
-  "04-gpu-world": { css: [1079, 791], out: [1079, 791] },
+  sandbox: { css: [1454, 783], out: [1454, 783] },
+  "sandbox-gpu": { css: [1454, 783], out: [1454, 783] },
+  "sandbox-rig": { css: [1454, 783], out: [1454, 783] },
+  "infinite-world": { css: [1454, 783], out: [1454, 783] },
+  galaxy: { css: [1454, 783], out: [1454, 783] },
+  "gpu-world": { css: [1079, 791], out: [1079, 791] },
 };
 
 /**
@@ -132,7 +132,7 @@ const SIZES = {
  */
 const DEMOS = [
   {
-    id: "01-sandbox",
+    id: "sandbox",
     // The graph is cooked behind a 150 ms debounce; the toolbar reads
     // "cooking…" until the first cook lands. There is no stats card to
     // scrape any more — the status line carries the readouts.
@@ -153,12 +153,12 @@ const DEMOS = [
   },
   {
     // The same page, twice, because the sandbox absorbed what the retired
-    // `04-gpu-fields` demo used to be: a graph is not what changes between
+    // gpu-fields demo used to be: a graph is not what changes between
     // the two shots, the cook path under it is. `?graph=` opens it on the
     // fusable chain and `manualOnly` keeps it out of docs/thumbs, since
     // the demo index has one card per PAGE and this is not another page.
-    id: "01-sandbox-gpu",
-    path: "01-sandbox/?graph=examples-gpu-fields",
+    id: "sandbox-gpu",
+    path: "sandbox/?graph=examples-gpu-fields",
     manualOnly: true,
     // The selector's GPU options stay disabled until the adapter probe
     // answers, so waiting for the option is waiting for the device — and
@@ -220,8 +220,8 @@ const DEMOS = [
     // flattened them into one silhouette; the parts are swept surfaces
     // now, so lit reads properly — but normals still separates twelve
     // pale tubes from each other where one material cannot.
-    id: "01-sandbox-rig",
-    path: "01-sandbox/?graph=examples-rig",
+    id: "sandbox-rig",
+    path: "sandbox/?graph=examples-rig",
     manualOnly: true,
     settleWait: () => !!document.querySelector(".toolbar .path.shade select"),
     settle: async () => {
@@ -254,7 +254,8 @@ const DEMOS = [
     },
   },
   {
-    id: "02-infinite-world",
+    id: "infinite-world",
+    path: "demos/infinite-world/",
     // The GPU adapter resolving triggers a full world rebuild, so "pending is
     // 0" only means anything once the adapter question has been answered.
     ready: (s, has) =>
@@ -269,7 +270,8 @@ const DEMOS = [
     settle: () => setRangeByLabel("speed", 0),
   },
   {
-    id: "03-galaxy",
+    id: "galaxy",
+    path: "demos/galaxy/",
     ready: (s, has) => s["pending"] === "0" && has(s["stars"]) && s["stars"] !== "0",
     // Cruise only disengages on a movement key. A tap moves the camera a
     // couple of units out of a 420-unit radius, which is invisible, and stops
@@ -279,7 +281,8 @@ const DEMOS = [
     animated: true,
   },
   {
-    id: "04-gpu-world",
+    id: "gpu-world",
+    path: "demos/gpu-world/",
     ready: (s, has) =>
       !!window.pcgWorld &&
       window.pcgWorld.probe().meshes > 0 &&
@@ -322,7 +325,7 @@ function pageInstrumentation() {
       const spans = row.querySelectorAll("span");
       if (spans.length >= 2) out[text(spans[0])] = text(spans[1]);
     }
-    // Svelte panels (05, 08): .stat = <span>label</span><b>value</b>
+    // Svelte panels: .stat = <span>label</span><b>value</b>
     for (const row of document.querySelectorAll(".panel .stat")) {
       const k = row.querySelector("span");
       const v = row.querySelector("b");
@@ -444,7 +447,7 @@ async function waitForPredicate(page, predicate, timeout) {
 /** Clip covering only the 3D viewport: no overlay panel, no HUD, no editor. */
 function clipFor([w, h]) {
   const left = 340; // widest left overlay is 300 CSS px + margin
-  const right = 400; // 05/08 keep a ~356 px panel on the right
+  const right = 400; // the panelled pages keep a ~356 px panel on the right
   return {
     x: left,
     y: 60,
@@ -579,7 +582,7 @@ async function main() {
   if (!noBuild) {
     log("building demos (vite, production)…");
     await build({
-      configFile: join(ROOT, "examples", "vite.config.ts"),
+      configFile: join(ROOT, "vite.config.ts"),
       base: "./",
       logLevel: "warn",
       build: { outDir: OUT_DIR, emptyOutDir: true },

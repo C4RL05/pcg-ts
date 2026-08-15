@@ -36,7 +36,7 @@ import { CookCancelledError } from "../graph/errors.js";
 import { getNodeType, setAttribute, transformPoints } from "../nodes/index.js";
 import { dataInput } from "../runtime/index.js";
 import { buildInstanceBatches, spawnInstances } from "../spawn/index.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 
 // ---------------------------------------------------------------------------
 // fakes
@@ -303,7 +303,7 @@ function instancesOf(result: Awaited<ReturnType<typeof cook>>, name = "instances
 
 describe("spawnInstances as a device-resident run terminal", () => {
   it("a lone spawner IS a run when the resolver advertises the terminal", async () => {
-    const { g, ids } = spawnGraph(makeCorpusGeometry(32));
+    const { g, ids } = spawnGraph(makeParityGeometry(32));
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     const r = await cook(g, { gpu });
 
@@ -326,7 +326,7 @@ describe("spawnInstances as a device-resident run terminal", () => {
   });
 
   it("reading `batches` on a device-resident item throws with an actionable message", async () => {
-    const { g } = spawnGraph(makeCorpusGeometry(8));
+    const { g } = spawnGraph(makeParityGeometry(8));
     const item = instancesOf(await cook(g, { gpu: deviceInstanceResolver(["spawnInstances"]) }));
     expect(() => item.batches).toThrow(/device-resident/);
     expect(() => item.batches).toThrow(/deviceBatches/);
@@ -334,7 +334,7 @@ describe("spawnInstances as a device-resident run terminal", () => {
   });
 
   it("without the terminal advertised, nothing changes: CPU batches, no run", async () => {
-    const geo = makeCorpusGeometry(32);
+    const geo = makeParityGeometry(32);
     const cpu = await cook(spawnGraph(geo).g);
     const { g } = spawnGraph(geo);
     const gpu = deviceInstanceResolver([]); // opt-in withheld
@@ -348,7 +348,7 @@ describe("spawnInstances as a device-resident run terminal", () => {
   });
 
   it("fuses a chain THROUGH to the spawner, and materializes geometry only when read", async () => {
-    const geo = makeCorpusGeometry(24);
+    const geo = makeParityGeometry(24);
     const { g, ids } = spawnGraph(geo, { chain: true });
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     const r = await cook(g, { gpu });
@@ -375,7 +375,7 @@ describe("spawnInstances as a device-resident run terminal", () => {
     // v0.7 opted this node out with the reason "spawn-asset-attr"; v0.8
     // retired both the opt-out and the reason. No fallback may be
     // counted, and the batch list must be the CPU list.
-    const geo = makeCorpusGeometry(16);
+    const geo = makeParityGeometry(16);
     geo.attrs.point.add("kind", "string", 1);
     const kind = geo.attrs.point.require("kind");
     // "rock" first-occurs at 1, "pine" at 0, and index 2 is empty so it
@@ -409,7 +409,7 @@ describe("spawnInstances as a device-resident run terminal", () => {
   });
 
   it("a missing or non-string assetAttr rejects at PLAN time, so the CPU raises it", async () => {
-    const { g } = spawnGraph(makeCorpusGeometry(4), { assetAttr: "" });
+    const { g } = spawnGraph(makeParityGeometry(4), { assetAttr: "" });
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     const clean = await cook(g, { gpu });
     expect(clean.stats.gpu!.fallbacks).toEqual({});
@@ -417,13 +417,13 @@ describe("spawnInstances as a device-resident run terminal", () => {
     // The node is now fusable, so detection DOES plan a run; the planner
     // is what rejects, and the per-node path then surfaces the CPU
     // spawner's identical message.
-    const withAttr = spawnGraph(makeCorpusGeometry(4), { assetAttr: "missing" });
+    const withAttr = spawnGraph(makeParityGeometry(4), { assetAttr: "missing" });
     const gpu2 = deviceInstanceResolver(["spawnInstances"]);
     await expect(cook(withAttr.g, { gpu: gpu2 })).rejects.toThrow(/assetAttr "missing" not found/);
     expect(gpu2.planned).toHaveLength(1);
 
     // Same for an attribute that exists but is not a string one.
-    const numeric = makeCorpusGeometry(4);
+    const numeric = makeParityGeometry(4);
     const badGraph = spawnGraph(numeric, { assetAttr: "density" });
     const gpu3 = deviceInstanceResolver(["spawnInstances"]);
     await expect(cook(badGraph.g, { gpu: gpu3 })).rejects.toThrow(/must be a string attribute/);
@@ -435,7 +435,7 @@ describe("resident fusion shape rule (boundaries in both directions)", () => {
   function shapeGraph(def: Parameters<Graph["add"]>[0], geoPin: string, tail: boolean) {
     const g = new Graph(7);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(8))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(8))]);
     const sa = g.add(setAttribute, { name: "a", value: 1 });
     const mid = g.add(def);
     g.connect(din, "out", sa, "in");
@@ -519,7 +519,7 @@ describe("resident fusion shape rule (boundaries in both directions)", () => {
 
 describe("memo-cache policy for device-resident outputs", () => {
   it("delivers handles but never memoizes them: fresh every cook, bounded retention", async () => {
-    const { g, ids } = spawnGraph(makeCorpusGeometry(64), { chain: true });
+    const { g, ids } = spawnGraph(makeParityGeometry(64), { chain: true });
     const gpu = deviceInstanceResolver(["spawnInstances"]);
 
     const seen: DeviceTransformsHandle[] = [];
@@ -559,7 +559,7 @@ describe("memo-cache policy for device-resident outputs", () => {
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     let peakBytes = 0;
     for (let cell = 0; cell < 24; cell++) {
-      const { g } = spawnGraph(makeCorpusGeometry(16 + cell), { chain: true });
+      const { g } = spawnGraph(makeParityGeometry(16 + cell), { chain: true });
       const item = instancesOf(await cook(g, { gpu }));
       peakBytes = Math.max(peakBytes, gpu.book.liveBytes);
       item.deviceBatches![0].transforms.dispose();
@@ -573,7 +573,7 @@ describe("memo-cache policy for device-resident outputs", () => {
   });
 
   it("dispose is idempotent and disposed handles refuse to hand out the resource", async () => {
-    const { g } = spawnGraph(makeCorpusGeometry(4));
+    const { g } = spawnGraph(makeParityGeometry(4));
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     const handle = instancesOf(await cook(g, { gpu })).deviceBatches![0].transforms;
     handle.dispose();
@@ -595,7 +595,7 @@ describe("memo-cache policy for device-resident outputs", () => {
         throw new Error("downstream boom");
       },
     });
-    const { g, ids } = spawnGraph(makeCorpusGeometry(16));
+    const { g, ids } = spawnGraph(makeParityGeometry(16));
     const sink = g.add(boom);
     g.connect(ids.sp, "points", sink, "in");
     g.output(sink, "out", "sink");
@@ -609,7 +609,7 @@ describe("memo-cache policy for device-resident outputs", () => {
   });
 
   it("a cancelled cook disposes the handles it had already produced", async () => {
-    const { g, ids } = spawnGraph(makeCorpusGeometry(16));
+    const { g, ids } = spawnGraph(makeParityGeometry(16));
     const sink = g.add(setAttribute, { name: "z", value: 1 });
     g.connect(ids.sp, "points", sink, "in");
     g.output(sink, "out", "sink");
@@ -648,7 +648,7 @@ describe("memo-cache policy for device-resident outputs", () => {
     });
     const g = new Graph(7);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(16))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(16))]);
     const rg = g.add(rogue);
     g.connect(din, "out", rg, "in");
     g.output(rg, "out", "out");
@@ -663,7 +663,7 @@ describe("memo-cache policy for device-resident outputs", () => {
     // The spawner's instances pin is neither connected nor selected, so
     // nothing can ever receive the handle: the cook owns it to the end
     // and frees it. Repeated cooks must not accumulate device memory.
-    const { g } = spawnGraph(makeCorpusGeometry(16), { declarePoints: true });
+    const { g } = spawnGraph(makeParityGeometry(16), { declarePoints: true });
     const gpu = deviceInstanceResolver(["spawnInstances"]);
     for (let i = 0; i < 5; i++) {
       const r = await cook(g, { gpu, outputs: ["points"] });
@@ -687,7 +687,7 @@ describe("memo-cache policy for device-resident outputs", () => {
     });
     const g = new Graph(7);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(16))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(16))]);
     const sp = g.add(spawnInstances, { assetId: "tree" });
     g.connect(din, "out", sp, "in");
     const fw = g.add(forward);
@@ -707,7 +707,7 @@ describe("memo-cache policy for device-resident outputs", () => {
   it("ordinary geometry runs still memoize normally", async () => {
     const g = new Graph(7);
     const din = g.add(dataInput);
-    g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(8))]);
+    g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(8))]);
     const a = g.add(setAttribute, { name: "a", value: 1 });
     const b = g.add(setAttribute, { name: "b", value: 2 });
     g.connect(din, "out", a, "in");

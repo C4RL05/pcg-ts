@@ -64,7 +64,7 @@ import { resolveOnMaybeGpu } from "../nodes/util.js";
 import { fieldFromJson } from "../fields/fieldJson.js";
 import { dataInput } from "../runtime/index.js";
 import { planResidentRun } from "./run.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 import { collectSourceFiles, cpuResolveField, opaqueField } from "./testHelpers.js";
 
 // ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ const unitSquare = (): ReturnType<typeof createTriangleMesh> =>
 
 const cloudInput = (g: Graph, count = 40): ReturnType<Graph["add"]> => {
   const din = g.add(dataInput);
-  g.setParam(din, "items", [makeGeometryItem(makeCorpusGeometry(count))]);
+  g.setParam(din, "items", [makeGeometryItem(makeParityGeometry(count))]);
   return din;
 };
 
@@ -613,7 +613,7 @@ describe("fieldFromJson never changes a live field's provenance", () => {
     // ...and the copy is indistinguishable everywhere else.
     expect(parsed.key).toBe(position().key);
     expect(parsed.tupleSize).toBe(position().tupleSize);
-    const geo = makeCorpusGeometry(8);
+    const geo = makeParityGeometry(8);
     // Two DISTINCT context objects: `evaluateField` memoizes per context
     // in an identity-keyed map, so evaluating both fields against one ctx
     // returns the same Column object and compares equal to itself no

@@ -14,5 +14,15 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "tests", "examples", "scripts"]
+  "include": [
+    "src",
+    "tests",
+    "scripts",
+    "sandbox",
+    "demos",
+    "shared",
+    "preview",
+    "svelte-shim.d.ts",
+    "vite.config.ts"
+  ]
 }

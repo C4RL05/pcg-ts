@@ -177,7 +177,7 @@ draw it" - and that is the whole gap.
 
 ### 2.1 The measurement rig
 
-`examples/graphs/examples-rig.json`, cooked headless through `dist/`:
+`graphs/examples-rig.json`, cooked headless through `dist/`:
 
 | quantity | value |
 | --- | --- |

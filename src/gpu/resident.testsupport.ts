@@ -54,7 +54,7 @@ import {
 import type { GpuDeviceLike } from "./device.js";
 import { GpuFieldEvaluator } from "./evaluator.js";
 import { planResidentRun } from "./run.js";
-import { makeCorpusGeometry } from "./testGeometry.js";
+import { makeParityGeometry } from "./testGeometry.js";
 import type { GpuScalarType } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ interface XformShape {
 
 /** Corpus cloud plus the requested transform attributes. */
 function makeXformGeometry(count: number, shape: XformShape): Geometry {
-  const geo = makeCorpusGeometry(count);
+  const geo = makeParityGeometry(count);
   const set = geo.attrs.point;
   const rot =
     shape.rot === "quat"
@@ -220,7 +220,7 @@ function leanGeometry(count: number): Geometry {
 
 /** Corpus cloud with a `mask` attribute that is exactly 0 on every 4th point. */
 function makeMaskGeometry(count: number, withRot: boolean): Geometry {
-  const geo = withRot ? makeTransformGeometry(count) : makeCorpusGeometry(count);
+  const geo = withRot ? makeTransformGeometry(count) : makeParityGeometry(count);
   const set = geo.attrs.point;
   const mask = set.add("mask", "f32", 1, 0);
   set.resize(count);
@@ -603,7 +603,7 @@ function chainCases(): ChainCase[] {
       name: "hash2",
       bitExact: true,
       count: 2000,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [randomD, { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 3 } }],
     },
     {
@@ -613,7 +613,7 @@ function chainCases(): ChainCase[] {
       name: "hash4",
       bitExact: true,
       count: 1500,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         randomD,
         { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125] } },
@@ -632,7 +632,7 @@ function chainCases(): ChainCase[] {
       name: "retype3",
       bitExact: true,
       count: 1200,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(setAttribute),
@@ -679,7 +679,7 @@ function chainCases(): ChainCase[] {
       name: "types5",
       bitExact: true,
       count: 900,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(setAttribute),
@@ -737,7 +737,7 @@ function chainCases(): ChainCase[] {
       name: "selfRetype5",
       bitExact: true,
       count: 850,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(setAttribute),
@@ -832,7 +832,7 @@ function chainCases(): ChainCase[] {
       name: "aliasTranslate2",
       bitExact: true,
       count: 700,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(transformPoints),
@@ -849,7 +849,7 @@ function chainCases(): ChainCase[] {
       name: "replaceP2",
       bitExact: true,
       count: 700,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(setAttribute),
@@ -876,7 +876,7 @@ function chainCases(): ChainCase[] {
       name: "epochP3",
       bitExact: true,
       count: 700,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125], seed: 3 } },
         {
@@ -921,7 +921,7 @@ function chainCases(): ChainCase[] {
       name: "seeds3",
       bitExact: true,
       count: 900,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(setAttribute),
@@ -946,7 +946,7 @@ function chainCases(): ChainCase[] {
       name: "orientSeed2",
       bitExact: false,
       count: 900,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(orientAlongVector),
@@ -974,7 +974,7 @@ function chainCases(): ChainCase[] {
       name: "long8",
       bitExact: true,
       count: 640,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       // Exactly ONE identity-keyed member, and it leads. jitterPoints and
       // randomField both hash the position BITS, so neither may follow a
       // fused member that rewrote P — which the jitter here does. The
@@ -1003,7 +1003,7 @@ function chainCases(): ChainCase[] {
       name: "orientThenTransform2",
       bitExact: false,
       count: 900,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         { def: anyDef(orientAlongVector), params: { direction: spec({ fn: "position" }) } },
         {
@@ -1063,7 +1063,7 @@ function chainCases(): ChainCase[] {
       name: "constStores4",
       bitExact: true,
       count: 256,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(setAttribute),
@@ -1081,7 +1081,7 @@ function chainCases(): ChainCase[] {
       name: "constDir2",
       bitExact: false,
       count: 600,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(orientAlongVector),
@@ -1098,7 +1098,7 @@ function chainCases(): ChainCase[] {
       name: "const3",
       bitExact: false,
       count: 1000,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       steps: [
         {
           def: anyDef(transformPoints),
@@ -1191,8 +1191,8 @@ async function orientSemantics(ev: GpuFieldEvaluator): Promise<Record<string, un
         params: { name: "t", type: "u32", tupleSize: 1, value: spec({ fn: "index" }) },
       },
     ];
-    const cpu = await cook(chainGraph(makeCorpusGeometry(2000), steps).g);
-    const fused = await cook(chainGraph(makeCorpusGeometry(2000), steps).g, { gpu: ev });
+    const cpu = await cook(chainGraph(makeParityGeometry(2000), steps).g);
+    const fused = await cook(chainGraph(makeParityGeometry(2000), steps).g, { gpu: ev });
     const c = snapshot(cpu).get("rot")!;
     const f = snapshot(fused).get("rot")!;
     axes.push({
@@ -1222,8 +1222,8 @@ async function orientSemantics(ev: GpuFieldEvaluator): Promise<Record<string, un
         params: { name: "t", type: "u32", tupleSize: 1, value: spec({ fn: "index" }) },
       },
     ];
-    const cpu = await cook(chainGraph(makeCorpusGeometry(1500), steps).g);
-    const fused = await cook(chainGraph(makeCorpusGeometry(1500), steps).g, { gpu: ev });
+    const cpu = await cook(chainGraph(makeParityGeometry(1500), steps).g);
+    const fused = await cook(chainGraph(makeParityGeometry(1500), steps).g, { gpu: ev });
     ups.push({
       up: [...up],
       residentRuns: fused.stats.gpu!.residentRuns,
@@ -1245,12 +1245,12 @@ async function orientSemantics(ev: GpuFieldEvaluator): Promise<Record<string, un
       },
     ];
     const count = 4000;
-    const input = makeCorpusGeometry(count);
+    const input = makeParityGeometry(count);
     const material = input.attrs.point.require("material").data;
     let zeroLanes = 0;
     for (let i = 0; i < count; i++) if (material[i] === 0) zeroLanes++;
-    const cpu = await cook(chainGraph(makeCorpusGeometry(count), steps).g);
-    const fused = await cook(chainGraph(makeCorpusGeometry(count), steps).g, { gpu: ev });
+    const cpu = await cook(chainGraph(makeParityGeometry(count), steps).g);
+    const fused = await cook(chainGraph(makeParityGeometry(count), steps).g, { gpu: ev });
     const c = snapshot(cpu).get("rot")!;
     const f = snapshot(fused).get("rot")!;
     return {
@@ -1323,8 +1323,8 @@ async function jitterSemantics(ev: GpuFieldEvaluator): Promise<Record<string, un
     },
     { def: anyDef(jitterPoints), params: { amount, seed: extraSeed } },
   ];
-  const input = makeCorpusGeometry(count);
-  const built = chainGraph(makeCorpusGeometry(count), steps);
+  const input = makeParityGeometry(count);
+  const built = chainGraph(makeParityGeometry(count), steps);
   const fused = await cook(built.g, { gpu: ev });
   const f = snapshot(fused).get("P")!;
 
@@ -1462,7 +1462,7 @@ async function planRejections(ev: GpuFieldEvaluator): Promise<Array<Record<strin
       // A tuple-3 value into a tuple-1 attribute: the CPU throws, and
       // the fused path must surface the identical error.
       name: "tupleMismatch",
-      geo: () => makeCorpusGeometry(300),
+      geo: () => makeParityGeometry(300),
       steps: [
         {
           def: anyDef(setAttribute),
@@ -1476,7 +1476,7 @@ async function planRejections(ev: GpuFieldEvaluator): Promise<Array<Record<strin
       // run is rejected, and the per-node path resolves on the CPU.
       name: "stringAttrField",
       geo: () => {
-        const geo = makeCorpusGeometry(300);
+        const geo = makeParityGeometry(300);
         const label = geo.attrs.point.add("label", "string", 1, "");
         label.fill("x", 0, 300);
         return geo;
@@ -1495,7 +1495,7 @@ async function planRejections(ev: GpuFieldEvaluator): Promise<Array<Record<strin
       // and the CPU serves the field — a SUCCESSFUL fallback.
       name: "tooManyBuffers",
       geo: () => {
-        const geo = makeCorpusGeometry(400);
+        const geo = makeParityGeometry(400);
         const set = geo.attrs.point;
         const cols = Array.from({ length: 8 }, (_, a) => set.add(`a${a}`, "f32", 1, 0));
         set.resize(400);
@@ -1799,13 +1799,13 @@ async function constantEdges(ev: GpuFieldEvaluator): Promise<Record<string, unkn
     return [...u32].map((w) => `0x${w.toString(16).padStart(8, "0")}`);
   };
   const count = 64;
-  const cpu = snapshot(await cook(chainGraph(makeCorpusGeometry(count), chain([...EDGE])).g));
+  const cpu = snapshot(await cook(chainGraph(makeParityGeometry(count), chain([...EDGE])).g));
   const uniform = snapshot(
-    await cook(chainGraph(makeCorpusGeometry(count), chain([...EDGE])).g, { gpu: ev }),
+    await cook(chainGraph(makeParityGeometry(count), chain([...EDGE])).g, { gpu: ev }),
   );
   const literal = snapshot(
     await cook(
-      chainGraph(makeCorpusGeometry(count), chain(spec({ fn: "constant", value: [...EDGE] }))).g,
+      chainGraph(makeParityGeometry(count), chain(spec({ fn: "constant", value: [...EDGE] }))).g,
       { gpu: ev },
     ),
   );
@@ -1840,7 +1840,7 @@ async function constantEdits(
   // type and makes `setParam`'s key parameter `never`.
   const build = (translate: readonly number[], up: readonly number[]) => {
     const g = new Graph(7);
-    const din = g.add(dataInput, { items: [makeGeometryItem(makeCorpusGeometry(1024))] }, "din");
+    const din = g.add(dataInput, { items: [makeGeometryItem(makeParityGeometry(1024))] }, "din");
     const sa = g.add(setAttribute, { name: "d", value: spec({ fn: "randomField", key: "c" }) }, "sa");
     // jitterPoints precedes transformPoints: both write P, and the jitter
     // keys on the position BITS, so it may only read a P no fused member
@@ -1911,14 +1911,14 @@ async function statsSemantics(
   const ev = new GpuFieldEvaluator(structural, { adapterInfo });
   const value = spec({ fn: "randomField", key: "shared" });
   const single = await cook(
-    chainGraph(makeCorpusGeometry(1024), [
+    chainGraph(makeParityGeometry(1024), [
       { def: anyDef(setAttribute), params: { name: "d", value } },
     ]).g,
     { gpu: ev },
   );
   const cacheAfterSingle = ev.pipelineCacheSize;
   const fused = await cook(
-    chainGraph(makeCorpusGeometry(1024), [
+    chainGraph(makeParityGeometry(1024), [
       { def: anyDef(setAttribute), params: { name: "d", value } },
       { def: anyDef(jitterPoints), params: { amount: [0.25, 0.5, 0.125] } },
     ]).g,
@@ -1927,7 +1927,7 @@ async function statsSemantics(
   const cacheAfterFused = ev.pipelineCacheSize;
 
   // Two runs in one cook, split by a non-fusable node in the middle.
-  const geo = makeCorpusGeometry(512);
+  const geo = makeParityGeometry(512);
   const g = new Graph(7);
   const din = g.add(dataInput, { items: [makeGeometryItem(geo)] });
   const sa1 = g.add(setAttribute, { name: "a", value });
@@ -1946,7 +1946,7 @@ async function statsSemantics(
   const cpuTwo = await cook(
     (() => {
       const h = new Graph(7);
-      const d2 = h.add(dataInput, { items: [makeGeometryItem(makeCorpusGeometry(512))] }, din.id);
+      const d2 = h.add(dataInput, { items: [makeGeometryItem(makeParityGeometry(512))] }, din.id);
       const a1 = h.add(setAttribute, { name: "a", value }, sa1.id);
       const j1 = h.add(jitterPoints, { amount: [0.25, 0.25, 0.25] }, jit1.id);
       const b1 = h.add(setBounds, {}, sb.id);
@@ -2040,7 +2040,7 @@ function retryCases(): RetryCase[] {
       name: "demoOrder5",
       count: 4096,
       bitExact: false,
-      geo: makeCorpusGeometry,
+      geo: makeParityGeometry,
       fused: [3, 4],
       steps: [
         {

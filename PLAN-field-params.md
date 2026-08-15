@@ -57,7 +57,7 @@ tracking degrades to "any change invalidates every node" — i.e. the seed.
 `ExposedParam` (`src/graph/subgraph.ts:68-77`) already is exactly what is
 needed: a name, an agent-facing description, a default, optional min/max.
 Already per-instance (`subgraph.ts:457-459`), already panel-addressable
-(`Knob.exposed`, `examples/shared/graphUi.ts`), already patchable through
+(`Knob.exposed`, `shared/graphUi.ts`), already patchable through
 `ParamPatch{node,param}`, already covered by the content hash
 (`hashableExposedParam`, `src/nodes/subgraphRegistry.ts:173-184`).
 
@@ -250,7 +250,7 @@ uniform helpers **XS**.
 
 **Examples (2)** — new `basics-field-params.json` + panel **M**; sandbox
 `controller.ts`/`FieldParam.svelte` annotation **S** (optional).
-`examples/shared/graphUi.ts` needs **no change** — the knob is
+`shared/graphUi.ts` needs **no change** — the knob is
 `exposed: true` and non-field, so `admit()` already accepts it.
 
 **Primitives — the payoff (8)** — `expr.ts` add `param(name)`, rewrite
@@ -264,7 +264,7 @@ uniform helpers **XS**.
 `docs/manual.html` hand-edit 4 `COUNT_CLAIMS` (`src/docs/site.ts:314-319,
 348-352, 384-388, 390-393`) plus the verbatim `listFieldFns()` block that
 `site.test.ts:202-226` compares live **S**; `llms.txt:260` 42 → 43 **S**;
-`docs/{nodes,primitives,examples}.*` and `tests/corpus.golden.json`
+`docs/{nodes,primitives,examples}.*` and `tests/graphs.golden.json`
 regenerate.
 
 **Tests (9)** — `src/fields/spec.test.ts:303`'s derivation matrix asserts
@@ -272,7 +272,7 @@ every registered fn is reachable from a constructor; `param` is
 deliberately JSON-only, so that becomes "every *derivable* fn" with
 `param` named as the documented exception **S**. New `fieldJson` parse /
 round-trip / unbound-eval / depth tests **M**; `compile.test.ts:237`
-`MINIMAL_SPECS.param` **S**; `gpu/corpus.testsupport.ts` mirror **S**;
+`MINIMAL_SPECS.param` **S**; `gpu/parity.testsupport.ts` mirror **S**;
 subgraph binding, restore-after-cook, concurrency **M**; **CPU/GPU parity
 for a bound field plus pipeline reuse across two values** — the regression
 this design exists to prevent **M**.

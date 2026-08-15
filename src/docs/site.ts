@@ -320,7 +320,7 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
   {
     page: "index.html",
     label: "corpus graphs",
-    source: "docs/examples.json entries",
+    source: "docs/graphs.json entries",
     // Was "corpus of N single-concept graphs". The corpus grew a family
     // that is not single-concept — composed scenes under `examples-` —
     // so the adjective moved into the sentence that follows it.
@@ -371,13 +371,13 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
   {
     page: "manual.html",
     label: "corpus graphs (ch. 8 catalog table)",
-    source: "docs/examples.json entries",
-    pattern: /([\d,]+) graphs under <code>examples\/graphs\/<\/code>/g,
+    source: "docs/graphs.json entries",
+    pattern: /([\d,]+) graphs under <code>graphs\/<\/code>/g,
   },
   {
     page: "manual.html",
     label: "corpus graphs (ch. 14 prose)",
-    source: "docs/examples.json entries",
+    source: "docs/graphs.json entries",
     pattern: /indexes ([\d,]+) corpus graphs/g,
   },
   {

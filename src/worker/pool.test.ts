@@ -30,7 +30,7 @@ import { CookWorkerPool } from "./pool.js";
 import { bundleWorkerEntry, type BundledEntry } from "./worker.testsupport.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const GRAPHS_DIR = join(HERE, "../../examples/graphs");
+const GRAPHS_DIR = join(HERE, "../../graphs");
 
 function loadGraphJson(name: string): SerializedGraph {
   return JSON.parse(readFileSync(join(GRAPHS_DIR, name), "utf8")) as SerializedGraph;

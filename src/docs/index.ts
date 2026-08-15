@@ -7,12 +7,12 @@
  * it is public API. See node-reference.ts for the full rationale.
  *
  * Note that importing this module registers the shipped primitives, as a
- * side effect of `corpus.ts` (which needs them to resolve `ref` nodes).
+ * side effect of `graphGolden.ts` (which needs them to resolve `ref` nodes).
  * Harmless for the catalog generators — they read their own registries —
- * and it is what lets `scripts/gen-corpus-golden.mjs` be I/O only.
+ * and it is what lets `scripts/gen-graphs-golden.mjs` be I/O only.
  */
 export * from "./node-reference.js";
 export * from "./primitives.js";
-export * from "./examples.js";
-export * from "./corpus.js";
+export * from "./graphIndex.js";
+export * from "./graphGolden.js";
 export * from "./site.js";
