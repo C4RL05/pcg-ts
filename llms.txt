@@ -1059,9 +1059,10 @@ Device-resident runs (fusion):
   to 2×, and the 12-byte per-chunk uniforms are not counted.
 - Cost model: a CONSTANT param (plain number or number tuple) costs a
   16-byte uniform slot and NO dispatch — only field-valued params
-  materialize an `n`-element column. Since v0.6.1 the
-  `examples/08-gpu-fields` chain holds 120 bytes per point (was 212)
-  and issues 9 member kernels (was 12). Constant values live in the
+  materialize an `n`-element column. Measured at v0.6.1 on the
+  five-node fusable chain that was then `examples/08-gpu-fields` and is
+  now the corpus graph `examples-gpu-fields.json`: 120 bytes per point
+  (was 212) and 9 member kernels (was 12). Constant values live in the
   uniform, never in generated WGSL: the apply-kernel key encodes only
   which params are constant, their tuple sizes, and their slots, so
   editing a constant hits the pipeline cache instead of recompiling.
@@ -1533,14 +1534,24 @@ not raised.
 - docs/design.md — why the data model has the shape it has: why there are
   four domains and not three or five, why an edge is a primitive, what a
   fifth domain would have to prove to exist
-- examples/ — nine vite demos; 06-graph-editor is an interactive node
-  editor built on this same registry metadata and JSON format;
-  08-gpu-fields cooks one five-node fusable chain three ways (CPU, GPU
-  per-node, one fused device-resident run) with cold-cache wall times,
-  the full CookStats.gpu counters, and a live parity readout;
-  09-gpu-world streams a World rendering from device-resident instance
-  transforms, with the binding's live handle count and the evaluator
-  pool's detached-buffer accounting shown side by side; 02-forest is
-  the MULTI-ASSET demonstration — `assetAttr: "species"` on the
-  device-resident path, with a CPU/resident toggle, the per-asset batch
-  count, and a fusion readout that does not overstate depth
+- examples/ — FOUR vite demos, plus the graph corpus they sit beside. A
+  demo exists only where a HOST is required to show the thing; anything
+  that is one cook of one graph is a corpus file instead, because a graph
+  an agent can run teaches more than a page it has to read.
+  - 01-sandbox is not a demo but a TOOL: it opens any corpus graph by
+    `?graph=<name>`, renders it, and gives you the node canvas, the
+    per-node inspector (including field-expression specs), the authored
+    param panel, a CPU/GPU cook-path switch, a lit/normals shading
+    switch, and export/import. It is the human half of the
+    agent-and-human ergonomics claim — start here to see what a graph
+    does before writing one.
+  - 02-infinite-world streams a `World`'s grid cells around a moving
+    viewpoint, coarse to fine.
+  - 03-galaxy is a streamed spiral, the one with a render loop of its own.
+  - 04-gpu-world streams a World rendering from device-resident instance
+    transforms, with the binding's live handle count and the evaluator
+    pool's detached-buffer accounting shown side by side.
+  Retired into the corpus, and named here because older docs still cite
+  them: the graph editor, the GPU-fields comparison, the headless demo,
+  the forest, and the rig playground. The forest and the rig are
+  `examples/graphs/examples-forest.json` and `examples-rig.json`.
