@@ -444,8 +444,20 @@ recooks all K.
   not an enforced invariant: a third-party node that mutates its input
   corrupts a shared cache where today it corrupts only its own memo.
 
-**`docs/pages/` is a committed build that no gate regenerates or
-checks.** 100 tracked files produced by `npm run examples:pages`, which
+**~~`docs/pages/` is a committed build that no gate regenerates or
+checks.~~ CLOSED 2026-08-16.** `tests/builtSiteCoverage.test.ts` gates
+both halves now: a graph with no chunk (the ADDED case this entry
+describes) and a chunk carrying superseded text (the EDITED case, which
+that file used to say it deliberately could not catch). It reads the JSON
+each chunk embeds rather than rebuilding, so it costs nothing and does not
+depend on vite emitting identical bytes on another OS — the CI byte-diff
+this entry proposed was written, measured against that risk, and thrown
+away. Two bugs in the original presence check went with it: chunk names
+were matched by prefix, so `pipeline-3-lots` was covered by
+`pipeline-3-lots-edits`, and the base was cut at the last dash, which
+vite's base64url hash can itself end with.
+
+Original entry: 100 tracked files produced by `npm run examples:pages`, which
 neither `npm run docs` nor CI runs — so it drifts from source silently and
 nothing notices. Adding `graphs/basics-mask-by-species.json` proved it:
 the sandbox enumerates graphs with `import.meta.glob` at BUILD time
