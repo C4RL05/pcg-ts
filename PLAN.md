@@ -68,9 +68,27 @@ gap 8, which is the reason.
    sides. A name the TARGET happens to carry is NOT refused: an uncarried
    target column never reaches the output, so there is nothing to collide
    with.
-2. **`pointsToPath.groupAttr` requires whole numbers.** The natural key
-   `curveU` is already on the target and is rejected. Group identity is
-   usually a NAME, so this wants a string attribute too.
+2. **~~`pointsToPath.groupAttr` requires whole numbers.~~ HALF SHIPPED,
+   HALF REFUSED, 2026-08-16.** `groupAttr` now takes a STRING attribute —
+   grouped by the word, emitted in ascending code-unit order of the word
+   and never of its table index, which is the same identity-versus-index
+   rule `attributeIs` is built on. That is the half worth having: a group
+   IS usually a name, `partitionByAttribute` already splits on one, and
+   the two nodes asking the same question and answering it differently is
+   how an agent writes a graph that one accepts and the other refuses.
+   **The fractional half is refused on purpose, and the reason is better
+   than the old message's.** A group key is an IDENTITY. Two values a ULP
+   apart are two paths, and the library's own parity promise is a
+   TOLERANCE — the noise interiors round in f32 within a published range,
+   so an f32 key could put a point in a different path on the GPU than on
+   the CPU. The refusal now says that, and names the three ways to get a
+   real key (`setAttribute` i32, `copyToPoints.targetIndexAttr`, or a
+   string).
+   **This entry's own example dissolved while it sat here.** `curveU` was
+   the natural key only because writing an integer id cost a node; gap 1
+   now has `copyToPoints` write that id itself, so the rig wants the
+   fractional key nowhere. What shipped therefore has no corpus consumer
+   yet — the graphs that group by name are the ones nobody has written.
 3. **A noise's `opts.seed` / `opts.frequency` cannot hold a field spec.**
    "Re-roll this noise, plus a variant" cost a 7-node fold, x2 branches x3
    axes x6 noises — 36 copies of one idiom. Wants field-valued noise opts,

@@ -95,6 +95,33 @@ function requireScalarPointAttr(
   return attr;
 }
 
+/**
+ * Resolve a param naming a GROUP KEY: the same scalar rule, plus strings,
+ * because a group is usually a NAME. `partitionByAttribute` already splits
+ * on a string and this is the same question asked of one geometry, so the
+ * two must not disagree about what a key is.
+ */
+function requireGroupPointAttr(
+  geo: Geometry,
+  name: string,
+  nodeType: string,
+  param: string,
+): Attribute {
+  const set = geo.attrs.point;
+  const attr = set.get(name);
+  if (!attr) {
+    throw new Error(
+      `${nodeType}: param "${param}" names point attribute "${name}", which does not exist; available point attributes: ${set.names().join(", ") || "(none)"} (leave "${param}" empty to skip it)`,
+    );
+  }
+  if (attr.tupleSize !== 1) {
+    throw new Error(
+      `${nodeType}: param "${param}" names attribute "${name}" with tupleSize ${attr.tupleSize}; it must be scalar (tupleSize 1)`,
+    );
+  }
+  return attr;
+}
+
 /** Params of {@link pointsToPath}. */
 export interface PointsToPathParams {
   closed: boolean;
@@ -107,7 +134,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
   type: "pointsToPath",
   category: "point op",
   description:
-    "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group id, emitted in ascending group id. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path; put this node after them, not before. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Turns a point cloud into one or more paths by building `polyline` primitives over the SAME points, so every point attribute survives — this is the only way to produce a path from a serialized graph. Ordering is fixed and deterministic: within a path the points are visited in ascending point index (the order they arrive on this node's input) unless orderAttr names a sort key, and ties in that key always break to the lower point index. With groupAttr set, the cloud splits into one path per distinct group key — a whole-number id or a string name — emitted in ascending key order. `closed` appends a trailing vertex referencing the path's first point — closure is structural, exactly what createPolyline produces and what splineSample detects; no `closed` attribute is written. Any existing topology on the input is replaced, and its vertex and primitive attributes are dropped with it. Downstream: any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a path that passes through one stops being a path; put this node after them, not before. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -121,7 +148,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
       type: "string",
       default: "",
       description:
-        "Name of a scalar numeric point attribute holding a group id, splitting the cloud into one path per distinct id (paths are emitted in ascending id). Ids must be whole numbers — write them with setAttribute (type 'i32'). Leave empty to build a single path over every point.",
+        "Name of a scalar point attribute holding a group key, splitting the cloud into one path per distinct key. A NUMERIC key must be a whole number (write one with setAttribute type 'i32', or have copyToPoints write the target index with `targetIndexAttr`) and paths are emitted in ascending key; a STRING key names the group instead — the usual thing a group is — and paths are emitted in ascending code-unit order of the word, never of its table index, so the same names produce the same paths in every geometry and every cell. Fractional numbers are refused rather than grouped: a key is an identity, two values a ULP apart would be two paths, and CPU/GPU parity is a tolerance rather than an equality. Leave empty to build a single path over every point.",
     },
     orderAttr: {
       type: "string",
@@ -146,26 +173,49 @@ export const pointsToPath = standardNode<PointsToPathParams>({
     // rather than taking them in first-seen order keeps the output
     // independent of point order.
     const groupName = params.groupAttr;
-    const grouped = new Map<number, number[]>();
+    const grouped = new Map<number | string, number[]>();
     if (groupName === "") {
       const all = new Array<number>(np);
       for (let i = 0; i < np; i++) all[i] = i;
       grouped.set(0, all);
     } else {
-      const attr = requireScalarPointAttr(geo, groupName, "pointsToPath", "groupAttr");
+      const attr = requireGroupPointAttr(geo, groupName, "pointsToPath", "groupAttr");
+      // Strings group BY VALUE, never by table index: an index is
+      // insertion-ordered, so the same word interns differently in two
+      // geometries and, under partitioned cooking, in two cells — the
+      // identity-versus-index rule, here deciding which points share a
+      // path.
+      const isString = attr.type === "string";
       for (let i = 0; i < np; i++) {
-        const value = attr.data[i];
-        if (!Number.isInteger(value)) {
-          throw new Error(
-            `pointsToPath: point ${i} has ${groupName} = ${value}, which is not a whole number; group ids must be whole numbers — write them with setAttribute (type 'i32', which truncates)`,
-          );
+        let key: number | string;
+        if (isString) {
+          key = attr.getString(i);
+        } else {
+          const value = attr.data[i];
+          if (!Number.isInteger(value)) {
+            throw new Error(
+              `pointsToPath: point ${i} has ${groupName} = ${value}, which is not a whole number; a group key is an IDENTITY, and a fractional one cannot be trusted to be equal to itself — two values a single ULP apart are two paths, and the GPU is only promised to agree with the CPU within a tolerance. Write a whole-number id with setAttribute (type 'i32', which truncates), let copyToPoints write one with "targetIndexAttr", or name the group with a string attribute, which this param also accepts`,
+            );
+          }
+          key = value;
         }
-        let bucket = grouped.get(value);
-        if (!bucket) grouped.set(value, (bucket = []));
+        let bucket = grouped.get(key);
+        if (!bucket) grouped.set(key, (bucket = []));
         bucket.push(i);
       }
     }
-    const ids = [...grouped.keys()].sort((a, b) => a - b);
+    // Sorted, never first-seen: the paths a cloud produces must not depend
+    // on the order its points arrived in. Strings compare by code unit,
+    // which is a property of the WORD and so survives interning.
+    const ids = [...grouped.keys()].sort((a, b) =>
+      typeof a === "string" || typeof b === "string"
+        ? String(a) < String(b)
+          ? -1
+          : String(a) > String(b)
+            ? 1
+            : 0
+        : a - b,
+    );
 
     // Optional sort key. The comparator falls back to the point index, so
     // the order is fully determined here rather than by sort stability.
@@ -192,15 +242,16 @@ export const pointsToPath = standardNode<PointsToPathParams>({
     const primVertexCount: number[] = [];
     for (const id of ids) {
       const indices = grouped.get(id) as number[];
+      const named = typeof id === "string" ? JSON.stringify(id) : String(id);
       if (indices.length < 2) {
         // Only a group can be this short: with no groupAttr the single
         // bucket holds every point, and `np < 2` above already rejected
         // that case — so there is no "the input" wording to reach here.
         throw new Error(
-          `pointsToPath: group ${id} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream or give it another point`,
+          `pointsToPath: group ${named} (attribute "${groupName}") has ${indices.length} point; every path needs at least 2 — drop that group upstream or give it another point`,
         );
       }
-      const where = groupName === "" ? "the input" : `group ${id} (attribute "${groupName}")`;
+      const where = groupName === "" ? "the input" : `group ${named} (attribute "${groupName}")`;
       if (closed && indices.length < 3) {
         throw new Error(
           `pointsToPath: ${where} has 2 points and closed is true, which would fold the path back over itself; set closed false, or give the path at least 3 points`,

@@ -132,6 +132,30 @@ describe("pointsToPath", () => {
     expect(geo.primitiveCount).toBe(2);
   });
 
+  it("splits on a string groupAttr, in ascending order of the WORD", async () => {
+    const src = row(6);
+    const lane = src.attrs.point.add("lane", "string", 1, "");
+    // Interned in an order that is not the sorted one, and not the point
+    // order either: what must decide the output is the word, never the
+    // table index it happens to have landed on.
+    ["oak", "birch", "oak", "birch", "ash", "ash"].forEach((v, i) => lane.setString(i, v));
+    const geo = firstGeo(
+      (await runNode(pointsToPath, { groupAttr: "lane" }, { in: [makeGeometryItem(src)] })).out,
+    );
+    // ash (4, 5), birch (1, 3), oak (0, 2) — alphabetical, though "oak"
+    // interned first and "ash" last.
+    expect(topologyOf(geo)).toEqual({ v: [4, 5, 1, 3, 0, 2], start: [0, 2, 4], count: [2, 2, 2] });
+  });
+
+  it("names the group in the message when the key is a word", async () => {
+    const src = row(3);
+    const lane = src.attrs.point.add("lane", "string", 1, "");
+    ["oak", "oak", "birch"].forEach((v, i) => lane.setString(i, v));
+    await expect(
+      runNode(pointsToPath, { groupAttr: "lane" }, { in: [makeGeometryItem(src)] }),
+    ).rejects.toThrow(/group "birch" \(attribute "lane"\) has 1 point/);
+  });
+
   it("orders by orderAttr ascending and breaks ties to the lower point index", async () => {
     const ordered = firstGeo(
       (
@@ -201,10 +225,13 @@ describe("pointsToPath", () => {
         { in: [makeGeometryItem(withAttr(row(4), "grp", [0, 0.5, 1, 1]))] },
       ),
     ).rejects.toThrow(/point 1 has grp = 0.5, which is not a whole number/);
+    // A string is a group key and no longer refused here — but it is still
+    // refused for `orderAttr`, which asks a different question (an order,
+    // not an identity).
     const stringy = row(4);
     stringy.attrs.point.add("name", "string", 1, "a");
     await expect(
-      runNode(pointsToPath, { groupAttr: "name" }, { in: [makeGeometryItem(stringy)] }),
+      runNode(pointsToPath, { orderAttr: "name" }, { in: [makeGeometryItem(stringy)] }),
     ).rejects.toThrow(/names string attribute "name"/);
     const vec = row(4);
     vec.attrs.point.add("pair", "f32", 2, 0);
