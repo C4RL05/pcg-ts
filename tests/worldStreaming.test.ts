@@ -114,18 +114,24 @@ function numberParam(nodeId: string, param: string): number {
 const HALO = numberParam("crowding", "radius");
 
 /**
- * The finite Y of the ownership box, taken from the graph. An infinity
- * would be the natural bound for an "xz" column and is what an imperative
- * `bind` writes — but `JSON.stringify(Infinity)` is `null`, so a patch
- * cannot carry one and a serialized level has to name a number.
+ * INFINITY, which is the natural bound for an "xz" column and which a
+ * patch can now carry.
+ *
+ * This constant used to read the graph's finite Y, because `patches.ts`
+ * refused an infinity on the reasoning that a patch is JSON. It is not: a
+ * patch rides `postMessage`, which is structured clone, and that carries
+ * ±Infinity exactly — measured in `src/runtime/patches.test.ts`. So the
+ * bind below writes the bound it means, and this level is the caller that
+ * made the difference visible: an ownership clip unbounded in the column
+ * IS the canonical partition recipe, and it was the one thing a
+ * serializable bind could not say.
+ *
+ * The GRAPH still carries a finite ±1e6, and must: that value is written
+ * to a FILE, where JSON has no infinity literal and `paramValueError`
+ * refuses one. The two rules are different because the two destinations
+ * are, which is the whole point.
  */
-const OWN_Y = ((): number => {
-  const value = graphParam("own", "boundsMax");
-  if (!Array.isArray(value) || typeof value[1] !== "number") {
-    throw new Error(`"own.boundsMax" is not a vec3 literal`);
-  }
-  return value[1];
-})();
+const OWN_Y = Infinity;
 
 const WORLD_SEED = 20260816;
 /** Fine cells; the region below is exactly 4x4 of them. */

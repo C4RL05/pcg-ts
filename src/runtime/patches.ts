@@ -9,7 +9,7 @@
 import {
   GraphValidationError,
   getSubgraphSpec,
-  paramValueError,
+  liveParamValueError,
   type Graph,
   type NodeHandle,
   type ParamSchema,
@@ -122,15 +122,34 @@ export function applyParamPatches(
       ) {
         value = new Array<number>(schema.type === "vec3" ? 3 : 4).fill(value);
       }
-      // `paramValueError`, not the live rule `Graph.setParam` applies, and
-      // the difference is deliberate: a patch is JSON that must survive
-      // `postMessage` unchanged, so a param declaring `acceptsInfinite`
-      // takes ±Infinity through an imperative `LevelDef.bind` and NOT
-      // through a patch. `JSON.stringify(Infinity)` is `null`, so the
-      // spelling a patch would need does not exist. A level that wants an
-      // unbounded axis binds it in place — such a level cooks locally,
-      // which is the same answer this file already gives for `items`.
-      const bad = paramValueError(schema, value);
+      // `liveParamValueError`, the rule `Graph.setParam` applies — NOT the
+      // serialization rule.
+      //
+      // This used to be `paramValueError`, on the reasoning that "a patch
+      // is JSON that must survive `postMessage`, and
+      // `JSON.stringify(Infinity)` is `null`". The second half is true and
+      // the first is not: a patch is never stringified. It rides
+      // `postMessage`, which uses STRUCTURED CLONE, and structured clone
+      // carries ±Infinity exactly — measured through a `MessageChannel`,
+      // `[0, -Infinity, 0]` arrives as `[0, -Infinity, 0]` where
+      // `JSON.stringify` would have made it `[0, null, 0]`.
+      //
+      // So the file rule was being applied to a transport that does not
+      // need it, and the cost was specific: `filterByBounds` declares
+      // `acceptsInfinite` for exactly the case a partitioned level wants —
+      // a `halfOpen` ownership clip over an `xz` column, unbounded in Y —
+      // and that, the CANONICAL partition recipe, was the one thing a
+      // serializable bind could not express. A level written the textbook
+      // way could not reach a worker pool.
+      //
+      // What a patch still may not carry is what the LIVE rule refuses,
+      // and `items` above, which structured clone would happily copy but
+      // which holds live handles a worker cannot use. A `CookBackend` that
+      // transports patches by JSON text rather than by structured clone
+      // must reject infinities itself; the contract already requires it to
+      // produce bytes identical to a local cook, and a transport that
+      // rewrites its inputs cannot.
+      const bad = liveParamValueError(schema, value);
       if (bad !== undefined) fail(`${at}: ${bad}`);
       if (Array.isArray(value)) value = [...(value as unknown[])];
     }

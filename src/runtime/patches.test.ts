@@ -4,6 +4,7 @@ import { Graph, GraphValidationError, cook, subgraphNode, type NodeHandle } from
 import { fieldFromJson, type FieldSpec } from "../fields/fieldJson.js";
 import { transformPoints, type TransformPointsParams } from "../nodes/pointOps.js";
 import { pointScatterInBounds, type PointScatterInBoundsParams } from "../nodes/sources.js";
+import { filterByBounds } from "../nodes/filtering.js";
 import { resolveExposedParam } from "../nodes/subgraphParams.js";
 import { dataInput } from "./dataInput.js";
 import { applyParamPatches } from "./patches.js";
@@ -143,5 +144,69 @@ describe("applyParamPatches", () => {
     ).toThrow(/no param "nope"/);
     // The valid patch before the failure did apply (documented in-order semantics).
     expect(graph.getParams(scatter).seed).toBe(123);
+  });
+});
+
+/**
+ * ±INFINITY ACROSS A PATCH, which this file refused until it was measured.
+ *
+ * The refusal reasoned that "a patch is JSON that must survive
+ * `postMessage`". A patch is never stringified: `postMessage` uses
+ * STRUCTURED CLONE, which carries ±Infinity exactly. The file rule was
+ * being applied to a transport that does not need it, and the one thing it
+ * cost is the canonical partition recipe — `filterByBounds` `halfOpen`
+ * over an `xz` column, unbounded in Y, which is precisely what
+ * `acceptsInfinite` exists for.
+ */
+describe("an unbounded axis", () => {
+  it("survives the transport a patch actually rides", async () => {
+    // The premise, measured rather than argued. JSON would give [0,null,0].
+    const { MessageChannel } = await import("node:worker_threads");
+    const { port1, port2 } = new MessageChannel();
+    const round = await new Promise<{ value: number[] }>((resolve) => {
+      port2.once("message", (m) => resolve(m as { value: number[] }));
+      port1.postMessage({ value: [0, -Infinity, 0] });
+    });
+    port1.close();
+    port2.close();
+    expect(round.value[1]).toBe(-Infinity);
+    expect(JSON.parse(JSON.stringify([0, -Infinity, 0]))[1]).toBeNull();
+  });
+
+  it("applies to a param that declares acceptsInfinite", () => {
+    const graph = new Graph(1);
+    const scatter = graph.add(pointScatterInBounds, { count: 8 }, "scatter");
+    const clip = graph.add(filterByBounds, {}, "clip");
+    graph.connect(scatter, "out", clip, "in");
+    applyParamPatches(graph, [
+      { node: "clip", param: "boundsMin", value: [0, -Infinity, 0] },
+      { node: "clip", param: "boundsMax", value: [64, Infinity, 64] },
+    ]);
+    // The ownership clip a partitioned level actually wants: a window in
+    // the plane, unbounded in the column.
+    expect(graph.getParams(clip).boundsMin).toEqual([0, -Infinity, 0]);
+    expect(graph.getParams(clip).boundsMax).toEqual([64, Infinity, 64]);
+  });
+
+  it("is still refused where the schema does not declare it", () => {
+    // The live rule is not "anything goes": a param that never admits an
+    // infinity still does not, and the message is the schema's own.
+    const graph = new Graph(1);
+    graph.add(pointScatterInBounds, { count: 8 }, "scatter");
+    expect(() =>
+      applyParamPatches(graph, [
+        { node: "scatter", param: "boundsMin", value: [0, -Infinity, 0] },
+      ]),
+    ).toThrow(/finite/);
+  });
+
+  it("still refuses NaN, which no schema ever admits", () => {
+    const graph = new Graph(1);
+    const scatter = graph.add(pointScatterInBounds, { count: 8 }, "scatter");
+    const clip = graph.add(filterByBounds, {}, "clip");
+    graph.connect(scatter, "out", clip, "in");
+    expect(() =>
+      applyParamPatches(graph, [{ node: "clip", param: "boundsMin", value: [0, NaN, 0] }]),
+    ).toThrow();
   });
 });

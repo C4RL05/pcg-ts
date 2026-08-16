@@ -4,6 +4,7 @@ export * from "./node.js";
 export {
   type GraphParam,
   graphParamBindings,
+  liveParamValueError,
   paramSchemaError,
   paramValueError,
   type ParamSchema,

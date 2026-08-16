@@ -53,16 +53,28 @@ SPACE and `graphs.test.ts` in TIME. Nothing crossed them, and the contract
 (`world.ts:247`) covers both: "Cook order, viewpoint path, evictions, and
 recooks never change the bytes a cell produces."
 
-**Its first finding, and the reason a vehicle is worth building.**
-±Infinity cannot cross a bind patch — `JSON.stringify(Infinity)` is `null`,
-so `patches.ts` refuses it deliberately and says a level wanting an
-unbounded axis "binds it in place — such a level cooks locally". That
-tradeoff was recorded and had no caller. It has one now, and it is the
-worst possible one: the CANONICAL ownership clip, `filterByBounds`
-`halfOpen` over an `xz` column, wants an unbounded Y. So the textbook
-partition recipe is exactly what a serializable bind cannot express, and a
-level written that way cannot reach a worker pool. The graph substitutes
-±1e6, which works and is a magic number standing where an infinity belongs.
+**Its first finding, and the reason a vehicle is worth building. ~~±Infinity
+cannot cross a bind patch.~~ FIXED 2026-08-17, and the refusal rested on a
+FALSE PREMISE.** `patches.ts` refused an infinity because "a patch is JSON
+that must survive `postMessage`, and `JSON.stringify(Infinity)` is `null`".
+The second half is true; the first is not. A patch is never stringified —
+it rides `postMessage`, which is STRUCTURED CLONE, and structured clone
+carries ±Infinity exactly. Measured through a `MessageChannel`:
+`[0, -Infinity, 0]` arrives intact where `JSON.stringify` would have made
+it `[0, null, 0]`.
+So the FILE rule was being applied to a TRANSPORT that does not need it,
+and the cost was specific rather than theoretical: `filterByBounds`
+declares `acceptsInfinite` for exactly one case — a `halfOpen` ownership
+clip over an `xz` column, unbounded in Y — and that, the canonical
+partition recipe, was the one thing a serializable bind could not express.
+A level written the textbook way could not reach a worker pool. Patches now
+apply the LIVE rule (`liveParamValueError`), the streamed level binds the
+bound it means, and the graph keeps a finite ±1e6 in the FILE, where JSON
+has no infinity literal and the serialization rule correctly still refuses
+one. The two rules differ because the two destinations do.
+The entry is kept because the shape recurs: a constraint inherited from
+the wrong layer, carried in a comment confident enough that nobody
+re-derived it until a consumer made it hurt.
 Two smaller ones with it: nothing enforces that a level's halo matches the
 radius of the neighbour query that needs it (the suite reads the radius out
 of the JSON to stop the two drifting), and a `ParamPatch` can only replace
