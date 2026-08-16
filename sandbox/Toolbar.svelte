@@ -8,6 +8,7 @@
     splitFallbacks,
     type CookPath,
   } from "../shared/gpu.js";
+  import { ICON_VIEWBOX, TOOLBAR_ICONS } from "./icons.js";
   import type { GpuState } from "./main.js";
   import type { CookStatus } from "./controller.js";
 
@@ -21,8 +22,9 @@
     onExport,
     onImport,
     onLayout,
-    viewLabel,
-    onCycleView,
+    sceneOn,
+    graphOn,
+    onToggleLayer,
     onFit,
     onActual,
     host,
@@ -45,9 +47,14 @@
     onExport: () => void;
     onImport: () => void;
     onLayout: () => void;
-    /** Name of the current view, and the control that cycles it. */
-    viewLabel: string;
-    onCycleView: () => void;
+    /**
+     * Which of the two layers are on, and the control that toggles one.
+     * Never both false: the caller's state has three values and none of
+     * them is empty, so this pair cannot arrive here as a blank screen.
+     */
+    sceneOn: boolean;
+    graphOn: boolean;
+    onToggleLayer: (layer: "scene" | "graph") => void;
     /** Readouts the host owns rather than the cook: frame rate, what drew, the device, the look. */
     host: { fps: string; drew: string; gpu: GpuState; shading: "lit" | "normals" };
     /** Choose how geometry is shaded. A redraw, not a recook. */
@@ -224,6 +231,14 @@
   }
 </script>
 
+<!-- One `<svg>` per icon button, written once. `aria-hidden`, because the
+     glyph is not the name: every button below carries its word in `title`
+     and in `aria-label`, and a screen reader should hear the word rather
+     than a shape it cannot see. -->
+{#snippet icon(d: string)}
+  <svg class="ic" viewBox={ICON_VIEWBOX} aria-hidden="true"><path {d} /></svg>
+{/snippet}
+
 <div class="toolbar" class:collapsed>
   <!-- The title doubles as the dock's collapse toggle on narrow screens.
        Deliberately not a <button>: the capture tooling clicks buttons by
@@ -238,11 +253,17 @@
     onkeydown={onTitleKeydown}
   >sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
 
-  <!-- Grouped by what a control acts ON — the loaded graph, the node
-       canvas, the render, the cook — with a hairline between groups.
-       Everything used to sit in one undifferentiated run, so "fit" (which
-       moves the canvas) and "frame" (which moves the camera) read as a
-       pair of the same thing when they are opposites. -->
+  <!-- Grouped by LAYER, with a hairline between groups. The two middle
+       groups are the two things on screen — the render and the node
+       canvas — and each LEADS with the toggle that puts its own layer up,
+       then holds the controls that act on it. The group is the answer to
+       "what does this touch", which is the question the bar kept getting
+       wrong: `frame` points the SCENE camera and `fit` zooms the NODE
+       CANVAS, and while they sat side by side they read as a pair of the
+       same thing when they are the same verb on opposite subjects.
+       The graph picker, the seed, export/import and `cook` are in neither
+       group, because they belong to neither layer: they are the graph you
+       loaded and how it cooks. -->
   <div class="grp">
     <label class="graph">
       graph
@@ -261,31 +282,55 @@
       seed
       <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
     </label>
-    <button onclick={onExport} title="serializeGraph → JSON">export</button>
-    <button onclick={onImport} title="paste JSON → deserializeGraph">import</button>
+    <!-- Icons from here on, and the WORD IS NOT GONE: every one of these
+         keeps its name in `title` for the pointer and in `aria-label` for
+         a screen reader. These are conventional verbs, which is what
+         makes a glyph readable here at all — an icon nobody has a
+         convention for is a control you learn by clicking it. -->
+    <button onclick={onExport} aria-label="export" title="export — serializeGraph → JSON"
+      >{@render icon(TOOLBAR_ICONS.export)}</button>
+    <button onclick={onImport} aria-label="import" title="import — paste JSON → deserializeGraph"
+      >{@render icon(TOOLBAR_ICONS.import)}</button>
   </div>
 
-  <div class="grp" title="the node canvas">
-    <button onclick={onLayout} title="re-run the deterministic topological layout">layout</button>
-    <button onclick={onActual} title="back to 1:1, centred on the graph (ctrl+0) — the zoom a graph opens at whenever it fits there">100%</button>
-    <button onclick={onFit} title="zoom out until every node is on screen, however small. The canvas pans with the right button and zooms on the wheel">fit</button>
-  </div>
-
-  <!-- The render group: where the camera points, which view, and how the
-       geometry is shaded. `shade` belongs here and not beside `cook`
-       because it changes nothing about the cook — it is a redraw of the
-       same result, judged by eye like the other two. -->
-  <div class="grp">
-    <button onclick={onFrame} title="point the camera at what the graph made (F) — done automatically whenever a graph loads">frame</button>
-    <!-- The view button is also the view READOUT, so the name is set
-         apart and bright: it is the part that changes. It used to be a
-         green button, which made the loudest thing on the bar a control
-         you press three times a session. -->
-    <button class="view" onclick={onCycleView} title="cycle the view (space, shift-space to go back) — hold shift to fly the scene through the graph"
-      ><span class="k">view</span>{viewLabel}</button>
+  <!-- THE RENDER. Its own switch first, then the three controls that act
+       on it: where the camera points, how the geometry is shaded, and how
+       far the whole thing is pushed back behind the graph. `shade` is
+       here rather than beside `cook` because it changes nothing about the
+       cook — it is a redraw of the same result, judged by eye. -->
+  <div class="grp" title="the render">
+    <!-- TWO TOGGLES, not one cycler, and each one leads the group for the
+         layer it switches. The view is two independent layers, so the bar
+         shows two switches and each says whether its own layer is up — a
+         cycler could only ever name the state it was about to leave. They
+         are also the view READOUT, which is what `aria-pressed` and the
+         lit treatment carry.
+         Clicking the only layer that is on SWAPS to the other rather than
+         clearing the page; the rule lives in Editor.svelte's three-state
+         VIEWS table, which has no row for "neither".
+         `.view.scene` and `.view.graph` are capture hooks of the same kind
+         as `.path.shade` and `.path.cook` below: scripts/capture-demos.mjs
+         clicks `.toolbar button.view.graph` to shoot the rig against the
+         scene alone. Two classes, like those two, because the first says
+         what the control IS and the second says which one — and renaming
+         either silently changes what ships in docs/. Which GROUP a hook
+         sits in is not part of any of those selectors, so the two toggles
+         living in different groups costs the tooling nothing. -->
+    <button
+      class="view scene"
+      class:on={sceneOn}
+      aria-pressed={sceneOn}
+      aria-label="scene"
+      onclick={() => onToggleLayer("scene")}
+      title="scene — the render. Turning it off leaves the graph alone on screen, never nothing. Hold shift over `scene + graph` to fly the scene through the graph."
+      >{@render icon(TOOLBAR_ICONS.scene)}</button>
+    <button onclick={onFrame} aria-label="frame" title="frame — point the camera at what the graph made (F) — done automatically whenever a graph loads"
+      >{@render icon(TOOLBAR_ICONS.frame)}</button>
     <!-- `.shade` is not decoration: the capture tooling selects
          `.toolbar .path.shade select` to shoot the sandbox in both modes.
-         Renaming it silently changes what ships in docs/. -->
+         Renaming it silently changes what ships in docs/; MOVING it does
+         not, since that is a descendant selector and the bar is its
+         ancestor either way. -->
     <label class="path shade" title="how the geometry is shaded — normals read volume and overlap where a single key light flattens them into one silhouette. A redraw, not a recook; vertex colours only show under `lit`.">
       shade
       <select value={host.shading} onchange={(e) => onShading(e.currentTarget.value as "lit" | "normals")}>
@@ -293,9 +338,10 @@
         <option value="normals">normals</option>
       </select>
     </label>
-    <!-- Acts on the OVERLAY rather than on the render, and still belongs
-         in this group: what it changes is how much of the render reaches
-         the eye, which is the question the other three controls here ask.
+    <!-- Acts on the SCENE — it pushes the render back — even though what
+         it buys lands on the graph, and that is what puts it in this group
+         rather than the next one: a control goes where its SUBJECT is, not
+         where its benefit shows up.
 
          Deliberately NOT a `.path`. That selector was ambiguous once
          before, the day a second `.path` appeared, and the capture tooling
@@ -303,9 +349,11 @@
          those two-class names. A range is also not `input[type="number"]`,
          which the same script uses to find the seed box.
 
-         NAMED, like everything else on this bar. `graph`, `seed`, `view`,
-         `shade` and `cook` all wear their word, and a lone unlabelled
-         slider among them is a control you have to hover to identify —
+         NAMED, like every other control on this bar that is not a button.
+         `graph`, `seed`, `shade` and `cook` all wear their word — the
+         icon buttons keep theirs in `title` and `aria-label` instead —
+         and a lone unlabelled slider among them, with no glyph either, is
+         a control you have to hover to identify —
          discoverable only to someone who already knows it is there. The
          word was briefly dropped to give the track 34 more pixels; the bar
          measured the same height either way, so that bought nothing that
@@ -329,6 +377,29 @@
         oninput={(e) => onLegibility(e.currentTarget.valueAsNumber)}
       />
     </label>
+  </div>
+
+  <!-- THE NODE CANVAS, built the same way: its own switch, then what acts
+       on it. Both zooms and the relayout move BOXES, never the camera —
+       which is the whole reason `fit` is here and `frame` is in the group
+       above, two groups apart instead of two buttons apart. -->
+  <div class="grp" title="the node canvas">
+    <!-- The other half of the pair — see the scene toggle above for the
+         invariant these two keep and for why their classes are hooks. -->
+    <button
+      class="view graph"
+      class:on={graphOn}
+      aria-pressed={graphOn}
+      aria-label="graph"
+      onclick={() => onToggleLayer("graph")}
+      title="graph — the node canvas. Turning it off leaves the render alone on screen, never nothing. Space cycles the three views, shift-space goes back."
+      >{@render icon(TOOLBAR_ICONS.graph)}</button>
+    <button onclick={onFit} aria-label="fit" title="fit — zoom out until every node is on screen, however small. The canvas pans with the right button and zooms on the wheel"
+      >{@render icon(TOOLBAR_ICONS.fit)}</button>
+    <button onclick={onActual} aria-label="100%, actual size" title="100% — actual size: back to 1:1, centred on the graph (ctrl+0) — the zoom a graph opens at whenever it fits there"
+      >{@render icon(TOOLBAR_ICONS.actual)}</button>
+    <button onclick={onLayout} aria-label="layout" title="layout — re-run the deterministic topological layout"
+      >{@render icon(TOOLBAR_ICONS.layout)}</button>
   </div>
 
   <!-- `cook` is the same kind of hook as `.shade` above: the capture
@@ -457,20 +528,30 @@
      the muted ink every other named control on this bar wears. Being a
      `label` rather than a `span` is what earns that. */
 
-  /* Measured rather than chosen: the first row has 130px of slack at
+  /* Measured rather than chosen: the first row has 211px of slack at
      1454px, the width the docs assets are shot at, and `cook` wraps to a
-     second row the moment this control plus its gap exceeds it. The word
-     costs 34 of those pixels, which leaves the track at 76 — wide enough
-     to aim at, and the constraint is the bar, not the aiming. A version
-     that dropped the word to buy the track 104px measured the same bar
-     height and cost the only thing that was actually scarce, which is a
-     reader knowing what the slider does without hovering it. */
+     second row the moment this control plus its gap exceeds it. The
+     figure read 130px when this comment was written and had drifted to 15
+     by the time the buttons wore words for the last time — measured on
+     the shipped build. Icons gave those 196 back; the regrouping spent
+     none of it, having moved controls between groups rather than adding
+     one. The word costs 34 pixels, which
+     leaves the track at 76 — wide enough to aim at, and the constraint is
+     the bar, not the aiming. A version that dropped the word to buy the
+     track 104px measured the same bar height and cost the only thing that
+     was actually scarce, which is a reader knowing what the slider does
+     without hovering it. */
   .legibility input {
     width: 76px;
     accent-color: var(--sb-accent);
   }
+  /* Every button on this bar is an icon now, so the padding is square
+     rather than the text token's 3px 10px — a glyph in a wide slab reads
+     as a button with something missing from it. `--sb-btn-pad` still
+     rules the text buttons everywhere else. */
   button {
-    padding: var(--sb-btn-pad);
+    display: flex;
+    padding: 4px 6px;
     background: var(--sb-raised);
     color: var(--sb-action);
     border: 1px solid var(--sb-edge);
@@ -481,14 +562,43 @@
   button:hover {
     background: var(--sb-raised-hi);
   }
-  /* Label inside the button, so the changing half stands out from the
-     word that never changes. */
-  .view .k {
-    margin-right: 7px;
+  .ic {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+  }
+  /* The two view toggles read as STATES, not actions, so they wear the
+     tab treatment the panel tabs use rather than the raised button one:
+     lit and white when the layer is up, sunken and faint when it is not.
+
+     QUALIFIED WITH `button`, and each state qualified again, so the
+     cascade is decided by SPECIFICITY rather than by where these rules
+     happen to sit in the file. Two collisions make that worth the extra
+     token: `.view.graph` shares its second class with the `graph` label
+     around the picker above, whose `flex: 0 1 auto; min-width: 0` exists
+     to let a SELECT shrink and has no business squeezing a 15px glyph;
+     and the plain `button:hover` above would otherwise tie with the
+     resting toggle rule. A rule that only wins because it is written
+     second is one edit away from losing. */
+  button.view {
+    flex: 0 0 auto;
+    background: var(--sb-tab);
     color: var(--sb-ink-faint);
   }
-  .view {
+  button.view:hover {
+    background: var(--sb-raised-hi);
     color: var(--sb-ink);
+  }
+  button.view.on {
+    background: var(--sb-tab-on);
+    border-color: var(--sb-tab-on-edge);
+    color: var(--sb-ink-hi);
+  }
+  /* An `on` toggle is still a button you can press, so it answers the
+     pointer too — without this the lit state outranks every hover rule
+     above and the control goes dead under the cursor. */
+  button.view.on:hover {
+    background: var(--sb-raised-hi);
   }
   /**
    * The readouts. `flex: 1 1 100%` puts them on their own row under the

@@ -1,6 +1,9 @@
 /**
- * One icon per node-registry CATEGORY, drawn in the top-left of every node
- * box.
+ * Two icon sets, from one source. `CATEGORY_ICONS` is one glyph per
+ * node-registry CATEGORY, drawn in the top-left of every node box;
+ * `TOOLBAR_ICONS` is one per verb on the top bar. Everything said below is
+ * about the category set — it is the constrained one — except PROVENANCE,
+ * which covers both.
  *
  * WHY SHAPE AND NOT COLOUR. The canvas' colour budget is spent elsewhere
  * (see the palette note in `index.html`): green marks the node being
@@ -40,17 +43,25 @@
  * Licence: MIT, Copyright (c) 2023 Phosphor Icons. The notice ships with
  * the copies, which is this comment; no visible in-app credit is required.
  * Inlined rather than installed on purpose — the browser build takes no
- * runtime dependency for ten path strings.
+ * runtime dependency for the path strings below.
  */
 
 /** The coordinate system every path below is drawn in. */
 export const ICON_VIEWBOX = "0 0 256 256";
 
+/**
+ * Named once because it is worn twice, and on purpose: a cube means "the
+ * 3D thing" in both places it appears — the category of nodes that make
+ * geometry out of nothing, and the toolbar's toggle for the layer that
+ * renders it.
+ */
+const CUBE =
+  "M225.6,62.64l-88-48.17a19.91,19.91,0,0,0-19.2,0l-88,48.17A20,20,0,0,0,20,80.19v95.62a20,20,0,0,0,10.4,17.55l88,48.17a19.89,19.89,0,0,0,19.2,0l88-48.17A20,20,0,0,0,236,175.81V80.19A20,20,0,0,0,225.6,62.64ZM128,36.57,200,76,128,115.4,56,76ZM44,96.79l72,39.4v76.67L44,173.44Zm96,116.07V136.19l72-39.4v76.65Z";
+
 export const CATEGORY_ICONS: Record<string, string> = {
   // cube — a closed hexagonal mass; the one solid volume, for the nodes
   // that make something out of nothing.
-  source:
-    "M225.6,62.64l-88-48.17a19.91,19.91,0,0,0-19.2,0l-88,48.17A20,20,0,0,0,20,80.19v95.62a20,20,0,0,0,10.4,17.55l88,48.17a19.89,19.89,0,0,0,19.2,0l88-48.17A20,20,0,0,0,236,175.81V80.19A20,20,0,0,0,225.6,62.64ZM128,36.57,200,76,128,115.4,56,76ZM44,96.79l72,39.4v76.67L44,173.44Zm96,116.07V136.19l72-39.4v76.65Z",
+  source: CUBE,
   // arrows-out-cardinal — a four-way plus, fully joined at every arm, for
   // the ops that move points around.
   "point op":
@@ -87,3 +98,59 @@ export const CATEGORY_ICONS: Record<string, string> = {
   // node exists to inject data from outside.
   io: "M144.49,136.49l-40,40a12,12,0,0,1-17-17L107,140H24a12,12,0,0,1,0-24h83L87.51,96.49a12,12,0,0,1,17-17l40,40A12,12,0,0,1,144.49,136.49ZM200,28H136a12,12,0,0,0,0,24h52V204H136a12,12,0,0,0,0,24h64a12,12,0,0,0,12-12V40A12,12,0,0,0,200,28Z",
 };
+
+/**
+ * One icon per verb on the top bar, in place of the words that were there.
+ *
+ * A toolbar glyph has to be READ, not decoded, so every one of these is
+ * the conventional mark for its verb rather than a clever one — and every
+ * button that wears one keeps its word in `title` AND in `aria-label`.
+ * An icon with no name is a control you can only learn by clicking it,
+ * which is a worse bar than the one with the words on it.
+ *
+ * The two that are easy to get wrong are the two framings, and they are
+ * commented as such below.
+ */
+export const TOOLBAR_ICONS = {
+  // download-simple — an arrow leaving the app for the reader. It writes
+  // no file (it opens the JSON to copy), but the DIRECTION is the
+  // convention and the direction is what gets recognised; the tooltip
+  // carries the rest.
+  export:
+    "M228,144v64a12,12,0,0,1-12,12H40a12,12,0,0,1-12-12V144a12,12,0,0,1,24,0v52H204V144a12,12,0,0,1,24,0Zm-108.49,8.49a12,12,0,0,0,17,0l40-40a12,12,0,0,0-17-17L140,115V32a12,12,0,0,0-24,0v83L96.49,95.51a12,12,0,0,0-17,17Z",
+  // upload-simple — the same tray with the arrow reversed. These two are
+  // only legible as a pair, which is why they come from one family
+  // rather than being picked well one at a time.
+  import:
+    "M228,144v64a12,12,0,0,1-12,12H40a12,12,0,0,1-12-12V144a12,12,0,0,1,24,0v52H204V144a12,12,0,0,1,24,0ZM96.49,80.49,116,61v83a12,12,0,0,0,24,0V61l19.51,19.52a12,12,0,1,0,17-17l-40-40a12,12,0,0,0-17,0l-40,40a12,12,0,1,0,17,17Z",
+  // tree-structure — boxes ranked by what feeds what, which is exactly
+  // what the topological layout leaves behind.
+  layout:
+    "M160,116h48a20,20,0,0,0,20-20V48a20,20,0,0,0-20-20H160a20,20,0,0,0-20,20V60H128a28,28,0,0,0-28,28v28H76v-4A20,20,0,0,0,56,92H24A20,20,0,0,0,4,112v32a20,20,0,0,0,20,20H56a20,20,0,0,0,20-20v-4h24v28a28,28,0,0,0,28,28h12v12a20,20,0,0,0,20,20h48a20,20,0,0,0,20-20V160a20,20,0,0,0-20-20H160a20,20,0,0,0-20,20v12H128a4,4,0,0,1-4-4V88a4,4,0,0,1,4-4h12V96A20,20,0,0,0,160,116ZM52,140H28V116H52Zm112,24h40v40H164Zm0-112h40V92H164Z",
+  // magnifying-glass — zoom, and nothing narrower than that: the glyph
+  // says the control is about magnification and the NAME says which
+  // magnification, which is why `title` and `aria-label` both lead with
+  // `100%` rather than with a verb. It sits one button from `fit` in the
+  // same group, and those two are the same idea at two settings — 1:1
+  // against however small it takes to see everything — so the word is
+  // load-bearing here in a way it is not on, say, `layout`.
+  actual: "M232.49,215.51,185,168a92.12,92.12,0,1,0-17,17l47.53,47.54a12,12,0,0,0,17-17ZM44,112a68,68,0,1,1,68,68A68.07,68.07,0,0,1,44,112Z",
+  // frame-corners — a rectangle with its corners marked. Fit the view to
+  // the content: the mark every full-screen and zoom-to-fit control
+  // already wears.
+  fit:
+    "M140,88a12,12,0,0,1,12-12h32a12,12,0,0,1,12,12v32a12,12,0,0,1-24,0V100H152A12,12,0,0,1,140,88ZM72,180h32a12,12,0,0,0,0-24H84V136a12,12,0,0,0-24,0v32A12,12,0,0,0,72,180ZM236,56V200a20,20,0,0,1-20,20H40a20,20,0,0,1-20-20V56A20,20,0,0,1,40,36H216A20,20,0,0,1,236,56Zm-24,4H44V196H212Z",
+  // cube-focus — the corner brackets again, with the geometry inside
+  // them. `fit` frames the CANVAS and this frames the SCENE, so they
+  // share the framing motif and differ in the subject: an empty
+  // rectangle against a cube. That is the pair readers get backwards.
+  frame:
+    "M236,48V88a12,12,0,0,1-24,0V60H184a12,12,0,0,1,0-24h40A12,12,0,0,1,236,48ZM72,196H44V168a12,12,0,0,0-24,0v40a12,12,0,0,0,12,12H72a12,12,0,0,0,0-24Zm152-40a12,12,0,0,0-12,12v28H184a12,12,0,0,0,0,24h40a12,12,0,0,0,12-12V168A12,12,0,0,0,224,156ZM32,100A12,12,0,0,0,44,88V60H72a12,12,0,0,0,0-24H32A12,12,0,0,0,20,48V88A12,12,0,0,0,32,100Zm158,70.42-56,32a12,12,0,0,1-11.9,0l-56-32A12,12,0,0,1,60,160V96a12,12,0,0,1,6-10.42l56-32a12,12,0,0,1,11.9,0l56,32A12,12,0,0,1,196,96v64A12,12,0,0,1,190,170.42ZM96.19,96,128,114.18,159.81,96,128,77.82ZM84,153l32,18.28V135L84,116.68Zm88,0V116.68L140,135v36.36Z",
+  // cube — the render layer, and the same path the `source` category
+  // wears. See CUBE above for why that repetition is the point.
+  scene: CUBE,
+  // graph — nodes and the wires between them: the layer itself, drawn as
+  // the thing it is.
+  graph:
+    "M200,152a35.77,35.77,0,0,0-16.46,4l-21.39-16.64A35.49,35.49,0,0,0,164,128.65l10.35-3.44A36,36,0,1,0,164,100c0,1.11.06,2.21.16,3.3l-7.78,2.59A36,36,0,0,0,128,92c-1,0-1.88,0-2.81.12l-4.45-10A36,36,0,1,0,96,92c1,0,1.88,0,2.81-.12l4.45,10a35.91,35.91,0,0,0-8.59,39.7L73.39,160.49a36,36,0,1,0,15.94,17.93l21.28-18.91a35.91,35.91,0,0,0,36.8-1.21L167,173.56A36,36,0,1,0,200,152Zm0-64a12,12,0,1,1-12,12A12,12,0,0,1,200,88ZM84,56A12,12,0,1,1,96,68,12,12,0,0,1,84,56ZM56,204a12,12,0,1,1,12-12A12,12,0,0,1,56,204Zm60-76a12,12,0,1,1,12,12A12,12,0,0,1,116,128Zm84,72a12,12,0,1,1,12-12A12,12,0,0,1,200,200Z",
+} as const;

@@ -238,8 +238,12 @@ const DEMOS = [
       };
       await settled("");
       setSelectByValue(".toolbar .path.shade select", "normals");
-      // Two clicks from `scene + graph` reaches `scene`. Shading is a
-      // redraw and cycling the view touches no cook, so neither moves the
+      // ONE click on the graph toggle turns that layer off and leaves the
+      // scene alone, which is the view this figure wants. It was two
+      // clicks on a three-state cycler until the bar grew two independent
+      // toggles: same destination, one step, and the step now names the
+      // layer it is switching off instead of counting to it. Shading is a
+      // redraw and a view change touches no cook, so neither moves the
       // status line and neither needs waiting on.
       //
       // Selected by CLASS, not by its text. This read `view ·` once, and a
@@ -247,11 +251,21 @@ const DEMOS = [
       // into a span — silently stopped matching, so the rig figure failed to
       // capture with "no button matching". The class is what the button IS;
       // its label is presentation and will move again.
-      const view = document.querySelector(".toolbar button.view");
-      if (!view) throw new Error("no .toolbar button.view to cycle the view with");
-      view.click();
-      view.click();
+      const graphLayer = document.querySelector(".toolbar button.view.graph");
+      if (!graphLayer) throw new Error("no .toolbar button.view.graph to turn the graph layer off with");
+      // The toggle publishes its own state as `aria-pressed`, so this can
+      // ask rather than assume: click only while the layer is up, then
+      // insist it went down. A click that lands on nothing fails here,
+      // loudly, instead of in the picture.
+      //
+      // The check comes AFTER the wait, and has to: the attribute is
+      // rendered, the render is a frame away, and reading it in the same
+      // turn as the click reads the state the click just left.
+      if (graphLayer.getAttribute("aria-pressed") === "true") graphLayer.click();
       await new Promise((r) => setTimeout(r, 400));
+      if (graphLayer.getAttribute("aria-pressed") !== "false") {
+        throw new Error("the graph layer is still on after clicking .toolbar button.view.graph");
+      }
       return true;
     },
     ready: () => {
@@ -391,7 +405,7 @@ function pageInstrumentation() {
   // and a cosmetic markup change — the separator moving into a span —
   // silently stopped matching, so a figure failed to capture for a reason
   // that had nothing to do with the figure. Select a control by the class
-  // that says what it IS (`button.view`, `.path.cook`, `.path.shade`);
+  // that says what it IS (`button.view.graph`, `.path.cook`, `.path.shade`);
   // those classes exist for this tooling and are documented as such where
   // they are declared. A label is presentation and will move again.
 }

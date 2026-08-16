@@ -74,10 +74,20 @@
   });
 
   /**
-   * What is on screen, cycled by the space bar. Three states rather than
-   * a boolean because the useful question is not "graph or no graph" but
-   * whether the scene is behind it: all of it while you place nodes
-   * against what they make, none of it when the graph IS the work.
+   * What is on screen: two LAYERS, and the three states they can be in.
+   * The useful question is not "graph or no graph" but whether the scene
+   * is behind it — all of it while you place nodes against what they
+   * make, none of it when the graph IS the work.
+   *
+   * THREE ROWS, NOT FOUR. The bar drives these with two independent
+   * toggles, and the pair may never both be off: a page showing neither
+   * layer is a blank screen with no way back onto it. That invariant is
+   * this table's SHAPE rather than a check somewhere — "neither" is not a
+   * row here, so no code has to notice it happening and undo it. See
+   * `toggleLayer` for the one rule that gets you between them.
+   *
+   * The scrim is not listed beside the layers any more: it IS
+   * `scene ? 0 : 1`, and two fields saying one thing can disagree.
    *
    * `graph` hides the CANVAS AND THE SIDEBAR, never the toolbar. The bar
    * carries the graph picker, the seed, the cook path and the whole
@@ -87,9 +97,9 @@
    * space bar, with nothing on screen to say so.
    */
   const VIEWS = [
-    { id: "scene", label: "scene", scrim: 0, graph: false },
-    { id: "both", label: "scene + graph", scrim: 0, graph: true },
-    { id: "graph", label: "graph only", scrim: 1, graph: true },
+    { id: "scene", scene: true, graph: false },
+    { id: "both", scene: true, graph: true },
+    { id: "graph", scene: false, graph: true },
   ] as const;
 
   /**
@@ -131,11 +141,28 @@
    * this over: it is one control for the one view that needs it, not a
    * global brightness knob.
    */
-  const scrimOpacity = $derived(combined ? legibility : view.scrim);
+  const scrimOpacity = $derived(combined ? legibility : view.scene ? 0 : 1);
   /** Step is always ±1 — never wired straight to a click, whose event
       argument would land here as the step and make the index NaN. */
   function cycleView(step: 1 | -1 = 1): void {
     viewIndex = (viewIndex + step + VIEWS.length) % VIEWS.length;
+  }
+  /**
+   * What the bar's two toggles do, in one rule: turning a layer OFF lands
+   * on the view where the other one is alone, and turning one ON lands on
+   * both. Nothing here special-cases the last layer standing, because
+   * that case is not special — clicking the only layer that is on is
+   * "turn it off", and the view where the other one is alone is where
+   * that goes. The result is a SWAP rather than a blank screen, and it
+   * falls out of the rule instead of correcting it.
+   *
+   * `other` doubles as a view id: the two single-layer views are named
+   * after the layer they show, which is what lets this be a lookup rather
+   * than a table of six transitions.
+   */
+  function toggleLayer(layer: "scene" | "graph"): void {
+    const other = layer === "scene" ? "graph" : "scene";
+    viewIndex = VIEWS.findIndex((v) => v.id === (view[layer] ? other : "both"));
   }
 
   /**
@@ -712,8 +739,9 @@
     {legibility}
     legibilityApplies={combined}
     onLegibility={(v) => (legibility = v)}
-    viewLabel={view.label}
-    onCycleView={() => cycleView()}
+    sceneOn={view.scene}
+    graphOn={view.graph}
+    onToggleLayer={toggleLayer}
     {host}
     onToggle={() => (collapsed = !collapsed)}
   />
