@@ -271,9 +271,18 @@ export const connectPoints = standardNode<ConnectPointsParams>({
 
     if (wantLength) {
       // The primitive domain exists only now, and holds exactly the
-      // primtype column setPolylineTopology just stamped.
+      // primtype column setPolylineTopology just stamped — so this is an
+      // OUTPUT-side collision, and the message must not tell an author to
+      // remove the attribute "from the input" where it never was.
+      //
+      // Unreachable today: the only column here is `primtype`, and the
+      // guard above catches that name first with a message of its own.
+      // Marked anyway, because the guard above is what makes it
+      // unreachable, and a later edit that relaxes it would otherwise turn
+      // this into a refusal that names the wrong geometry.
       requireReportSlot({
         attrs: geo.attrs.primitive,
+        on: "output",
         nodeType: "connectPoints",
         param: "lengthAttr",
         name: params.lengthAttr,

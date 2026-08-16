@@ -770,13 +770,32 @@ describe("pathResample", () => {
       runNode(pathResample, { lengthAttr: "roadKind" }, { in: [makeGeometryItem(roads)] }),
     );
     expect(msg).toContain('pathResample: lengthAttr "roadKind"');
-    expect(msg).toContain("primitive domain");
-    expect(msg).toContain("removeAttribute");
+    // `roadKind` IS the input's — the early check sees it there, and
+    // removing it upstream is a real fix. This is the wording the
+    // report-slot rule has always used and half a dozen suites pin.
+    expect(msg).toContain("already exists on the input's primitive domain");
+    expect(msg).toContain('remove "roadKind" from the input first with removeAttribute');
     // The one that would leave the output unrecognisable downstream.
     const tagMsg = await rejection(
       runNode(pathResample, { stepAttr: PRIMTYPE_ATTR }, { in: [makeGeometryItem(twoPaths())] }),
     );
     expect(tagMsg).toContain(`pathResample: stepAttr "${PRIMTYPE_ATTR}"`);
+    expect(tagMsg).toContain("already exists on the input's primitive domain");
+    // ...but only because THIS input carries a `primtype`. Strip it and
+    // the polylines are still read, the output still gets one stamped by
+    // setPolylineTopology, and the collision is now on a column the input
+    // never had — so the refusal has to say so rather than send an author
+    // to removeAttribute something that is not there.
+    const bare = twoPaths();
+    expect(bare.attrs.primitive.remove(PRIMTYPE_ATTR)).toBe(true);
+    const bareMsg = await rejection(
+      runNode(pathResample, { stepAttr: PRIMTYPE_ATTR }, { in: [makeGeometryItem(bare)] }),
+    );
+    expect(bareMsg).toContain(
+      `pathResample: stepAttr "${PRIMTYPE_ATTR}" already exists on the output's primitive domain`,
+    );
+    expect(bareMsg).not.toContain("the input's primitive domain");
+    expect(bareMsg).toContain("removeAttribute upstream cannot help here");
     // A same-shape column is reset rather than refused — that is the rule
     // everywhere, and it is what the re-resample below relies on.
     const width = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
@@ -1148,8 +1167,13 @@ describe("pathSegments", () => {
       ),
     );
     expect(msg).toContain('pathSegments: segmentIndexAttr "curveU"');
-    expect(msg).toContain("point domain");
-    expect(msg).toContain("removeAttribute");
+    // The output's, not the input's: this node builds a fresh cloud, and
+    // `curveU` is a column it declared itself a few lines earlier. The
+    // input has no `curveU` to remove and nothing upstream can clear it.
+    expect(msg).toContain("already exists on the output's point domain");
+    expect(msg).not.toContain("the input's point domain");
+    expect(msg).toContain("removeAttribute upstream cannot help here");
+    expect(msg).toContain('a name of its own (e.g. "segmentIndex"');
     // `seed` is the near miss: same tuple size, same scalar shape to the
     // eye, u32 rather than i32 — and refused, because replacing it would
     // delete the column the whole determinism story runs through.
@@ -1157,6 +1181,17 @@ describe("pathSegments", () => {
       runNode(pathSegments, { segmentIndexAttr: "seed" }, { in: [makeGeometryItem(elbow())] }),
     );
     expect(seedMsg).toContain('pathSegments: segmentIndexAttr "seed"');
+    // The case the defect was reported on. `P` exists on the input too, so
+    // this is the one where the old wording was not merely imprecise but
+    // pointed at a real column that is the WRONG one — the input's `P`
+    // never reaches the segment cloud.
+    const pMsg = await rejection(
+      runNode(pathSegments, { segmentIndexAttr: "P" }, { in: [makeGeometryItem(elbow())] }),
+    );
+    expect(pMsg).toContain(
+      'pathSegments: segmentIndexAttr "P" already exists on the output\'s point domain',
+    );
+    expect(pMsg).not.toContain('remove "P" from the input first');
   });
 
   it("refuses a carried primitive attribute that would collide with the index", async () => {

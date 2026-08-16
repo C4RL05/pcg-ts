@@ -19,6 +19,7 @@ import {
   volumeSample,
 } from "./index.js";
 import { firstGeo, runNode } from "./nodes.testsupport.js";
+import { requireReportSlot, type ReportSlot } from "./util.js";
 
 function cloudAt(positions: number[][]): ReturnType<typeof createPointCloud> {
   const geo = createPointCloud(positions.length);
@@ -149,5 +150,81 @@ describe("spawnInstances", () => {
     await expect(runNode(spawnInstances, {}, { in: [] })).rejects.toThrow(
       'spawnInstances: input pin "in" has no geometry connected',
     );
+  });
+});
+
+/**
+ * The refusal has to name the geometry the collision is actually ON.
+ *
+ * Every caller until `pathSegments.segmentIndexAttr` and `pathResample`'s
+ * second run checked a set that arrived on a pin, so "the input's" was
+ * true and "remove it from the input" was a real fix. A node that checks a
+ * set IT BUILT gets neither: the input's `P` is not the `P` at risk, and
+ * removing it clears nothing. `ReportSlot.on` is what separates them, and
+ * these two cases pin both sides of it — the input wording because half a
+ * dozen suites elsewhere quote it verbatim, the output wording because
+ * that is the whole point of the flag.
+ */
+describe("requireReportSlot: which geometry the collision is on", () => {
+  /** The slot every case below varies: i32 landing on the f32x3 `P`. */
+  function slotOnP(on?: "input" | "output"): ReportSlot {
+    return {
+      attrs: createPointCloud(4).attrs.point,
+      nodeType: "pathSegments",
+      param: "segmentIndexAttr",
+      name: "P",
+      type: "i32",
+      tupleSize: 1,
+      domain: "point",
+      suggestion: "segmentIndex",
+      ...(on === undefined ? {} : { on }),
+    };
+  }
+
+  it("says the INPUT by default, in the wording other suites pin", () => {
+    let msg = "";
+    try {
+      requireReportSlot(slotOnP());
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain(
+      'pathSegments: segmentIndexAttr "P" already exists on the input\'s point domain as f32x3',
+    );
+    expect(msg).toContain(
+      'or remove "P" from the input first with removeAttribute if it is genuinely dead',
+    );
+    // Passing the default explicitly changes nothing.
+    expect(() => requireReportSlot(slotOnP("input"))).toThrow(msg);
+  });
+
+  it("says the OUTPUT, and withdraws the fix that is not one, when the node built the set", () => {
+    let msg = "";
+    try {
+      requireReportSlot(slotOnP("output"));
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain(
+      'pathSegments: segmentIndexAttr "P" already exists on the output\'s point domain — the ' +
+        "geometry pathSegments builds for itself, not the input's — as f32x3",
+    );
+    // The defect in one assertion: the old message sent an author to
+    // removeAttribute a column that is not on the input at all.
+    expect(msg).not.toContain("the input's point domain");
+    expect(msg).not.toContain('remove "P" from the input first');
+    expect(msg).toContain("removeAttribute upstream cannot help here");
+    // The half that must NOT vary: the hazard, and the rename that fixes it.
+    expect(msg).toContain('writing it would DELETE the "P" column');
+    expect(msg).toContain('a name of its own (e.g. "segmentIndex"');
+    expect(msg).toContain("A name that already holds i32 is fine");
+  });
+
+  it("refuses nothing on either side when the shape already matches", () => {
+    const attrs = createPointCloud(4).attrs.point;
+    attrs.add("segmentIndex", "i32", 1, 0);
+    const same = { ...slotOnP(), attrs, name: "segmentIndex" } as const;
+    expect(() => requireReportSlot(same)).not.toThrow();
+    expect(() => requireReportSlot({ ...same, on: "output" })).not.toThrow();
   });
 });

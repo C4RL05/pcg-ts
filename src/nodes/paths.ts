@@ -301,7 +301,11 @@ export interface PathResampleParams {
  * domain actually written and the only one guaranteed to hold `primtype`
  * (an input with no `primtype` at all still has its polylines read).
  */
-function requireResampleReports(attrs: AttributeSet, params: PathResampleParams): void {
+function requireResampleReports(
+  attrs: AttributeSet,
+  params: PathResampleParams,
+  on: "input" | "output",
+): void {
   const slots = [
     ["lengthAttr", params.lengthAttr, "pathLength"],
     ["stepAttr", params.stepAttr, "sampleStep"],
@@ -317,6 +321,7 @@ function requireResampleReports(attrs: AttributeSet, params: PathResampleParams)
       tupleSize: 1,
       domain: "primitive",
       suggestion,
+      on,
     });
   }
 }
@@ -395,7 +400,7 @@ export const pathResample = standardNode<PathResampleParams>({
     // Against the INPUT first, where a refusal costs nothing: its
     // primitive columns are the ones carried onto the output, so this
     // catches every collision except a `primtype` the input lacks.
-    requireResampleReports(geo.attrs.primitive, params);
+    requireResampleReports(geo.attrs.primitive, params, "input");
     const tables = polylineArcTables(geo, "pathResample");
     // Only needed to name a spacing that would fit the budget below.
     const totalLength = tables.reduce((sum, table) => sum + table.length, 0);
@@ -555,8 +560,12 @@ export const pathResample = standardNode<PathResampleParams>({
     // with itself and be refused, and re-running a node over its own
     // output has to stay ordinary. The general shape check runs again here
     // because this is the domain actually written — the early one saw the
-    // input's.
-    requireResampleReports(out.attrs.primitive, params);
+    // input's. Marked "output" so the refusal names THIS domain: the only
+    // collision that reaches here is `primtype`, which setPolylineTopology
+    // stamped above and which the input may never have had, so the
+    // input-side advice would send an author after a column that is not
+    // there.
+    requireResampleReports(out.attrs.primitive, params, "output");
     if (params.lengthAttr !== "") {
       const data = out.attrs.primitive.replace(params.lengthAttr, "f32", 1, 0).data;
       // Output primitive `ti` resamples `tables[ti]` and nothing else, the
@@ -683,6 +692,10 @@ export const pathSegments = standardNode<PathSegmentsParams>({
         tupleSize: 1,
         domain: "point",
         suggestion: "segmentIndex",
+        // `out` is this node's own fresh cloud, so the refusal must name
+        // it: the input's `P` never reaches here, and "remove it from the
+        // input" would be advice about the wrong geometry.
+        on: "output",
       });
       segmentIndex = out.attrs.point.replace(params.segmentIndexAttr, "i32", 1, 0).data;
     }

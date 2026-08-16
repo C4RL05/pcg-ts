@@ -393,6 +393,32 @@ export interface ReportSlot {
    * conversion, not a clobber. Omit for a pure report.
    */
   readonly source?: Attribute | undefined;
+  /**
+   * WHICH GEOMETRY {@link attrs} belongs to, for the message only.
+   *
+   * `"input"` (the default) means the set came in on a pin — the raw input
+   * or a clone of it — so the colliding column is the author's own and
+   * "remove it from the input" is a real fix. That is the common case, and
+   * the case every caller had until a node started checking a set it had
+   * just built itself.
+   *
+   * `"output"` means the set is one THIS NODE created: `pathSegments`
+   * builds a fresh cloud, and `pathResample` re-checks after
+   * `setPolylineTopology` has stamped a primitive domain the input may
+   * never have had. There the input is not where the column lives, and
+   * telling an author to remove it from the input sends them after a
+   * column that is not there — `pathSegments.segmentIndexAttr: "P"` was
+   * refused for the input's `P`, which never reaches the output at all.
+   *
+   * A FLAG RATHER THAN A SECOND FUNCTION: the rule itself — same shape is
+   * reused, different shape is refused, `source` is exempt — is identical
+   * on both sides and is the thing that must never drift, so it stays in
+   * one body. Only two clauses of the message vary. Defaulting to
+   * `"input"` is what keeps the seventeen callers that were always right
+   * (and the tests pinning their wording) untouched: a caller states this
+   * only when it is checking a geometry it built.
+   */
+  readonly on?: "input" | "output" | undefined;
 }
 
 /**
@@ -428,14 +454,25 @@ export function requireReportSlot(slot: ReportSlot): void {
   if (existing.type === slot.type && existing.tupleSize === slot.tupleSize) return;
   if (slot.source !== undefined && existing === slot.source) return;
   const want = shapeLabel(slot.type, slot.tupleSize);
+  // The two clauses that name the GEOMETRY THE COLLISION IS ON — see
+  // `ReportSlot.on`. Everything between them is the same sentence either
+  // way, because the hazard is the same either way.
+  const output = slot.on === "output";
+  const where = output
+    ? `on the output's ${slot.domain} domain — the geometry ${slot.nodeType} builds for itself, ` +
+      `not the input's —`
+    : `on the input's ${slot.domain} domain`;
+  const alsoTry = output
+    ? ` — removeAttribute upstream cannot help here, because the "${slot.name}" column is not the ` +
+      `input's: ${slot.nodeType} writes it on the geometry it emits`
+    : `, or remove "${slot.name}" from the input first with removeAttribute if it is genuinely dead`;
   throw new Error(
-    `${slot.nodeType}: ${slot.param} "${slot.name}" already exists on the input's ` +
-      `${slot.domain} domain as ${shapeLabel(existing.type, existing.tupleSize)}, but ` +
+    `${slot.nodeType}: ${slot.param} "${slot.name}" already exists ${where} ` +
+      `as ${shapeLabel(existing.type, existing.tupleSize)}, but ` +
       `${slot.param} is written as ${want} — writing it would DELETE the "${slot.name}" column ` +
       `and everything in it, and the cook would look fine afterwards. Give ${slot.param} a name ` +
-      `of its own (e.g. "${slot.suggestion}" — a "__" prefix marks a name internal), or remove ` +
-      `"${slot.name}" from the input first with removeAttribute if it is genuinely dead. A name ` +
-      `that already holds ${want} is fine: that column is reset, not deleted.`,
+      `of its own (e.g. "${slot.suggestion}" — a "__" prefix marks a name internal)${alsoTry}. ` +
+      `A name that already holds ${want} is fine: that column is reset, not deleted.`,
   );
 }
 
