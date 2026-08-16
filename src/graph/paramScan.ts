@@ -20,7 +20,7 @@
  */
 import { isField } from "../fields/index.js";
 import { type FieldSpec, isDerivedSpec, peekFieldSpec } from "../fields/spec.js";
-import { paramNamesOf, unboundParamNamesOf } from "../fields/fieldJson.js";
+import { paramNamesOf, paramReadingCounts, unboundParamNamesOf } from "../fields/fieldJson.js";
 import type { Graph } from "./graph.js";
 
 /** One node param holding a field expression that reads at least one name. */
@@ -36,6 +36,13 @@ export interface ParamFieldRef {
   readonly spec: FieldSpec;
   /** Names this spec references, sorted and deduplicated. */
   readonly names: readonly string[];
+  /**
+   * How many times each of {@link ParamFieldRef.names} is read in this one
+   * spec. A name read four times inside one expression is one SLOT and four
+   * READINGS, and a listing that reports only the first understates exactly
+   * the case a param exists for.
+   */
+  readonly readings: Readonly<Record<string, number>>;
   /**
    * The subset of {@link names} this spec does NOT supply itself — the ones
    * a `param` node mentions without carrying an inline value. Those are
@@ -96,6 +103,7 @@ export function paramScan(graph: Graph): ParamScan {
         param,
         spec,
         names: read,
+        readings: paramReadingCounts(spec),
         needs: unboundParamNamesOf(spec),
       };
       if (isDerivedSpec(spec)) {

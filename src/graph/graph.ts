@@ -18,6 +18,7 @@ import {
   graphParamError,
   liveParamValueError,
   type ParamSchema,
+  type ParamValue,
 } from "./params.js";
 import { subgraphSpecs, wrappedGraphOf } from "./subgraphLink.js";
 
@@ -427,7 +428,7 @@ export class Graph {
    * reads that counter to tell a user edit from its own per-cell binding,
    * and a quiet write would leave every stored cell serving the old value.
    */
-  setGraphParam(name: string, value: number | readonly number[]): void {
+  setGraphParam(name: string, value: ParamValue): void {
     const index = this._graphParams.findIndex((p) => p.name === name);
     if (index < 0) {
       throw new GraphValidationError(
@@ -455,6 +456,15 @@ export class Graph {
       value: Array.isArray(value) ? Object.freeze([...value]) : value,
     }) as GraphParam;
     this._graphParams = Object.freeze(params);
+    // The slots it DRIVES take the value outright. This is the half a field
+    // expression cannot do: an `i32`, an `enum` or a `string` is written,
+    // not substituted, and writing is what lets a declaration reach the
+    // other half of the format. `setParam` validates against each target's
+    // own registered schema, so a value the merged schema admitted but a
+    // target refuses still fails here, naming that target.
+    for (const t of next.targets ?? []) {
+      this.setParam({ id: t.node } as NodeHandle<Record<string, unknown>>, t.param, value as never);
+    }
     const bindings = graphParamBindings(this._graphParams);
     for (const ref of scan.refs) {
       if (!ref.names.includes(name)) continue;

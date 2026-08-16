@@ -90,22 +90,54 @@ export interface ParamSchema {
   readonly acceptsInfinite?: boolean;
 }
 
+/** One node param a graph-scoped param writes into. */
+export interface GraphParamTarget {
+  readonly node: string;
+  readonly param: string;
+}
+
 /**
- * One graph-scoped param: a value declared once on the graph and read by
- * name from any node's field expression.
+ * One graph-scoped param: a value declared once on the graph, read by name
+ * from any node's field expression and — when it declares `targets` —
+ * written into named node params outright.
  *
- * The shape is the inline `param` spec node's, minus `fn` — a graph-scoped
- * param IS an inline value hoisted out of one expression so several can
- * share it, so it carries the same five keys and derives the same schema
- * from them. It holds a LITERAL and never an expression: a value that can
+ * WITHOUT TARGETS it is an inline `param` spec node hoisted out of one
+ * expression so several can share it, and it carries that node's keys minus
+ * `fn`. It reaches only what an expression can reach, which is a number:
+ * every field-capable param in the registry is `f32`, `vec3` or `vec4`.
+ *
+ * WITH TARGETS it reaches the other half of the format — `i32`, `bool`,
+ * `string`, `enum`, `stringList`, and non-field vectors — because the value
+ * is WRITTEN into the param rather than substituted into an expression. The
+ * schema is then DERIVED from the targets' registered schemas and carried
+ * in {@link GraphParam.schema}, exactly as a subgraph's exposed param
+ * derives its own, and by the same resolver: a declaration can never claim
+ * a type or a capability the params it drives do not have.
+ *
+ * It holds a LITERAL and never an expression, either way: a value that can
  * compute is a node, and a param referring to another param would need a
  * topological order and cycle detection for no caller that has asked.
  */
 export interface GraphParam {
   /** Read by `{"fn":"param","name":…}`. Dot-free, and never `$`-prefixed. */
   readonly name: string;
-  /** A finite number, or a non-empty tuple of them. */
-  readonly value: number | readonly number[];
+  /**
+   * The value. A finite number or a numeric tuple when targetless; anything
+   * the targets' merged schema admits when not.
+   */
+  readonly value: ParamValue;
+  /**
+   * Node params this writes into, in write order. Absent or empty means the
+   * expressions that read the name are its only readers.
+   */
+  readonly targets?: readonly GraphParamTarget[];
+  /**
+   * The schema merged from {@link GraphParam.targets}, resolved ABOVE this
+   * layer because param schemas live in the node registry and the graph
+   * layer may not import it — the same split `ExposedParam` makes. Absent
+   * for a targetless param, whose type comes from the value's own shape.
+   */
+  readonly schema?: ParamSchema;
   readonly min?: number;
   readonly max?: number;
   /** What turning it does, in the graph rather than in a panel beside it. */
@@ -136,9 +168,24 @@ export function graphParamError(param: GraphParam, who: string): string | undefi
   if (name.startsWith("$")) {
     return `${who}: graph param name ${JSON.stringify(name)} starts with "$"; that sigil is the address's own ("$${name.slice(1)}"), so the name carries it exactly once and never itself`;
   }
+  // A TARGETED param is judged by the schema its targets merged into,
+  // because that schema is the whole point: it is how a declaration reaches
+  // an `i32` or an `enum`, and the numeric rules below would refuse both.
+  // `liveParamValueError` rather than `paramValueError` for the reason
+  // `setParam` uses it — this is a live graph, not a serialization.
+  if (param.schema !== undefined) {
+    const bad = liveParamValueError(param.schema, value);
+    return bad === undefined ? undefined : `${who}: graph param "${name}" ${bad}`;
+  }
+  // Targets declared but not yet resolved: the value is judged when the
+  // schema is, and judging it here on the NUMERIC rules would refuse the
+  // very values targets exist to carry — a `"xy"` bound for an enum, a
+  // `true` for a bool. The reader calls this before the nodes exist and
+  // again after resolution, which is the pass that has the schema.
+  if (param.targets !== undefined && param.targets.length > 0) return undefined;
   if (!isFiniteNumber(value)) {
     if (!Array.isArray(value) || value.length === 0 || !value.every(isFiniteNumber)) {
-      return `${who}: graph param "${name}" must hold a finite number or a non-empty array of finite numbers, got ${JSON.stringify(value)}`;
+      return `${who}: graph param "${name}" must hold a finite number or a non-empty array of finite numbers, got ${JSON.stringify(value)}. A param that drives a non-numeric node param declares "targets" and takes its type from them`;
     }
     // A width the param vocabulary cannot name has no schema, and a
     // declaration nothing can describe is one nothing can address: it would
@@ -160,7 +207,7 @@ export function graphParamError(param: GraphParam, who: string): string | undefi
   // and a knob free to write past its declared max would make the range a
   // decoration rather than a rule. Componentwise for a tuple, the way a
   // vec param's bounds already read.
-  const components = typeof value === "number" ? [value] : value;
+  const components = typeof value === "number" ? [value] : (value as readonly number[]);
   for (const component of components) {
     if ((min !== undefined && component < min) || (max !== undefined && component > max)) {
       return `${who}: graph param "${name}" is ${JSON.stringify(value)}, outside its declared range ${min ?? "-∞"}..${max ?? "∞"}`;
@@ -181,7 +228,16 @@ export function graphParamBindings(
   // Null-prototype: a param name is any dot-free non-empty string, which
   // includes `__proto__`, and on a plain object that key is a setter.
   const out = Object.create(null) as Record<string, number | readonly number[]>;
-  for (const param of params) out[param.name] = param.value;
+  for (const param of params) {
+    const v = param.value;
+    // Only what a field expression can hold. A targeted param may carry a
+    // string, a bool or an enum — those reach their node params by being
+    // WRITTEN, and an expression naming one stays unbound, which
+    // `fieldFromJson` reports against the name the author actually typed.
+    if (typeof v === "number" || (Array.isArray(v) && v.every((x) => typeof x === "number"))) {
+      out[param.name] = v as number | readonly number[];
+    }
+  }
   return out;
 }
 
@@ -292,7 +348,13 @@ export function paramSchemaError(schema: ParamSchema): string | undefined {
  * {@link ParamSchema.acceptsField}.
  */
 export function paramValueError(schema: ParamSchema, value: unknown): string | undefined {
-  return valueError(schema, value, false);
+  const bad = valueError(schema, value, false);
+  // The advice rides the REFUSAL rather than replacing it: the shape error
+  // is still the fact, and this is what to do about it.
+  if (bad !== undefined && schema.acceptsField !== true && looksLikeFieldSpec(value)) {
+    return bad + fieldSpecAdvice(schema);
+  }
+  return bad;
 }
 
 /**
@@ -300,6 +362,44 @@ export function paramValueError(schema: ParamSchema, value: unknown): string | u
  * disagree on: whether ±Infinity counts as a number. See
  * {@link ParamSchema.acceptsInfinite} for why serialization always says no.
  */
+/**
+ * Is this value an author reaching for a field expression?
+ *
+ * A plain object carrying a string `fn` is the field grammar's own shape,
+ * and nothing else a param may hold looks like it. Recognizing it is what
+ * lets the refusal below say something useful instead of quoting the spec
+ * back as a malformed number.
+ */
+function looksLikeFieldSpec(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { fn?: unknown }).fn === "string"
+  );
+}
+
+/**
+ * The sentence a field spec at a non-field param earns, which the bare
+ * "expected an integer" does not give.
+ *
+ * The author has just learned that a name can stand for a value, tried it
+ * one param over, and been told only that the shape is wrong. What they
+ * cannot know from that is the RULE — every field-capable param in the
+ * registry is `f32`, `vec3` or `vec4`, so an `i32`, an `enum`, a `bool` or
+ * a `string` is not "not yet" field-capable but structurally never — nor
+ * the route that does work, which is to drive the param by NAME from the
+ * graph's own `params` block. The body-slot refusal one level down has
+ * said as much for a while; this brings the top level up to it.
+ */
+function fieldSpecAdvice(schema: ParamSchema): string {
+  // Spoken, not spelled: "an f32" and "an i32" because the letters are read
+  // aloud, "a u32" because that one is not.
+  const article = /^[aeiofilmnsx]/.test(schema.type) && !schema.type.startsWith("u") ? "an" : "a";
+  const named = `${article} ${schema.type}`;
+  return `. ${article === "an" ? "An" : "A"} ${schema.type} param is never field-capable — a field resolves per element and only f32, vec3 and vec4 params read one — so this expression cannot live here. To drive it from one place, declare a graph param with "targets" naming this node and param: its value is WRITTEN into the slot rather than substituted into an expression, which is how a declaration reaches ${named}`;
+}
+
 function valueError(schema: ParamSchema, value: unknown, allowInfinite: boolean): string | undefined {
   const okNumber = (v: unknown): v is number =>
     typeof v === "number" && (allowInfinite ? !Number.isNaN(v) : Number.isFinite(v));

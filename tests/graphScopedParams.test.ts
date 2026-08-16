@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   type Geometry,
   Graph,
+  type NodeHandle,
   cook,
   deserializeGraph,
   describeGraphParams,
@@ -251,6 +252,7 @@ describe("addressing", () => {
       scope: "graph",
       name: "lift",
       readers: ["dunesA.translate", "dunesB.translate"],
+      readings: 2,
       schema: { type: "f32", default: 2, description: "How high.", min: 0, max: 9 },
       value: 2,
       holdsField: false,
@@ -266,5 +268,220 @@ describe("addressing", () => {
     json.params = [{ name: "unread", value: 1 }];
     const first = describeGraphParams(deserializeGraph(json))[0];
     expect(first.scope === "graph" && first.readers).toEqual([]);
+  });
+});
+
+/**
+ * TARGETS — the half of the format an expression cannot reach.
+ *
+ * Every field-capable param in the registry is `f32`, `vec3` or `vec4`, so
+ * a value that travels by SUBSTITUTION can only ever be a number. A
+ * declaration with `targets` travels by being WRITTEN instead, which is
+ * what lets one name drive an `i32` count, an `enum` mode or a `bool`.
+ */
+describe("a graph param with targets", () => {
+  const withTargets = (value: unknown, targets: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      formatVersion: 1,
+      seed: 5,
+      params: [{ name: "sides", value, targets, ...extra }],
+      nodes: [
+        { id: "a", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+        { id: "b", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+      ],
+      connections: [],
+      outputs: [{ id: "a", pin: "out", name: "points" }],
+    });
+
+  it("writes an i32 into every target and types itself from them", () => {
+    const graph = deserializeGraph(
+      JSON.parse(
+        withTargets(7, [
+          { node: "a", param: "countX" },
+          { node: "b", param: "countX" },
+        ]),
+      ),
+    );
+    // Written, not merely declared — this is the whole difference.
+    for (const id of ["a", "b"]) {
+      expect(graph.getParams({ id } as NodeHandle<{ countX: number }>).countX, id).toBe(7);
+    }
+    const described = describeGraphParams(graph)[0];
+    expect(described.key).toBe("$sides");
+    // i32, from the TARGETS — a value's own shape would have said f32, and
+    // an f32 knob writing 7.5 into a count is exactly what that would cost.
+    expect(described.schema.type).toBe("i32");
+    expect(described.scope === "graph" && described.readers).toEqual(["a.countX", "b.countX"]);
+  });
+
+  it("reaches an enum, which no expression can", () => {
+    const graph = deserializeGraph(
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: 1,
+          seed: 1,
+          params: [
+            {
+              name: "placement",
+              value: "spacing",
+              targets: [
+                { node: "r1", param: "mode" },
+                { node: "r2", param: "mode" },
+              ],
+            },
+          ],
+          nodes: [
+            { id: "line", type: "pointLine", params: { count: 4 } },
+            { id: "path", type: "pointsToPath", params: {} },
+            { id: "r1", type: "pathResample", params: {} },
+            { id: "r2", type: "pathResample", params: {} },
+          ],
+          connections: [
+            { from: ["line", "out"], to: ["path", "in"] },
+            { from: ["path", "out"], to: ["r1", "in"] },
+            { from: ["r1", "out"], to: ["r2", "in"] },
+          ],
+          outputs: [{ id: "r2", pin: "out", name: "points" }],
+        }),
+      ),
+    );
+    for (const id of ["r1", "r2"]) {
+      expect(graph.getParams({ id } as NodeHandle<{ mode: string }>).mode, id).toBe("spacing");
+    }
+    const schema = describeGraphParams(graph)[0].schema;
+    expect(schema.type).toBe("enum");
+    expect(schema.enum).toEqual(["count", "spacing"]);
+    // And the enum is enforced, from the targets' own declaration.
+    expect(() => graph.setGraphParam("placement", "sideways")).toThrow(/count|spacing/);
+  });
+
+  it("turning it moves every target", () => {
+    const graph = deserializeGraph(
+      JSON.parse(
+        withTargets(7, [
+          { node: "a", param: "countX" },
+          { node: "b", param: "countX" },
+        ]),
+      ),
+    );
+    graph.setGraphParam("sides", 9);
+    for (const id of ["a", "b"]) {
+      expect(graph.getParams({ id } as NodeHandle<{ countX: number }>).countX, id).toBe(9);
+    }
+  });
+
+  it("refuses a value its targets would reject, naming the bound", () => {
+    // `pointGrid.countX` is i32 with min 1. The merged schema carries that,
+    // so the declaration cannot smuggle a 0 past the param it drives.
+    expect(() =>
+      deserializeGraph(JSON.parse(withTargets(0, [{ node: "a", param: "countX" }]))),
+    ).toThrow(/1/);
+    expect(() =>
+      deserializeGraph(JSON.parse(withTargets(2.5, [{ node: "a", param: "countX" }]))),
+    ).toThrow(/integer/i);
+  });
+
+  it("refuses targets that disagree on type", () => {
+    expect(() =>
+      deserializeGraph(
+        JSON.parse(
+          withTargets(2, [
+            { node: "a", param: "countX" },
+            { node: "a", param: "spacing" },
+          ]),
+        ),
+      ),
+    ).toThrow(/disagree on type/);
+  });
+
+  it("names an unknown node or param rather than ignoring it", () => {
+    expect(() =>
+      deserializeGraph(JSON.parse(withTargets(2, [{ node: "nope", param: "countX" }]))),
+    ).toThrow(/unknown inner node "nope"/);
+    expect(() =>
+      deserializeGraph(JSON.parse(withTargets(2, [{ node: "a", param: "nope" }]))),
+    ).toThrow(/nope/);
+  });
+
+  it("round-trips its targets, and not its derived schema", () => {
+    const text = withTargets(7, [{ node: "a", param: "countX" }], { description: "Sides." });
+    const written = serializeGraph(deserializeGraph(JSON.parse(text)));
+    expect(written.params).toEqual([
+      { name: "sides", value: 7, targets: [{ node: "a", param: "countX" }], description: "Sides." },
+    ]);
+    // The schema is re-derived on every load from the registry, so writing
+    // it would be a second copy of a truth that already has an owner.
+    expect(JSON.stringify(written.params)).not.toContain("i32");
+    expect(serializeGraph(deserializeGraph(written))).toEqual(written);
+  });
+});
+
+describe("what a listing and a refusal now say", () => {
+  it("counts READINGS as well as slots", () => {
+    // One expression, one slot, two readings of the same name — which is
+    // the whole case for hoisting it. A slot count alone reports "1".
+    const graph = deserializeGraph(
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: 1,
+          seed: 2,
+          params: [{ name: "k", value: 3 }],
+          nodes: [
+            { id: "grid", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+            {
+              id: "t",
+              type: "transformPoints",
+              params: {
+                translate: {
+                  fn: "mul",
+                  args: [
+                    { fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "k" }] },
+                    { fn: "param", name: "k" },
+                  ],
+                },
+              },
+            },
+          ],
+          connections: [{ from: ["grid", "out"], to: ["t", "in"] }],
+          outputs: [{ id: "t", pin: "out", name: "points" }],
+        }),
+      ),
+    );
+    const p = describeGraphParams(graph)[0];
+    expect(p.scope === "graph" && p.readers).toEqual(["t.translate"]);
+    expect(p.scope === "graph" && p.readings).toBe(2);
+  });
+
+  it("tells an author what to do when a field spec lands on an i32", () => {
+    // The bare "expected an integer" left them guessing. The rule they
+    // cannot know is that NO i32 is field-capable, and the route that works
+    // is a targeted graph param.
+    const json = {
+      formatVersion: 1,
+      seed: 1,
+      nodes: [
+        { id: "g", type: "pointGrid", params: { countX: { fn: "param", name: "n" } } },
+      ],
+      connections: [],
+      outputs: [{ id: "g", pin: "out", name: "points" }],
+    };
+    expect(() => deserializeGraph(json)).toThrow(/never field-capable/);
+    expect(() => deserializeGraph(json)).toThrow(/declare a graph param with "targets"/);
+    // And it still says what was actually wrong, first.
+    expect(() => deserializeGraph(json)).toThrow(/expected an integer/);
+  });
+
+  it("says nothing extra when the value is simply the wrong number", () => {
+    // The advice is gated on the value LOOKING like a field spec; a plain
+    // bad number must not collect a paragraph about expressions.
+    const json = {
+      formatVersion: 1,
+      seed: 1,
+      nodes: [{ id: "g", type: "pointGrid", params: { countX: 2.5 } }],
+      connections: [],
+      outputs: [{ id: "g", pin: "out", name: "points" }],
+    };
+    expect(() => deserializeGraph(json)).toThrow(/expected an integer/);
+    expect(() => deserializeGraph(json)).not.toThrow(/field-capable/);
   });
 });

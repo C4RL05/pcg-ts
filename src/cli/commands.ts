@@ -338,7 +338,12 @@ function graphParamRow(p: DescribedGraphParam): string[] {
     p.scope === "graph"
       ? p.readers.length === 0
         ? "read by nothing"
-        : `read by ${plural(p.readers.length, "slot")}: ${p.readers.join(", ")}`
+        : // SLOTS and READINGS both, because they differ exactly where the
+          // param earns its keep: one expression can read a name four
+          // times, and "1 slot" would understate that to nothing.
+          `read by ${plural(p.readers.length, "slot")}${
+            p.readings > p.readers.length ? `, ${p.readings} readings` : ""
+          }: ${p.readers.join(", ")}`
       : "",
   ];
 }

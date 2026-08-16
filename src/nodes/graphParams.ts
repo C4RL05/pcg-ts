@@ -100,8 +100,19 @@ export interface DescribedGraphScopedParam extends DescribedParamBase {
   readonly scope: "graph";
   /** The declared name, without the address's `$`. */
   readonly name: string;
-  /** `"<node>.<param>"` of every slot whose expression reads this name. */
+  /**
+   * `"<node>.<param>"` of every slot this value reaches — the ones it is
+   * WRITTEN into first, then the ones whose expressions read the name.
+   */
   readonly readers: readonly string[];
+  /** Node params it writes into, when it declares any. */
+  readonly targets?: readonly { readonly node: string; readonly param: string }[];
+  /**
+   * Total READINGS across those slots — a name read four times inside one
+   * expression is 1 slot and 4 readings, and the second number is the one
+   * that says why it is a param.
+   */
+  readonly readings: number;
 }
 
 /**
@@ -151,6 +162,12 @@ export function inlineParamSchema(
   if (value.length === 3) return { type: "vec3", default: [...value], description, ...bounds };
   if (value.length === 4) return { type: "vec4", default: [...value], description, ...bounds };
   return undefined;
+}
+
+
+/** A defensive copy of a param value, whatever kind it is. */
+function copyParamValue(v: ParamValue): ParamValue {
+  return Array.isArray(v) ? ([...v] as ParamValue) : v;
 }
 
 /** The inline field params of one node param, in spec-walk order. */
@@ -228,28 +245,47 @@ export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
     // declared-but-unread param reports an empty `readers`, which is the
     // only way an author sees that a rename left a value stranded.
     const readers = new Map<string, string[]>();
+    const readings = new Map<string, number>();
     for (const ref of paramScan(graph).refs) {
       for (const name of ref.names) {
         let list = readers.get(name);
         if (list === undefined) readers.set(name, (list = []));
         list.push(`${ref.node}.${ref.param}`);
+        // SLOTS and READINGS are different numbers wherever a name is worth
+        // hoisting: one expression can read the same name four times, and
+        // that is the case a param exists for rather than a literal.
+        readings.set(name, (readings.get(name) ?? 0) + (ref.readings[name] ?? 1));
       }
     }
     for (const param of declared) {
-      const schema = inlineParamSchema(
-        param.name,
-        param.value,
-        param,
-        `declared in the graph's "params" block`,
-      );
+      // A TARGETED param already carries the schema its targets merged
+      // into, and that schema is the point: it is what makes the param an
+      // `i32` or an `enum` rather than the `f32` a value's shape would
+      // suggest. Only a targetless one is typed from its own value.
+      const schema =
+        param.schema ??
+        inlineParamSchema(
+          param.name,
+          param.value as FieldBindingValue,
+          param,
+          `declared in the graph's "params" block`,
+        );
       if (schema === undefined) continue;
+      // The slots it writes are readers too — and for a targeted param they
+      // are the only ones, since a `string` or an `i32` reaches no
+      // expression. Listing both is what makes "read by nothing" mean it.
+      const written = (param.targets ?? []).map((t) => `${t.node}.${t.param}`);
       out.push({
         key: `$${param.name}`,
         scope: "graph",
         name: param.name,
-        readers: readers.get(param.name) ?? [],
+        readers: [...written, ...(readers.get(param.name) ?? [])],
+        // A written target is one reading each; an expression may hold
+        // several of the same name.
+        readings: written.length + (readings.get(param.name) ?? 0),
+        ...(param.targets !== undefined ? { targets: [...param.targets] } : {}),
         schema,
-        value: typeof param.value === "number" ? param.value : [...param.value],
+        value: copyParamValue(param.value),
         holdsField: false,
         // A top-level declaration is an author saying this number is worth
         // turning, which is the argument that makes an inline value

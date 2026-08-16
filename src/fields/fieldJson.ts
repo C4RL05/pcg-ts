@@ -1287,6 +1287,26 @@ export function paramNamesOf(spec: FieldSpec): readonly string[] {
 }
 
 /**
+ * How many times each name is READ, which {@link paramNamesOf} cannot say
+ * because it answers a set question.
+ *
+ * The two counts differ wherever a name is worth hoisting: the rig's
+ * `stretchMin` is read four times inside ONE expression, so a listing that
+ * reports slots alone says "1" about the very case that makes it a param
+ * rather than a literal. Both numbers are reported, because both are true
+ * and neither implies the other.
+ */
+export function paramReadingCounts(spec: FieldSpec): Readonly<Record<string, number>> {
+  // Null-prototype for the reason `inlineParamValuesOf` is: `__proto__` is
+  // a legal param name and a setter on a plain object.
+  const counts = Object.create(null) as Record<string, number>;
+  eachParam(spec, (_node, name) => {
+    counts[name] = (counts[name] ?? 0) + 1;
+  });
+  return counts;
+}
+
+/**
  * @internal The subset of {@link paramNamesOf} that some reference leaves
  * for a BINDER to supply: a name is listed as soon as one `param` node
  * mentioning it carries no inline value of its own.

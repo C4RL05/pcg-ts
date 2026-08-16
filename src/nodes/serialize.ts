@@ -179,7 +179,18 @@ export interface SerializedOutput {
  */
 export interface SerializedGraphParam {
   readonly name: string;
-  readonly value: number | readonly number[];
+  /**
+   * A finite number or a numeric tuple when the param has no `targets`;
+   * anything the targets' merged schema admits when it does.
+   */
+  readonly value: ParamValue;
+  /**
+   * Node params this writes into, in write order. Omitted for a param that
+   * only field expressions read by name — which is every param that can
+   * reach a number and no param that can reach an `i32`, a `bool`, a
+   * `string` or an `enum`, since those are unreachable from an expression.
+   */
+  readonly targets?: readonly { readonly node: string; readonly param: string }[];
   readonly min?: number;
   readonly max?: number;
   readonly description?: string;
@@ -250,7 +261,7 @@ const GRAPH_KEYS = [
   "connections",
   "outputs",
 ] as const;
-const GRAPH_PARAM_KEYS = ["name", "value", "min", "max", "description"] as const;
+const GRAPH_PARAM_KEYS = ["name", "value", "targets", "min", "max", "description"] as const;
 const NODE_KEYS = ["id", "type", "params", "subgraph", "ref"] as const;
 const SUBGRAPH_PAYLOAD_KEYS = ["graph", "inputs", "outputs", "params"] as const;
 const SUBGRAPH_REF_KEYS = ["name", "hash"] as const;
@@ -470,18 +481,120 @@ function readGraphParams(v: unknown, nested: boolean): readonly GraphParam[] {
         `params[${i}] ("${name}"): "description" must be a string, got ${JSON.stringify(raw.description)}`,
       );
     }
+    const targets = readGraphParamTargets(raw.targets, `params[${i}] ("${name}")`);
     const param: GraphParam = {
       name,
-      value: raw.value as number | readonly number[],
+      value: raw.value as ParamValue,
+      ...(targets !== undefined ? { targets } : {}),
       ...(raw.min !== undefined ? { min: raw.min as number } : {}),
       ...(raw.max !== undefined ? { max: raw.max as number } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
     };
+    // A TARGETED param's value is judged later, against the schema its
+    // targets merge into — which cannot be read until the nodes exist. This
+    // pass checks only what is knowable now: the name, and (for a targetless
+    // param) the numeric shape.
     const error = graphParamError(param, `params[${i}]`);
     if (error !== undefined) fail(error);
     out.push(param);
   });
   return out;
+}
+
+
+
+/**
+ * Resolve every targeted graph param against the nodes it drives, WRITE its
+ * value into them, and hand back the params carrying their merged schemas.
+ *
+ * The resolver is `resolveExposedParam`, unchanged and deliberately: a
+ * subgraph's exposed param answers the same question — "one name, several
+ * inner param slots, what may it hold?" — and its merge rules are the
+ * soundness argument, not a convenience. Types and enum sets must agree
+ * across targets, `acceptsField` and `acceptsInfinite` are ANDed, bounds
+ * intersect, and an author may only narrow them. A declaration therefore
+ * cannot claim a capability the params it drives do not have, which is the
+ * whole reason this reaches `i32` and `enum` safely.
+ *
+ * WRITING is where this differs from the subgraph form, and the difference
+ * is that there is nothing to restore. `withExposedParams` writes into a
+ * body at cook time and puts it back, because one body is shared between
+ * wrapper instances and by `serializeGraph`. A top-level graph has exactly
+ * one set of values and one owner, so the write is permanent and the node
+ * simply holds what the declaration says.
+ *
+ * The consequence worth stating: a node param that a graph param drives is
+ * NOT independently editable — the declaration wins on every load, the same
+ * way a wrapper's value wins over what its body happens to hold.
+ */
+function applyGraphParamTargets(graph: Graph, params: readonly GraphParam[]): GraphParam[] {
+  return params.map((param) => {
+    const targets = param.targets;
+    if (targets === undefined || targets.length === 0) return param;
+    let resolved;
+    try {
+      resolved = resolveExposedParam(graph, {
+        name: param.name,
+        targets: targets.map((t) => ({ node: { id: t.node }, param: t.param })),
+        // `description` is optional on a graph param and REQUIRED by the
+        // resolver, so the fallback says where the missing sentence goes —
+        // the same answer `inlineParamSchema` gives for an undocumented
+        // inline value, in the same voice.
+        description:
+          param.description ??
+          `Graph param "${param.name}", driving ${targets.map((t) => `"${t.node}".${t.param}`).join(", ")}. The graph says nothing else about it — write "description" beside the value to say what turning it does.`,
+        default: param.value,
+        ...(param.min !== undefined ? { min: param.min } : {}),
+        ...(param.max !== undefined ? { max: param.max } : {}),
+      });
+    } catch (err) {
+      fail(`graph param "${param.name}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const withSchema: GraphParam = { ...param, schema: resolved.schema };
+    const bad = graphParamError(withSchema, "params");
+    if (bad !== undefined) fail(bad);
+    for (const t of targets) {
+      try {
+        graph.setParam({ id: t.node } as NodeHandle<Record<string, unknown>>, t.param, param.value as never);
+      } catch (err) {
+        fail(
+          `graph param "${param.name}" cannot write "${t.node}".${t.param}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return withSchema;
+  });
+}
+
+/** Read a graph param's optional `targets`, or undefined when it has none. */
+function readGraphParamTargets(
+  v: unknown,
+  where: string,
+): readonly { node: string; param: string }[] | undefined {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v)) {
+    fail(`${where}: "targets" must be an array of { node, param }, got ${JSON.stringify(v)}`);
+  }
+  const out: { node: string; param: string }[] = [];
+  v.forEach((raw: unknown, i: number) => {
+    if (!isPlainObject(raw)) {
+      fail(`${where}: targets[${i}] must be an object { node, param }, got ${JSON.stringify(raw)}`);
+    }
+    checkKeys(raw, EXPOSED_PARAM_TARGET_KEYS, `${where} targets[${i}]`, NO_ANNOTATION_KEY);
+    const node = raw.node;
+    const param = raw.param;
+    if (typeof node !== "string" || node === "") {
+      fail(`${where}: targets[${i}].node must be a non-empty string, got ${JSON.stringify(node)}`);
+    }
+    if (typeof param !== "string" || param === "") {
+      fail(`${where}: targets[${i}].param must be a non-empty string, got ${JSON.stringify(param)}`);
+    }
+    out.push({ node, param });
+  });
+  // An empty list means the same as no list — the expressions are the only
+  // readers — and is admitted rather than refused, because the exposed-param
+  // form it borrows from admits it and says so.
+  return out.length === 0 ? undefined : out;
 }
 
 /**
@@ -947,6 +1060,12 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
             params: graph.graphParams.map((p) => ({
               name: p.name,
               value: Array.isArray(p.value) ? [...p.value] : p.value,
+              // The declaration, not the resolved schema: the schema is
+              // DERIVED from these targets on every load, so writing it out
+              // would be a second copy of a truth the registry already owns
+              // — the same reason a subgraph payload omits an exposed
+              // param's `type` and `acceptsField`.
+              ...(p.targets !== undefined ? { targets: p.targets.map((t) => ({ ...t })) } : {}),
               ...(p.min !== undefined ? { min: p.min } : {}),
               ...(p.max !== undefined ? { max: p.max } : {}),
               ...(p.description !== undefined ? { description: p.description } : {}),
@@ -1397,7 +1516,10 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
   // reaches a memo key), and deserialize is the earliest build that has
   // them.
   const graphParams = readGraphParams(json.params, ctx.nested === true);
-  graph.setGraphParams(graphParams);
+  // Only the BINDINGS are needed before the nodes: a targetless param
+  // substitutes into expressions at build time. A targeted one is resolved
+  // and applied after, because its schema comes from params that do not
+  // exist yet — see `applyGraphParamTargets`.
   const bindings = graphParamBindings(graphParams);
   const declaredParams = new Set(graphParams.map((p) => p.name));
   const handles = new Map<string, NodeHandle>();
@@ -1472,6 +1594,10 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
     }
     handles.set(id, graph.add(reg.def, params, id));
   });
+
+  // Now that every node exists, a targeted param can merge its schema from
+  // the params it drives and write its value into them.
+  graph.setGraphParams(applyGraphParamTargets(graph, graphParams));
 
   connectionsJson.forEach((connJson: unknown, i: number) => {
     if (!isPlainObject(connJson)) {
