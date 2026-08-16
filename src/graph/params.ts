@@ -397,21 +397,42 @@ function looksLikeFieldSpec(value: unknown): boolean {
  * The sentence a field spec at a non-field param earns, which the bare
  * "expected an integer" does not give.
  *
- * The author has just learned that a name can stand for a value, tried it
- * one param over, and been told only that the shape is wrong. What they
- * cannot know from that is the RULE — every field-capable param in the
- * registry is `f32`, `vec3` or `vec4`, so an `i32`, an `enum`, a `bool` or
- * a `string` is not "not yet" field-capable but structurally never — nor
- * the route that does work, which is to drive the param by NAME from the
- * graph's own `params` block. The body-slot refusal one level down has
- * said as much for a while; this brings the top level up to it.
+ * The author has just learned that an expression can stand for a value,
+ * tried it one param over, and been told only that the shape is wrong.
+ * What they cannot know from that is WHY, and the why has two cases which
+ * the first version of this message collapsed into one — and got wrong:
+ *
+ *   - Types that can NEVER carry a field. A field resolves per element,
+ *     and only `f32`, `vec3` and `vec4` read one, so an `i32`, an `enum`,
+ *     a `bool` or a `string` is not "not yet" field-capable but
+ *     structurally never. The route out is a graph param with `targets`,
+ *     which WRITES the value instead of substituting it.
+ *   - A type that CAN, on a param that does not. `transformPoints.
+ *     translate` is a field-capable `vec3` and `pointLine.start` is not,
+ *     so "a vec3 param is never field-capable" was a falsehood printed on
+ *     the rig panel's very first knob — and self-contradicting, since the
+ *     same sentence listed vec3 among the types that do read a field.
  */
+const NEVER_FIELD_CAPABLE = ["i32", "u32", "bool", "string", "enum", "items", "stringList", "numberList"] as const;
+
+/**
+ * "a" or "an" for a type name, spoken rather than spelled: "an f32" and
+ * "an i32" because the letters are read aloud, "a u32" because that one is
+ * not. A character-class rule got `An string` and `An numberList`, which is
+ * why this is a list.
+ */
+function articleFor(type: ParamType): "a" | "an" {
+  return type === "f32" || type === "i32" || type === "enum" || type === "items" ? "an" : "a";
+}
+
 function fieldSpecAdvice(schema: ParamSchema): string {
-  // Spoken, not spelled: "an f32" and "an i32" because the letters are read
-  // aloud, "a u32" because that one is not.
-  const article = /^[aeiofilmnsx]/.test(schema.type) && !schema.type.startsWith("u") ? "an" : "a";
+  const article = articleFor(schema.type);
+  const Article = article === "an" ? "An" : "A";
   const named = `${article} ${schema.type}`;
-  return `. ${article === "an" ? "An" : "A"} ${schema.type} param is never field-capable — a field resolves per element and only f32, vec3 and vec4 params read one — so this expression cannot live here. To drive it from one place, declare a graph param with "targets" naming this node and param: its value is WRITTEN into the slot rather than substituted into an expression, which is how a declaration reaches ${named}`;
+  if ((NEVER_FIELD_CAPABLE as readonly string[]).includes(schema.type)) {
+    return `. ${Article} ${schema.type} param is never field-capable — a field resolves per element, and only f32, vec3 and vec4 params read one — so no expression can live here. To drive it from one place, declare a graph param with "targets" naming this node and param: its value is WRITTEN into the slot rather than substituted into an expression, which is how a declaration reaches ${named}`;
+  }
+  return `. ${schema.type} params CAN be field-capable, but this one does not declare it — the capability is per param, not per type, so a sibling of the same type may well accept the expression you are writing. Either move it to a param whose schema says acceptsField, or declare a graph param with "targets" naming this node and param, whose value is WRITTEN into the slot rather than substituted into an expression`;
 }
 
 function valueError(schema: ParamSchema, value: unknown, allowInfinite: boolean): string | undefined {

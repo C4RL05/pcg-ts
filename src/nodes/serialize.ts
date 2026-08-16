@@ -503,6 +503,17 @@ function readGraphParams(v: unknown, nested: boolean): readonly GraphParam[] {
 
 
 
+
+/** Value equality for a param: numbers, strings, bools, and flat lists. */
+function sameParamValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i])
+    );
+  }
+  return a === b;
+}
+
 /**
  * Resolve every targeted graph param against the nodes it drives, WRITE its
  * value into them, and hand back the params carrying their merged schemas.
@@ -527,7 +538,19 @@ function readGraphParams(v: unknown, nested: boolean): readonly GraphParam[] {
  * NOT independently editable — the declaration wins on every load, the same
  * way a wrapper's value wins over what its body happens to hold.
  */
-function applyGraphParamTargets(graph: Graph, params: readonly GraphParam[]): GraphParam[] {
+function applyGraphParamTargets(
+  graph: Graph,
+  params: readonly GraphParam[],
+  authored: ReadonlyMap<string, ReadonlySet<string>>,
+): GraphParam[] {
+  // Which declaration owns which slot. A slot with two owners has no
+  // defined value — measured before this guard, two params targeting one
+  // `countX` simply let the LAST one win, 90 points against 40, with
+  // nothing said. `resolveExposedParam` has refused exactly this for
+  // subgraph params since it shipped ("two exposed params binding the same
+  // inner slot… is a hard error naming the params and the slot"), and the
+  // two mechanisms must not disagree about a question they both answer.
+  const owner = new Map<string, string>();
   return params.map((param) => {
     const targets = param.targets;
     if (targets === undefined || targets.length === 0) return param;
@@ -561,10 +584,32 @@ function applyGraphParamTargets(graph: Graph, params: readonly GraphParam[]): Gr
       // JSON still shows the expression. That is the hazard this session
       // keeps closing: a graph that does something its own text does not
       // say. Both readings are defensible, so neither is chosen silently.
+      const slot = `"${t.node}".${t.param}`;
+      const claimed = owner.get(slot);
+      if (claimed !== undefined) {
+        fail(
+          claimed === param.name
+            ? `graph param "${param.name}" lists ${slot} twice; name each slot once — writing it twice cannot mean anything a single write does not`
+            : `graph params "${claimed}" and "${param.name}" both target ${slot}, so the slot has two declared values and takes whichever is applied last. Drive it from one of them, or split the slot into two params`,
+        );
+      }
+      owner.set(slot, param.name);
       const held = graph.getParams({ id: t.node } as NodeHandle<Record<string, unknown>>)[t.param];
       if (isField(held)) {
         fail(
           `graph param "${param.name}" targets "${t.node}".${t.param}, which holds a FIELD EXPRESSION. Writing the declared value there would leave that expression in the file and dead in the cook, so it is refused rather than chosen for you: either drop the expression from that param (the declaration then drives it), or drop the target and have the expression READ the name instead — a `+"`param`"+` reference inside it binds to the same declared value.`,
+        );
+      }
+      // A literal that DISAGREES with its driver is a hand edit that would
+      // be silently discarded: the declaration wins on every load, so the
+      // number in the file would sit there meaning nothing. Serialization
+      // writes the driven value back, so a round-tripped graph always
+      // agrees and never reaches this — only a file somebody edited does,
+      // which is exactly when it is worth saying.
+      const wasAuthored = authored.get(t.node)?.has(t.param) === true;
+      if (wasAuthored && held !== undefined && !isField(held) && !sameParamValue(held, param.value)) {
+        fail(
+          `node "${t.node}" param "${t.param}" is ${JSON.stringify(held)}, but graph param "${param.name}" drives it to ${JSON.stringify(param.value)}. The declaration wins on every load, so the value written on the node would be discarded silently: change the declaration, or drop the target and let the node keep its own value`,
         );
       }
       try {
@@ -1536,6 +1581,11 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
   const bindings = graphParamBindings(graphParams);
   const declaredParams = new Set(graphParams.map((p) => p.name));
   const handles = new Map<string, NodeHandle>();
+  // Which param keys each node's JSON ACTUALLY carried. `getParams` merges
+  // the registry defaults, so it cannot tell "the author wrote 2" from
+  // "the author wrote nothing and the default is 10" — and only the first
+  // is worth objecting to when a graph param drives that slot.
+  const authoredParamKeys = new Map<string, ReadonlySet<string>>();
   const knownIds = (): string => [...handles.keys()].join(", ");
 
   nodesJson.forEach((nodeJson: unknown, i: number) => {
@@ -1566,6 +1616,7 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
     if (!isPlainObject(paramsJson)) {
       fail(`node "${id}": params must be an object, got ${JSON.stringify(nodeJson.params)}`);
     }
+    authoredParamKeys.set(id, new Set(Object.keys(paramsJson)));
     if (type === "subgraph" || type === "forEach") {
       handles.set(
         id,
@@ -1610,7 +1661,7 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
 
   // Now that every node exists, a targeted param can merge its schema from
   // the params it drives and write its value into them.
-  graph.setGraphParams(applyGraphParamTargets(graph, graphParams));
+  graph.setGraphParams(applyGraphParamTargets(graph, graphParams, authoredParamKeys));
 
   connectionsJson.forEach((connJson: unknown, i: number) => {
     if (!isPlainObject(connJson)) {

@@ -286,9 +286,12 @@ describe("a graph param with targets", () => {
       formatVersion: 1,
       seed: 5,
       params: [{ name: "sides", value, targets, ...extra }],
+      // `countX` is deliberately NOT authored on these nodes: a driven slot
+      // whose file value disagrees with its driver is refused, and leaving
+      // it out is the shape a hand-written graph takes.
       nodes: [
-        { id: "a", type: "pointGrid", params: { countX: 2, countZ: 2 } },
-        { id: "b", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+        { id: "a", type: "pointGrid", params: { countZ: 2 } },
+        { id: "b", type: "pointGrid", params: { countZ: 2 } },
       ],
       connections: [],
       outputs: [{ id: "a", pin: "out", name: "points" }],
@@ -622,5 +625,68 @@ describe("a target that already holds an expression", () => {
     const graph = deserializeGraph(json);
     const described = describeGraphParams(graph)[0];
     expect(described.scope === "graph" && described.readers).toEqual(["t.translate"]);
+  });
+});
+
+describe("a slot has one owner, and its literal cannot disagree", () => {
+  const twoOwners = (countX: number) =>
+    JSON.parse(
+      JSON.stringify({
+        formatVersion: 1,
+        seed: 1,
+        params: [
+          { name: "a", value: 4, targets: [{ node: "g", param: "countX" }] },
+          { name: "b", value: 9, targets: [{ node: "g", param: "countX" }] },
+        ],
+        nodes: [{ id: "g", type: "pointGrid", params: { countX } }],
+        connections: [],
+        outputs: [{ id: "g", pin: "out", name: "points" }],
+      }),
+    );
+
+  it("refuses two declarations targeting one slot", () => {
+    // Measured before this guard: the LAST declaration won and the graph
+    // cooked 90 points instead of 40, with nothing said. The subgraph
+    // resolver has refused the same thing since it shipped, and the two
+    // mechanisms must not answer one question differently.
+    expect(() => deserializeGraph(twoOwners(4))).toThrow(
+      /both target "g"\.countX.*whichever is applied last/s,
+    );
+  });
+
+  it("refuses one declaration listing a slot twice", () => {
+    const json = twoOwners(4) as { params: { name: string; targets: unknown[] }[] };
+    json.params = [
+      {
+        name: "a",
+        value: 4,
+        targets: [
+          { node: "g", param: "countX" },
+          { node: "g", param: "countX" },
+        ],
+      } as never,
+    ];
+    expect(() => deserializeGraph(json)).toThrow(/lists "g"\.countX twice/);
+  });
+
+  it("refuses a node literal that disagrees with its driver", () => {
+    // Only a hand-edited file reaches this: serialization writes the driven
+    // value back, so a round-tripped graph always agrees. Which is exactly
+    // when the number in the file is a thing somebody meant.
+    const json = twoOwners(2) as { params: unknown[] };
+    json.params = [{ name: "a", value: 4, targets: [{ node: "g", param: "countX" }] }];
+    expect(() => deserializeGraph(json)).toThrow(
+      /is 2, but graph param "a" drives it to 4.*discarded silently/s,
+    );
+  });
+
+  it("accepts the agreeing case, which is what a round trip produces", () => {
+    const json = twoOwners(4) as { params: unknown[] };
+    json.params = [{ name: "a", value: 4, targets: [{ node: "g", param: "countX" }] }];
+    const graph = deserializeGraph(json);
+    expect(graph.getParams({ id: "g" } as NodeHandle<{ countX: number }>).countX).toBe(4);
+    // And a round trip stays accepted, which is the property that keeps
+    // this refusal from firing on anything the library itself wrote.
+    expect(() => deserializeGraph(serializeGraph(graph))).not.toThrow();
   });
 });
