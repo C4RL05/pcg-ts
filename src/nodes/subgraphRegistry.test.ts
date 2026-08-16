@@ -739,7 +739,7 @@ describe("named subgraph registry", () => {
         outputs: [],
       }),
     ).toThrow(
-      /deserializeGraph: unknown key "note"; valid keys: formatVersion, seed, meta, nodes, connections, outputs/,
+      /deserializeGraph: unknown key "note"; valid keys: formatVersion, seed, meta, params, nodes, connections, outputs/,
     );
   });
 

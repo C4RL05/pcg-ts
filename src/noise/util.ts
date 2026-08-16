@@ -22,14 +22,67 @@ import {
 } from "../fields/spec.js";
 import { hashFinalize, hashMix, hashSeed } from "../random/hash.js";
 
+/**
+ * The largest `variant` a {@link NodeSeedRef} may carry, inclusive: 2^24
+ * is where an f32 stops holding every integer, and the GPU may read a
+ * `param` variant back through an f32 uniform slot. A variant is a slot
+ * number, not a seed, so the bound costs nothing.
+ */
+export const MAX_SEED_VARIANT = 2 ** 24;
+
+/**
+ * A noise seed derived from the COOKING NODE's seed rather than written
+ * as a literal: `hashCombine(ctx.seed, variant)`, in u32 integer math.
+ *
+ * It exists because a serialized field expression bakes its numbers, so a
+ * saved noise carries a literal `opts.seed` and the graph's seed box
+ * moves the scatters and not the shapes. This is the one non-numeric form
+ * `opts.seed` admits, and it is closed on purpose: every step of the
+ * derivation is `Math.imul`, xor and shift here and the same operations
+ * on wrapping u32s in WGSL, built from the same exported murmur
+ * constants, so CPU and GPU land on the same u32 with no tolerance spent.
+ * An arbitrary expression could not promise that — a field column is f32,
+ * and a one-ULP disagreement in a seed is not a rounding error but an
+ * unrelated noise field.
+ *
+ * `variant` picks WHICH independent draw off that node, so two noises on
+ * one node with different variants are two independent draws. It is the
+ * old literal seed's position and keeps whatever meaning that number had.
+ *
+ * Adopting this in a saved noise RE-ROLLS it: at the graph's default seed
+ * the output is a different draw from the same family. That is not an
+ * oversight — a form that were the identity at one particular seed would
+ * have to be told which seed, i.e. carry a calibration constant, and a
+ * calibration constant goes stale on every rename.
+ */
+export interface NodeSeedRef {
+  /**
+   * Which seed the derivation reads. `"node"` is the only member today;
+   * a discriminator rather than a boolean because it has obvious future
+   * ones (a per-cell re-roll, say).
+   */
+  readonly from: "node";
+  /** Which independent draw off the node. Integer, 0..2^24. Default 0. */
+  readonly variant?: number;
+  /**
+   * @internal fbm's octave index, hashed in after the node seed so the
+   * octave layers are seeded the way they already are
+   * (`hashCombine(seed, o)`). NOT part of the JSON grammar — an fbm spec
+   * carries one `opts.seed` — which is why a ref carrying one withholds
+   * its own derived spec (see {@link noiseOptsSpec}).
+   */
+  readonly octave?: number;
+}
+
 /** Options shared by all noise fields. */
 export interface NoiseOpts {
   /**
-   * Integer seed. Noise is a pure function of (seed, sample position) —
-   * the field context seed does not affect it; derive per-node seeds
-   * with `hashCombine` when needed. Default 0.
+   * Integer seed, or a {@link NodeSeedRef} (`{ from: "node", variant }`)
+   * that derives one from the cooking node's own seed. Noise is a pure
+   * function of (seed, sample position); a literal seed ignores the field
+   * context seed, which is exactly what the ref form is for. Default 0.
    */
-  seed?: number;
+  seed?: number | NodeSeedRef;
   /** Uniform scale applied to positions before sampling. Default 1. */
   frequency?: number;
   /** Offset added after scaling (in noise space). Default [0, 0, 0]. */
@@ -190,6 +243,62 @@ export type NoiseOptsResult =
   | { readonly withheld: WithheldReason };
 
 /**
+ * Is this `opts.seed` the tagged ref rather than a literal? The union is
+ * `number | NodeSeedRef`, so "not a number" settles it; the grammar's
+ * parser is what checks the SHAPE, and it does so before anything here
+ * sees the object.
+ */
+export function isNodeSeedRef(seed: number | NodeSeedRef | undefined): seed is NodeSeedRef {
+  return typeof seed === "object" && seed !== null;
+}
+
+/**
+ * @internal The u32 a {@link NodeSeedRef} stands for at this evaluation
+ * seed. Pure integer murmur — the same `hashCombine` the executor derives
+ * node seeds with — so the GPU's transliteration of it agrees bit for bit
+ * with no budget spent.
+ */
+export function resolveNodeSeed(ref: NodeSeedRef, ctxSeed: number): number {
+  const seed = hash2(ctxSeed, ref.variant ?? 0);
+  return ref.octave === undefined ? seed : hash2(seed, ref.octave);
+}
+
+/**
+ * @internal How a {@link NodeSeedRef} names itself inside `Field.key`.
+ * The key is fixed at CONSTRUCTION while the seed arrives at evaluation,
+ * so it names the ref and not the value it will resolve to — the same
+ * shape `nodeSeed()` already has, and sound for the same two reasons:
+ * `evaluateField` memoizes per `EvalContext` object (one context is one
+ * seed), and the executor's node memo key carries the node seed verbatim,
+ * so every node recooks when the graph seed moves.
+ *
+ * The `n` prefix makes a ref unforgeable by a literal seed, which spells
+ * itself as a bare decimal.
+ */
+function nodeSeedKey(ref: NodeSeedRef): string {
+  const variant = `n${ref.variant ?? 0}`;
+  return ref.octave === undefined ? variant : `${variant}o${ref.octave}`;
+}
+
+/**
+ * @internal Why this ref cannot appear in a derived spec, or undefined.
+ * The range rules are the parser's, restated here because the factories
+ * are reachable directly and a spec that cannot be parsed back must never
+ * be produced.
+ */
+function nodeSeedRefProblem(ref: NodeSeedRef): string | undefined {
+  if (ref.octave !== undefined) {
+    return "per-octave `seed` ref is internal to fbm and has no form in the grammar";
+  }
+  if (ref.from !== "node") return '`seed.from` must be "node"';
+  const variant = ref.variant ?? 0;
+  if (!Number.isInteger(variant) || variant < 0 || variant > MAX_SEED_VARIANT) {
+    return `\`seed.variant\` must be an integer from 0 to ${MAX_SEED_VARIANT}`;
+  }
+  return undefined;
+}
+
+/**
  * @internal The `opts` object of a derived noise spec, or the reason no
  * spec can be derived because an option falls outside what the grammar's
  * parser accepts. The factories are looser than the parser (`seed` is
@@ -213,14 +322,19 @@ export type NoiseOptsResult =
 export function noiseOptsSpec(
   fn: string,
   opts: NoiseOpts,
-  seed: number,
+  seed: number | NodeSeedRef,
   frequency: number,
   offset: readonly number[],
   positionSpec: FieldSpec | undefined,
   resolvedPosition: () => Field,
   extra: Readonly<Record<string, unknown>> | undefined,
 ): NoiseOptsResult {
-  if (opts.seed !== undefined && !Number.isInteger(opts.seed)) {
+  if (isNodeSeedRef(seed)) {
+    const problem = nodeSeedRefProblem(seed);
+    if (problem !== undefined) {
+      return { withheld: { kind: "ungrammatical", detail: `${fn}'s ${problem}` } };
+    }
+  } else if (opts.seed !== undefined && !Number.isInteger(opts.seed)) {
     return { withheld: { kind: "ungrammatical", detail: `${fn}'s \`seed\` must be an integer` } };
   }
   if (!isSpecNumber(frequency)) {
@@ -243,7 +357,9 @@ export function noiseOptsSpec(
     return { withheld: withheldOver(resolvedPosition()) };
   }
   const out: Record<string, unknown> = {
-    seed,
+    // A FRESH object for a ref: a spec is immutable by contract, and the
+    // one the caller handed in is theirs to keep mutating.
+    seed: isNodeSeedRef(seed) ? { from: "node", variant: seed.variant ?? 0 } : seed,
     frequency,
     offset: [offset[0], offset[1], offset[2]],
   };
@@ -291,7 +407,9 @@ export const GRAD3: Float32Array = new Float32Array([
  * Build a noise Field from per-sample logic: resolves the position input,
  * applies frequency/offset, and evaluates `sample` per element into an
  * f32 scalar column. `kindSalt` decorrelates noise types sharing a seed;
- * the effective seed passed to `makeSampler` is `hash2(kindSalt, seed)`.
+ * the effective seed passed to `makeSampler` is `hash2(kindSalt, seed)`,
+ * where `seed` is `opts.seed` itself or — for a {@link NodeSeedRef} — the
+ * u32 it resolves to against the evaluation context.
  * `rawRange` is the sampler's documented output range; when
  * `opts.normalized` is set the raw field is wrapped with
  * {@link normalize01} (the raw path stays bit-identical).
@@ -308,14 +426,33 @@ export function makeNoiseField(
   makeSampler: (seed: number) => (x: number, y: number, z: number) => number,
   spec: NoiseSpecInfo | WithheldReason,
 ): Field<1> {
-  const seed = (opts.seed ?? 0) >>> 0;
+  const seedRef = isNodeSeedRef(opts.seed) ? opts.seed : undefined;
+  const seed = seedRef === undefined ? ((opts.seed as number | undefined) ?? 0) >>> 0 : seedRef;
   const frequency = opts.frequency ?? 1;
   const offset = opts.offset ?? [0, 0, 0];
   const [ox, oy, oz] = offset;
   const pos = resolveField(opts.position ?? position());
-  const key = `${kind}(${seed},${keyNum(frequency)},${keyNum(ox)},${keyNum(oy)},${keyNum(oz)};${keyRef(pos.key)})`;
-  const sample = makeSampler(hash2(kindSalt, seed));
+  const seedKey = seedRef === undefined ? `${seed as number}` : nodeSeedKey(seedRef);
+  const key = `${kind}(${seedKey},${keyNum(frequency)},${keyNum(ox)},${keyNum(oy)},${keyNum(oz)};${keyRef(pos.key)})`;
+  // A literal seed keeps building its sampler at CONSTRUCTION, exactly as
+  // it always did — same allocation, same bytes. A ref cannot: `ctx.seed`
+  // does not exist yet, so the sampler moves inside the closure, memoized
+  // on the last resolved u32. A sampler is a closure over one number, so
+  // that is one allocation per distinct seed per field, against a
+  // per-element sample loop.
+  const literalSampler = seedRef === undefined ? makeSampler(hash2(kindSalt, seed as number)) : undefined;
+  let lastSeed = -1;
+  let lastSampler: ((x: number, y: number, z: number) => number) | undefined;
   const raw = makeField<1>(key, 1, (ctx) => {
+    let sample = literalSampler;
+    if (sample === undefined) {
+      const s = resolveNodeSeed(seedRef as NodeSeedRef, ctx.seed);
+      if (s !== lastSeed) {
+        lastSampler = makeSampler(hash2(kindSalt, s));
+        lastSeed = s;
+      }
+      sample = lastSampler as (x: number, y: number, z: number) => number;
+    }
     const posCol = evaluateField(pos, ctx);
     if (posCol.tupleSize !== 3) {
       throw new Error(`${kind}: position field must have tupleSize 3, got ${posCol.tupleSize}`);

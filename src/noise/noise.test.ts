@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
 import { type EvalContext, type Field, evaluateField, mul, position } from "../fields/index.js";
 import type { FieldSpec } from "../fields/spec.js";
-import { fieldFromJson, getFieldSpec, listFieldFns } from "../fields/fieldJson.js";
+import { fieldFromJson, fieldToJson, getFieldSpec, listFieldFns } from "../fields/fieldJson.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { NOISE_BASES, WORLEY_OUTPUTS } from "./bases.js";
 import { fbm } from "./fbm.js";
@@ -690,5 +690,225 @@ describe("golden determinism", () => {
   it.each(GOLDEN)("%s matches pinned f32 values exactly", (_name, field, expected) => {
     const values = sample(field, GOLDEN_POSITIONS);
     expect(Array.from(values)).toEqual(expected);
+  });
+});
+
+/**
+ * `opts.seed: { from: "node", variant }` — the one non-numeric seed form.
+ *
+ * The contract is stated so it can be checked from OUTSIDE the library: a
+ * node-seeded noise at evaluation seed `S` IS the noise a literal
+ * `hashCombine(S, variant)` builds. Everything else here follows from
+ * that one equation, which is why it is asserted per factory rather than
+ * once — each of the five reaches the sampler by its own route, and fbm
+ * reaches it once per octave.
+ */
+describe("node-derived noise seeds", () => {
+  const POSITIONS = gridPositions(8, 0.7);
+  const GRAPH_SEED = 0x51ed9a3b;
+
+  /** Sample at an explicit evaluation seed (`cloudCtx` pins seed 0). */
+  function sampleAt(field: Field, seed: number): Float32Array {
+    const geo = createPointCloud(POSITIONS.length / 3);
+    geo.attrs.point.require("P").data.set(POSITIONS);
+    return evaluateField(field, { geo, domain: "point", seed }).data as Float32Array;
+  }
+
+  function correlation(a: Float32Array, b: Float32Array): number {
+    let ma = 0;
+    let mb = 0;
+    for (let i = 0; i < a.length; i++) {
+      ma += a[i];
+      mb += b[i];
+    }
+    ma /= a.length;
+    mb /= b.length;
+    let cov = 0;
+    let va = 0;
+    let vb = 0;
+    for (let i = 0; i < a.length; i++) {
+      cov += (a[i] - ma) * (b[i] - mb);
+      va += (a[i] - ma) ** 2;
+      vb += (b[i] - mb) ** 2;
+    }
+    return cov / Math.sqrt(va * vb);
+  }
+
+  const FACTORIES: Array<[string, NoiseFactory]> = [
+    ["valueNoise", valueNoise],
+    ["perlinNoise", perlinNoise],
+    ["simplexNoise", simplexNoise],
+    ["worleyNoise", worleyNoise],
+    ["fbm(perlin)", (o) => fbm(perlinNoise, { ...o, octaves: 3 })],
+    ["fbm(worley)", (o) => fbm(worleyNoise, { ...o, octaves: 3, lacunarity: 2.1, gain: 0.45 })],
+  ];
+
+  it.each(FACTORIES)(
+    "%s: a variant is exactly the literal seed hashCombine(graphSeed, variant)",
+    (_name, make) => {
+      for (const variant of [0, 1, 7, 12345, 2 ** 24]) {
+        const derived = sampleAt(
+          make({ seed: { from: "node", variant }, frequency: 0.4 }),
+          GRAPH_SEED,
+        );
+        const literal = sampleAt(
+          make({ seed: hashCombine(GRAPH_SEED, variant), frequency: 0.4 }),
+          GRAPH_SEED,
+        );
+        expect(Array.from(derived), `variant ${variant}`).toEqual(Array.from(literal));
+      }
+    },
+  );
+
+  it.each(FACTORIES)("%s: an omitted variant is variant 0", (_name, make) => {
+    const implicit = sampleAt(make({ seed: { from: "node" }, frequency: 0.4 }), GRAPH_SEED);
+    const explicit = sampleAt(
+      make({ seed: { from: "node", variant: 0 }, frequency: 0.4 }),
+      GRAPH_SEED,
+    );
+    expect(Array.from(implicit)).toEqual(Array.from(explicit));
+  });
+
+  it.each(FACTORIES)("%s: variant N and N+1 are different fields", (_name, make) => {
+    for (const variant of [0, 1, 41]) {
+      const a = sampleAt(make({ seed: { from: "node", variant }, frequency: 0.4 }), GRAPH_SEED);
+      const b = sampleAt(
+        make({ seed: { from: "node", variant: variant + 1 }, frequency: 0.4 }),
+        GRAPH_SEED,
+      );
+      expect(Array.from(a), `variant ${variant} vs ${variant + 1}`).not.toEqual(Array.from(b));
+    }
+  });
+
+  // The claim the position-shift idiom's rotating `K` constants had to be
+  // chosen for (|r| ~ 0.003 rather than 0.339), now had for free: two
+  // variants are two independent draws, not one draw wearing two hats.
+  it("variants 0/1/2 on one node are uncorrelated", () => {
+    // Its own, much wider sampling: the shared grid spans under two
+    // lattice cells at these frequencies, where any two smooth fields
+    // correlate and the measurement would be about the domain rather
+    // than about the seeds.
+    const wide = gridPositions(16, 1.3);
+    const geo = createPointCloud(wide.length / 3);
+    geo.attrs.point.require("P").data.set(wide);
+    const columns = [0, 1, 2].map(
+      (variant) =>
+        evaluateField(perlinNoise({ seed: { from: "node", variant }, frequency: 1 }), {
+          geo,
+          domain: "point",
+          seed: GRAPH_SEED,
+        }).data as Float32Array,
+    );
+    for (const [i, j] of [
+      [0, 1],
+      [0, 2],
+      [1, 2],
+    ] as const) {
+      expect(Math.abs(correlation(columns[i], columns[j])), `variants ${i}/${j}`).toBeLessThan(0.06);
+    }
+  });
+
+  // The second half is what proves the first can tell: a check that
+  // reported "changed" for everything would pass the seed-response claim
+  // without measuring it.
+  it("the graph seed moves a node-seeded noise and not a literal-seeded one", () => {
+    const derived = perlinNoise({ seed: { from: "node", variant: 3 }, frequency: 0.4 });
+    expect(Array.from(sampleAt(derived, 101))).not.toEqual(Array.from(sampleAt(derived, 102)));
+    const literal = perlinNoise({ seed: 3, frequency: 0.4 });
+    expect(Array.from(sampleAt(literal, 101))).toEqual(Array.from(sampleAt(literal, 102)));
+  });
+
+  // The sampler is memoized on the last resolved seed, so a field
+  // evaluated at two seeds and then back at the first must rebuild rather
+  // than serve the second's sampler.
+  it("re-evaluating at an earlier seed rebuilds that seed's sampler", () => {
+    const field = valueNoise({ seed: { from: "node", variant: 2 }, frequency: 0.4 });
+    const first = Array.from(sampleAt(field, 11));
+    sampleAt(field, 22);
+    expect(Array.from(sampleAt(field, 11))).toEqual(first);
+  });
+
+  // The key is fixed at construction while the seed arrives at
+  // evaluation, so it names the REF. `n` prefixes it because a literal
+  // seed spells itself as a bare decimal and the two must never collide.
+  it("Field.key names the ref, and separates variants from literals", () => {
+    expect(perlinNoise({ seed: { from: "node", variant: 3 } }).key).toContain("perlin(n3,");
+    expect(perlinNoise({ seed: 3 }).key).toContain("perlin(3,");
+    expect(perlinNoise({ seed: { from: "node", variant: 3 } }).key).not.toBe(
+      perlinNoise({ seed: { from: "node", variant: 4 } }).key,
+    );
+  });
+
+  it("the derived spec re-emits the ref", () => {
+    expect(
+      getFieldSpec(perlinNoise({ seed: { from: "node", variant: 3 }, frequency: 0.045 })),
+    ).toEqual({
+      fn: "perlinNoise",
+      opts: { seed: { from: "node", variant: 3 }, frequency: 0.045, offset: [0, 0, 0] },
+    });
+    expect(getFieldSpec(fbm(worleyNoise, { seed: { from: "node", variant: 5 }, octaves: 2 }))).toEqual(
+      {
+        fn: "fbm",
+        base: "worleyNoise",
+        opts: {
+          seed: { from: "node", variant: 5 },
+          frequency: 1,
+          offset: [0, 0, 0],
+          octaves: 2,
+          lacunarity: 2,
+          gain: 0.5,
+        },
+      },
+    );
+  });
+
+  // An omitted variant normalizes to 0 in the DERIVED spec, so what comes
+  // back rebuilds the field that is already in hand.
+  it("the derived spec normalizes an omitted variant to 0", () => {
+    expect(getFieldSpec(valueNoise({ seed: { from: "node" } }))).toEqual({
+      fn: "valueNoise",
+      opts: { seed: { from: "node", variant: 0 }, frequency: 1, offset: [0, 0, 0] },
+    });
+  });
+
+  // The ref object a caller keeps is theirs to mutate; a spec is not.
+  it("the derived spec does not alias the ref it was given", () => {
+    const ref = { from: "node", variant: 3 } as const;
+    const spec = getFieldSpec(perlinNoise({ seed: ref })) as FieldSpec;
+    expect((spec.opts as { seed: unknown }).seed).not.toBe(ref);
+  });
+
+  // A variant outside the parser's range could not be read back, so no
+  // spec is derived rather than one that fails to reopen.
+  it.each([[1.5], [-1], [2 ** 24 + 1]])("a variant of %s withholds the spec", (variant) => {
+    const field = perlinNoise({ seed: { from: "node", variant } });
+    expect(getFieldSpec(field)).toBeUndefined();
+    expect(() => fieldToJson(field)).toThrow(
+      /perlinNoise's `seed\.variant` must be an integer from 0 to 16777216/,
+    );
+  });
+
+  // fbm's octave layers carry an internal ref with an `octave`, which has
+  // no grammar form — so THEY withhold while the fbm itself does not, and
+  // no unparseable spec ever escapes through the octave tree.
+  it("an fbm's octave layers withhold their own spec, and the fbm does not", () => {
+    expect(getFieldSpec(fbm(perlinNoise, { seed: { from: "node", variant: 2 }, octaves: 2 }))).toBeDefined();
+    const octave = perlinNoise({ seed: { from: "node", variant: 2, octave: 1 } });
+    expect(getFieldSpec(octave)).toBeUndefined();
+    expect(() => fieldToJson(octave)).toThrow(
+      /perlinNoise's per-octave `seed` ref is internal to fbm/,
+    );
+  });
+
+  // An fbm over a base the grammar cannot name falls back to serializing
+  // the octave tree it composed. A ref seed gives that up — the octave
+  // layers withhold — so the refusal must name the BASE rather than trail
+  // off into an octave's internal reason.
+  it("fbm over a non-built-in base names the base once a ref seed removes the fallback", () => {
+    const forwards: NoiseFactory = (o) => worleyNoise({ ...o, output: "f2" });
+    expect((fieldToJson(fbm(forwards, { seed: 7, octaves: 2 })) as FieldSpec).fn).toBe("add");
+    expect(() =>
+      fieldToJson(fbm(forwards, { seed: { from: "node", variant: 7 }, octaves: 2 })),
+    ).toThrow(/fbm's `base` is not one of the built-in noise factories/);
   });
 });

@@ -32,6 +32,7 @@ var e=`{
       "title": "truss",
       "controls": [
         { "param": "trussCells.count", "label": "stations", "min": 8, "max": 120, "step": 2 },
+        { "param": "$trussHalfWidth", "label": "half width", "step": 0.025 },
         {
           "param": "trussChordSkin.radius",
           "label": "chord",
@@ -78,14 +79,7 @@ var e=`{
       "controls": [
         { "param": "wrapCarrierLine.count", "label": "wraps", "min": 1, "max": 40, "step": 1 },
         { "param": "wrapCells.count", "label": "wrap steps", "min": 20, "max": 400, "step": 10 },
-        {
-          "param": "wrapWraps.cableRadius",
-          "also": ["danglerDanglerSkin.radius", "drapeDrapeSkin.radius"],
-          "label": "cable radius",
-          "min": 0.005,
-          "max": 0.2,
-          "step": 0.005
-        },
+        { "param": "$cableRadius", "label": "cable radius", "step": 0.005 },
         { "param": "chainAnchors.count", "label": "chains", "min": 2, "max": 20, "step": 1 },
         { "param": "danglerAnchors.count", "label": "danglers", "min": 10, "max": 400, "step": 10 },
         {

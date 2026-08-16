@@ -472,11 +472,17 @@ export function isDerivedSpec(spec: FieldSpec): boolean {
  * across `fieldJson.ts`, `fold.ts`, `src/gpu/compile.ts` and
  * `src/gpu/run.ts` cannot each know a different set.
  *
- * There are four such positions:
+ * There are five such positions:
  *
  * - `args` entries — every combinator.
  * - `opts.position` — the noise samplers' sample position, an argument
  *   position that happens to be spelled inside an options bag.
+ * - `opts.seed.variant` — the `param` a node-seed ref may name instead of
+ *   a bare integer. The NARROWEST spec-valued position the grammar has:
+ *   exactly one `fn` is admitted there and only with an integer value.
+ *   It is returned all the same, because what routes through here is what
+ *   allocates its uniform slot, reports its address to a panel and
+ *   recovers its value for a rebuild.
  * - `cases` VALUES — `byAttribute`'s case set. The keys are literals, not
  *   specs, and are deliberately not returned.
  * - `default` — `byAttribute`'s fall-through.
@@ -500,6 +506,14 @@ export function specChildren(node: Record<string, unknown>): unknown[] {
   if (typeof opts === "object" && opts !== null && !Array.isArray(opts)) {
     const position = (opts as Record<string, unknown>).position;
     if (position !== undefined) out.push(position);
+    const seed = (opts as Record<string, unknown>).seed;
+    // A literal seed is a number and holds nothing; a node-seed ref holds
+    // its `variant`, which is an integer far more often than it is a
+    // `param`. Both come back as they are — this returns POSITIONS.
+    if (typeof seed === "object" && seed !== null && !Array.isArray(seed)) {
+      const variant = (seed as Record<string, unknown>).variant;
+      if (variant !== undefined) out.push(variant);
+    }
   }
   const cases = node.cases;
   if (typeof cases === "object" && cases !== null && !Array.isArray(cases)) {

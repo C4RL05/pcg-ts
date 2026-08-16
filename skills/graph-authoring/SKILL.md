@@ -88,6 +88,45 @@ exposed param binds one param on the wrapping node to one or more inner
 slots, and its schema is *derived* from those targets, so it cannot promise
 something the inner node would reject.
 
+**A value several nodes share belongs to the GRAPH, not to any one of them.**
+A serialized graph may carry an optional top-level `params` array —
+`{ name, value, min?, max?, description? }` each — and any node's field
+expression reads one by name with `{ "fn": "param", "name": "tubeRadius" }`
+and no inline `value` beside it. One declared value, every slot that names it.
+Reach for it the moment the same authored quantity appears in two nodes;
+writing it twice is how two numbers that mean one thing drift apart.
+
+```json
+"params": [
+  { "name": "tubeRadius", "value": 0.035, "min": 0.005, "max": 0.2,
+    "description": "Radius of every tube in the rig, in metres." }
+]
+```
+
+Four rules to author against:
+
+- **Binding happens at deserialize, by substitution.** A declared value is
+  byte-identical to the number written out in each reading slot, so it costs
+  nothing and changes no cooked byte. Turning one with
+  `graph.setGraphParam(name, value)` re-keys exactly the readers; every other
+  node keeps its cache.
+- **An inline `value` for a name the graph declares is a hard error**, not a
+  precedence rule — the graph would always win, so the inline number is dead
+  text. Drop it, or rename one of the two.
+- **A subgraph payload's inner graph may not declare `params`.** A body's
+  names are bound by its wrapper's exposed params. Hoist the value to the
+  outer graph and let it reach the body through the wrapper's own param slot.
+- **The address is `"$<name>"`**, so a name may not contain a `.` or start
+  with `$`. A declared name nothing reads is legal and reported —
+  `pcg validate <graph.json> --params` prints the graph-scoped rows first,
+  with the slots that read each one, or `read by nothing`. Run it after
+  declaring one: "I turned it and nothing happened" is a rename, and that
+  line is where you see it.
+
+What a graph param cannot reach is what a field cannot reach: a param that is
+not field-capable. Six copies of an `i32` `sides: 8` stay six numbers, because
+no field expression produces an integer.
+
 Two constraints that decide the design for you:
 
 - An exposed param's default must be a plain value, and every cook writes the

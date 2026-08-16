@@ -331,6 +331,15 @@ function graphParamRow(p: DescribedGraphParam): string[] {
     schema.type,
     value.length > 44 ? `${value.slice(0, 43)}…` : value,
     range,
+    // Only a graph-scoped param says who reads it, because only it can be
+    // read from more than one place — and a declaration nothing reads is
+    // exactly what a rename leaves behind, so the count is the interesting
+    // half of the row.
+    p.scope === "graph"
+      ? p.readers.length === 0
+        ? "read by nothing"
+        : `read by ${plural(p.readers.length, "slot")}: ${p.readers.join(", ")}`
+      : "",
   ];
 }
 
@@ -376,9 +385,15 @@ const validateCommand: Command = {
     const params = boolFlag(args, "params") ? describeGraphParams(graph) : undefined;
     if (params !== undefined) {
       const declared = params.filter((p) => p.exposed).length;
+      const scoped = params.filter((p) => p.scope === "graph").length;
       lines.push(
         "",
         `params:  ${plural(params.length, "address", "addresses")}, ${declared} declared worth turning (*)`,
+        ...(scoped > 0
+          ? [
+              `  ${plural(scoped, "graph-scoped param")} first, addressed "$<name>" — one value, every slot that reads the name`,
+            ]
+          : []),
         `  the graph's own seed is a knob too, addressed as "seed" (currently ${graph.seed})`,
         "",
       );

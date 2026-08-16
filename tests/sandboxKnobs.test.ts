@@ -105,7 +105,7 @@ describe("knobs() reaches into a field spec", () => {
     const c = controller();
     expect(c.importText(graphText({ nodeId: "a.b.c" }))).not.toHaveProperty("error");
     const knob = byKey(c.knobs(), "a.b.c.translate.amplitude");
-    expect(knob).toMatchObject({ node: "a.b.c", name: "translate", fieldParam: "amplitude" });
+    expect(knob).toMatchObject({ scope: "node" as const, node: "a.b.c", name: "translate", fieldParam: "amplitude" });
     expect(knob?.key.split(".").slice(-2).join(".")).toBe("translate.amplitude");
   });
 });
@@ -132,7 +132,7 @@ describe("turning a field-spec knob rewrites the spec", () => {
   it("leaves the param holding a FIELD, so the expression survives the write", () => {
     const c = controller();
     c.importText(graphText());
-    c.setKnob({ node: "dunes", name: "translate", fieldParam: "amplitude" }, 3);
+    c.setKnob({ scope: "node" as const, node: "dunes", name: "translate", fieldParam: "amplitude" }, 3);
     expect(byKey(c.knobs(), "dunes.translate")?.isField).toBe(true);
   });
 
@@ -146,7 +146,7 @@ describe("turning a field-spec knob rewrites the spec", () => {
     c.importText(graphText());
     const keyOf = (): string => (byKey(c.knobs(), "dunes.translate")?.value as Field).key;
     const before = keyOf();
-    c.setKnob({ node: "dunes", name: "translate", fieldParam: "amplitude" }, 42);
+    c.setKnob({ scope: "node" as const, node: "dunes", name: "translate", fieldParam: "amplitude" }, 42);
     const after = keyOf();
     expect(after).not.toBe(before);
     // And it is the key the literal itself builds — the same field an author
@@ -161,7 +161,7 @@ describe("turning a field-spec knob rewrites the spec", () => {
     c.importText(graphText());
     const keyOf = (): string => (byKey(c.knobs(), "dunes.translate")?.value as Field).key;
     const before = keyOf();
-    c.setKnob({ node: "dunes", name: "translate", fieldParam: "amplitude" }, 18);
+    c.setKnob({ scope: "node" as const, node: "dunes", name: "translate", fieldParam: "amplitude" }, 18);
     expect(keyOf()).toBe(before);
   });
 
@@ -183,7 +183,7 @@ describe("turning a field-spec knob rewrites the spec", () => {
     // gone — and a success that changed nothing is invisible to the panel.
     const c = controller();
     c.importText(graphText());
-    const problem = c.setKnob({ node: "dunes", name: "translate", fieldParam: "gone" }, 1);
+    const problem = c.setKnob({ scope: "node" as const, node: "dunes", name: "translate", fieldParam: "gone" }, 1);
     expect(problem).toMatch(/node "dunes" param "translate": .*no param "gone"/);
   });
 
@@ -191,7 +191,7 @@ describe("turning a field-spec knob rewrites the spec", () => {
     const c = controller();
     c.importText(graphText());
     const problem = c.setKnob(
-      { node: "dunes", name: "translate", fieldParam: "amplitude" },
+      { scope: "node" as const, node: "dunes", name: "translate", fieldParam: "amplitude" },
       "nope" as unknown as number,
     );
     expect(problem).toMatch(/field-spec param "amplitude" takes a number/);
@@ -208,7 +208,7 @@ describe("turning a field-spec knob rewrites the spec", () => {
       JSON.stringify({ fn: "param", name: "amplitude", value: 18, min: 0, max: 20 }),
     );
     expect(c.importText(text)).not.toHaveProperty("error");
-    const problem = c.setKnob({ node: "dunes", name: "translate", fieldParam: "amplitude" }, 50);
+    const problem = c.setKnob({ scope: "node" as const, node: "dunes", name: "translate", fieldParam: "amplitude" }, 50);
     expect(problem).toMatch(
       /node "dunes" param "translate": .*param "amplitude": the inline value 50 is above its own max 20/,
     );

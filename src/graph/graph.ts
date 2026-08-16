@@ -1,10 +1,24 @@
-import { isField } from "../fields/index.js";
+import { type Field, isField } from "../fields/index.js";
+// The grammar's parser, by MODULE rather than through `../nodes/index.js`,
+// for the reason `subgraph.ts` states: it imports only `../fields` and
+// `../noise`, so no cycle and no registry crossing the layer boundary. The
+// graph layer needs it because rebinding a graph param means REBUILDING the
+// expressions that read it, and building is the only door a value has into
+// `Field.key`.
+import { fieldFromJson } from "../fields/fieldJson.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphCycleError, GraphValidationError } from "./errors.js";
 import type { NodeDef, PinDef } from "./node.js";
+import { paramScan, refLabel } from "./paramScan.js";
 import { defParamSchemas } from "./paramSchemaLink.js";
-import { liveParamValueError, type ParamSchema } from "./params.js";
+import {
+  type GraphParam,
+  graphParamBindings,
+  graphParamError,
+  liveParamValueError,
+  type ParamSchema,
+} from "./params.js";
 import { subgraphSpecs, wrappedGraphOf } from "./subgraphLink.js";
 
 /**
@@ -314,6 +328,7 @@ export class Graph {
   private _seed: number;
   private _version = 0;
   private _meta: GraphMeta | undefined;
+  private _graphParams: readonly GraphParam[] = [];
   private readonly typeCounts = new Map<string, number>();
 
   constructor(seed = 0) {
@@ -347,6 +362,118 @@ export class Graph {
    */
   setMeta(meta: GraphMeta | undefined): void {
     this._meta = meta === undefined ? undefined : validateGraphMeta(meta, "setMeta");
+  }
+
+  /**
+   * Graph-scoped params in declaration order, frozen. Empty for a graph
+   * that declares none, which is every graph that never asked for one.
+   */
+  get graphParams(): readonly GraphParam[] {
+    return this._graphParams;
+  }
+
+  /**
+   * Declare the graph's params, replacing any previous set. The values are
+   * NOT pushed into the nodes: this records what the graph declares, and
+   * the expressions were bound when they were BUILT — which is the whole
+   * mechanism, because a value that arrives after construction never
+   * reaches `Field.key` and so never moves a memo key. `deserializeGraph`
+   * calls this with the same values it bound the fields with; use
+   * {@link Graph.setGraphParam} to change one afterwards, which rebinds
+   * the readers as it goes.
+   *
+   * Does not bump {@link Graph.version} on its own: on the deserialize path
+   * every field already carries the value, and a bump would only invalidate
+   * caches nothing has yet filled. `setGraphParam` bumps for the edit it
+   * actually makes.
+   */
+  setGraphParams(params: readonly GraphParam[]): void {
+    const seen = new Set<string>();
+    const out: GraphParam[] = [];
+    for (const param of params) {
+      const error = graphParamError(param, "setGraphParams");
+      if (error !== undefined) throw new GraphValidationError(error);
+      if (seen.has(param.name)) {
+        throw new GraphValidationError(
+          `setGraphParams: duplicate graph param "${param.name}"; declare each name once`,
+        );
+      }
+      seen.add(param.name);
+      out.push(
+        Object.freeze({
+          ...param,
+          value: Array.isArray(param.value) ? Object.freeze([...param.value]) : param.value,
+        }) as GraphParam,
+      );
+    }
+    this._graphParams = Object.freeze(out);
+  }
+
+  /**
+   * Set one declared graph param's value and rebuild every field expression
+   * that reads its name.
+   *
+   * The fan-out is the point: "cable radius" is one value read by three
+   * nodes, and turning it must re-key exactly those three. A non-reader's
+   * param object is untouched, so its `stableValueHash` is unchanged and it
+   * is still served from cache; readers get a rebuilt field with a new
+   * `Field.key`, which is what the executor's memo key is built on.
+   *
+   * The writes are LOUD, and that is where this inverts the subgraph
+   * mechanism. `withExposedParams` writes quietly and restores on the way
+   * out, because a body is shared between wrapper instances and a version
+   * bump would invalidate the wrapper on every cook. This is a permanent
+   * edit of a graph nobody else owns, so it must bump the version — a World
+   * reads that counter to tell a user edit from its own per-cell binding,
+   * and a quiet write would leave every stored cell serving the old value.
+   */
+  setGraphParam(name: string, value: number | readonly number[]): void {
+    const index = this._graphParams.findIndex((p) => p.name === name);
+    if (index < 0) {
+      throw new GraphValidationError(
+        `setGraphParam: this graph declares no param "${name}"; declared: ${
+          this._graphParams.map((p) => p.name).join(", ") || "(none)"
+        }`,
+      );
+    }
+    const next: GraphParam = { ...this._graphParams[index], value };
+    const error = graphParamError(next, "setGraphParam");
+    if (error !== undefined) throw new GraphValidationError(error);
+    // Scan BEFORE the first write: setParam bumps the version, which
+    // invalidates the scan's memo, and a cold re-scan would then read specs
+    // this call has already rebuilt.
+    const scan = paramScan(this);
+    const derived = scan.derivedRefs.find((ref) => ref.names.includes(name));
+    if (derived !== undefined) {
+      throw new GraphValidationError(
+        `setGraphParam: the field at ${refLabel(derived)} reads the graph param "${name}", but it was COMPOSED with the field constructors (mul(fieldFromJson(…), 3)) rather than authored as one JSON spec, so it cannot be rebuilt — it would keep the value it was built with while every authored expression took the new one. Write that slot as a single fieldFromJson spec, or have it read a name this graph does not declare`,
+      );
+    }
+    const params = [...this._graphParams];
+    params[index] = Object.freeze({
+      ...next,
+      value: Array.isArray(value) ? Object.freeze([...value]) : value,
+    }) as GraphParam;
+    this._graphParams = Object.freeze(params);
+    const bindings = graphParamBindings(this._graphParams);
+    for (const ref of scan.refs) {
+      if (!ref.names.includes(name)) continue;
+      const state = this._nodes.get(ref.node);
+      if (state === undefined) continue;
+      let rebuilt: Field;
+      try {
+        rebuilt = fieldFromJson(ref.spec, bindings);
+      } catch (err) {
+        throw new GraphValidationError(
+          `setGraphParam: the field at ${refLabel(ref)} cannot be rebuilt with graph param "${name}" = ${JSON.stringify(value)}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      this.setParam(
+        { id: ref.node } as NodeHandle<Record<string, unknown>>,
+        ref.param,
+        rebuilt as never,
+      );
+    }
   }
 
   /**

@@ -772,3 +772,50 @@ describe("the element-count threshold", () => {
     expect(values(declined, ctx)).toEqual(values(taken, ctx));
   });
 });
+
+/**
+ * A node-seed ref is not a spec, so the fold never sees one — and the
+ * `param` a variant may name is a bare leaf with no spec under it, which
+ * `isWorthFolding` declines. Both facts are asserted rather than assumed:
+ * this module rebuilds specs, and a rewrite at the seed position would
+ * change which noise a graph cooks rather than what it costs.
+ */
+describe("a node-seeded noise", () => {
+  const refSpec = (variant: unknown): FieldSpec =>
+    ({
+      fn: "perlinNoise",
+      opts: { seed: { from: "node", variant }, frequency: 0.045 },
+    }) as unknown as FieldSpec;
+
+  it("is left exactly as written — there is nothing domain-constant in it", () => {
+    for (const variant of [3, { fn: "param", name: "v", value: 3 }]) {
+      const field = fieldFromJson(refSpec(variant));
+      expect(foldDomainConstants(field, SEED, FOLD_ANY_SIZE)).toBe(field);
+    }
+  });
+
+  // A fold INSIDE the position still happens, and must carry the variant
+  // through: the rebuild runs `fieldFromJson` again, and a param it could
+  // not re-supply would come back unbound.
+  it("still folds a chain in its position, variant param intact", () => {
+    const spec: FieldSpec = {
+      fn: "perlinNoise",
+      opts: {
+        seed: { from: "node", variant: { fn: "param", name: "v", value: 2 } },
+        position: {
+          fn: "add",
+          args: [{ fn: "position" }, { fn: "vec", args: [seedShift(1021, 0.245422363, 1600), 0, 0] }],
+        },
+      },
+    } as unknown as FieldSpec;
+    const ctx = spreadCtx(4);
+    const field = fieldFromJson(spec);
+    const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
+    expect(folded).not.toBe(field);
+    expect(values(folded, ctx)).toEqual(values(field, ctx));
+    const seed = (peekFieldSpec(folded) as unknown as { opts: { seed: { variant: FieldSpec } } }).opts
+      .seed;
+    expect(seed.variant.fn).toBe("param");
+    expect(paramValue(seed.variant)).toBe(2);
+  });
+});

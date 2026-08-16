@@ -2,13 +2,21 @@
  * Domain-constant folding: evaluate ONCE what cannot vary per element.
  *
  * `{"fn":"nodeSeed"}` resolves to `ctx.seed` — the same number on every
- * element — so the seed-shift idiom the graphs use to derive a per-node
+ * element — so the seed-shift idiom older graphs use to derive a per-node
  * offset, `A * (fract(nodeSeed * 2^-32 * K) - W0)`, is a chain of six
  * arithmetic nodes whose value is fixed for the whole domain. It was
  * being recomputed for every one of a cloud's 40 000 points, three times
  * over for three axes. This rewrites each maximal subexpression that
  * cannot vary per element into the literal it already evaluates to, so
  * the chain runs once instead of once per element.
+ *
+ * That workload is the one this module was written for, and it shrinks as
+ * graphs move to `opts.seed: {from:"node", variant}` — a noise seeded
+ * that way has no domain-constant chain to fold, so it pays neither these
+ * passes nor a fold miss, in the streaming regime included (where the
+ * element-count threshold declines and the chains run in full). The
+ * machinery stays because it is general: any uniform subexpression an
+ * author writes is still folded here.
  *
  * **Bit-exactness is the premise, not an aspiration.** Every combinator
  * computes in f64 and stores f32, so folding a chain to the f32 value it

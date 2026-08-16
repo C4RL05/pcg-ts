@@ -402,6 +402,104 @@ describe("codegen structure", () => {
     expect(count(k.wgsl, "pcg_fbm_0")).toBe(2); // definition + one call
   });
 
+  // A node-seeded noise reads the per-dispatch seed uniform instead of a
+  // baked constant. Three things are pinned here and each fails
+  // differently: the hash2 TEXT (a wrong chain derives a different u32
+  // from the CPU's, silently), the absence of a baked seed (a baked one
+  // would specialize a pipeline per drag of the seed box), and the
+  // `usesSeed` flag, which is what a reader of the kernel metadata has to
+  // tell a seed-dependent kernel by.
+  describe("a node-derived seed", () => {
+    const refSeed = (variant: unknown): FieldSpec =>
+      ({ fn: "perlinNoise", opts: { seed: { from: "node", variant }, frequency: 0.045 } }) as unknown as FieldSpec;
+
+    // The murmur chain, verbatim: this is `hash2(a, b)` with
+    // `hashSeed(2) = 0x95e0ed6f`, over the same two library rounds every
+    // other hash here uses. The CPU/GPU agreement on a seed rests on
+    // this one line being exactly the CPU's program.
+    const HASH2 = `fn pcg_hash2_0(a: u32, b: u32) -> u32 {
+  return pcg_hash_finalize(pcg_hash_mix(pcg_hash_mix(0x95e0ed6fu, a), b));
+}`;
+
+    it("derives the sampler seed from params.seed with the CPU's hash chain", () => {
+      const k = compileFieldSpec(refSeed(3), LAYOUT);
+      expect(k.wgsl).toContain(HASH2);
+      // 0x7065726c is PERLIN_SALT ("perl"), applied outside exactly as
+      // `makeNoiseField` applies it.
+      expect(k.wgsl).toContain(
+        "pcg_perlin_noise(pcg_hash2_0(0x7065726cu, pcg_hash2_0(params.seed, 3u)), ",
+      );
+      expect(k.usesSeed).toBe(true);
+    });
+
+    it("emits the hash2 helper once however many noises derive a seed", () => {
+      const k = compileFieldSpec(
+        {
+          fn: "add",
+          args: [refSeed(1), { fn: "worleyNoise", opts: { seed: { from: "node", variant: 2 } } }],
+        } as unknown as FieldSpec,
+        LAYOUT,
+      );
+      expect(count(k.wgsl, "fn pcg_hash2_0(")).toBe(1);
+    });
+
+    it("leaves a literal seed baked, byte for byte as before", () => {
+      const k = compileFieldSpec(
+        { fn: "perlinNoise", opts: { seed: 3, frequency: 0.045 } },
+        LAYOUT,
+      );
+      expect(k.wgsl).not.toContain("pcg_hash2_0");
+      expect(k.wgsl).not.toContain("params.seed");
+      expect(k.usesSeed).toBe(false);
+    });
+
+    it("hoists the node half of an fbm's octave chain and derives each octave from it", () => {
+      const k = compileFieldSpec(
+        {
+          fn: "fbm",
+          base: "valueNoise",
+          opts: { seed: { from: "node", variant: 5 }, octaves: 3, frequency: 2 },
+        } as unknown as FieldSpec,
+        LAYOUT,
+      );
+      expect(k.wgsl).toContain("  let ns = pcg_hash2_0(params.seed, 5u);");
+      // hash2(VALUE_SALT, hash2(nodeSeed, o)) per octave — the CPU's
+      // `hashCombine(seed, o)` then the layer's own salting.
+      expect(k.wgsl).toContain(
+        "var seeds = array<u32, 3>(pcg_hash2_0(0x76616c75u, pcg_hash2_0(ns, 0u)), " +
+          "pcg_hash2_0(0x76616c75u, pcg_hash2_0(ns, 1u)), pcg_hash2_0(0x76616c75u, pcg_hash2_0(ns, 2u)));",
+      );
+      // Declared before the helper that calls it.
+      expect(k.wgsl.indexOf("fn pcg_hash2_0(")).toBeLessThan(k.wgsl.indexOf("fn pcg_fbm_0("));
+    });
+
+    it("reads a param variant from a uniform slot rather than baking it", () => {
+      // The stamped spec `fieldFromJson` attaches, which is the object
+      // the compiler and the uniform filler both see at cook time.
+      const stamped = peekFieldSpec(
+        fieldFromJson(refSeed({ fn: "param", name: "v", value: 4 })),
+      ) as FieldSpec;
+      const k = compileFieldSpec(stamped, LAYOUT);
+      expect(k.paramNames).toEqual(["v"]);
+      expect(k.wgsl).toContain("pcg_hash2_0(params.seed, u32(params.consts[0].x))");
+      expect(k.wgsl).not.toContain(", 4u)");
+      expect(paramConstValues(stamped, k)).toEqual({ values: [4, 0, 0, 0] });
+    });
+
+    // The regression a baked value would cause, and the one that is
+    // invisible in an output comparison: one kernel has to serve every
+    // variant of a param and every seed the graph is given.
+    it("one kernel serves every param variant, while a literal variant keys its own", () => {
+      const a = compileFieldSpec(refSeed({ fn: "param", name: "v", value: 4 }), LAYOUT);
+      const b = compileFieldSpec(refSeed({ fn: "param", name: "v", value: 9 }), LAYOUT);
+      expect(b.key).toBe(a.key);
+      expect(b.wgsl).toBe(a.wgsl);
+      expect(compileFieldSpec(refSeed(4), LAYOUT).key).not.toBe(
+        compileFieldSpec(refSeed(9), LAYOUT).key,
+      );
+    });
+  });
+
   it("normalized noise wraps with the CPU range endpoints", () => {
     const k = compileFieldSpec({ fn: "perlinNoise", opts: { normalized: true } }, LAYOUT);
     expect(k.wgsl).toMatch(/let v\d+ = \(v\d+ - -1f\) \/ 2f;/);

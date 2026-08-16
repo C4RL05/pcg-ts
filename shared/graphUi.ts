@@ -101,6 +101,13 @@ export async function loadPanelSpec(name: string): Promise<GraphPanelSpec | unde
 }
 
 /**
+ * Section title for knobs belonging to the graph rather than to a node.
+ * Doubles as the grouping key, which is safe because a node id is a node
+ * id and this is not one — the sigil the address uses for the same reason.
+ */
+const GRAPH_SECTION = "$graph";
+
+/**
  * Everything a WRITE needs to find the slot: the node, the param on it,
  * and — when the knob addresses a literal inside that param's field
  * expression — which literal.
@@ -109,9 +116,13 @@ export async function loadPanelSpec(name: string): Promise<GraphPanelSpec | unde
  * and nothing else of a knob survives to the commit; carrying the parts is
  * what lets the key stay an opaque handle instead of a thing to re-split.
  */
-export interface KnobTarget {
+export type KnobTarget = NodeKnobTarget | GraphKnobTarget;
+
+/** A write that lands on one node's param. */
+export interface NodeKnobTarget {
+  readonly scope: "node";
   readonly node: string;
-  /** The NODE param this knob writes — the field spec's own param when {@link fieldParam} is set. */
+  /** The NODE param this knob writes — the field spec's own param when {@link NodeKnobTarget.fieldParam} is set. */
   readonly name: string;
   /**
    * Set when this knob addresses a `param` node carrying an inline value
@@ -121,12 +132,36 @@ export interface KnobTarget {
   readonly fieldParam?: string;
 }
 
-/** One param of one node, as the controller reports it. */
-export interface Knob extends KnobTarget {
+/**
+ * A write that lands on the GRAPH: one declared value, fanned out by the
+ * graph layer to every expression that reads its name. The panel does not
+ * know or care which slots those are — that is the point of declaring it
+ * once rather than mirroring it with `also`.
+ */
+export interface GraphKnobTarget {
+  readonly scope: "graph";
+  /** The declared name, without the address's `$`. */
+  readonly name: string;
+}
+
+/**
+ * One addressable param, as the controller reports it: a {@link KnobTarget}
+ * (which of the two kinds of write it is) plus everything a panel needs to
+ * render it.
+ *
+ * An intersection over the union rather than an interface extending it,
+ * because `KnobTarget` is now two shapes — narrowing a Knob on `scope`
+ * narrows its target half with it, which is what keeps the write path
+ * honest.
+ */
+export type Knob = KnobTarget & KnobDisplay;
+
+/** The presentation half of a {@link Knob}. */
+export interface KnobDisplay {
   /**
-   * `"<nodeId>.<paramName>"`, or `"<nodeId>.<paramName>.<fieldParamName>"`
-   * when {@link fieldParam} is set — unique within a graph, and the spec's
-   * handle.
+   * `"<nodeId>.<paramName>"`, `"<nodeId>.<paramName>.<fieldParamName>"` for
+   * a literal inside an expression, or `"$<name>"` for a graph-scoped param
+   * — unique within a graph, and the spec's handle.
    *
    * NOTHING SPLITS IT. Every consumer looks a whole key up in a map built
    * from this list, and the parts each knob needs are the fields beside it,
@@ -145,11 +180,11 @@ export interface Knob extends KnobTarget {
   readonly isField: boolean;
   /**
    * Declared tunable, so a panel with nothing else to go on shows it: a
-   * subgraph's exposed param, or a field-spec `param` that carries its own
-   * value. Both are an author saying this number is worth turning — one by
-   * naming it on the wrapper, one by writing it into the expression.
-   * Standard-node params are not, and appear only when a panel spec names
-   * one.
+   * subgraph's exposed param, a field-spec `param` carrying its own value,
+   * or a graph-scoped declaration. All three are an author saying this
+   * number is worth turning — by naming it on the wrapper, by writing it
+   * into the expression, or by hoisting it to the graph. Standard-node
+   * params are not, and appear only when a panel spec names one.
    */
   readonly exposed: boolean;
 }
@@ -233,7 +268,12 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
   // which several of them can share, so the literal's own name has to be in
   // the label or two rows read identically.
   const label =
-    spec?.label ?? (knob.fieldParam === undefined ? knob.name : `${knob.name}.${knob.fieldParam}`);
+    spec?.label ??
+    (knob.scope === "graph"
+      ? knob.name
+      : knob.fieldParam === undefined
+        ? knob.name
+        : `${knob.name}.${knob.fieldParam}`);
   const schema = knob.schema;
   const min = spec?.min ?? schema.min;
   const max = spec?.max ?? schema.max;
@@ -397,20 +437,36 @@ export function buildKnobPanel(knobs: readonly Knob[], spec?: GraphPanelSpec): K
       delete values[knob.key];
       continue;
     }
-    let list = grouped.get(knob.node);
+    // A graph-scoped knob belongs to no node, so it groups under the GRAPH
+    // — one section, first, the way it reads in `pcg validate --params`.
+    // Grouping it under a node would have to pick one of its readers, and
+    // the whole point of declaring it once is that there is no such one.
+    const group = knob.scope === "graph" ? GRAPH_SECTION : knob.node;
+    let list = grouped.get(group);
     if (!list) {
-      grouped.set(knob.node, (list = []));
+      grouped.set(group, (list = []));
       // The node id is what the canvas labels the box with, so it is what
       // connects a row here to a node over there; the primitive's name
       // says what it IS.
-      titles.set(knob.node, knob.nodeLabel === "" ? knob.node : `${knob.node} · ${knob.nodeLabel}`);
+      titles.set(
+        group,
+        knob.scope === "graph"
+          ? GRAPH_SECTION
+          : knob.nodeLabel === ""
+            ? knob.node
+            : `${knob.node} · ${knob.nodeLabel}`,
+      );
     }
     list.push(control);
   }
-  const sections = [...grouped.entries()].map(([node, controls]) => ({
-    title: titles.get(node) ?? node,
-    controls,
-  }));
+  const sections = [...grouped.entries()]
+    // Graph-scoped first: the knobs several nodes share are the ones a
+    // reader wants before any one node's.
+    .sort((a, b) => (a[0] === GRAPH_SECTION ? -1 : b[0] === GRAPH_SECTION ? 1 : 0))
+    .map(([node, controls]) => ({
+      title: titles.get(node) ?? node,
+      controls,
+    }));
   return { sections, values, mirrors, skipped, unknown, authored: false };
 }
 

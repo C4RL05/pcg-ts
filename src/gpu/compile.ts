@@ -26,7 +26,7 @@
 import { opaqueParam, paramSpecOf, paramValue, specChildren } from "../fields/spec.js";
 import type { FieldSpec, FieldSpecArg } from "../fields/fieldJson.js";
 import { fieldFromJson, fieldFromJsonValueFree } from "../fields/fieldJson.js";
-import { hashCombine, hashString } from "../random/hash.js";
+import { hashCombine, hashSeed, hashString } from "../random/hash.js";
 import { APPLY_CONST_COMPONENTS, applyUniformBytes } from "./applyKernels.js";
 import { NOISE_RAW_RANGES, type NoiseRange, hash2 } from "../noise/util.js";
 import { VALUE_SALT } from "../noise/value.js";
@@ -756,8 +756,18 @@ function rampHelperBody(stops: ReadonlyArray<readonly [number, number]>, context
 
 // -- noise ------------------------------------------------------------------
 
+/**
+ * The tagged `opts.seed`, as it stands in a spec. `variant` is an integer
+ * or a `param` node — nothing else parses (see `parseNoiseSeed`), and
+ * nothing else is lowered here.
+ */
+interface NodeSeedRefSpec {
+  readonly from: "node";
+  readonly variant?: number | Record<string, unknown>;
+}
+
 interface NoiseOptsSpec {
-  readonly seed?: number;
+  readonly seed?: number | NodeSeedRefSpec;
   readonly frequency?: number;
   readonly offset?: readonly number[];
   readonly position?: unknown;
@@ -808,9 +818,103 @@ function compileSamplePoint(fnName: string, spec: Record<string, unknown>, path:
   return ctx.emit(`${pos.ref} * ${freq} + ${off}`, 3);
 }
 
-/** Effective sampler seed, exactly as makeNoiseField derives it. */
-function effectiveSeed(fnName: string, seed: number | undefined): number {
-  return hash2(NOISE_SALTS[fnName], (seed ?? 0) >>> 0);
+/**
+ * `hash2` as a WGSL function, built by the same `hashChain(hashSeed(2),
+ * [a, b])` recipe `pcg_hash3/4/5` are and over the same two library
+ * rounds, which are themselves serialized from `src/random/hash.ts`'s
+ * exported constants. Both sides therefore run the identical integer
+ * program and the derived seed is bit-exact with no tolerance spent —
+ * the property that makes this form admissible in a seed at all.
+ *
+ * A helper rather than a library entry because a HELPER calls it: the fbm
+ * body derives its octave seeds through this, and helper text is emitted
+ * in registration order, so this one is registered before the fbm body is
+ * built. (A library entry would order fine against the main body — the
+ * closure precedes every helper — but not against another helper.)
+ * Deduped by body, so one kernel emits it once however many noises derive
+ * a seed.
+ */
+function hash2Fn(ctx: CompileCtx): string {
+  ctx.libRoots.add("pcg_hash_mix");
+  ctx.libRoots.add("pcg_hash_finalize");
+  return ctx.helper(
+    "hash2",
+    `fn @NAME@(a: u32, b: u32) -> u32 {
+  return pcg_hash_finalize(pcg_hash_mix(pcg_hash_mix(${wgslHexU32(hashSeed(2))}, a), b));
+}`,
+  );
+}
+
+function isNodeSeedRefSpec(seed: NoiseOptsSpec["seed"]): seed is NodeSeedRefSpec {
+  return typeof seed === "object" && seed !== null;
+}
+
+/**
+ * The `opts.seed` u32 before the kind salt: a compile-time literal, or an
+ * expression over the per-dispatch seed uniform.
+ */
+type SeedSource = { readonly literal: number } | { readonly expr: string };
+
+/**
+ * The variant, as a u32 expression.
+ *
+ * An INTEGER is part of the spec text, hence part of the kernel key, so
+ * baking it specializes nothing that was not already specialized. A
+ * `param` must NOT be baked: two bindings of one name produce the same
+ * spec text and therefore the same kernel key, so a baked value would
+ * serve the second binding a pipeline compiled for the first — cache
+ * poisoning rather than a missed optimization. It reads its uniform slot
+ * like every other `param`, and the conversion is exact because the
+ * grammar caps a variant at 2^24.
+ */
+function variantExpr(variant: NodeSeedRefSpec["variant"], path: string, ctx: CompileCtx): string {
+  if (variant === undefined) return "0u";
+  if (typeof variant === "number") return wgslU32(variant);
+  const name = variant.name;
+  if (typeof name !== "string" || name === "") {
+    throw new GpuCompileError(`${path}.opts.seed.variant: param requires a non-empty string name`);
+  }
+  // Unreachable through the grammar (a Field binding is refused at the
+  // variant position), so this is the door a hand-built spec could come
+  // through: an expression spliced into a seed is exactly what has no
+  // agreeing lowering, and refusing beats compiling a different noise.
+  if (paramSpecOf(variant as unknown as FieldSpec) !== undefined) {
+    throw new GpuCompileError(
+      `${path}.opts.seed.variant: param ${JSON.stringify(name)} is bound to a Field, and a seed ` +
+        "is resolved in u32 integer math with no per-element form; bind an integer, or evaluate " +
+        "this field on the CPU",
+    );
+  }
+  const { slot } = ctx.paramSlot(name);
+  return `u32(params.consts[${slot}].x)`;
+}
+
+/**
+ * The `opts.seed` value a noise's sampler is derived from, before the
+ * kind salt.
+ *
+ * A literal seed is baked exactly as it always was, so every graph that
+ * does not use the tagged form compiles to byte-identical WGSL. A ref
+ * reads `params.seed`, the uniform written per dispatch — so ONE kernel
+ * serves every seed the graph is ever given, which is the same argument
+ * the `nodeSeed` leaf already makes against baking a number that moves on
+ * every drag of the seed box.
+ */
+function noiseSeedSource(
+  seed: NoiseOptsSpec["seed"],
+  path: string,
+  ctx: CompileCtx,
+): SeedSource {
+  if (!isNodeSeedRefSpec(seed)) return { literal: (seed ?? 0) >>> 0 };
+  ctx.usesSeed = true;
+  return { expr: `${hash2Fn(ctx)}(params.seed, ${variantExpr(seed.variant, path, ctx)})` };
+}
+
+/** The sampler seed `hash2(kindSalt, seed)`, folded when the seed is a literal. */
+function saltedSeed(fnName: string, src: SeedSource, ctx: CompileCtx): string {
+  const salt = NOISE_SALTS[fnName];
+  if ("literal" in src) return wgslHexU32(hash2(salt, src.literal));
+  return `${hash2Fn(ctx)}(${wgslHexU32(salt)}, ${src.expr})`;
 }
 
 /** Wrap a raw noise value with the CPU normalize01 affine map. */
@@ -823,9 +927,13 @@ function emitNormalized(ctx: CompileCtx, raw: Val, range: NoiseRange, context: s
 for (const fnName of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
   HANDLERS.set(fnName, (spec, path, ctx) => {
     const opts = noiseOpts(spec);
+    // Before the sample point, so the hash2 helper (when there is one)
+    // precedes anything the position compiles into: helper order is
+    // emission order, and WGSL wants a function declared before its use.
+    const seed = saltedSeed(fnName, noiseSeedSource(opts.seed, path, ctx), ctx);
     const sp = compileSamplePoint(fnName, spec, path, ctx);
     ctx.libRoots.add(NOISE_LIB_FN[fnName]);
-    const raw = ctx.emit(`${NOISE_LIB_FN[fnName]}(${wgslHexU32(effectiveSeed(fnName, opts.seed))}, ${sp.ref})`, 1);
+    const raw = ctx.emit(`${NOISE_LIB_FN[fnName]}(${seed}, ${sp.ref})`, 1);
     if (opts.normalized !== true) return raw;
     return emitNormalized(ctx, raw, NOISE_RAW_RANGES[fnName], `${path}.opts.normalized`);
   });
@@ -835,13 +943,11 @@ HANDLERS.set("worleyNoise", (spec, path, ctx) => {
   const opts = noiseOpts(spec);
   const output = opts.output ?? "f1";
   const exact = opts.exact === true;
+  const seed = saltedSeed("worleyNoise", noiseSeedSource(opts.seed, path, ctx), ctx);
   const sp = compileSamplePoint("worleyNoise", spec, path, ctx);
   ctx.libRoots.add("pcg_worley");
   const needsF2 = output !== "f1";
-  const pair = ctx.emit(
-    `pcg_worley(${wgslHexU32(effectiveSeed("worleyNoise", opts.seed))}, ${sp.ref}, ${exact}, ${needsF2})`,
-    2,
-  );
+  const pair = ctx.emit(`pcg_worley(${seed}, ${sp.ref}, ${exact}, ${needsF2})`, 2);
   const raw =
     output === "f1"
       ? ctx.emit(`${pair.ref}.x`, 1)
@@ -870,9 +976,12 @@ HANDLERS.set("fbm", (spec, path, ctx) => {
   const octaves = opts.octaves ?? 4;
   const lacunarity = opts.lacunarity ?? 2;
   const gain = opts.gain ?? 0.5;
-  const seed = opts.seed ?? 0;
   const frequency = opts.frequency ?? 1;
   const [ox, oy, oz] = opts.offset ?? [0, 0, 0];
+  // Resolved BEFORE the position compiles, so a `hash2` helper this needs
+  // is declared ahead of anything the position registers — and ahead of
+  // the fbm helper below, which calls it.
+  const seedSource = noiseSeedSource(opts.seed, path, ctx);
 
   const posPath = opts.position === undefined ? path : `${path}.opts.position`;
   const pos =
@@ -895,7 +1004,19 @@ HANDLERS.set("fbm", (spec, path, ctx) => {
   let lo = 0;
   let hi = 0;
   for (let o = 0; o < octaves; o++) {
-    seeds.push(wgslHexU32(effectiveSeed(base, hashCombine(seed, o))));
+    // The CPU builds octave `o` with `hashCombine(seed, o)` and the layer
+    // then salts it, so the chain is the same one hash deeper. With a ref
+    // the node half is hoisted into `ns` below rather than repeated per
+    // octave.
+    seeds.push(
+      saltedSeed(
+        base,
+        "literal" in seedSource
+          ? { literal: hashCombine(seedSource.literal, o) }
+          : { expr: `${hash2Fn(ctx)}(ns, ${wgslU32(o)})` },
+        ctx,
+      ),
+    );
     freqs.push(wgslF32(octaveFrequency, `${path}.opts.frequency`));
     amps.push(wgslF32(amplitude, `${path}.opts.gain`));
     lo += amplitude >= 0 ? amplitude * range[0] : amplitude * range[1];
@@ -906,8 +1027,12 @@ HANDLERS.set("fbm", (spec, path, ctx) => {
 
   ctx.libRoots.add(base === "worleyNoise" ? "pcg_worley" : NOISE_LIB_FN[base]);
   const off = `vec3<f32>(${wgslF32(ox, `${path}.opts.offset`)}, ${wgslF32(oy, `${path}.opts.offset`)}, ${wgslF32(oz, `${path}.opts.offset`)})`;
+  // The node half of a derived seed, named once: `params` is a
+  // module-scope uniform, so a helper reads it exactly as the main body
+  // does, and a `var` array constructor takes runtime expressions.
+  const ns = "literal" in seedSource ? "" : `  let ns = ${seedSource.expr};\n`;
   const body = `fn @NAME@(p: vec3<f32>) -> f32 {
-  var seeds = array<u32, ${octaves}>(${seeds.join(", ")});
+${ns}  var seeds = array<u32, ${octaves}>(${seeds.join(", ")});
   var freqs = array<f32, ${octaves}>(${freqs.join(", ")});
   var amps = array<f32, ${octaves}>(${amps.join(", ")});
   var sum = 0f;

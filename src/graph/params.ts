@@ -90,8 +90,99 @@ export interface ParamSchema {
   readonly acceptsInfinite?: boolean;
 }
 
+/**
+ * One graph-scoped param: a value declared once on the graph and read by
+ * name from any node's field expression.
+ *
+ * The shape is the inline `param` spec node's, minus `fn` — a graph-scoped
+ * param IS an inline value hoisted out of one expression so several can
+ * share it, so it carries the same five keys and derives the same schema
+ * from them. It holds a LITERAL and never an expression: a value that can
+ * compute is a node, and a param referring to another param would need a
+ * topological order and cycle detection for no caller that has asked.
+ */
+export interface GraphParam {
+  /** Read by `{"fn":"param","name":…}`. Dot-free, and never `$`-prefixed. */
+  readonly name: string;
+  /** A finite number, or a non-empty tuple of them. */
+  readonly value: number | readonly number[];
+  readonly min?: number;
+  readonly max?: number;
+  /** What turning it does, in the graph rather than in a panel beside it. */
+  readonly description?: string;
+}
+
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
+}
+
+/**
+ * Why `param` is not a legal graph-scoped param, or undefined.
+ *
+ * The name rules are the two the addressing depends on. A `.` would make
+ * `"$name"` ambiguous against the node forms a knob key splits from the
+ * right (`<node>.<param>` and `<node>.<param>.<fieldParam>`), and a leading
+ * `$` would let `$$x` exist — the sigil appears exactly once or the address
+ * stops being readable.
+ */
+export function graphParamError(param: GraphParam, who: string): string | undefined {
+  const { name, value } = param;
+  if (typeof name !== "string" || name === "") {
+    return `${who}: a graph param needs a non-empty string name, got ${JSON.stringify(name)}`;
+  }
+  if (name.includes(".")) {
+    return `${who}: graph param name ${JSON.stringify(name)} contains a "."; a knob addresses a graph param as "$<name>" and a node param as "<node>.<param>", so a dot in the name would make the address ambiguous`;
+  }
+  if (name.startsWith("$")) {
+    return `${who}: graph param name ${JSON.stringify(name)} starts with "$"; that sigil is the address's own ("$${name.slice(1)}"), so the name carries it exactly once and never itself`;
+  }
+  if (!isFiniteNumber(value)) {
+    if (!Array.isArray(value) || value.length === 0 || !value.every(isFiniteNumber)) {
+      return `${who}: graph param "${name}" must hold a finite number or a non-empty array of finite numbers, got ${JSON.stringify(value)}`;
+    }
+    // A width the param vocabulary cannot name has no schema, and a
+    // declaration nothing can describe is one nothing can address: it would
+    // bind into the expressions silently and then be missing from every
+    // knob listing. The grammar takes any run of numbers INSIDE a spec, so
+    // this is stricter than an inline value — deliberately, because a
+    // declaration is a promise that the value is turnable.
+    if (value.length !== 3 && value.length !== 4) {
+      return `${who}: graph param "${name}" holds ${value.length} number${value.length === 1 ? "" : "s"}, which the param vocabulary cannot name — declare a single number, a vec3 or a vec4, since a declared param has to be describable to be addressable`;
+    }
+  }
+  const { min, max } = param;
+  if (min !== undefined && max !== undefined && min > max) {
+    return `${who}: graph param "${name}" declares min ${min} above max ${max}, a range no value satisfies`;
+  }
+  // The GRAPH enforces its own declared range, because nothing else can.
+  // An inline `param` declares its bounds INSIDE the spec, so the grammar
+  // refuses there on every rebuild; a hoisted one has no spec of its own,
+  // and a knob free to write past its declared max would make the range a
+  // decoration rather than a rule. Componentwise for a tuple, the way a
+  // vec param's bounds already read.
+  const components = typeof value === "number" ? [value] : value;
+  for (const component of components) {
+    if ((min !== undefined && component < min) || (max !== undefined && component > max)) {
+      return `${who}: graph param "${name}" is ${JSON.stringify(value)}, outside its declared range ${min ?? "-∞"}..${max ?? "∞"}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The declared values as the binding record `fieldFromJson` takes, so a
+ * `{"fn":"param","name":…}` reference resolves to the graph's value when
+ * the field is BUILT — the only moment a value can reach `Field.key`, and
+ * therefore the only moment it can reach a memo key.
+ */
+export function graphParamBindings(
+  params: readonly GraphParam[],
+): Readonly<Record<string, number | readonly number[]>> {
+  // Null-prototype: a param name is any dot-free non-empty string, which
+  // includes `__proto__`, and on a plain object that key is a setter.
+  const out = Object.create(null) as Record<string, number | readonly number[]>;
+  for (const param of params) out[param.name] = param.value;
+  return out;
 }
 
 function checkNumberVector(v: unknown, size: number): v is readonly number[] {

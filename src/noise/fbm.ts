@@ -14,8 +14,10 @@ import { hashCombine } from "../random/index.js";
 import { NOISE_BASES } from "./bases.js";
 import {
   type DerivedSpec,
+  type NodeSeedRef,
   type NoiseFactory,
   type NoiseOpts,
+  isNodeSeedRef,
   noiseOptsSpec,
   noiseOutputRange,
   normalize01,
@@ -34,7 +36,9 @@ export interface FbmOpts extends NoiseOpts {
 
 /**
  * Fractal Brownian motion: layers a base noise at increasing frequency
- * and decreasing amplitude. Octave `o` uses seed `hashCombine(seed, o)`,
+ * and decreasing amplitude. Octave `o` uses seed `hashCombine(seed, o)`
+ * — with a {@link NodeSeedRef} seed, `hashCombine(hashCombine(ctx.seed,
+ * variant), o)`, the same chain one hash deeper —
  * frequency `frequency * lacunarity^o`, and amplitude `gain^o`. The sum
  * is not renormalized, so the raw range grows toward
  * `baseRange * (1 - gain^octaves) / (1 - gain)`.
@@ -51,10 +55,20 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
   if (!Number.isInteger(octaves) || octaves < 1) {
     throw new Error(`fbm: octaves must be a positive integer, got ${octaves}`);
   }
+  // A ref cannot be hashed here — `ctx.seed` arrives at evaluation — so
+  // the octave index rides ALONG with it and the layer resolves the whole
+  // chain itself. `hashCombine(seed, o)` for a literal, unchanged.
+  const seedRef = isNodeSeedRef(seed) ? seed : undefined;
+  const literalSeed = isNodeSeedRef(seed) ? 0 : seed;
+  const octaveSeed = (o: number): number | NodeSeedRef =>
+    seedRef === undefined
+      ? hashCombine(literalSeed, o)
+      : { from: "node", variant: seedRef.variant ?? 0, octave: o };
   let sum: Field | undefined;
-  // Octave 0's field: its derived spec names the base in the grammar and
-  // carries the position spec, so `deriveFbmSpec` needs neither a linear
-  // scan of the base table nor a throwaway `resolveField(opts.position)`.
+  // Octave 0's field: with a literal seed its derived spec carries the
+  // position spec, so `deriveFbmSpec` needs no throwaway
+  // `resolveField(opts.position)`, and it is also what the withhold trail
+  // continues through.
   let firstLayer: Field<1> | undefined;
   let amplitude = 1;
   let octaveFrequency = frequency;
@@ -63,7 +77,7 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
   let rangeKnown = true;
   for (let o = 0; o < octaves; o++) {
     const layer = base({
-      seed: hashCombine(seed, o),
+      seed: octaveSeed(o),
       frequency: octaveFrequency,
       offset: opts.offset,
       position: opts.position,
@@ -130,6 +144,18 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
 }
 
 /**
+ * The grammar name of a built-in noise factory, by IDENTITY — undefined
+ * for anything else, a closure forwarding to a built-in included. Four
+ * entries, so the scan is cheaper than the object lookup it replaces.
+ */
+function baseNameOf(base: NoiseFactory): string | undefined {
+  for (const [name, factory] of Object.entries(NOISE_BASES)) {
+    if (factory === base) return name;
+  }
+  return undefined;
+}
+
+/**
  * The derived spec for an fbm result and its nesting depth, or the reason
  * it cannot be named in the grammar: a base outside {@link NOISE_BASES},
  * or an option outside what the grammar's parser accepts (`fbm` never
@@ -138,22 +164,29 @@ export function fbm(base: NoiseFactory, opts: FbmOpts = {}): Field<1> {
  * `add`/`mul` octave tree composed, which is `undefined` unless every
  * octave is spec'd.
  *
- * `firstLayer` is octave 0. Its own derived spec supplies the base's
- * grammar name and the position spec nested in its opts — but the name is
- * only a CLAIM by the field, so it is checked against {@link NOISE_BASES}
- * BY IDENTITY: a custom base that forwards to a built-in factory (say
+ * `firstLayer` is octave 0. The base is named BY IDENTITY against
+ * {@link NOISE_BASES} rather than by whatever name the layer's spec
+ * claims: a custom base that forwards to a built-in factory (say
  * `(o) => worleyNoise({ ...o, output: "f2" })`) hands back a field whose
  * spec says `worleyNoise`, and naming that as an fbm base would round-trip
- * to a different field. Identity accepts exactly the four factories, which
- * is what a scan of the table accepted. With no spec at all, the layer is
- * where the trail to the un-nameable leaf continues.
+ * to a different field. Identity accepts exactly the four factories. With
+ * no name AND no layer spec, the layer is where the trail to the
+ * un-nameable leaf continues, so its own refusal is inherited.
+ *
+ * The layer also supplies the position spec nested in its opts — except
+ * under a node-seed ref, where every octave withholds (its per-octave seed
+ * has no grammar form) and the position is resolved here instead. That
+ * resolve is free of consequence: the octave was passed `opts.position`
+ * verbatim, so it is the same object for a Field input and an equal
+ * constant for a bare number or tuple.
  *
  * `octaves` is already validated identically by the constructor, and
- * `seed` by {@link noiseOptsSpec} — it rejects a non-integer `opts.seed`,
- * which is the same condition as a non-integer `resolved.seed` because
- * `resolved.seed` is `opts.seed ?? 0`. (`-0` needs no guard of its own:
- * `hashCombine` cannot tell it from `0`, so both build the identical
- * field and JSON's `-0` → `0` cannot change what the spec means.)
+ * `seed` by {@link noiseOptsSpec} — it rejects a non-integer `opts.seed`
+ * and an out-of-range ref variant, which are the same conditions on
+ * `resolved.seed` because `resolved.seed` is `opts.seed ?? 0`. (`-0`
+ * needs no guard of its own: `hashCombine` cannot tell it from `0`, so
+ * both build the identical field and JSON's `-0` → `0` cannot change what
+ * the spec means.)
  */
 function deriveFbmSpec(
   base: NoiseFactory,
@@ -163,14 +196,18 @@ function deriveFbmSpec(
     octaves: number;
     lacunarity: number;
     gain: number;
-    seed: number;
+    seed: number | NodeSeedRef;
     frequency: number;
   },
 ): DerivedSpec | { readonly withheld: WithheldReason } {
   const baseSpec: FieldSpec | undefined = peekFieldSpec(firstLayer);
-  if (baseSpec === undefined) return { withheld: withheldOver(firstLayer) };
-  const name = baseSpec.fn;
-  if (NOISE_BASES[name] !== base) {
+  const seedRef = isNodeSeedRef(resolved.seed);
+  // A layer with no spec is where the trail to the un-nameable leaf
+  // continues — unless the seed is a ref, in which case EVERY layer
+  // withholds by construction and the absence says nothing.
+  if (baseSpec === undefined && !seedRef) return { withheld: withheldOver(firstLayer) };
+  const name = baseNameOf(base);
+  if (name === undefined) {
     return {
       withheld: {
         kind: "ungrammatical",
@@ -196,7 +233,9 @@ function deriveFbmSpec(
   const positionSpec =
     opts.position === undefined
       ? undefined
-      : ((baseSpec.opts as Record<string, unknown> | undefined)?.position as FieldSpec | undefined);
+      : baseSpec !== undefined
+        ? ((baseSpec.opts as Record<string, unknown> | undefined)?.position as FieldSpec | undefined)
+        : peekFieldSpec(resolveField(opts.position));
   const optsSpec = noiseOptsSpec(
     "fbm",
     opts,

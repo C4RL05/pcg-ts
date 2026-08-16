@@ -240,6 +240,17 @@ const roundTrip = serializeGraph(graph); // structurally equal JSON back
 const result = await cook(graph);
 ```
 
+**One value, many nodes.** A graph may declare an optional top-level
+`params` array — `{ name, value, min?, max?, description? }` each — that
+any node's field expression reads by name with
+`{ "fn": "param", "name": "tubeRadius" }`. Binding happens at
+deserialize, by substitution into the expression, so a declared value
+cooks byte-identically to the same number written out in every reading
+slot, and `graph.setGraphParam(name, value)` re-keys exactly the nodes
+that read it while every other node keeps its cache. It is the home for
+an authored quantity — a cable radius, a truss half-width — that would
+otherwise be a dozen independent literals kept equal by hand.
+
 **Field params serialize whichever way you authored them.** A field
 built from the combinator API — `mul(position(), 0.1)`,
 `ge(randomField("species"), 0.72)` — derives its spec from its

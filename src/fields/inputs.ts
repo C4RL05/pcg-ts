@@ -466,12 +466,27 @@ attachSpec(NODE_SEED, { fn: "nodeSeed" }, 1);
  * already hashes. Constant over the domain: the same number on every
  * element, changing only when the GRAPH seed or the node's id changes.
  *
+ * **For making a saved noise re-roll with the graph seed, reach for
+ * `opts.seed: { from: "node", variant: N }` instead.** That form resolves
+ * to `hashCombine(ctx.seed, variant)` in u32 integer math — no float in
+ * the seed path, bit-exact on CPU and GPU with no tolerance spent, no
+ * calibration constant to go stale, and `variant` gives one node as many
+ * independent draws as it needs. It is the preferred spelling and the one
+ * to write in new graphs. The cost is that adopting it in a SAVED noise
+ * re-rolls that noise: it is a different draw from the same family at the
+ * graph's default seed, and no form can avoid that without carrying the
+ * default seed in the spec.
+ *
+ * The rest of this block documents the idiom that form replaces, because
+ * 39 specs across the graph corpus still use it and a reader meeting one
+ * needs to know what it computes.
+ *
  * It exists because a serialized field expression bakes its numbers, so a
  * saved noise carries a literal `opts.seed` and the graph's seed box
- * moves nothing about it. `opts.seed` is read as a plain number and
- * cannot hold a spec; `opts.position` is an ordinary argument position
- * and can — so this is what an author folds into the SAMPLE POSITION to
- * make a frozen noise re-roll with the graph.
+ * moves nothing about it. Before the tagged form, `opts.seed` was read as
+ * a plain number and could hold nothing else; `opts.position` is an
+ * ordinary argument position and can — so this is what an author folded
+ * into the SAMPLE POSITION to make a frozen noise re-roll with the graph.
  *
  * Fold it BOUNDED. The offset per axis is
  * `A * (fract(nodeSeed * 2^-32 * K) - W0)`, added outside whatever
@@ -510,6 +525,12 @@ attachSpec(NODE_SEED, { fn: "nodeSeed" }, 1);
  * leaves ~73 f32 steps per noise period at frequency 14 — a field that
  * still cooks, still looks plausible, and rounds differently on CPU and
  * GPU. `docs/authoring.md` carries the derivation.
+ *
+ * `W0` is also why the idiom was replaced rather than merely joined: it
+ * is correct for exactly one (graph seed, node id) pair, so a rename, a
+ * change of default seed, or a copy into another graph leaves it stale —
+ * the graph still cooks, still looks plausible, and is simply no longer
+ * seed-neutral, with no test able to say so.
  *
  * Two properties worth stating, because both are easy to assume wrongly:
  *

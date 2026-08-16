@@ -1,17 +1,12 @@
 import { type Field, isField } from "../fields/index.js";
-import { type FieldSpec, isDerivedSpec, peekFieldSpec } from "../fields/spec.js";
 // The field grammar's parser, reached by MODULE and not through
 // `../nodes/index.js`. It imports only `../fields` and `../noise`, so
 // there is no cycle to break here and no registry crossing the layer
 // boundary: this is the grammar itself, which the graph layer needs
 // because a body's field expressions are rebuilt against a wrapper's
 // exposed values at cook time and building is the only door a value has.
-import {
-  type FieldBindings,
-  fieldFromJson,
-  paramNamesOf,
-  unboundParamNamesOf,
-} from "../fields/fieldJson.js";
+import { type FieldBindings, fieldFromJson } from "../fields/fieldJson.js";
+import { type ParamFieldRef, type ParamScan, paramScan, refLabel } from "./paramScan.js";
 import { hashCombine, hashString } from "../random/index.js";
 import type { DataCollection } from "./data.js";
 import { GraphValidationError } from "./errors.js";
@@ -386,112 +381,8 @@ export function transitiveVersionKey(graph: Graph, seen: Set<Graph>): string {
   return key;
 }
 
-/** One body param slot whose field expression reads exposed params by name. */
-interface BodyFieldRef {
-  /** Id of the inner node holding the field. */
-  readonly node: string;
-  /** Param name on that inner node. */
-  readonly param: string;
-  /**
-   * The spec the field was built from. Kept because binding SUBSTITUTES:
-   * a value reaches the expression only by rebuilding the field from this
-   * spec, which is what puts the value in `Field.key` and so in the body
-   * node's memo key. `fieldFromJson` clones it and stamps the clone on the
-   * rebuilt field, so the reference — not the value it stood for — is
-   * still what a re-scan (or a save) sees while a rebuild is installed.
-   */
-  readonly spec: FieldSpec;
-  /** Names this spec references, sorted and deduplicated. */
-  readonly names: readonly string[];
-  /**
-   * The subset of {@link names} this spec does NOT supply itself — the
-   * ones a `param` node mentions without carrying an inline value. Those
-   * are what a wrapper must declare; a self-supplied name is bindable but
-   * not required, so it is bound when declared and left to its own value
-   * when not.
-   */
-  readonly needs: readonly string[];
-}
-
-/** What one body's field expressions read, as of one {@link Graph.version}. */
-interface BodyScan {
-  readonly version: number;
-  /** Slots holding an AUTHORED spec: the ones a cook rebuilds. */
-  readonly refs: readonly BodyFieldRef[];
-  /**
-   * Slots reading a name through a DERIVED spec, which cannot be rebuilt
-   * (see {@link bodyScan}) and so are refused rather than bound.
-   */
-  readonly derivedRefs: readonly BodyFieldRef[];
-  /** Every name any of `refs` reads. */
-  readonly names: ReadonlySet<string>;
-}
-
-const bodyScans = new WeakMap<Graph, BodyScan>();
-
-/**
- * What `body` reads by name, computed once per edit of it.
- *
- * Version-keyed rather than frozen at wrap time, because the body is not
- * frozen at wrap time: `getSubgraphSpec(def).graph` is the sanctioned door
- * back to it, and setting a field on an inner node after wrapping is an
- * ordinary edit. Every such edit bumps {@link Graph.version} (the quiet
- * writes this module makes deliberately do not), and that same counter is
- * already in the wrapper's `memoKey` through `transitiveVersionKey` — so a
- * body whose scan moved is a body whose wrapper recooks anyway.
- *
- * Keyed per GRAPH rather than per def: one body can back several wrappers,
- * and what it reads is a fact about the body alone.
- *
- * Only AUTHORED specs are BOUND. A field composed in TypeScript on top of
- * one — `mul(fieldFromJson(spec), 3)` — carries a DERIVED spec, and
- * rebuilding from that would hand the field an authored spec it never had,
- * moving it onto the device for a graph that never asked (see
- * `deviceSpec`). Those are collected separately and refused when they read
- * a name this wrapper declares (see {@link checkDerivedReaders}); one
- * reading a name nothing declares is left alone, since it can only be a
- * value an author already baked in.
- */
-function bodyScan(body: Graph): BodyScan {
-  const cached = bodyScans.get(body);
-  if (cached !== undefined && cached.version === body.version) return cached;
-  const refs: BodyFieldRef[] = [];
-  const derivedRefs: BodyFieldRef[] = [];
-  const names = new Set<string>();
-  for (const state of body._nodes.values()) {
-    for (const [param, value] of Object.entries(state.params)) {
-      if (!isField(value)) continue;
-      const spec = peekFieldSpec(value);
-      if (spec === undefined) continue;
-      const read = paramNamesOf(spec);
-      if (read.length === 0) continue;
-      const ref: BodyFieldRef = {
-        node: state.id,
-        param,
-        spec,
-        names: read,
-        needs: unboundParamNamesOf(spec),
-      };
-      if (isDerivedSpec(spec)) {
-        derivedRefs.push(ref);
-        continue;
-      }
-      refs.push(ref);
-      for (const name of read) names.add(name);
-    }
-  }
-  const scan: BodyScan = { version: body.version, refs, derivedRefs, names };
-  bodyScans.set(body, scan);
-  return scan;
-}
-
-/** `"nodeId".param`, the way these errors name a body slot. */
-function refLabel(ref: BodyFieldRef): string {
-  return `"${ref.node}".${ref.param}`;
-}
-
 /** The body slots reading `name`, for a message. */
-function readersOf(scan: BodyScan, name: string): string {
+function readersOf(scan: ParamScan, name: string): string {
   return scan.refs
     .filter((ref) => ref.names.includes(name))
     .map(refLabel)
@@ -565,12 +456,12 @@ function bindingValue(value: unknown): number | readonly number[] | Field | unde
  * Re-checked per cook because the body can be edited afterwards.
  *
  * A reference carrying its own inline value is not read here: it needs no
- * declaration, because it already has the number ({@link BodyFieldRef}'s
+ * declaration, because it already has the number ({@link ParamFieldRef}'s
  * `needs`). It stays bindable — a wrapper that DOES declare the name
  * overrides it, which is the whole precedence — so the only thing skipped
  * is the refusal.
  */
-function checkBodyReferences(scan: BodyScan, declared: ReadonlySet<string>): void {
+function checkBodyReferences(scan: ParamScan, declared: ReadonlySet<string>): void {
   for (const ref of scan.refs) {
     for (const name of ref.needs) {
       if (declared.has(name)) continue;
@@ -597,7 +488,7 @@ function checkBodyReferences(scan: BodyScan, declared: ReadonlySet<string>): voi
  * alone: nothing here would have bound it, so there is nothing to
  * disagree with, and an unbound one still fails at evaluate.
  */
-function checkDerivedReaders(scan: BodyScan, declared: ReadonlySet<string>): void {
+function checkDerivedReaders(scan: ParamScan, declared: ReadonlySet<string>): void {
   for (const ref of scan.derivedRefs) {
     for (const name of ref.names) {
       if (!declared.has(name)) continue;
@@ -616,7 +507,7 @@ function checkDerivedReaders(scan: BodyScan, declared: ReadonlySet<string>): voi
  * them provably does nothing: the fan-out would overwrite the whole
  * expression, or the rebuilt expression would overwrite the fan-out.
  */
-function checkSlotConflicts(scan: BodyScan, paramList: readonly ExposedParam[]): void {
+function checkSlotConflicts(scan: ParamScan, paramList: readonly ExposedParam[]): void {
   if (scan.refs.length === 0) return;
   for (const exp of paramList) {
     for (const target of exp.targets) {
@@ -903,7 +794,7 @@ export function prepareWrapper(
   // scope for the body's field expressions, which read it as
   // {"fn": "param", "name": …}. Each route is optional on its own; a
   // declaration with neither is the one thing that cannot affect a cook.
-  const scan = bodyScan(inner);
+  const scan = paramScan(inner);
   // Ahead of everything else, so a body reading a declared name through a
   // spec that cannot be rebuilt is named as itself rather than as a
   // declaration that reads nothing.
@@ -1034,7 +925,7 @@ export function checkExposedValues(
   paramList: readonly ExposedParam[],
   params: Record<string, unknown>,
 ): void {
-  const scan = bodyScan(inner);
+  const scan = paramScan(inner);
   for (const exp of paramList) {
     const value = params[exp.name];
     const readByBody = scan.names.has(exp.name);
@@ -1126,7 +1017,7 @@ export async function withExposedParams<T>(
   // target slot would then read back as a body reader and refuse the cook.
   // Both current callers happen to warm it first via `checkExposedValues`;
   // depending on that would make this function correct only by luck.
-  const scan = bodyScan(inner);
+  const scan = paramScan(inner);
   try {
     for (const exp of paramList) {
       const value = params[exp.name];

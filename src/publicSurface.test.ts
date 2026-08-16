@@ -26,7 +26,7 @@ const ROOT_SURFACE = [
   "filterByBounds", "filterByDensity", "filterByExpression", "filterByTag",
   "filterPrimitivesByAttribute", "filterPrimitivesByBounds", "firstGeometry", "floor", "forEachNode", "fraction", "ge",
   "getFieldSpec",
-  "getNodeType", "getRegisteredSubgraph", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
+  "getNodeType", "getRegisteredSubgraph", "graphParamBindings", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",
   "index", "inlineParamMetaOf", "inlineParamSchema", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "listFieldFnInfos", "listFieldFns",

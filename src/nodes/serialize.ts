@@ -20,9 +20,20 @@ import {
   type ParamSchema,
   type ParamValue,
   type SubgraphSpec,
+  type GraphParam,
+  graphParamBindings,
 } from "../graph/index.js";
+// Reached by MODULE, like `../graph/subgraph.js` above: the validator is
+// the graph layer's own, not package API, and the reader needs the same one
+// the live setter uses so a value refused by one is refused by both.
+import { graphParamError } from "../graph/params.js";
 import { ITERATED_PIN_NAMES, type WrapperKind } from "../graph/subgraph.js";
-import { type FieldSpec, fieldFromJson, fieldToJson } from "../fields/fieldJson.js";
+import {
+  type FieldSpec,
+  fieldFromJson,
+  fieldToJson,
+  inlineParamValuesOf,
+} from "../fields/fieldJson.js";
 import { forEachNode } from "./forEach.js";
 import { getNodeType, hasNodeType, listNodeTypes, standardNode } from "./registry.js";
 import { type ExposedParamDecl, resolveExposedParam } from "./subgraphParams.js";
@@ -155,10 +166,39 @@ export interface SerializedOutput {
   readonly name: string;
 }
 
+/**
+ * One graph-scoped param: a value declared once at the top level and read
+ * by name from any node's field expression (`{"fn":"param","name":…}`).
+ *
+ * The keys are the inline `param` spec node's keys minus `fn`, because a
+ * graph-scoped param IS an inline value hoisted out of one expression so
+ * several can share it — same vocabulary, same validation, same derived
+ * schema. Deliberately not the exposed-param vocabulary: `targets` means
+ * nothing without a wrapper, and `default` is what a fresh INSTANCE starts
+ * with, where a graph has no instances and the value it holds is its value.
+ */
+export interface SerializedGraphParam {
+  readonly name: string;
+  readonly value: number | readonly number[];
+  readonly min?: number;
+  readonly max?: number;
+  readonly description?: string;
+}
+
 /** The stable, versioned graph interchange format. */
 export interface SerializedGraph {
   readonly formatVersion: 1;
   readonly seed: number;
+  /**
+   * Optional graph-scoped params, in declaration order. Written only when
+   * the graph declares one, so a graph that has none serializes
+   * byte-identically to before this key existed. An ARRAY rather than an
+   * object keyed by name because `JSON.parse` collapses duplicate object
+   * keys before any reader sees them — the trap `byAttribute`'s `cases`
+   * had to concede — and here a repeated name is detectable, so it is
+   * detected.
+   */
+  readonly params?: readonly SerializedGraphParam[];
   /**
    * Optional descriptive block ({@link GraphMeta}): title, description,
    * tags. Written only when the graph declares one, ignored by cooking,
@@ -182,15 +222,35 @@ const FORMAT_VERSION = 1;
  * because unknown keys were ignored. That leniency is now spent: a reader
  * that ignores what it does not recognize cannot tell a new field from a
  * typo, and `"refs"` for `"ref"` would have cooked as an ordinary subgraph
- * node — a near-miss, silently. A future format field therefore arrives
- * with a `formatVersion` bump rather than riding along unnoticed.
+ * node — a near-miss, silently. A future field an old reader could MISREAD
+ * therefore arrives with a `formatVersion` bump rather than riding along
+ * unnoticed.
+ *
+ * That is narrower than "a future format field", and the narrowing is the
+ * honest statement of what the rule protects. An added key an old reader
+ * REFUSES — which is every added key, since this list is closed — cannot be
+ * misread: `meta` was added under exactly this reasoning, the inline `value`
+ * on a `param` spec node after it, and `params` here. The bump is not free
+ * either: `hashableGraph` covers `formatVersion`, so moving it moves every
+ * subgraph content hash and breaks every pinned `ref` in the corpus. Spend
+ * it on a change that alters what an EXISTING key means, not on an addition
+ * the closed list already polices.
  *
  * The rule holds at EVERY object position, not only the outer ones — a
  * lenient nested object is the same near-miss one level down, and the
  * nested positions are where the plausible typos live (`enum` or
  * `acceptsField` on an exposed param, `description` on a declared output).
  */
-const GRAPH_KEYS = ["formatVersion", "seed", "meta", "nodes", "connections", "outputs"] as const;
+const GRAPH_KEYS = [
+  "formatVersion",
+  "seed",
+  "meta",
+  "params",
+  "nodes",
+  "connections",
+  "outputs",
+] as const;
+const GRAPH_PARAM_KEYS = ["name", "value", "min", "max", "description"] as const;
 const NODE_KEYS = ["id", "type", "params", "subgraph", "ref"] as const;
 const SUBGRAPH_PAYLOAD_KEYS = ["graph", "inputs", "outputs", "params"] as const;
 const SUBGRAPH_REF_KEYS = ["name", "hash"] as const;
@@ -328,6 +388,100 @@ function readGraphMeta(v: unknown, where: string): GraphMeta | undefined {
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * Refuse an inline `param` VALUE for a name the graph declares.
+ *
+ * Under the existing precedence — binding > spliced field > inline value —
+ * the graph-scoped value would arrive as a binding and silently win, and
+ * the author would be looking at a number in the spec that nothing uses.
+ * That precedence is right for the case it was written for and stays: a
+ * SUBGRAPH binding a BODY is two documents, where the body must also stand
+ * alone and its inline value is its standalone answer. A graph-scoped param
+ * is the same document as the expression that reads it, so there is no
+ * second reader to keep working and no reason to prefer one number over the
+ * other — only a choice about which one is dead.
+ *
+ * A value-free reference is untouched: that is the ordinary way to read a
+ * declared name.
+ */
+function checkNoShadowedGraphParam(
+  spec: FieldSpec,
+  declared: ReadonlySet<string>,
+  where: string,
+): void {
+  if (declared.size === 0) return;
+  for (const name of Object.keys(inlineParamValuesOf(spec))) {
+    if (!declared.has(name)) continue;
+    fail(
+      `${where}: {"fn": "param", "name": ${JSON.stringify(name)}} carries its own "value", but the graph declares "${name}" in its top-level "params" — the graph's value would win and the inline one would be a number nothing reads. Drop the inline "value" to read the graph's, or rename one of the two`,
+    );
+  }
+}
+
+/**
+ * Read the optional top-level `params` block into the graph's declared
+ * params, refusing what a reader could otherwise misunderstand.
+ *
+ * Nested payloads are refused outright. A body's names are bound by its
+ * WRAPPER's exposed params, and two binders that can disagree is the
+ * failure `checkDerivedReaders` refuses one level up; the harder reason is
+ * that `hashableGraph` covers a payload verbatim, so admitting a key there
+ * would move every pinned `ref` hash in the corpus.
+ */
+function readGraphParams(v: unknown, nested: boolean): readonly GraphParam[] {
+  if (v === undefined) return [];
+  if (nested) {
+    fail(
+      `a subgraph payload's graph cannot declare "params": a body's names are bound by its wrapper's exposed params, which is the one binder a body has. Declare it under the payload's "params" (an exposed param with no targets reads a name the body's expressions use), or hoist the value to the OUTER graph's "params" and pass it in through the wrapper's own param slot`,
+    );
+  }
+  if (!Array.isArray(v)) {
+    fail(
+      `"params" must be an array of { name, value, min?, max?, description? }, got ${JSON.stringify(v)}. It is an array rather than an object so a repeated name is detectable: JSON.parse collapses duplicate object keys before any reader sees them`,
+    );
+  }
+  const seen = new Set<string>();
+  const out: GraphParam[] = [];
+  v.forEach((raw: unknown, i: number) => {
+    if (!isPlainObject(raw)) {
+      fail(`params[${i}]: expected an object { name, value, ... }, got ${JSON.stringify(raw)}`);
+    }
+    checkKeys(raw, GRAPH_PARAM_KEYS, `params[${i}]`, NO_ANNOTATION_KEY);
+    const name = raw.name;
+    if (typeof name !== "string" || name === "") {
+      fail(`params[${i}]: "name" must be a non-empty string, got ${JSON.stringify(name)}`);
+    }
+    if (seen.has(name)) {
+      fail(
+        `params[${i}]: duplicate graph param "${name}"; declare each name once (a second declaration cannot be a redefinition, because a reference names one value)`,
+      );
+    }
+    seen.add(name);
+    for (const key of ["min", "max"] as const) {
+      const bound = raw[key];
+      if (bound !== undefined && (typeof bound !== "number" || !Number.isFinite(bound))) {
+        fail(`params[${i}] ("${name}"): "${key}" must be a finite number, got ${JSON.stringify(bound)}`);
+      }
+    }
+    if (raw.description !== undefined && typeof raw.description !== "string") {
+      fail(
+        `params[${i}] ("${name}"): "description" must be a string, got ${JSON.stringify(raw.description)}`,
+      );
+    }
+    const param: GraphParam = {
+      name,
+      value: raw.value as number | readonly number[],
+      ...(raw.min !== undefined ? { min: raw.min as number } : {}),
+      ...(raw.max !== undefined ? { max: raw.max as number } : {}),
+      ...(raw.description !== undefined ? { description: raw.description as string } : {}),
+    };
+    const error = graphParamError(param, `params[${i}]`);
+    if (error !== undefined) fail(error);
+    out.push(param);
+  });
+  return out;
 }
 
 /**
@@ -785,6 +939,20 @@ function serializeGraphRec(graph: Graph, seen: Set<Graph>): SerializedGraph {
       // a graph that never used it serializes byte-identically to before.
       // `setMeta` already validated and froze it, so it is emitted as held.
       ...(graph.meta !== undefined ? { meta: graph.meta } : {}),
+      // Same rule, same reason: a graph declaring none writes no key. The
+      // values were validated by `setGraphParams` and are emitted as held,
+      // with the optional keys omitted rather than written as undefined.
+      ...(graph.graphParams.length > 0
+        ? {
+            params: graph.graphParams.map((p) => ({
+              name: p.name,
+              value: Array.isArray(p.value) ? [...p.value] : p.value,
+              ...(p.min !== undefined ? { min: p.min } : {}),
+              ...(p.max !== undefined ? { max: p.max } : {}),
+              ...(p.description !== undefined ? { description: p.description } : {}),
+            })),
+          }
+        : {}),
       nodes,
       connections: graph._connections
         .filter((c) => !isPortal(c.from) && !isPortal(c.to))
@@ -923,6 +1091,15 @@ interface ReadContext {
    * need a guard of their own.
    */
   readonly seenNames: Set<string>;
+  /**
+   * True inside a subgraph payload's graph, where a top-level `params`
+   * block is refused. A body's names are bound by its WRAPPER's exposed
+   * params, and two binders that can disagree is the failure
+   * `checkDerivedReaders` refuses one level up — but the load-bearing
+   * reason is narrower: `hashableGraph` covers a payload verbatim, so a
+   * key admitted there would move every pinned `ref` hash in the corpus.
+   */
+  readonly nested?: boolean;
 }
 
 /** Read and validate a node's `ref` object. */
@@ -964,6 +1141,8 @@ function addSubgraphNode(
   paramsJson: Record<string, unknown>,
   ctx: ReadContext,
   wrapper: WrapperKind,
+  bindings: Readonly<Record<string, number | readonly number[]>>,
+  declaredParams: ReadonlySet<string>,
 ): NodeHandle {
   const refJson = nodeJson.ref;
   const payload = nodeJson.subgraph;
@@ -1004,6 +1183,8 @@ function addSubgraphNode(
         ctx,
         ref,
         wrapper,
+        bindings,
+        declaredParams,
       );
     } finally {
       ctx.seenNames.delete(ref.name);
@@ -1021,7 +1202,17 @@ function addSubgraphNode(
   }
   ctx.seenPayloads.add(payload);
   try {
-    return buildSubgraphNode(graph, id, payload, paramsJson, ctx, undefined, wrapper);
+    return buildSubgraphNode(
+      graph,
+      id,
+      payload,
+      paramsJson,
+      ctx,
+      undefined,
+      wrapper,
+      bindings,
+      declaredParams,
+    );
   } finally {
     ctx.seenPayloads.delete(payload);
   }
@@ -1041,11 +1232,13 @@ function buildSubgraphNode(
   ctx: ReadContext,
   ref: SerializedSubgraphRef | undefined,
   wrapper: WrapperKind,
+  bindings: Readonly<Record<string, number | readonly number[]>>,
+  declaredParams: ReadonlySet<string>,
 ): NodeHandle {
   checkKeys(payload, SUBGRAPH_PAYLOAD_KEYS, `node "${id}" subgraph payload`, NO_ANNOTATION_KEY);
   let inner: Graph;
   try {
-    inner = deserializeGraphRec(payload.graph, ctx);
+    inner = deserializeGraphRec(payload.graph, { ...ctx, nested: true });
   } catch (err) {
     if (err instanceof GraphSerializationError) {
       fail(`node "${id}" inner graph: ${err.message}`);
@@ -1127,8 +1320,13 @@ function buildSubgraphNode(
     }
     const where = `node "${id}" param "${key}"`;
     if (schema.acceptsField === true && isPlainObject(value)) {
+      // The wrapper's OWN slot lives in the outer graph, so the outer
+      // graph's params bind it — this is the one hop by which a
+      // graph-scoped value reaches a body, `withExposedParams` substituting
+      // it the rest of the way at cook time.
+      checkNoShadowedGraphParam(value as FieldSpec, declaredParams, where);
       try {
-        params[key] = fieldFromJson(value as FieldSpec);
+        params[key] = fieldFromJson(value as FieldSpec, bindings);
       } catch (err) {
         fail(`${where}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1193,6 +1391,15 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
 
   const graph = new Graph(json.seed);
   graph.setMeta(readGraphMeta(json.meta, `"meta"`));
+  // Declared BEFORE any node is read, because every field-valued param
+  // below is built against these values: binding substitutes at BUILD time
+  // (the only moment a value reaches `Field.key`, and so the only moment it
+  // reaches a memo key), and deserialize is the earliest build that has
+  // them.
+  const graphParams = readGraphParams(json.params, ctx.nested === true);
+  graph.setGraphParams(graphParams);
+  const bindings = graphParamBindings(graphParams);
+  const declaredParams = new Set(graphParams.map((p) => p.name));
   const handles = new Map<string, NodeHandle>();
   const knownIds = (): string => [...handles.keys()].join(", ");
 
@@ -1225,7 +1432,10 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
       fail(`node "${id}": params must be an object, got ${JSON.stringify(nodeJson.params)}`);
     }
     if (type === "subgraph" || type === "forEach") {
-      handles.set(id, addSubgraphNode(graph, id, nodeJson, paramsJson, ctx, type));
+      handles.set(
+        id,
+        addSubgraphNode(graph, id, nodeJson, paramsJson, ctx, type, bindings, declaredParams),
+      );
       return;
     }
     // Both keys are inner-graph plumbing. Carried by any other type they
@@ -1249,8 +1459,9 @@ function deserializeGraphRec(json: unknown, ctx: ReadContext): Graph {
       }
       const where = `node "${id}" param "${key}"`;
       if (schema.acceptsField === true && isPlainObject(value)) {
+        checkNoShadowedGraphParam(value as FieldSpec, declaredParams, where);
         try {
-          params[key] = fieldFromJson(value as FieldSpec);
+          params[key] = fieldFromJson(value as FieldSpec, bindings);
         } catch (err) {
           fail(`${where}: ${err instanceof Error ? err.message : String(err)}`);
         }

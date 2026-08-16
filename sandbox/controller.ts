@@ -27,6 +27,7 @@ import {
   getFieldSpec,
   getNodeType,
   getRegisteredSubgraph,
+  graphParamBindings,
   isField,
   resolveExposedParam,
   serializeGraph,
@@ -463,20 +464,37 @@ export class EditorController {
     const labels = new Map(
       this.mirror.describe().nodes.map((n) => [n.id, this.subgraphs.get(n.id)?.ref ?? n.defType ?? ""]),
     );
-    return describeGraphParams(this.mirror).map((p) => ({
-      key: p.key,
-      node: p.node,
-      nodeLabel: labels.get(p.node) ?? "",
-      name: p.param,
-      ...(p.fieldParam !== undefined ? { fieldParam: p.fieldParam } : {}),
-      schema: p.schema,
-      // A field-valued param reports no plain value, and the inspector
-      // wants the Field itself — the panel never reads this one (it skips
-      // `isField` knobs), but the node editor does.
-      value: p.holdsField ? this.paramValue(p.node, p.param) : copyPlain(p.value),
-      isField: p.holdsField,
-      exposed: p.exposed,
-    }));
+    return describeGraphParams(this.mirror).map((p) =>
+      p.scope === "graph"
+        ? {
+            key: p.key,
+            scope: "graph" as const,
+            // No node, and no node LABEL: a value ten nodes read belongs to
+            // none of them, and naming one of its readers here would be a
+            // guess the panel then prints as a fact.
+            nodeLabel: "",
+            name: p.name,
+            schema: p.schema,
+            value: copyPlain(p.value),
+            isField: false,
+            exposed: p.exposed,
+          }
+        : {
+            key: p.key,
+            scope: "node" as const,
+            node: p.node,
+            nodeLabel: labels.get(p.node) ?? "",
+            name: p.param,
+            ...(p.fieldParam !== undefined ? { fieldParam: p.fieldParam } : {}),
+            schema: p.schema,
+            // A field-valued param reports no plain value, and the inspector
+            // wants the Field itself — the panel never reads this one (it
+            // skips `isField` knobs), but the node editor does.
+            value: p.holdsField ? this.paramValue(p.node, p.param) : copyPlain(p.value),
+            isField: p.holdsField,
+            exposed: p.exposed,
+          },
+    );
   }
 
   /** One live param value, or undefined if the node or param has gone. */
@@ -558,6 +576,19 @@ export class EditorController {
    * memo misses exactly as it would for a plain param.
    */
   private writeKnob(knob: KnobTarget, value: unknown): void {
+    if (knob.scope === "graph") {
+      // The graph layer owns the fan-out: one declared value, rebound into
+      // every expression that reads the name. No spec rewrite here and no
+      // per-slot loop — which is the whole difference between declaring a
+      // value once and mirroring it with a panel's `also`.
+      if (typeof value !== "number" && !isNumberArray(value)) {
+        throw new Error(
+          `graph param "${knob.name}" takes a number or an array of numbers, got ${JSON.stringify(value)}`,
+        );
+      }
+      this.mirror.setGraphParam(knob.name, value);
+      return;
+    }
     const handle = { id: knob.node } as NodeHandle<Record<string, unknown>>;
     if (knob.fieldParam === undefined) {
       this.mirror.setParam(handle, knob.name, copyPlain(value));
@@ -674,12 +705,18 @@ export class EditorController {
     }
     const json = parsed as SerializedGraph;
     const mirror = new Graph(json.seed >>> 0);
+    // Declared before the first node, because binding substitutes at BUILD
+    // time and a node built without them holds an unbound reference that
+    // refuses to evaluate. `deserializeGraph` above has already validated
+    // the block; this mirror is the editor's own copy of the same graph.
+    mirror.setGraphParams(json.params ?? []);
+    const bindings = graphParamBindings(mirror.graphParams);
     const pins = new Map<string, { inputs: PinView[]; outputs: PinView[] }>();
     const subgraphs = new Map<string, SubgraphView>();
     const nodes: NodeView[] = [];
     try {
       for (const sn of json.nodes) {
-        const view = this.addImportedNode(mirror, sn, subgraphs);
+        const view = this.addImportedNode(mirror, sn, subgraphs, bindings);
         pins.set(sn.id, view);
         const copy = copyPinViews(view);
         const category = nodeCategory(sn.type);
@@ -735,6 +772,7 @@ export class EditorController {
     mirror: Graph,
     sn: SerializedNode,
     subgraphs: Map<string, SubgraphView>,
+    bindings: Readonly<Record<string, number | readonly number[]>>,
   ): { inputs: PinView[]; outputs: PinView[] } {
     if (WRAPPER_TYPES.has(sn.type)) {
       /**
@@ -787,7 +825,7 @@ export class EditorController {
         const schema = exposed.find((e) => e.name === key)?.schema;
         params[key] =
           schema?.acceptsField === true && isPlainObject(value)
-            ? fieldFromJson(value as FieldSpec)
+            ? fieldFromJson(value as FieldSpec, bindings)
             : copyPlain(value);
       }
       mirror.add(def, params, sn.id);
@@ -817,7 +855,12 @@ export class EditorController {
       if (!schema) continue; // unreachable: deserializeGraph validated
       params[key] =
         schema.acceptsField === true && isPlainObject(value)
-          ? fieldFromJson(value as FieldSpec)
+          ? // The graph's declared params bind HERE, because this editor
+            // builds its own mirror rather than keeping the one
+            // `deserializeGraph` made — and a value binds when the field is
+            // BUILT or never. Same call, same record, same substitution the
+            // library performs, so the mirror cooks what the file says.
+            fieldFromJson(value as FieldSpec, bindings)
           : copyPlain(value);
     }
     mirror.add(reg.def, params, sn.id);

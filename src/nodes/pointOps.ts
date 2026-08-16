@@ -289,12 +289,12 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
     }
 
     // The target index is SYNTHESIZED rather than carried, so it takes the
-    // same three refusals a carried name takes and takes them in the same
-    // order — a composed standard, a name the source already writes, a name
-    // `targetNames` is already carrying — each naming the param the author
-    // typed the name into. It is added after the carried columns so those
-    // refusals happen first: a name that is wrong for both reasons reports
-    // the one the author is more likely to have meant.
+    // same three refusals a carried name takes — a composed standard, a
+    // name `targetNames` is already carrying, a name the source already
+    // writes — each naming the param the author typed the name into. It is
+    // added after the carried columns so their refusals happen first: a
+    // name that is wrong for both reasons reports the one the author is
+    // more likely to have meant.
     const indexName = params.targetIndexAttr;
     if (indexName !== "") {
       if (COPY_STANDARD.some((std) => std.name === indexName)) {

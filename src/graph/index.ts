@@ -2,6 +2,8 @@ export * from "./errors.js";
 export * from "./data.js";
 export * from "./node.js";
 export {
+  type GraphParam,
+  graphParamBindings,
   paramSchemaError,
   paramValueError,
   type ParamSchema,

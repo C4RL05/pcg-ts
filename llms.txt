@@ -69,6 +69,24 @@ Format (`SerializedGraph`, formatVersion 1 — field names exactly):
 
 - `formatVersion`: 1
 - `seed`: number (graph seed; node seeds derive from it)
+- `meta`: optional `{ title, description, tags }` — the only place
+  descriptive text belongs; excluded from the content hash
+- `params`: optional [{ `name`, `value`, `min`?, `max`?, `description`? }] —
+  GRAPH-SCOPED params, in declaration order, written only when non-empty.
+  One value declared once at the top level; any node's field expression
+  reads it by name as `{ fn: "param", name }` with NO inline `value`
+  (below). Binding happens at DESERIALIZE, by substitution into the spec,
+  so the graph cooks byte-identically to one with that number written out
+  in every reading slot. `value` is a finite number or a non-empty array
+  of them — never a spec, never a reference to another param. `name` may
+  not contain a `.` or start with `$` (the address is `"$<name>"`). A
+  declared `min`/`max` is enforced on the value, componentwise, by the
+  graph itself, since a hoisted value has no spec of its own to be
+  refused by. A repeated name is a hard error — it is an ARRAY rather
+  than an object precisely so a duplicate is detectable, `JSON.parse`
+  collapsing duplicate object keys before any reader sees them. A
+  subgraph payload's graph may NOT carry it — a body's names are bound by
+  its WRAPPER's exposed params, which is the one binder a body has.
 - `nodes`: [{ `id`: string, `type`: registered type name, `params`: object }]
   Omitted params take their schema defaults. Field-capable params accept
   a field spec object (below) instead of a constant. A `subgraph` node
@@ -93,9 +111,12 @@ object, a node object, a `subgraph` payload, a `ref`, a connection, a
 declared output, an exposed-pin declaration, an exposed-param declaration
 and each of its `targets`. An unknown key at any of them is a hard error
 naming it and listing the valid ones. The format is closed: a future
-field arrives with a `formatVersion` bump, not by riding along unnoticed,
-and there is no annotation key (descriptive text goes in `meta`, or in an
-exposed param's own `description`).
+field an old reader could MISREAD arrives with a `formatVersion` bump,
+not by riding along unnoticed. An added KEY is not that case — the closed
+list refuses it by name rather than ignoring it — which is why `meta` and
+`params` both arrived under formatVersion 1; spend the bump on a change
+to what an EXISTING key means. There is no annotation key (descriptive
+text goes in `meta`, or in an exposed param's own `description`).
 
 An exposed-param declaration carries ONLY { `name`, `targets`,
 `description`, `default`?, `min`?, `max`? }. Writing `type`, `enum` or
@@ -112,6 +133,12 @@ to write into. With no targets there is no inner schema to borrow: the
 3-number array vec3, a 4-number array vec4, and nothing else), and the
 param is always field-capable: a Field binding is SPLICED into the
 expression where the reference stands, so the knob can vary per element.
+
+That wrapper is the ONLY binder a body has: the graph inside a `subgraph`
+payload may not declare a top-level `params` block, and saying so is an
+error naming the two homes that work — an exposed param with no targets
+on the payload, or a declaration on the OUTER graph whose value reaches
+the body through the wrapper's own param slot, one hop at a time.
 
 Complete minimal example (deserializes and cooks as-is):
 
@@ -207,10 +234,39 @@ frozen snapshots with no mutation path that bypasses version bumps.
   `targets` are the `{ node, param }` slots the value is written into.
   Returns `undefined` for non-subgraph defs; throws when later edits
   removed a bound inner node or param.
+- `graph.setGraphParam(name, value)` — turn one graph-scoped param
+  (`graph.graphParams` reads the declared list back, frozen). Rebuilds
+  every authored field spec that reads the name and installs it with
+  `setParam`: the readers re-key and recook, every non-reader's param
+  object is untouched and is served from cache. The declared `min`/`max`
+  binds the write, componentwise. Throws naming the declared names for an
+  undeclared one, and refuses a slot whose field was COMPOSED with the
+  constructors around a spec (`mul(fieldFromJson(…), 3)`) — it cannot be
+  rebuilt, so it would keep its old value while every authored expression
+  took the new one. The writes are LOUD (they bump `graph.version`), so a
+  streaming World sees a user edit rather than its own per-cell binding.
+  `graph.setGraphParams(list)` declares the block and pushes nothing into
+  the nodes — the deserialize path, where the fields are already bound —
+  and bumps no version of its own.
 - `describeGraphParams(graph)` — every param of a graph that can be
-  addressed and turned, in node order: frozen-shape records of
-  `{ key, node, type, param, fieldParam?, schema, value?, holdsField,
-  exposed }`. `key` is `"<node>.<param>"`, or
+  addressed and turned: frozen-shape records discriminated by `scope`,
+  the graph-scoped ones FIRST in declaration order, then the node ones in
+  node order. Narrow on `scope` before reading a field: a graph-scoped
+  param belongs to no node and has no `node`, `type` or `param`.
+  `scope: "graph"` is `{ key: "$<name>", scope, name, readers, schema,
+  value, holdsField: false, exposed: true }`, one per top-level `params`
+  declaration. `key` is `"$<name>"` — one segment and a sigil, so it
+  collides with neither node shape nor the sandbox's bare `"seed"` (a
+  graph param named `seed` is addressed `$seed` and is a different knob).
+  `readers` lists the `"<node>.<param>"` of every slot whose expression
+  reads that name, and is EMPTY for a declaration nothing reads — legal,
+  and what a rename leaves behind, which is why it is reported rather
+  than refused. `schema` comes from the value's shape plus the
+  declaration's own `min`/`max`/`description`, exactly as an inline field
+  param's does, and `exposed` is always `true`: a top-level declaration
+  is an author saying the number is worth turning.
+  `scope: "node"` is `{ key, scope, node, type, param, fieldParam?,
+  schema, value?, holdsField, exposed }`. `key` is `"<node>.<param>"`, or
   `"<node>.<param>.<fieldParam>"` for a literal an author wrote INSIDE a
   field expression (`{ "fn": "param", "name": …, "value": … }`) — the one
   address no catalog can give you, since nothing outside the spec names
@@ -226,7 +282,8 @@ frozen snapshots with no mutation path that bypasses version bumps.
   sandbox builds its knobs from this, so a panel file, a shared link and
   the CLI cannot disagree about what a param is called. From the command
   line: `pcg validate <graph.json> --params` (add `--json` for the same
-  list machine-readable).
+  list machine-readable), which prints the graph-scoped rows first and
+  annotates each with `read by <n> slots: …`, or `read by nothing`.
 - `resolveExposedParam(inner, decl)` — build one exposed param for
   `subgraphNode`'s fourth argument. `decl` is
   `{ name, targets, description, default?, min?, max? }`; the schema is
@@ -370,7 +427,8 @@ into `constant`). All 45 fns (`listFieldFns()`):
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
   - `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4,
     description?: "..." }` — the value bound to
-    that name by an enclosing wrapper's exposed param of the same name
+    that name by the graph's top-level `params` block (above), or by an
+    enclosing wrapper's exposed param of the same name
     (every `subgraph` and `forEach` exposed param binds into its body's
     field scope), substituted where the literal would have stood, so the
     field is exactly the field the literal would have built. Uniform over
@@ -379,11 +437,20 @@ into `constant`). All 45 fns (`listFieldFns()`):
     binds the name — so a PLAIN node's expression is tunable without a
     subgraph wrapped around it purely to carry the number, and the same
     spec still works wrapped, because a binder wins over it. A name is
-    subgraph-scoped when bound from outside (one exposed `freq` drives
+    GRAPH-scoped when the top-level `params` block declares it (one
+    declared `cableRadius` drives every slot in the document that names
+    it), subgraph-scoped when bound from outside (one exposed `freq` drives
     every body spec that mentions it) and node-scoped when written inline
     (each spec carries its own): a binding belongs to the binder, a literal
-    to the expression. The inline value is the one binding that survives
-    serialization, being written in the spec rather than beside it. With
+    to the expression. A graph-scoped name and an inline `value` for that
+    same name is a hard DESERIALIZE error, not a precedence rule — a
+    graph-scoped param is the same document as the expression reading it,
+    so an always-overridden inline value is dead text and a second
+    address for one number, and the message names both sites and both
+    fixes (drop the inline `value`, or rename one of the two). The inline
+    value is the one binding that survives serialization, being written in
+    the spec rather than beside it; a graph-scoped one survives too,
+    written in the graph rather than in a wrapper above it. With
     neither, the reference still builds — its key and its GPU kernel need
     only the name — but refuses to evaluate, naming the name and the fix.
     A name may not contain a `.`. Only argument positions can hold one

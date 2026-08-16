@@ -449,6 +449,59 @@ describe("resident run planning: only AUTHORED specs are fusable", () => {
   });
 });
 
+/**
+ * The contrast with `attributeIs` below, and the reason it is asserted
+ * rather than assumed: a node-derived noise seed needs the same
+ * per-dispatch `seed` uniform every `KernelStep` already carries, and a
+ * `param` variant needs a const slot `paramConstValues` already fills
+ * from a stamp. Neither is a per-dispatch string table and neither wants
+ * a geometry, so a run containing one stays FUSED — the feature does not
+ * make a node CPU-only.
+ */
+describe("resident run planning: a node-derived noise seed stays fused", () => {
+  const noise = (seed: unknown): FieldSpec =>
+    ({ fn: "perlinNoise", opts: { seed, frequency: 0.045 } }) as unknown as FieldSpec;
+
+  it("fuses a member whose field derives its seed from the node", () => {
+    const p = plan(
+      [
+        member(
+          "setAttribute",
+          { name: "h", type: "f32", tupleSize: 1, value: field(noise({ from: "node", variant: 3 })) },
+          "sa",
+        ),
+      ],
+      32,
+    );
+    expect(p.members).toHaveLength(1);
+    // The recorded reason is absent, not merely the output equal: a
+    // decline would have thrown out of `plan` above.
+    expect(stepCount(p)).toBe(2); // one field kernel, one apply
+  });
+
+  it("fuses a param variant onto a uniform slot", () => {
+    const p = plan(
+      [
+        member(
+          "setAttribute",
+          {
+            name: "h",
+            type: "f32",
+            tupleSize: 1,
+            value: field(noise({ from: "node", variant: { fn: "param", name: "v", value: 4 } })),
+          },
+          "sa",
+        ),
+      ],
+      32,
+    );
+    expect(p.members).toHaveLength(1);
+    // The value rides the step's const payload, exactly as any other
+    // param's does — one slot, four components, the variant in `x`.
+    expect(p.members[0].steps[0].consts).toEqual([4, 0, 0, 0]);
+  });
+});
+
 describe("resident run planning: attributeIs needs a geometry a plan does not have", () => {
   /** A cloud carrying a string column, which is the only thing this needs. */
   const STRING_LAYOUT: ResidentRunContext["attributes"] = {

@@ -973,17 +973,19 @@ pcg nodes pointGrid --json</code></pre></div>
       <dt>formatVersion</dt><dd>Always <code>1</code>.</dd>
       <dt>seed</dt><dd>Number. The graph seed; every node seed derives from it.</dd>
       <dt>meta</dt><dd>Optional <code>{ title, description, tags }</code>. The only place descriptive text belongs — there is no comment or annotation key. It is excluded from the content hash and does not bump the graph version, so retitling a graph cannot invalidate a cache.</dd>
+      <dt>params</dt><dd>Optional array of graph-scoped params, <code>{ name, value, min?, max?, description? }</code> each, in declaration order. One value declared once at the top level, read by name from any node's field expression as <code>{ "fn": "param", "name": "tubeRadius" }</code> with no inline <code>value</code> beside it — the shape for an authored quantity that occupies six nodes of one document. Binding happens at deserialize, by substitution into the expression, so the graph cooks byte-identically to one with the number written out in every reading slot. Written only when non-empty. See <a href="#params">One value, many nodes</a>.</dd>
       <dt>nodes</dt><dd>Array of <code>{ id, type, params }</code>. <code>id</code> is yours to choose and is what every error message and every introspection read will call the node. Omitted parameters take their schema defaults. A <code>subgraph</code> node additionally carries <em>either</em> a <code>subgraph: { graph, inputs, outputs, params }</code> payload — the inner graph recursively in this same format, plus the exposed pin mappings and param declarations — <em>or</em> a <code>ref</code> naming a registered primitive. The two are mutually exclusive, and no other node type may carry either.</dd>
       <dt>connections</dt><dd>Array of <code>{ from: [nodeId, outputPin], to: [nodeId, inputPin] }</code>. Order matters on <code>multi</code> inputs: it is part of determinism.</dd>
       <dt>outputs</dt><dd>Array of <code>{ id, pin, name }</code>. <code>name</code> becomes the key in <code>result.outputs</code>.</dd>
     </dl>
 
-    <p><strong>The format is closed, at every object position.</strong> An unrecognized key is an error, not something quietly ignored — inside the graph object, a node, a <code>subgraph</code> payload, a <code>ref</code>, a connection, a declared output, an exposed-pin or exposed-param declaration. This matters more to a generator than to a person, because the near-miss is the dangerous case: <code>"refs"</code> for <code>"ref"</code> under a lenient reader would have cooked as an ordinary subgraph node and reported success. The consequence is deliberate and permanent — a future format field arrives with a <code>formatVersion</code> bump, never by riding along unnoticed:</p>
+    <p><strong>The format is closed, at every object position.</strong> An unrecognized key is an error, not something quietly ignored — inside the graph object, a node, a <code>subgraph</code> payload, a <code>ref</code>, a connection, a declared output, an exposed-pin or exposed-param declaration. This matters more to a generator than to a person, because the near-miss is the dangerous case: <code>"refs"</code> for <code>"ref"</code> under a lenient reader would have cooked as an ordinary subgraph node and reported success. The consequence is deliberate and permanent — a future field an old reader could <em>misread</em> arrives with a <code>formatVersion</code> bump, never by riding along unnoticed:</p>
     <div class="codeblock"><pre><code>deserializeGraph: unknown key <span class="s">"notes"</span>; valid keys: formatVersion, seed, meta,
-nodes, connections, outputs. The format is closed — an unrecognized key is a typo,
-not an extension, so a future field arrives with a formatVersion bump. There is no
-annotation key: descriptive text belongs in the graph's <span class="s">"meta"</span> block
-({ title, description, tags })</code></pre></div>
+params, nodes, connections, outputs. The format is closed — an unrecognized
+key is a typo, not an extension, so a future field arrives with a formatVersion
+bump. There is no annotation key: descriptive text belongs in the graph's
+<span class="s">"meta"</span> block ({ title, description, tags })</code></pre></div>
+    <p>That is narrower than "a future format field", and the narrowing is the honest statement of what the rule protects. An added <em>key</em> is not the hazard it was written against: the list is closed, so an old reader meeting <code>params</code> refuses it by name rather than ignoring it, and nothing rides along. <code>meta</code> arrived that way, then the inline <code>value</code> on a <code>param</code> spec node, then <code>params</code> — all at format version 1. The bump is not free either: the subgraph content hash covers <code>formatVersion</code>, so moving it moves every pinned <code>ref</code> in the corpus. Spend it on a change to what an <em>existing</em> key means.</p>
 
     <h3>A complete working example</h3>
     <p>This document deserializes, cooks, and round-trips as written. It scatters two thousand points over a hundred-unit square, writes a normalized four-octave fBm into the <code>density</code> attribute, keeps points probabilistically against that density, and spawns the survivors.</p>
@@ -1041,6 +1043,45 @@ batch.transforms.length;     <span class="c">// 16608  (16 floats per instance, 
     </ul>
     <p>So the correct diffing strategy for an agent is: normalise both sides through one serialize before comparing. Comparing your hand-written emission against a serialize output will report differences that are not differences.</p>
 
+    <h3 id="params">One value, many nodes: graph-scoped params</h3>
+    <p>One authored quantity is rarely written once. A cable radius reaches three nodes, a truss half-width twenty slots across ten, and the document then holds twenty independent numbers that a person has to keep equal by hand. The top-level <code>params</code> array is where that quantity lives instead: declared once, read by name from any node's field expression.</p>
+    <div class="codeblock"><pre><code>{
+  <span class="s">"formatVersion"</span>: <span class="n">1</span>,
+  <span class="s">"seed"</span>: <span class="n">7</span>,
+  <span class="s">"params"</span>: [
+    { <span class="s">"name"</span>: <span class="s">"tubeRadius"</span>, <span class="s">"value"</span>: <span class="n">0.035</span>, <span class="s">"min"</span>: <span class="n">0.005</span>, <span class="s">"max"</span>: <span class="n">0.2</span>,
+      <span class="s">"description"</span>: <span class="s">"Radius of every tube in the rig, in metres."</span> }
+  ],
+  <span class="s">"nodes"</span>: [
+    { <span class="s">"id"</span>: <span class="s">"grid"</span>, <span class="s">"type"</span>: <span class="s">"pointGrid"</span>, <span class="s">"params"</span>: { <span class="s">"countX"</span>: <span class="n">8</span>, <span class="s">"countZ"</span>: <span class="n">8</span> } },
+
+    { <span class="s">"id"</span>: <span class="s">"thicken"</span>, <span class="s">"type"</span>: <span class="s">"transformPoints"</span>, <span class="s">"params"</span>: {
+        <span class="s">"scale"</span>: { <span class="s">"fn"</span>: <span class="s">"mul"</span>, <span class="s">"args"</span>: [{ <span class="s">"fn"</span>: <span class="s">"param"</span>, <span class="s">"name"</span>: <span class="s">"tubeRadius"</span> }, <span class="n">2</span>] } } },
+
+    { <span class="s">"id"</span>: <span class="s">"lift"</span>, <span class="s">"type"</span>: <span class="s">"transformPoints"</span>, <span class="s">"params"</span>: {
+        <span class="s">"translate"</span>: { <span class="s">"fn"</span>: <span class="s">"vec"</span>, <span class="s">"args"</span>: [<span class="n">0</span>, { <span class="s">"fn"</span>: <span class="s">"param"</span>, <span class="s">"name"</span>: <span class="s">"tubeRadius"</span> }, <span class="n">0</span>] } } }
+  ],
+  <span class="s">"connections"</span>: [
+    { <span class="s">"from"</span>: [<span class="s">"grid"</span>, <span class="s">"out"</span>],    <span class="s">"to"</span>: [<span class="s">"thicken"</span>, <span class="s">"in"</span>] },
+    { <span class="s">"from"</span>: [<span class="s">"thicken"</span>, <span class="s">"out"</span>], <span class="s">"to"</span>: [<span class="s">"lift"</span>, <span class="s">"in"</span>] }
+  ],
+  <span class="s">"outputs"</span>: [ { <span class="s">"id"</span>: <span class="s">"lift"</span>, <span class="s">"pin"</span>: <span class="s">"out"</span>, <span class="s">"name"</span>: <span class="s">"points"</span> } ]
+}</code></pre></div>
+    <p>A reading slot writes the reference and nothing else — <code>{ "fn": "param", "name": "tubeRadius" }</code>, with no <code>value</code> beside it. <strong>Binding happens at deserialize, by substitution into the expression</strong>, which is the same contract an exposed param has and the reason it is invisible to the cache in the right way: what comes back from <code>deserializeGraph</code> is an ordinary field with the number already inside it, so the declared graph cooks byte-identically to one with <code>0.035</code> written out in both slots. Cooking is untouched, and there is no per-cell or per-context channel through which two readers could see different values.</p>
+    <p><strong>Turning one re-keys exactly the readers.</strong> <code>graph.setGraphParam("tubeRadius", 0.05)</code> rebuilds every authored spec that names it; a non-reader's params are not touched, so its memo key does not move and the next cook serves it from cache. The declared <code>min</code>/<code>max</code> binds that write, componentwise — the graph enforces its own range, because a hoisted value has no spec of its own to be refused by and a knob free to write past its stated maximum would make the range a decoration.</p>
+    <p><strong>One name, one value.</strong> An inline <code>{ "fn": "param", "name": "tubeRadius", "value": 0.04 }</code> in a graph that declares <code>tubeRadius</code> is refused at deserialize, naming both sites and both fixes. It is not a precedence rule: a graph-scoped param is the same document as the expression reading it, so an always-overridden inline value is dead text and a second address for one number. The rule that a binder beats an inline value still holds where it was written for — a subgraph binding a body, which is two documents, and where the body must also stand alone.</p>
+    <p>The rest, briefly. <code>value</code> is a literal — a finite number or a non-empty array of them, never a spec and never a reference to another param. It is an array rather than an object so that a repeated name is detectable, since <code>JSON.parse</code> collapses duplicate object keys before any reader sees them. A <code>name</code> may not contain a <code>.</code> or start with <code>$</code>, because the address is <code>"$&lt;name&gt;"</code> — one segment and a sigil, colliding with neither <code>"&lt;node&gt;.&lt;param&gt;"</code> nor the sandbox's bare <code>"seed"</code>. A declared name nothing reads is legal and reported rather than refused (it is what a rename leaves behind; <code>pcg validate --params</code> prints it as <code>read by nothing</code>). And a subgraph payload's inner graph may not declare <code>params</code> at all: a body's names are bound by its wrapper's exposed params, which is the one binder it has, and a graph-scoped value reaches a body one hop at a time through the wrapper's own param slot.</p>
+    <p><code>describeGraphParams</code> publishes the graph-scoped rows first, in declaration order, each carrying the address of every slot that reads it:</p>
+    <div class="codeblock"><pre><code>pcg validate rig.json --params
+
+params:  12 addresses, 1 declared worth turning (*)
+  1 graph-scoped param first, addressed <span class="s">"$&lt;name&gt;"</span> — one value, every slot that reads the name
+  the graph's own seed is a knob too, addressed as <span class="s">"seed"</span> (currently 7)
+
+  *  $tubeRadius          f32   0.035    0.005..0.2  read by 2 slots: thicken.scale, lift.translate
+     grid.countX          i32   8        &gt;= 1
+     ...</code></pre></div>
+
     <h3>Referencing a primitive instead of writing one</h3>
     <p>Everything above assumes you are wiring node types by hand. Often you should not be. A <code>subgraph</code> node can name a registered primitive instead of carrying a payload, and then the whole recipe is <strong>one node</strong>:</p>
     <div class="codeblock"><pre><code>{ <span class="s">"id"</span>: <span class="s">"ground"</span>, <span class="s">"type"</span>: <span class="s">"subgraph"</span>,
@@ -1089,7 +1130,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 { <span class="s">"fn"</span>: <span class="s">"fraction"</span> }                              <span class="c">// index / (count - 1), [0, 1] inclusive</span>
 { <span class="s">"fn"</span>: <span class="s">"nodeSeed"</span> }                              <span class="c">// the cooking node's own seed, same on every element</span>
 { <span class="s">"fn"</span>: <span class="s">"randomField"</span>, <span class="s">"key"</span>: <span class="s">"species"</span> }            <span class="c">// per-element hash random in [0,1)</span>
-{ <span class="s">"fn"</span>: <span class="s">"param"</span>,       <span class="s">"name"</span>: <span class="s">"amplitude"</span> }         <span class="c">// the value bound to that name</span></code></pre></div>
+{ <span class="s">"fn"</span>: <span class="s">"param"</span>,       <span class="s">"name"</span>: <span class="s">"amplitude"</span> }         <span class="c">// bound by the graph's "params", or by a wrapper</span></code></pre></div>
     <p><code>attributeIs</code> is how a string attribute reaches a field, and it is a predicate rather than an accessor deliberately: a string column stores indices into a per-attribute table that clone, filter and merge rebuild, so one logical value sits at different indices in different cells of a partitioned world — a fn handing back the index would agree with itself everywhere until two cells disagreed. That same fact fixes the one rule worth memorising. <strong>A literal the geometry's table does not hold yields all zeros, not an error</strong>, because a cell holding no pines legitimately has no <code>"pine"</code> to find; the price is that a misspelled literal reads as "nothing matches" rather than as a mistake. Structural errors still throw — a missing attribute does, and so does a numeric one, naming <code>eq(attribute(name), value)</code> as the thing you meant.</p>
 
     <h4>Elementwise combinators — exact arity, scalars broadcast</h4>

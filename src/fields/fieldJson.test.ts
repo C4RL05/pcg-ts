@@ -1366,3 +1366,226 @@ describe("variation classification", () => {
     expect(fnVariation("notAFn")).toBeUndefined();
   });
 });
+
+/**
+ * `opts.seed`: an integer, or the one tagged form. The position is closed
+ * on purpose — a seed has no tolerance, so an arbitrary expression there
+ * would resolve to a different u32 on the GPU and cook a different noise
+ * — and every refusal has to say which of the two shapes was wanted,
+ * because an agent reading only the message has to be able to write the
+ * fix.
+ */
+describe("opts.seed — the node-seed ref", () => {
+  function seedSpec(seed: unknown): FieldSpec {
+    return { fn: "perlinNoise", opts: { seed, frequency: 0.045 } } as unknown as FieldSpec;
+  }
+
+  it("round-trips the tagged form unchanged", () => {
+    const spec = seedSpec({ from: "node", variant: 3 });
+    expect(fieldToJson(fieldFromJson(spec))).toEqual(spec);
+  });
+
+  it("round-trips a param variant, metadata intact", () => {
+    const spec: FieldSpec = {
+      fn: "fbm",
+      base: "perlinNoise",
+      opts: {
+        seed: {
+          from: "node",
+          variant: { fn: "param", name: "ridgeVariant", value: 4, min: 0, max: 16, description: "which draw" },
+        },
+        octaves: 3,
+      },
+    } as unknown as FieldSpec;
+    expect(fieldToJson(fieldFromJson(spec))).toEqual(spec);
+  });
+
+  it("an integer seed is untouched", () => {
+    const spec = seedSpec(12345);
+    expect(fieldToJson(fieldFromJson(spec))).toEqual(spec);
+  });
+
+  // `normalized` wraps the noise in a fresh field that has to be given a
+  // MIRRORED spec, so the ref has to survive that copy too.
+  it("round-trips under normalized: true", () => {
+    const spec = {
+      fn: "worleyNoise",
+      opts: { seed: { from: "node", variant: 2 }, output: "f2-f1", normalized: true },
+    } as unknown as FieldSpec;
+    expect(fieldToJson(fieldFromJson(spec))).toEqual(spec);
+  });
+
+  // Legal, and asserted as legal: the discriminator alone is a complete
+  // ref, and `variant` defaults to 0.
+  it("a ref with no variant parses, as variant 0", () => {
+    const field = fieldFromJson(seedSpec({ from: "node" }));
+    const ctx = testCloud();
+    expect(Array.from(evaluateField(field, ctx).data)).toEqual(
+      Array.from(evaluateField(fieldFromJson(seedSpec({ from: "node", variant: 0 })), ctx).data),
+    );
+  });
+
+  it("the variant is the number a param binds, not the one written in the node", () => {
+    const spec = seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 1 } });
+    const ctx = testCloud();
+    const bound = evaluateField(fieldFromJson(spec, { v: 9 }), ctx).data;
+    const literal = evaluateField(fieldFromJson(seedSpec({ from: "node", variant: 9 })), ctx).data;
+    expect(Array.from(bound)).toEqual(Array.from(literal));
+  });
+
+  it.each([
+    [1.5, /variant must be an integer, got 1\.5/],
+    [-1, /variant must be 0 or greater, got -1/],
+    [2 ** 24 + 1, /variant must be at most 16777216 \(2\^24\), got 16777217/],
+  ])("refuses a variant of %s", (variant, message) => {
+    expect(() => fieldFromJson(seedSpec({ from: "node", variant }))).toThrow(message);
+  });
+
+  it("refuses an unknown `from`", () => {
+    expect(() => fieldFromJson(seedSpec({ from: "cell", variant: 1 }))).toThrow(
+      /"from" must be "node", the one seed a noise can derive from today; got "cell"/,
+    );
+  });
+
+  it("refuses an unknown key inside the ref", () => {
+    expect(() => fieldFromJson(seedSpec({ from: "node", variant: 1, zeroAt: 40100 }))).toThrow(
+      /unknown key "zeroAt" in a node-seed ref/,
+    );
+  });
+
+  it("refuses a non-integer seed, naming both legal forms", () => {
+    expect(() => fieldFromJson(seedSpec(1.5))).toThrow(
+      /seed must be an integer, or the tagged form \{"from": "node", "variant": <integer 0 to 16777216>\}/,
+    );
+  });
+
+  it("refuses a spec at opts.seed", () => {
+    expect(() => fieldFromJson(seedSpec({ fn: "nodeSeed" }))).toThrow(
+      /unknown key "fn" in a node-seed ref/,
+    );
+  });
+
+  it("refuses a non-param spec at the variant", () => {
+    expect(() =>
+      fieldFromJson(seedSpec({ from: "node", variant: { fn: "mul", args: [{ fn: "nodeSeed" }, 3] } })),
+    ).toThrow(/variant takes an integer, or an inline \{"fn": "param"/);
+  });
+
+  it("refuses a Field bound to the variant", () => {
+    const spec = seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 1 } });
+    expect(() => fieldFromJson(spec, { v: perlinNoise({ seed: 1 }) })).toThrow(
+      /stands at a noise seed's variant and is bound to a Field/,
+    );
+  });
+
+  it("refuses a tuple bound to the variant", () => {
+    const spec = seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 1 } });
+    expect(() => fieldFromJson(spec, { v: [1, 2] })).toThrow(
+      /stands at a noise seed's variant and is a 2-tuple/,
+    );
+  });
+
+  // Unlike an ordinary param, there is no later moment to supply this
+  // one: the seed decides `Field.key`, which is fixed at construction.
+  it("refuses a variant param with neither a value nor a binding", () => {
+    expect(() => fieldFromJson(seedSpec({ from: "node", variant: { fn: "param", name: "v" } }))).toThrow(
+      /stands at a noise seed's variant with no "value" of its own and nothing bound to it/,
+    );
+  });
+
+  // Presence, not truthiness: an explicit undefined IS a binding, and
+  // falling back to the inline value would let a binder miss silently.
+  it("refuses a variant param bound to undefined rather than falling back", () => {
+    const spec = seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 1 } });
+    expect(() => fieldFromJson(spec, { v: undefined } as never)).toThrow(
+      /stands at a noise seed's variant and is bound to undefined/,
+    );
+  });
+
+  it("refuses an out-of-range param value", () => {
+    expect(() =>
+      fieldFromJson(seedSpec({ from: "node", variant: { fn: "param", name: "v", value: -3 } })),
+    ).toThrow(/variant must be 0 or greater, got -3/);
+  });
+
+  // The four walkers that route through `specChildren` all have to reach
+  // it: this is what allocates the uniform slot, reports the address to a
+  // panel, and recovers the value for the domain-constant rebuild.
+  it("a variant param is reachable to every spec walker", () => {
+    const spec = seedSpec({
+      from: "node",
+      variant: { fn: "param", name: "ridgeVariant", value: 4, min: 0, max: 16, description: "which draw" },
+    });
+    expect(paramNamesOf(spec)).toEqual(["ridgeVariant"]);
+    expect(unboundParamNamesOf(spec)).toEqual([]);
+    expect(inlineParamValuesOf(spec)).toEqual({ ridgeVariant: 4 });
+    expect(inlineParamMetaOf(spec)).toEqual({
+      ridgeVariant: { min: 0, max: 16, description: "which draw" },
+    });
+    // The field's OWN spec object, not `fieldToJson`'s defensive copy:
+    // the value rides a side table keyed on the node, and that is where
+    // the GPU's uniform filler and the fold both read it from.
+    const stamped = peekFieldSpec(fieldFromJson(spec)) as unknown as {
+      opts: { seed: { variant: FieldSpec } };
+    };
+    expect(paramValue(stamped.opts.seed.variant)).toBe(4);
+  });
+
+  it("a knob turn rewrites the variant and the field follows", () => {
+    const spec = seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 1 } });
+    const turned = withInlineParamValue(spec, "v", 9);
+    const ctx = testCloud();
+    expect(Array.from(evaluateField(fieldFromJson(turned), ctx).data)).toEqual(
+      Array.from(evaluateField(fieldFromJson(seedSpec({ from: "node", variant: 9 })), ctx).data),
+    );
+  });
+
+  // One kernel serves every variant, so the value-free rebuild that keys
+  // it must not carry the number — while an INTEGER variant is spec text
+  // and stays in the key, as it always has been.
+  it("the value-free rebuild drops a param variant and keeps a literal one", () => {
+    const paramSpec = seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 5 } });
+    expect(fieldFromJsonValueFree(paramSpec).key).toBe(
+      fieldFromJsonValueFree(seedSpec({ from: "node", variant: { fn: "param", name: "v", value: 6 } })).key,
+    );
+    expect(fieldFromJsonValueFree(seedSpec({ from: "node", variant: 5 })).key).not.toBe(
+      fieldFromJsonValueFree(seedSpec({ from: "node", variant: 6 })).key,
+    );
+  });
+});
+
+describe("opts.frequency stays a literal", () => {
+  // Rejected because it already exists: the sample point is
+  // `p * frequency + offset`, so scaling the POSITION computes the same
+  // point through the one option that does take a spec. The refusal has
+  // to say so — it is the answer, not a consolation.
+  it("names the position equivalent", () => {
+    expect(() =>
+      fieldFromJson({
+        fn: "perlinNoise",
+        opts: { frequency: { fn: "attribute", name: "density" } },
+      } as unknown as FieldSpec),
+    ).toThrow(
+      /frequency must be a finite number; it is not a field position[\s\S]*"position": \{"fn": "mul"/,
+    );
+  });
+
+  it("and the equivalent it names computes the same field", () => {
+    const ctx = testCloud();
+    const scaled = fieldFromJson({
+      fn: "perlinNoise",
+      opts: {
+        seed: 3,
+        position: { fn: "mul", args: [{ fn: "position" }, 0.25] },
+        frequency: 1,
+      },
+    } as unknown as FieldSpec);
+    const literal = fieldFromJson({
+      fn: "perlinNoise",
+      opts: { seed: 3, frequency: 0.25 },
+    } as unknown as FieldSpec);
+    const a = evaluateField(scaled, ctx).data;
+    const b = evaluateField(literal, ctx).data;
+    for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(b[i], 5);
+  });
+});

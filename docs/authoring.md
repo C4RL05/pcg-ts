@@ -29,6 +29,8 @@ A serialized graph is one JSON object (`SerializedGraph`):
 | --- | --- |
 | `formatVersion` | Always `1`. Other values are rejected with the supported version named. |
 | `seed` | Graph seed (finite number, used as u32). Every node's seed is `hashCombine(seed, hashString(nodeId))`. |
+| `params` | Optional. Graph-scoped params, in declaration order: `{ name, value, min?, max?, description? }` each. One value declared once, read by name from any node's field expression (see [Graph-scoped params](#one-value-many-nodes-graph-scoped-params)). Written only when non-empty, so a graph that declares none serializes exactly as it did before the key existed. |
+| `meta` | Optional `{ title, description, tags }` — the only place descriptive text belongs; there is no comment or annotation key. Excluded from the content hash, so retitling a graph invalidates nothing. |
 | `nodes` | Node instances. `id` must be unique and non-empty; `type` must be a registered node type; `params` maps param names to values. Omitted params take their schema defaults. A `subgraph` node additionally carries either a `subgraph` payload or a `ref` (below); no other node type may carry either. |
 | `connections` | Directed edges `from: [nodeId, outputPin]` to `to: [nodeId, inputPin]`. Pin kinds must be compatible (`any` matches everything); an input pin accepts one connection unless declared `multi`; cycles are rejected. |
 | `outputs` | Declared terminal outputs. Cooking pulls from these (and cooks only what they reach); `name` keys the collection in `CookResult.outputs`. |
@@ -52,6 +54,14 @@ valid:
   refused by name, with the reason: they are derived from the targets'
   registered schemas, not authored, so a declaration cannot claim a type
   or a field capability the inner params do not have
+- a `params` entry that repeats a name, holds anything but a finite
+  number or a non-empty array of them, states a value outside its own
+  declared `min`/`max`, or carries a name containing a `.` or starting
+  with `$` → refused, naming the index and the rule
+- an inline `{"fn": "param", "name": X, "value": …}` for a name the graph
+  declares in `params` → refused, naming both sites and both fixes
+- a `params` block on a subgraph payload's inner graph → refused, naming
+  the wrapper's exposed params as the right home
 
 The unknown-key rule is worth stating plainly, because **the format is
 closed**. Until v0.10 an unrecognized key was ignored, which is how `meta`
@@ -59,10 +69,23 @@ could be added in v0.9 and still be read by every earlier v1 reader. That
 leniency is spent: a reader that ignores what it does not recognize cannot
 tell a new field from a typo, and `"refs"` for `"ref"` would have cooked as
 an ordinary subgraph node — a near-miss, silently. The consequence is
-deliberate and permanent: **a future format field arrives with a
-`formatVersion` bump**, never by riding along unnoticed. There is no
-annotation or comment key either; descriptive text belongs in the `meta`
-block, or — for an exposed param — in its own `description`.
+deliberate and permanent: **a future field an old reader could MISREAD
+arrives with a `formatVersion` bump**, never by riding along unnoticed.
+
+That is narrower than "a future format field", and the narrowing is the
+honest statement of what the rule protects. An added KEY is not the hazard
+it was written against: the list is closed, so an old reader meeting
+`params` refuses it by name rather than ignoring it, and nothing rides
+along. `meta` arrived that way, then the inline `value` on a `param` spec
+node, then `params` — all at `formatVersion` 1. The bump is not free
+either. `hashableGraph` covers `formatVersion`, so moving it moves every
+subgraph content hash and breaks every pinned `ref`; spend it on a change
+to what an EXISTING key means, not on an addition the closed list already
+polices.
+
+There is no annotation or comment key either; descriptive text belongs in
+the `meta` block, in a graph param's own `description`, or — for an
+exposed param — in its own `description`.
 
 The rule holds at every object position, not only the outer ones, because
 a lenient nested object is the same near-miss one level down and the
@@ -591,9 +614,11 @@ is tunable standalone and still wrappable, and a wrapper that exposes
 
 That asymmetry is deliberate and worth stating: a name is
 SUBGRAPH-scoped when bound from outside — one exposed `freq` drives every
-body spec that mentions it — and NODE-scoped when written inline, each
-spec carrying its own. A binding belongs to the binder; a literal belongs
-to the expression.
+body spec that mentions it — NODE-scoped when written inline, each spec
+carrying its own, and GRAPH-scoped when the document's own `params` block
+declares it, one value reaching every slot in the graph that names it
+(below). A binding belongs to the binder; a literal belongs to the
+expression.
 
 The inline value is also the one binding that survives a save, for the
 plainest of reasons: it is written in the spec rather than beside it. A
@@ -666,6 +691,145 @@ One caveat rides along with it. A position field resolves to an f32
 column, so folding the scale in rounds one step earlier than
 `opts.frequency` does, which multiplies that same f32 position in f64.
 The two agree except at knife edges.
+
+#### One value, many nodes: graph-scoped params
+
+An inline value tunes one expression, and an exposed param tunes one
+wrapper's body. Neither reaches the case where one authored quantity —
+a cable radius, a truss half-width — is written into six nodes of the
+same document. For that the graph itself declares it, in an optional
+top-level `params` array, and every expression that names it reads that
+one value:
+
+```json
+{
+  "formatVersion": 1,
+  "seed": 7,
+  "params": [
+    {
+      "name": "tubeRadius",
+      "value": 0.035,
+      "min": 0.005,
+      "max": 0.2,
+      "description": "Radius of every tube in the rig, in metres."
+    }
+  ],
+  "nodes": [
+    { "id": "grid", "type": "pointGrid", "params": { "countX": 8, "countZ": 8 } },
+    { "id": "thicken", "type": "transformPoints",
+      "params": { "scale": { "fn": "mul", "args": [{ "fn": "param", "name": "tubeRadius" }, 2] } } },
+    { "id": "lift", "type": "transformPoints",
+      "params": { "translate": { "fn": "vec", "args": [0, { "fn": "param", "name": "tubeRadius" }, 0] } } }
+  ],
+  "connections": [
+    { "from": ["grid", "out"], "to": ["thicken", "in"] },
+    { "from": ["thicken", "out"], "to": ["lift", "in"] }
+  ],
+  "outputs": [{ "id": "lift", "pin": "out", "name": "points" }]
+}
+```
+
+A reading slot writes the reference and NOTHING else: `{"fn": "param",
+"name": "tubeRadius"}`, with no `value` beside it. The value lives in one
+place, which is the whole point.
+
+**Binding happens at deserialize, by substitution.** `deserializeGraph`
+turns the block into bindings and hands them to every `fieldFromJson`
+call it makes for a top-level node param, so the graph that comes back
+holds ordinary fields with the number already inside them. A declared
+`0.035` is therefore byte-identical to `0.035` written out in each of the
+two slots — same `Field.key`, same memo keys, same cooked bytes — which
+is the substitution contract stated a few paragraphs above, applied one
+scope wider. Cooking is untouched; there is no per-cook, per-cell or
+per-context step that could make two readers disagree.
+
+**Turning one re-keys exactly the readers.** `graph.setGraphParam("tubeRadius",
+0.05)` rebuilds every authored spec that names it and installs the result.
+A non-reader's params are not touched, so its hash does not move and the
+next cook serves it from cache; the readers recook because their
+`Field.key` moved, and whatever is downstream of them recooks as ordinary
+dataflow. The declared `min`/`max` binds that write: the GRAPH enforces
+its own range, componentwise, because a hoisted value has no spec of its
+own to be refused by and a knob free to write past its declared maximum
+would make the range a decoration rather than a rule. One slot shape is
+refused rather than rewritten: a field COMPOSED with the constructors
+around a spec — `mul(fieldFromJson({"fn": "param", "name": "lift"}), 3)` —
+cannot be rebuilt, so it would keep the value it was built with while
+every authored expression took the new one. `setGraphParam` names that
+slot and stops. Write it as one `fieldFromJson` spec instead.
+
+**One name, one value — shadowing is an error.** An inline
+`{"fn": "param", "name": "tubeRadius", "value": 0.04}` in a graph that
+declares `tubeRadius` is refused at deserialize, naming the node, the
+param, both numbers and both fixes. It is not a precedence rule, because
+a graph-scoped param is not "outer": it is the same document as the
+expression reading it, so the inline number could never be read and would
+publish a second address for one value where turning one of them does
+nothing. The rule that a binder beats an inline value still holds where
+it was written for — a subgraph binding a body, which is two documents
+and where the body must also stand alone.
+
+The rest of the rules, each with a reason:
+
+- **`value` is a literal**: a finite number, or a non-empty array of
+  them. Not a spec, and not a reference to another graph param — a value
+  that computes is a node, and params referring to params would need a
+  topological order and cycle detection for nobody who has asked. Write
+  the `mul` at the reading site, or declare both values.
+- **An array, not an object keyed by name.** `JSON.parse` collapses
+  duplicate object keys before any reader sees them; in an array a
+  repeated name is detectable, so it is detected and refused. The array
+  also fixes the display order.
+- **`name` may not contain a `.` or start with `$`.** A knob addresses a
+  graph param as `"$<name>"` and a node param as `"<node>.<param>"`, so a
+  dot would make the address ambiguous and a leading `$` would let `$$x`
+  exist.
+- **A declared name nothing reads is legal**, and reported rather than
+  refused: it is how a knob is staged before it is wired, and it is what
+  a rename leaves behind. `pcg validate <graph.json> --params` prints it
+  as `read by nothing`.
+- **A reference to a name nothing declares is unchanged**: it builds, and
+  refuses at evaluation, exactly as it does anywhere else.
+- **A subgraph payload's inner graph may not declare `params`.** A body's
+  names are bound by its wrapper's exposed params, which is the one
+  binder it has; two binders that can disagree is the failure the derived
+  reader check refuses one level up. A graph-scoped value still reaches a
+  body, one hop at a time: the wrapper's own param slot holds a field
+  built from `{"fn": "param", "name": …}`, the graph binds that at
+  deserialize, and the wrapper substitutes into the body at cook.
+- **The block is written only when non-empty**, so a graph that declares
+  none serializes exactly as it did before the key existed.
+- **It is not a per-cell channel.** A graph-scoped param is a property of
+  the graph, fixed before the first cell cooks and identical for every
+  cell — structurally so, since a value reaches an expression only by
+  being substituted when the field is built, and two cells holding
+  different values would hold different `Field.key`s. `ParamPatch` gains
+  no `$name` form; the seed remains the one graph-level value carried per
+  cell.
+
+The address is `"$<name>"` — one segment and a sigil, so it collides with
+neither `"<node>.<param>"` nor the sandbox's bare `"seed"`, and a graph
+param named `seed` is addressed `$seed` and is a different knob.
+`describeGraphParams` publishes the graph-scoped rows first, in
+declaration order, each carrying the `"<node>.<param>"` of every slot that
+reads it:
+
+```
+params:  12 addresses, 1 declared worth turning (*)
+  1 graph-scoped param first, addressed "$<name>" — one value, every slot that reads the name
+  the graph's own seed is a knob too, addressed as "seed" (currently 7)
+
+  *  $tubeRadius          f32   0.035    0.005..0.2  read by 2 slots: thicken.scale, lift.translate
+     grid.countX          i32   8        >= 1
+     ...
+```
+
+What a save writes back is the REFERENCE, not the value it was bound to:
+the declaration stays in `params` and each reading slot round-trips as
+`{"fn": "param", "name": "tubeRadius"}`. So the expression is still a
+`param` node everywhere that reads specs, and everything said above about
+one — its key, its GPU lowering — applies to a graph-scoped reference
+unchanged.
 
 ### Elementwise combinators
 
@@ -1081,6 +1245,19 @@ introspection API — preserving node caches that a rebuild through
   throw, listing what is declared). Node caches are untouched — an
   output changes what a cook pulls, not any memo key — so the next cook
   serves every unchanged node from cache.
+- `setGraphParam(name, value)` turns one graph-scoped param: it rebuilds
+  every authored field spec that reads the name and installs the result
+  with `setParam`. Readers recook, non-readers keep their caches, and the
+  declared `min`/`max` binds the write. The writes are LOUD — they bump
+  the version, because a streaming World reads that counter to tell a
+  user edit from its own per-cell binding, and a quiet write would leave
+  every stored cell serving the old value. `setGraphParams(list)` is the
+  declaration half: it records what the graph declares and pushes nothing
+  into the nodes (an expression is bound when it is BUILT, which is why
+  `deserializeGraph` calls it with the same values it bound the fields
+  with, and why it bumps no version on its own). `graphParams` reads the
+  list back, frozen. See
+  [Graph-scoped params](#one-value-many-nodes-graph-scoped-params).
 - `describe()` returns a frozen structural snapshot: nodes (`id`,
   derived `seed`, `defType`), connections, and declared outputs, in
   insertion order. `getParams(handle)` returns a frozen shallow copy of

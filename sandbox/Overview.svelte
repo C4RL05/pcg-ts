@@ -36,6 +36,7 @@
     knobValues,
     type GraphPanelSpec,
     type KnobPatch,
+    type KnobTarget,
     type KnobValues,
   } from "../shared/graphUi.js";
   import type { EditorController } from "./controller.js";
@@ -94,14 +95,20 @@
    * from ever being anybody's problem.
    */
   const targets = $derived(
-    new Map(
+    new Map<string, KnobTarget>(
       knobs.map((k) => [
         k.key,
-        {
-          node: k.node,
-          name: k.name,
-          ...(k.fieldParam !== undefined ? { fieldParam: k.fieldParam } : {}),
-        },
+        // `scope` travels with the parts. It is what decides which write a
+        // commit is, and a target rebuilt without it sends a graph-scoped
+        // value down the node path with no node id to write to.
+        k.scope === "graph"
+          ? { scope: "graph", name: k.name }
+          : {
+              scope: "node",
+              node: k.node,
+              name: k.name,
+              ...(k.fieldParam !== undefined ? { fieldParam: k.fieldParam } : {}),
+            },
       ]),
     ),
   );

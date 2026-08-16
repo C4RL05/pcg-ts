@@ -25,9 +25,11 @@
  *   exactly 0 on the first element and exactly 1 on the last (a lone
  *   element gives 0)
  * - `{ fn: "nodeSeed" }` — the cooking node's own seed (`ctx.seed`), the
- *   same number `randomField` hashes, constant over the domain. Fold it
- *   into a noise's `opts.position` to make a saved noise re-roll with the
- *   graph seed, which its literal `opts.seed` cannot
+ *   same number `randomField` hashes, constant over the domain. To make a
+ *   saved noise re-roll with the graph seed, write
+ *   `opts.seed: {from: "node", variant: N}` rather than folding this into
+ *   `opts.position`; the fold is what older graphs contain (see
+ *   {@link nodeSeed})
  * - `{ fn: "randomField", key?: 0 | "salt" }`
  * - `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4,
  *   description?: "..." }` — the value bound to that name, substituted at
@@ -51,6 +53,16 @@
  *   exact?: false } }`
  * - `{ fn: "fbm", base: "perlinNoise", opts?: { ...noise opts, octaves?,
  *   lacunarity?, gain? } }`
+ *
+ * `opts.seed` is an integer, or `{ from: "node", variant: 3 }` — the one
+ * non-numeric form, resolving to `hashCombine(the cooking node's seed,
+ * variant)` in u32 integer math, so a SAVED noise re-rolls with the
+ * graph's seed box instead of only its scatters moving. `variant` picks
+ * which independent draw off that node and may itself be an inline
+ * `param` (an integer knob, and the only spec admitted there). Every
+ * other noise option is a literal; `position` is the one that takes a
+ * field, and it is also how a per-element FREQUENCY is written —
+ * `{"position": mul(<pos>, F), "frequency": 1}` samples the same point.
  *
  * It lives in `src/fields` because a parsed spec IS a field, and nothing
  * about it is a node. The cost is that naming the noises means importing
@@ -131,11 +143,15 @@ import {
 import { NOISE_BASES, WORLEY_OUTPUTS } from "../noise/bases.js";
 import {
   type FbmOpts,
+  type NodeSeedRef,
   type NoiseOpts,
   type WorleyNoiseOpts,
   fbm,
   worleyNoise,
 } from "../noise/index.js";
+// By path, not through `src/noise/index.ts`: the range bound and the
+// discriminator are the parser's business, not the package's surface.
+import { MAX_SEED_VARIANT } from "../noise/util.js";
 
 /** Errors raised while converting fields to or from JSON specs. */
 export class FieldJsonError extends Error {
@@ -878,6 +894,171 @@ const NOISE_FACTORIES = NOISE_BASES;
 
 const NOISE_OPT_KEYS = ["seed", "frequency", "offset", "position", "normalized"] as const;
 
+/** Keys a node-seed ref may carry, for the unknown-key refusal. */
+const SEED_REF_KEYS = ["from", "variant"] as const;
+
+/**
+ * The two legal shapes of `opts.seed`, named together because every
+ * refusal in this position has to say which one the author wanted. An
+ * agent reading only the message must be able to write the fix.
+ */
+const SEED_FORMS =
+  "seed must be an integer, or the tagged form " +
+  `{"from": "node", "variant": <integer 0 to ${MAX_SEED_VARIANT}>} — which derives the seed as ` +
+  "hashCombine(the cooking node's own seed, variant), so the graph's seed box re-rolls this " +
+  "noise instead of moving only the scatters. `variant` picks WHICH independent draw off that " +
+  "node (it stands where the old literal seed stood) and defaults to 0";
+
+/**
+ * The integer a node-seed ref's `variant` stands for.
+ *
+ * A bare integer is part of the spec text, so it is baked into the kernel
+ * key and the WGSL. A `param` must not be: two bindings of one name
+ * produce the same spec text and therefore the same kernel key, so baking
+ * the value would serve the second binding a pipeline compiled for the
+ * first. It rides a uniform const slot like every other `param` instead,
+ * which is why the value-free rebuild reads 0 here — one kernel serves
+ * every variant.
+ *
+ * Resolution order is the `param` fn's own: an outer binding, then the
+ * node's inline value. A reference with neither is refused rather than
+ * defaulted, because unlike an ordinary param there is nowhere to defer
+ * to — the seed decides `Field.key`, which is fixed at construction.
+ */
+function parseSeedVariantParam(node: Record<string, unknown>, path: string): number {
+  const name = node.name;
+  if (typeof name !== "string" || name === "") {
+    fail(`${path}.name`, "param requires a non-empty string name");
+  }
+  if (name.includes(".")) {
+    fail(
+      `${path}.name`,
+      `param name ${JSON.stringify(name)} contains a "."; a knob addresses a field-spec param as ` +
+        `"<nodeId>.<paramKey>.<fieldParamName>", so a dot inside the name itself would split that ` +
+        "address in a place nothing can put back together — rename the param without a dot",
+    );
+  }
+  const inline = inlineParamValue(node, path);
+  checkInlineParamMeta(node, inline, path);
+  // Presence, not truthiness — the `param` fn's own rule. An explicit
+  // `{name: undefined}` IS a binding, and a wrong one; falling through to
+  // the inline value would let a binder silently miss and the graph cook
+  // a different noise than the one it asked for.
+  const bindings = currentBindings;
+  const isBound = bindings !== undefined && Object.hasOwn(bindings, name);
+  const bound = isBound ? bindings[name] : undefined;
+  if (isField(bound)) {
+    fail(
+      `${path}.name`,
+      `param ${JSON.stringify(name)} stands at a noise seed's variant and is bound to a Field. A ` +
+        "seed is resolved in u32 integer math with no float anywhere in it, so it has no " +
+        "per-element form — bind an integer, or drive what you meant to vary through " +
+        "opts.position instead",
+    );
+  }
+  // Value-free rebuild (`specKernelKey`): binding-free by construction,
+  // so the 0 stands for "whatever the slot will carry" and keeps the
+  // variant out of the kernel's identity.
+  if (!isBound && ignoreInlineValues) return 0;
+  const value = isBound ? bound : inline;
+  if (value === undefined) {
+    fail(
+      `${path}.value`,
+      `param ${JSON.stringify(name)} stands at a noise seed's variant ${
+        isBound
+          ? "and is bound to undefined"
+          : 'with no "value" of its own and nothing bound to it'
+      }. A seed is fixed when the field is built, so there is no later moment to supply it — ` +
+        'give the reference a "value", or bind the name to an integer',
+    );
+  }
+  if (typeof value !== "number") {
+    fail(
+      `${path}.value`,
+      `param ${JSON.stringify(name)} stands at a noise seed's variant and is ${
+        Array.isArray(value) ? `a ${value.length}-tuple` : describeValue(value)
+      }; ${SEED_FORMS}`,
+    );
+  }
+  checkSeedVariant(value, `${path}.value`);
+  return value;
+}
+
+/** The range rules `NodeSeedRef.variant` is parsed against, wherever it is written. */
+function checkSeedVariant(variant: number, path: string): void {
+  if (!Number.isInteger(variant)) {
+    fail(path, `variant must be an integer, got ${variant}; ${SEED_FORMS}`);
+  }
+  if (variant < 0) {
+    fail(
+      path,
+      `variant must be 0 or greater, got ${variant}. The derivation reads it as a u32 here and ` +
+        "may read it back through an f32 uniform slot on the GPU, where a negative conversion is " +
+        "not defined to agree — number the draws off a node from 0",
+    );
+  }
+  if (variant > MAX_SEED_VARIANT) {
+    fail(
+      path,
+      `variant must be at most ${MAX_SEED_VARIANT} (2^24), got ${variant}. Above that an f32 no ` +
+        "longer holds every integer, so the CPU and the GPU would derive different seeds. A " +
+        "variant is a slot number, not a seed",
+    );
+  }
+}
+
+/**
+ * `opts.seed`: an integer, unchanged and byte-identical, or the one
+ * tagged form. Nothing else — and deliberately not an arbitrary spec.
+ * A seed has no tolerance: a field column is f32, so a seed read through
+ * one arrives rounded to 24 bits, and a one-ULP disagreement in a seed is
+ * not a rounding error in the output but `hashCombine` avalanching to an
+ * unrelated u32 and the node cooking a different noise on the two paths.
+ * The safe subset is not checkable from the spec either — it depends on
+ * VALUES, which arrive at evaluation — so the position stays closed.
+ */
+function parseNoiseSeed(raw: unknown, path: string): number | NodeSeedRef {
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw)) fail(path, `${SEED_FORMS}; got ${raw}`);
+    return raw;
+  }
+  if (!isPlainObject(raw)) fail(path, `${SEED_FORMS}; got ${describeValue(raw)}`);
+  for (const key of Object.keys(raw)) {
+    if (!(SEED_REF_KEYS as readonly string[]).includes(key)) {
+      fail(path, `unknown key ${JSON.stringify(key)} in a node-seed ref; ${SEED_FORMS}`);
+    }
+  }
+  if (raw.from !== "node") {
+    fail(
+      `${path}.from`,
+      `"from" must be "node", the one seed a noise can derive from today; got ${
+        typeof raw.from === "string" ? JSON.stringify(raw.from) : describeValue(raw.from)
+      }`,
+    );
+  }
+  if (raw.variant === undefined) return { from: "node", variant: 0 };
+  if (typeof raw.variant === "number") {
+    checkSeedVariant(raw.variant, `${path}.variant`);
+    return { from: "node", variant: raw.variant };
+  }
+  if (isPlainObject(raw.variant)) {
+    if (raw.variant.fn !== "param") {
+      fail(
+        `${path}.variant`,
+        `variant takes an integer, or an inline {"fn": "param", "name": "...", "value": <integer>} ` +
+          `whose value is one — got ${
+            typeof raw.variant.fn === "string"
+              ? `a spec for ${JSON.stringify(raw.variant.fn)}`
+              : "an object with no fn"
+          }. No other expression is admitted in a seed: every field column is f32, so an ` +
+          "expression here would resolve to a different u32 on the GPU and cook a different noise",
+      );
+    }
+    return { from: "node", variant: parseSeedVariantParam(raw.variant, `${path}.variant`) };
+  }
+  fail(`${path}.variant`, `${SEED_FORMS}; got ${describeValue(raw.variant)}`);
+}
+
 function parseNoiseOpts(
   spec: Record<string, unknown>,
   path: string,
@@ -893,21 +1074,29 @@ function parseNoiseOpts(
     }
   }
   const opts: {
-    seed?: number;
+    seed?: number | NodeSeedRef;
     frequency?: number;
     offset?: readonly [number, number, number];
     position?: FieldLike;
     normalized?: boolean;
   } = {};
   if (rawOpts.seed !== undefined) {
-    if (typeof rawOpts.seed !== "number" || !Number.isInteger(rawOpts.seed)) {
-      fail(`${path}.opts.seed`, "seed must be an integer");
-    }
-    opts.seed = rawOpts.seed;
+    opts.seed = parseNoiseSeed(rawOpts.seed, `${path}.opts.seed`);
   }
   if (rawOpts.frequency !== undefined) {
     if (typeof rawOpts.frequency !== "number" || !Number.isFinite(rawOpts.frequency)) {
-      fail(`${path}.opts.frequency`, "frequency must be a finite number");
+      // The refusal names the equivalent because a field-valued frequency
+      // ALREADY EXISTS, spelled through the one option that takes a spec:
+      // the sample point is `p * frequency + offset`, so scaling the
+      // position computes the same point. fbm included — its per-octave
+      // `p * (frequency * lacunarity^o)` is `(p * F) * lacunarity^o`.
+      fail(
+        `${path}.opts.frequency`,
+        "frequency must be a finite number; it is not a field position. For a frequency that " +
+          'varies per element, scale the SAMPLE POSITION instead: {"position": {"fn": "mul", ' +
+          '"args": [{"fn": "position"}, <F>]}, "frequency": 1} samples exactly the same point, ' +
+          "and <F> there may be any expression — an attribute, a param, another noise",
+      );
     }
     opts.frequency = rawOpts.frequency;
   }

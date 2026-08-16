@@ -40,16 +40,45 @@ import {
   type ParamValue,
   describeSubgraphParams,
 } from "../graph/index.js";
+// By module: the scan is the graph layer's internal, and this is the
+// second caller of it rather than a new public surface.
+import { paramScan } from "../graph/paramScan.js";
 import { getNodeType, hasNodeType } from "./registry.js";
 
-/** One addressable param of a graph; see {@link describeGraphParams}. */
-export interface DescribedGraphParam {
-  /**
-   * The address: `"<node>.<param>"`, or `"<node>.<param>.<fieldParam>"`
-   * for a value written inside a field expression. A `param` name may not
-   * contain a "." (the grammar refuses one), so the split is unambiguous.
-   */
+/** What every addressable param carries, whatever its scope. */
+export interface DescribedParamBase {
+  /** The address a panel, a link or a CLI flag spells it with. */
   readonly key: string;
+  /**
+   * The registered schema, the wrapper's resolved one, or — for a value
+   * living inside an expression — one derived from the shape of the literal
+   * its author wrote plus whatever the `param` node declares about it.
+   */
+  readonly schema: ParamSchema;
+  /**
+   * The value the graph currently holds. Absent when a node param holds a
+   * Field: the value is then the expression, and what a knob turns is one
+   * of the `fieldParam` entries that follow it.
+   */
+  readonly value?: ParamValue;
+  /** Whether the param holds a Field rather than a plain value. */
+  readonly holdsField: boolean;
+  /**
+   * Whether someone DECLARED this one worth turning: a wrapper's exposed
+   * param, a literal an author named inside an expression, or a top-level
+   * declaration. A standard node's params are mostly wiring and report
+   * `false` — still addressable, just not self-nominated.
+   */
+  readonly exposed: boolean;
+}
+
+/**
+ * A param belonging to one node, addressed `"<node>.<param>"` or
+ * `"<node>.<param>.<fieldParam>"`. A `param` name may not contain a "."
+ * (the grammar refuses one), so the split is unambiguous.
+ */
+export interface DescribedNodeParam extends DescribedParamBase {
+  readonly scope: "node";
   /** Node instance holding it. */
   readonly node: string;
   /** The node's declared type, or `undefined` for a def carrying none. */
@@ -58,28 +87,32 @@ export interface DescribedGraphParam {
   readonly param: string;
   /** Name of the inline `param` node inside `param`'s field expression. */
   readonly fieldParam?: string;
-  /**
-   * The registered schema, the wrapper's resolved one, or — for a
-   * `fieldParam` — one derived from the shape of the literal its author
-   * wrote plus whatever the `param` node declares about it.
-   */
-  readonly schema: ParamSchema;
-  /**
-   * The value the graph currently holds. Absent when the node param holds
-   * a Field: the value is then the expression, and what a knob turns is
-   * one of the `fieldParam` entries that follow this one.
-   */
-  readonly value?: ParamValue;
-  /** Whether the node param holds a Field rather than a plain value. */
-  readonly holdsField: boolean;
-  /**
-   * Whether someone DECLARED this one worth turning: a wrapper's exposed
-   * param, or a literal an author named inside an expression. A standard
-   * node's params are mostly wiring and report `false` — still addressable,
-   * just not self-nominated.
-   */
-  readonly exposed: boolean;
 }
+
+/**
+ * A param belonging to the GRAPH: declared once at the top level, read by
+ * name from any node's expression, addressed `"$<name>"`. One segment and
+ * a sigil, so it collides with neither node shape nor with the sandbox's
+ * bare `"seed"` — and so its KIND is legible without the graph in hand,
+ * where a bare name is indistinguishable from a mistyped node id.
+ */
+export interface DescribedGraphScopedParam extends DescribedParamBase {
+  readonly scope: "graph";
+  /** The declared name, without the address's `$`. */
+  readonly name: string;
+  /** `"<node>.<param>"` of every slot whose expression reads this name. */
+  readonly readers: readonly string[];
+}
+
+/**
+ * One addressable param of a graph; see {@link describeGraphParams}.
+ *
+ * A UNION rather than one shape with optional fields, because a
+ * graph-scoped param has no node and a consumer reading `.node` as
+ * `undefined` would print a wrong address. Narrowing on `scope` makes each
+ * consumer decide what it shows for a knob belonging to no node.
+ */
+export type DescribedGraphParam = DescribedNodeParam | DescribedGraphScopedParam;
 
 /**
  * The `ParamSchema` an inline field param does not have, derived from the
@@ -102,12 +135,13 @@ export function inlineParamSchema(
   name: string,
   value: FieldBindingValue,
   meta?: InlineParamMeta,
+  origin = "inside this node's field expression",
 ): ParamSchema | undefined {
   // Addressed to whoever is looking at an undocumented knob, so it says
   // where the missing sentence goes rather than restating the mechanism.
   const description =
     meta?.description ??
-    `Inline value "${name}" inside this node's field expression. The graph says nothing else ` +
+    `Inline value "${name}" ${origin}. The graph says nothing else ` +
       'about it — write "description", "min" and "max" beside the value to say what turning it does.';
   const bounds = {
     ...(meta?.min !== undefined ? { min: meta.min } : {}),
@@ -125,7 +159,7 @@ function fieldParamsOf(
   type: string | undefined,
   param: string,
   value: unknown,
-): DescribedGraphParam[] {
+): DescribedNodeParam[] {
   if (!isField(value)) return [];
   // The non-throwing reader, and the uncopied one: a field built by
   // makeField carries no spec, and a param holding one is not an error
@@ -134,7 +168,7 @@ function fieldParamsOf(
   // would be one deep clone per field param in the graph, for nothing.
   const spec = peekFieldSpec(value);
   if (spec === undefined) return [];
-  const out: DescribedGraphParam[] = [];
+  const out: DescribedNodeParam[] = [];
   // Two reads of one walk's worth of information, kept apart because they
   // are two questions: what the value IS, and what the graph says about
   // it. The second is empty for every param authored before those keys
@@ -145,6 +179,7 @@ function fieldParamsOf(
     if (schema === undefined) continue;
     out.push({
       key: `${node}.${param}.${fieldParam}`,
+      scope: "node",
       node,
       type,
       param,
@@ -175,6 +210,11 @@ function fieldParamsOf(
  * nothing: its params exist, but with no schema to read there is nothing
  * true to say about them beyond their current values.
  *
+ * Graph-scoped params come FIRST, in declaration order, before any node.
+ * They are graph-level, like the seed, and a reader scanning the list wants
+ * the shared knobs at the top — a value read by ten nodes is not a property
+ * of whichever node happens to be first.
+ *
  * The graph's own `seed` is NOT in this list. It is a property of the
  * graph rather than of any node, it has no `<node>.<param>` address, and
  * every caller that offers it as a knob (the sandbox does, under the bare
@@ -182,6 +222,42 @@ function fieldParamsOf(
  */
 export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
   const out: DescribedGraphParam[] = [];
+  const declared = graph.graphParams;
+  if (declared.length > 0) {
+    // One walk answers "who reads this name", for every name at once. A
+    // declared-but-unread param reports an empty `readers`, which is the
+    // only way an author sees that a rename left a value stranded.
+    const readers = new Map<string, string[]>();
+    for (const ref of paramScan(graph).refs) {
+      for (const name of ref.names) {
+        let list = readers.get(name);
+        if (list === undefined) readers.set(name, (list = []));
+        list.push(`${ref.node}.${ref.param}`);
+      }
+    }
+    for (const param of declared) {
+      const schema = inlineParamSchema(
+        param.name,
+        param.value,
+        param,
+        `declared in the graph's "params" block`,
+      );
+      if (schema === undefined) continue;
+      out.push({
+        key: `$${param.name}`,
+        scope: "graph",
+        name: param.name,
+        readers: readers.get(param.name) ?? [],
+        schema,
+        value: typeof param.value === "number" ? param.value : [...param.value],
+        holdsField: false,
+        // A top-level declaration is an author saying this number is worth
+        // turning, which is the argument that makes an inline value
+        // `exposed` too.
+        exposed: true,
+      });
+    }
+  }
   for (const described of graph.describe().nodes) {
     const node = described.id;
     const type = described.defType;
@@ -210,6 +286,7 @@ export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
       const holdsField = isField(value);
       out.push({
         key: `${node}.${name}`,
+        scope: "node",
         node,
         type,
         param: name,
