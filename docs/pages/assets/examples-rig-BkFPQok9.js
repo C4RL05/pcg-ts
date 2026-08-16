@@ -1758,6 +1758,10 @@ var e=`{\r
         "cableRadius": {\r
           "fn": "param",\r
           "name": "cableRadius"\r
+        },\r
+        "halfWidth": {\r
+          "fn": "param",\r
+          "name": "trussHalfWidth"\r
         }\r
       },\r
       "subgraph": {\r
@@ -1929,8 +1933,11 @@ var e=`{\r
                                   "fn": "mul",\r
                                   "args": [\r
                                     {\r
-                                      "fn": "constant",\r
-                                      "value": 0.6010407640085654\r
+                                      "fn": "mul",\r
+                                      "args": [\r
+                                        { "fn": "param", "name": "halfWidth" },\r
+                                        1.4142135623730951\r
+                                      ]\r
                                     },\r
                                     {\r
                                       "fn": "add",\r
@@ -2112,8 +2119,11 @@ var e=`{\r
                                   "fn": "mul",\r
                                   "args": [\r
                                     {\r
-                                      "fn": "constant",\r
-                                      "value": 0.6010407640085654\r
+                                      "fn": "mul",\r
+                                      "args": [\r
+                                        { "fn": "param", "name": "halfWidth" },\r
+                                        1.4142135623730951\r
+                                      ]\r
                                     },\r
                                     {\r
                                       "fn": "add",\r
@@ -2472,6 +2482,14 @@ var e=`{\r
             "default": 0.035,\r
             "min": 0.005,\r
             "max": 0.2\r
+          },\r
+          {\r
+            "name": "halfWidth",\r
+            "targets": [],\r
+            "description": "Half the truss width, passed in from the outer graph so a wrap sits on the chords it is wrapping. NO TARGETS: the body's own expression reads the name, which is the only route a value has into a body — a body is bound by its wrapper and by nothing else, so the outer graph's \`params\` block cannot reach in here.",\r
+            "default": 0.425,\r
+            "min": 0.15,\r
+            "max": 1.2\r
           }\r
         ]\r
       }\r
