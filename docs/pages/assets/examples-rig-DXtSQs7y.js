@@ -1,4 +1,4 @@
-{
+var e=`{
   "_comment": "Panel spec — presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
   "sections": [
     {
@@ -34,7 +34,7 @@
         {
           "param": "spineWander.translate.variantUp",
           "label": "variant up",
-          "description": "Which of the up-and-down wanders, of the many the same noise holds. It is added to the node seed before the fold into `opts.position`, so it re-rolls THIS noise and nothing else — the seed box moves every noise at once, this moves one.",
+          "description": "Which of the up-and-down wanders, of the many the same noise holds. It is added to the node seed before the fold into \`opts.position\`, so it re-rolls THIS noise and nothing else — the seed box moves every noise at once, this moves one.",
           "min": 0,
           "max": 1,
           "step": 0.01
@@ -147,3 +147,4 @@
     }
   ]
 }
+`;export{e as default};

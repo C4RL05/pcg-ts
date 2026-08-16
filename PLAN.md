@@ -35,6 +35,73 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### The rig's gap list, 2026-08-16
+
+Ten things the rig wanted to say and could not, found by taking
+`graphs/examples-rig.json` through the four features that shipped
+because of its *previous* gap list. That loop is what the rig is for, so
+these are recorded as found rather than triaged into other sections.
+Nothing here is scheduled.
+
+Adopted in that pass: inline `param` values (three ways — the
+`spineWander` wrapper subgraph is gone, six noises gained an independent
+`variant`, and a frozen `constant 1` became a knob), `attributeIs` (part
+size now varies by kind), and `copyToPoints` `targetNames` (two
+`floor(index/N)` restatements of another node's count are gone).
+`mergePrimitives` did NOT fit and that is a result: every union in the rig
+happens BEFORE topology exists, so there is nothing to preserve — see
+gap 8, which is the reason.
+
+1. **`copyToPoints` will not write the target index.** Wanting "one chain
+   per anchor" cost a whole `setAttribute anchorId = index` node purely to
+   give `targetNames` something to carry. It already computes
+   `i = t*nS + s`; a `targetIndexAttr` param would hand that over.
+2. **`pointsToPath.groupAttr` requires whole numbers.** The natural key
+   `curveU` is already on the target and is rejected. Group identity is
+   usually a NAME, so this wants a string attribute too.
+3. **A noise's `opts.seed` / `opts.frequency` cannot hold a field spec.**
+   "Re-roll this noise, plus a variant" cost a 7-node fold, x2 branches x3
+   axes x6 noises — 36 copies of one idiom. Wants field-valued noise opts,
+   or one `{"fn":"seedOffset","scale":900,"variant":…}` node.
+4. **Renaming a node silently changes its geometry**, because `nodeSeed`
+   is `hash(graphSeed, nodeId)`. Re-zeroing the fold needed a throwaway
+   script emulating the library's staged f32 rounding. Wants a
+   zero-centred `nodeSeedOffset` needing no calibration, or `pcg`
+   printing derived node seeds.
+5. **An inline `param` cannot carry `min`/`max`/`step`/`description`, and
+   the subgraph form can. THIS IS A REGRESSION THIS WEEK'S WORK CAUSED**:
+   flattening `spineWander` moved three param descriptions out of the
+   graph and into a presentation-only panel file, where a graph opened
+   without its panel loses them. `PLAN-spec-params.md` decided the panel
+   was the right home for min/max; it did not notice that the subgraph
+   form kept them IN the graph. The fix is small — let the inline form
+   carry them too — and it should happen before more graphs are flattened.
+6. **No `switch` / `cases` over a string.** Three nested `lerp`s over
+   three `attributeIs` calls; a fifth kind means editing three axes. Worse,
+   a typo'd literal returns all-zeros silently, and the rig's fourth part
+   kind `clamp` ALREADY falls through unselected — verified: its instance
+   transforms are bit-identical before and after the change that was
+   supposed to resize it. Wants
+   `{"fn":"byAttribute","name":"part","cases":{…},"default":…}` with keys
+   validated against the string table.
+7. **No graph-scoped param.** "Cable radius" lives in three nodes and only
+   the panel's `also` knows they are one thing. Inline params are
+   node-scoped by design, so they cannot fix this. Wants a top-level
+   `params` block a node's field expression binds by name.
+8. **Point filters drop all topology**, which forces the
+   tag → `mergePoints` → regroup idiom throughout the rig, and is exactly
+   why `mergePrimitives` had nothing to preserve. Wants `topology: "keep"`
+   on `filterByAttribute` and friends, dropping only primitives that lose
+   points.
+9. **`attributeIs` disqualifies a fused GPU run** (`run-plan-failed`), so
+   adding string variation silently makes a node CPU-only. Known and
+   documented when it shipped; the rig is the first graph to pay it.
+   Wants the interned index lowered to a u32 device column.
+10. **No CLI listing of a graph's knob addresses.** Learning that
+    `spineWander.verticalAmplitude` had become
+    `spineWander.translate.verticalAmplitude` required launching a
+    browser. Wants `pcg validate --params`.
+
 **~~Primitive identity, so primitive-domain randomness stops being
 index-keyed.~~ SHIPPED 2026-08-16** — `primitiveIdentities` in
 `src/data/identity.ts`, folded order-independently from a primitive's own

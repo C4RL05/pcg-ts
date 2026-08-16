@@ -743,7 +743,7 @@
             "kind": "geometry",
             "tags": [],
             "counts": {
-              "point": 576,
+              "point": 6561,
               "vertex": 0,
               "primitive": 0,
               "detail": 1
@@ -762,14 +762,14 @@
             },
             "bounds": {
               "min": [
-                -23,
-                -3.5613,
-                -23
+                -10,
+                -4.909,
+                -10
               ],
               "max": [
-                23,
-                3.3205,
-                23
+                10,
+                5.1495,
+                10
               ]
             }
           }
@@ -2246,7 +2246,7 @@
                 "color:f32x4",
                 "seed:u32",
                 "cableU:f32",
-                "cableId:i32",
+                "anchorId:i32",
                 "normal:f32x3",
                 "uv:f32x2"
               ],

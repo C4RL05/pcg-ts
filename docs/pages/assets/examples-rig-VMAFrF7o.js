@@ -3,7 +3,7 @@ var e=`{
   "seed": 3,
   "meta": {
     "title": "a suspended rig, built from curves",
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander itself is a one-node subgraph, because the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are exposed params its body's field expression reads by name, and a param can only be declared on a wrapper: one of them reaches both noises at once, which is a control the panel would otherwise have to mirror. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut is tagged with a \`strutId\` before it is moved, the four are merged, and \`pointsToPath\` groups them back into four paths — the same idiom the frames, the chains and the fringe already use, and it leaves the chord radius a single knob rather than one knob mirrored into four. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: six of the eight fbm fields fold \`nodeSeed\` into \`opts.position\` as a bounded shift, so the spine takes a different wander and the clusters a different shape, rather than the same frozen field being walked over by points that moved. The shift is exactly zero at seed 3, so this file still cooks what it always cooked. The cable wraps are the deliberate exception: their body is a \`forEach\`, whose seed varies per item, and their wobble already re-rolls through \`randomField\`.",
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut is tagged with a \`strutId\` before it is moved, the four are merged, and \`pointsToPath\` groups them back into four paths — the same idiom the frames use, and it leaves the chord radius a single knob rather than one knob mirrored into four. The chains and the fringe reach that same grouping from the other end: \`copyToPoints\` now carries the anchor's own \`anchorId\` onto every copy through \`targetNames\`, and \`pointsToPath\` groups by it. The id used to be recovered arithmetically instead — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the source strand's point count written out a second time, in another node, with nothing holding the two together. Editing the strand welded every chain into one path and said nothing. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: \`attributeIs\` reads the string \`part\` as a 0 or a 1 and blends on it, so a rod lengthens along the radius it points down, a bar along the chord it lies on, and a panel widens on both of its faces while staying slab-thin. Four kinds shared one shape law until a string could reach a field expression. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: six of the eight fbm fields fold \`nodeSeed\` into \`opts.position\` as a bounded shift, so the spine takes a different wander and the clusters a different shape, rather than the same frozen field being walked over by points that moved. Each of those six also carries a \`variant\` param of its own, an inline value added into the fold before it is scaled, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, so until a param could sit inside a plain node's expression the spine's two noises could only move together, and the four scalars this graph needed had to be folded into literal noise seeds before it was saved. Every variant defaults to 0, so the shift is still exactly zero at seed 3 and the spine is the spine this file has always cooked — the flattening moved the node's id, and with it the seed the fold is calibrated against, so the three constants that zero it were re-derived rather than left to drift. The cable wraps are the deliberate exception: their body is a \`forEach\`, whose seed varies per item, and their wobble already re-rolls through \`randomField\`.",
     "tags": [
       "examples",
       "curves",
@@ -34,185 +34,130 @@ var e=`{
     },
     {
       "id": "spineWander",
-      "type": "subgraph",
+      "type": "transformPoints",
       "params": {
-        "verticalAmplitude": 1.2,
-        "horizontalAmplitude": 2.4,
-        "wanderScale": 1
-      },
-      "subgraph": {
-        "graph": {
-          "formatVersion": 1,
-          "seed": 0,
-          "nodes": [
+        "translate": {
+          "fn": "vec",
+          "args": [
             {
-              "id": "wander",
-              "type": "transformPoints",
-              "params": {
-                "translate": {
-                  "fn": "vec",
-                  "args": [
-                    {
-                      "fn": "constant",
-                      "value": 0
-                    },
-                    {
-                      "fn": "mul",
-                      "args": [
-                        {
-                          "fn": "param",
-                          "name": "verticalAmplitude"
-                        },
-                        {
-                          "fn": "fbm",
-                          "base": "perlinNoise",
-                          "opts": {
-                            "seed": 4178438610,
-                            "frequency": 0.035,
-                            "position": {
-                              "fn": "add",
-                              "args": [
-                                {
-                                  "fn": "mul",
-                                  "args": [
-                                    {
-                                      "fn": "position"
-                                    },
-                                    {
-                                      "fn": "param",
-                                      "name": "wanderScale"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "fn": "vec",
-                                  "args": [
-                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.300842285] }, 900] },
-                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.391479492] }, 900] },
-                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.718261719] }, 900] }
-                                  ]
-                                }
-                              ]
-                            },
-                            "offset": [
-                              0,
-                              0,
-                              0
-                            ],
-                            "octaves": 3,
-                            "lacunarity": 2,
-                            "gain": 0.5
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "fn": "mul",
-                      "args": [
-                        {
-                          "fn": "param",
-                          "name": "horizontalAmplitude"
-                        },
-                        {
-                          "fn": "fbm",
-                          "base": "perlinNoise",
-                          "opts": {
-                            "seed": 2443226542,
-                            "frequency": 0.035,
-                            "position": {
-                              "fn": "add",
-                              "args": [
-                                {
-                                  "fn": "mul",
-                                  "args": [
-                                    {
-                                      "fn": "position"
-                                    },
-                                    {
-                                      "fn": "param",
-                                      "name": "wanderScale"
-                                    }
-                                  ]
-                                },
-                                {
-                                  "fn": "vec",
-                                  "args": [
-                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.391479492] }, 900] },
-                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.718261719] }, 900] },
-                                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.300842285] }, 900] }
-                                  ]
-                                }
-                              ]
-                            },
-                            "offset": [
-                              0,
-                              0,
-                              0
-                            ],
-                            "octaves": 3,
-                            "lacunarity": 2,
-                            "gain": 0.5
-                          }
-                        }
-                      ]
-                    }
-                  ]
+              "fn": "constant",
+              "value": 0
+            },
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "param",
+                  "name": "verticalAmplitude",
+                  "value": 1.2
                 },
-                "rotateEuler": [
-                  0,
-                  0,
-                  0
-                ],
-                "scale": [
-                  1,
-                  1,
-                  1
-                ]
-              }
+                {
+                  "fn": "fbm",
+                  "base": "perlinNoise",
+                  "opts": {
+                    "seed": 4178438610,
+                    "frequency": 0.035,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        {
+                          "fn": "mul",
+                          "args": [
+                            {
+                              "fn": "position"
+                            },
+                            {
+                              "fn": "param",
+                              "name": "wanderScale",
+                              "value": 1
+                            }
+                          ]
+                        },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 1021] }] }] }, 0.6426391602] }, 900] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 3067] }] }] }, 0.2977294922] }, 900] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 8191] }] }] }, 0.0173339844] }, 900] }
+                          ]
+                        }
+                      ]
+                    },
+                    "offset": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "octaves": 3,
+                    "lacunarity": 2,
+                    "gain": 0.5
+                  }
+                }
+              ]
+            },
+            {
+              "fn": "mul",
+              "args": [
+                {
+                  "fn": "param",
+                  "name": "horizontalAmplitude",
+                  "value": 2.4
+                },
+                {
+                  "fn": "fbm",
+                  "base": "perlinNoise",
+                  "opts": {
+                    "seed": 2443226542,
+                    "frequency": 0.035,
+                    "position": {
+                      "fn": "add",
+                      "args": [
+                        {
+                          "fn": "mul",
+                          "args": [
+                            {
+                              "fn": "position"
+                            },
+                            {
+                              "fn": "param",
+                              "name": "wanderScale",
+                              "value": 1
+                            }
+                          ]
+                        },
+                        {
+                          "fn": "vec",
+                          "args": [
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 3067] }] }] }, 0.2977294922] }, 900] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 8191] }] }] }, 0.0173339844] }, 900] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 1021] }] }] }, 0.6426391602] }, 900] }
+                          ]
+                        }
+                      ]
+                    },
+                    "offset": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "octaves": 3,
+                    "lacunarity": 2,
+                    "gain": 0.5
+                  }
+                }
+              ]
             }
-          ],
-          "connections": [],
-          "outputs": []
+          ]
         },
-        "inputs": [
-          {
-            "name": "in",
-            "node": "wander",
-            "pin": "in"
-          }
+        "rotateEuler": [
+          0,
+          0,
+          0
         ],
-        "outputs": [
-          {
-            "name": "out",
-            "node": "wander",
-            "pin": "out"
-          }
-        ],
-        "params": [
-          {
-            "name": "verticalAmplitude",
-            "targets": [],
-            "description": "How far the spine wanders up and down, in world units, multiplied into a perlin fBm that is already centred on zero — so 0 gives a straight spine. It writes into no inner param slot: the body's \`translate\` expression reads it by name, which is why its type comes from the shape of this default rather than from a target's schema.",
-            "default": 1.2,
-            "min": 0,
-            "max": 8
-          },
-          {
-            "name": "horizontalAmplitude",
-            "targets": [],
-            "description": "How far the spine wanders sideways over the same run, on its own noise seed, so the two axes drift independently instead of tracing one curve in a plane.",
-            "default": 2.4,
-            "min": 0,
-            "max": 12
-          },
-          {
-            "name": "wanderScale",
-            "targets": [],
-            "description": "Scales the position both noises are sampled at, so larger means a tighter, faster wander and 1 is the wander the graph was authored with. It is a MULTIPLIER rather than a frequency because that is what keeps the default exact: the base frequency stays in the noise, where it multiplies in f64, and x1.0 through the position column is the identity. Spelling it as an absolute frequency instead would fold the base into an f32 column and shift the spine by a last bit. This graph amplifies that: the swags are picked by an index-keyed random over edges whose ORDER a last-bit move can change, so 200 tube instances appear or vanish from a change of 1.9e-6 world units. A tunable frequency has to reach the position at all because \`opts.frequency\` is read as a plain number and cannot hold a field expression.",
-            "default": 1,
-            "min": 0.1,
-            "max": 8
-          }
+        "scale": [
+          1,
+          1,
+          1
         ]
       }
     },
@@ -1428,9 +1373,9 @@ var e=`{
                 {
                   "fn": "vec",
                   "args": [
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.0648269653] }, 2.5] },
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.660949707] }, 2.5] },
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.200744629] }, 2.5] }
+                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 1021] }] }] }, 0.0648269653] }, 2.5] },
+                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 3067] }] }] }, 0.660949707] }, 2.5] },
+                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 8191] }] }] }, 0.200744629] }, 2.5] }
                   ]
                 }
               ]
@@ -1780,24 +1725,18 @@ var e=`{
               "fn": "mul",
               "args": [
                 {
-                  "fn": "constant",
-                  "value": 1
+                  "fn": "mul",
+                  "args": [
+                    { "fn": "param", "name": "partScale", "value": 1 },
+                    { "fn": "lerp", "args": [0.55, 1.45, { "fn": "randomField", "key": "size" }] }
+                  ]
                 },
                 {
                   "fn": "lerp",
                   "args": [
-                    {
-                      "fn": "constant",
-                      "value": 0.55
-                    },
-                    {
-                      "fn": "constant",
-                      "value": 1.45
-                    },
-                    {
-                      "fn": "randomField",
-                      "key": "size"
-                    }
+                    1,
+                    { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] },
+                    { "fn": "attributeIs", "name": "part", "value": "panel" }
                   ]
                 }
               ]
@@ -1806,24 +1745,25 @@ var e=`{
               "fn": "mul",
               "args": [
                 {
-                  "fn": "constant",
-                  "value": 1
+                  "fn": "mul",
+                  "args": [
+                    { "fn": "param", "name": "partScale", "value": 1 },
+                    { "fn": "lerp", "args": [0.55, 1.45, { "fn": "randomField", "key": "size" }] }
+                  ]
                 },
                 {
                   "fn": "lerp",
                   "args": [
                     {
-                      "fn": "constant",
-                      "value": 0.55
+                      "fn": "lerp",
+                      "args": [
+                        1,
+                        { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] },
+                        { "fn": "attributeIs", "name": "part", "value": "rod" }
+                      ]
                     },
-                    {
-                      "fn": "constant",
-                      "value": 1.45
-                    },
-                    {
-                      "fn": "randomField",
-                      "key": "size"
-                    }
+                    0.7,
+                    { "fn": "attributeIs", "name": "part", "value": "panel" }
                   ]
                 }
               ]
@@ -1832,24 +1772,25 @@ var e=`{
               "fn": "mul",
               "args": [
                 {
-                  "fn": "constant",
-                  "value": 1
+                  "fn": "mul",
+                  "args": [
+                    { "fn": "param", "name": "partScale", "value": 1 },
+                    { "fn": "lerp", "args": [0.55, 1.45, { "fn": "randomField", "key": "size" }] }
+                  ]
                 },
                 {
                   "fn": "lerp",
                   "args": [
                     {
-                      "fn": "constant",
-                      "value": 0.55
+                      "fn": "lerp",
+                      "args": [
+                        1,
+                        { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] },
+                        { "fn": "attributeIs", "name": "part", "value": "bar" }
+                      ]
                     },
-                    {
-                      "fn": "constant",
-                      "value": 1.45
-                    },
-                    {
-                      "fn": "randomField",
-                      "key": "size"
-                    }
+                    { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] },
+                    { "fn": "attributeIs", "name": "part", "value": "panel" }
                   ]
                 }
               ]
@@ -2723,34 +2664,15 @@ var e=`{
       }
     },
     {
-      "id": "chainCopies",
-      "type": "copyToPoints",
-      "params": {}
-    },
-    {
-      "id": "chainChainId",
+      "id": "chainAnchorId",
       "type": "setAttribute",
       "params": {
-        "name": "chainId",
+        "name": "anchorId",
         "domain": "point",
         "type": "i32",
         "tupleSize": 1,
         "value": {
-          "fn": "floor",
-          "args": [
-            {
-              "fn": "div",
-              "args": [
-                {
-                  "fn": "index"
-                },
-                {
-                  "fn": "constant",
-                  "value": 35
-                }
-              ]
-            }
-          ]
+          "fn": "index"
         },
         "values": [],
         "stringValue": "",
@@ -2758,11 +2680,20 @@ var e=`{
       }
     },
     {
+      "id": "chainCopies",
+      "type": "copyToPoints",
+      "params": {
+        "targetNames": [
+          "anchorId"
+        ]
+      }
+    },
+    {
       "id": "chainChainPath",
       "type": "pointsToPath",
       "params": {
         "closed": false,
-        "groupAttr": "chainId",
+        "groupAttr": "anchorId",
         "orderAttr": ""
       }
     },
@@ -3114,38 +3045,28 @@ var e=`{
       }
     },
     {
-      "id": "danglerCopies",
-      "type": "copyToPoints",
-      "params": {}
-    },
-    {
-      "id": "danglerCableId",
+      "id": "danglerAnchorId",
       "type": "setAttribute",
       "params": {
-        "name": "cableId",
+        "name": "anchorId",
         "domain": "point",
         "type": "i32",
         "tupleSize": 1,
         "value": {
-          "fn": "floor",
-          "args": [
-            {
-              "fn": "div",
-              "args": [
-                {
-                  "fn": "index"
-                },
-                {
-                  "fn": "constant",
-                  "value": 17
-                }
-              ]
-            }
-          ]
+          "fn": "index"
         },
         "values": [],
         "stringValue": "",
         "seed": 0
+      }
+    },
+    {
+      "id": "danglerCopies",
+      "type": "copyToPoints",
+      "params": {
+        "targetNames": [
+          "anchorId"
+        ]
       }
     },
     {
@@ -3203,9 +3124,9 @@ var e=`{
                         {
                           "fn": "vec",
                           "args": [
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.51373291] }, 64] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.395263672] }, 64] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.520996094] }, 64] }
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 1021] }] }] }, 0.51373291] }, 64] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 3067] }] }] }, 0.395263672] }, 64] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 8191] }] }] }, 0.520996094] }, 64] }
                           ]
                         }
                       ]
@@ -3266,9 +3187,9 @@ var e=`{
                         {
                           "fn": "vec",
                           "args": [
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.395263672] }, 64] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.520996094] }, 64] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.51373291] }, 64] }
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 3067] }] }] }, 0.395263672] }, 64] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 8191] }] }] }, 0.520996094] }, 64] },
+                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 1021] }] }] }, 0.51373291] }, 64] }
                           ]
                         }
                       ]
@@ -3296,7 +3217,7 @@ var e=`{
       "type": "pointsToPath",
       "params": {
         "closed": false,
-        "groupAttr": "cableId",
+        "groupAttr": "anchorId",
         "orderAttr": ""
       }
     },
@@ -3420,9 +3341,9 @@ var e=`{
                                     {
                                       "fn": "vec",
                                       "args": [
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.0917510986] }, 500] },
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.761413574] }, 500] },
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.529418945] }, 500] }
+                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 1021] }] }] }, 0.0917510986] }, 500] },
+                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 3067] }] }] }, 0.761413574] }, 500] },
+                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 8191] }] }] }, 0.529418945] }, 500] }
                                       ]
                                     }
                                   ]
@@ -4107,6 +4028,16 @@ var e=`{
         "out"
       ],
       "to": [
+        "chainAnchorId",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "chainAnchorId",
+        "out"
+      ],
+      "to": [
         "chainReach",
         "in"
       ]
@@ -4134,16 +4065,6 @@ var e=`{
     {
       "from": [
         "chainCopies",
-        "out"
-      ],
-      "to": [
-        "chainChainId",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "chainChainId",
         "out"
       ],
       "to": [
@@ -4247,6 +4168,16 @@ var e=`{
         "out"
       ],
       "to": [
+        "danglerAnchorId",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "danglerAnchorId",
+        "out"
+      ],
+      "to": [
         "danglerCopies",
         "target"
       ]
@@ -4254,16 +4185,6 @@ var e=`{
     {
       "from": [
         "danglerCopies",
-        "out"
-      ],
-      "to": [
-        "danglerCableId",
-        "in"
-      ]
-    },
-    {
-      "from": [
-        "danglerCableId",
         "out"
       ],
       "to": [
