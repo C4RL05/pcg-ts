@@ -13,7 +13,12 @@
 import { describe, expect, it } from "vitest";
 import type { Field } from "pcg-ts";
 import { EditorController } from "../sandbox/controller.js";
-import { buildKnobPanel, type GraphPanelSpec, type Knob } from "../shared/graphUi.js";
+import {
+  buildKnobPanel,
+  knobTargets,
+  type GraphPanelSpec,
+  type Knob,
+} from "../shared/graphUi.js";
 
 /** Silent hooks: nothing here is looking at a render or a stats line. */
 const controller = (): EditorController =>
@@ -361,5 +366,86 @@ describe("the two mechanisms still compose", () => {
     expect(translate?.specText).toContain('"amplitude"');
     // And the live param really is a Field, not a folded constant.
     expect(byKey(c.knobs(), "dunes.translate")?.isField).toBe(true);
+  });
+});
+
+/**
+ * THE PANEL'S WRITE PATH, at the seam where the browser found two bugs the
+ * whole suite could not.
+ *
+ * `Overview.svelte` rebuilds a `KnobTarget` from a `Knob` to route a
+ * commit, and when `KnobTarget` gained `scope` that inline copy kept the
+ * old shape — every graph-scoped write went down the node path with an
+ * undefined node id. `tsc --noEmit` does not read `.svelte`, so 3880 tests
+ * passed and the panel was broken. The derivation moved into
+ * `shared/graphUi.ts` so it can be called from here; these tests are what
+ * that move bought.
+ */
+describe("knobTarget — the write half of a knob", () => {
+  it("carries scope, so a commit cannot take the wrong path", () => {
+    const c = controller();
+    c.importText(
+      JSON.stringify({
+        formatVersion: 1,
+        seed: 5,
+        params: [{ name: "lift", value: 2 }],
+        nodes: [
+          { id: "grid", type: "pointGrid", params: { countX: 3, countZ: 3 } },
+          {
+            id: "dunes",
+            type: "transformPoints",
+            params: {
+              translate: { fn: "mul", args: [{ fn: "position" }, { fn: "param", name: "lift" }] },
+            },
+          },
+        ],
+        connections: [{ from: ["grid", "out"], to: ["dunes", "in"] }],
+        outputs: [{ id: "dunes", pin: "out", name: "points" }],
+      }),
+    );
+    const targets = knobTargets(c.knobs());
+    // The graph-scoped one: a name and nothing else. A node id here would
+    // be a fabrication — the value belongs to no node.
+    expect(targets.get("$lift")).toEqual({ scope: "graph", name: "lift" });
+    // The node-scoped ones keep their parts, and every target is tagged.
+    expect(targets.get("grid.countX")).toEqual({
+      scope: "node",
+      node: "grid",
+      name: "countX",
+    });
+    for (const [key, target] of targets) {
+      expect(target.scope, key).toBe(key.startsWith("$") ? "graph" : "node");
+    }
+  });
+
+  it("routes a three-part key to the literal inside the expression", () => {
+    const c = controller();
+    c.importText(graphText());
+    expect(knobTargets(c.knobs()).get("dunes.translate.amplitude")).toEqual({
+      scope: "node",
+      node: "dunes",
+      name: "translate",
+      fieldParam: "amplitude",
+    });
+  });
+
+  it("every knob the panel shows has a target, which is what a commit needs", () => {
+    const c = controller();
+    c.importText(graphText());
+    const knobs = c.knobs();
+    const targets = knobTargets(knobs);
+    // The commit handler looks a key up and returns early when it misses,
+    // so a knob with no target is a row that silently does nothing. A
+    // `flags` control writes several keys and carries no single one, hence
+    // the two shapes rather than a cast.
+    for (const section of buildKnobPanel(knobs).sections) {
+      for (const control of section.controls) {
+        const keys =
+          "key" in control ? [control.key] : control.items.map((i) => i.key);
+        for (const key of keys) {
+          expect(targets.has(String(key)), String(key)).toBe(true);
+        }
+      }
+    }
   });
 });

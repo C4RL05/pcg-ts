@@ -349,6 +349,36 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
 }
 
 /**
+ * The WRITE half of a knob: what a commit needs to find the slot, without
+ * the presentation half it does not.
+ *
+ * It lives here, in a plain module, rather than inside the panel component
+ * that consumes it — and the reason is a bug this file now exists to
+ * prevent. The panel used to rebuild this object inline in `.svelte`, and
+ * when `KnobTarget` gained `scope` the inline copy silently kept the old
+ * shape: every graph-scoped write went down the NODE path with an
+ * undefined node id. `tsc --noEmit` does not read `.svelte` files, so
+ * nothing caught it — 3880 tests passed and the panel was broken in the
+ * browser. Whatever a component derives from library types belongs where a
+ * test can call it and the compiler can check it.
+ */
+export function knobTarget(knob: Knob): KnobTarget {
+  return knob.scope === "graph"
+    ? { scope: "graph", name: knob.name }
+    : {
+        scope: "node",
+        node: knob.node,
+        name: knob.name,
+        ...(knob.fieldParam !== undefined ? { fieldParam: knob.fieldParam } : {}),
+      };
+}
+
+/** Key → the slot it writes, so no consumer re-splits a key. */
+export function knobTargets(knobs: readonly Knob[]): Map<string, KnobTarget> {
+  return new Map(knobs.map((k) => [k.key, knobTarget(k)]));
+}
+
+/**
  * Every knob's current value, whether or not a panel spec shows it.
  * The patch is computed against this rather than against the panel's own
  * values: a knob edited in the node inspector, or one the spec chose not

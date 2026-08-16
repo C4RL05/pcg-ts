@@ -33,10 +33,10 @@
   import {
     buildKnobPanel,
     knobPatch,
+    knobTargets,
     knobValues,
     type GraphPanelSpec,
     type KnobPatch,
-    type KnobTarget,
     type KnobValues,
   } from "../shared/graphUi.js";
   import type { EditorController } from "./controller.js";
@@ -93,25 +93,12 @@
    * parts once a knob reaches into a field spec, and the node id it starts
    * with may itself contain dots — carrying the parts is what keeps that
    * from ever being anybody's problem.
+   *
+   * Derived by the library module rather than rebuilt here, because this
+   * component rebuilt it inline once and dropped a field when the type
+   * gained one. Nothing in the build reads `.svelte`.
    */
-  const targets = $derived(
-    new Map<string, KnobTarget>(
-      knobs.map((k) => [
-        k.key,
-        // `scope` travels with the parts. It is what decides which write a
-        // commit is, and a target rebuilt without it sends a graph-scoped
-        // value down the node path with no node id to write to.
-        k.scope === "graph"
-          ? { scope: "graph", name: k.name }
-          : {
-              scope: "node",
-              node: k.node,
-              name: k.name,
-              ...(k.fieldParam !== undefined ? { fieldParam: k.fieldParam } : {}),
-            },
-      ]),
-    ),
-  );
+  const targets = $derived(knobTargets(knobs));
 
   /**
    * Merged rather than replaced. Swapping the whole record in invalidates
