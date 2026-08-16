@@ -27,7 +27,7 @@
   import type { CookPath } from "../shared/gpu.js";
   import type { GpuState } from "./main.js";
   import type { CookStatus, EditorController } from "./controller.js";
-  import { topoLayout } from "./layout.js";
+  import { autoLayout } from "./autoLayout.js";
   import {
     STARTER_GRAPH_TEXT,
     allocateId,
@@ -510,7 +510,7 @@
   function relayout(): void {
     // The row heights the boxes actually have — a column stacked on the
     // pre-preview height would tuck each box into the one below it.
-    topoLayout(
+    autoLayout(
       model.nodes,
       model.edges,
       new Map([...previews].map(([id, rows]) => [id, rows.length])),

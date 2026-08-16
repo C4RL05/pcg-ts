@@ -53,7 +53,7 @@ import {
 import { PARTIAL_FUSION } from "../shared/gpu.js";
 import type { Knob, KnobPatch, KnobTarget } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
-import { topoLayout } from "./layout.js";
+import { autoLayout } from "./autoLayout.js";
 import {
   nodeCategory,
   nodePinsForType,
@@ -830,7 +830,7 @@ export class EditorController {
     // mirror is live by now, so the preview rows can be counted here
     // rather than left for the editor to correct on the next relayout —
     // otherwise every imported graph opens with its columns overlapping.
-    topoLayout(
+    autoLayout(
       nodes,
       edges,
       new Map(nodes.map((n) => [n.id, paramPreviews(this.paramViews(n.id, n.type)).length])),
