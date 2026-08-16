@@ -7,12 +7,14 @@ import {
   type CookOptions,
   DOMAINS,
   type DataItem,
+  type DescribedGraphParam,
   type Domain,
   type Graph,
   type NodeDoneInfo,
   type NodeTypeInfo,
   type ParamSchema,
   cook,
+  describeGraphParams,
   describeSubgraphParams,
   deserializeGraph,
   getNodeType,
@@ -300,13 +302,50 @@ const fieldsCommand: Command = {
 // validate
 // ---------------------------------------------------------------------------
 
+/**
+ * One row of `--params`: the address, what it holds, and what the schema
+ * allows. Deliberately the same column vocabulary `pcg nodes` uses for a
+ * type's params — an agent reading one catalog and a person reading the
+ * other must not be told different things about the same param.
+ */
+function graphParamRow(p: DescribedGraphParam): string[] {
+  const { schema } = p;
+  const range =
+    schema.min !== undefined && schema.max !== undefined
+      ? `${schema.min}..${schema.max}`
+      : schema.min !== undefined
+        ? `>= ${schema.min}`
+        : schema.max !== undefined
+          ? `<= ${schema.max}`
+          : schema.enum !== undefined
+            ? schema.enum.join("|")
+            : "";
+  // A field-valued param holds an EXPRESSION, and the addresses that reach
+  // into it are the rows that follow this one. Everything else prints as
+  // JSON, clipped: one 300-entry `values` list would otherwise set the
+  // column width for the whole table and push the range off the screen.
+  const value = p.holdsField ? "(field)" : JSON.stringify(p.value);
+  return [
+    p.exposed ? "*" : "",
+    p.key,
+    schema.type,
+    value.length > 44 ? `${value.slice(0, 43)}…` : value,
+    range,
+  ];
+}
+
 const validateCommand: Command = {
   spec: {
     name: "validate",
     summary:
-      "Deserialize a graph file and report its structure. Exits nonzero with the library's own message when the graph is invalid.",
+      "Deserialize a graph file and report its structure. Exits nonzero with the library's own message when the graph is invalid. --params lists every addressable param, by the name a panel file or a shared link spells it with.",
     positionals: [GRAPH_ARG],
-    flags: {},
+    flags: {
+      params: {
+        kind: "boolean",
+        description: "list every addressable param, its value and its range",
+      },
+    },
   },
   run(args, io) {
     const { graph, path } = loadGraph(io, args.positional[0]);
@@ -334,6 +373,21 @@ const validateCommand: Command = {
         ? ["  (none declared — nothing to cook without --node)"]
         : table(description.outputs.map((o) => [o.name, `<- ${o.id}.${o.pin}`]))),
     );
+    const params = boolFlag(args, "params") ? describeGraphParams(graph) : undefined;
+    if (params !== undefined) {
+      const declared = params.filter((p) => p.exposed).length;
+      lines.push(
+        "",
+        `params:  ${plural(params.length, "address", "addresses")}, ${declared} declared worth turning (*)`,
+        `  the graph's own seed is a knob too, addressed as "seed" (currently ${graph.seed})`,
+        "",
+      );
+      lines.push(
+        ...(params.length === 0
+          ? ["  (none — every node here is paramless, or carries no registered schema)"]
+          : table(params.map(graphParamRow))),
+      );
+    }
     return Promise.resolve({
       text: lines.join("\n") + "\n",
       json: {
@@ -344,6 +398,7 @@ const validateCommand: Command = {
         nodes,
         connections: description.connections.map((c) => ({ from: c.from, to: c.to })),
         outputs: description.outputs.map((o) => ({ name: o.name, node: o.id, pin: o.pin })),
+        ...(params !== undefined ? { params } : {}),
       },
     });
   },

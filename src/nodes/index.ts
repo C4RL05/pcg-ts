@@ -36,6 +36,7 @@ export {
   type InlineParamMeta,
 } from "../fields/fieldJson.js";
 export * from "./subgraphParams.js";
+export * from "./graphParams.js";
 export * from "./serialize.js";
 // The factory only: `ITERATION_MODE`/`MAX_ITERATIONS` and the internals
 // beside it are this module's business, not the package's.

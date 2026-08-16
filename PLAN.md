@@ -139,10 +139,22 @@ gap 8, which is the reason.
    adding string variation silently makes a node CPU-only. Known and
    documented when it shipped; the rig is the first graph to pay it.
    Wants the interned index lowered to a u32 device column.
-10. **No CLI listing of a graph's knob addresses.** Learning that
-    `spineWander.verticalAmplitude` had become
-    `spineWander.translate.verticalAmplitude` required launching a
-    browser. Wants `pcg validate --params`.
+10. **~~No CLI listing of a graph's knob addresses.~~ SHIPPED
+    2026-08-16** as `pcg validate <graph.json> --params`, which prints
+    every address with its value and range and marks the ones an author
+    declared worth turning; `--json` emits the same list. The rig reports
+    301 addresses, 11 declared, and
+    `spineWander.translate.verticalAmplitude` — the address that cost a
+    browser launch to find — is one line of it.
+    **The listing is a LIBRARY function, not a CLI one, and that is the
+    part worth keeping.** `describeGraphParams(graph)` derives the
+    addresses, and the sandbox now builds its knobs from it rather than
+    from its own copy of the same rule. Two derivations of one address
+    was the real hazard: a panel file, a shared link and a command line
+    all spell a knob the same way, and the CLI answering differently from
+    the tool would be worse than not answering. `inlineParamSchema` moved
+    with it, so the schema a value inside a field spec gets is also
+    derived once.
 11. **~~`tests/graphs.golden.json` cannot see instance transforms.~~
     CLOSED 2026-08-16** — never an expressiveness gap like the ten above,
     a coverage one, found while fixing gap 6. The rig's `clamp` parts were

@@ -123,11 +123,40 @@ const ATTR_GRAPH = JSON.stringify({
   outputs: [{ id: "kind", pin: "out", name: "cloud" }],
 });
 
+/**
+ * A graph whose only interesting param is one nothing outside the field
+ * spec names: `lift`, an inline `param` carrying its own value, range and
+ * prose. Addressed `dunes.translate.lift` and reachable no other way.
+ */
+const KNOB_GRAPH = JSON.stringify({
+  formatVersion: 1,
+  seed: 5,
+  nodes: [
+    { id: "grid", type: "pointGrid", params: { countX: 3, countZ: 3 } },
+    {
+      id: "dunes",
+      type: "transformPoints",
+      params: {
+        translate: {
+          fn: "mul",
+          args: [
+            { fn: "position" },
+            { fn: "param", name: "lift", value: 2, min: 0, max: 9, description: "How high." },
+          ],
+        },
+      },
+    },
+  ],
+  connections: [{ from: ["grid", "out"], to: ["dunes", "in"] }],
+  outputs: [{ id: "dunes", pin: "out", name: "points" }],
+});
+
 const GRAPH = "/graphs/scatter.json";
 const ATTRS = "/graphs/attrs.json";
+const KNOBS = "/graphs/knobs.json";
 
 function withGraph(extra: Record<string, string> = {}): FakeIo {
-  return fakeIo({ [GRAPH]: SCATTER_GRAPH, [ATTRS]: ATTR_GRAPH, ...extra });
+  return fakeIo({ [GRAPH]: SCATTER_GRAPH, [ATTRS]: ATTR_GRAPH, [KNOBS]: KNOB_GRAPH, ...extra });
 }
 
 /** The one output line starting with `name`, whitespace and all. */
@@ -206,6 +235,46 @@ describe("pcg cli — validate", () => {
     expect(report.meta.tags).toEqual(["basics", "scatter"]);
     expect(report.nodes.map((n: { id: string }) => n.id)).toEqual(["scatter", "height", "keep"]);
     expect(report.outputs).toEqual([{ name: "points", node: "keep", pin: "out" }]);
+  });
+
+  it("--params prints the address of a value living inside a field spec", async () => {
+    const io = withGraph();
+    expect(await runCli(["validate", KNOBS, "--params"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    expect(text).toContain("params:  9 addresses, 1 declared worth turning (*)");
+    expect(text).toContain('addressed as "seed" (currently 5)');
+    // The three-part key is the whole point: nothing else in the library
+    // or the docs names `lift`, and finding it used to mean opening the
+    // graph in the sandbox and reading a label.
+    expect(lineFor(text, "*")).toMatch(/^\s+\*\s+dunes\.translate\.lift\s+f32\s+2\s+0\.\.9$/);
+    // Its container is listed too, and says it holds an expression rather
+    // than pretending to a value a knob could write.
+    expect(lineFor(text, "dunes.translate")).toMatch(/dunes\.translate\s+vec3\s+\(field\)$/);
+  });
+
+  it("--params is opt-in, and --json carries the same list", async () => {
+    const bare = withGraph();
+    expect(await runCli(["validate", KNOBS], bare.io)).toBe(EXIT_OK);
+    expect(bare.stdout()).not.toContain("params:");
+
+    const io = withGraph();
+    expect(await runCli(["validate", KNOBS, "--params", "--json"], io.io)).toBe(EXIT_OK);
+    const report = JSON.parse(io.stdout());
+    const lift = report.params.find((p: { key: string }) => p.key === "dunes.translate.lift");
+    expect(lift).toMatchObject({
+      node: "dunes",
+      type: "transformPoints",
+      param: "translate",
+      fieldParam: "lift",
+      value: 2,
+      exposed: true,
+      holdsField: false,
+      schema: { type: "f32", default: 2, description: "How high.", min: 0, max: 9 },
+    });
+    // No flag, no key — the terse report stays terse for an agent too.
+    const plain = withGraph();
+    expect(await runCli(["validate", KNOBS, "--json"], plain.io)).toBe(EXIT_OK);
+    expect(JSON.parse(plain.stdout()).params).toBeUndefined();
   });
 
   it("an invalid graph fails with the library's message, unparaphrased", async () => {
@@ -758,7 +827,7 @@ describe("pcg cli — the command line itself", () => {
     const blank = withGraph();
     expect(await runCli(["cook", GRAPH, "--out", "   "], blank.io)).toBe(EXIT_USAGE);
     expect(blank.stderr()).toContain('flag "--out" needs a non-empty value');
-    expect(Object.keys(blank.files)).toEqual([GRAPH, ATTRS]);
+    expect(Object.keys(blank.files)).toEqual([GRAPH, ATTRS, KNOBS]);
   });
 
   it("states the exit-code rule in the top-level help", async () => {

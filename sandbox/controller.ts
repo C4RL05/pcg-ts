@@ -18,6 +18,7 @@ import {
   Graph,
   cook,
   createGpuCookStats,
+  describeGraphParams,
   describeSubgraphPins,
   deserializeGraph,
   fieldFromJson,
@@ -26,8 +27,6 @@ import {
   getFieldSpec,
   getNodeType,
   getRegisteredSubgraph,
-  inlineParamMetaOf,
-  inlineParamValuesOf,
   isField,
   resolveExposedParam,
   serializeGraph,
@@ -37,11 +36,9 @@ import {
   type ExposedParam,
   type ExposedPin,
   type Field,
-  type FieldBindingValue,
   type FieldSpec,
   type GpuCookStats,
   type GpuFieldResolver,
-  type InlineParamMeta,
   type NodeHandle,
   type ParamSchema,
   type ParamValue,
@@ -209,103 +206,6 @@ export function clampToSchema(schema: ParamSchema, raw: number): number {
   if (schema.min !== undefined) v = Math.max(schema.min, v);
   if (schema.max !== undefined) v = Math.min(schema.max, v);
   return v;
-}
-
-/**
- * The `ParamSchema` a field-spec knob does not have, derived from the
- * shape of the literal its author wrote and from whatever the `param` node
- * says about it.
- *
- * A node param carries a registered schema; a `param` node inside a field
- * expression carries a name and a number. The value's shape is enough to
- * pick a widget — the same rule a targetless exposed param already uses to
- * type itself from its default — so a graph gets a working control with no
- * panel file at all.
- *
- * The range and the prose come from the node too when it declares them
- * (`min`, `max`, `description`), which is what puts them in the GRAPH: the
- * subgraph wrapper this form replaced declared a full schema inside the
- * graph, and a panel is one presentation of a graph rather than the place
- * its params are defined. A panel spec still refines all three, exactly as
- * it refines a registered schema's.
- *
- * A tuple the param vocabulary cannot name — 1 or 2 components, or more
- * than 4 — gets no schema and therefore no knob: the grammar accepts any
- * non-empty run of numbers, `ParamType` names only vec3 and vec4, and
- * inventing a type here would produce a widget writing values the panel
- * cannot read back.
- */
-function derivedFieldParamSchema(
-  name: string,
-  value: FieldBindingValue,
-  meta: InlineParamMeta | undefined,
-): ParamSchema | undefined {
-  // The fallback is addressed to whoever is looking at an undocumented
-  // knob, so it says where the missing sentence goes rather than restating
-  // the mechanism.
-  const description =
-    meta?.description ??
-    `Inline value "${name}" inside this node's field expression. The graph says nothing else ` +
-      'about it — write "description", "min" and "max" beside the value to say what turning it does.';
-  const bounds = {
-    ...(meta?.min !== undefined ? { min: meta.min } : {}),
-    ...(meta?.max !== undefined ? { max: meta.max } : {}),
-  };
-  if (typeof value === "number") return { type: "f32", default: value, description, ...bounds };
-  if (value.length === 3) return { type: "vec3", default: [...value], description, ...bounds };
-  if (value.length === 4) return { type: "vec4", default: [...value], description, ...bounds };
-  return undefined;
-}
-
-/**
- * The knobs hiding INSIDE one node param: every `param` node in the field
- * expression it holds that carries its own value.
- *
- * Only the ones with a value. A `{"fn":"param","name":"x"}` with none is
- * unbound — it refuses to evaluate, and standing alone that is an error
- * state rather than a control; inside a wrapper it is the wrapper's to
- * supply, and the wrapper's own exposed param is already a knob. Offering
- * a widget for either would write a literal where an author deliberately
- * left none.
- */
-function fieldSpecKnobs(
-  node: string,
-  nodeLabel: string,
-  name: string,
-  value: unknown,
-): Knob[] {
-  if (!isField(value)) return [];
-  // The non-throwing reader: a field built by makeField carries no spec,
-  // and a param that happens to hold one is not an error here.
-  const spec = getFieldSpec(value);
-  if (spec === undefined) return [];
-  const out: Knob[] = [];
-  // Two reads of one walk's worth of information, kept apart because they
-  // are two questions: what the knob's value IS, and what the graph says
-  // about it. The second is empty for every param authored before the keys
-  // existed, which is what makes them additive.
-  const meta = inlineParamMetaOf(spec);
-  for (const [fieldParam, inline] of Object.entries(inlineParamValuesOf(spec))) {
-    const schema = derivedFieldParamSchema(fieldParam, inline, meta[fieldParam]);
-    if (schema === undefined) continue;
-    out.push({
-      key: `${node}.${name}.${fieldParam}`,
-      node,
-      nodeLabel,
-      name,
-      fieldParam,
-      schema,
-      value: copyPlain(inline),
-      // The node param holds a Field; THIS knob holds the literal standing
-      // inside it, which is exactly the constant a widget can represent.
-      isField: false,
-      // An author who wrote a value into an expression decided that number
-      // was worth turning, the same declaration a wrapper makes by exposing
-      // a param — so a panel with no spec shows it.
-      exposed: true,
-    });
-  }
-  return out;
 }
 
 function copyPinViews(pins: { inputs: PinView[]; outputs: PinView[] }): {
@@ -538,64 +438,54 @@ export class EditorController {
   }
 
   /**
-   * Every param of every node, in node insertion order.
+   * Every param of every node, in node insertion order, as the panel's own
+   * vocabulary.
+   *
+   * The addresses, schemas and `exposed` flags are the LIBRARY's
+   * (`describeGraphParams`), not this editor's: a panel file, a shared link
+   * and `pcg validate --params` all have to spell a knob the same way, and
+   * two derivations of one address is how they would stop. What is added
+   * here is presentation the library has no business knowing — the node's
+   * label, which is the primitive's registered name rather than its type,
+   * and a live re-read of a field-valued param so the inspector has the
+   * Field itself.
    *
    * `exposed` separates the two kinds. A subgraph's exposed params are
    * knobs by construction — someone decided each was worth turning and
    * gave it a name at the primitive's level of abstraction — so a panel
-   * with nothing else to go on shows exactly those. A standard node's
+   * with nothing else to go on shows exactly those, along with every
+   * literal an author named inside a field expression. A standard node's
    * params are mostly wiring, and showing all of them by default would
    * bury the handful that matter; but a panel spec naming one knows what
    * it is asking for, so it gets it.
-   *
-   * `items` params are omitted throughout: they are runtime-injected
-   * DataItems, never serialized and never authored.
    */
   knobs(): Knob[] {
-    const out: Knob[] = [];
-    for (const n of this.mirror.describe().nodes) {
-      const view = this.subgraphs.get(n.id);
-      let rec: Readonly<Record<string, unknown>>;
-      try {
-        rec = this.mirror.getParams({ id: n.id } as NodeHandle<Record<string, unknown>>);
-      } catch {
-        continue; // node vanished between describe() and read
-      }
-      let entries: { name: string; schema: ParamSchema }[];
-      if (view !== undefined) {
-        entries = view.params.map((p) => ({ name: p.name, schema: p.schema }));
-      } else {
-        // An ad-hoc def can report a type string the registry never saw;
-        // `describe()` promises no lookup will succeed.
-        const type = n.defType;
-        if (type === undefined) continue;
-        try {
-          entries = Object.entries(getNodeType(type).info.params).map(([name, schema]) => ({
-            name,
-            schema,
-          }));
-        } catch {
-          continue;
-        }
-      }
-      const nodeLabel = view?.ref ?? n.defType ?? "";
-      for (const { name, schema } of entries) {
-        if (schema.type === "items") continue;
-        const value = rec[name];
-        out.push({
-          key: `${n.id}.${name}`,
-          node: n.id,
-          nodeLabel,
-          name,
-          schema,
-          value: copyPlain(value),
-          isField: isField(value),
-          exposed: view !== undefined,
-        });
-        for (const knob of fieldSpecKnobs(n.id, nodeLabel, name, value)) out.push(knob);
-      }
+    const labels = new Map(
+      this.mirror.describe().nodes.map((n) => [n.id, this.subgraphs.get(n.id)?.ref ?? n.defType ?? ""]),
+    );
+    return describeGraphParams(this.mirror).map((p) => ({
+      key: p.key,
+      node: p.node,
+      nodeLabel: labels.get(p.node) ?? "",
+      name: p.param,
+      ...(p.fieldParam !== undefined ? { fieldParam: p.fieldParam } : {}),
+      schema: p.schema,
+      // A field-valued param reports no plain value, and the inspector
+      // wants the Field itself — the panel never reads this one (it skips
+      // `isField` knobs), but the node editor does.
+      value: p.holdsField ? this.paramValue(p.node, p.param) : copyPlain(p.value),
+      isField: p.holdsField,
+      exposed: p.exposed,
+    }));
+  }
+
+  /** One live param value, or undefined if the node or param has gone. */
+  private paramValue(node: string, param: string): unknown {
+    try {
+      return this.mirror.getParams({ id: node } as NodeHandle<Record<string, unknown>>)[param];
+    } catch {
+      return undefined;
     }
-    return out;
   }
 
   /**

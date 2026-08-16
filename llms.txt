@@ -207,6 +207,26 @@ frozen snapshots with no mutation path that bypasses version bumps.
   `targets` are the `{ node, param }` slots the value is written into.
   Returns `undefined` for non-subgraph defs; throws when later edits
   removed a bound inner node or param.
+- `describeGraphParams(graph)` — every param of a graph that can be
+  addressed and turned, in node order: frozen-shape records of
+  `{ key, node, type, param, fieldParam?, schema, value?, holdsField,
+  exposed }`. `key` is `"<node>.<param>"`, or
+  `"<node>.<param>.<fieldParam>"` for a literal an author wrote INSIDE a
+  field expression (`{ "fn": "param", "name": …, "value": … }`) — the one
+  address no catalog can give you, since nothing outside the spec names
+  it. `value` is absent when the param holds a Field (the expression is
+  the value; the `fieldParam` rows that follow are what a knob turns),
+  and `schema` for a `fieldParam` is derived from the value's shape plus
+  whatever the `param` node declares (`min`, `max`, `description`).
+  `exposed` marks the ones an author declared worth turning — a
+  wrapper's exposed params and every inline field param — as against a
+  standard node's params, which are addressable but mostly wiring.
+  `items` params and nodes with no registered schema are omitted; the
+  graph's own seed is not a node param and is not in the list. The
+  sandbox builds its knobs from this, so a panel file, a shared link and
+  the CLI cannot disagree about what a param is called. From the command
+  line: `pcg validate <graph.json> --params` (add `--json` for the same
+  list machine-readable).
 - `resolveExposedParam(inner, decl)` — build one exposed param for
   `subgraphNode`'s fourth argument. `decl` is
   `{ name, targets, description, default?, min?, max? }`; the schema is
