@@ -30,6 +30,9 @@
     onFrame,
     onCookPath,
     onShading,
+    legibility,
+    legibilityApplies,
+    onLegibility,
   }: {
     seed: number;
     status: CookStatus | null;
@@ -49,6 +52,11 @@
     host: { fps: string; drew: string; gpu: GpuState; shading: "lit" | "normals" };
     /** Choose how geometry is shaded. A redraw, not a recook. */
     onShading: (mode: "lit" | "normals") => void;
+    /** How far the render is pushed back behind the graph, 0 to {@link LEGIBILITY_MAX}. */
+    legibility: number;
+    /** False outside the combined view, where the control does nothing. */
+    legibilityApplies: boolean;
+    onLegibility: (value: number) => void;
     /** Choose the cook path. The graph is unchanged; only how it cooks moves. */
     onCookPath: (path: CookPath) => void;
     /** Frame every node in the canvas, at whatever zoom that takes. */
@@ -63,6 +71,45 @@
 
   const byGroup = $derived(
     PRESET_GROUPS.map((group) => ({ group, items: PRESETS.filter((p) => p.group === group) })),
+  );
+
+  /**
+   * The top of the range, and it is not 1.
+   *
+   * At 1 the scrim IS the graph-only view, which the space bar already
+   * gives — so the last of the travel would spend itself reproducing a
+   * view rather than serving this one. What is left at 0.9 is a tenth of
+   * the render: enough to see WHERE the content is while you read the
+   * wires over it, which is the only reason to be in the combined view at
+   * all.
+   *
+   * The number is measured, not chosen, and the CABLES set it: the node
+   * boxes are opaque #0e0e0e and read at every level, so they never were
+   * the constraint. Against the worst case the page can make — the rig
+   * under `normals`, in `scene + graph`: a dense multicoloured render at
+   * high spatial frequency — mean frame luminance falls 26.2 → 7.1 across
+   * the range, against 5.6 for the graph-only view. A wire is half
+   * traceable at 0.6, reliably traceable pin to pin from about 0.75, and
+   * at 0.9 it reads as it does with the scene gone entirely.
+   */
+  const LEGIBILITY_MAX = 0.9;
+
+  /**
+   * Leads with the name rather than the mechanism: a reader who hovered to
+   * ask "what is this" should have the answer in the first three words,
+   * not after a clause about scrims. The visible word is `read`, which
+   * says what it buys you; the tooltip is where the longer name and the
+   * caveat live.
+   */
+  const legibilityTitle = $derived(
+    legibilityApplies
+      ? "graph legibility — how far the scene is pushed back so the graph can be read over it. " +
+        "At 0 the render is untouched; by the top of the range a cable is traceable from its " +
+        "output pin to its input across a dense one. The node boxes were never the problem; " +
+        "the wires are. An overlay redraw: it changes nothing about the render, and nothing " +
+        "about the cook."
+      : "graph legibility — only in `scene + graph`. The scene view has no graph to read, and " +
+        "the graph view has no render left to push back.",
   );
 
   /**
@@ -246,6 +293,42 @@
         <option value="normals">normals</option>
       </select>
     </label>
+    <!-- Acts on the OVERLAY rather than on the render, and still belongs
+         in this group: what it changes is how much of the render reaches
+         the eye, which is the question the other three controls here ask.
+
+         Deliberately NOT a `.path`. That selector was ambiguous once
+         before, the day a second `.path` appeared, and the capture tooling
+         still drives `.path.shade select` and `.path.cook select` by
+         those two-class names. A range is also not `input[type="number"]`,
+         which the same script uses to find the seed box.
+
+         NAMED, like everything else on this bar. `graph`, `seed`, `view`,
+         `shade` and `cook` all wear their word, and a lone unlabelled
+         slider among them is a control you have to hover to identify —
+         discoverable only to someone who already knows it is there. The
+         word was briefly dropped to give the track 34 more pixels; the bar
+         measured the same height either way, so that bought nothing that
+         was scarce and cost the one thing that was.
+
+         A `label` wraps it, which also gives the word a click target. The
+         `title` sits on the LABEL rather than the input because a disabled
+         input dispatches no mouse events and shows no tooltip of its own —
+         and outside the combined view, the reason this does nothing is
+         exactly what a reader needs. -->
+    <label class="legibility" class:off={!legibilityApplies} title={legibilityTitle}>
+      read
+      <input
+        type="range"
+        min="0"
+        max={LEGIBILITY_MAX}
+        step="0.05"
+        value={legibility}
+        disabled={!legibilityApplies}
+        aria-label="how far the scene is pushed back so the graph can be read over it"
+        oninput={(e) => onLegibility(e.currentTarget.valueAsNumber)}
+      />
+    </label>
   </div>
 
   <!-- `cook` is the same kind of hook as `.shade` above: the capture
@@ -362,9 +445,29 @@
     max-width: none;
   }
   /* Dimmed rather than hidden while there is no device: the control has
-     to stay visible for its tooltip to carry the reason there is none. */
-  .path.off {
+     to stay visible for its tooltip to carry the reason there is none.
+     `legibility` outside the combined view is the same case, and it has a
+     second reason — the capture tooling cycles the view between shots, and
+     a control that came and went would reflow the bar underneath it. */
+  .path.off,
+  .legibility.off {
     opacity: 0.55;
+  }
+  /* Layout comes from the base `label` rule — flex, centred, a 6px gap and
+     the muted ink every other named control on this bar wears. Being a
+     `label` rather than a `span` is what earns that. */
+
+  /* Measured rather than chosen: the first row has 130px of slack at
+     1454px, the width the docs assets are shot at, and `cook` wraps to a
+     second row the moment this control plus its gap exceeds it. The word
+     costs 34 of those pixels, which leaves the track at 76 — wide enough
+     to aim at, and the constraint is the bar, not the aiming. A version
+     that dropped the word to buy the track 104px measured the same bar
+     height and cost the only thing that was actually scarce, which is a
+     reader knowing what the slider does without hovering it. */
+  .legibility input {
+    width: 76px;
+    accent-color: var(--sb-accent);
   }
   button {
     padding: var(--sb-btn-pad);

@@ -104,6 +104,34 @@
   const sceneHasPointer = $derived(shiftHeld && view.id === "both");
   let viewIndex = $state(1);
   const view = $derived(VIEWS[viewIndex]);
+
+  /**
+   * HOW FAR THE RENDER IS PUSHED BACK SO THE GRAPH CAN BE READ.
+   *
+   * The combined view is the only one where the two layers compete, and
+   * what loses is not the node boxes — their fill is opaque #0e0e0e, so a
+   * title and a param row stay readable over anything. It is the CABLES.
+   * A connection is a 1.6px curve at 55% over a 4px black casing, and
+   * against a dense high-frequency render (the rig under `normals` is the
+   * worst the page can produce) it is untraceable within about fifty
+   * pixels of the pin it leaves. Reading how nodes CONNECT is the whole
+   * point of the view, so a graph whose boxes all read and whose wires do
+   * not is still a lost view.
+   *
+   * Zero by default, which is what the combined view has always shown:
+   * the slider starts where the VIEWS table already put it, so nobody who
+   * never touches it sees a change.
+   */
+  let legibility = $state(0);
+  /** The combined view — the only one where the slider means anything. */
+  const combined = $derived(view.id === "both");
+  /**
+   * The view still decides the scrim everywhere else. `scene` has no graph
+   * to help and `graph` has nothing left to push back, so neither hands
+   * this over: it is one control for the one view that needs it, not a
+   * global brightness knob.
+   */
+  const scrimOpacity = $derived(combined ? legibility : view.scrim);
   /** Step is always ±1 — never wired straight to a click, whose event
       argument would land here as the step and make the index NaN. */
   function cycleView(step: 1 | -1 = 1): void {
@@ -660,8 +688,10 @@
 
 <!-- Behind the overlay, in front of the scene: how much of the render
      shows through is a property of the VIEW, not of the graph, so it is
-     one element rather than an opacity smeared over the editor's parts. -->
-<div class="scrim" style="opacity: {view.scrim}" aria-hidden="true"></div>
+     one element rather than an opacity smeared over the editor's parts.
+     In the combined view the reader sets it instead — see `legibility`,
+     which starts at the 0 the table already declared there. -->
+<div class="scrim" style="opacity: {scrimOpacity}" aria-hidden="true"></div>
 
 <div class="editor" class:collapsed class:bare={!view.graph}>
   <Toolbar
@@ -679,6 +709,9 @@
     onFrame={() => bridge.frame?.()}
     onCookPath={(p) => bridge.setCookPath?.(p)}
     onShading={(m) => bridge.setShading?.(m)}
+    {legibility}
+    legibilityApplies={combined}
+    onLegibility={(v) => (legibility = v)}
     viewLabel={view.label}
     onCycleView={() => cycleView()}
     {host}
@@ -782,7 +815,8 @@
   /**
    * A full-bleed overlay over the live render rather than a panel beside
    * it. Its parts carry their own backing; the space between them is the
-   * scene, dimmed by the scrim to whatever the current view asks for.
+   * scene, dimmed by the scrim to whatever the current view asks for — or,
+   * in the combined view, to whatever the reader asked for instead.
    */
   .editor {
     position: fixed;
