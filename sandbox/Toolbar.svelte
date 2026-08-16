@@ -104,9 +104,9 @@
   /**
    * Leads with the name rather than the mechanism: a reader who hovered to
    * ask "what is this" should have the answer in the first three words,
-   * not after a clause about scrims. The visible word is `read`, which
-   * says what it buys you; the tooltip is where the longer name and the
-   * caveat live.
+   * not after a clause about scrims. That matters more than it would
+   * otherwise, because this control carries no visible word — the tooltip
+   * and the `aria-label` are the only places it is named at all.
    */
   const legibilityTitle = $derived(
     legibilityApplies
@@ -251,7 +251,21 @@
     aria-expanded={!collapsed}
     onclick={onToggle}
     onkeydown={onTitleKeydown}
-  >sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
+  ><!-- The pcg-ts wordmark, inlined rather than linked. `docs/logo-dark.svg`
+       is the same artwork, but this page is served from two roots — the
+       vite dev server at the repository root and the built site under
+       `docs/pages/sandbox/` — so any src path is right in one and broken in
+       the other.
+
+       NOT in `icons.ts`: that module's contract is Phosphor bold in a
+       shared `0 0 256 256` box, and this is different provenance in a
+       1055x128 one. `currentColor` rather than the file's white, so the
+       mark and the word beside it are one colour decided in one place —
+       and so the light-theme variant is not a second asset to keep in
+       sync. -->
+    <svg class="mark" viewBox="0 0 1055 128" aria-hidden="true" focusable="false"
+      ><g fill="currentColor" fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg
+    >Sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
 
   <!-- Grouped by LAYER, with a hairline between groups. The two middle
        groups are the two things on screen — the render and the node
@@ -324,16 +338,38 @@
       onclick={() => onToggleLayer("scene")}
       title="scene — the render. Turning it off leaves the graph alone on screen, never nothing. Hold shift over `scene + graph` to fly the scene through the graph."
       >{@render icon(TOOLBAR_ICONS.scene)}</button>
-    <button onclick={onFrame} aria-label="frame" title="frame — point the camera at what the graph made (F) — done automatically whenever a graph loads"
+    <!-- Inert while the scene is hidden, like everything else in this
+         group: pointing a camera nobody can see is a control that appears
+         to do nothing, which is worse than one that says it does nothing.
+         Dimmed rather than removed, for the reason `.path.cook` is — the
+         tooltip has to stay reachable to explain the absence. -->
+    <button
+      class:off={!sceneOn}
+      disabled={!sceneOn}
+      onclick={onFrame}
+      aria-label="frame"
+      title={sceneOn
+        ? "frame — point the camera at what the graph made (F) — done automatically whenever a graph loads"
+        : "frame — only while the scene is on. There is no camera to point at anything you can see."}
       >{@render icon(TOOLBAR_ICONS.frame)}</button>
     <!-- `.shade` is not decoration: the capture tooling selects
          `.toolbar .path.shade select` to shoot the sandbox in both modes.
          Renaming it silently changes what ships in docs/; MOVING it does
          not, since that is a descendant selector and the bar is its
          ancestor either way. -->
-    <label class="path shade" title="how the geometry is shaded — normals read volume and overlap where a single key light flattens them into one silhouette. A redraw, not a recook; vertex colours only show under `lit`.">
-      shade
-      <select value={host.shading} onchange={(e) => onShading(e.currentTarget.value as "lit" | "normals")}>
+    <label
+      class="path shade"
+      class:off={!sceneOn}
+      title={sceneOn
+        ? "how the geometry is shaded — normals read volume and overlap where a single key light flattens them into one silhouette. A redraw, not a recook; vertex colours only show under `lit`."
+        : "shade — only while the scene is on. Nothing is being drawn for it to decide the look of."}
+    >
+      <select
+        value={host.shading}
+        disabled={!sceneOn}
+        aria-label="shade"
+        onchange={(e) => onShading(e.currentTarget.value as "lit" | "normals")}
+      >
         <option value="lit">lit</option>
         <option value="normals">normals</option>
       </select>
@@ -353,19 +389,16 @@
          `graph`, `seed`, `shade` and `cook` all wear their word — the
          icon buttons keep theirs in `title` and `aria-label` instead —
          and a lone unlabelled slider among them, with no glyph either, is
-         a control you have to hover to identify —
-         discoverable only to someone who already knows it is there. The
-         word was briefly dropped to give the track 34 more pixels; the bar
-         measured the same height either way, so that bought nothing that
-         was scarce and cost the one thing that was.
+         a control identified by its shape and its position rather than
+         by a word: the one slider on a bar of buttons and selects, sitting
+         with the controls that decide what the render looks like.
 
-         A `label` wraps it, which also gives the word a click target. The
-         `title` sits on the LABEL rather than the input because a disabled
-         input dispatches no mouse events and shows no tooltip of its own —
-         and outside the combined view, the reason this does nothing is
-         exactly what a reader needs. -->
+         The `title` sits on the WRAPPER rather than the input because a
+         disabled input dispatches no mouse events and shows no tooltip of
+         its own — and outside the combined view, the reason this does
+         nothing is exactly what a reader needs. With no text left to
+         label, the wrapper is kept for that alone. -->
     <label class="legibility" class:off={!legibilityApplies} title={legibilityTitle}>
-      read
       <input
         type="range"
         min="0"
@@ -394,11 +427,43 @@
       onclick={() => onToggleLayer("graph")}
       title="graph — the node canvas. Turning it off leaves the render alone on screen, never nothing. Space cycles the three views, shift-space goes back."
       >{@render icon(TOOLBAR_ICONS.graph)}</button>
-    <button onclick={onFit} aria-label="fit" title="fit — zoom out until every node is on screen, however small. The canvas pans with the right button and zooms on the wheel"
-      >{@render icon(TOOLBAR_ICONS.fit)}</button>
-    <button onclick={onActual} aria-label="100%, actual size" title="100% — actual size: back to 1:1, centred on the graph (ctrl+0) — the zoom a graph opens at whenever it fits there"
-      >{@render icon(TOOLBAR_ICONS.actual)}</button>
-    <button onclick={onLayout} aria-label="layout" title="layout — re-run the deterministic topological layout"
+    <!-- One pill, because these two are one question asked twice: what
+         zoom is the canvas at. `fit` takes whatever zoom shows everything
+         and `100%` takes exactly 1:1, so they are two answers to it and
+         not two separate actions — joining them says so before either
+         tooltip is read. Everything else in this group does something
+         other than zoom. -->
+    <!-- Inert while the canvas is hidden, the mirror of what `frame` and
+         `shade` do without the scene: zooming and relaying out something
+         nobody can see are controls that appear to do nothing. -->
+    <span class="pill">
+      <button
+        class:off={!graphOn}
+        disabled={!graphOn}
+        onclick={onFit}
+        aria-label="fit"
+        title={graphOn
+          ? "fit — zoom out until every node is on screen, however small. The canvas pans with the right button and zooms on the wheel"
+          : "fit — only while the graph is on. There is no canvas on screen to zoom."}
+        >{@render icon(TOOLBAR_ICONS.fit)}</button>
+      <button
+        class:off={!graphOn}
+        disabled={!graphOn}
+        onclick={onActual}
+        aria-label="100%, actual size"
+        title={graphOn
+          ? "100% — actual size: back to 1:1, centred on the graph (ctrl+0) — the zoom a graph opens at whenever it fits there"
+          : "100% — only while the graph is on. There is no canvas on screen to zoom."}
+        >{@render icon(TOOLBAR_ICONS.actual)}</button>
+    </span>
+    <button
+      class:off={!graphOn}
+      disabled={!graphOn}
+      onclick={onLayout}
+      aria-label="layout"
+      title={graphOn
+        ? "layout — re-run the deterministic topological layout"
+        : "layout — only while the graph is on. The nodes would be rearranged out of sight."}
       >{@render icon(TOOLBAR_ICONS.layout)}</button>
   </div>
 
@@ -472,7 +537,24 @@
     border-left: none;
     padding-left: 0;
   }
+  /* A WORDMARK, so height is the only dimension set and the 8.24:1 box
+     decides the rest — pinning a width would letterbox or stretch it.
+     11px rather than the title's own size: it reads as the product name
+     the page belongs to, with `sandbox` as the louder word for which page
+     that is, so the mark sits one step down rather than competing. */
+  .mark {
+    height: 11px;
+    width: auto;
+    flex: 0 0 auto;
+  }
   .title {
+    display: flex;
+    align-items: center;
+    /* Wider than the 6px the bar uses between siblings, because these two
+       are not siblings: the mark is a logotype and the word is a heading,
+       and set at a sibling's distance they read as one run of letters
+       rather than a product followed by which page of it you are on. */
+    gap: 12px;
     font-weight: 600;
     color: var(--sb-ink-hi);
     white-space: nowrap;
@@ -521,8 +603,40 @@
      second reason — the capture tooling cycles the view between shots, and
      a control that came and went would reflow the bar underneath it. */
   .path.off,
-  .legibility.off {
+  .legibility.off,
+  button.off {
     opacity: 0.55;
+  }
+  /* A disabled button keeps the arrow rather than showing the "not
+     allowed" slash: this is a control that is temporarily out of scope,
+     not one being refused, and the tooltip already says which. */
+  button:disabled {
+    cursor: default;
+  }
+  /* Two buttons reading as one control: the outer corners keep the shared
+     radius, the meeting edge loses its rounding, and the seam is ONE
+     border rather than two abutting ones — `margin-left: -1px` on the
+     second is what stops the join looking twice as heavy as every other
+     edge on the bar. The hovered half is raised above its neighbour so
+     its full outline draws over the shared seam rather than under it. */
+  .pill {
+    display: flex;
+  }
+  .pill button {
+    border-radius: 0;
+  }
+  .pill button:first-child {
+    border-top-left-radius: var(--sb-radius);
+    border-bottom-left-radius: var(--sb-radius);
+  }
+  .pill button:last-child {
+    border-top-right-radius: var(--sb-radius);
+    border-bottom-right-radius: var(--sb-radius);
+    margin-left: -1px;
+  }
+  .pill button:hover {
+    position: relative;
+    z-index: 1;
   }
   /* Layout comes from the base `label` rule — flex, centred, a 6px gap and
      the muted ink every other named control on this bar wears. Being a
@@ -535,12 +649,10 @@
      by the time the buttons wore words for the last time — measured on
      the shipped build. Icons gave those 196 back; the regrouping spent
      none of it, having moved controls between groups rather than adding
-     one. The word costs 34 pixels, which
-     leaves the track at 76 — wide enough to aim at, and the constraint is
-     the bar, not the aiming. A version that dropped the word to buy the
-     track 104px measured the same bar height and cost the only thing that
-     was actually scarce, which is a reader knowing what the slider does
-     without hovering it. */
+     one. 76px is what the track had while the word `read` sat in front of
+     it; the word is gone now and the width is simply left where it was,
+     because the slack is no longer the binding constraint and a wider
+     track was never the reason to drop it. */
   .legibility input {
     width: 76px;
     accent-color: var(--sb-accent);
@@ -601,13 +713,21 @@
     background: var(--sb-raised-hi);
   }
   /**
-   * The readouts. `flex: 1 1 100%` puts them on their own row under the
-   * controls at every width, which is what lets them be a table of pairs
-   * rather than a sentence squeezed into whatever the controls left over.
+   * The readouts. `flex-basis: auto` rather than `100%`, so they ride the
+   * SAME row as the controls whenever their natural width fits in what
+   * the controls left over, and take a row of their own when it does not.
+   * It used to be `1 1 100%`, which claims a whole line unconditionally —
+   * correct while the controls wore words and left 15px of slack, and
+   * simply wasteful now icons leave over 200.
+   *
+   * `flex-shrink: 0` is what makes the wrap CLEAN. Allowed to shrink, the
+   * readouts squeeze into the leftover space and then wrap internally,
+   * growing the bar to three lines rather than two; refusing to shrink
+   * means they either fit beside the controls or move down whole.
    */
   .status {
     display: flex;
-    flex: 1 1 100%;
+    flex: 1 0 auto;
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 2px 16px;

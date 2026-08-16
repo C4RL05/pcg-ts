@@ -127,23 +127,24 @@ export const TOOLBAR_ICONS = {
   // what the topological layout leaves behind.
   layout:
     "M160,116h48a20,20,0,0,0,20-20V48a20,20,0,0,0-20-20H160a20,20,0,0,0-20,20V60H128a28,28,0,0,0-28,28v28H76v-4A20,20,0,0,0,56,92H24A20,20,0,0,0,4,112v32a20,20,0,0,0,20,20H56a20,20,0,0,0,20-20v-4h24v28a28,28,0,0,0,28,28h12v12a20,20,0,0,0,20,20h48a20,20,0,0,0,20-20V160a20,20,0,0,0-20-20H160a20,20,0,0,0-20,20v12H128a4,4,0,0,1-4-4V88a4,4,0,0,1,4-4h12V96A20,20,0,0,0,160,116ZM52,140H28V116H52Zm112,24h40v40H164Zm0-112h40V92H164Z",
-  // magnifying-glass — zoom, and nothing narrower than that: the glyph
-  // says the control is about magnification and the NAME says which
-  // magnification, which is why `title` and `aria-label` both lead with
-  // `100%` rather than with a verb. It sits one button from `fit` in the
-  // same group, and those two are the same idea at two settings — 1:1
-  // against however small it takes to see everything — so the word is
-  // load-bearing here in a way it is not on, say, `layout`.
-  actual: "M232.49,215.51,185,168a92.12,92.12,0,1,0-17,17l47.53,47.54a12,12,0,0,0,17-17ZM44,112a68,68,0,1,1,68,68A68.07,68.07,0,0,1,44,112Z",
-  // frame-corners — a rectangle with its corners marked. Fit the view to
-  // the content: the mark every full-screen and zoom-to-fit control
-  // already wears.
+  // corners-out — four corner marks pushed apart, with nothing between
+  // them. Its pill-mate `fit` is four ARROWS driven outward: the same
+  // outward motion, one carrying arrowheads and one not, which is the
+  // difference between "as far as it takes" and a fixed 1:1. The glyphs
+  // are deliberately siblings because the two controls are one question
+  // asked twice; `title` and `aria-label` both lead with `100%` because
+  // that is the half a silhouette cannot say.
+  actual:
+    "M220,48V88a12,12,0,0,1-24,0V60H168a12,12,0,0,1,0-24h40A12,12,0,0,1,220,48ZM88,196H60V168a12,12,0,0,0-24,0v40a12,12,0,0,0,12,12H88a12,12,0,0,0,0-24Zm120-40a12,12,0,0,0-12,12v28H168a12,12,0,0,0,0,24h40a12,12,0,0,0,12-12V168A12,12,0,0,0,208,156ZM88,36H48A12,12,0,0,0,36,48V88a12,12,0,0,0,24,0V60H88a12,12,0,0,0,0-24Z",
+  // arrows-out — four arrows driven to the corners. Open the view out
+  // until everything fits, which is the motion rather than the frame it
+  // ends at.
   fit:
-    "M140,88a12,12,0,0,1,12-12h32a12,12,0,0,1,12,12v32a12,12,0,0,1-24,0V100H152A12,12,0,0,1,140,88ZM72,180h32a12,12,0,0,0,0-24H84V136a12,12,0,0,0-24,0v32A12,12,0,0,0,72,180ZM236,56V200a20,20,0,0,1-20,20H40a20,20,0,0,1-20-20V56A20,20,0,0,1,40,36H216A20,20,0,0,1,236,56Zm-24,4H44V196H212Z",
-  // cube-focus — the corner brackets again, with the geometry inside
-  // them. `fit` frames the CANVAS and this frames the SCENE, so they
-  // share the framing motif and differ in the subject: an empty
-  // rectangle against a cube. That is the pair readers get backwards.
+    "M220,48V96a12,12,0,0,1-24,0V77l-35.51,35.52a12,12,0,0,1-17-17L179,60H160a12,12,0,0,1,0-24h48A12,12,0,0,1,220,48ZM95.51,143.51,60,179V160a12,12,0,0,0-24,0v48a12,12,0,0,0,12,12H96a12,12,0,0,0,0-24H77l35.52-35.51a12,12,0,0,0-17-17ZM208,148a12,12,0,0,0-12,12v19l-35.51-35.52a12,12,0,0,0-17,17L179,196H160a12,12,0,0,0,0,24h48a12,12,0,0,0,12-12V160A12,12,0,0,0,208,148ZM77,60H96a12,12,0,0,0,0-24H48A12,12,0,0,0,36,48V96a12,12,0,0,0,24,0V77l35.51,35.52a12,12,0,0,0,17-17Z",
+  // cube-focus — corner brackets closing on the geometry inside them.
+  // `fit` opens the CANVAS out and this closes the SCENE camera in, which
+  // is the pair readers get backwards; they now differ in direction as
+  // well as subject, arrows driven outward against brackets drawn in.
   frame:
     "M236,48V88a12,12,0,0,1-24,0V60H184a12,12,0,0,1,0-24h40A12,12,0,0,1,236,48ZM72,196H44V168a12,12,0,0,0-24,0v40a12,12,0,0,0,12,12H72a12,12,0,0,0,0-24Zm152-40a12,12,0,0,0-12,12v28H184a12,12,0,0,0,0,24h40a12,12,0,0,0,12-12V168A12,12,0,0,0,224,156ZM32,100A12,12,0,0,0,44,88V60H72a12,12,0,0,0,0-24H32A12,12,0,0,0,20,48V88A12,12,0,0,0,32,100Zm158,70.42-56,32a12,12,0,0,1-11.9,0l-56-32A12,12,0,0,1,60,160V96a12,12,0,0,1,6-10.42l56-32a12,12,0,0,1,11.9,0l56,32A12,12,0,0,1,196,96v64A12,12,0,0,1,190,170.42ZM96.19,96,128,114.18,159.81,96,128,77.82ZM84,153l32,18.28V135L84,116.68Zm88,0V116.68L140,135v36.36Z",
   // cube — the render layer, and the same path the `source` category
