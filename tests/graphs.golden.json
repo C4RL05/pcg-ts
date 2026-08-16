@@ -2657,7 +2657,6 @@
                 "curveNormal:f32x3",
                 "curveBinormal:f32x3",
                 "stationId:i32",
-                "strutId:i32",
                 "normal:f32x3",
                 "uv:f32x2"
               ],
@@ -2847,7 +2846,6 @@
                 "curveNormal:f32x3",
                 "curveBinormal:f32x3",
                 "stationId:i32",
-                "strutId:i32",
                 "framePhase:f32",
                 "normal:f32x3",
                 "uv:f32x2"
@@ -3118,7 +3116,6 @@
                 "curveNormal:f32x3",
                 "curveBinormal:f32x3",
                 "stationId:i32",
-                "strutId:i32",
                 "normal:f32x3",
                 "uv:f32x2"
               ],
