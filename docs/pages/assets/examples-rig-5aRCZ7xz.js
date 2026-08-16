@@ -3,7 +3,7 @@ var e=`{\r
   "seed": 3,\r
   "meta": {\r
     "title": "a suspended rig, built from curves",\r
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Two numbers this graph reads over and over are declared once at the top, under \`params\`, and read by name from the expressions that need them: \`trussHalfWidth\` was eighteen literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2 — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe reach that same grouping from the other end: \`copyToPoints\` writes each copy's anchor index itself, through \`targetIndexAttr\`, and \`pointsToPath\` groups by it. Carrying it needed a \`setAttribute\` on the anchors first, writing an \`index\` field into a column whose only reader was \`targetNames\` — the node had already computed that index to place the copies, so both of those are gone. Before that the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the source strand's point count written out a second time, in another node, with nothing holding the two together. Editing the strand welded every chain into one path and said nothing. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: six of the eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. Each of those six carries its \`variant\` as an inline \`param\` of its own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The cable wraps are the deliberate exception: their body is a \`forEach\`, whose seed varies per item, and their wobble already re-rolls through \`randomField\`.",\r
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Six numbers this graph reads over and over are declared once at the top, under \`params\`, and read by name from the expressions that need them: \`trussHalfWidth\` was TWENTY literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2 — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. Four more say it about smaller things. \`braceRadius\` gangs the diagonal braces to the station frames, and it retired the last \`also\` row in the whole corpus: no fact about this graph's structure lives in a presentation file any more. \`stretchMin\` and \`stretchMax\` are the two ends of ONE draw that the component sizes write once per axis — \`lerp(0.55, 1.6, randomField(\\"stretch\\"))\`, four times over, for the rod, the bar and the panel's two faces — where how far a component may stretch is a single decision and eight literals were spelling it. \`bundles\` is the fringe's 7, read twice inside one expression: \`floor(u × 7)\` bins each strand and the \`/ 7\` puts the bin back in [0, 1), so the two have to agree, and until the number had a name nothing said so. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe reach that same grouping from the other end: \`copyToPoints\` writes each copy's anchor index itself, through \`targetIndexAttr\`, and \`pointsToPath\` groups by it. Carrying it needed a \`setAttribute\` on the anchors first, writing an \`index\` field into a column whose only reader was \`targetNames\` — the node had already computed that index to place the copies, so both of those are gone. Before that the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the source strand's point count written out a second time, in another node, with nothing holding the two together. Editing the strand welded every chain into one path and said nothing. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: all eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. The six outside the cable body each carry their \`variant\` as an inline \`param\` of their own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The last two are the cable wobble, inside the \`forEach\` body, and they were held back as the deliberate exception — the body's seed varies per item, so its wobble was said to re-roll already. That was true of the sample WINDOW and false of the FIELD. Freeze the four per-carrier picks and cook: on the old literal seed the sixteen cables come back as ONE geometry, on the node seed as sixteen. A body node's seed is hashed with the item's own key, so \`{ \\"from\\": \\"node\\" }\` there means per-cable, and what it replaced was a fourth pick — \`wofs\`, transferred onto the wrap and multiplied by 1000 — whose whole job was to walk one frozen field far enough sideways that no two cables sampled the same place. That pick and its transfer are gone with it: the body is eight nodes where it was ten. Variants 0 and 1 keep the wobble's two components apart, the one riding the curve normal and the one riding the binormal, which a single literal seed had collapsed into the same number twice.",\r
     "tags": [\r
       "examples",\r
       "curves",\r
@@ -26,7 +26,35 @@ var e=`{\r
       "value": 0.425,\r
       "min": 0.15,\r
       "max": 1.2,\r
-      "description": "Half the width of the box truss, in world units: the distance from the spine out to each chord. The four chords sit at ± this along the curve normal and binormal, and the diagonal braces and component mounts at this × √2 — eighteen readings of one number, previously written in four different float spellings of it, so this is the knob that sizes the truss."\r
+      "description": "Half the width of the box truss, in world units: the distance from the spine out to each chord. The four chords sit at ± this along the curve normal and binormal, and the diagonal braces and component mounts at this × √2 — twenty readings of one number, previously written in four different float spellings of it, so this is the knob that sizes the truss. Two of the twenty live inside the cable \`forEach\` body and reach it through the wrapper's own \`halfWidth\` param, because a body is bound by its wrapper and by nothing else — they were missed when the other eighteen were collapsed, and the cables sat inside the truss at any value but the default until they were plumbed through."\r
+    },\r
+    {\r
+      "name": "braceRadius",\r
+      "value": 0.03,\r
+      "min": 0.005,\r
+      "max": 0.12,\r
+      "description": "Radius of the diagonal braces and of the station frames, in world units — the truss's thinner tube, set against the chords' own. One value because they are one gauge of tube, which the graph had no way to say: the pairing lived in the corpus's only panel \`also\` row, in a presentation file, which is the wrong place for a fact about the graph."\r
+    },\r
+    {\r
+      "name": "stretchMin",\r
+      "value": 0.55,\r
+      "min": 0.1,\r
+      "max": 1,\r
+      "description": "The short end of the per-component stretch, as a multiple of the base size. Each kind stretches along the axis its own shape wants — a rod down the radius it points, a bar along the chord it lies on, a panel across both of its faces — but all four of those are the same draw, \`lerp($stretchMin, $stretchMax, randomField(\\"stretch\\"))\`, written once per axis. Lift this toward the max and the components go uniform."\r
+    },\r
+    {\r
+      "name": "stretchMax",\r
+      "value": 1.6,\r
+      "min": 1,\r
+      "max": 4,\r
+      "description": "The long end of that same draw, read at the same four sites. Two names rather than eight literals is the point: how far a component may stretch is ONE decision, and the rod, the bar and the panel's two axes have to agree on it or the parts stop reading as one kit."\r
+    },\r
+    {\r
+      "name": "bundles",\r
+      "value": 7,\r
+      "min": 1,\r
+      "max": 20,\r
+      "description": "How many bundles the fringe is gathered into. \`danglerBundling\` bins each strand's \`curveU\` with \`floor(u × $bundles)\` and then divides by the same number to put the bin back in [0, 1) — the two readings must agree, and until the number had a name nothing said so. Raise it for more and thinner tufts; at 1 the whole fringe gathers to one point. A whole number: \`floor\` makes a fraction mean a ragged last bundle."\r
     }\r
   ],\r
   "nodes": [\r
@@ -1141,7 +1169,10 @@ var e=`{\r
       "params": {\r
         "profile": "circle",\r
         "sides": 8,\r
-        "radius": 0.03,\r
+        "radius": {\r
+          "fn": "param",\r
+          "name": "braceRadius"\r
+        },\r
         "frame": "upHint",\r
         "up": [\r
           0,\r
@@ -1230,7 +1261,10 @@ var e=`{\r
       "params": {\r
         "profile": "circle",\r
         "sides": 8,\r
-        "radius": 0.03,\r
+        "radius": {\r
+          "fn": "param",\r
+          "name": "braceRadius"\r
+        },\r
         "frame": "upHint",\r
         "up": [\r
           0,\r
@@ -1669,9 +1703,9 @@ var e=`{\r
               "fn": "byAttribute",\r
               "name": "part",\r
               "cases": {\r
-                "rod": { "fn": "vec", "args": [1, { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] }, 1] },\r
-                "bar": { "fn": "vec", "args": [1, 1, { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] }] },\r
-                "panel": { "fn": "vec", "args": [{ "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] }, 0.7, { "fn": "lerp", "args": [0.55, 1.6, { "fn": "randomField", "key": "stretch" }] }] },\r
+                "rod": { "fn": "vec", "args": [1, { "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }, 1] },\r
+                "bar": { "fn": "vec", "args": [1, 1, { "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }] },\r
+                "panel": { "fn": "vec", "args": [{ "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }, 0.7, { "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }] },\r
                 "clamp": [1.25, 0.5, 1.25]\r
               },\r
               "default": 1\r
@@ -1821,23 +1855,6 @@ var e=`{\r
               }\r
             },\r
             {\r
-              "id": "wrapPick_wofs",\r
-              "type": "setAttribute",\r
-              "params": {\r
-                "name": "wofs",\r
-                "domain": "point",\r
-                "type": "f32",\r
-                "tupleSize": 1,\r
-                "value": {\r
-                  "fn": "randomField",\r
-                  "key": "wofs"\r
-                },\r
-                "values": [],\r
-                "stringValue": "",\r
-                "seed": 0\r
-              }\r
-            },\r
-            {\r
               "id": "wrapOnto_wphase",\r
               "type": "transferAttribute",\r
               "params": {\r
@@ -1880,25 +1897,6 @@ var e=`{\r
               "type": "transferAttribute",\r
               "params": {\r
                 "name": "wspread",\r
-                "mapping": "nearest",\r
-                "attrDomain": "point",\r
-                "uvAttr": "uv",\r
-                "direction": [\r
-                  0,\r
-                  -1,\r
-                  0\r
-                ],\r
-                "directionAttr": "",\r
-                "maxDistance": 0,\r
-                "missCountAttr": "",\r
-                "hitAttr": ""\r
-              }\r
-            },\r
-            {\r
-              "id": "wrapOnto_wofs",\r
-              "type": "transferAttribute",\r
-              "params": {\r
-                "name": "wofs",\r
                 "mapping": "nearest",\r
                 "attrDomain": "point",\r
                 "uvAttr": "uv",\r
@@ -1985,7 +1983,10 @@ var e=`{\r
                                       "fn": "fbm",\r
                                       "base": "perlinNoise",\r
                                       "opts": {\r
-                                        "seed": 2459580991,\r
+                                        "seed": {\r
+                                          "from": "node",\r
+                                          "variant": 0\r
+                                        },\r
                                         "frequency": 0.35,\r
                                         "offset": [\r
                                           0,\r
@@ -1993,39 +1994,7 @@ var e=`{\r
                                           0\r
                                         ],\r
                                         "position": {\r
-                                          "fn": "add",\r
-                                          "args": [\r
-                                            {\r
-                                              "fn": "position"\r
-                                            },\r
-                                            {\r
-                                              "fn": "vec",\r
-                                              "args": [\r
-                                                {\r
-                                                  "fn": "mul",\r
-                                                  "args": [\r
-                                                    {\r
-                                                      "fn": "attribute",\r
-                                                      "name": "wofs",\r
-                                                      "tupleSize": 1\r
-                                                    },\r
-                                                    {\r
-                                                      "fn": "constant",\r
-                                                      "value": 1000\r
-                                                    }\r
-                                                  ]\r
-                                                },\r
-                                                {\r
-                                                  "fn": "constant",\r
-                                                  "value": 0\r
-                                                },\r
-                                                {\r
-                                                  "fn": "constant",\r
-                                                  "value": 0\r
-                                                }\r
-                                              ]\r
-                                            }\r
-                                          ]\r
+                                          "fn": "position"\r
                                         },\r
                                         "octaves": 2,\r
                                         "lacunarity": 2,\r
@@ -2171,7 +2140,10 @@ var e=`{\r
                                       "fn": "fbm",\r
                                       "base": "perlinNoise",\r
                                       "opts": {\r
-                                        "seed": 2459580991,\r
+                                        "seed": {\r
+                                          "from": "node",\r
+                                          "variant": 1\r
+                                        },\r
                                         "frequency": 0.35,\r
                                         "offset": [\r
                                           0,\r
@@ -2179,39 +2151,7 @@ var e=`{\r
                                           0\r
                                         ],\r
                                         "position": {\r
-                                          "fn": "add",\r
-                                          "args": [\r
-                                            {\r
-                                              "fn": "position"\r
-                                            },\r
-                                            {\r
-                                              "fn": "vec",\r
-                                              "args": [\r
-                                                {\r
-                                                  "fn": "mul",\r
-                                                  "args": [\r
-                                                    {\r
-                                                      "fn": "attribute",\r
-                                                      "name": "wofs",\r
-                                                      "tupleSize": 1\r
-                                                    },\r
-                                                    {\r
-                                                      "fn": "constant",\r
-                                                      "value": 1000\r
-                                                    }\r
-                                                  ]\r
-                                                },\r
-                                                {\r
-                                                  "fn": "constant",\r
-                                                  "value": 0\r
-                                                },\r
-                                                {\r
-                                                  "fn": "constant",\r
-                                                  "value": 0\r
-                                                }\r
-                                              ]\r
-                                            }\r
-                                          ]\r
+                                          "fn": "position"\r
                                         },\r
                                         "octaves": 2,\r
                                         "lacunarity": 2,\r
@@ -2353,23 +2293,13 @@ var e=`{\r
                 "out"\r
               ],\r
               "to": [\r
-                "wrapPick_wofs",\r
-                "in"\r
-              ]\r
-            },\r
-            {\r
-              "from": [\r
-                "wrapPick_wofs",\r
-                "out"\r
-              ],\r
-              "to": [\r
                 "wrapOnto_wphase",\r
                 "source"\r
               ]\r
             },\r
             {\r
               "from": [\r
-                "wrapPick_wofs",\r
+                "wrapPick_wspread",\r
                 "out"\r
               ],\r
               "to": [\r
@@ -2389,7 +2319,7 @@ var e=`{\r
             },\r
             {\r
               "from": [\r
-                "wrapPick_wofs",\r
+                "wrapPick_wspread",\r
                 "out"\r
               ],\r
               "to": [\r
@@ -2409,27 +2339,7 @@ var e=`{\r
             },\r
             {\r
               "from": [\r
-                "wrapPick_wofs",\r
-                "out"\r
-              ],\r
-              "to": [\r
-                "wrapOnto_wofs",\r
-                "source"\r
-              ]\r
-            },\r
-            {\r
-              "from": [\r
                 "wrapOnto_wspread",\r
-                "out"\r
-              ],\r
-              "to": [\r
-                "wrapOnto_wofs",\r
-                "in"\r
-              ]\r
-            },\r
-            {\r
-              "from": [\r
-                "wrapOnto_wofs",\r
                 "out"\r
               ],\r
               "to": [\r
@@ -2850,8 +2760,8 @@ var e=`{\r
                               "tupleSize": 1\r
                             },\r
                             {\r
-                              "fn": "constant",\r
-                              "value": 7\r
+                              "fn": "param",\r
+                              "name": "bundles"\r
                             }\r
                           ]\r
                         }\r
@@ -2864,8 +2774,8 @@ var e=`{\r
                   ]\r
                 },\r
                 {\r
-                  "fn": "constant",\r
-                  "value": 7\r
+                  "fn": "param",\r
+                  "name": "bundles"\r
                 }\r
               ]\r
             },\r
