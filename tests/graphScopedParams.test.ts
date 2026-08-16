@@ -501,48 +501,81 @@ describe("what a listing and a refusal now say", () => {
  * migration stops at the boundary.
  */
 describe("strandedGraphParamValues", () => {
-  const bodyHolding = (constant: number, declaredValue: number): Graph =>
+  /**
+   * A body whose `move` node carries `constant`, in whichever SPELLING the
+   * grammar offers — because the spelling is what this lint used to be
+   * blind to, and the one it missed is the one the rig mostly writes:
+   *
+   *   - `constant`  `{"fn":"constant","value":x}`, the only one the first
+   *                 version of the scan looked at;
+   *   - `bare`      `x` as an argument, which the grammar takes just as
+   *                 happily and which outnumbers the above 1017 to 105
+   *                 across `graphs/`;
+   *   - `opts`      a number in a sampler's options bag;
+   *   - `plain`     a param that holds no expression at all.
+   *
+   * `extra` appends nodes to the body (a nested wrapper, a second reader).
+   */
+  type Spelling = "constant" | "bare" | "opts" | "plain";
+  const moveParams = (spelling: Spelling, constant: number): Record<string, unknown> => {
+    switch (spelling) {
+      case "constant":
+        return { translate: { fn: "vec", args: [{ fn: "constant", value: constant }, 0, 0] } };
+      case "bare":
+        return { translate: { fn: "vec", args: [constant, 0, 0] } };
+      case "opts":
+        return {
+          translate: {
+            fn: "vec",
+            args: [{ fn: "perlinNoise", opts: { frequency: constant } }, 0, 0],
+          },
+        };
+      case "plain":
+        return { translate: [constant, 0, 0] };
+    }
+  };
+  const bodyGraph = (
+    spelling: Spelling,
+    constant: number,
+    extra: readonly unknown[] = [],
+  ): Record<string, unknown> => ({
+    formatVersion: 1,
+    seed: 0,
+    nodes: [
+      { id: "grid", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+      { id: "move", type: "transformPoints", params: moveParams(spelling, constant) },
+      ...extra,
+    ],
+    connections: [{ from: ["grid", "out"], to: ["move", "in"] }],
+    outputs: [{ id: "move", pin: "out", name: "out" }],
+  });
+  const wrapping = (id: string, body: Record<string, unknown>): Record<string, unknown> => ({
+    id,
+    type: "subgraph",
+    params: {},
+    subgraph: { graph: body, inputs: [], outputs: [{ name: "out", node: "move", pin: "out" }] },
+  });
+  const declaring = (
+    declaredValue: number | readonly number[],
+    wrapper: Record<string, unknown>,
+  ): Graph =>
     deserializeGraph(
       JSON.parse(
         JSON.stringify({
           formatVersion: 1,
           seed: 3,
           params: [{ name: "halfWidth", value: declaredValue }],
-          nodes: [
-            {
-              id: "wrap",
-              type: "subgraph",
-              params: {},
-              subgraph: {
-                graph: {
-                  formatVersion: 1,
-                  seed: 0,
-                  nodes: [
-                    { id: "grid", type: "pointGrid", params: { countX: 2, countZ: 2 } },
-                    {
-                      id: "move",
-                      type: "transformPoints",
-                      params: {
-                        translate: {
-                          fn: "vec",
-                          args: [{ fn: "constant", value: constant }, 0, 0],
-                        },
-                      },
-                    },
-                  ],
-                  connections: [{ from: ["grid", "out"], to: ["move", "in"] }],
-                  outputs: [{ id: "move", pin: "out", name: "out" }],
-                },
-                inputs: [],
-                outputs: [{ name: "out", node: "move", pin: "out" }],
-              },
-            },
-          ],
+          nodes: [wrapper],
           connections: [],
-          outputs: [{ id: "wrap", pin: "out", name: "points" }],
+          outputs: [{ id: wrapper.id, pin: "out", name: "points" }],
         }),
       ),
     );
+  const bodyHolding = (
+    constant: number,
+    declaredValue: number | readonly number[],
+    spelling: Spelling = "constant",
+  ): Graph => declaring(declaredValue, wrapping("wrap", bodyGraph(spelling, constant)));
 
   it("catches the rig's actual bug: a half-diagonal frozen in a body", () => {
     // 0.425 * √2 — the relationship, not a coincidence, and the exact
@@ -557,8 +590,105 @@ describe("strandedGraphParamValues", () => {
     });
   });
 
+  it("catches it in EVERY spelling the grammar offers, not just one", () => {
+    // The defect this replaced: the scan read `{"fn":"constant"}` nodes and
+    // nothing else, so the same graph written with a bare numeric argument
+    // — the majority spelling, and the one the rig's own cable body uses —
+    // validated `ok`. Rebuilt against the historical rig
+    // (`aef61b9~1:graphs/examples-rig.json`) both ways: the `constant`
+    // spelling reported 2 and the bare spelling reported 0, on files that
+    // cook byte-identically to each other.
+    for (const spelling of ["constant", "bare", "opts", "plain"] as const) {
+      const found = strandedGraphParamValues(bodyHolding(0.425 * Math.SQRT2, 0.425, spelling));
+      expect(found, spelling).toHaveLength(1);
+      expect(found[0].value, spelling).toBe(0.425 * Math.SQRT2);
+    }
+  });
+
   it("catches a derived-looking exact copy", () => {
     expect(strandedGraphParamValues(bodyHolding(0.6010407640085654, 0.6010407640085654))).toHaveLength(1);
+  });
+
+  it("counts occurrences, so two readings in one slot report as two", () => {
+    // The historical rig's bug was exactly this shape: one `translate`,
+    // two frozen copies of the half-diagonal, reported as `2 values`. A
+    // scan that deduped by slot would quietly restate it as one.
+    const found = strandedGraphParamValues(
+      declaring(
+        0.425,
+        wrapping("wrap", {
+          formatVersion: 1,
+          seed: 0,
+          nodes: [
+            { id: "grid", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+            {
+              id: "move",
+              type: "transformPoints",
+              params: {
+                translate: {
+                  fn: "vec",
+                  args: [0.6010407640085654, 0.6010407640085654, 0],
+                },
+              },
+            },
+          ],
+          connections: [{ from: ["grid", "out"], to: ["move", "in"] }],
+          outputs: [{ id: "move", pin: "out", name: "out" }],
+        }),
+      ),
+    );
+    expect(found).toHaveLength(2);
+    expect(found.every((f) => f.innerSlot === "move.translate")).toBe(true);
+  });
+
+  it("walks a body inside a body, naming the path that reaches it", () => {
+    // One boundary hides a value; two hide it better. The wrappers join
+    // outermost-first so the finding says where to go.
+    const inner = wrapping("innerWrap", bodyGraph("bare", 0.425 * Math.SQRT2));
+    const outer = wrapping("outerWrap", {
+      formatVersion: 1,
+      seed: 0,
+      nodes: [inner, { id: "move", type: "transformPoints", params: {} }],
+      connections: [{ from: ["innerWrap", "out"], to: ["move", "in"] }],
+      outputs: [{ id: "move", pin: "out", name: "out" }],
+    });
+    const found = strandedGraphParamValues(declaring(0.425, outer));
+    expect(found).toHaveLength(1);
+    expect(found[0].slot).toBe("outerWrap > innerWrap");
+    expect(found[0].innerSlot).toBe("move.translate");
+  });
+
+  it("checks a plain numeric param, which holds no expression to walk", () => {
+    // `spacing: 0.6010407640085654` freezes the declared value exactly as
+    // thoroughly as an expression does, and it is less to type.
+    const found = strandedGraphParamValues(
+      declaring(
+        0.425,
+        wrapping(
+          "wrap",
+          bodyGraph("constant", 0, [
+            { id: "line", type: "pointLine", params: { spacing: 0.6010407640085654 } },
+          ]),
+        ),
+      ),
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].innerSlot).toBe("line.spacing");
+  });
+
+  it("checks a vec declaration, whole and never componentwise", () => {
+    // A vec3 knob's copies used to be unreachable: the declared set kept
+    // numbers only. It matches as a TUPLE — every component equal, at least
+    // one of them distinctive — because `[0.425, 0, 1]` shares two
+    // components with most graphs ever written and matching those would
+    // report the coincidence class this lint was tuned to avoid.
+    const vec = [0.6010407640085654, 0, 0];
+    expect(strandedGraphParamValues(bodyHolding(vec[0], vec, "plain"))).toHaveLength(1);
+    // The control: the same tuple with one component moved is not a copy,
+    // and the shared distinctive component alone does not make it one.
+    expect(
+      strandedGraphParamValues(bodyHolding(vec[0], [0.6010407640085654, 1, 0], "plain")),
+    ).toEqual([]);
   });
 
   it("stays quiet on a short round number, which is what a coincidence is", () => {
@@ -572,6 +702,36 @@ describe("strandedGraphParamValues", () => {
 
   it("stays quiet when the body holds an unrelated number", () => {
     expect(strandedGraphParamValues(bodyHolding(1.2345678901234, 0.425))).toEqual([]);
+  });
+
+  it("stays quiet on a constant that stands on its own merits", () => {
+    // The ×√2 relation is SYMMETRIC, so a declared 0.5 "derives"
+    // 0.7071067811865476 — which is the unit diagonal's component, a number
+    // the rig writes three times for reasons that have nothing to do with
+    // any param. Widening the scan to bare arguments makes this worse
+    // rather than better: √2 itself is now in range, and any declared 1
+    // would light up every diagonal in the graph.
+    for (const [constant, declared] of [
+      [Math.SQRT1_2, 0.5],
+      [Math.SQRT2, 1],
+      [Math.SQRT2 * 2, 2],
+    ] as const) {
+      expect(strandedGraphParamValues(bodyHolding(constant, declared)), String(constant)).toEqual(
+        [],
+      );
+    }
+    // THE CONTROL, and the reason the three assertions above are not
+    // vacuous: the identical fixture, the identical ×√2 rule, one number
+    // that is nobody's constant but this graph's — reported.
+    expect(strandedGraphParamValues(bodyHolding(0.425 * Math.SQRT2, 0.425))).toHaveLength(1);
+    // And the suppression is not "anything near √2": the same relation on a
+    // value the set does not name still fires, in both spellings.
+    for (const spelling of ["constant", "bare"] as const) {
+      expect(
+        strandedGraphParamValues(bodyHolding(0.31 * Math.SQRT2, 0.31, spelling)),
+        spelling,
+      ).toHaveLength(1);
+    }
   });
 
   it("has nothing to say about a graph that declares no params", () => {
@@ -688,5 +848,91 @@ describe("a slot has one owner, and its literal cannot disagree", () => {
     // And a round trip stays accepted, which is the property that keeps
     // this refusal from firing on anything the library itself wrote.
     expect(() => deserializeGraph(serializeGraph(graph))).not.toThrow();
+  });
+});
+
+/**
+ * A DRIVEN ADDRESS IS NOT AN EDITABLE ONE, and until now the listing said
+ * it was.
+ *
+ * A node param a declaration's `targets` writes into keeps its own literal
+ * in the file, and that literal is dead text: the declaration overwrites it
+ * on every load and `serializeGraph` writes the declaration's current value
+ * straight back over it. The rig has six such addresses among 366, and
+ * `--params` printed all six as ordinary node params — so a knob turner
+ * edits one and nothing happens, and an agent writes one and reads back
+ * something else, with nothing in the listing to have warned either.
+ */
+describe("a driven node param says so", () => {
+  const driven = (extra: Record<string, unknown> = {}) =>
+    deserializeGraph(
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: 1,
+          seed: 1,
+          params: [
+            { name: "sides", value: 7, targets: [{ node: "g", param: "countX" }], ...extra },
+          ],
+          nodes: [{ id: "g", type: "pointGrid", params: { countX: 7, countZ: 3 } }],
+          connections: [],
+          outputs: [{ id: "g", pin: "out", name: "points" }],
+        }),
+      ),
+    );
+
+  it("reports its own scope, and names the address that does move it", () => {
+    const byKey = new Map(describeGraphParams(driven()).map((p) => [p.key, p]));
+    const target = byKey.get("g.countX");
+    expect(target?.scope).toBe("driven");
+    expect(target?.scope === "driven" && target.driver).toBe("sides");
+    // It keeps everything that made it an address: the value in the slot is
+    // still the truth about the slot, and the node is still named.
+    expect(target?.value).toBe(7);
+    expect(target?.scope === "driven" && target.node).toBe("g");
+    expect(target?.scope === "driven" && target.param).toBe("countX");
+  });
+
+  it("leaves an undriven sibling on the same node alone", () => {
+    // The distinction is per SLOT, not per node — the failure mode of a
+    // node-level flag would be to condemn every param of a driven node.
+    const byKey = new Map(describeGraphParams(driven()).map((p) => [p.key, p]));
+    expect(byKey.get("g.countZ")?.scope).toBe("node");
+    expect(byKey.get("g.spacing")?.scope).toBe("node");
+  });
+
+  it("is a third scope, so a consumer splitting graph from node meets it", () => {
+    // The point of the shape. `scope === "node"` used to mean "an address a
+    // knob can turn", and six of the rig's were not; a boolean beside it
+    // would have let every listing keep the old label by doing nothing.
+    const scopes = new Set(describeGraphParams(driven()).map((p) => p.scope));
+    expect([...scopes].sort()).toEqual(["driven", "graph", "node"]);
+    expect(describeGraphParams(driven()).filter((p) => p.scope === "node")).not.toHaveLength(0);
+  });
+
+  it("says the same thing to --json, because that is where an agent looks", () => {
+    // `pcg validate --json` serializes these objects verbatim, so the
+    // discriminant IS the machine-readable answer and needs no second
+    // encoding to keep in step with the text.
+    const json = JSON.parse(JSON.stringify(describeGraphParams(driven()))) as {
+      key: string;
+      scope: string;
+      driver?: string;
+    }[];
+    expect(json.find((p) => p.key === "g.countX")).toMatchObject({
+      scope: "driven",
+      driver: "sides",
+    });
+  });
+
+  it("still reports the driver itself as the graph-scoped knob", () => {
+    const first = describeGraphParams(driven())[0];
+    expect(first.key).toBe("$sides");
+    expect(first.scope).toBe("graph");
+    expect(first.scope === "graph" && first.readers).toEqual(["g.countX"]);
+  });
+
+  it("says nothing about a slot no declaration names", () => {
+    const plain = deserializeGraph(JSON.parse(graphText({ declared: true })));
+    expect(describeGraphParams(plain).every((p) => p.scope !== "driven")).toBe(true);
   });
 });

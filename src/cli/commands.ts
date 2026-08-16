@@ -337,7 +337,12 @@ function graphParamRow(p: DescribedGraphParam): string[] {
     // read from more than one place — and a declaration nothing reads is
     // exactly what a rename leaves behind, so the count is the interesting
     // half of the row.
-    p.scope === "graph"
+    p.scope === "driven"
+      ? // The address exists and does nothing: the declaration overwrites
+        // it on every load, so a literal typed here is discarded. Saying
+        // so is the whole point of listing it at all.
+        `driven by $${p.driver} — a value written here is overwritten on load`
+      : p.scope === "graph"
       ? p.readers.length === 0
         ? "read by nothing"
         : // SLOTS and READINGS both, because they differ exactly where the
@@ -406,12 +411,18 @@ const validateCommand: Command = {
     if (params !== undefined) {
       const declared = params.filter((p) => p.exposed).length;
       const scoped = params.filter((p) => p.scope === "graph").length;
+      const driven = params.filter((p) => p.scope === "driven").length;
       lines.push(
         "",
         `params:  ${plural(params.length, "address", "addresses")}, ${declared} declared worth turning (*)`,
         ...(scoped > 0
           ? [
               `  ${plural(scoped, "graph-scoped param")} first, addressed "$<name>" — one value, every slot that reads the name`,
+            ]
+          : []),
+        ...(driven > 0
+          ? [
+              `  ${plural(driven, "address", "addresses")} driven by a declaration: the value moves only through its "$<name>", never here`,
             ]
           : []),
         `  the graph's own seed is a knob too, addressed as "seed" (currently ${graph.seed})`,

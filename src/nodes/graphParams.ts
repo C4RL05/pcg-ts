@@ -32,9 +32,10 @@ import {
   inlineParamMetaOf,
   inlineParamValuesOf,
 } from "../fields/fieldJson.js";
-import { type FieldSpec, peekFieldSpec, specChildren } from "../fields/spec.js";
+import { MAX_SPEC_DEPTH, peekFieldSpec } from "../fields/spec.js";
 import {
   type Graph,
+  type GraphParam,
   type NodeHandle,
   type ParamSchema,
   type ParamValue,
@@ -117,14 +118,63 @@ export interface DescribedGraphScopedParam extends DescribedParamBase {
 }
 
 /**
+ * A node param whose value is WRITTEN into it by a graph-scoped
+ * declaration's `targets` — an address that can be READ and cannot be
+ * turned.
+ *
+ * Its own scope rather than a flag on {@link DescribedNodeParam}, because
+ * the difference is not a decoration on an editable address: the literal
+ * standing in the graph file for this slot is dead text. `deserializeGraph`
+ * overwrites it from the declaration on every load, and `serializeGraph`
+ * writes the declaration's current value straight back over it — so
+ * whatever a knob, a `--param` flag or an agent writes here is gone by the
+ * next load, with no error to say so. A consumer that narrows on `scope`
+ * to decide what an address IS therefore has to meet this one and choose,
+ * which is the whole reason it is a third member and not a boolean: an
+ * optional field lets a listing keep the old label by doing nothing.
+ *
+ * `$<driver>` is the address that DOES move it.
+ */
+export interface DescribedDrivenParam extends DescribedParamBase {
+  readonly scope: "driven";
+  /** Node instance holding it. */
+  readonly node: string;
+  /** The node's declared type, or `undefined` for a def carrying none. */
+  readonly type: string | undefined;
+  /** Param name on the node. */
+  readonly param: string;
+  /**
+   * Never set here. Declared so a consumer narrowing `scope === "graph"`
+   * and treating everything else as a node address keeps compiling: an
+   * inline field param inside a driven slot is unreachable, since a
+   * declaration with `targets` is refused against a param holding an
+   * expression.
+   */
+  readonly fieldParam?: string;
+  /**
+   * Declared name (no `$`) of the graph param that writes this slot.
+   *
+   * The EFFECTIVE one when two declarations name the same slot: they are
+   * written in declaration order, so the last one wins and it is the only
+   * one whose value is actually in the param.
+   */
+  readonly driver: string;
+}
+
+/**
  * One addressable param of a graph; see {@link describeGraphParams}.
  *
  * A UNION rather than one shape with optional fields, because a
  * graph-scoped param has no node and a consumer reading `.node` as
  * `undefined` would print a wrong address. Narrowing on `scope` makes each
- * consumer decide what it shows for a knob belonging to no node.
+ * consumer decide what it shows for a knob belonging to no node — and, for
+ * {@link DescribedDrivenParam}, for one that belongs to a node and is
+ * nonetheless not the address that turns it.
  */
-export type DescribedGraphParam = DescribedNodeParam | DescribedGraphScopedParam;
+export type DescribedGraphParam =
+  | DescribedNodeParam
+  | DescribedDrivenParam
+  | DescribedGraphScopedParam;
 
 /**
  * The `ParamSchema` an inline field param does not have, derived from the
@@ -237,10 +287,30 @@ function fieldParamsOf(
  * graph rather than of any node, it has no `<node>.<param>` address, and
  * every caller that offers it as a knob (the sandbox does, under the bare
  * key `"seed"`) already knows where to find it.
+ *
+ * A node param a declaration's `targets` WRITES INTO reports
+ * `scope: "driven"` rather than `"node"`; see {@link DescribedDrivenParam}
+ * for why that is a scope and not a flag. It stays in the list — the
+ * address is real and its value is the truth about the slot — but it is no
+ * longer indistinguishable from one a knob can turn.
  */
 export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
   const out: DescribedGraphParam[] = [];
   const declared = graph.graphParams;
+  // "<node>.<param>" -> the declaration that writes it. Built over ALL
+  // declarations before any node is described, because a slot is driven by
+  // whether a declaration names it and not by where the node sits.
+  //
+  // Later entries overwrite earlier ones, which the LOAD path no longer
+  // produces — `deserializeGraph` refuses two declarations claiming one
+  // slot — but this describes any Graph, including one assembled in
+  // memory, and the targets are applied in declaration order there too. So
+  // the last one is the value actually sitting in the param, and naming
+  // the first would report a driver whose value is not there.
+  const drivenBy = new Map<string, string>();
+  for (const param of declared) {
+    for (const t of param.targets ?? []) drivenBy.set(`${t.node}.${t.param}`, param.name);
+  }
   if (declared.length > 0) {
     // One walk answers "who reads this name", for every name at once. A
     // declared-but-unread param reports an empty `readers`, which is the
@@ -321,9 +391,8 @@ export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
       if (schema.type === "items") continue;
       const value = values[name];
       const holdsField = isField(value);
-      out.push({
-        key: `${node}.${name}`,
-        scope: "node",
+      const driver = drivenBy.get(`${node}.${name}`);
+      const shared: Omit<DescribedNodeParam, "scope" | "key"> = {
         node,
         type,
         param: name,
@@ -331,7 +400,12 @@ export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
         ...(holdsField ? {} : { value: value as ParamValue }),
         holdsField,
         exposed,
-      });
+      };
+      out.push(
+        driver === undefined
+          ? { key: `${node}.${name}`, scope: "node", ...shared }
+          : { key: `${node}.${name}`, scope: "driven", driver, ...shared },
+      );
       out.push(...fieldParamsOf(node, type, name, value));
     }
   }
@@ -342,12 +416,16 @@ export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
 export interface StrandedGraphParamValue {
   /** The declared param whose value it duplicates. */
   readonly name: string;
-  /** `"<node>.<param>"` of the wrapper whose body holds the constant. */
+  /**
+   * The wrapper node whose body holds the constant. Nested bodies join
+   * their wrappers outermost-first with `" > "`, so a one-level finding —
+   * every finding until a body wraps a body — is still a bare node id.
+   */
   readonly slot: string;
   /** `"<innerNode>.<param>"` inside that body. */
   readonly innerSlot: string;
-  /** The value both carry. */
-  readonly value: number;
+  /** The value both carry: a number, or the tuple a vec knob declares. */
+  readonly value: number | readonly number[];
 }
 
 /**
@@ -365,6 +443,19 @@ export interface StrandedGraphParamValue {
  * is not one, the fingerprint sees the default cook and that was
  * unchanged, and a text migration stops at the boundary.
  *
+ * WHAT IT LOOKS AT. Every number a body's params hold, wherever it sits:
+ * a `{"fn":"constant"}` node, a BARE numeric argument (the commoner
+ * spelling by an order of magnitude — 1,017 bare args against 105
+ * `constant` nodes across `graphs/`, and the rig's own cable body is 26
+ * against 14), a component of a numeric tuple, a number in a sampler's
+ * options bag, and a plain non-field param's value. Position is not what
+ * makes a match believable — the gates below are — and a scan that
+ * believed it was is a scan that misses the bug in the spelling its own
+ * graph mostly writes, which is exactly what this one did.
+ *
+ * It walks nested bodies too, at any depth: a wrapper inside a wrapper is
+ * the same boundary twice, and the value is more hidden rather than less.
+ *
  * WHAT IT REPORTS, and why it is choosy. A numeric equality is a SUSPICION,
  * not a defect — a body may hold a number that happens to match — so the
  * rule is built to earn its noise. Measured on the rig, which is the only
@@ -380,50 +471,122 @@ export interface StrandedGraphParamValue {
  *     produces and exactly the "half width / half diagonal" pair the rig's
  *     bug was.
  *
+ * and, either way, the constant is not one that stands on its OWN merits
+ * ({@link SELF_STANDING}). That last clause is not a refinement, it is what
+ * keeps the ×√2 rule usable: the relation is symmetric, so a declared 0.5
+ * "derives" 0.7071067811865476 — the unit diagonal's component, which the
+ * rig writes four times for reasons that have nothing to do with any param
+ * — and widening the scan to bare arguments drags √2 itself into range,
+ * where any declared 1 would light it up.
+ *
  * A short round number matching exactly is left alone, because that is what
  * a coincidence looks like and a lint nobody believes is worse than none.
- * The cost is stated plainly: a body that freezes a declared 0.5 is not
- * caught. The relationship set is deliberately two entries rather than
+ * The costs are stated plainly rather than hidden: a body that freezes a
+ * declared 0.5 is not caught, and neither is one that freezes a declared √2
+ * or π. The relationship set is deliberately two entries rather than
  * general arithmetic, which would either miss most relationships or flag
  * every number in the graph.
+ *
+ * A TUPLE declaration (a vec3 knob) is matched WHOLE and componentwise
+ * never: `[0.425, 0, 1]` shares two components with most graphs ever
+ * written, so component matching would report the coincidence class this
+ * lint was tuned to avoid, while a full tuple agreeing to the last bit with
+ * one distinctive component is not a coincidence at all.
  */
 export function strandedGraphParamValues(graph: Graph): StrandedGraphParamValue[] {
-  const declared = graph.graphParams.filter((p) => typeof p.value === "number");
+  const declared = graph.graphParams.filter(
+    (p) => typeof p.value === "number" || isNumberTuple(p.value),
+  );
   if (declared.length === 0) return [];
   const out: StrandedGraphParamValue[] = [];
   for (const state of graph._nodes.values()) {
     const spec = getSubgraphSpec(state.def);
     if (spec === undefined) continue;
-    // EVERY field spec in the body, not `paramScan`'s refs: that scan keeps
-    // only specs which already read a name, and a stranded constant is
-    // precisely one that reads nothing. Filtering by refs made this lint
-    // silent on the exact bug it was written for.
-    for (const inner of spec.graph._nodes.values()) {
-      for (const [param, value] of Object.entries(inner.params)) {
-        if (!isField(value)) continue;
-        const innerSpec = peekFieldSpec(value);
-        if (innerSpec === undefined) continue;
-        const ref = { node: inner.id, param };
-        for (const constant of specConstants(innerSpec)) {
-          for (const declaredParam of declared) {
-            const declaredValue = declaredParam.value as number;
-            const derived = declaredValue !== 0 && constant === declaredValue * Math.SQRT2;
-            if ((constant === declaredValue && isDistinctive(constant)) || derived) {
-              out.push({
-                name: declaredParam.name,
-                slot: state.id,
-                innerSlot: `${ref.node}.${ref.param}`,
-                value: constant,
-              });
-            }
-          }
-        }
-      }
-    }
+    scanBody(spec.graph, state.id, declared, out, new Set());
   }
   return out;
 }
 
+/**
+ * One body's params against every declaration, then the bodies inside it.
+ *
+ * `seen` guards the recursion on the body GRAPH rather than on a depth
+ * count: a def is a value and two wrappers may share one, so the same body
+ * can appear twice in a graph without any cycle, and reporting its
+ * constants twice would inflate a count this lint asks people to trust.
+ */
+function scanBody(
+  body: Graph,
+  path: string,
+  declared: readonly GraphParam[],
+  out: StrandedGraphParamValue[],
+  seen: Set<Graph>,
+): void {
+  if (seen.has(body)) return;
+  seen.add(body);
+  for (const inner of body._nodes.values()) {
+    for (const [param, value] of Object.entries(inner.params)) {
+      // EVERY field spec in the body, not `paramScan`'s refs: that scan
+      // keeps only specs which already read a name, and a stranded constant
+      // is precisely one that reads nothing. Filtering by refs made this
+      // lint silent on the exact bug it was written for.
+      const numbers = paramNumbers(value);
+      if (numbers.scalars.length === 0 && numbers.tuples.length === 0) continue;
+      const innerSlot = `${inner.id}.${param}`;
+      for (const declaredParam of declared) {
+        const declaredValue = declaredParam.value;
+        if (typeof declaredValue === "number") {
+          // Occurrences, not distinct values: a name read twice in one
+          // expression is the case a param exists for, and the rig's own
+          // bug was two readings in one slot.
+          for (const constant of numbers.scalars) {
+            if (!scalarIsStranded(constant, declaredValue)) continue;
+            out.push({ name: declaredParam.name, slot: path, innerSlot, value: constant });
+          }
+        } else if (isNumberTuple(declaredValue)) {
+          for (const tuple of numbers.tuples) {
+            if (!tupleIsStranded(tuple, declaredValue)) continue;
+            out.push({ name: declaredParam.name, slot: path, innerSlot, value: [...tuple] });
+          }
+        }
+      }
+    }
+    const nested = getSubgraphSpec(inner.def);
+    if (nested !== undefined) scanBody(nested.graph, `${path} > ${inner.id}`, declared, out, seen);
+  }
+}
+
+/** Does this body constant look like a frozen copy of `declaredValue`? */
+function scalarIsStranded(constant: number, declaredValue: number): boolean {
+  if (SELF_STANDING.has(constant)) return false;
+  if (constant === declaredValue) return isDistinctive(constant);
+  return (
+    declaredValue !== 0 && constant === declaredValue * Math.SQRT2 && isDistinctive(constant)
+  );
+}
+
+/** The same question for a tuple: every component equal, one distinctive. */
+function tupleIsStranded(tuple: readonly number[], declaredValue: readonly number[]): boolean {
+  if (tuple.length !== declaredValue.length) return false;
+  if (!tuple.every((v, i) => v === declaredValue[i])) return false;
+  return tuple.some((v) => isDistinctive(v) && !SELF_STANDING.has(v));
+}
+
+/**
+ * Numbers that occur on their own merits, so an equality with one says
+ * nothing about where it came from.
+ *
+ * √2, √3 and π at the small factors geometry actually writes, plus the
+ * degree conversions. Every entry is a hole in the lint — a declared value
+ * whose copy will not be reported — which is why the set is generated from
+ * three bases rather than accumulated by hand: a list nobody can justify
+ * grows until the rule means nothing.
+ */
+const SELF_STANDING: ReadonlySet<number> = new Set(
+  [Math.SQRT2, Math.sqrt(3), Math.PI]
+    .flatMap((base) => [1 / 4, 1 / 3, 1 / 2, 1, 2, 3, 4].flatMap((f) => [base * f, base / f]))
+    .concat([180 / Math.PI, Math.PI / 180]),
+);
 
 /**
  * Does this number look computed rather than typed?
@@ -439,13 +602,76 @@ function isDistinctive(value: number): boolean {
   return digits.length >= 10;
 }
 
-/** Every `constant` value in a spec, however deep. */
-function specConstants(spec: FieldSpec, out: number[] = []): number[] {
-  if (spec.fn === "constant" && typeof spec.value === "number") out.push(spec.value);
-  for (const child of specChildren(spec)) {
-    if (typeof child === "object" && child !== null && !Array.isArray(child)) {
-      specConstants(child as FieldSpec, out);
-    }
+/** A finite numeric tuple — what a vec3 or vec4 declaration holds. */
+function isNumberTuple(value: unknown): value is readonly number[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((v) => typeof v === "number" && Number.isFinite(v))
+  );
+}
+
+/** The scalars and the numeric tuples one param value holds. */
+interface BodyNumbers {
+  readonly scalars: number[];
+  readonly tuples: (readonly number[])[];
+}
+
+/**
+ * Every number in one param value, whether it holds a Field or a literal.
+ *
+ * The non-field half is the other spelling this scan used to miss: a body
+ * node with `spacing: 0.6010407640085654` freezes the declared value just
+ * as thoroughly as an expression does, and it is the cheaper thing for an
+ * author to write. `items` and other opaque param values contribute
+ * nothing, which is why the plain walk admits only numbers and arrays of
+ * them rather than recursing into whatever an object turns out to be.
+ */
+function paramNumbers(value: unknown): BodyNumbers {
+  const into: BodyNumbers = { scalars: [], tuples: [] };
+  if (isField(value)) {
+    // The non-throwing reader: a field built by `makeField` carries no spec
+    // and is not an error here, it is simply a value with no insides to
+    // read.
+    const spec = peekFieldSpec(value);
+    if (spec !== undefined) collectSpecNumbers(spec, into, 0);
+    return into;
   }
-  return out;
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) into.scalars.push(value);
+  } else if (isNumberTuple(value)) {
+    into.tuples.push(value);
+    into.scalars.push(...value);
+  }
+  return into;
+}
+
+/**
+ * Every number anywhere inside a field spec.
+ *
+ * A generic walk over the JSON rather than `specChildren`, which
+ * answers "the child POSITIONS the grammar recurses into" and deliberately
+ * stops at an options bag's own keys. That is the right answer for a
+ * compiler and the wrong one here: a frozen value in `opts.frequency` is
+ * the same defect as one in `args[0]`, and this walk is looking for a
+ * number rather than for a subexpression. A spec is JSON by construction
+ * ({@link peekFieldSpec} hands back what the grammar parsed), so there is
+ * nothing but objects, arrays and leaves to meet.
+ */
+function collectSpecNumbers(node: unknown, into: BodyNumbers, depth: number): void {
+  // The grammar refuses to parse deeper than MAX_SPEC_DEPTH, so a spec
+  // cannot exceed it; the cap is here so a hand-built one cannot spin.
+  if (depth > MAX_SPEC_DEPTH) return;
+  if (typeof node === "number") {
+    if (Number.isFinite(node)) into.scalars.push(node);
+    return;
+  }
+  if (Array.isArray(node)) {
+    if (isNumberTuple(node)) into.tuples.push(node);
+    for (const child of node) collectSpecNumbers(child, into, depth + 1);
+    return;
+  }
+  if (typeof node === "object" && node !== null) {
+    for (const child of Object.values(node)) collectSpecNumbers(child, into, depth + 1);
+  }
 }

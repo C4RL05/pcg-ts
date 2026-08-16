@@ -518,6 +518,16 @@ function sameParamValue(a: unknown, b: unknown): boolean {
  * Resolve every targeted graph param against the nodes it drives, WRITE its
  * value into them, and hand back the params carrying their merged schemas.
  *
+ * EXPORTED because `deserializeGraph` is not the only thing that builds a
+ * graph from a `SerializedGraph`: the sandbox rebuilds its own mirror node
+ * by node, and skipping this step left every driven slot holding whatever
+ * the file said instead of what its declaration says. That is the second
+ * time a hand-rolled rebuild has missed a step this function performs, so
+ * the function is the thing both call rather than a shape both imitate.
+ * `authored` may be empty — it only decides whether a DISAGREEING literal
+ * is refused, and a caller that cannot tell an authored value from a
+ * default should not be raising that error.
+ *
  * The resolver is `resolveExposedParam`, unchanged and deliberately: a
  * subgraph's exposed param answers the same question — "one name, several
  * inner param slots, what may it hold?" — and its merge rules are the
@@ -538,7 +548,7 @@ function sameParamValue(a: unknown, b: unknown): boolean {
  * NOT independently editable — the declaration wins on every load, the same
  * way a wrapper's value wins over what its body happens to hold.
  */
-function applyGraphParamTargets(
+export function applyGraphParamTargets(
   graph: Graph,
   params: readonly GraphParam[],
   authored: ReadonlyMap<string, ReadonlySet<string>>,

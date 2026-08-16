@@ -449,3 +449,47 @@ describe("knobTarget — the write half of a knob", () => {
     }
   });
 });
+
+describe("a driven slot is shown but not writable", () => {
+  const driven = (): EditorController => {
+    const c = controller();
+    c.importText(
+      JSON.stringify({
+        formatVersion: 1,
+        seed: 1,
+        params: [{ name: "sides", value: 7, targets: [{ node: "g", param: "countX" }] }],
+        nodes: [{ id: "g", type: "pointGrid", params: { countZ: 2 } }],
+        connections: [],
+        outputs: [{ id: "g", pin: "out", name: "points" }],
+      }),
+    );
+    return c;
+  };
+
+  it("marks the slot with the declaration that drives it", () => {
+    const knob = byKey(driven().knobs(), "g.countX");
+    expect(knob?.scope === "node" && knob.drivenBy).toBe("sides");
+    // Still listed: the inspector should show what the node holds.
+    expect(knob?.value).toBe(7);
+  });
+
+  it("refuses a write, naming the knob that does move it", () => {
+    // Before this, the write went through, and the graph it produced would
+    // no longer LOAD — the declaration wins on load and a node literal
+    // disagreeing with its driver is refused outright, so the edit
+    // travelled exactly as far as the next open.
+    const c = driven();
+    const target = knobTargets(c.knobs()).get("g.countX");
+    expect(target).toBeDefined();
+    expect(c.setKnob(target as never, 12)).toMatch(/driven by the graph param "\$sides"/);
+    // And the graph did not move.
+    expect(byKey(c.knobs(), "g.countX")?.value).toBe(7);
+  });
+
+  it("the declaration itself is still writable, and moves the slot", () => {
+    const c = driven();
+    const target = knobTargets(c.knobs()).get("$sides");
+    expect(c.setKnob(target as never, 12)).toBeNull();
+    expect(byKey(c.knobs(), "g.countX")?.value).toBe(12);
+  });
+});

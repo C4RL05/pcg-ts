@@ -130,6 +130,13 @@ export interface NodeKnobTarget {
    * it rewrites that literal in the spec and sets the rebuilt field.
    */
   readonly fieldParam?: string;
+  /**
+   * Set when a graph param with `targets` DRIVES this slot. The address is
+   * still listed — the inspector should show what the node holds — but a
+   * write to it is refused, because the declaration wins on load and a
+   * disagreeing literal now makes the graph refuse to open.
+   */
+  readonly drivenBy?: string;
 }
 
 /**
@@ -370,6 +377,11 @@ export function knobTarget(knob: Knob): KnobTarget {
         node: knob.node,
         name: knob.name,
         ...(knob.fieldParam !== undefined ? { fieldParam: knob.fieldParam } : {}),
+        // Carried, because the WRITE is what this decides: a driven slot
+        // is refused rather than written, and a target rebuilt without the
+        // mark would send the write down the ordinary path — the same
+        // dropped-field bug this helper exists to have prevented once.
+        ...(knob.drivenBy !== undefined ? { drivenBy: knob.drivenBy } : {}),
       };
 }
 

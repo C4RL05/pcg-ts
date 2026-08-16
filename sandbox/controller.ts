@@ -16,6 +16,7 @@
  */
 import {
   Graph,
+  applyGraphParamTargets,
   cook,
   createGpuCookStats,
   describeGraphParams,
@@ -482,6 +483,14 @@ export class EditorController {
         : {
             key: p.key,
             scope: "node" as const,
+            // A DRIVEN slot is still listed, because the inspector should
+            // show what the node holds — but it is marked, and the write
+            // path refuses it. Editing one used to produce a graph that
+            // will no longer LOAD: the declaration wins on load, and a
+            // node literal disagreeing with its driver is now refused
+            // outright, so the edit would have travelled as far as the
+            // next open and then failed.
+            ...(p.scope === "driven" ? { drivenBy: p.driver } : {}),
             node: p.node,
             nodeLabel: labels.get(p.node) ?? "",
             name: p.param,
@@ -576,6 +585,11 @@ export class EditorController {
    * memo misses exactly as it would for a plain param.
    */
   private writeKnob(knob: KnobTarget, value: unknown): void {
+    if (knob.scope === "node" && knob.drivenBy !== undefined) {
+      throw new Error(
+        `"${knob.node}".${knob.name} is driven by the graph param "$${knob.drivenBy}", so a value written here would be overwritten the next time the graph is opened — and the graph would refuse to open, because a node literal that disagrees with its driver is an error. Turn "$${knob.drivenBy}" instead; it moves every slot it drives.`,
+      );
+    }
     if (knob.scope === "graph") {
       // The graph layer owns the fan-out: one declared value, rebound into
       // every expression that reads the name. No spec rewrite here and no
@@ -734,6 +748,17 @@ export class EditorController {
       for (const c of json.connections ?? []) {
         mirror.connect({ id: c.from[0] }, c.from[1], { id: c.to[0] }, c.to[1]);
       }
+    } catch (err) {
+      return { error: errorMessage(err) };
+    }
+    // The targets, after every node exists. `deserializeGraph` does this
+    // for the graph it builds; this editor builds its OWN mirror, so it has
+    // to do it too — and skipping it left a driven slot showing the file's
+    // literal while the declaration that owns it said something else.
+    // Empty `authored` map: this path cannot tell an authored value from a
+    // registry default, and the disagreement error is not its to raise.
+    try {
+      mirror.setGraphParams(applyGraphParamTargets(mirror, mirror.graphParams, new Map()));
     } catch (err) {
       return { error: errorMessage(err) };
     }
