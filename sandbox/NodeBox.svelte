@@ -150,7 +150,13 @@
   .body {
     fill: #0e0e0e;
     stroke: var(--sb-edge);
-    stroke-width: 1;
+    /* Never thinner than one screen pixel. `--hairline` is set by the
+       canvas from the live zoom (see the transformed group there); the
+       `1` fallback is what this was, and is what applies to any NodeBox
+       rendered outside that group. The border is the node's silhouette,
+       and a silhouette that disappears when you zoom out to see the whole
+       graph disappears exactly when it is the only thing still legible. */
+    stroke-width: var(--hairline, 1);
     cursor: grab;
   }
   .body:hover {

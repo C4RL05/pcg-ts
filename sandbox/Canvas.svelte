@@ -295,7 +295,23 @@
     if (e.target === svgEl) onSelect(null);
   }}
 >
-  <g transform="translate({view.x} {view.y}) scale({view.z})">
+  <!-- A HAIRLINE FLOOR, in graph units, inherited by everything below.
+       Strokes here are authored in graph units and so scale with the
+       view: a 1-unit node border is 1 screen px at 100% and 0.2 of one at
+       the 0.2 zoom floor, which is not a faint line but no line at all —
+       the boxes lose their edges exactly when a big graph is zoomed out
+       far enough that the silhouette is all you have left to read.
+
+       `max(1, 1/z)` is a floor and nothing more: at and above 100% it is
+       1 unit and the border scales with everything else, and below it
+       grows in graph units at just the rate that keeps it one screen
+       pixel. A custom property rather than a prop because it has to reach
+       every NodeBox and every rule inside one, and CSS variables inherit
+       through the SVG tree for free. -->
+  <g
+    transform="translate({view.x} {view.y}) scale({view.z})"
+    style="--hairline: {Math.max(1, 1 / view.z)}"
+  >
   {#each model.edges as edge, i}
     {@const d = edgePath(edge)}
     {#if d}
