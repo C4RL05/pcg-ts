@@ -35,6 +35,49 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### The streamed level, and what it found first, 2026-08-16
+
+`graphs/examples-streamed-terrain.json` plus `tests/worldStreaming.test.ts`
+— a second discovery vehicle, added because round four judged the rig
+SATURATED FOR THE DATA MODEL: four of its five findings were in the
+reporting surface rather than the cook, and three rounds of measurement
+were all one cook at defaults.
+
+Two absences made the choice. No serialized graph in `graphs/` could be
+cooked by a `World` at all — every streaming example builds its graph in
+TypeScript, so the format agents and the sandbox actually use had never
+been exercised for streaming. And the BUDGET x CELL-ORDER product was
+untested: `budgetMs` appeared in World tests only as 0 ("nothing cooks"),
+while `crossPartition.test.ts` says in its own header that it partitions in
+SPACE and `graphs.test.ts` in TIME. Nothing crossed them, and the contract
+(`world.ts:247`) covers both: "Cook order, viewpoint path, evictions, and
+recooks never change the bytes a cell produces."
+
+**Its first finding, and the reason a vehicle is worth building.**
+±Infinity cannot cross a bind patch — `JSON.stringify(Infinity)` is `null`,
+so `patches.ts` refuses it deliberately and says a level wanting an
+unbounded axis "binds it in place — such a level cooks locally". That
+tradeoff was recorded and had no caller. It has one now, and it is the
+worst possible one: the CANONICAL ownership clip, `filterByBounds`
+`halfOpen` over an `xz` column, wants an unbounded Y. So the textbook
+partition recipe is exactly what a serializable bind cannot express, and a
+level written that way cannot reach a worker pool. The graph substitutes
+±1e6, which works and is a magic number standing where an infinity belongs.
+Two smaller ones with it: nothing enforces that a level's halo matches the
+radius of the neighbour query that needs it (the suite reads the radius out
+of the JSON to stop the two drifting), and a `ParamPatch` can only replace
+a whole `FieldSpec`, never a number inside one.
+
+**What the suite asserts, and what it refuses to.** Byte-identity across
+budgets, across cell orders, and across the two together, each with a
+control that was SEEN to fail — a halo of 0 and of radius-1 (pinning the
+width, not merely that a halo exists), a per-cell reseed on a graph whose
+`randomField` moves with it, and a retain radius large enough that nothing
+evicts. The unbounded-hop rung is kept in the graph on purpose and its
+DISAGREEMENT is asserted rather than papered over: a rank over a cell's own
+population is not the rank over the region, and a suite that pretended
+otherwise would be asserting something the library does not promise.
+
 ### The rig's gap list, round three, 2026-08-16
 
 Ten more, found by taking the rig through the five mechanisms that shipped

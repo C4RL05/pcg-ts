@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-54 examples, alphabetical by file:
+55 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -52,6 +52,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
 - [examples-headless-scatter.json](#examples-headless-scatterjson) — headless scatter
 - [examples-rig.json](#examples-rigjson) — a suspended rig, built from curves
+- [examples-streamed-terrain.json](#examples-streamed-terrainjson) — one cell of a streamed world, halo and all
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
 - [pipeline-3-lots-edits.json](#pipeline-3-lots-editsjson) — staged pipeline 3/5, edited — hand-placed plots that win on priority
@@ -888,6 +889,24 @@ A box truss follows a spline pushed around by two noises: four chords with zigza
 **Outputs:** `truss` (from `trussChordSkin`.`out`), `braces` (from `trussBraceSkin`.`out`), `frames` (from `trussFrameSkin`.`out`), `parts` (from `partPartSpawn`.`instances`), `wraps` (from `wrapWraps`.`out`), `chains` (from `chainSpawn`.`instances`), `danglers` (from `danglerDanglerSkin`.`out`), `drapes` (from `drapeDrapeSkin`.`out`), `spinePoints` (from `spineSpine`.`out`)
 
 Cook it: `pcg cook graphs/examples-rig.json --stats`
+
+## examples-streamed-terrain.json
+
+**one cell of a streamed world, halo and all**
+
+The corpus graph a `World` can BIND, not just cook: every per-cell quantity is an ordinary top-level node param, so `bindPatches` reaches it as plain JSON and the level can cook on a worker. Its defaults are not a picture, they are the RECTANGLE OF ONE CELL: cell [0, 0] of a 64-unit level, which is [0, 64) on both axes, queried with the 4-unit halo it needs (the scatter window runs -4 to 68) and clipped back to what it owns. Note where that box is NOT — a cell is always [c*size, (c+1)*size), so no cell is ever centred on the origin, and a graph whose default box straddles it is quietly claiming to be a window rather than a cell. What a bind still supplies is the SEEDS: standalone they are the literals below, while a World writes ctx.worldSeed and salts of it, so the standalone cook shows this cell's geometry and mechanism rather than any particular world's bytes. Four seam hazards are wired on purpose. (1) The source is `pointScatterInWorld` — `basics-scatter-in-world` teaches it alone — whose lattice is a function of its own `seed` and never of the graph seed, so bind hands it a cell-INVARIANT `ctx.worldSeed` and varies only `boundsMin`/`boundsMax`. (2) The density noise carries a LITERAL `seed` inside its spec instead of `{ "from": "node", "variant": 0 }`, because a nodeSeed-folded noise 'samples a different region in every cell, so it must not feed anything that has to agree across a seam' (src/nodes/attributes.ts) — which is exactly what `basics-reseed-a-noise` wires up, and exactly what a level graph must not. (3) `pointNeighborhood` is the ONE-HOP rung: exact at a halo of `radius` and at no smaller width, so bind widens the scatter window by exactly 4 units and by nothing more. (4) `filterByBounds` at its default half-open boundary is the OWNERSHIP rule, bound from the UNWIDENED cell, because 'the exactness comes from the two cells sharing an endpoint value' — 'compare against the box, not against a recomputed index', since `floor(67.8 / 0.1)` is 677 while `678 * 0.1` is exactly 67.8 (docs/authoring.md). Its Y bounds are a finite +/-1e6 rather than infinities, which do not survive JSON and cannot be patched, and which an 'xz' World column does not bound anyway. `filterByDensity` and the `randomField` inside `size` both draw on their node seed, which the GRAPH seed does reach, so a per-cell `graph.setSeed` (or a `bindPatches` `seed`) would move them and 'the halo and the neighbour disagree, deterministically and silently' (src/runtime/types.ts); bind seeds them cell-invariantly and never reseeds the graph. The second output, `populationRank`, is the counter-example kept deliberately: a `fraction` field measures the population present in THIS cook, which under a World means the population HERE, so it is the unbounded rung no halo width can repair and the one thing in this graph a partitioned cook is not allowed to agree about.
+
+**Tags:** `examples`, `world`, `streaming`, `halo`, `determinism`
+
+**Seed:** 20260816
+
+**Node types:** `filterByBounds`, `filterByDensity`, `pointNeighborhood`, `pointScatterInWorld`, `setAttribute`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `size`.`out`), `populationRank` (from `rank`.`out`)
+
+Cook it: `pcg cook graphs/examples-streamed-terrain.json --stats`
 
 ## pipeline-1-boundary.json
 

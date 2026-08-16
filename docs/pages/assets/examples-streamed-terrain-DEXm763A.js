@@ -1,0 +1,138 @@
+var e=`{
+  "formatVersion": 1,
+  "seed": 20260816,
+  "meta": {
+    "title": "one cell of a streamed world, halo and all",
+    "description": "The corpus graph a \`World\` can BIND, not just cook: every per-cell quantity is an ordinary top-level node param, so \`bindPatches\` reaches it as plain JSON and the level can cook on a worker. Its defaults are not a picture, they are the RECTANGLE OF ONE CELL: cell [0, 0] of a 64-unit level, which is [0, 64) on both axes, queried with the 4-unit halo it needs (the scatter window runs -4 to 68) and clipped back to what it owns. Note where that box is NOT — a cell is always [c*size, (c+1)*size), so no cell is ever centred on the origin, and a graph whose default box straddles it is quietly claiming to be a window rather than a cell. What a bind still supplies is the SEEDS: standalone they are the literals below, while a World writes ctx.worldSeed and salts of it, so the standalone cook shows this cell's geometry and mechanism rather than any particular world's bytes. Four seam hazards are wired on purpose. (1) The source is \`pointScatterInWorld\` — \`basics-scatter-in-world\` teaches it alone — whose lattice is a function of its own \`seed\` and never of the graph seed, so bind hands it a cell-INVARIANT \`ctx.worldSeed\` and varies only \`boundsMin\`/\`boundsMax\`. (2) The density noise carries a LITERAL \`seed\` inside its spec instead of \`{ \\"from\\": \\"node\\", \\"variant\\": 0 }\`, because a nodeSeed-folded noise 'samples a different region in every cell, so it must not feed anything that has to agree across a seam' (src/nodes/attributes.ts) — which is exactly what \`basics-reseed-a-noise\` wires up, and exactly what a level graph must not. (3) \`pointNeighborhood\` is the ONE-HOP rung: exact at a halo of \`radius\` and at no smaller width, so bind widens the scatter window by exactly 4 units and by nothing more. (4) \`filterByBounds\` at its default half-open boundary is the OWNERSHIP rule, bound from the UNWIDENED cell, because 'the exactness comes from the two cells sharing an endpoint value' — 'compare against the box, not against a recomputed index', since \`floor(67.8 / 0.1)\` is 677 while \`678 * 0.1\` is exactly 67.8 (docs/authoring.md). Its Y bounds are a finite +/-1e6 rather than infinities, which do not survive JSON and cannot be patched, and which an 'xz' World column does not bound anyway. \`filterByDensity\` and the \`randomField\` inside \`size\` both draw on their node seed, which the GRAPH seed does reach, so a per-cell \`graph.setSeed\` (or a \`bindPatches\` \`seed\`) would move them and 'the halo and the neighbour disagree, deterministically and silently' (src/runtime/types.ts); bind seeds them cell-invariantly and never reseeds the graph. The second output, \`populationRank\`, is the counter-example kept deliberately: a \`fraction\` field measures the population present in THIS cook, which under a World means the population HERE, so it is the unbounded rung no halo width can repair and the one thing in this graph a partitioned cook is not allowed to agree about.",
+    "tags": ["examples", "world", "streaming", "halo", "determinism"]
+  },
+  "nodes": [
+    {
+      "id": "scatter",
+      "type": "pointScatterInWorld",
+      "params": {
+        "density": 0.5,
+        "cellSize": 7,
+        "latticeMode": "xz",
+        "height": 0,
+        "boundsMin": [-4, 0, -4],
+        "boundsMax": [68, 0, 68],
+        "seed": 20259
+      }
+    },
+    {
+      "id": "density",
+      "type": "setAttribute",
+      "params": {
+        "name": "density",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "clamp",
+          "args": [
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "fbm",
+                  "base": "perlinNoise",
+                  "opts": {
+                    "seed": 7717,
+                    "frequency": 0.035,
+                    "octaves": 3,
+                    "gain": 0.5,
+                    "normalized": true,
+                    "position": { "fn": "position" }
+                  }
+                },
+                0.3,
+                0.8,
+                0,
+                1
+              ]
+            },
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": "thin",
+      "type": "filterByDensity",
+      "params": { "mode": "probabilistic", "seed": 0 }
+    },
+    {
+      "id": "crowding",
+      "type": "pointNeighborhood",
+      "params": { "radius": 4, "countAttr": "nbrCount" }
+    },
+    {
+      "id": "own",
+      "type": "filterByBounds",
+      "params": {
+        "mode": "inside",
+        "boundary": "halfOpen",
+        "boundsMin": [0, -1000000, 0],
+        "boundsMax": [64, 1000000, 64]
+      }
+    },
+    {
+      "id": "size",
+      "type": "setAttribute",
+      "params": {
+        "name": "size",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "mul",
+          "args": [
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "clamp",
+                  "args": [{ "fn": "attribute", "name": "nbrCount" }, 2, 16]
+                },
+                2,
+                16,
+                0.4,
+                1.35
+              ]
+            },
+            {
+              "fn": "remap",
+              "args": [{ "fn": "randomField", "key": "size" }, 0, 1, 0.85, 1.15]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "rank",
+      "type": "setAttribute",
+      "params": {
+        "name": "cookRank",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": { "fn": "fraction" }
+      }
+    }
+  ],
+  "connections": [
+    { "from": ["scatter", "out"], "to": ["density", "in"] },
+    { "from": ["density", "out"], "to": ["thin", "in"] },
+    { "from": ["thin", "out"], "to": ["crowding", "in"] },
+    { "from": ["crowding", "out"], "to": ["own", "in"] },
+    { "from": ["own", "out"], "to": ["size", "in"] },
+    { "from": ["own", "out"], "to": ["rank", "in"] }
+  ],
+  "outputs": [
+    { "id": "size", "pin": "out", "name": "points" },
+    { "id": "rank", "pin": "out", "name": "populationRank" }
+  ]
+}
+`;export{e as default};

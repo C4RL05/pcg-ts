@@ -3908,6 +3908,86 @@
         ]
       }
     },
+    "examples-streamed-terrain.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 871,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "nbrCount:u32",
+                "size:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                0.1792,
+                0,
+                0.013
+              ],
+              "max": [
+                63.9978,
+                0,
+                63.85
+              ]
+            }
+          }
+        ],
+        "populationRank": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 871,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "nbrCount:u32",
+                "cookRank:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                0.1792,
+                0,
+                0.013
+              ],
+              "max": [
+                63.9978,
+                0,
+                63.85
+              ]
+            }
+          }
+        ]
+      }
+    },
     "pipeline-1-boundary.json": {
       "outputs": {
         "boundary": [
