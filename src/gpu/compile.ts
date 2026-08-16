@@ -23,7 +23,7 @@
  * inside float arithmetic (f32 mantissa); as the kernel root it is
  * written as raw u32 and exact everywhere.
  */
-import { opaqueParam, paramSpecOf, paramValue } from "../fields/spec.js";
+import { opaqueParam, paramSpecOf, paramValue, specChildren } from "../fields/spec.js";
 import type { FieldSpec, FieldSpecArg } from "../fields/fieldJson.js";
 import { fieldFromJson, fieldFromJsonValueFree } from "../fields/fieldJson.js";
 import { hashCombine, hashString } from "../random/hash.js";
@@ -234,7 +234,8 @@ function resolveLayoutAttr(
       `${path}: ${origin}attribute ${JSON.stringify(name)} has type "string"; a string column has ` +
         "no numeric value to read — test it with " +
         `{ fn: "attributeIs", name: ${JSON.stringify(name)}, value: "..." }, which is 1 where it ` +
-        "matches and 0 elsewhere, or read a numeric or bool attribute",
+        `matches and 0 elsewhere, or select on it with { fn: "byAttribute", name: ${JSON.stringify(name)}, ` +
+        "cases: {...}, default: ... }, or read a numeric or bool attribute",
     );
   }
   if (expectTupleSize !== undefined && attr.tupleSize !== expectTupleSize) {
@@ -334,30 +335,40 @@ HANDLERS.set("attribute", (spec, path, ctx) => {
 });
 
 /**
- * Validate the STRING column `attributeIs` tests. Deliberately not
- * `resolveLayoutAttr`, which refuses strings wholesale and is right to:
- * a string column has no numeric value, so `attribute("species")` has
- * nothing to read. This one reads no value either — it compares an index
- * against an index — so the refusal it needs is the mirror image, and a
- * NUMERIC column is the mistake here. The message names `eq` for the
- * same reason the CPU constructor does: absence of a value is data,
- * absence of the right KIND of attribute is a bug the author can fix.
+ * Validate the STRING column `attributeIs` tests and `byAttribute`
+ * selects on. Deliberately not `resolveLayoutAttr`, which refuses strings
+ * wholesale and is right to: a string column has no numeric value, so
+ * `attribute("species")` has nothing to read. These two read no value
+ * either — they compare an index against an index — so the refusal they
+ * need is the mirror image, and a NUMERIC column is the mistake here. The
+ * message names `eq` for the same reason the CPU constructors do: absence
+ * of a value is data, absence of the right KIND of attribute is a bug the
+ * author can fix.
+ *
+ * `fn` and `verb` are the caller's, so the message names the fn the author
+ * actually wrote rather than the one that happens to share the check.
  *
  * No tuple cap, unlike the numeric path: only component 0 is read, so a
  * wide string tuple costs nothing and never has to fit in a `vecN`.
  */
-function resolveStringAttr(ctx: CompileCtx, path: string, name: string): FieldKernelAttr {
+function resolveStringAttr(
+  ctx: CompileCtx,
+  path: string,
+  name: string,
+  fn: string,
+  verb: string,
+): FieldKernelAttr {
   const attrs = ctx.layout.attributes;
   if (!Object.hasOwn(attrs, name)) {
     throw new GpuCompileError(
-      `${path}: attributeIs: attribute ${JSON.stringify(name)} is not in the kernel layout; ${describeLayout(ctx.layout)}`,
+      `${path}: ${fn}: attribute ${JSON.stringify(name)} is not in the kernel layout; ${describeLayout(ctx.layout)}`,
     );
   }
   const attr = attrs[name];
   if (attr.type !== "string") {
     throw new GpuCompileError(
-      `${path}: attributeIs: attribute ${JSON.stringify(name)} has type ${JSON.stringify(attr.type)}, ` +
-        "but attributeIs tests a string attribute; compare a numeric attribute with " +
+      `${path}: ${fn}: attribute ${JSON.stringify(name)} has type ${JSON.stringify(attr.type)}, ` +
+        `but ${fn} ${verb} a string attribute; compare a numeric attribute with ` +
         `{ fn: "eq", args: [{ fn: "attribute", name: ${JSON.stringify(name)} }, <number>] }`,
     );
   }
@@ -397,13 +408,53 @@ function resolveStringAttr(ctx: CompileCtx, path: string, name: string): FieldKe
 HANDLERS.set("attributeIs", (spec, path, ctx) => {
   const name = spec.name as string;
   const value = spec.value as string;
-  const attr = resolveStringAttr(ctx, path, name);
+  const attr = resolveStringAttr(ctx, path, name, "attributeIs", "tests");
   const b = ctx.binding(name);
   const slot = ctx.attrIsSlot(name, value);
   return ctx.emit(
     `select(0f, 1f, f32(${b.varName}[${flatIndex(attr.tupleSize, 0)}]) == params.consts[${slot}].x)`,
     1,
   );
+});
+
+// The N-way form is the SAME mechanism N times, not a second one: one
+// uniform slot per case key, drawn from the same plan under the same
+// `attrIsKey`, compared the same way against component 0 of the same
+// column. Everything the note above says about why the index must not be
+// baked applies here unchanged and for the same reason.
+//
+// The chain is right-to-left `select`s over the default, and the order it
+// is built in cannot change the answer: distinct case keys intern at
+// DISTINCT table indices and an element holds exactly one, so at most one
+// comparison is ever true. Absent keys hold -1 and are true on no lane.
+// The keys are sorted anyway, so the emitted text is a function of the
+// case SET rather than of the order an author wrote it in — two
+// permutations of one case set compile to identical WGSL.
+//
+// The comparison expression is byte-identical across cases, so `ctx.emit`
+// value-numbers it and the column is loaded and converted ONCE however
+// many cases there are; the per-case cost in the body is one `select`.
+HANDLERS.set("byAttribute", (spec, path, ctx) => {
+  const name = spec.name as string;
+  const cases = spec.cases as Record<string, unknown>;
+  const attr = resolveStringAttr(ctx, path, name, "byAttribute", "selects on");
+  const b = ctx.binding(name);
+  const keys = Object.keys(cases).sort();
+  const branches = keys.map((k) =>
+    compileArg(cases[k], `${path}.cases[${JSON.stringify(k)}]`, ctx),
+  );
+  const fallback = compileArg(spec.default, `${path}.default`, ctx);
+  const size = broadcastSizes("byAttribute", path, [
+    ...branches.map((v) => v.size),
+    fallback.size,
+  ]);
+  const lane = ctx.emit(`f32(${b.varName}[${flatIndex(attr.tupleSize, 0)}])`, 1);
+  let expr = splat(fallback, size);
+  keys.forEach((k, i) => {
+    const slot = ctx.attrIsSlot(name, k);
+    expr = `select(${expr}, ${splat(branches[i], size)}, ${lane.ref} == params.consts[${slot}].x)`;
+  });
+  return ctx.emit(expr, size);
 });
 
 HANDLERS.set("position", (_spec, path, ctx) => {
@@ -912,6 +963,15 @@ function collectAttrNames(v: unknown, out: Set<string>): void {
     if (typeof v.name === "string") out.add(v.name);
     return;
   }
+  // `byAttribute` reads a column AND holds nested branches, so unlike the
+  // two above it must claim its name and then keep walking. Returning here
+  // would leave an attribute read only inside a case value unbound, and the
+  // body would reference a binding nothing declared.
+  if (fn === "byAttribute") {
+    if (typeof v.name === "string") out.add(v.name);
+    for (const child of specChildren(v)) collectAttrNames(child, out);
+    return;
+  }
   if (fn === "position") {
     out.add("P");
     return;
@@ -993,10 +1053,11 @@ function bindingArity(value: number | readonly number[]): number {
 }
 
 /**
- * Walk `args` and `opts.position`, the two field-valued positions — plus
- * the expression spliced into a field-bound `param`, which is a third
- * one that lives beside the spec rather than inside it. It is walked for
- * the same reason the compiler descends into it: what it references is
+ * Walk every field-valued position ({@link specChildren} — `args` entries,
+ * `opts.position`, and `byAttribute`'s `cases` values and `default`) plus
+ * the expression spliced into a field-bound `param`, which is one more
+ * that lives beside the spec rather than inside it. It is walked for the
+ * same reason the compiler descends into it: what it references is
  * referenced by the kernel, so a `param` nested inside a spliced field
  * must claim its slot and write its value like any other.
  */
@@ -1008,12 +1069,7 @@ function eachSpecNode(v: unknown, visit: (node: Record<string, unknown>) => void
     if (bound !== undefined) eachSpecNode(bound, visit);
     return;
   }
-  const args = v.args;
-  if (Array.isArray(args)) {
-    for (const a of args) eachSpecNode(a, visit);
-  }
-  const opts = v.opts;
-  if (isPlainObject(opts)) eachSpecNode(opts.position, visit);
+  for (const child of specChildren(v)) eachSpecNode(child, visit);
 }
 
 /**
@@ -1067,6 +1123,22 @@ function computeParamPlan(root: FieldSpec): ParamPlan {
       if (typeof node.name !== "string" || node.name === "") return;
       if (typeof node.value !== "string") return;
       attrIs.set(attrIsKey(node.name, node.value), { attr: node.name, value: node.value });
+      return;
+    }
+    // One slot per CASE KEY, drawn from the same map under the same key —
+    // so a `byAttribute` case and an `attributeIs` on the same (attribute,
+    // literal) pair share one slot, and the whole downstream half of the
+    // mechanism (the sig, the geometry-aware filler, the -1-on-absence
+    // rule, the worker refusal, the fused decline) needs no new kind to
+    // learn about. The `return` ends this VISITOR call, not the walk —
+    // `eachSpecNode` descends into the case values afterwards either way,
+    // which is how a `param` nested inside a case still claims its slot.
+    if (node.fn === "byAttribute") {
+      if (typeof node.name !== "string" || node.name === "") return;
+      if (!isPlainObject(node.cases)) return;
+      for (const value of Object.keys(node.cases)) {
+        attrIs.set(attrIsKey(node.name, value), { attr: node.name, value });
+      }
       return;
     }
     if (node.fn !== "param" || typeof node.name !== "string" || node.name === "") return;
@@ -1130,9 +1202,10 @@ function computeParamPlan(root: FieldSpec): ParamPlan {
   if (total > MAX_FIELD_CONST_SLOTS) {
     throw new GpuCompileError(
       `this field needs ${total} uniform constant slots (${names.length} distinct params and ` +
-        `${attrIsKeys.length} distinct attributeIs literals), but a kernel carries at most ` +
-        `${MAX_FIELD_CONST_SLOTS} (raise MAX_FIELD_CONST_SLOTS in compile.ts if an expression ` +
-        "legitimately needs more)",
+        `${attrIsKeys.length} distinct string literals across its attributeIs tests and ` +
+        `byAttribute case keys), but a kernel carries at most ${MAX_FIELD_CONST_SLOTS}; ` +
+        "split the expression, or evaluate it on the CPU (raise MAX_FIELD_CONST_SLOTS in " +
+        "compile.ts if an expression legitimately needs more)",
     );
   }
   return {
@@ -1265,7 +1338,7 @@ export function paramConstValues(spec: FieldSpecArg, kernel: CompiledFieldKernel
   if (kernel.attrIsSlots.length > 0) {
     return {
       problem:
-        `this kernel carries ${kernel.attrIsSlots.length} attributeIs slot(s) ` +
+        `this kernel carries ${kernel.attrIsSlots.length} string-literal slot(s) ` +
         `(${kernel.attrIsSlots.map((a) => `${JSON.stringify(a.attr)} == ${JSON.stringify(a.value)}`).join(", ")}) ` +
         "whose values are string-table indices of the geometry being cooked; fill them with " +
         "constSlotValues, which takes that geometry's attribute set",

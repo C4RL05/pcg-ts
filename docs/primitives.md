@@ -149,7 +149,7 @@ Run it: `pcg run fill/scatter-clustered`
 
 Scatters candidates through a box and then removes any that fall closer than a minimum distance, giving evenly spaced points with no visible clumping — for anything with physical extent: trees, rocks, buildings. COUNT: over-scatter deliberately. The output count is EMERGENT and approaches a ceiling of about 0.7 x area / minDistance squared from BELOW — the default 4000 candidates reach only about 85% of it — so raising `count` keeps adding a few points for a long time, while the way to get materially more is a smaller `minDistance`. The scan is a deterministic greedy pass in index order, not a Poisson-disc sample, so the count is not controllable and looping to hit a target count will not converge. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly.
 
-**Content hash:** `3a0d277f9d3b1840`
+**Content hash:** `cc82fcafd7656e59`
 
 **Tags:** `fill`, `scatter`, `spacing`
 
@@ -175,7 +175,7 @@ Run it: `pcg run fill/scatter-even`
 
 Fills a box with a jittered grid of points and keeps only the cells where a 3D noise field rises above a threshold, carving connected volumes out of solid — caves, clouds, asteroid interiors, floating islands. COUNT: the grid is extent cubed over cellSize cubed, so this is the one primitive here that can blow up; halving `cellSize` costs eight times as many points in a three-dimensional region (four over a flat one) before the threshold takes any away. Connect the `in` pin and the bounds come from that geometry's own extents instead of the params, which is the library's only 'adapt to whatever arrives' mechanism. VARIATION: the jitter varies per instance but the CARVE PATTERN does not, so two instances hollow out the same shape unless their `variant` differs.
 
-**Content hash:** `d725ed5f8975818a`
+**Content hash:** `613a9dd972ddc544`
 
 **Tags:** `fill`, `noise`, `volume`
 
@@ -204,7 +204,7 @@ Run it: `pcg run fill/volume-by-noise`
 
 Measures each point's distance to the nearest point of a second cloud and keeps or drops it by that distance — 'no trees within 20m of the road', or 'cabins only near the lake'. This is the only way to ask how far anything is from anything: transferring the nearest value copies it but never reveals the distance. A point that finds nothing (an empty `features` cloud) is at distance Infinity, so 'le' drops it and 'ge' keeps it. Fully deterministic. Reads `P` on both inputs; writes nothing (the distance column is removed again).
 
-**Content hash:** `988d52b6ceb54ba4`
+**Content hash:** `d0aa7eab0a945715`
 
 **Tags:** `filter`, `spatial`, `proximity`
 
@@ -251,7 +251,7 @@ Run it: `pcg run filter/by-distance-to-curve`
 
 Counts each point's neighbours within a radius and keeps or drops it by that count — 'ge' removes lonely outliers and finds cluster cores, 'le' thins the dense middle out. Fully deterministic: it measures whatever arrives. Reads `P`; writes nothing (the count column is removed again).
 
-**Content hash:** `ee36765e9ee4552b`
+**Content hash:** `f461750d35f784ab`
 
 **Tags:** `filter`, `neighborhood`, `spatial`
 
@@ -275,7 +275,7 @@ Run it: `pcg run filter/by-neighbor-count`
 
 Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (the scratch distance column is removed again).
 
-**Content hash:** `6e560ec2b3e9af83`
+**Content hash:** `6453da45726fc30c`
 
 **Tags:** `filter`, `spatial`, `mask`
 
@@ -299,7 +299,7 @@ Run it: `pcg run filter/inside-radius`
 
 Keeps only the points where a normalized noise field rises above a threshold — a HARD mask, giving connected regions with visible edges, the way a coastline separates land from sea. For a soft, gradual fade instead, use `filter/thin-by-density`. On normalized noise a threshold of 0.5 keeps roughly half the area, and higher keeps less — but the usable band is only about 0.32 to 0.68, not the full 0..1 the param's range suggests; the `threshold` description gives the measured table. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances mask IDENTICALLY unless their `variant` differs. Reads `P`; writes nothing at all — the whole test is one field expression, so no scratch column is created to be cleaned up.
 
-**Content hash:** `badd94382742ee61`
+**Content hash:** `21ea595e362b93a1`
 
 **Tags:** `filter`, `noise`, `mask`
 
@@ -323,7 +323,7 @@ Run it: `pcg run filter/mask-by-noise`
 
 Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, so no reference of any kind can stand there and no knob can move it — two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.
 
-**Content hash:** `f6f376aa61310021`
+**Content hash:** `c7eab56acaf8bf4e`
 
 **Tags:** `filter`, `noise`, `density`
 
@@ -398,7 +398,7 @@ Run it: `pcg run place/along-curve`
 
 Casts a ray from every point along a direction, moves each one to where it hits the mesh, and DISCARDS the ones that hit nothing — which is what turns any flat scatter into a terrain-aware one. THREE nodes casting ONE ray: the transfer moves `P` to the hit AND reports per point whether it found anything, so the filter that discards the misses reads the outcome of the very ray that did the moving. It used to be five nodes and two rays, the second cast only to recover what the first already knew; there is nothing left to get out of order. A miss keeps its prior position and is filtered out. Fully deterministic. Reads and writes `P`; the internal `__onSurface` flag column (bool, tuple 1) is removed again. PRECONDITION: the input must not already carry `__onSurface` under a different shape — the hit flag refuses to delete an existing column, so it stops instead of cooking something plausible; an input holding the name as a bool is harmless, since every point is rewritten.
 
-**Content hash:** `8240be26af3cc83a`
+**Content hash:** `998e22fafd04cba1`
 
 **Tags:** `place`, `surface`, `raycast`, `terrain`
 
@@ -445,7 +445,7 @@ Run it: `pcg run place/on-surface`
 
 Scatters points on a mesh and keeps only the ones on gentle enough ground below a height limit — the standard 'where can vegetation go' test, and the shape every forest in the demo corpus is built from. `maxSlope` is on the 0..1 scale `place/on-surface` writes, where 0 is dead flat: 0.3 is about a 45-degree limit. VARIATION: yes, through the scatter. Built on `place/on-surface`, so the output carries `height`, `slope`, `normal` and `density` too.
 
-**Content hash:** `dd94c5b8741967f1`
+**Content hash:** `b5bdeceea73e7232`
 
 **Tags:** `place`, `surface`, `terrain`, `vegetation`
 
@@ -494,7 +494,7 @@ Run it: `pcg run place/radial-on-curve`
 
 Scatters points uniformly inside a disc in the XZ plane by scattering a square and rejecting the corners — the circular counterpart to scattering a box, and the right answer when scattering a square and hoping is wrong. COUNT: `count` is the number of CANDIDATES; the disc keeps about 78.5% of them, so asking for 1000 gives roughly 785 points. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly. Writes `P`; leaves the per-point `scale` attribute at 1.
 
-**Content hash:** `80a61364563e287a`
+**Content hash:** `47763b3db8aefc2d`
 
 **Tags:** `shape`, `scatter`, `radial`
 
@@ -600,7 +600,7 @@ Run it: `pcg run shape/ring`
 
 Scatters points uniformly over the surface of a sphere, by rejecting a cube scatter down to the ball first and then pushing every survivor out to the surface. The rejection step is the content: normalizing a cube scatter directly piles points up toward the eight corner directions, and the result looks wrong without looking obviously wrong. COUNT: `count` is the number of CANDIDATES; the ball keeps about 52.4% of them. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly. Writes `P`; leaves the per-point `scale` attribute at 1.
 
-**Content hash:** `bfae98c5249b3ebd`
+**Content hash:** `3156102d0ccd5bf2`
 
 **Tags:** `shape`, `scatter`, `radial`
 

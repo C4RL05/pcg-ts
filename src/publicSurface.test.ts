@@ -17,7 +17,7 @@ const ROOT_SURFACE = [
   "STANDARD_POINT_ATTRS", "TRANSFER_AREA_EPS", "TRANSFER_BARY_EPS", "TRANSFER_BOX_PAD_REL",
   "TRANSFER_DET_EPS", "VERSION", "World", "WorldValidationError", "abs", "acos", "add",
   "applyParamPatches", "asin", "atan", "atan2", "attribute", "attributeIs", "attributeReduce",
-  "attributeRemap", "buildInstanceBatches", "capture", "captureAsync", "clamp",
+  "attributeRemap", "buildInstanceBatches", "byAttribute", "capture", "captureAsync", "clamp",
   "cloneGeometry", "component", "composeTRS", "connectPoints", "constant", "cook",
   "copyToPoints", "cos", "createGpuCookStats", "createPointCloud", "createPolyline",
   "createTriangleMesh", "dataInput", "defineNode", "describeSubgraphParams",

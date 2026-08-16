@@ -19,15 +19,21 @@ export interface FieldKernelAttr {
 }
 
 /**
- * One `attributeIs` (attribute, literal) pair, and so one uniform
- * constant slot: the slot holds that literal's index in the string table
- * of the geometry the kernel is dispatched over. See
+ * One (attribute, string literal) pair, and so one uniform constant slot:
+ * the slot holds that literal's index in the string table of the geometry
+ * the kernel is dispatched over. See
  * {@link CompiledFieldKernel.attrIsSlots} for why the index is not here.
+ *
+ * TWO fns mint these, and they share the pool: an `attributeIs` literal
+ * and each of a `byAttribute`'s case KEYS. Keyed by the pair rather than
+ * by the fn, so an `attributeIs("part", "rod")` and a `byAttribute` case
+ * `"rod"` on the same attribute occupy ONE slot — one index is one index,
+ * whichever fn asked for it.
  */
 export interface AttrIsSlot {
-  /** The string attribute the predicate tests. */
+  /** The string attribute the predicate tests or the case set selects on. */
   readonly attr: string;
-  /** The literal it is tested against. */
+  /** The literal it is compared against — a test literal or a case key. */
   readonly value: string;
 }
 

@@ -12,6 +12,14 @@
  *   STRING attribute equals the literal, 0 elsewhere; a literal the
  *   geometry's string table does not hold is all zeros rather than an
  *   error (see {@link attributeIs})
+ * - `{ fn: "byAttribute", name: "part", cases: { "rod": 1, "panel": [1, 0.7, 1] },
+ *   default: 1 }` — the N-way form: the case whose KEY equals the string
+ *   attribute's value, or `default` where none does. Case values are full
+ *   argument positions (spec, number, or tuple) and broadcast against each
+ *   other like any other combinator's. The `default` is REQUIRED — naming
+ *   the fall-through is the point of the fn — and a case key the
+ *   geometry's table does not hold matches nothing and takes it, for the
+ *   same partition-independence reason {@link attributeIs} yields zeros
  * - `{ fn: "position" }` / `{ fn: "index" }`
  * - `{ fn: "fraction" }` — normalized index, `index / (count - 1)`:
  *   exactly 0 on the first element and exactly 1 on the last (a lone
@@ -64,6 +72,7 @@ import {
   atan2,
   attribute,
   attributeIs,
+  byAttribute,
   clamp,
   component,
   constant,
@@ -114,6 +123,7 @@ import {
   peekFieldSpec,
   recordSplicedProvenance,
   recordWithheld,
+  specChildren,
   splicedProvenance,
   withheldOver,
   withheldReason,
@@ -354,6 +364,62 @@ register(
       );
     }
     return attributeIs(spec.name, spec.value);
+  },
+);
+
+// Per-element for the same reason `attributeIs` is, and the reason is
+// stronger here rather than weaker: even when every case VALUE is uniform,
+// which case fires is read from a column, so two elements of one domain
+// can differ.
+register(
+  "byAttribute",
+  "per-element",
+  ["name", "cases", "default"],
+  `{ fn: "byAttribute", name: "part", cases: { "rod": 1, "panel": [1, 0.7, 1] }, default: 1 }`,
+  (spec, path) => {
+    if (typeof spec.name !== "string" || spec.name === "") {
+      fail(`${path}.name`, "byAttribute requires a non-empty string name");
+    }
+    if (!isPlainObject(spec.cases)) {
+      fail(
+        `${path}.cases`,
+        `byAttribute requires a "cases" object keyed by the string values of ${JSON.stringify(spec.name)}, got ${describeValue(spec.cases)}`,
+      );
+    }
+    const keys = Object.keys(spec.cases);
+    if (keys.length === 0) {
+      fail(
+        `${path}.cases`,
+        "byAttribute requires at least one case; a case set with no cases is its default written the long way",
+      );
+    }
+    // Required, and the message says why rather than only reporting the
+    // missing key: an unnamed fall-through is the defect this fn exists to
+    // remove, so defaulting it here would reinstate the defect one level
+    // down, under a value nobody wrote.
+    if (spec.default === undefined) {
+      fail(
+        `${path}.default`,
+        `byAttribute requires a "default": an element whose ${JSON.stringify(spec.name)} matches no case has to ` +
+          "resolve to something, and naming it here is the point of this fn — write a number, a " +
+          "tuple, or a spec, or add a case for every value you expect. Note that a case key this " +
+          "geometry's string table does not hold matches nothing and takes the default, so the " +
+          "default is reachable even when every value you expect has a case",
+      );
+    }
+    // Null-prototype, because a case key is an author's string and
+    // `"__proto__"` is among the strings they may write. `JSON.parse`
+    // creates a real own property for it, but assigning it onto a PLAIN
+    // object runs `Object.prototype`'s setter instead, so the case would
+    // vanish here while the GPU compiler — which reads `Object.keys` off
+    // the raw spec — still allocated a slot for it. That is a silent
+    // CPU/GPU disagreement in the one place this fn promises exactness.
+    // Same reasoning, same fix as `foldOnce` in `./fold.ts`.
+    const cases: Record<string, Field> = Object.create(null) as Record<string, Field>;
+    for (const k of keys) {
+      cases[k] = buildArg(spec.cases[k], `${path}.cases[${JSON.stringify(k)}]`);
+    }
+    return byAttribute(spec.name, cases, buildArg(spec.default, `${path}.default`));
   },
 );
 
@@ -986,10 +1052,10 @@ export type FieldBindings = Readonly<Record<string, number | readonly number[] |
 
 /**
  * Visit every spec node in a tree, once each. The field-valued positions
- * are `args` entries and `opts.position` — the noise samplers' position
- * input is an argument position like any other, which is why a `param`
- * can appear there too (`collectAttrNames` in `src/gpu/compile.ts` walks
- * the same two).
+ * come from {@link specChildren}, the single answer shared with the walks
+ * in `fold.ts`, `src/gpu/compile.ts` and `src/gpu/run.ts` — so a fn that
+ * puts a spec somewhere new is taught once rather than four times, in four
+ * places whose disagreement would be silent.
  *
  * `seen` guards cycles: `buildSpec` rejects them before anything reaches
  * here, but {@link paramNamesOf} is public and may be handed raw JSON
@@ -1003,12 +1069,7 @@ function walkSpecNodes(
   if (!isPlainObject(v) || seen.has(v)) return;
   seen.add(v);
   visit(v);
-  const args = v.args;
-  if (Array.isArray(args)) {
-    for (const a of args) walkSpecNodes(a, visit, seen);
-  }
-  const opts = v.opts;
-  if (isPlainObject(opts)) walkSpecNodes(opts.position, visit, seen);
+  for (const child of specChildren(v)) walkSpecNodes(child, visit, seen);
 }
 
 /** Call `visit` for every well-formed `param` node in `spec`. */

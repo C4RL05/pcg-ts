@@ -82,23 +82,45 @@ gap 8, which is the reason.
    has no such field and a second vocabulary is what a panel file is for.
    None of the three reaches `Field.key`, so the rig cooks to the same
    hash (`2778aafc`) either side of the change.
-6. **No `switch` / `cases` over a string.** Three nested `lerp`s over
-   three `attributeIs` calls; a fifth kind means editing three axes. Worse,
-   a typo'd literal returns all-zeros silently, and the rig's fourth part
-   kind `clamp` ALREADY falls through unselected — verified: its instance
-   transforms are bit-identical before and after the change that was
-   supposed to resize it. Wants
-   `{"fn":"byAttribute","name":"part","cases":{…},"default":…}` with keys
-   validated against the string table.
+6. **~~No `switch` / `cases` over a string.~~ SHIPPED 2026-08-16** as
+   `{"fn":"byAttribute","name":…,"cases":{…},"default":…}`; see
+   `PLAN-by-attribute.md`. The rig's part sizing is three `byAttribute`
+   calls instead of three nested `lerp`s over `attributeIs`, and `clamp`
+   — which had been silently falling through to the uniform base scale —
+   now has a stated case.
+   **Two things this entry asked for are impossible and the feature does
+   not pretend otherwise.** Case keys are NOT validated against the
+   string table: each cell cooks its own geometry with its own table, so
+   a cell legitimately lacking a value would throw while its neighbour
+   succeeded (the partition-safety argument in `PLAN-attribute-is.md`).
+   And duplicate-key detection is unimplementable — `JSON.parse`
+   collapses duplicate object keys before the grammar ever sees them. So
+   a misspelled key is still dead code; what the form buys is that the
+   fall-through is NAMED and the case set is enumerable in one place.
 7. **No graph-scoped param.** "Cable radius" lives in three nodes and only
    the panel's `also` knows they are one thing. Inline params are
    node-scoped by design, so they cannot fix this. Wants a top-level
    `params` block a node's field expression binds by name.
-8. **Point filters drop all topology**, which forces the
-   tag → `mergePoints` → regroup idiom throughout the rig, and is exactly
-   why `mergePrimitives` had nothing to preserve. Wants `topology: "keep"`
-   on `filterByAttribute` and friends, dropping only primitives that lose
-   points.
+8. **~~Point filters drop all topology.~~ SHIPPED 2026-08-16** as
+   `topology: "drop" | "keep"` on the five point filters
+   (`filterByDensity`, `filterByBounds`, `filterByAttribute`,
+   `filterByExpression`, `selfPrune`), default `"drop"` and byte-identical
+   there; a primitive survives iff EVERY point it references does. See
+   `PLAN-filter-topology.md`. `gatherPrimitives` was reused rather than
+   duplicated — its `dropUnreferenced` boolean became
+   `GatherPointRule = "all" | "referenced" | ArrayLike<number>`, because
+   `"keep"` must emit exactly the point domain `"drop"` emits and neither
+   old rule does that.
+   **This entry's causal claim was wrong about the rig, which is worth
+   keeping.** It said filters dropping topology was "exactly why
+   `mergePrimitives` had nothing to preserve". Measured: `trussKeep` sits
+   BELOW a `mergePoints` that had already flattened to 184 points and 0
+   primitives, so the topology was destroyed by the MERGE, not by the
+   filter. The feature is right in general and buys the rig nothing. What
+   the rig actually wants is `mergePrimitives` in place of `mergePoints`
+   at `trussMove0/2/4/6`, which makes `trussChordPath` / `trussBracePath`
+   and eight `trussTag*` nodes dead — ten nodes, wiring in the plan doc.
+   NOT YET APPLIED.
 9. **`attributeIs` disqualifies a fused GPU run** (`run-plan-failed`), so
    adding string variation silently makes a node CPU-only. Known and
    documented when it shipped; the rig is the first graph to pay it.
@@ -107,6 +129,20 @@ gap 8, which is the reason.
     `spineWander.verticalAmplitude` had become
     `spineWander.translate.verticalAmplitude` required launching a
     browser. Wants `pcg validate --params`.
+11. **`tests/graphs.golden.json` CANNOT SEE INSTANCE TRANSFORMS**, added
+    2026-08-16 and not an expressiveness gap like the ten above — a
+    coverage one, found while fixing gap 6. The rig's `clamp` parts were
+    resized from `(1,1,1)` to `(1.25, 0.5, 1.25)`, which is plainly
+    visible in the render, and the golden entry did not move by one byte
+    in any of the three states the rewrite passed through. That is how
+    the silent fall-through survived in the first place: the golden pins
+    per-domain counts and `P` bounds, and an instances output contributes
+    neither. Combined with what `tests/foldCorpus.test.ts` already
+    records — the golden is a SHAPE gate within a 1e-3 tolerance, not a
+    byte gate — the honest summary is that no committed artifact would
+    notice a graph's instance transforms all changing. Wants the golden
+    to carry a digest of each instances output's transforms, which is
+    cheap and would have caught this without anyone looking.
 
 **~~Primitive identity, so primitive-domain randomness stops being
 index-keyed.~~ SHIPPED 2026-08-16** — `primitiveIdentities` in

@@ -1346,8 +1346,8 @@ describe("variation classification", () => {
    * should see, so it fails here until someone writes it down.
    */
   const PER_ELEMENT = [
-    "attribute", "attributeIs", "fbm", "fraction", "index", "param", "perlinNoise", "position",
-    "randomField", "simplexNoise", "valueNoise", "worleyNoise",
+    "attribute", "attributeIs", "byAttribute", "fbm", "fraction", "index", "param", "perlinNoise",
+    "position", "randomField", "simplexNoise", "valueNoise", "worleyNoise",
   ];
 
   it("every registered fn carries an explicit answer", () => {

@@ -15,8 +15,8 @@ const LAYOUT: FieldKernelLayout = {
     active: { type: "bool", tupleSize: 1 },
     id: { type: "u32", tupleSize: 1 },
     material: { type: "i32", tupleSize: 1 },
-    // `attributeIs` is the one fn that reads a string column; `tags` is
-    // the tuple case, which the stride has to survive.
+    // `attributeIs` and `byAttribute` are the fns that read a string
+    // column; `tags` is the tuple case, which the stride has to survive.
     species: { type: "string", tupleSize: 1 },
     tags: { type: "string", tupleSize: 2 },
   },
@@ -243,6 +243,12 @@ describe("grammar coverage", () => {
     constant: { fn: "constant", value: 1 },
     attribute: { fn: "attribute", name: "density" },
     attributeIs: { fn: "attributeIs", name: "species", value: "pine" },
+    byAttribute: {
+      fn: "byAttribute",
+      name: "species",
+      cases: { pine: 1, oak: [2, 3] },
+      default: 0,
+    },
     position: { fn: "position" },
     index: { fn: "index" },
     fraction: { fn: "fraction" },
@@ -919,7 +925,7 @@ describe("attributeIs", () => {
     const k = compileFieldSpec(spec, LAYOUT);
     const refused = paramConstValues(spec, k);
     expect("problem" in refused && refused.problem).toMatch(
-      /attributeIs slot\(s\) \("species" == "pine"\).*constSlotValues/s,
+      /string-literal slot\(s\) \("species" == "pine"\).*constSlotValues/s,
     );
   });
 

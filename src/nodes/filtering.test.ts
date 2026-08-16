@@ -8,6 +8,7 @@ import {
   filterByAttribute,
   filterByBounds,
   filterByDensity,
+  filterByExpression,
   filterPrimitivesByAttribute,
   type FilterPrimitivesByAttributeParams,
   filterPrimitivesByBounds,
@@ -16,6 +17,7 @@ import {
   projectToPlane,
   selfPrune,
 } from "./index.js";
+import { gatherPrimitives } from "./util.js";
 import {
   firstGeo,
   permutePoints,
@@ -1869,3 +1871,245 @@ describe("projectToPlane", () => {
     ).rejects.toThrow(/non-zero/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// topology "keep": the point filters that leave a network a network
+//
+// ONE block for all five, because it is one decision shared by five nodes
+// (PLAN-filter-topology.md) — a per-node copy of these assertions is how
+// the five would drift on what a filtered geometry IS.
+
+/**
+ * Seven points on the X axis at x = 0..6, plus a LOOSE eighth at x = 1 that
+ * belongs to no primitive, and five primitives chosen so that every arm of
+ * the survival rule has a case:
+ *
+ *   road0 [0,1,2]  every point survives the box below      -> kept
+ *   road1 [2,3]    every point survives                    -> kept
+ *   road2 [4,5,6]  no point survives                       -> dropped
+ *   road3 [3,4]    point 3 survives, point 4 does not      -> DROPPED
+ *
+ * road3 is the one the rule is actually about: a primitive is dropped for
+ * losing ONE point, however many it keeps.
+ *
+ * No empty primitive here — setPolylineTopology refuses a polyline with
+ * fewer than two vertices, so that case needs bare setTopology and gets its
+ * own fixture below.
+ */
+function xNetwork(): Geometry {
+  return networkAt(
+    [
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+      [3, 0, 0],
+      [4, 0, 0],
+      [5, 0, 0],
+      [6, 0, 0],
+      [1, 0, 0],
+    ],
+    [[0, 1, 2], [2, 3], [4, 5, 6], [3, 4]],
+  );
+}
+
+/** The box that keeps x <= 3: points 0, 1, 2, 3 and the loose 7. */
+const HALF_BOX = { boundsMin: [-1, -1, -1], boundsMax: [3.5, 1, 1] } as const;
+
+async function boundsFiltered(geo: Geometry, topology: string): Promise<Geometry> {
+  return firstGeo(
+    (await runNode(filterByBounds, { ...HALF_BOX, topology }, { in: [makeGeometryItem(geo)] })).out,
+  );
+}
+
+describe('point filters: topology "keep"', () => {
+  it('drops every primitive by default, and "drop" says the same thing explicitly', async () => {
+    for (const params of [{ ...HALF_BOX }, { ...HALF_BOX, topology: "drop" }]) {
+      const out = firstGeo(
+        (await runNode(filterByBounds, params, { in: [makeGeometryItem(xNetwork())] })).out,
+      );
+      expect(out.pointCount).toBe(5);
+      expect(out.primitiveCount).toBe(0);
+      expect(out.vertexCount).toBe(0);
+      // A point cloud has no room for the detail domain either.
+      expect(out.attrs.detail.names()).toEqual([]);
+    }
+  });
+
+  it("keeps only the primitives that lose no point", async () => {
+    const out = await boundsFiltered(xNetwork(), "keep");
+    expect(kindsOf(out)).toEqual(["road0", "road1"]);
+    // road3 kept point 3 and lost point 4, so it is gone: a partially
+    // surviving polyline has no truncation that means anything.
+    expect(kindsOf(out)).not.toContain("road3");
+    expect(primXs(out)).toEqual([
+      [0, 1, 2],
+      [2, 3],
+    ]);
+  });
+
+  it("renumbers the topology onto the surviving points", async () => {
+    const out = await boundsFiltered(xNetwork(), "keep");
+    expect(Array.from(out.vertexToPoint)).toEqual([0, 1, 2, 2, 3]);
+    expect(Array.from(out.primVertexStart)).toEqual([0, 3]);
+    expect(Array.from(out.primVertexCount)).toEqual([3, 2]);
+  });
+
+  it("keeps a primitive with no vertices: it has no point to lose", async () => {
+    // Only bare setTopology can build one — setPolylineTopology refuses a
+    // polyline under two vertices — and the rule never SHORTENS a primitive,
+    // so this can only come out if it went in. filterPrimitivesByBounds
+    // writes down the opposite vacuous answer for the same case and the two
+    // agree: "where is it" has no answer for a primitive that is nowhere,
+    // while "did it lose a point" does.
+    const geo = cloudAt([
+      [0, 0, 0],
+      [9, 0, 0],
+    ]);
+    geo.setTopology(new Uint32Array([0]), new Uint32Array([0, 1]), new Uint32Array([1, 0]));
+    const out = await boundsFiltered(geo, "keep");
+    expect(out.pointCount).toBe(1);
+    expect(Array.from(out.primVertexCount)).toEqual([1, 0]);
+  });
+
+  it("carries the vertex, primitive and detail domains", async () => {
+    const out = await boundsFiltered(xNetwork(), "keep");
+    // sourceVertex names each vertex's index in the INPUT, so this is the
+    // proof that vertex values travelled with the primitive that owns them
+    // rather than with a position in the array.
+    const sv = out.attrs.vertex.require("sourceVertex");
+    expect(Array.from({ length: out.vertexCount }, (_, v) => sv.get(v))).toEqual([0, 1, 2, 3, 4]);
+    expect(out.attrs.primitive.require("primtype").getString(0)).toBe("polyline");
+    expect(out.attrs.detail.require("region").getString(0)).toBe("north");
+  });
+
+  it("emits the same POINT domain under both settings", async () => {
+    const geo = xNetwork();
+    const dropped = snapshotGeometry(await boundsFiltered(geo, "drop"));
+    const kept = snapshotGeometry(await boundsFiltered(geo, "keep"));
+    // Same points, same order, same attributes: `topology` only ever ADDS.
+    expect(kept.point).toEqual(dropped.point);
+    expect(kept.topology).not.toEqual(dropped.topology);
+  });
+
+  it("keeps a surviving point that belongs to no primitive", async () => {
+    const out = await boundsFiltered(xNetwork(), "keep");
+    // Point 7 (x = 1) is in no primitive. gatherPrimitives' "referenced"
+    // rule would have dropped it; the explicit selection must not.
+    expect(positionsOf(out).map((p) => p[0])).toEqual([0, 1, 2, 3, 1]);
+  });
+
+  it("reproduces the input exactly when the predicate keeps every point", async () => {
+    const geo = xNetwork();
+    const before = snapshotGeometry(geo);
+    const out = firstGeo(
+      (
+        await runNode(
+          filterByBounds,
+          { boundsMin: [-99, -99, -99], boundsMax: [99, 99, 99], topology: "keep" },
+          { in: [makeGeometryItem(geo)] },
+        )
+      ).out,
+    );
+    expect(snapshotGeometry(out)).toEqual(before);
+  });
+
+  it("outputs an empty topology, not a bare cloud, when the input has none", async () => {
+    const out = await boundsFiltered(
+      cloudAt([
+        [0, 0, 0],
+        [9, 0, 0],
+      ]),
+      "keep",
+    );
+    // What the output IS depends on the graph, never on the data.
+    expect(out.pointCount).toBe(1);
+    expect(out.primitiveCount).toBe(0);
+    expect(Array.from(out.primVertexStart)).toEqual([]);
+  });
+
+  it("is the same decision on all five point filters", async () => {
+    const geo = xNetwork();
+    const density = geo.attrs.point.require("density");
+    const mark = geo.attrs.point.add("mark", "f32", 1, 0);
+    const P = geo.attrs.point.require("P");
+    for (let i = 0; i < geo.pointCount; i++) {
+      // The same survivor set the box picks: x <= 3, plus the loose point.
+      const keep = P.get(i, 0) <= 3.5 ? 1 : 0;
+      mark.set(i, keep);
+      density.set(i, keep);
+    }
+    const [box, dens, attr, expr, prune] = await Promise.all([
+      boundsFiltered(geo, "keep"),
+      runNode(
+        filterByDensity,
+        { mode: "threshold", threshold: 0.5, topology: "keep" },
+        { in: [makeGeometryItem(geo)] },
+      ).then((r) => firstGeo(r.out)),
+      runNode(
+        filterByAttribute,
+        { attribute: "mark", comparison: "gt", value: 0.5, topology: "keep" },
+        { in: [makeGeometryItem(geo)] },
+      ).then((r) => firstGeo(r.out)),
+      runNode(
+        filterByExpression,
+        { predicate: attribute("mark"), topology: "keep" },
+        { in: [makeGeometryItem(geo)] },
+      ).then((r) => firstGeo(r.out)),
+      // selfPrune at a radius nothing can violate keeps the whole cloud, so
+      // every primitive must come back — including road4.
+      runNode(
+        selfPrune,
+        { minDistance: 0.0001, topology: "keep" },
+        { in: [makeGeometryItem(geo)] },
+      ).then((r) => firstGeo(r.out)),
+    ]);
+    for (const out of [dens, attr, expr]) expect(kindsOf(out)).toEqual(kindsOf(box));
+    expect(kindsOf(box)).toEqual(["road0", "road1"]);
+    expect(kindsOf(prune)).toEqual(["road0", "road1", "road2", "road3"]);
+  });
+
+  it("refuses a misspelled value on every one of the five, naming the node", async () => {
+    const cases: [string, Promise<unknown>][] = [
+      ["filterByBounds", runNode(filterByBounds, { topology: "Keep" }, item())],
+      ["filterByDensity", runNode(filterByDensity, { topology: "Keep" }, item())],
+      ["filterByAttribute", runNode(filterByAttribute, { topology: "Keep" }, item())],
+      ["filterByExpression", runNode(filterByExpression, { topology: "Keep" }, item())],
+      // selfPrune checks ABOVE its own off-switch, so a typo is still an
+      // error at a minDistance that would have passed the input through.
+      ["selfPrune", runNode(selfPrune, { minDistance: 0, topology: "Keep" }, item())],
+    ];
+    for (const [who, ran] of cases) {
+      await expect(ran).rejects.toThrow(
+        new RegExp(
+          `^${who}: topology must be "drop" or "keep", got "Keep"; .*loses one point is dropped whole`,
+          "s",
+        ),
+      );
+    }
+  });
+
+  it("refuses a primitive selection the point selection cannot support", () => {
+    // The precondition of gatherPrimitives' explicit point rule. No shipped
+    // caller can reach it — the filters select the primitives from the same
+    // survivor mask — which is exactly why it is tested directly: without
+    // the guard the stale index passes setTopology's bounds check and names
+    // the WRONG point, silently.
+    expect(() => gatherPrimitives(xNetwork(), [3], [0, 1, 2, 3, 7])).toThrow(
+      /gatherPrimitives: source primitive 3 references point 4, which is not in the explicit point selection/,
+    );
+  });
+
+  it("refuses a point selection that names a point twice", () => {
+    // The other half of the same precondition: a repeated index would win
+    // with its LAST slot and every vertex naming that point would land on a
+    // copy the caller did not mean — silently, since the count still adds up.
+    expect(() => gatherPrimitives(xNetwork(), [0], [0, 1, 1, 2])).toThrow(
+      /gatherPrimitives: point 1 appears more than once in the explicit point selection \(at indices 1 and 2\)/,
+    );
+  });
+});
+
+/** A fresh single-geometry input pin over {@link xNetwork}. */
+function item(): { in: ReturnType<typeof makeGeometryItem>[] } {
+  return { in: [makeGeometryItem(xNetwork())] };
+}

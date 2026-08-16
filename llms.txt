@@ -291,6 +291,26 @@ into `constant`). All 45 fns (`listFieldFns()`):
     MISSPELLED literal reads as "nothing matches". Structural mistakes do
     still throw: a missing attribute, and a numeric one whose message
     names `eq(attribute(name), value)` as what was meant
+  - `{ fn: "byAttribute", name: "part", cases: { "rod": 1, "panel": [1, 0.7, 1] },
+    default: 1 }` — the N-way form of `attributeIs`: the case whose KEY
+    equals the string attribute's value, or `default` where none does.
+    Case values are full argument positions (spec, number, or tuple) and
+    broadcast against each other like any combinator's inputs, so the
+    result's tuple size is a property of the expression and never of
+    which case fired. The `default` is REQUIRED, and that is the point of
+    the fn: an unnamed fall-through cannot be searched for, reviewed or
+    edited, because it is the absence of an expression rather than one.
+    Case keys are NOT validated against the string table and cannot be —
+    a key the table does not hold matches nothing and takes the default,
+    for the same partition-independence reason `attributeIs` yields
+    zeros. So a MISSPELLED key is dead code, not an error. What it buys
+    is that the fall-through is explicit and the case set is enumerable
+    in one place. Parse-time checks: non-empty `name`, at least one case,
+    a present `default`, tuple sizes that broadcast. Duplicate keys are
+    NOT checkable — `JSON.parse` collapses them before the grammar runs.
+    Every case is evaluated then selected between, as the nested `lerp`s
+    it replaces already did; at most one case can fire, so the answer
+    does not depend on the order the cases are written in
   - `{ fn: "position" }` — reads P (tuple 3); `{ fn: "index" }` — 0,1,2,...
   - `{ fn: "fraction" }` — normalized index `i / (count - 1)`, spanning
     [0, 1] CLOSED: exactly 0 on the first element and exactly 1 on the
@@ -978,7 +998,7 @@ Surface:
     cause reported twice would read as two
   - `compile-error` — spec cannot lower to WGSL against the geometry's
     attribute layout (missing attribute, a string attribute reached by
-    `attribute` rather than by `attributeIs`, tuple size > 4, non-finite
+    `attribute` rather than by `attributeIs`/`byAttribute`, tuple size > 4, non-finite
     f32 constant)
   - `too-many-buffers` — kernel needs > 8 storage buffers (more than 7
     attribute inputs + the output; baseline WebGPU limit)
@@ -986,7 +1006,7 @@ Surface:
     compiled into the pipeline (unknown resident kind, field compile
     error, tuple/layout mismatch, missing standard attribute, buffer
     limit, a spawn over the instance budget or naming a bad
-    `assetAttr`/`colorAttr`, or an `attributeIs` anywhere in the run —
+    `assetAttr`/`colorAttr`, or an `attributeIs`/`byAttribute` anywhere in the run —
     its kernel compiles and dispatches fine on the per-node path, but
     the uniform it reads is a string-table index of the geometry being
     cooked and a PLAN has only attribute descriptors and a count).

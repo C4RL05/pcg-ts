@@ -1,7 +1,6 @@
 import { resolveField } from "./inputs.js";
 import { attachArgsSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
-  type Column,
   type Field,
   type FieldLike,
   elementCount,
@@ -10,29 +9,7 @@ import {
   keyRef,
   makeField,
 } from "./types.js";
-
-/**
- * Broadcast rule shared by all elementwise combinators: scalars
- * (tupleSize 1) broadcast against any tuple size; non-scalar tuple sizes
- * must match exactly.
- */
-function broadcastTupleSize(kind: string, sizes: readonly (number | undefined)[]): number | undefined {
-  let ts: number | undefined = 1;
-  for (const s of sizes) {
-    if (s === undefined) return undefined;
-    if (s === 1) continue;
-    if (ts !== 1 && ts !== s) {
-      throw new Error(`${kind}: incompatible tuple sizes ${ts} and ${s}`);
-    }
-    ts = s;
-  }
-  return ts;
-}
-
-/** Read component k of element i from a column, broadcasting scalars. */
-function readAt(col: Column, i: number, k: number): number {
-  return col.tupleSize === 1 ? col.data[i] : col.data[i * col.tupleSize + k];
-}
+import { broadcastTupleSize, readColumnAt as readAt } from "./broadcast.js";
 
 /**
  * Build an elementwise combinator field: inputs are broadcast per the

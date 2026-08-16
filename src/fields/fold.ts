@@ -43,7 +43,14 @@
  */
 import { createPointCloud } from "../data/index.js";
 import { type FieldBindings, fieldFromJson, fnVariation, paramNamesOf } from "./fieldJson.js";
-import { type FieldBindingValue, type FieldSpec, isSpecNumber, paramValue, peekFieldSpec } from "./spec.js";
+import {
+  type FieldBindingValue,
+  type FieldSpec,
+  isSpecNumber,
+  paramValue,
+  peekFieldSpec,
+  specChildren,
+} from "./spec.js";
 import { type EvalContext, type Field, evaluateField } from "./types.js";
 
 /**
@@ -152,15 +159,23 @@ function isLiteralArg(v: unknown): boolean {
 }
 
 /**
- * The spec-valued positions of a node: `args` entries and `opts.position`
- * — the same two `walkSpecNodes` in `fieldJson.ts` and `collectAttrNames`
- * in `src/gpu/compile.ts` walk. A noise's position input is an argument
- * position like any other, and it is where the corpus' folds actually
- * live: the noise itself varies per element, but the seed shift added to
- * its sample position does not.
+ * A noise's sample position, the one spec-valued position `rewrite` has to
+ * REBUILD by name rather than merely visit. It is where the corpus' folds
+ * actually live: the noise itself varies per element, but the seed shift
+ * added to its sample position does not.
+ *
+ * Pure VISITS use {@link specChildren} instead, which is the shared answer
+ * to "what hangs off this spec" — `args` entries, this, and
+ * `byAttribute`'s `cases` values and `default`.
  */
 function positionOpt(spec: FieldSpec): unknown {
   return isPlainObject(spec.opts) ? spec.opts.position : undefined;
+}
+
+/** `byAttribute`'s case values, in key order, or undefined for any other fn. */
+function caseEntries(spec: FieldSpec): [string, unknown][] | undefined {
+  if (!isPlainObject(spec.cases)) return undefined;
+  return Object.entries(spec.cases as Record<string, unknown>);
 }
 
 /**
@@ -293,10 +308,27 @@ function rewrite(spec: FieldSpec, ctx: EvalContext, bindings: FieldBindings | un
   const nextPosition = isSpec(position) ? rewrite(position, ctx, bindings) : position;
   const positionChanged = nextPosition !== position;
 
-  if (!argsChanged && !positionChanged) return spec;
+  // `byAttribute`'s branches. Rebuilt rather than merely visited, and
+  // keyed rather than positional, so the object that comes out carries the
+  // same keys in the same order as the one that went in — a case set whose
+  // keys moved would still cook the same, but the spec would no longer be
+  // what the author wrote, and `fieldToJson` hands that spec back.
+  const cases = caseEntries(spec);
+  const nextCases = cases?.map(
+    ([k, v]) => [k, isSpec(v) ? rewrite(v, ctx, bindings) : v] as [string, unknown],
+  );
+  const casesChanged =
+    cases !== undefined && nextCases !== undefined && nextCases.some((e, i) => e[1] !== cases[i][1]);
+  const fallback = spec.default;
+  const nextFallback = isSpec(fallback) ? rewrite(fallback, ctx, bindings) : fallback;
+  const fallbackChanged = nextFallback !== fallback;
+
+  if (!argsChanged && !positionChanged && !casesChanged && !fallbackChanged) return spec;
   const out: Record<string, unknown> = { ...spec };
   if (argsChanged) out.args = nextArgs;
   if (positionChanged) out.opts = { ...(spec.opts as Record<string, unknown>), position: nextPosition };
+  if (casesChanged) out.cases = Object.fromEntries(nextCases as [string, unknown][]);
+  if (fallbackChanged) out.default = nextFallback;
   return out as unknown as FieldSpec;
 }
 
@@ -362,13 +394,10 @@ function paramBindings(spec: FieldSpec, into: Record<string, FieldBindingValue>)
     into[name] = value;
     return true;
   }
-  if (Array.isArray(spec.args)) {
-    for (const a of spec.args) {
-      if (isSpec(a) && !paramBindings(a, into)) return false;
-    }
+  for (const child of specChildren(spec as unknown as Record<string, unknown>)) {
+    if (isSpec(child) && !paramBindings(child, into)) return false;
   }
-  const position = positionOpt(spec);
-  return !isSpec(position) || paramBindings(position, into);
+  return true;
 }
 
 function foldOnce(field: Field, spec: FieldSpec, seed: number): Field {

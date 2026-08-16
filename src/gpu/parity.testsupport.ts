@@ -65,9 +65,10 @@ export const PARITY_LAYOUT: FieldKernelLayout = {
     active: { type: "bool", tupleSize: 1 },
     id: { type: "u32", tupleSize: 1 },
     material: { type: "i32", tupleSize: 1 },
-    // The only string column, and the only fn that reads one is
-    // `attributeIs`. It is here so the corpus can carry that fn at all: a
-    // layout without a string attribute cannot compile it.
+    // The only string column, and the only fns that read one are
+    // `attributeIs` and `byAttribute`. It is here so the corpus can carry
+    // them at all: a layout without a string attribute cannot compile
+    // either.
     species: { type: "string", tupleSize: 1 },
   },
 };
@@ -83,6 +84,16 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   // (see attributeIs.testsupport.ts), because it is the one whose answer
   // comes from a uniform the compiler could not have baked.
   attributeIs: { fn: "attributeIs", name: "species", value: "pine" },
+  // Exact for the same reason, and the minimal spec deliberately mixes the
+  // three shapes a case set can take: a key the fixture's table HOLDS, a
+  // key it does not (which must take the default rather than throw), and a
+  // scalar default broadcast against tuple cases.
+  byAttribute: {
+    fn: "byAttribute",
+    name: "species",
+    cases: { pine: [1, 2, 3], nothing_interns_this: [4, 5, 6] },
+    default: 7,
+  },
   position: { fn: "position" },
   index: { fn: "index" },
   fraction: { fn: "fraction" },

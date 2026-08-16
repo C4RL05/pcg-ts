@@ -611,6 +611,65 @@ export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometr
 }
 
 /**
+ * How {@link gatherPrimitives} builds the output's POINT domain — the one
+ * thing a caller selecting primitives still has to decide.
+ *
+ * - `"all"` copies the point domain whole and leaves the topology the
+ *   indices it arrived with. A primitive filter's `unreferencedPoints
+ *   "keep"`: same points, same order, same identities.
+ * - `"referenced"` compacts to the points some surviving primitive still
+ *   references, in ascending source order, and renumbers the topology onto
+ *   them. A primitive filter's `unreferencedPoints "drop"`.
+ * - An EXPLICIT ascending list of distinct source point indices — the same
+ *   array {@link gatherPoints} takes — keeps exactly those points and
+ *   renumbers onto them. This is what a POINT filter running
+ *   `topology "keep"` passes: the survivors are already chosen, including
+ *   ones no primitive references, and the primitive list must be the
+ *   primitives all of whose points are in it.
+ *
+ * The explicit form carries a PRECONDITION the other two cannot violate:
+ * every point a surviving primitive references must appear in the
+ * selection. A caller that breaks it would otherwise get a stale index
+ * that `setTopology`'s bounds check accepts — a silently wrong point — so
+ * the vertex walk below checks it and throws instead.
+ */
+export type GatherPointRule = "all" | "referenced" | ArrayLike<number>;
+
+/**
+ * Remap slot for a point the output does not carry. A geometry can never
+ * hold 2^32 - 1 points, so no real index collides with it.
+ */
+const GATHER_NO_POINT = 0xffffffff;
+
+/**
+ * The precondition {@link GatherPointRule}'s explicit form carries, spelled
+ * out with the primitive that broke it — an error path, so the search for
+ * the owning primitive is a scan.
+ */
+function gatherSelectionError(
+  newStart: Uint32Array,
+  newCount: Uint32Array,
+  prims: ArrayLike<number>,
+  vertex: number,
+  point: number,
+): Error {
+  let owner = -1;
+  for (let k = 0; k < newStart.length; k++) {
+    if (vertex >= newStart[k] && vertex < newStart[k] + newCount[k]) {
+      owner = k;
+      break;
+    }
+  }
+  const source = owner >= 0 ? prims[owner] : -1;
+  return new Error(
+    `gatherPrimitives: source primitive ${source} references point ${point}, which is not in the explicit ` +
+      "point selection; the explicit rule keeps exactly the points it is given, so the primitive list must " +
+      "hold only primitives ALL of whose points are selected (that is the survival rule the point filters' " +
+      'topology "keep" applies). Pass "referenced" instead to let the point domain follow the primitives.',
+  );
+}
+
+/**
  * Build a geometry holding the selected PRIMITIVES of `src`, with their
  * topology intact: the chosen primitives in the given order, each keeping
  * its own vertices in their own order, plus every vertex, primitive and
@@ -618,18 +677,16 @@ export function gatherPoints(src: Geometry, indices: ArrayLike<number>): Geometr
  *
  * The counterpart of {@link gatherPoints}, and deliberately the only one of
  * the pair that preserves topology — which is the whole reason
- * `filterPrimitivesByBounds` and `filterPrimitivesByAttribute` exist.
+ * `filterPrimitivesByBounds` and `filterPrimitivesByAttribute` exist, and
+ * (through the explicit {@link GatherPointRule}) what the point filters'
+ * `topology "keep"` is built on.
  *
- * With `dropUnreferenced` the point domain is compacted to the points some
- * surviving primitive still references, in ascending source order (the
- * same convention {@link gatherPoints} callers produce), and the topology is
- * renumbered onto it. Otherwise the point domain is copied whole and the
- * topology keeps the indices it arrived with.
+ * `points` decides the point domain; see {@link GatherPointRule}.
  */
 export function gatherPrimitives(
   src: Geometry,
   prims: ArrayLike<number>,
-  dropUnreferenced: boolean,
+  points: GatherPointRule,
 ): Geometry {
   const starts = src.primVertexStart;
   const counts = src.primVertexCount;
@@ -653,20 +710,46 @@ export function gatherPrimitives(
   }
 
   const np = src.pointCount;
-  let pointSrc: Uint32Array | undefined;
+  let pointSrc: ArrayLike<number> | undefined;
   let remap: Uint32Array | undefined;
-  if (dropUnreferenced) {
+  if (points === "referenced") {
     const used = new Uint8Array(np);
     for (let v = 0; v < nv; v++) used[v2p[vertexSrc[v]]] = 1;
-    remap = new Uint32Array(np);
+    // Prefilled with the sentinel so the walk below reads the same way
+    // under both renumbering rules; an unused slot is never read here,
+    // since every surviving vertex names a point this loop marked used.
+    remap = new Uint32Array(np).fill(GATHER_NO_POINT);
     let kept = 0;
     for (let i = 0; i < np; i++) {
       if (used[i] === 1) remap[i] = kept++;
     }
-    pointSrc = new Uint32Array(kept);
+    const src2 = new Uint32Array(kept);
     let k = 0;
     for (let i = 0; i < np; i++) {
-      if (used[i] === 1) pointSrc[k++] = i;
+      if (used[i] === 1) src2[k++] = i;
+    }
+    pointSrc = src2;
+  } else if (points !== "all") {
+    // An explicit selection: the caller already chose the points, so the
+    // remap is read off it rather than derived from what survives.
+    pointSrc = points;
+    remap = new Uint32Array(np).fill(GATHER_NO_POINT);
+    for (let j = 0; j < points.length; j++) {
+      const p = points[j];
+      // Distinctness, checked while the remap is being written rather than
+      // in a pass of its own: a repeated index would silently win with its
+      // LAST slot, and every vertex naming that point would then land on a
+      // copy the caller did not mean. The membership half of the
+      // precondition is checked in the vertex walk below.
+      if (remap[p] !== GATHER_NO_POINT) {
+        throw new Error(
+          `gatherPrimitives: point ${p} appears more than once in the explicit point selection ` +
+            "(at indices " +
+            `${remap[p]} and ${j}); the selection must be distinct and ascending — it names each kept ` +
+            "point once, in source order, exactly as gatherPoints takes it.",
+        );
+      }
+      remap[p] = j;
     }
   }
 
@@ -677,7 +760,13 @@ export function gatherPrimitives(
   const newV2P = new Uint32Array(nv);
   for (let v = 0; v < nv; v++) {
     const pt = v2p[vertexSrc[v]];
-    newV2P[v] = remap === undefined ? pt : remap[pt];
+    if (remap === undefined) {
+      newV2P[v] = pt;
+      continue;
+    }
+    const to = remap[pt];
+    if (to === GATHER_NO_POINT) throw gatherSelectionError(newStart, newCount, prims, v, pt);
+    newV2P[v] = to;
   }
   out.setTopology(newV2P, newStart, newCount);
   copyElements(src.attrs.vertex, out.attrs.vertex, vertexSrc, nv);

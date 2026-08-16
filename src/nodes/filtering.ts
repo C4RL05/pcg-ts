@@ -2,12 +2,17 @@
  * Filtering nodes: keep or drop points by density, bounds, attribute
  * comparisons, minimum mutual distance, or project them onto a plane.
  *
- * Every POINT filter here outputs points only: it rebuilds the point
- * domain from the survivors, and the topology describing the points that
- * are gone goes with it. {@link filterPrimitivesByBounds} and
- * {@link filterPrimitivesByAttribute} are the exceptions in the library,
- * and they earn it by filtering the PRIMITIVE domain instead — see their
- * descriptions.
+ * Every POINT filter here rebuilds the point domain from the survivors,
+ * and by DEFAULT (`topology "drop"`) the topology describing the points
+ * that are gone goes with it — all of it, touched primitives and untouched
+ * alike. `topology "keep"` is the opt-in that drops only the primitives
+ * which actually lose a point; it is one shared param, one shared guard
+ * and one shared rebuild ({@link rebuildFiltered}) across all five,
+ * because five filters disagreeing about whether a network survives them
+ * is the same class of bug as two boxes disagreeing about a face.
+ * {@link filterPrimitivesByBounds} and {@link filterPrimitivesByAttribute}
+ * come at it from the other side, filtering the PRIMITIVE domain and
+ * deciding what happens to the POINTS — see their descriptions.
  *
  * Each primitive filter is the twin of a point filter and shares its
  * decision rather than restating it: the box test with filterByBounds,
@@ -23,7 +28,7 @@ import { type Column, isField } from "../fields/index.js";
 // cost more than the question is worth.
 import { peekFieldSpec } from "../fields/spec.js";
 import { pointIdentities } from "../data/identity.js";
-import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
+import { cloneGeometry, makeGeometryItem, type ParamSchema } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { type PositionView, UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
@@ -35,11 +40,92 @@ import {
   resolveOnAllowingNonFinite,
 } from "./util.js";
 
+/**
+ * The `topology` param, ONE object shared verbatim by all five point
+ * filters (the registry copies every schema it is handed, so sharing is
+ * safe). Five nodes making one decision must not be able to describe it
+ * five ways — the same reason {@link insideBoxPredicate} is one predicate
+ * and {@link requireUnreferencedPointsRule} is one guard.
+ */
+const TOPOLOGY_PARAM: ParamSchema = {
+  type: "enum",
+  default: "drop",
+  enum: ["drop", "keep"],
+  description:
+    "What happens to the input's TOPOLOGY — the vertices and primitives built over these points. 'drop' (the default) outputs a point cloud: the survivors are rebuilt as points and EVERY primitive goes with them, whether or not the filter touched one of its points, which is why a filtered network has to be rebuilt downstream (pointsToPath over a grouping attribute, or connectPoints again). 'keep' preserves the primitives ALL of whose points survive, carrying their vertices, their vertex and primitive attributes, and the detail domain, renumbered onto the surviving points. A primitive that loses even ONE point is dropped whole: there is no truncation of a polyline or a poly that means anything — closing the gap invents a segment nobody authored and splitting the primitive in two invents a primitive, and neither is a filter's job. A primitive is never SHORTENED, so one that comes out with fewer than two vertices is one that went in that way — this node cannot manufacture a degenerate primitive, and it does not delete one either (setPolylineTopology already refuses a polyline under two vertices, so such a primitive can only have come from bare setTopology, deliberately). The POINT domain is IDENTICAL under both settings — same points, same order, same attributes, same identities — so this param only ever ADDS information and nothing reading a point can tell which was set; the one thing 'keep' carries beyond topology is the DETAIL attributes, which a point cloud has no room for. A predicate that keeps every point reproduces the input's topology, with one inherited caveat it shares with filterPrimitivesByBounds and filterPrimitivesByAttribute: surviving primitives are laid out into contiguous vertex runs, so a geometry whose primitive ranges do not TILE its vertex array (only bare setTopology can build one — nothing checks more than start + count <= vertexCount) loses the vertices no primitive references, and their vertex attribute values with them. This is the point-domain mirror of the primitive filters' `unreferencedPoints`, and it is what lets mergePrimitives find something to preserve downstream of a filter.",
+};
+
+/**
+ * Returns whether the surviving primitives are KEPT; see
+ * {@link requireUnreferencedPointsRule}, whose reasoning this shares. A
+ * param's `enum` is metadata for an editor, not a runtime guard, so the
+ * value is checked here rather than defaulted through an `else` — five
+ * filters silently disagreeing about whether a network survives them is
+ * exactly the drift the shared schema above exists to prevent.
+ */
+function requireTopologyRule(nodeType: string, value: string): boolean {
+  if (value !== "drop" && value !== "keep") {
+    throw new Error(
+      `${nodeType}: topology must be "drop" or "keep", got ${JSON.stringify(value)}; ` +
+        '"drop" outputs a point cloud and every primitive goes with the filtered points, ' +
+        '"keep" preserves the primitives all of whose points survive (a primitive that loses one point is dropped whole)',
+    );
+  }
+  return value === "keep";
+}
+
+/**
+ * THE rebuild every point filter ends on, so the five cannot drift on what
+ * a filtered geometry IS.
+ *
+ * `keep` is ascending and distinct — every caller here fills it by walking
+ * the point domain in order.
+ *
+ * The `false` arm is the call this file has always made, unchanged and not
+ * re-derived: `topology "drop"` has to stay byte-identical to what shipped.
+ * The `true` arm marks the survivors, selects the primitives that lose
+ * none of their points, and hands both to the assembler that already
+ * renumbers topology and carries the vertex, primitive and detail domains
+ * (`gatherPrimitives`, the same helper the two primitive filters use). It
+ * runs even when the input has NO primitives, because what the output IS
+ * must depend on the graph and never on the data — the rule selfPrune's
+ * off-switch comment states.
+ */
+function rebuildFiltered(geo: Geometry, keep: ArrayLike<number>, keepTopology: boolean): Geometry {
+  if (!keepTopology) return gatherPoints(geo, keep);
+  const alive = new Uint8Array(geo.pointCount);
+  for (let j = 0; j < keep.length; j++) alive[keep[j]] = 1;
+  const v2p = geo.vertexToPoint;
+  const starts = geo.primVertexStart;
+  const counts = geo.primVertexCount;
+  const prims: number[] = [];
+  const nPrims = geo.primitiveCount;
+  for (let p = 0; p < nPrims; p++) {
+    const s = starts[p];
+    const c = counts[p];
+    // Vacuously true for c === 0: a primitive with no vertices references
+    // no point, so it loses none. (filterPrimitivesByBounds writes down the
+    // opposite vacuous answer for the same case, and the two agree —
+    // "where is it" has no answer for a primitive that is nowhere, while
+    // "did it lose a point" does.)
+    let survives = true;
+    for (let j = 0; j < c; j++) {
+      if (alive[v2p[s + j]] === 0) {
+        survives = false;
+        break;
+      }
+    }
+    if (survives) prims.push(p);
+  }
+  return gatherPrimitives(geo, prims, keep);
+}
+
 /** Params of {@link filterByDensity}. */
 export interface FilterByDensityParams {
   mode: string;
   threshold: number;
   seed: number;
+  topology: string;
 }
 
 /** Keep points by their `density` attribute. */
@@ -47,7 +133,7 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
   type: "filterByDensity",
   category: "filter",
   description:
-    "Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). The probabilistic draw is keyed on each point's IDENTITY — its stored position bits together with its `seed` point attribute — not on its array index, so the same point survives or does not whatever order it arrives in and whichever cell derived it. Two points that share a position AND a seed are one point as far as that draw is concerned and always decide the same way, so a cloud with no per-point seeds (the attribute defaults to 0) decides purely on position. Output is a point cloud of the survivors with all attributes carried.",
+    "Filters points by their `density` point attribute (f32, tuple 1). mode 'threshold' keeps points with density >= threshold; mode 'probabilistic' keeps each point when a deterministic per-point hashed random in [0, 1) is < its density (so density 0 never survives, 1 always does). The probabilistic draw is keyed on each point's IDENTITY — its stored position bits together with its `seed` point attribute — not on its array index, so the same point survives or does not whatever order it arrives in and whichever cell derived it. Two points that share a position AND a seed are one point as far as that draw is concerned and always decide the same way, so a cloud with no per-point seeds (the attribute defaults to 0) decides purely on position. Output is a point cloud of the survivors with all attributes carried — unless `topology` is set to 'keep', which also preserves every primitive ALL of whose points survived, renumbered onto them.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -68,9 +154,11 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
       default: 0,
       description: "Extra seed for 'probabilistic' mode; change it to re-roll which points survive.",
     },
+    topology: TOPOLOGY_PARAM,
   },
   execute({ inputs, params, seed: nodeSeed }) {
     const geo = requireGeometry(inputs, "in", "filterByDensity");
+    const keepTopology = requireTopologyRule("filterByDensity", params.topology);
     const density = geo.attrs.point.get("density");
     if (!density || density.type !== "f32" || density.tupleSize !== 1) {
       throw new Error(
@@ -94,7 +182,7 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
         if (hashFloat(hashCombine(seed, ident[i])) < density.data[i]) keep.push(i);
       }
     }
-    return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+    return { out: [makeGeometryItem(rebuildFiltered(geo, keep, keepTopology))] };
   },
 });
 
@@ -224,6 +312,7 @@ export interface FilterByBoundsParams {
   boundsMax: readonly number[];
   mode: string;
   boundary: string;
+  topology: string;
 }
 
 /** Keep points inside (or outside) an axis-aligned box. */
@@ -231,7 +320,7 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
   type: "filterByBounds",
   category: "filter",
   description:
-    "Keeps points by position against the axis-aligned box [boundsMin, boundsMax]. What happens ON a face is the `boundary` param, and it is the difference between a selection and an OWNERSHIP RULE: the default 'halfOpen' keeps min <= p < max on every axis — the min face is inside, the max face is not — so two boxes that MEET at a face (one's max is the other's min, the same number) tile space with no gap and no duplicate, and each point belongs to exactly one of them. That is the rule a grid cell uses, and the one pointScatterInWorld's query window and a World cell rectangle already follow; note that it is the shared ENDPOINT VALUE that makes the tiling exact, so building the boxes as [c*size, (c+1)*size) is exact at any size, while recovering the index arithmetically as floor(p / size) can name the neighbouring cell when size is not exactly representable (floor(67.8 / 0.1) is 677, yet 678*0.1 is exactly 67.8). 'inclusive' keeps min <= p <= max, which is what you want to select a box whose faces carry points on purpose, and which emits a point sitting on a shared face from BOTH neighbouring boxes — harmless in a one-off selection, wrong in a partitioned cook, where a doubled point is invisible until two cells disagree. mode 'outside' is the exact complement of 'inside' under whichever boundary rule is active, so the two modes always partition the input: no point lost, none emitted twice. Infinite bounds work under both rules (every finite coordinate satisfies p < +Infinity), so an axis that should not be bounded — the Y of a World 'xz' column — needs no extra param. A NaN coordinate is never inside, so such a point lands in 'outside'. Output is a point cloud of the survivors with all attributes carried.",
+    "Keeps points by position against the axis-aligned box [boundsMin, boundsMax]. What happens ON a face is the `boundary` param, and it is the difference between a selection and an OWNERSHIP RULE: the default 'halfOpen' keeps min <= p < max on every axis — the min face is inside, the max face is not — so two boxes that MEET at a face (one's max is the other's min, the same number) tile space with no gap and no duplicate, and each point belongs to exactly one of them. That is the rule a grid cell uses, and the one pointScatterInWorld's query window and a World cell rectangle already follow; note that it is the shared ENDPOINT VALUE that makes the tiling exact, so building the boxes as [c*size, (c+1)*size) is exact at any size, while recovering the index arithmetically as floor(p / size) can name the neighbouring cell when size is not exactly representable (floor(67.8 / 0.1) is 677, yet 678*0.1 is exactly 67.8). 'inclusive' keeps min <= p <= max, which is what you want to select a box whose faces carry points on purpose, and which emits a point sitting on a shared face from BOTH neighbouring boxes — harmless in a one-off selection, wrong in a partitioned cook, where a doubled point is invisible until two cells disagree. mode 'outside' is the exact complement of 'inside' under whichever boundary rule is active, so the two modes always partition the input: no point lost, none emitted twice. Infinite bounds work under both rules (every finite coordinate satisfies p < +Infinity), so an axis that should not be bounded — the Y of a World 'xz' column — needs no extra param. A NaN coordinate is never inside, so such a point lands in 'outside'. Output is a point cloud of the survivors with all attributes carried — unless `topology` is set to 'keep', which also preserves every primitive ALL of whose points survived, renumbered onto them.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -263,9 +352,11 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
       description:
         "Which faces belong to the box. 'halfOpen' (the default) keeps min <= p < max on every axis, matching the half-open windows of pointScatterInWorld and of a World cell: two abutting boxes then own a point on their shared face exactly once between them, which is what makes this node usable as the ownership rule of a partitioned cook. 'inclusive' keeps min <= p <= max, so BOTH such boxes emit that point — choose it when the box is a selection whose faces carry points deliberately (a pointGrid's last row, an authored extent) and nothing downstream requires one owner per point.",
     },
+    topology: TOPOLOGY_PARAM,
   },
   execute({ inputs, params }) {
     const geo = requireGeometry(inputs, "in", "filterByBounds");
+    const keepTopology = requireTopologyRule("filterByBounds", params.topology);
     const wantInside = requireInsideOutside("filterByBounds", params.mode);
     const inclusive = requireBoundaryRule("filterByBounds", params.boundary);
     requireBounds3("filterByBounds", params.boundsMin, params.boundsMax);
@@ -283,7 +374,7 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
     for (let i = 0; i < nPoints; i++) {
       if (insidePoint(i) === wantInside) keep.push(i);
     }
-    return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+    return { out: [makeGeometryItem(rebuildFiltered(geo, keep, keepTopology))] };
   },
 });
 
@@ -420,7 +511,7 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
       }
       if (inside === wantInside) keep.push(p);
     }
-    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop))] };
+    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop ? "referenced" : "all"))] };
   },
 });
 
@@ -488,8 +579,9 @@ function otherDomainHint(
       ? ` — but "${name}" IS a ${shape} POINT attribute here, which is the likeliest mix-up: this node keeps whole ` +
           `PRIMITIVES and reads the PRIMITIVE domain, which is what lets a filtered network stay a network. Either ` +
           `lift the column with promoteAttribute (name "${name}", from "point", to "primitive") and filter here, or ` +
-          `filter the points with filterByAttribute — same comparisons, but it rebuilds the point domain and the ` +
-          `topology goes with it, so it only reads right once a sampler has already flattened the primitives to points`
+          `filter the points with filterByAttribute — same comparisons, but it rebuilds the point domain, so it only ` +
+          `reads right once a sampler has already flattened the primitives to points, and it keeps a network only ` +
+          `under its topology "keep" (which drops every primitive that loses a point, not just the ones you tested)`
       : ` — but "${name}" IS a ${shape} PRIMITIVE attribute here: filterByAttribute filters POINTS and outputs a ` +
           `point cloud, so the primitives carrying "${name}" would not survive it in any case. Keep whole primitives ` +
           `with filterPrimitivesByAttribute, which reads the primitive domain directly and preserves topology, or ` +
@@ -519,7 +611,7 @@ function requireFilterAttribute(
     // empty domain and would otherwise be told only that a name is missing.
     const gone =
       domain === "primitive" && geo.primitiveCount === 0 && set.names().length === 0
-        ? ` — and this geometry has no primitives at all, so either none was ever built (pointsToPath, connectPoints, meshPrimitive) or a node between the builder and here removed points and the topology went with them (filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute, mergePoints)`
+        ? ` — and this geometry has no primitives at all, so either none was ever built (pointsToPath, connectPoints, meshPrimitive) or a node between the builder and here removed points and the topology went with them (filterByDensity, filterByBounds, filterByAttribute, filterByExpression and selfPrune all take topology "keep", which preserves the primitives that lose no point; partitionByAttribute and mergePoints do not, and need the network rebuilt after them)`
         : "";
     throw new Error(
       `${nodeType}: ${domain} attribute "${name}" not found; available: ${set.names().join(", ") || "(none)"}` +
@@ -590,6 +682,7 @@ export interface FilterByAttributeParams {
   comparison: string;
   value: number;
   stringValue: string;
+  topology: string;
 }
 
 /** Keep points by comparing a scalar or string point attribute. */
@@ -597,7 +690,7 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
   type: "filterByAttribute",
   category: "filter",
   description:
-    "Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried, so the topology describing the points that are gone goes with them — to keep whole primitives by a primitive attribute and preserve the network, use filterPrimitivesByAttribute, which is this node at the primitive domain.",
+    "Keeps points whose named point attribute satisfies a comparison. Numeric attributes (f32/i32/u32/bool, tuple 1) compare against `value` with any comparison. String attributes compare against `stringValue` and support only 'eq' and 'ne'. Output is a point cloud of the survivors with all attributes carried, so by default the topology describing the points that are gone goes with them — all of it. Two ways to keep a network a network: set `topology` to 'keep' here, which preserves every primitive ALL of whose points survived and drops the rest, or reach for filterPrimitivesByAttribute, which is this node at the PRIMITIVE domain and tests a value the primitive itself carries.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -624,11 +717,13 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
       default: "",
       description: "Right-hand side for string attributes. Ignored for numeric attributes.",
     },
+    topology: TOPOLOGY_PARAM,
   },
   execute({ inputs, params }) {
     const who = "filterByAttribute";
     const geo = requireGeometry(inputs, "in", who);
     const cmp = requireComparison(who, params.comparison);
+    const keepTopology = requireTopologyRule(who, params.topology);
     const attr = requireFilterAttribute(who, geo, "point", params.attribute);
     // Built once per cook, never per point — the SoA rule stands.
     const pass = comparisonPredicate(who, "point", attr, cmp, params.value, params.stringValue);
@@ -636,7 +731,7 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
     for (let i = 0; i < geo.pointCount; i++) {
       if (pass(i)) keep.push(i);
     }
-    return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+    return { out: [makeGeometryItem(rebuildFiltered(geo, keep, keepTopology))] };
   },
 });
 
@@ -704,7 +799,7 @@ export const filterPrimitivesByAttribute = standardNode<FilterPrimitivesByAttrib
     for (let p = 0; p < nPrims; p++) {
       if (pass(p)) keep.push(p);
     }
-    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop))] };
+    return { out: [makeGeometryItem(gatherPrimitives(geo, keep, drop ? "referenced" : "all"))] };
   },
 });
 
@@ -712,6 +807,7 @@ export const filterPrimitivesByAttribute = standardNode<FilterPrimitivesByAttrib
 export interface FilterByExpressionParams {
   predicate: FieldParam;
   seed: number;
+  topology: string;
 }
 
 /** Keep points where a boolean field predicate holds. */
@@ -719,7 +815,7 @@ export const filterByExpression = standardNode<FilterByExpressionParams>({
   type: "filterByExpression",
   category: "filter",
   description:
-    "Keeps points where a field-capable `predicate` evaluates to a non-zero number. The predicate is resolved once over the input's point domain, so it can read position, any attribute, noise, or per-point randomness — which means a test that would otherwise need a scratch attribute plus filterByAttribute becomes one node, with no leftover column on the output. Comparison field functions (gt/ge/lt/le/eq/ne) already yield 1 and 0, and combining them with mul acts as AND, max as OR. NaN never passes, so a predicate that fails to compute drops the point instead of keeping it. The predicate must evaluate to tuple size 1: comparisons broadcast elementwise, so comparing a vector yields a vector of flags, which is not a decision. Output is a point cloud of the survivors with all attributes carried.",
+    "Keeps points where a field-capable `predicate` evaluates to a non-zero number. The predicate is resolved once over the input's point domain, so it can read position, any attribute, noise, or per-point randomness — which means a test that would otherwise need a scratch attribute plus filterByAttribute becomes one node, with no leftover column on the output. Comparison field functions (gt/ge/lt/le/eq/ne) already yield 1 and 0, and combining them with mul acts as AND, max as OR. NaN never passes, so a predicate that fails to compute drops the point instead of keeping it. The predicate must evaluate to tuple size 1: comparisons broadcast elementwise, so comparing a vector yields a vector of flags, which is not a decision. Output is a point cloud of the survivors with all attributes carried — unless `topology` is set to 'keep', which also preserves every primitive ALL of whose points survived, renumbered onto them.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -736,9 +832,11 @@ export const filterByExpression = standardNode<FilterByExpressionParams>({
       description:
         "Extra seed for evaluating `predicate`: 0 (the default) uses the node's derived seed unchanged; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the evaluation context (randomField, the per-point seed attribute, and the `nodeSeed` field) but not a noise on its own, whose seed lives inside its own field spec — a noise moves with this only when its `opts.position` reads `nodeSeed`.",
     },
+    topology: TOPOLOGY_PARAM,
   },
   execute({ inputs, params, seed: nodeSeed }) {
     const geo = requireGeometry(inputs, "in", "filterByExpression");
+    const keepTopology = requireTopologyRule("filterByExpression", params.topology);
     const seed = params.seed === 0 ? nodeSeed : hashCombine(nodeSeed, params.seed);
     // Deliberately NOT a `gpu: "fields"` adopter, unlike every other node
     // with a field-capable param. The device path is a documented
@@ -767,7 +865,7 @@ export const filterByExpression = standardNode<FilterByExpressionParams>({
       const v = data[i];
       if (v > 0 || v < 0) keep.push(i);
     }
-    return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+    return { out: [makeGeometryItem(rebuildFiltered(geo, keep, keepTopology))] };
   },
 });
 
@@ -776,6 +874,7 @@ export interface SelfPruneParams {
   mode: string;
   minDistance: FieldParam;
   priority: FieldParam;
+  topology: string;
 }
 
 /**
@@ -1003,7 +1102,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
   type: "selfPrune",
   category: "filter",
   description:
-    "Enforces a minimum distance between points, under one of two rules chosen by `mode`. The default 'greedy' considers points one at a time and keeps a point only when every already-kept point is at least minDistance away; it packs points densely, and it CANNOT BE SPLIT ACROSS CELLS — a point's fate depends on whether its neighbour survived, which depends on ITS neighbour, an unbounded chain that no halo width covers, so running it per cell in a partitioned or World cook silently produces survivors that differ with the cell size and seam pairs closer than minDistance (measured: 1.41 apart where 3 was asked for) that read as a rendering artifact rather than as this node. Use mode 'localMaximum' there: it decides each point from its immediate neighbours alone, which makes a halo of minDistance exactly sufficient, at the price of keeping fewer points. Both rules settle every contest the same way — `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point IDENTITY, a hash of the point's stored position bits and its `seed` point attribute, NOT its array index. That is what makes the survivors a property of the points rather than of the order they arrived in: shuffle the input, filter something upstream, or derive the same region inside another cell's halo, and the same points survive. With priority left alone every point ties, so identity alone decides, and the result is a spatially unbiased thinning rather than the front-of-the-array-wins prune an index order gives. Points that are indistinguishable — same position AND same seed — fall back to the lower index, since nothing else separates them. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried.",
+    "Enforces a minimum distance between points, under one of two rules chosen by `mode`. The default 'greedy' considers points one at a time and keeps a point only when every already-kept point is at least minDistance away; it packs points densely, and it CANNOT BE SPLIT ACROSS CELLS — a point's fate depends on whether its neighbour survived, which depends on ITS neighbour, an unbounded chain that no halo width covers, so running it per cell in a partitioned or World cook silently produces survivors that differ with the cell size and seam pairs closer than minDistance (measured: 1.41 apart where 3 was asked for) that read as a rendering artifact rather than as this node. Use mode 'localMaximum' there: it decides each point from its immediate neighbours alone, which makes a halo of minDistance exactly sufficient, at the price of keeping fewer points. Both rules settle every contest the same way — `priority` DESCENDING (higher priority survives) with ties broken by the LOWER point IDENTITY, a hash of the point's stored position bits and its `seed` point attribute, NOT its array index. That is what makes the survivors a property of the points rather than of the order they arrived in: shuffle the input, filter something upstream, or derive the same region inside another cell's halo, and the same points survive. With priority left alone every point ties, so identity alone decides, and the result is a spatially unbiased thinning rather than the front-of-the-array-wins prune an index order gives. Points that are indistinguishable — same position AND same seed — fall back to the lower index, since nothing else separates them. Both params are field-capable: a field `minDistance` is a PER-POINT radius (scale-aware declutter — big trees claim more room than bushes), and a pair then conflicts when it is closer than the LARGER of the two radii, so no kept point ever has another kept point inside its own radius. Survivors always come out in ascending INPUT index order; priority chooses who survives, never the order of the output. Uses a uniform spatial grid, so it stays fast well beyond a few thousand points. Output is a point cloud of the survivors with all attributes carried — unless `topology` is set to 'keep', which also preserves every primitive ALL of whose points survived, renumbered onto them.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -1029,6 +1128,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
       description:
         "Per-point survival priority: HIGHER WINS. Points are considered in descending priority, so a point at priority 1 survives against a neighbour at priority 0 whichever of them the tiebreak would have preferred — this is how authored points beat procedural ones by SAYING so, instead of by being merged onto an earlier pin. Field-capable and evaluated on the input's points: attribute(\"locked\") ranks by a flag written upstream (merge the layers with mergePoints first — an attribute missing on one input fills with its default there), and randomField(\"key\") re-rolls the thinning when the key changes. Equal priorities break to the LOWER point IDENTITY (position bits plus the `seed` attribute), and NaN ranks lowest. The default 0 ties every point, so identity alone picks the survivors — which is already unbiased, so a random priority is for re-rolling, not for undoing an ordering bias. This decides WHO survives, never the output order.",
     },
+    topology: TOPOLOGY_PARAM,
   },
   execute({ inputs, params, seed: nodeSeed }) {
     const geo = requireGeometry(inputs, "in", "selfPrune");
@@ -1044,6 +1144,10 @@ export const selfPrune = standardNode<SelfPruneParams>({
           '"localMaximum" decides each point from its immediate neighbours alone, which is what makes a halo of minDistance exactly sufficient',
       );
     }
+    // Checked here, ABOVE the off-switch below, for the reason `mode` is:
+    // a typo must not pass silently just because this cook happened to
+    // take the pass-through path.
+    const keepTopology = requireTopologyRule("selfPrune", params.topology);
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
@@ -1143,7 +1247,7 @@ export const selfPrune = standardNode<SelfPruneParams>({
     }
     const keep: number[] = [];
     for (let i = 0; i < n; i++) if (kept[i] === 1) keep.push(i);
-    return { out: [makeGeometryItem(gatherPoints(geo, keep))] };
+    return { out: [makeGeometryItem(rebuildFiltered(geo, keep, keepTopology))] };
   },
 });
 

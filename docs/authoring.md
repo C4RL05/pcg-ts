@@ -351,8 +351,9 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 | fn | Spec | Result |
 | --- | --- | --- |
 | `constant` | `{ fn, value: 1 \| [1, 2, 3] }` | Same scalar/tuple for every element |
-| `attribute` | `{ fn, name: "density", tupleSize?: 1 }` | Reads a numeric attribute of the target domain (a string attribute is read by `attributeIs` instead, never by this fn; `tupleSize`, when given, must match) |
+| `attribute` | `{ fn, name: "density", tupleSize?: 1 }` | Reads a numeric attribute of the target domain (a string attribute is read by `attributeIs` or `byAttribute` instead, never by this fn; `tupleSize`, when given, must match) |
 | `attributeIs` | `{ fn, name: "species", value: "pine" }` | 1 on elements whose STRING attribute equals the literal, 0 on all the others, on any domain. A predicate, never an index accessor: the string table is insertion-ordered and rebuilt by clone/filter/merge, so one logical value sits at different indices in different cells of a partitioned world |
+| `byAttribute` | `{ fn, name: "part", cases: { "rod": 1, "panel": [1, 0.7, 1] }, default: 1 }` | The N-way form: the case whose KEY equals the STRING attribute's value, or `default` where none does. Case values are full argument positions (spec, number, or tuple) and broadcast against each other like any other combinator's inputs. The `default` is REQUIRED |
 | `position` | `{ fn }` | The `P` attribute (f32, tuple 3) |
 | `index` | `{ fn }` | Element index 0, 1, 2, ... |
 | `fraction` | `{ fn }` | Normalized element index, `index / (count - 1)` |
@@ -360,9 +361,10 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 | `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, element IDENTITY): point identity on the point domain, the order-independent fold of a primitive's own points' identities on the primitive domain, and the element index on vertex and detail |
 | `param` | `{ fn, name: "amplitude" }` | The value bound to that name, substituted where the literal would have stood. Same for every element — a value that varies per element is an attribute, not a param. An unbound `param` builds (its key and its GPU kernel need only the name) but refuses to evaluate |
 
-`attributeIs` has one rule that will surprise you, and it is forced
-rather than chosen: **a literal the geometry's string table does not
-hold yields all zeros, not an error.** Each cell of a `World` cooks its
+`attributeIs` and `byAttribute` share one rule that will surprise you,
+and it is forced rather than chosen: **a literal the geometry's string
+table does not hold yields all zeros (or, for `byAttribute`, the
+`default`) rather than an error.** Each cell of a `World` cooks its
 own geometry, so a cell holding no pines legitimately has no `"pine"` in
 its table, and filtering the last pine away does the same thing inside a
 single cook — throwing there would make the result depend on how the
@@ -372,6 +374,34 @@ partition-independence buys. Structural errors still throw, and the line
 falls exactly there: absence of a VALUE is data, absence of an ATTRIBUTE
 is a bug. A missing attribute throws, and so does a numeric one — naming
 `eq(attribute(name), value)` as the comparison you meant to write.
+
+`byAttribute` exists because the 2-way form composes badly. Sizing a part
+by its kind on three axes needs one nested `lerp` per axis per kind, so a
+new kind means editing every axis — and the value an element takes when
+every predicate reads 0 is written down nowhere at all. That
+fall-through is the defect, and it is the ABSENCE of an expression rather
+than one, so it cannot be searched for, reviewed, or edited. Naming it is
+what this fn buys, which is why its `default` is required rather than
+optional.
+
+Be precise about what that does and does not get you. **It does not make
+a typo impossible.** A case key the table does not hold matches nothing
+and takes the default, exactly as a misspelled `attributeIs` literal
+reads as "nothing matches", and for the same partition-independence
+reason — a cell holding no clamps has no `"clamp"` in its table, so
+validating case keys against the table would make output depend on how
+the world was partitioned. What you get is narrower and real: the
+fall-through is explicit, and the case set is enumerable in ONE place
+instead of spread across one expression per component. What the parser
+does check is an empty `name`, an empty case set, a missing `default`,
+and tuple sizes that do not broadcast. Duplicate keys it cannot check —
+`JSON.parse` has already collapsed them.
+
+Every case is evaluated and then selected between, exactly as the nested
+`lerp`s it replaces already did (`lerp` is strict). Sub-expressions
+shared between cases are evaluated once. At most one case can fire —
+distinct keys intern at distinct table indices — so the result does not
+depend on the order you write the cases in.
 
 `fraction` spans **[0, 1] closed**: exactly 0 on the first element and
 exactly 1 on the last, matching `pointLine`'s `includeEnd: true`
@@ -2200,7 +2230,8 @@ reason in `CookStats.gpu.fallbacks`:
    all falls back with `no-spec`.
 2. The spec compiles against the geometry's attribute layout: every
    `attribute` it reads exists on the domain, is numeric (bool reads
-   compile; a string column compiles only through `attributeIs`, whose
+   compile; a string column compiles only through `attributeIs` or
+   `byAttribute`, whose
    literal rides a per-dispatch uniform rather than a baked constant —
    the resolved table index is a property of the geometry, not of the
    spec, and the kernel cache key does not include table contents), and
@@ -2370,7 +2401,8 @@ That is by design, not a bug; benchmark from cold caches.
   or naming an `assetAttr`/`colorAttr` it cannot use. Genuinely invalid
   params still surface the identical CPU error from the per-node path,
   which is why none of those spawner conditions needed a reason of its
-  own. An `attributeIs` anywhere in the run declines here too, and for
+  own. An `attributeIs` or `byAttribute` anywhere in the run declines here
+  too, and for
   a reason worth separating from the rest: its kernel compiles and
   dispatches perfectly well — the per-node path runs it on the device.
   What a plan cannot supply is the uniform that kernel reads, the

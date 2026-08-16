@@ -121,7 +121,7 @@ import {
 } from "../fields/index.js";
 import { cloneGeometry } from "../graph/clone.js";
 import { CookCancelledError } from "../graph/errors.js";
-import { deviceSpec, type FieldSpecArg } from "../fields/spec.js";
+import { deviceSpec, type FieldSpecArg, specChildren } from "../fields/spec.js";
 import { hashCombine } from "../random/index.js";
 import { groupPointsByAsset } from "../spawn/grouping.js";
 import { MAX_INSTANCES } from "../spawn/instances.js";
@@ -483,13 +483,8 @@ function specKeysOnIdentity(v: unknown): boolean {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
   const spec = v as Record<string, unknown>;
   if (spec.fn === "randomField") return true;
-  const args = spec.args;
-  if (Array.isArray(args)) {
-    for (const a of args) if (specKeysOnIdentity(a)) return true;
-  }
-  const opts = spec.opts;
-  if (typeof opts === "object" && opts !== null) {
-    if (specKeysOnIdentity((opts as Record<string, unknown>).position)) return true;
+  for (const child of specChildren(spec)) {
+    if (specKeysOnIdentity(child)) return true;
   }
   return false;
 }
@@ -693,7 +688,9 @@ export function planResidentRun(
     // here for the reason rather than the refusal — a reader who deletes
     // it still gets a rejected run, and a reader who moves the consts to
     // execute time needs to find all three.
-    if (kernel.attrIsSlots.length > 0) throw new PlanFail("attributeIs needs a per-dispatch string table");
+    if (kernel.attrIsSlots.length > 0) {
+      throw new PlanFail("attributeIs / byAttribute need a per-dispatch string table");
+    }
     const slotValues = paramConstValues(spec, kernel);
     if ("problem" in slotValues) throw new PlanFail("param bindings");
     const colIndex = cols.length;

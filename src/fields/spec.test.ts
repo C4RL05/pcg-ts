@@ -52,6 +52,7 @@ import {
 import {
   attribute,
   attributeIs,
+  byAttribute,
   constant,
   fraction,
   index,
@@ -225,6 +226,33 @@ const CASES: Case[] = [
   // zeros, which is the answer a partitioned cook produces most often.
   { name: "attributeIs a value the table lacks", make: () => attributeIs("species", "cypress") },
   { name: "attributeIs the default entry", make: () => attributeIs("species", "") },
+  {
+    name: "byAttribute scalar cases",
+    make: () => byAttribute("species", { pine: 1, oak: 2, birch: 3 }, 0),
+  },
+  // Tuple cases with a SCALAR default, so the round trip has to preserve
+  // the broadcast as well as the selection.
+  {
+    name: "byAttribute tuple cases with a broadcast default",
+    make: () => byAttribute("species", { pine: [1, 2, 3], oak: [4, 5, 6] }, 9),
+  },
+  // A key the table lacks is the case a partitioned cook produces most
+  // often, and the one whose spec and column must still agree.
+  {
+    name: "byAttribute with a key the table lacks",
+    make: () => byAttribute("species", { cypress: 1, pine: 2 }, -1),
+  },
+  {
+    name: "byAttribute over derived case values",
+    make: () =>
+      byAttribute(
+        "species",
+        { pine: mul(attribute("density"), 2), oak: add(attribute("density"), 1) },
+        attribute("density"),
+      ),
+  },
+  { name: "byAttribute with a single case", make: () => byAttribute("species", { pine: 5 }, 6) },
+  { name: "byAttribute on the default entry", make: () => byAttribute("species", { "": 1 }, 0) },
   { name: "position", make: () => position() },
   { name: "index", make: () => index() },
   { name: "fraction", make: () => fraction() },
@@ -522,6 +550,11 @@ describe("no spec is derived when none can be", () => {
     { name: "noise with a negative-zero frequency", make: () => valueNoise({ frequency: -0 }) },
     { name: "attribute with an empty name", make: () => attribute(""), evaluable: false },
     { name: "attributeIs with an empty name", make: () => attributeIs("", "pine"), evaluable: false },
+    {
+      name: "byAttribute with an empty name",
+      make: () => byAttribute("", { pine: 1 }, 0),
+      evaluable: false,
+    },
     { name: "attribute with a fractional tupleSize", make: () => attribute("density", 2.5), evaluable: false },
     { name: "attribute with a zero tupleSize", make: () => attribute("density", 0), evaluable: false },
     { name: "randomField with a non-finite key", make: () => randomField(NaN) },

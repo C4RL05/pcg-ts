@@ -1,14 +1,26 @@
 import { pointIdentities, primitiveIdentities } from "../data/identity.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
-import { attachSpec, isSpecNumber, recordWithheld } from "./spec.js";
+import {
+  type FieldSpec,
+  MAX_SPEC_DEPTH,
+  attachSpec,
+  isSpecNumber,
+  peekFieldSpec,
+  recordWithheld,
+  specDepth,
+  withheldOver,
+} from "./spec.js";
 import {
   type Field,
   type FieldLike,
   elementCount,
+  evaluateField,
   isField,
   keyNum,
+  keyRef,
   makeField,
 } from "./types.js";
+import { broadcastTupleSize, readColumnAt } from "./broadcast.js";
 
 /**
  * Constant field: the same scalar or tuple for every element. Values are
@@ -52,8 +64,9 @@ export function resolveField(v: FieldLike): Field {
  * Read a named attribute of the context's domain. Numeric attributes are
  * returned as zero-copy views of the attribute storage; bool attributes
  * are copied to 0/1 floats. A string attribute has no numeric column to
- * return and is refused here — {@link attributeIs} is how one drives a
- * field. When `tupleSize` is given, the attribute's tuple size must match.
+ * return and is refused here — {@link attributeIs} and
+ * {@link byAttribute} are how one drives a field. When `tupleSize` is
+ * given, the attribute's tuple size must match.
  */
 export function attribute(name: string, tupleSize?: number): Field {
   // JSON.stringify quotes and escapes the name, so keys stay
@@ -69,7 +82,8 @@ export function attribute(name: string, tupleSize?: number): Field {
       throw new Error(
         `attribute "${name}": a string attribute has no numeric column to read; ` +
           `test it with attributeIs("${name}", "<value>"), which is 1 where it matches ` +
-          `and 0 elsewhere. Reading the table INDEX is deliberately not offered — it is ` +
+          `and 0 elsewhere, or select on it with byAttribute("${name}", {...}, <default>). ` +
+          `Reading the table INDEX is deliberately not offered — it is ` +
           `insertion-ordered and differs between cells of a partitioned world.`,
       );
     }
@@ -179,6 +193,200 @@ export function attributeIs(name: string, value: string): Field<1> {
       detail: "attributeIs's `name` must not be empty",
     });
   }
+  return field;
+}
+
+/**
+ * The tuple size a case set resolves to, or undefined when some branch's
+ * width is not known until a geometry is in hand (`attribute(name)` with
+ * no declared `tupleSize`). The rule is the library's ordinary broadcast
+ * rule — {@link broadcastTupleSize} — restated here only so the message
+ * can name the CASE KEY that disagreed, which is the whole reason an
+ * author is reading it.
+ */
+function caseSetTupleSize(
+  name: string,
+  keys: readonly string[],
+  branches: readonly Field[],
+  fallback: Field,
+): number | undefined {
+  // "the default" is the last entry, so one loop covers both populations
+  // and the blame is always attributed to the position that widened it.
+  const labels = [...keys.map((k) => `case ${JSON.stringify(k)}`), "the default"];
+  const sizes = [...branches.map((b) => b.tupleSize), fallback.tupleSize];
+  let ts = 1;
+  let setBy = "the default";
+  for (let i = 0; i < sizes.length; i++) {
+    const s = sizes[i];
+    if (s === undefined) return undefined;
+    if (s === 1) continue;
+    if (ts !== 1 && ts !== s) {
+      throw new Error(
+        `byAttribute ${JSON.stringify(name)}: ${labels[i]} has tuple size ${s}, but ${setBy} has ` +
+          `tuple size ${ts}; every case and the default must agree, except that a scalar ` +
+          `broadcasts against any size`,
+      );
+    }
+    ts = s;
+    setBy = labels[i];
+  }
+  return ts;
+}
+
+/**
+ * Select a field by the value of a STRING attribute: the case whose key
+ * equals the element's `name`, or `defaultValue` where no key does. The
+ * N-way form of {@link attributeIs}, and it exists because the 2-way form
+ * composes badly — an expression that sizes a part by its kind on three
+ * axes needs one nested `lerp` per axis per kind, so a new kind means
+ * editing every axis and forgetting one is silent.
+ *
+ * **The `default` is required, and that is the point of the fn.** A case
+ * set spread across nested `lerp`s has a fall-through nobody wrote: the
+ * value an element takes when every predicate reads 0. It cannot be
+ * searched for, reviewed, or edited, because it is the ABSENCE of an
+ * expression rather than one. Naming it is what this fn buys.
+ *
+ * What it does NOT buy, and the docs must not imply otherwise: **a case
+ * key is never validated against the geometry's string table.** A key the
+ * table does not hold selects nothing and its elements take the default,
+ * so a MISSPELLED key becomes dead code rather than an error. That is
+ * forced, not chosen — each cell of a partitioned world cooks its own
+ * geometry with its own insertion-ordered table (see {@link attributeIs}),
+ * so a cell legitimately holding no clamps has no `"clamp"` in its table,
+ * and throwing there would make output depend on how the world was
+ * partitioned. Partition-independence is an invariant; typo detection is a
+ * convenience.
+ *
+ * What it DOES buy is narrower and real: the fall-through is explicit, and
+ * the case set is enumerable in one place instead of spread across one
+ * expression per component.
+ *
+ * Structural mistakes still throw, on the same line {@link attributeIs}
+ * draws: a missing attribute throws, and a NUMERIC one throws naming
+ * `eq(attribute(name), value)`. Absence of a VALUE is data; absence of an
+ * ATTRIBUTE is a bug.
+ *
+ * Widths follow the library's ordinary broadcast rule — a scalar case
+ * broadcasts against tuple cases, two non-scalar widths must match — so
+ * the result's tuple size is a property of the EXPRESSION and never of
+ * which case happened to fire.
+ *
+ * Every case is evaluated, then selected between, exactly as the nested
+ * `lerp`s it replaces already did (`lerp` is strict). Sub-expressions
+ * shared between cases are evaluated once, because `evaluateField`
+ * memoizes per context on `Field.key`.
+ *
+ * At most one case can fire — distinct keys intern at distinct table
+ * indices — so the result does not depend on the order the cases are
+ * written in, and `Field.key` sorts them so two orderings are one field.
+ */
+export function byAttribute(
+  name: string,
+  cases: Readonly<Record<string, FieldLike>>,
+  defaultValue: FieldLike,
+): Field {
+  const keys = Object.keys(cases).sort();
+  if (keys.length === 0) {
+    throw new Error(
+      `byAttribute ${JSON.stringify(name)}: \`cases\` must name at least one value; a case set ` +
+        `with no cases is its default written the long way`,
+    );
+  }
+  const branches = keys.map((k) => resolveField(cases[k]));
+  const fallback = resolveField(defaultValue);
+  const staticTs = caseSetTupleSize(name, keys, branches, fallback);
+  // Sorted keys, so two orderings of one case set are one field — they
+  // compute the same column, and `Field.key`'s contract is that equal keys
+  // mean interchangeable columns. Both halves of every pair go through
+  // `JSON.stringify` and the child keys through `keyRef`, so no attribute
+  // name, case key or child key can forge the shape of another.
+  const key =
+    `byAttr(${JSON.stringify(name)},` +
+    `${keys.map((k, i) => `${JSON.stringify(k)}=${keyRef(branches[i].key)}`).join(",")},` +
+    `else=${keyRef(fallback.key)})`;
+  const field = makeField(key, staticTs, (ctx) => {
+    const attr = ctx.geo.attrs[ctx.domain].require(name);
+    if (attr.type !== "string") {
+      throw new Error(
+        `byAttribute ${JSON.stringify(name)}: expected a string attribute, got ${attr.type}; ` +
+          `compare a numeric attribute with eq(attribute(${JSON.stringify(name)}), value)`,
+      );
+    }
+    const cols = branches.map((b) => evaluateField(b, ctx));
+    const fallbackCol = evaluateField(fallback, ctx);
+    const ts =
+      broadcastTupleSize(
+        `byAttribute ${JSON.stringify(name)}`,
+        [...cols.map((c) => c.tupleSize), fallbackCol.tupleSize],
+      ) ?? 1;
+    const n = elementCount(ctx);
+    const out = new Float32Array(n * ts);
+    // Dense table-index -> case ordinal, so the inner loop is an array
+    // read rather than a Map probe. -1 is "no case", which is what every
+    // index a case set does not name keeps — including every index when a
+    // key is absent from this geometry's table. `lookupString` never
+    // inserts, so the table is the same afterwards as before.
+    const lut = new Int32Array(attr.stringTable.length).fill(-1);
+    for (let c = 0; c < keys.length; c++) {
+      const idx = attr.lookupString(keys[c]);
+      if (idx !== undefined) lut[idx] = c;
+    }
+    const src = attr.data;
+    const ats = attr.tupleSize;
+    for (let i = 0; i < n; i++) {
+      // Component 0 of a tuple-valued string attribute, matching
+      // `Attribute.getString`'s default component and `attributeIs`.
+      const raw = src[i * ats];
+      const c = raw < lut.length ? lut[raw] : -1;
+      const col = c < 0 ? fallbackCol : cols[c];
+      for (let k = 0; k < ts; k++) out[i * ts + k] = readColumnAt(col, i, k);
+    }
+    return { data: out, tupleSize: ts };
+  });
+  // Derivation is all-or-nothing over every branch, the rule `argSpecs`
+  // enforces for argument lists — but the case values are not an argument
+  // LIST, so the withhold and the depth are counted here. The emitted
+  // `cases` object is keyed in the caller's order rather than the sorted
+  // one, because a spec describes what the author wrote; the sorted order
+  // is an implementation detail of the key and of the kernel.
+  if (name === "") {
+    recordWithheld(field, { kind: "ungrammatical", detail: "byAttribute's `name` must not be empty" });
+    return field;
+  }
+  const byKey = new Map(keys.map((k, i) => [k, branches[i]]));
+  // Null-prototype, for the reason the grammar's builder is: `"__proto__"`
+  // is a legal case key, and writing it onto a plain object runs
+  // `Object.prototype`'s setter and drops the case. Here the loss lands on
+  // the SPEC rather than the field — the column would be right and
+  // `fieldToJson` would emit a case set missing an entry, so a kernel
+  // built from that spec would answer the default where the CPU did not.
+  const caseSpecs: Record<string, FieldSpec> = Object.create(null) as Record<string, FieldSpec>;
+  let deepest = 0;
+  for (const k of Object.keys(cases)) {
+    const branch = byKey.get(k) as Field;
+    const spec = peekFieldSpec(branch);
+    if (spec === undefined) {
+      recordWithheld(field, withheldOver(branch));
+      return field;
+    }
+    const d = specDepth(spec);
+    if (d > deepest) deepest = d;
+    caseSpecs[k] = spec;
+  }
+  const fallbackSpec = peekFieldSpec(fallback);
+  if (fallbackSpec === undefined) {
+    recordWithheld(field, withheldOver(fallback));
+    return field;
+  }
+  const fd = specDepth(fallbackSpec);
+  if (fd > deepest) deepest = fd;
+  const depth = deepest + 1;
+  if (depth > MAX_SPEC_DEPTH) {
+    recordWithheld(field, { kind: "too-deep" });
+    return field;
+  }
+  attachSpec(field, { fn: "byAttribute", name, cases: caseSpecs, default: fallbackSpec }, depth);
   return field;
 }
 

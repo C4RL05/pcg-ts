@@ -467,6 +467,49 @@ export function isDerivedSpec(spec: FieldSpec): boolean {
 }
 
 /**
+ * @internal EVERY spec-valued position of a node, in a fixed order — the
+ * single answer to "what hangs off this spec", so the walks scattered
+ * across `fieldJson.ts`, `fold.ts`, `src/gpu/compile.ts` and
+ * `src/gpu/run.ts` cannot each know a different set.
+ *
+ * There are four such positions:
+ *
+ * - `args` entries — every combinator.
+ * - `opts.position` — the noise samplers' sample position, an argument
+ *   position that happens to be spelled inside an options bag.
+ * - `cases` VALUES — `byAttribute`'s case set. The keys are literals, not
+ *   specs, and are deliberately not returned.
+ * - `default` — `byAttribute`'s fall-through.
+ *
+ * Entries that are not objects (a raw number, a number tuple, a missing
+ * position) come back as they are; every caller already has to test what
+ * it got, because an `args` entry has always been allowed to be a number.
+ * Returning them keeps this function's contract "the child POSITIONS",
+ * which is checkable, rather than "the child specs", which would silently
+ * hide a malformed one from a walk that reports on malformed input.
+ *
+ * Lives here because `spec.ts` sits below both the constructors and the
+ * grammar and imports nothing but `./types.js`, so the GPU compiler can
+ * reach it without reaching the parser.
+ */
+export function specChildren(node: Record<string, unknown>): unknown[] {
+  const out: unknown[] = [];
+  const args = node.args;
+  if (Array.isArray(args)) out.push(...args);
+  const opts = node.opts;
+  if (typeof opts === "object" && opts !== null && !Array.isArray(opts)) {
+    const position = (opts as Record<string, unknown>).position;
+    if (position !== undefined) out.push(position);
+  }
+  const cases = node.cases;
+  if (typeof cases === "object" && cases !== null && !Array.isArray(cases)) {
+    out.push(...Object.values(cases as Record<string, unknown>));
+  }
+  if (node.default !== undefined) out.push(node.default);
+  return out;
+}
+
+/**
  * The JSON spec describing a field, or undefined. Fields built by
  * `fieldFromJson` carry the spec they were built from; fields built with
  * the combinator API carry one composed from their inputs' specs, which

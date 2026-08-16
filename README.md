@@ -109,7 +109,8 @@ recooks. Same seed always reproduces the same bytes.
 A `Field` is a deferred computation: it resolves to one column of values
 when evaluated over a domain (`EvalContext` = geometry + domain + seed).
 Inputs (`position()`, `attribute(name)`, `attributeIs(name, value)`,
-`index()`, `fraction()`, `nodeSeed()`, `randomField(key)`),
+`byAttribute(name, cases, default)`, `index()`, `fraction()`,
+`nodeSeed()`, `randomField(key)`),
 combinators (arithmetic, comparisons, trig from `sin` through `atan2`,
 `clamp`/`lerp`/`remap`, `select`, `ramp`, vector ops), and noise
 (`valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise`, `fbm`) all
@@ -145,6 +146,16 @@ error, because a cell holding no pines legitimately has no `"pine"` — so
 a misspelled literal reads as "nothing matches". A missing attribute
 still throws, and so does a numeric one, naming `eq(attribute(name), n)`
 as the thing you wanted.
+
+`byAttribute(name, cases, default)` is the N-way form, for when the 2-way
+one stops composing: sizing a part by its kind on three axes needs one
+nested `lerp` per axis per kind, and the value an element takes when
+every predicate reads 0 is written down nowhere. Its `default` is
+required precisely because that unnamed fall-through is the defect. Be
+clear about the limit, though — a case key is never validated against the
+string table either, for the same reason, so a misspelled key is dead
+code that quietly takes the default. What you gain is that the
+fall-through is explicit and the case set is enumerable in one place.
 
 Every noise field takes `normalized: true` for a uniform [0, 1] output
 contract — an exact affine remap of the per-noise raw range, published
