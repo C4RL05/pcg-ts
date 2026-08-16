@@ -475,6 +475,218 @@ describe("copyToPoints", () => {
     expect(bare.attrs.point.names()).toEqual(source.attrs.point.names());
     expect(snapshotGeometry(firstGeo((await call("")).out))).toEqual(snapshotGeometry(bare));
   });
+
+  describe("topology", () => {
+    interface TopologyParams {
+      topology?: string;
+      targetNames?: string[];
+      targetIndexAttr?: string;
+    }
+
+    /**
+     * Five points wired into TWO polylines whose vertex order is NOT the
+     * identity — 0-2-4 and 3-1. A source whose `vertexToPoint` reads
+     * [0, 1, 2, ...] looks correctly shifted under almost any arithmetic,
+     * so it cannot tell a re-emission from a coincidence.
+     */
+    function forkedSource(): Geometry {
+      const geo = seededCloudAt([
+        [0, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+        [4, 0, 0],
+      ]);
+      setPolylineTopology(geo, [0, 2, 4, 3, 1], [0, 3], [3, 2]);
+      return geo;
+    }
+
+    const THREE_TARGETS = [
+      [0, 0, 0],
+      [0, 10, 0],
+      [0, 20, 0],
+    ];
+
+    async function copy(
+      source: Geometry,
+      params: TopologyParams = {},
+      target: Geometry = seededCloudAt(THREE_TARGETS),
+    ): Promise<Geometry> {
+      return firstGeo(
+        (
+          await runNode(copyToPoints, params, {
+            source: [makeGeometryItem(source)],
+            target: [makeGeometryItem(target)],
+          })
+        ).out,
+      );
+    }
+
+    it("drops the source's topology by default — the measurement gap 6 opened with", async () => {
+      const geo = await copy(createPolyline([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0]));
+      // A 5-point polyline (1 primitive) onto 3 targets: 15 points, 0
+      // primitives. The paths are gone and nothing said so.
+      expect(geo.pointCount).toBe(15);
+      expect(geo.vertexCount).toBe(0);
+      expect(geo.primitiveCount).toBe(0);
+    });
+
+    it('"drop" is the path that shipped, byte for byte', async () => {
+      const shipped = snapshotGeometry(await copy(forkedSource()));
+      expect(snapshotGeometry(await copy(forkedSource(), { topology: "drop" }))).toEqual(shipped);
+      // THE CONTROL. The equality above is worth nothing unless the same
+      // comparison can report "different" — so the other setting, over the
+      // same source and targets, must not match it.
+      expect(snapshotGeometry(await copy(forkedSource(), { topology: "keep" }))).not.toEqual(
+        shipped,
+      );
+    });
+
+    it('"keep" re-emits every source primitive once per target, shifted onto its block', async () => {
+      const geo = await copy(forkedSource(), { topology: "keep" });
+      expect(geo.pointCount).toBe(15);
+      expect(geo.vertexCount).toBe(15);
+      expect(geo.primitiveCount).toBe(6); // nT * nSourcePrimitives
+      // Each block walks the SOURCE's vertex order, t * nS further on.
+      expect(Array.from(geo.vertexToPoint)).toEqual([
+        0, 2, 4, 3, 1, 5, 7, 9, 8, 6, 10, 12, 14, 13, 11,
+      ]);
+      expect(Array.from(geo.primVertexStart)).toEqual([0, 3, 5, 8, 10, 13]);
+      expect(Array.from(geo.primVertexCount)).toEqual([3, 2, 3, 2, 3, 2]);
+      expect(primitiveTypeCounts(geo)).toEqual({ polyline: 6 });
+      // And the primitives describe the copies they were emitted for: the
+      // last block sits on the third target, ten units up from the second.
+      expect(positionsOf(geo)[12]).toEqual([2, 20, 0]);
+    });
+
+    it("carries the source's vertex and primitive attributes onto every copy", async () => {
+      const source = forkedSource();
+      const width = source.attrs.primitive.add("width", "f32", 1, 0);
+      width.set(0, 1.5);
+      width.set(1, 2.5);
+      const uv = source.attrs.vertex.add("uv", "f32", 2, [9, 9]);
+      [
+        [0, 0],
+        [0.5, 0],
+        [1, 0],
+        [0, 1],
+        [1, 1],
+      ].forEach((v, i) => uv.setTuple(i, v));
+      const geo = await copy(source, { topology: "keep" });
+      const outWidth = geo.attrs.primitive.require("width");
+      expect([0, 1, 2, 3, 4, 5].map((i) => outWidth.get(i))).toEqual([1.5, 2.5, 1.5, 2.5, 1.5, 2.5]);
+      const outUv = geo.attrs.vertex.require("uv");
+      // Vertex values travel with the vertex, not the point: block 1's
+      // vertices repeat block 0's, in the same order.
+      expect([0, 1, 2, 3, 4].map((i) => outUv.getTuple(i))).toEqual([
+        [0, 0],
+        [0.5, 0],
+        [1, 0],
+        [0, 1],
+        [1, 1],
+      ]);
+      expect(outUv.getTuple(5)).toEqual([0, 0]);
+      expect(outUv.getTuple(9)).toEqual([1, 1]);
+      // Type, tuple size and default come across with the values.
+      expect([outUv.type, outUv.tupleSize, outUv.defaultValue]).toEqual(["f32", 2, [9, 9]]);
+      expect([outWidth.type, outWidth.tupleSize, outWidth.defaultValue]).toEqual(["f32", 1, [0]]);
+    });
+
+    it("is byte-identical under both settings for a source with no primitives", async () => {
+      // The common case: a cloud onto a cloud. "keep" still routes through
+      // setTopology (what the output IS must depend on the graph, not the
+      // data), and an empty topology is what "drop" already emits.
+      const cloudSource = (): Geometry =>
+        seededCloudAt([
+          [0, 0, 0],
+          [1, 0, 0],
+        ]);
+      const dropped = snapshotGeometry(await copy(cloudSource()));
+      expect(snapshotGeometry(await copy(cloudSource(), { topology: "keep" }))).toEqual(dropped);
+      const kept = await copy(cloudSource(), { topology: "keep" });
+      expect([kept.vertexCount, kept.primitiveCount]).toEqual([0, 0]);
+      // THE CONTROL for the equality above: with primitives in the source
+      // the same two calls diverge, so the snapshot is comparing topology.
+      expect(snapshotGeometry(await copy(forkedSource(), { topology: "keep" }))).not.toEqual(
+        snapshotGeometry(await copy(forkedSource())),
+      );
+    });
+
+    it("emits the same POINT domain either way, targetNames and targetIndexAttr included", async () => {
+      const source = forkedSource();
+      const target = seededCloudAt(THREE_TARGETS);
+      const age = target.attrs.point.add("age", "u32", 1, 0);
+      [7, 8, 9].forEach((v, i) => age.set(i, v));
+      const params: TopologyParams = { targetNames: ["age"], targetIndexAttr: "anchorId" };
+      const dropped = await copy(source, { ...params, topology: "drop" }, target);
+      const kept = await copy(source, { ...params, topology: "keep" }, target);
+      // The param only ever ADDS: nothing reading a point can tell which
+      // was set, so the two point columns this node writes itself survive
+      // the re-emission untouched.
+      expect(snapshotGeometry(kept).point).toEqual(snapshotGeometry(dropped).point);
+      // THE CONTROL: as whole geometries they differ, so the equality
+      // above is a statement about the point domain and not a tautology.
+      expect(snapshotGeometry(kept)).not.toEqual(snapshotGeometry(dropped));
+      const anchor = kept.attrs.point.require("anchorId");
+      expect([...Array(15).keys()].map((i) => anchor.get(i))).toEqual([
+        0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2,
+      ]);
+      expect(kept.attrs.point.require("age").get(7)).toBe(8);
+    });
+
+    it("gives every copy of a primitive its own identity", async () => {
+      const draws = (geo: Geometry): number[] =>
+        Array.from(evaluateField(randomField("copy"), { geo, domain: "primitive", seed: 9 }).data);
+      // A primitive is named by the fold of its own points' identities, and
+      // BOTH halves of a point's identity are composed per copy here — P by
+      // the target's transform, seed by hashCombine(sourceSeed, targetSeed).
+      // So six copies are six primitives and each draws its own value.
+      const distinct = draws(await copy(forkedSource(), { topology: "keep" }));
+      expect(distinct.length).toBe(6);
+      expect(new Set(distinct).size).toBe(6);
+      // The documented exception, and the reason this is worth measuring:
+      // `cloudAt` seeds every target 0, so targets 0 and 2 sitting at the
+      // same position make copies that ARE the same points — one primitive
+      // to every identity-keyed decision, exactly the hazard
+      // mergePrimitives records. Give coincident targets distinct seeds.
+      const coincident = draws(
+        await copy(
+          forkedSource(),
+          { topology: "keep" },
+          cloudAt([
+            [0, 0, 0],
+            [0, 10, 0],
+            [0, 0, 0],
+          ]),
+        ),
+      );
+      expect(coincident.slice(4)).toEqual(coincident.slice(0, 2));
+      expect(new Set(coincident).size).toBe(4);
+    });
+
+    it("refuses a misspelled value, and a source resized behind its own topology", async () => {
+      await expect(copy(forkedSource(), { topology: "Keep" })).rejects.toThrow(
+        /copyToPoints: topology must be "drop" or "keep", got "Keep"; "drop" copies/,
+      );
+      const desynced = forkedSource();
+      desynced.attrs.vertex.resize(9);
+      await expect(copy(desynced, { topology: "keep" })).rejects.toThrow(
+        /copyToPoints: the source on pin "source" has 9 vertex attribute elements but 5 vertex references/,
+      );
+      // "drop" never reads the topology, so it is unaffected — the guard
+      // belongs to the opt-in path and not to the node.
+      await expect(copy(desynced)).resolves.toBeDefined();
+    });
+
+    it("registers topology as an enum defaulting to drop", () => {
+      const info = getNodeType("copyToPoints").info;
+      expect(info.params.topology.type).toBe("enum");
+      expect(info.params.topology.default).toBe("drop");
+      expect(info.params.topology.enum).toEqual(["drop", "keep"]);
+      expect(info.params.topology.description).toMatch(/t \* nSource \+ s/);
+      expect(info.params.topology.description).toMatch(/DETAIL domain is carried under NEITHER/);
+    });
+  });
 });
 
 describe("mergePoints", () => {

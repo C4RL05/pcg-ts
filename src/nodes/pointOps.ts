@@ -198,6 +198,99 @@ const COPY_STANDARD: ReadonlyArray<{
 export interface CopyToPointsParams {
   targetNames: readonly string[];
   targetIndexAttr: string;
+  topology: string;
+}
+
+/**
+ * Returns whether the source's topology is KEPT.
+ *
+ * The twin of `requireTopologyRule` in `filtering.ts`, and deliberately a
+ * second function rather than a shared one: that guard is private to its
+ * file, and its message states a SURVIVAL rule ("keep preserves the
+ * primitives all of whose points survive") that has no meaning here —
+ * nothing is filtered, every source primitive is re-emitted once per
+ * target. Unifying the two would mean a message that says neither thing
+ * precisely, and error messages are part of the agent API. What IS shared
+ * is the vocabulary: same param name, same two values, same default.
+ *
+ * Checked at runtime for the reason {@link requireCopyTopologyRule}'s twin
+ * gives: a param's `enum` is metadata for an editor, not a runtime guard,
+ * and a value that reached execute unrecognized must not silently mean
+ * "drop".
+ */
+function requireCopyTopologyRule(value: string): boolean {
+  if (value !== "drop" && value !== "keep") {
+    throw new Error(
+      `copyToPoints: topology must be "drop" or "keep", got ${JSON.stringify(value)}; ` +
+        '"drop" copies the source\'s POINTS only and its vertices and primitives are gone, ' +
+        '"keep" re-emits every source primitive once per target, renumbered onto that target\'s block of copies',
+    );
+  }
+  return value === "keep";
+}
+
+/**
+ * The vertex/primitive domains a geometry carries must be sized BY its
+ * topology, which `setTopology` (and `setPolylineTopology`) is the only
+ * thing that does. A geometry that resized one of those attribute sets
+ * directly would land its vertex values on another block's vertices in
+ * the assemblers below — silently, and with a plausible-looking cook.
+ *
+ * `where` names the input in the author's words: a pin for
+ * {@link copyToPoints}, a numbered multi-pin slot for
+ * {@link mergePrimitives}.
+ */
+function requireTopologySized(geo: Geometry, who: string, where: string): void {
+  if (geo.attrs.vertex.count !== geo.vertexToPoint.length) {
+    throw new Error(
+      `${who}: ${where} has ${geo.attrs.vertex.count} vertex attribute ` +
+        `elements but ${geo.vertexToPoint.length} vertex references; build topology with setTopology ` +
+        "(or setPolylineTopology), which sizes the vertex attributes to match, rather than resizing " +
+        "the vertex attribute set on its own.",
+    );
+  }
+  if (geo.attrs.primitive.count !== geo.primVertexStart.length) {
+    throw new Error(
+      `${who}: ${where} has ${geo.attrs.primitive.count} primitive attribute ` +
+        `elements but ${geo.primVertexStart.length} vertex ranges; build topology with setTopology ` +
+        "(or setPolylineTopology), which sizes the primitive attributes to match, rather than resizing " +
+        "the primitive attribute set on its own.",
+    );
+  }
+}
+
+/**
+ * Append ONE geometry's topology into output arrays at the given bases:
+ * every vertex reference shifted onto that block's points, every
+ * primitive's vertex range shifted onto that block's vertices, counts
+ * verbatim. Each input's vertex layout arrives as it was — nothing is
+ * compacted, which is what separates this from `gatherPrimitives`
+ * (util.ts) and is spelled out at {@link mergePrimitives}'s call.
+ *
+ * Shared by the file's two block-wise assemblers, which build the same
+ * arrays from different block SOURCES: {@link mergePrimitives} walks a
+ * list of inputs, {@link copyToPoints} under `topology "keep"` walks the
+ * SAME input once per target. A copy array is a union with all the terms
+ * equal, so the index arithmetic must be one function or the two will
+ * drift on what "renumber" means.
+ */
+function appendTopologyBlock(
+  geo: Geometry,
+  vertexToPoint: Uint32Array,
+  primVertexStart: Uint32Array,
+  primVertexCount: Uint32Array,
+  pointBase: number,
+  vertexBase: number,
+  primBase: number,
+): void {
+  const srcV2P = geo.vertexToPoint;
+  for (let v = 0; v < srcV2P.length; v++) vertexToPoint[vertexBase + v] = srcV2P[v] + pointBase;
+  const srcStart = geo.primVertexStart;
+  const srcCount = geo.primVertexCount;
+  for (let p = 0; p < srcStart.length; p++) {
+    primVertexStart[primBase + p] = srcStart[p] + vertexBase;
+    primVertexCount[primBase + p] = srcCount[p];
+  }
 }
 
 /** Copy a source cloud onto every target point, composing transforms. */
@@ -205,7 +298,7 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
   type: "copyToPoints",
   category: "point op",
   description:
-    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error. `targetIndexAttr` writes the target's INDEX rather than one of its attributes, which is what makes \"one thing per target\" — one path per anchor, one group per instance — expressible without an upstream setAttribute whose only job was to give this node something to carry.",
+    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error. `targetIndexAttr` writes the target's INDEX rather than one of its attributes, which is what makes \"one thing per target\" — one path per anchor, one group per instance — expressible without an upstream setAttribute whose only job was to give this node something to carry. The source's TOPOLOGY is dropped by default — an array of a path comes out a bare cloud — and `topology \"keep\"` re-emits every source primitive once per target instead, which is what makes the array of paths a set of paths without rebuilding them downstream.",
   inputs: [
     { name: "source", kind: "geometry" },
     { name: "target", kind: "geometry" },
@@ -224,10 +317,18 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
       description:
         'Name of an i32 point attribute to write the TARGET INDEX into — 0 for every copy that landed on the first target point, 1 for the second, and so on. Empty (the default) writes nothing. This is the key downstream nodes group by: pointsToPath\'s `groupAttr` turns "the copies of one target" into one path per target, and partitionByAttribute turns them into one item each. The node already computes this index to place the copies, so naming it here replaces the setAttribute writing `{"fn":"index"}` on the target purely so `targetNames` had something to carry. The column is i32, tuple size 1, default -1 (which no copy ever gets, so an element appended later reads as belonging to no target). Refused for the same three reasons `targetNames` refuses a name: "P", "rot", "scale" and "seed" are composed per copy, a name the source already carries would have two writers, and so would a name `targetNames` is carrying.',
     },
+    topology: {
+      type: "enum",
+      default: "drop",
+      enum: ["drop", "keep"],
+      description:
+        "What happens to the SOURCE's topology — the vertices and primitives built over the source's points. 'drop' (the default) copies POINTS only: an array of a path comes out a bare cloud with the paths gone, which is why the copies have to be rebuilt downstream (targetIndexAttr, then a pointsToPath grouping on it). 'keep' re-emits every source primitive once per TARGET: the copies are laid out in contiguous blocks of nSource (copy s of target t is point t * nSource + s), so primitive p of block t walks exactly the points its original walked, t * nSource further on. That is what mergePrimitives produces from nTarget copies of the source, and it is the whole difference between an array of points and an array of paths. Nothing is filtered and no primitive is reshaped: a source with N primitives always yields nTarget * N, in target-block order. The source's VERTEX and PRIMITIVE attributes come along, each copy carrying the original's values (a per-primitive width, a per-vertex uv, and `primtype`, so the copies stay samplable as what they are). The TARGET's own topology is never read under either setting — the target contributes point transforms and, through targetNames/targetIndexAttr, point attributes, while its primitives describe points that are not in this output at all. The POINT domain is IDENTICAL under both settings — same points, same order, same attributes, same identities — so this param only ever ADDS information, and neither targetNames nor targetIndexAttr (which write point columns) can be disturbed by it. The DETAIL domain is carried under NEITHER setting, for the reason mergePrimitives gives for dropping it: there are two inputs, each has a detail domain, and choosing between them would be a guess. On IDENTITY, because it decides what per-copy randomness does: a primitive is named by the fold of its own points' identities, and a point's identity is its position bits plus its `seed` — both of which this node composes per copy (P from the target's transform, seed from hashCombine(sourceSeed, targetSeed)). So the nTarget copies of one source primitive are nTarget DISTINCT primitives, and a randomField on the primitive domain draws a different value for each, which is what 'one variation per copy' needs. The exception is the one mergePrimitives documents: two targets sharing a position AND a seed produce copies that are the same points, hence ONE primitive to every identity-keyed decision — give coincident targets distinct seeds.",
+    },
   },
   execute({ inputs, params }) {
     const src = requireGeometry(inputs, "source", "copyToPoints");
     const tgt = requireGeometry(inputs, "target", "copyToPoints");
+    const keepTopology = requireCopyTopologyRule(params.topology);
     const srcSet = src.attrs.point;
     const tgtSet = tgt.attrs.point;
     const nS = srcSet.count;
@@ -432,6 +533,61 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
         oSeed[i] = hashCombine(sSeed ? sSeed[s] : s, tSeedVal);
       }
     }
+
+    // TOPOLOGY, opt-in and strictly additive. It runs LAST because
+    // `setTopology` validates the renumbered vertex references against the
+    // point count, and the point domain is only final here. Nothing above
+    // is re-derived: `topology "drop"` skips this block entirely rather
+    // than routing through a rebuild, so the default is byte-identical to
+    // what shipped by construction, not by argument.
+    //
+    // `targetNames` and `targetIndexAttr` cannot collide with any of this:
+    // they write POINT columns, while `setTopology` only sizes the vertex
+    // and primitive sets and leaves the point domain untouched.
+    if (keepTopology) {
+      requireTopologySized(src, "copyToPoints", 'the source on pin "source"');
+      const nV = src.vertexToPoint.length;
+      const nPrim = src.primVertexStart.length;
+      const vertexToPoint = new Uint32Array(nV * nT);
+      const primVertexStart = new Uint32Array(nPrim * nT);
+      const primVertexCount = new Uint32Array(nPrim * nT);
+      // One block per target, with the same `t * nS` stride the transform
+      // loop above used — which is exactly why this is a re-emission and
+      // not a rebuild: the copies are already contiguous per target, so
+      // the shift is the only thing a primitive needs.
+      for (let t = 0; t < nT; t++) {
+        appendTopologyBlock(
+          src,
+          vertexToPoint,
+          primVertexStart,
+          primVertexCount,
+          t * nS,
+          t * nV,
+          t * nPrim,
+        );
+      }
+      // Runs even when the source has NO primitives (the common case, and
+      // an empty topology either way): what the output IS must depend on
+      // the graph and never on the data — the rule the point filters'
+      // `topology "keep"` states at selfPrune's off switch.
+      out.setTopology(vertexToPoint, primVertexStart, primVertexCount);
+      // Vertex and primitive columns are bulk-copied per block, exactly as
+      // the source POINT columns are above: every copy of a primitive
+      // carries the original's values. `add` cannot collide here — both
+      // sets are fresh, and only the point domain has other writers — and
+      // `setTopology` has already sized them, so the copy is a plain
+      // ranged write. String columns (`primtype`) re-intern through
+      // `copyFrom`, since a table index means nothing in another geometry.
+      for (const domain of ["vertex", "primitive"] as const) {
+        const from = src.attrs[domain];
+        const to = out.attrs[domain];
+        const per = from.count;
+        for (const attr of from) {
+          const dst = to.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue as AttrDefault);
+          for (let t = 0; t < nT; t++) dst.copyFrom(attr, 0, t * per, per);
+        }
+      }
+    }
     return { out: [makeGeometryItem(out)] };
   },
 });
@@ -568,22 +724,7 @@ export const mergePrimitives = standardNode<MergePrimitivesParams>({
       // attribute set directly would land its vertex values on
       // other inputs' vertices here, silently, which is exactly the class
       // of failure this node exists to avoid.
-      if (geo.attrs.vertex.count !== geo.vertexToPoint.length) {
-        throw new Error(
-          `mergePrimitives: input ${i} on pin "in" has ${geo.attrs.vertex.count} vertex attribute ` +
-            `elements but ${geo.vertexToPoint.length} vertex references; build topology with setTopology ` +
-            "(or setPolylineTopology), which sizes the vertex attributes to match, rather than resizing " +
-            "the vertex attribute set on its own.",
-        );
-      }
-      if (geo.attrs.primitive.count !== geo.primVertexStart.length) {
-        throw new Error(
-          `mergePrimitives: input ${i} on pin "in" has ${geo.attrs.primitive.count} primitive attribute ` +
-            `elements but ${geo.primVertexStart.length} vertex ranges; build topology with setTopology ` +
-            "(or setPolylineTopology), which sizes the primitive attributes to match, rather than resizing " +
-            "the primitive attribute set on its own.",
-        );
-      }
+      requireTopologySized(geo, "mergePrimitives", `input ${i} on pin "in"`);
       totalPoints += geo.pointCount;
       totalVerts += geo.vertexToPoint.length;
       totalPrims += geo.primVertexStart.length;
@@ -601,8 +742,9 @@ export const mergePrimitives = standardNode<MergePrimitivesParams>({
     // the vertex columns through the same selection; what it loses is
     // data this node was asked to concatenate, not to filter). Two
     // different operations that happen to share the word "renumber", so
-    // the shared piece here is the column union above, not the index
-    // arithmetic.
+    // the shared pieces here are the column union above and the per-block
+    // shift ({@link appendTopologyBlock}, which `copyToPoints`'
+    // `topology "keep"` walks once per target), not `gatherPrimitives`.
     const vertexToPoint = new Uint32Array(totalVerts);
     const primVertexStart = new Uint32Array(totalPrims);
     const primVertexCount = new Uint32Array(totalPrims);
@@ -611,17 +753,18 @@ export const mergePrimitives = standardNode<MergePrimitivesParams>({
     let primBase = 0;
     for (const item of items) {
       const geo = item.geo;
-      const srcV2P = geo.vertexToPoint;
-      for (let v = 0; v < srcV2P.length; v++) vertexToPoint[vertexBase + v] = srcV2P[v] + pointBase;
-      const srcStart = geo.primVertexStart;
-      const srcCount = geo.primVertexCount;
-      for (let p = 0; p < srcStart.length; p++) {
-        primVertexStart[primBase + p] = srcStart[p] + vertexBase;
-        primVertexCount[primBase + p] = srcCount[p];
-      }
+      appendTopologyBlock(
+        geo,
+        vertexToPoint,
+        primVertexStart,
+        primVertexCount,
+        pointBase,
+        vertexBase,
+        primBase,
+      );
       pointBase += geo.pointCount;
-      vertexBase += srcV2P.length;
-      primBase += srcStart.length;
+      vertexBase += geo.vertexToPoint.length;
+      primBase += geo.primVertexStart.length;
     }
 
     // Points first: setTopology validates the renumbered vertex
