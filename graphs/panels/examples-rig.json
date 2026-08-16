@@ -48,7 +48,14 @@
       "controls": [
         { "param": "partDense.count", "label": "density", "min": 100, "max": 2000, "step": 50 },
         { "param": "partCluster.threshold", "label": "cluster cut", "min": 0, "max": 1, "step": 0.01 },
-        { "param": "partScatter.amount", "label": "scatter" },
+        {
+          "param": "partScatter.amount.scatterSteps",
+          "label": "scatter",
+          "description": "How far a component may wander off its sample, in STEPS of the sampling above it: 0.5 is half a step, so neighbours can meet but not cross. It reads the step `partDense` publishes, so it keeps that meaning as the density knob moves — where a frozen distance was 0.05 of a step at 100 samples and 1.1 of one at 2000.",
+          "min": 0,
+          "max": 1.5,
+          "step": 0.05
+        },
         {
           "param": "partSize.value.partScale",
           "label": "part size",
