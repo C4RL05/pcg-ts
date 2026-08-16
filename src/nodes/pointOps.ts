@@ -3,9 +3,16 @@
  * bounds stamping. All clone their inputs before mutating (the executor
  * caches inputs by reference).
  */
-import { Geometry, type AttrDefault, createPointCloud } from "../data/index.js";
+import {
+  type AttrDefault,
+  type AttributeSet,
+  type Domain,
+  Geometry,
+  PRIMTYPE_ATTR,
+  createPointCloud,
+} from "../data/index.js";
 import { pointIdentities } from "../data/identity.js";
-import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
+import { type GeometryItem, cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import { isField, type Column } from "../fields/index.js";
@@ -292,6 +299,56 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
   },
 });
 
+/**
+ * Union the attribute columns of one domain across every input into
+ * `into`: first-occurrence order, and the first occurrence's type, tuple
+ * size and default. Two inputs disagreeing on an attribute's shape is a
+ * hard error naming it — the alternative is a column whose meaning
+ * changes halfway down, which nothing downstream could notice.
+ *
+ * Copying the values is the caller's job, because the two merges append
+ * different things: this only settles what columns exist and what an
+ * input that lacks one contributes (its default, filled by `resize`).
+ *
+ * `primtype` on the primitive domain is the ONE column whose default is
+ * overridden, and {@link mergePrimitives} explains why.
+ */
+function unionColumns(
+  who: string,
+  items: readonly GeometryItem[],
+  domain: Domain,
+  into: AttributeSet,
+): void {
+  for (const item of items) {
+    for (const attr of item.geo.attrs[domain]) {
+      const existing = into.get(attr.name);
+      if (!existing) {
+        // `attr.type === "string"` is not decoration: the empty default
+        // below is only a legal default FOR a string column, and a
+        // hand-built numeric column under this name would otherwise be
+        // refused by the attribute layer in an error naming neither this
+        // node nor the input it came from. Such a column is not a type
+        // tag anyway, so it takes the ordinary rule.
+        const isPrimType =
+          domain === "primitive" && attr.name === PRIMTYPE_ATTR && attr.type === "string";
+        into.add(
+          attr.name,
+          attr.type,
+          attr.tupleSize,
+          isPrimType ? "" : (attr.defaultValue as AttrDefault),
+        );
+      } else if (existing.type !== attr.type || existing.tupleSize !== attr.tupleSize) {
+        throw new Error(
+          `${who}: attribute "${attr.name}" has conflicting shapes across inputs on the ${domain} ` +
+            `domain (${existing.type} tuple ${existing.tupleSize} vs ${attr.type} tuple ${attr.tupleSize}). ` +
+            `Every input must agree on a name's type and tuple size — rename one side with setAttribute, ` +
+            `or drop the column upstream with removeAttribute (domain "${domain}", names ["${attr.name}"]).`,
+        );
+      }
+    }
+  }
+}
+
 /** Params of {@link mergePoints} (none). */
 export type MergePointsParams = Record<string, never>;
 
@@ -300,7 +357,7 @@ export const mergePoints = standardNode<MergePointsParams>({
   type: "mergePoints",
   category: "point op",
   description:
-    "Concatenates the points of every connected geometry, in connection order, into one point cloud. The output carries the union of all point attributes: an attribute missing on an input fills with its default over that input's range. Attributes sharing a name must agree on type and tuple size. Topology (vertices/primitives) is not carried — the result is points only. Output tags are the union of input tags.",
+    "Concatenates the points of every connected geometry, in connection order, into one point cloud. The output carries the union of all point attributes: an attribute missing on an input fills with its default over that input's range. Attributes sharing a name must agree on type and tuple size. Topology (vertices/primitives) is not carried — the result is points only, so a network or a mesh arrives here and leaves as a bare cloud; `mergePrimitives` is the twin that keeps it. Output tags are the union of input tags.",
   inputs: [{ name: "in", kind: "geometry", multi: true }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {},
@@ -319,19 +376,7 @@ export const mergePoints = standardNode<MergePointsParams>({
     }
     const out = new Geometry();
     const outSet = out.attrs.point;
-    // Union of attributes, first-occurrence order and shape.
-    for (const item of items) {
-      for (const attr of item.geo.attrs.point) {
-        const existing = outSet.get(attr.name);
-        if (!existing) {
-          outSet.add(attr.name, attr.type, attr.tupleSize, attr.defaultValue as AttrDefault);
-        } else if (existing.type !== attr.type || existing.tupleSize !== attr.tupleSize) {
-          throw new Error(
-            `mergePoints: attribute "${attr.name}" has conflicting shapes across inputs (${existing.type} tuple ${existing.tupleSize} vs ${attr.type} tuple ${attr.tupleSize})`,
-          );
-        }
-      }
-    }
+    unionColumns("mergePoints", items, "point", outSet);
     let total = 0;
     for (const item of items) total += item.geo.pointCount;
     outSet.resize(total);
@@ -343,6 +388,131 @@ export const mergePoints = standardNode<MergePointsParams>({
       }
       offset += n;
     }
+    const tags = new Set<string>();
+    for (const item of items) for (const tag of item.tags) tags.add(tag);
+    return { out: [makeGeometryItem(out, tags)] };
+  },
+});
+
+/** Params of {@link mergePrimitives} (none). */
+export type MergePrimitivesParams = Record<string, never>;
+
+/** Concatenate whole geometries — points, vertices and primitives. */
+export const mergePrimitives = standardNode<MergePrimitivesParams>({
+  type: "mergePrimitives",
+  category: "point op",
+  description:
+    "Concatenates every connected geometry, in connection order, KEEPING TOPOLOGY: points, vertices and primitives are appended and each input's vertex and primitive references are renumbered onto its place in the result, so an authored network merged with a generated one comes out a single network. The topology-preserving twin of mergePoints, which carries points only and so turns any input into a bare cloud. The point, vertex and primitive domains each carry the union of that domain's attributes: an attribute missing on an input fills with its default over that input's range, and attributes sharing a name must agree on type and tuple size. The one exception is `primtype`, which is a type tag rather than a value: each input's primitives keep their own tag, and primitives from an input carrying no primtype column come out with an EMPTY tag rather than inheriting another input's — this node cannot know what an untagged primitive is and must not guess. One consequence to know before relying on absence: surfaceSample ignores the tag entirely when a geometry has NO primtype column, so an untagged triangle mesh samples fine alone but is skipped once a tagged input is merged in and the column exists — tag such a mesh upstream (createTriangleMesh does) rather than leaving it untagged. Mixed primitive types are allowed, because every consumer selects what it understands (surfaceSample takes 3-vertex `poly`, the path nodes take `polyline`). An input with no topology contributes its points and no primitives, which is not an error. The detail domain is not carried: every input has one and choosing between them would be a guess. Output tags are the union of input tags. Point identity is position bits plus the `seed` attribute and both are copied verbatim, so two inputs holding a point at the same position with the same seed are ONE point to every identity-keyed decision (jitter, probabilistic filters, randomField) — the same inherited hazard mergePoints carries. Give clouds that must stay distinct distinct seeds.",
+  inputs: [{ name: "in", kind: "geometry", multi: true }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {},
+  execute({ inputs }) {
+    const items = geometryItems(inputs.in);
+    // Same reasoning as mergePoints: an unconnected multi-pin is a slot
+    // to fill later, and it must produce a valid empty cloud rather than
+    // an attribute-less Geometry the next node rejects for the wrong
+    // reason.
+    if (items.length === 0) {
+      return { out: [makeGeometryItem(createPointCloud(0))] };
+    }
+    const out = new Geometry();
+    for (const domain of ["point", "vertex", "primitive"] as const) {
+      unionColumns("mergePrimitives", items, domain, out.attrs[domain]);
+    }
+
+    let totalPoints = 0;
+    let totalVerts = 0;
+    let totalPrims = 0;
+    for (let i = 0; i < items.length; i++) {
+      const geo = items[i].geo;
+      // Topology is what sizes the vertex and primitive domains, and
+      // `setTopology` is the only thing that does it — so the two agree for
+      // every geometry built through the API. One that resized an
+      // attribute set directly would land its vertex values on
+      // other inputs' vertices here, silently, which is exactly the class
+      // of failure this node exists to avoid.
+      if (geo.attrs.vertex.count !== geo.vertexToPoint.length) {
+        throw new Error(
+          `mergePrimitives: input ${i} on pin "in" has ${geo.attrs.vertex.count} vertex attribute ` +
+            `elements but ${geo.vertexToPoint.length} vertex references; build topology with setTopology ` +
+            "(or setPolylineTopology), which sizes the vertex attributes to match, rather than resizing " +
+            "the vertex attribute set on its own.",
+        );
+      }
+      if (geo.attrs.primitive.count !== geo.primVertexStart.length) {
+        throw new Error(
+          `mergePrimitives: input ${i} on pin "in" has ${geo.attrs.primitive.count} primitive attribute ` +
+            `elements but ${geo.primVertexStart.length} vertex ranges; build topology with setTopology ` +
+            "(or setPolylineTopology), which sizes the primitive attributes to match, rather than resizing " +
+            "the primitive attribute set on its own.",
+        );
+      }
+      totalPoints += geo.pointCount;
+      totalVerts += geo.vertexToPoint.length;
+      totalPrims += geo.primVertexStart.length;
+    }
+
+    // THE ASSEMBLER IS LOCAL ON PURPOSE, and is not `gatherPrimitives`
+    // (util.ts) with more sources. That one GATHERS a chosen subset of one
+    // geometry's primitives and rebuilds their vertex runs contiguously
+    // from `w`; this one APPENDS whole geometries and must keep each
+    // input's vertex layout as it arrived. A geometry whose primitive
+    // ranges do not tile its vertex array — nothing forbids it, only
+    // `start + count <= nv` is checked — comes out of a compacting rebuild
+    // with the unreferenced vertices GONE, and their attribute values
+    // with them (that gather stays internally consistent, since it carries
+    // the vertex columns through the same selection; what it loses is
+    // data this node was asked to concatenate, not to filter). Two
+    // different operations that happen to share the word "renumber", so
+    // the shared piece here is the column union above, not the index
+    // arithmetic.
+    const vertexToPoint = new Uint32Array(totalVerts);
+    const primVertexStart = new Uint32Array(totalPrims);
+    const primVertexCount = new Uint32Array(totalPrims);
+    let pointBase = 0;
+    let vertexBase = 0;
+    let primBase = 0;
+    for (const item of items) {
+      const geo = item.geo;
+      const srcV2P = geo.vertexToPoint;
+      for (let v = 0; v < srcV2P.length; v++) vertexToPoint[vertexBase + v] = srcV2P[v] + pointBase;
+      const srcStart = geo.primVertexStart;
+      const srcCount = geo.primVertexCount;
+      for (let p = 0; p < srcStart.length; p++) {
+        primVertexStart[primBase + p] = srcStart[p] + vertexBase;
+        primVertexCount[primBase + p] = srcCount[p];
+      }
+      pointBase += geo.pointCount;
+      vertexBase += srcV2P.length;
+      primBase += srcStart.length;
+    }
+
+    // Points first: setTopology validates the renumbered vertex
+    // references against the point count they are meant to index.
+    out.attrs.point.resize(totalPoints);
+    out.setTopology(vertexToPoint, primVertexStart, primVertexCount);
+
+    let pointOffset = 0;
+    let vertexOffset = 0;
+    let primOffset = 0;
+    for (const item of items) {
+      const geo = item.geo;
+      for (const attr of geo.attrs.point) {
+        out.attrs.point.require(attr.name).copyFrom(attr, 0, pointOffset, geo.pointCount);
+      }
+      for (const attr of geo.attrs.vertex) {
+        out.attrs.vertex.require(attr.name).copyFrom(attr, 0, vertexOffset, geo.attrs.vertex.count);
+      }
+      for (const attr of geo.attrs.primitive) {
+        out.attrs.primitive
+          .require(attr.name)
+          .copyFrom(attr, 0, primOffset, geo.attrs.primitive.count);
+      }
+      pointOffset += geo.pointCount;
+      vertexOffset += geo.attrs.vertex.count;
+      primOffset += geo.attrs.primitive.count;
+    }
+
     const tags = new Set<string>();
     for (const item of items) for (const tag of item.tags) tags.add(tag);
     return { out: [makeGeometryItem(out, tags)] };

@@ -838,6 +838,49 @@
         ]
       }
     },
+    "basics-merge-primitives.json": {
+      "outputs": {
+        "network": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 98,
+              "vertex": 191,
+              "primitive": 82,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -26,
+                0,
+                -26
+              ],
+              "max": [
+                26,
+                0,
+                26
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-mesh-primitive.json": {
       "outputs": {
         "mesh": [

@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { Geometry, createPointCloud } from "../data/index.js";
-import { attribute, position, vec, component, constant } from "../fields/index.js";
+import {
+  Geometry,
+  createPointCloud,
+  createPolyline,
+  createTriangleMesh,
+  primitiveTypeCounts,
+  setPolylineTopology,
+} from "../data/index.js";
+import {
+  attribute,
+  component,
+  constant,
+  evaluateField,
+  position,
+  randomField,
+  vec,
+} from "../fields/index.js";
 import { Graph, makeGeometryItem } from "../graph/index.js";
 import {
   copyToPoints,
@@ -9,10 +24,12 @@ import {
   getNodeType,
   jitterPoints,
   mergePoints,
+  mergePrimitives,
   orientAlongVector,
   pointGrid,
   serializeGraph,
   setBounds,
+  surfaceSample,
   transformPoints,
 } from "./index.js";
 import { rotateVec } from "./util.js";
@@ -285,6 +302,192 @@ describe("mergePoints", () => {
   it("merges zero inputs into an empty cloud", async () => {
     const geo = firstGeo((await runNode(mergePoints, {}, {})).out);
     expect(geo.pointCount).toBe(0);
+  });
+});
+
+describe("mergePrimitives", () => {
+  /**
+   * A triangle whose topology came from bare `setTopology`, so it carries
+   * NO `primtype` column — the case the union rule mislabels if `primtype`
+   * is treated as an ordinary attribute. `createTriangleMesh` stamps one,
+   * which is exactly why it cannot be used to build this.
+   */
+  function untaggedTriangle(offsetX = 0): Geometry {
+    const geo = new Geometry();
+    const P = geo.attrs.point.add("P", "f32", 3);
+    geo.attrs.point.resize(3);
+    P.data.set([offsetX, 0, 0, offsetX + 1, 0, 0, offsetX, 0, 1]);
+    geo.setTopology(Uint32Array.of(0, 1, 2), Uint32Array.of(0), Uint32Array.of(3));
+    return geo;
+  }
+
+  /** A seeded cloud wired into `n - 1` consecutive 2-vertex polylines. */
+  function chain(positions: number[][]): Geometry {
+    const geo = seededCloudAt(positions);
+    const idx: number[] = [];
+    const start: number[] = [];
+    const count: number[] = [];
+    for (let i = 0; i + 1 < positions.length; i++) {
+      start.push(idx.length);
+      count.push(2);
+      idx.push(i, i + 1);
+    }
+    setPolylineTopology(geo, idx, start, count);
+    return geo;
+  }
+
+  async function merge(...geos: Geometry[]): Promise<Geometry> {
+    return firstGeo(
+      (await runNode(mergePrimitives, {}, { in: geos.map((g) => makeGeometryItem(g)) })).out,
+    );
+  }
+
+  it("keeps both inputs' topology, renumbered onto one geometry", async () => {
+    const mesh = createTriangleMesh([0, 0, 0, 1, 0, 0, 0, 0, 1], [0, 1, 2]);
+    const net = createPolyline([5, 0, 0, 6, 0, 0, 7, 0, 0]);
+    const geo = await merge(mesh, net);
+    expect(geo.pointCount).toBe(6);
+    expect(geo.vertexCount).toBe(6);
+    expect(geo.primitiveCount).toBe(2);
+    // The network's polyline still walks its own points, three points on.
+    expect(Array.from(geo.primVertexStart)).toEqual([0, 3]);
+    expect(Array.from(geo.primVertexCount)).toEqual([3, 3]);
+    expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(positionsOf(geo).map((p) => p[0])).toEqual([0, 1, 0, 5, 6, 7]);
+    expect(primitiveTypeCounts(geo)).toEqual({ poly: 1, polyline: 1 });
+  });
+
+  it("does not stamp an untagged mesh with another input's primtype", async () => {
+    // THE HAZARD. `primtype` is a type tag, not a value, so the union
+    // rule's default fill would relabel an untagged triangle as whichever
+    // kind the first tagged input established — after which surfaceSample
+    // skips it and a line renderer draws it. Both orders, because the
+    // default fill mislabels from either side.
+    const net = createPolyline([5, 0, 0, 6, 0, 0]);
+    const netFirst = await merge(net, untaggedTriangle());
+    const tags = netFirst.attrs.primitive.require("primtype");
+    expect(tags.getString(0)).toBe("polyline");
+    expect(tags.getString(1)).toBe("");
+    expect(primitiveTypeCounts(netFirst)).toEqual({ polyline: 1, "": 1 });
+
+    const meshFirst = await merge(untaggedTriangle(), net);
+    const flipped = meshFirst.attrs.primitive.require("primtype");
+    expect(flipped.getString(0)).toBe("");
+    expect(flipped.getString(1)).toBe("polyline");
+    expect(primitiveTypeCounts(meshFirst)).toEqual({ "": 1, polyline: 1 });
+  });
+
+  it("invents no primtype column when no input carries one", async () => {
+    const geo = await merge(untaggedTriangle(), untaggedTriangle(4));
+    expect(geo.attrs.primitive.has("primtype")).toBe(false);
+    expect(primitiveTypeCounts(geo)).toEqual({});
+  });
+
+  it("keeps a tagged mesh samplable with a network merged in", async () => {
+    // A quad at y = 0 and a polyline at y = 5: every sample landing at
+    // y = 0 is the proof surfaceSample found the mesh's triangles and only
+    // those, whatever else the geometry now holds.
+    const mesh = createTriangleMesh(
+      [0, 0, 0, 4, 0, 0, 4, 0, 4, 0, 0, 4],
+      [0, 1, 2, 0, 2, 3],
+    );
+    const net = createPolyline([0, 5, 0, 4, 5, 0, 4, 5, 4]);
+    const geo = await merge(mesh, net);
+    expect(primitiveTypeCounts(geo)).toEqual({ poly: 2, polyline: 1 });
+    const sampled = firstGeo(
+      (await runNode(surfaceSample, { count: 64 }, { in: [makeGeometryItem(geo)] })).out,
+    );
+    expect(sampled.pointCount).toBe(64);
+    for (const [x, y, z] of positionsOf(sampled)) {
+      expect(y).toBe(0);
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(4);
+      expect(z).toBeGreaterThanOrEqual(0);
+      expect(z).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("takes an input with no topology as points only", async () => {
+    const cloud = cloudAt([
+      [9, 0, 0],
+      [9, 0, 1],
+    ]);
+    const net = createPolyline([0, 0, 0, 1, 0, 0]);
+    const geo = await merge(cloud, net);
+    expect(geo.pointCount).toBe(4);
+    expect(geo.primitiveCount).toBe(1);
+    // The polyline's two vertices moved past the cloud's points.
+    expect(Array.from(geo.vertexToPoint)).toEqual([2, 3]);
+    expect(positionsOf(geo).map((p) => p[0])).toEqual([9, 9, 0, 1]);
+  });
+
+  it("rejects conflicting attribute shapes, naming the attribute and the domain", async () => {
+    const a = createPolyline([0, 0, 0, 1, 0, 0]);
+    a.attrs.primitive.add("width", "f32", 1, 0);
+    const b = createPolyline([2, 0, 0, 3, 0, 0]);
+    b.attrs.primitive.add("width", "i32", 1, 0);
+    await expect(
+      runNode(mergePrimitives, {}, { in: [makeGeometryItem(a), makeGeometryItem(b)] }),
+    ).rejects.toThrow(/attribute "width" has conflicting shapes across inputs on the primitive domain/);
+  });
+
+  it("merges zero inputs into an empty cloud", async () => {
+    const geo = firstGeo((await runNode(mergePrimitives, {}, {})).out);
+    expect(geo.pointCount).toBe(0);
+    expect(geo.primitiveCount).toBe(0);
+  });
+
+  it("copies a single input rather than passing it through", async () => {
+    const net = createPolyline([0, 0, 0, 1, 0, 0, 2, 0, 0]);
+    const geo = await merge(net);
+    expect(geo).not.toBe(net);
+    expect(geo.pointCount).toBe(3);
+    expect(Array.from(geo.vertexToPoint)).toEqual([0, 1, 2]);
+    // Writing to the copy must not reach back into the input.
+    geo.attrs.point.require("P").set(0, 99);
+    expect(net.attrs.point.require("P").get(0)).toBe(0);
+  });
+
+  it("unions vertex and primitive attributes with defaults over the other input's range", async () => {
+    const a = createPolyline([0, 0, 0, 1, 0, 0]);
+    const w = a.attrs.primitive.add("width", "f32", 1, 3);
+    w.set(0, 1.5);
+    const uv = a.attrs.vertex.add("uv", "f32", 2, [7, 7]);
+    uv.setTuple(0, [0, 0]);
+    uv.setTuple(1, [1, 0]);
+    const b = createPolyline([2, 0, 0, 3, 0, 0]);
+    const geo = await merge(a, b);
+    const width = geo.attrs.primitive.require("width");
+    expect([width.get(0), width.get(1)]).toEqual([1.5, 3]);
+    const merged = geo.attrs.vertex.require("uv");
+    expect([0, 1, 2, 3].map((i) => merged.getTuple(i))).toEqual([
+      [0, 0],
+      [1, 0],
+      [7, 7],
+      [7, 7],
+    ]);
+  });
+
+  it("keeps each primitive's randomField draw, whichever side it came from", async () => {
+    // Primitive identity is the fold of its own points' identities, and a
+    // union moves neither a position nor a seed — so a primitive keeps its
+    // draw across the merge, and keeps it when the inputs swap places.
+    const a = chain([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    const b = chain([
+      [10, 0, 0],
+      [11, 0, 0],
+    ]);
+    const draws = (geo: Geometry): number[] =>
+      Array.from(evaluateField(randomField("edge"), { geo, domain: "primitive", seed: 9 }).data);
+    const alone = draws(a);
+    expect(alone.length).toBe(2);
+    expect(new Set(alone).size).toBe(2);
+    expect(draws(await merge(a, b))).toEqual([...alone, ...draws(b)]);
+    expect(draws(await merge(b, a))).toEqual([...draws(b), ...alone]);
   });
 });
 

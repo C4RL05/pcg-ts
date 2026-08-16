@@ -343,7 +343,11 @@ topology with it, as do `mergePoints` and `partitionByAttribute`. Three
 filters are exempt — `projectToPlane`, which removes nothing, and the two
 primitive filters, `filterPrimitivesByBounds` and
 `filterPrimitivesByAttribute`, which remove whole primitives rather than
-points and so trim a network instead of demolishing it. Nothing warns
+points and so trim a network instead of demolishing it. Combining two
+geometries has its own exemption: `mergePrimitives` concatenates points,
+vertices *and* primitives and renumbers each input's references, so an
+authored path joined to a generated network stays one network, where
+`mergePoints` would hand back both as loose points. Nothing warns
 where the loss happens, so build the path or the network after the last
 filter. The full contract is in docs/authoring.md —
 [Paths](./docs/authoring.md#paths) for closure and ordering,

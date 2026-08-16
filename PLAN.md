@@ -170,11 +170,6 @@ recooks all K.
   not an enforced invariant: a third-party node that mutates its input
   corrupts a shared cache where today it corrupts only its own memo.
 
-**A topology-preserving union.** `mergePoints` destroys topology, so two
-polyline geometries cannot be combined — which blocks mixing authored
-and procedural networks (a hand-placed trail plus a generated one). Was
-ranked #3 in the stage-5 design's missing list.
-
 **`docs/pages/` is a committed build that no gate regenerates or
 checks.** 100 tracked files produced by `npm run examples:pages`, which
 neither `npm run docs` nor CI runs — so it drifts from source silently and

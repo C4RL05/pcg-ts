@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-52 examples, alphabetical by file:
+53 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -22,6 +22,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-jitter-points.json](#basics-jitter-pointsjson) — break up a lattice with deterministic jitter
 - [basics-mask-by-species.json](#basics-mask-by-speciesjson) — let a string attribute drive a field
 - [basics-merge-points.json](#basics-merge-pointsjson) — concatenate two clouds into one
+- [basics-merge-primitives.json](#basics-merge-primitivesjson) — join an authored path to a generated network
 - [basics-mesh-primitive.json](#basics-mesh-primitivejson) — build a mesh a saved graph can cook
 - [basics-neighborhood-count.json](#basics-neighborhood-countjson) — measure how crowded each point is
 - [basics-orient-along-path.json](#basics-orient-along-pathjson) — turn a path's own points to follow it
@@ -346,6 +347,24 @@ Cook it: `pcg cook graphs/basics-mask-by-species.json --stats`
 **Outputs:** `points` (from `both`.`out`)
 
 Cook it: `pcg cook graphs/basics-merge-points.json --stats`
+
+## basics-merge-primitives.json
+
+**join an authored path to a generated network**
+
+`mergePrimitives` is `mergePoints` with the topology kept: points, vertices AND primitives are concatenated, and each input's vertex and primitive references are renumbered onto its place in the result — so an authored boundary path and a generated trail network come out one geometry that is still a network. Send the same two inputs through `mergePoints` instead and both survive as loose points with every primitive gone, which is what blocked mixing authored geometry with generated geometry at all. Each domain carries the union of its attributes, an input missing one filling with that column's default over its own range. `primtype` is the exception, because it is a type tag rather than a value: each input's primitives keep their own tag, and primitives from an input carrying no tag come out with an empty one instead of inheriting another input's. Mixed primitive kinds in one geometry are fine — every consumer selects what it understands, so a mesh unioned with a network is coherent.
+
+**Tags:** `basics`, `merge`, `topology`, `compose`
+
+**Seed:** 1050
+
+**Node types:** `connectPoints`, `mergePrimitives`, `pointScatterInBounds`, `subgraph`
+
+**Primitives:** `shape/path-loop`
+
+**Outputs:** `network` (from `network`.`out`)
+
+Cook it: `pcg cook graphs/basics-merge-primitives.json --stats`
 
 ## basics-mesh-primitive.json
 

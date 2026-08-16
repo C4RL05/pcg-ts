@@ -1277,7 +1277,10 @@ group id (whole numbers, typically written with `setAttribute` at type
 This is the one that bites first. Every filter node that can remove
 points routes through `gatherPoints`, which rebuilds the point domain
 from the survivors and drops primitive topology with it. `mergePoints`
-and `partitionByAttribute` drop it the same way. Three filter-category
+and `partitionByAttribute` drop it the same way — combine two geometries
+with `mergePrimitives` instead, which concatenates points, vertices *and*
+primitives and renumbers each input's references, so an authored network
+joined to a generated one stays one network. Three filter-category
 nodes are exempt, for two unrelated reasons: `projectToPlane` moves
 points without removing any, and `filterPrimitivesByBounds` and
 `filterPrimitivesByAttribute` remove whole *primitives* rather than
@@ -1637,7 +1640,8 @@ remove points routes through `gatherPoints`, which rebuilds the point
 domain from the survivors and drops primitive topology with it —
 `filterByDensity`, `filterByBounds`, `filterByAttribute`,
 `filterByExpression`, `selfPrune`, `partitionByAttribute`, and
-`mergePoints` when it concatenates. Put any of them after
+`mergePoints` when it concatenates (`mergePrimitives` is the
+concatenation that keeps the network). Put any of them after
 `connectPoints` and the network is quietly a point cloud again: the
 points look right, the attributes survive, `pcg validate` says `ok`, and
 the cook succeeds. Nothing warns.

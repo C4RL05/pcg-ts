@@ -31,7 +31,7 @@ const ROOT_SURFACE = [
   "index", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "listFieldFnInfos", "listFieldFns",
   "listNodeTypes", "listSubgraphs", "lt", "makeDeviceInstancesItem", "makeField",
-  "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints",
+  "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints", "mergePrimitives",
   "meshPrimitive", "min", "mul", "ne", "nextRev", "nodeSeed", "noiseOutputRange", "normalize",
   "orientAlongVector", "paramNamesOf", "paramSchemaError", "paramValueError", "partitionByAttribute",
   "pathPointAt", "pathResample", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
