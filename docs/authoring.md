@@ -357,7 +357,7 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 | `index` | `{ fn }` | Element index 0, 1, 2, ... |
 | `fraction` | `{ fn }` | Normalized element index, `index / (count - 1)` |
 | `nodeSeed` | `{ fn }` | The cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes. The same value on every element |
-| `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, index) |
+| `randomField` | `{ fn, key?: 0 \| "salt" }` | Per-element deterministic random in [0, 1) from (context seed, key, element IDENTITY): point identity on the point domain, the order-independent fold of a primitive's own points' identities on the primitive domain, and the element index on vertex and detail |
 | `param` | `{ fn, name: "amplitude" }` | The value bound to that name, substituted where the literal would have stood. Same for every element — a value that varies per element is an attribute, not a param. An unbound `param` builds (its key and its GPU kernel need only the name) but refuses to evaluate |
 
 `attributeIs` has one rule that will surprise you, and it is forced
@@ -2763,7 +2763,9 @@ The CPU is the bit-exact reference: goldens are CPU-produced and never
 move. On the GPU, u32 hash/random streams (`randomField`, noise
 lattice hashing), `index`, integer attribute roots, bool→f32 reads,
 hash+compare+select trees, and f32 add/sub/mul, clamp/min/max, floor,
-select/compares are bit-exact ports. One device is run-to-run
+select/compares are bit-exact ports. `randomField`'s is point-domain:
+the kernel requires `P`, so a primitive-domain `randomField` declines to
+the CPU and keys on primitive identity there. One device is run-to-run
 byte-identical. Everything else matches within measured per-op-family
 budgets, in range-ULP units — |cpu−gpu| / (2⁻²³ · max|cpu|), i.e. ULPs
 at the top of the family's output range (raw max-ULP is misleading at

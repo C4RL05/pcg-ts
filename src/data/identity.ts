@@ -32,11 +32,18 @@
  * randomness over it is constant. Real clouds get distinct positions and
  * per-point seeds from their source; hand-built ones must too.
  *
+ * A PRIMITIVE gets its name the same way, from the same place: it is the
+ * order-independent fold of its own points' identities
+ * ({@link primitiveIdentities}), so it too survives a reordering and moves
+ * only when its points move. The vertex domain has no identity here and no
+ * caller asking for one — a vertex is a point AND a position within a
+ * primitive, which is a different question from either of these.
+ *
  * Internal: deliberately NOT re-exported from `src/data/index.ts`, and so
  * not part of the package surface, for the same reason `src/spatial` is
  * not re-exported from `src/index.ts`.
  */
-import { hashFinalize, hashMix, hashSeed } from "../random/hash.js";
+import { hashCombine, hashFinalize, hashMix, hashSeed } from "../random/hash.js";
 import type { Geometry } from "./geometry.js";
 
 /** Scratch for reinterpreting a number as the f32 that would be stored. */
@@ -107,6 +114,100 @@ export function pointIdentities(geo: Geometry, who: string): Uint32Array {
     h = hashMix(h, bits === undefined ? f32Bits(pd[o + 2]) : bits[o + 2]);
     h = hashMix(h, sd === undefined ? 0 : sd[i] >>> 0);
     out[i] = hashFinalize(h);
+  }
+  return out;
+}
+
+/**
+ * Fold a run of identities in sorted order — the MULTISET of them, without
+ * their arrangement.
+ *
+ * Sorted because the arrangement must not matter: an edge and its reverse
+ * are one edge, and an item whose points a caller permuted is one item. XOR
+ * would be the cheaper fold and is wrong — it cancels duplicates, and
+ * coincident points are manufactured deliberately (`snapToGrid`), so a
+ * two-vertex primitive over one repeated point would fold to the same digest
+ * as an empty one. The length seeds the fold, so runs agreeing on a prefix
+ * cannot collide either.
+ *
+ * The copy is deliberate: the identity columns are allocated fresh, but
+ * sorting in place would still be sorting a buffer the caller may hold.
+ * Typed-array `sort` is numeric by default, so no comparator closure runs
+ * per compare.
+ *
+ * Shared with `src/graph/itemKey.ts`, whose item key is this same fold over
+ * a whole geometry's points. It lives HERE because identity is this module's
+ * subject and `itemKey.ts` already imports this file — the dependency only
+ * runs one way.
+ */
+export function foldIdentities(ids: Uint32Array): number {
+  const sorted = ids.slice().sort();
+  let h = hashCombine(sorted.length);
+  for (let i = 0; i < sorted.length; i++) h = hashCombine(h, sorted[i]);
+  return h;
+}
+
+/**
+ * Per-primitive identity hashes over `geo`'s primitive domain, one u32 per
+ * primitive in primitive order (SoA: one allocation, no per-primitive
+ * objects).
+ *
+ * A primitive is named by ITS OWN POINTS: the order-independent fold
+ * ({@link foldIdentities}) of the identities of the points its vertices
+ * reference. The array index is not a name here for the same reason it is
+ * not one for a point — a faster neighbour query, a filter upstream, or a
+ * cell cooked with a halo all re-emit the same primitives in a different
+ * order, and none of those is supposed to change what a primitive generates.
+ *
+ * Its OWN points, never a parent's, although `sweepProfile` and
+ * `extrudePolygon` do carry a `primSrc` back to the primitive they came
+ * from and keying on that is tempting: a cell may hold a derived primitive
+ * whose parent lies outside it, and then there is no parent identity to
+ * read. Own points are present by construction.
+ *
+ * Consequence worth stating plainly, in the same voice {@link
+ * pointIdentities} states its own: two primitives over the same point SET
+ * are the SAME primitive here, whatever their vertex order — a quad ABCD and
+ * a quad ABDC collide. The related case is the one that has to work and is
+ * why the fold is order-independent at all: an edge and its reverse are one
+ * edge. Separating ABDC from ABCD would want a canonical CYCLIC sequence
+ * instead (rotate to the smallest identity, then take the lexicographically
+ * smaller of the two directions), which distinguishes the two quads and
+ * still agrees on an edge and its reverse. Deferred until a caller needs it,
+ * and named here so it is not re-derived from scratch.
+ *
+ * `who` names the caller in the errors {@link pointIdentities} raises.
+ */
+export function primitiveIdentities(geo: Geometry, who: string): Uint32Array {
+  const n = geo.primitiveCount;
+  const out = new Uint32Array(n);
+  if (n === 0) return out;
+  // `setTopology` is the only thing that resizes the primitive domain, so
+  // these agree for every geometry built through the API. A hand-built one
+  // that resized the attribute set directly would silently hand every
+  // primitive an empty vertex range, and so one identity repeated.
+  if (geo.primVertexCount.length !== n) {
+    throw new Error(
+      `${who}: per-primitive randomness is keyed on primitive IDENTITY (the fold of its own points' identities), ` +
+        `so the primitive domain's ${n} elements need matching topology, but this geometry carries ` +
+        `${geo.primVertexCount.length} vertex ranges. Build the topology with setTopology (or setPolylineTopology), ` +
+        "which sizes the primitive attributes to match, rather than resizing the primitive attribute set on its own.",
+    );
+  }
+  const point = pointIdentities(geo, who);
+  const v2p = geo.vertexToPoint;
+  const start = geo.primVertexStart;
+  const count = geo.primVertexCount;
+  // One scratch buffer grown to the widest primitive so far, viewed per
+  // primitive: `foldIdentities` copies before it sorts, so gathering into a
+  // fresh array here would allocate twice per primitive instead of once.
+  let scratch = new Uint32Array(0);
+  for (let p = 0; p < n; p++) {
+    const k = count[p];
+    if (k > scratch.length) scratch = new Uint32Array(k);
+    const s = start[p];
+    for (let i = 0; i < k; i++) scratch[i] = point[v2p[s + i]];
+    out[p] = foldIdentities(scratch.subarray(0, k));
   }
   return out;
 }

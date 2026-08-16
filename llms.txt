@@ -719,12 +719,18 @@ Three rules an agent needs before choosing one:
   the tiebreaks in `selfPrune` and `pointNeighborhood`. Identity is the
   stored position bits plus the point's `seed` attribute, so an upstream
   filter that renumbers everything cannot move a survivor's draw, and two
-  points sharing a position AND a seed are one point to that draw. The
-  exclusions are principled, not oversights: on vertex/primitive/detail
-  domains `randomField` still keys on index, because those elements have
-  no position and the index is the only name they have; and
-  `surfaceSample` still keys on index because it manufactures its own
-  candidates rather than receiving them.
+  points sharing a position AND a seed are one point to that draw. A
+  PRIMITIVE is named the same way, one level up: `randomField` on the
+  primitive domain keys on the order-independent fold of its own points'
+  identities, so a reordered network re-rolls nothing and an edge agrees
+  with its reverse — at the price that two primitives over the same point
+  SET collide whatever their vertex order (a quad ABCD and a quad ABDC
+  draw alike). The exclusions are principled, not oversights: on the
+  vertex and detail domains `randomField` still keys on index, because a
+  vertex is a point AND a place within a primitive — a different question
+  nothing has asked yet — and detail is one element; and `surfaceSample`
+  still keys on index because it manufactures its own candidates rather
+  than receiving them.
 - Identity keying makes those nodes indifferent to the WINDOW, not to
   their own seed. `filterByDensity`, `jitterPoints` and any field param
   resolving `randomField` or `nodeSeed` still fold in the node seed, so
@@ -1320,6 +1326,9 @@ goldens never move:
   with default and string keys, noise lattice hashing), `index`,
   u32/i32 attribute roots, bool→f32 reads, pure hash+compare+select
   trees, and f32 add/sub/mul, clamp/min/max, floor, select/compares.
+  `randomField`'s port is POINT-DOMAIN ONLY — the kernel requires `P`,
+  so a primitive-domain `randomField` never reaches the device; it
+  resolves on the CPU keyed on primitive identity.
 - Per-instance COLOUR is bit-exact too, and structurally rather than
   by measurement: unlike the composed matrix it is a GATHER, not
   arithmetic — the kernel copies the three source f32 and does nothing

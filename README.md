@@ -723,7 +723,10 @@ of it:
 - u32 hash and random streams (`hashCombine`, `hashFloat`,
   `randomField`, noise lattice hashing) are **bit-exact** between CPU
   and WGSL — likewise `index`, integer attribute reads, bool→f32 reads,
-  and pure hash+compare+select trees.
+  and pure hash+compare+select trees. `randomField`'s port is
+  point-domain: the kernel needs `P`, so a primitive-domain
+  `randomField` declines to the CPU and keys on primitive identity
+  there, and there is no device answer for it to be exact against.
 - Float arithmetic matches within measured per-op-family budgets (CPU
   computes in f64 and stores f32; WGSL computes in f32). Condensed, in
   range-ULP units (error / 2⁻²³·max|output|, measured on real
@@ -1110,9 +1113,14 @@ What the library promises:
   an array index: `filterByDensity` (probabilistic), `jitterPoints`,
   `randomField` on the point domain, and the tiebreaks in `selfPrune` and
   `pointNeighborhood`. Paired with a world-anchored source, that is what
-  makes a halo reproduce a neighbour exactly. (Other domains have no
-  position, so `randomField` still keys on index there; `surfaceSample`
-  does too, because it manufactures its own candidates.)
+  makes a halo reproduce a neighbour exactly. A PRIMITIVE has an
+  identity too — the order-independent fold of its own points'
+  identities — so `randomField` there survives a reordered network and
+  gives an edge and its reverse the same draw. (Vertex and detail keep
+  the index: detail is one element, and a vertex is a point *and* a
+  place within a primitive, which is a different question nothing has
+  asked yet. `surfaceSample` keys on index too, because it manufactures
+  its own candidates.)
 - **One deliberate exception to the seed chain.** `pointScatterInWorld`
   derives its lattice from its own `seed` param alone — the graph seed
   never reaches it — so a `graph.setSeed` inside a level's `bind`, a CLI

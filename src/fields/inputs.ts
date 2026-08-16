@@ -1,4 +1,4 @@
-import { pointIdentities } from "../data/identity.js";
+import { pointIdentities, primitiveIdentities } from "../data/identity.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { attachSpec, isSpecNumber, recordWithheld } from "./spec.js";
 import {
@@ -335,9 +335,22 @@ export function nodeSeed(): Field<1> {
  * it), and moving points changes their randomness, so draw before you
  * jitter if you want the value to survive the move.
  *
- * On the vertex, primitive and detail domains there is no position and
- * no seed to key on, so the element index is used — it is the only name
- * those elements have.
+ * On the PRIMITIVE domain the draw is keyed on the primitive's identity:
+ * the order-independent fold of the identities of its own points
+ * (`primitiveIdentities`). So an edge network that comes back permuted —
+ * from a faster neighbour query, a filter upstream, or a cell cooked with
+ * a halo — hands each edge the same number it had, and an edge agrees
+ * with its reverse. The same two consequences follow as on the point
+ * domain, plus one of its own: two primitives over the same point SET are
+ * one primitive here whatever their vertex order, so a quad ABCD and a
+ * quad ABDC draw alike.
+ *
+ * On the VERTEX and DETAIL domains the element index is used. Detail has
+ * exactly one element, so there is nothing to name. Vertex has the same
+ * index defect the primitive domain had, and no caller: a vertex is a
+ * point AND a position within a primitive, which is a different question
+ * from either identity above, and this library does not answer a question
+ * nothing has asked yet. The asymmetry is deliberate, not an oversight.
  */
 export function randomField(key: number | string = 0): Field<1> {
   const keyHash = typeof key === "string" ? hashString(key) : key >>> 0;
@@ -345,8 +358,15 @@ export function randomField(key: number | string = 0): Field<1> {
     const n = elementCount(ctx);
     const seed = ctx.seed;
     const data = new Float32Array(n);
+    const who = `randomField(${JSON.stringify(key)})`;
     if (ctx.domain === "point") {
-      const ident = pointIdentities(ctx.geo, `randomField(${JSON.stringify(key)})`);
+      const ident = pointIdentities(ctx.geo, who);
+      for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, ident[i]));
+    } else if (ctx.domain === "primitive") {
+      // A primitive is named by its own points, so this survives a
+      // reordering exactly as the point domain does. Vertex and detail
+      // fall through to the index deliberately — see the note above.
+      const ident = primitiveIdentities(ctx.geo, who);
       for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, ident[i]));
     } else {
       for (let i = 0; i < n; i++) data[i] = hashFloat(hashCombine(seed, keyHash, i));

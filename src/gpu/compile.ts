@@ -491,9 +491,16 @@ HANDLERS.set("nodeSeed", (_spec, _path, ctx) => {
 // randomField is keyed on POINT IDENTITY on the CPU (see
 // `src/data/identity.ts`): the f32 bit patterns of P.xyz hashed with the
 // `seed` attribute, then folded into (params.seed, key). A layout carries
-// no domain, so a spec compiled against one without P — vertex, primitive
-// or detail, where the CPU falls back to the element index — throws here
-// and resolves on the CPU instead of inventing a key the CPU never used.
+// no domain, so a spec compiled against one without P throws here and
+// resolves on the CPU instead of inventing a key the CPU never used —
+// which is how every non-point domain reaches the CPU in practice, since
+// vertex, primitive and detail sets do not carry P. None of the three
+// could be served here anyway: vertex and detail key on the element
+// index, and a primitive keys on the fold of its own points' identities,
+// a gather over topology this elementwise compiler cannot express. The
+// one layout that would slip through is a non-point domain carrying a
+// PROMOTED P column, which is why the fallthrough is a domain question
+// this compiler cannot ask rather than a guarantee it makes.
 HANDLERS.set("randomField", (spec, path, ctx) => {
   const key = spec.key;
   const keyHash = typeof key === "string" ? hashString(key) : ((key as number | undefined) ?? 0) >>> 0;

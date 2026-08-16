@@ -50,7 +50,7 @@
  * Internal: not re-exported from `src/index.ts`, for the same reason
  * `pointIdentities` is not.
  */
-import { pointIdentities } from "../data/identity.js";
+import { foldIdentities, pointIdentities } from "../data/identity.js";
 import { GraphValidationError } from "./errors.js";
 import { hashCombine, hashString } from "../random/hash.js";
 import type { DataItem, DataValue, GeometryItem } from "./data.js";
@@ -72,21 +72,6 @@ function tagDigest(tags: ReadonlySet<string>): number {
   const names = [...tags].sort();
   let h = hashCombine(names.length);
   for (const name of names) h = hashCombine(h, hashString(name));
-  return h;
-}
-
-/**
- * Fold per-point identities in sorted order — the multiset of points,
- * without their arrangement.
- *
- * The copy is deliberate: `pointIdentities` allocates fresh, but sorting in
- * place would still be sorting a buffer the caller may hold. Typed-array
- * `sort` is numeric by default, so no comparator closure runs per compare.
- */
-function foldIdentities(ids: Uint32Array): number {
-  const sorted = ids.slice().sort();
-  let h = hashCombine(sorted.length);
-  for (let i = 0; i < sorted.length; i++) h = hashCombine(h, sorted[i]);
   return h;
 }
 

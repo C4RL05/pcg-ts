@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createPointCloud } from "../data/index.js";
-import { pointIdentities } from "../data/identity.js";
+import { createPointCloud, setPolylineTopology } from "../data/index.js";
+import { pointIdentities, primitiveIdentities } from "../data/identity.js";
 import { hashCombine, hashFloat, hashString } from "../random/index.js";
 import { capture } from "./capture.js";
 import { add, mul } from "./combinators.js";
@@ -41,6 +41,44 @@ function identityCtx(count: number, seed = 0): EvalContext {
   }
   return { geo, domain: "point", seed };
 }
+
+/**
+ * A NETWORK over `identityCtx`'s distinct points: one 2-vertex polyline per
+ * entry of `edges`, emitted in the order given, on the primitive domain.
+ *
+ * The points are the same points in the same slots whatever `edges` says, so
+ * two contexts built from one point set and two edge ORDERS differ in
+ * nothing but how their primitives are arranged.
+ */
+function edgeCtx(edges: ReadonlyArray<readonly [number, number]>, seed = 0): EvalContext {
+  const geo = identityCtx(16).geo;
+  const flat: number[] = [];
+  const starts: number[] = [];
+  const counts: number[] = [];
+  for (const [a, b] of edges) {
+    starts.push(flat.length);
+    counts.push(2);
+    flat.push(a, b);
+  }
+  setPolylineTopology(geo, flat, starts, counts);
+  return { geo, domain: "primitive", seed };
+}
+
+/** Twelve edges over sixteen points, no two of them over the same pair. */
+const NETWORK: ReadonlyArray<readonly [number, number]> = [
+  [0, 1],
+  [2, 3],
+  [4, 5],
+  [6, 7],
+  [8, 9],
+  [10, 11],
+  [12, 13],
+  [14, 15],
+  [0, 2],
+  [1, 3],
+  [4, 6],
+  [5, 7],
+];
 
 /** The same cloud with its points reordered, and the order used. */
 function permutedCtx(ctx: EvalContext, order: number[]): EvalContext {
@@ -217,15 +255,62 @@ describe("randomField", () => {
     expect(Array.from(evaluateField(randomField(1), reseeded).data)).not.toEqual(straight);
   });
 
-  it("falls back to the element index off the point domain", () => {
-    // Vertices, primitives and detail carry no position and no seed, so
-    // there is no identity to key on and the index is the only name an
-    // element has.
+  it("travels with the primitive when the network is reordered", () => {
+    // THE claim of primitive identity, and the only one that matters: a
+    // primitive is named by the multiset of its own points' identities, so
+    // reordering the primitives — which a faster spatial query, a filter
+    // upstream, or a differently partitioned cook all do without moving a
+    // single point — permutes the values and changes none of them. Keyed on
+    // the element index, every primitive would instead inherit whatever the
+    // primitive now sitting in its slot used to get.
+    const order = Array.from({ length: NETWORK.length }, (_, i) => (i * 5 + 3) % NETWORK.length);
+    const straight = evaluateField(randomField("drape"), edgeCtx(NETWORK, 5));
+    const shuffled = evaluateField(
+      randomField("drape"),
+      edgeCtx(
+        order.map((from) => NETWORK[from]),
+        5,
+      ),
+    );
+    expect(Array.from(shuffled.data)).toEqual(order.map((from) => straight.data[from]));
+    // Not a constant column, which would satisfy the above trivially.
+    expect(new Set(Array.from(straight.data)).size).toBe(NETWORK.length);
+  });
+
+  it("matches the documented hash on the primitive domain", () => {
+    const ctx = edgeCtx(NETWORK, 5);
+    const ident = primitiveIdentities(ctx.geo, "test");
+    const col = evaluateField(randomField("drape"), ctx);
+    for (let i = 0; i < NETWORK.length; i++) {
+      expect(col.data[i]).toBe(hashFloat(hashCombine(5, hashString("drape"), ident[i])));
+    }
+  });
+
+  it("still keys the VERTEX and DETAIL domains on the element index", () => {
+    // Deliberate asymmetry, not an oversight. Detail is one element and has
+    // nothing to name. A vertex is a point AND a position within a
+    // primitive, which is a different question from either identity, and
+    // nothing in the library asks it yet.
+    const ctx = edgeCtx(NETWORK, 6);
+    const vertex = evaluateField(randomField(4), { ...ctx, domain: "vertex" });
+    expect(vertex.data.length).toBe(NETWORK.length * 2);
+    for (let i = 0; i < vertex.data.length; i++) {
+      expect(vertex.data[i]).toBe(hashFloat(hashCombine(6, 4, i)));
+    }
+    const detail = evaluateField(randomField(4), { ...ctx, domain: "detail" });
+    expect(Array.from(detail.data)).toEqual([hashFloat(hashCombine(6, 4, 0))]);
+  });
+
+  it("refuses a primitive domain whose topology was never built", () => {
+    // The one way to reach an inconsistent geometry: resizing the primitive
+    // attribute set on its own leaves no vertex ranges, and every primitive
+    // would otherwise fold the same empty run into one repeated value.
     const geo = createPointCloud(0);
     geo.attrs.primitive.add("dummy", "f32", 1, 0);
     geo.attrs.primitive.resize(16);
-    const col = evaluateField(randomField(4), { geo, domain: "primitive", seed: 6 });
-    for (let i = 0; i < 16; i++) expect(col.data[i]).toBe(hashFloat(hashCombine(6, 4, i)));
+    expect(() => evaluateField(randomField(4), { geo, domain: "primitive", seed: 6 })).toThrow(
+      /16 elements need matching topology, but this geometry carries 0 vertex ranges/,
+    );
   });
 });
 

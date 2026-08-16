@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud, setPolylineTopology, type Geometry } from "../data/index.js";
+import { primitiveIdentities } from "../data/identity.js";
 import { Graph, cook, makeGeometryItem, type NodeHandle } from "../graph/index.js";
 import { dataInput, type DataInputParams } from "../runtime/index.js";
 import {
@@ -673,7 +674,12 @@ describe("the partitioned network cook is expressible entirely in nodes", () => 
    * The Y and Z bounds are finite rather than the ±Infinity the params
    * document, for the same reason: an infinity does not survive JSON.
    */
-  async function cookCell(geo: Geometry, w: Window, radius: number): Promise<Geometry> {
+  async function cookCell(
+    geo: Geometry,
+    w: Window,
+    radius: number,
+    unreferencedPoints = "keep",
+  ): Promise<Geometry> {
     const FAR = 1e6;
     const graph = new Graph(4242);
     const input = graph.add(dataInput, undefined, "in");
@@ -694,6 +700,7 @@ describe("the partitioned network cook is expressible entirely in nodes", () => 
         boundsMax: [w.hi, FAR, FAR],
         vertex: "first",
         boundary: "halfOpen",
+        unreferencedPoints,
       },
       "owned",
     );
@@ -741,5 +748,69 @@ describe("the partitioned network cook is expressible entirely in nodes", () => 
       expect(a).toBeLessThan(cell.pointCount);
       expect(b).toBeLessThan(cell.pointCount);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Identity across a seam
+  //
+  // An edge's IDENTITY — the fold of its own points' identities, which is
+  // what primitive-domain randomField draws on — has to be the same number
+  // in every cell that derives that edge, or a partitioned cook would
+  // randomize a seam edge differently on each side of the seam. It holds for
+  // a reason worth naming: halo is authored rather than a runtime concept,
+  // so both cells hold both endpoints; identity reads only stored position
+  // bits and `seed`; and dropping unreferenced points renumbers the point
+  // domain without moving anything in it.
+
+  /** Every edge of `geo`, named by position, with its primitive identity. */
+  function identityByEdge(geo: Geometry): Map<string, number> {
+    const ident = primitiveIdentities(geo, "test");
+    const out = new Map<string, number>();
+    edgeKeys(geo).forEach((key, p) => out.set(key, ident[p]));
+    return out;
+  }
+
+  it("two neighbouring cells agree on every edge both of them derive", async () => {
+    // Before the ownership filter picks a winner, the overlap of two halos
+    // holds the same edges twice — once per cell, over differently numbered
+    // points. These are the seam edges, and this is where the two cells
+    // could have disagreed.
+    const geo = partitionCloud();
+    const radius = partitionRadius;
+    const [left, right] = [partitionWindows[1], partitionWindows[2]];
+    const a = identityByEdge(
+      await connect(clipX(geo, left.lo - radius, left.hi + radius), { radius }),
+    );
+    const b = identityByEdge(
+      await connect(clipX(geo, right.lo - radius, right.hi + radius), { radius }),
+    );
+    const shared = [...a.keys()].filter((key) => b.has(key));
+    expect(shared.length).toBeGreaterThan(5);
+    for (const key of shared) expect(a.get(key)).toBe(b.get(key));
+    // The halos really do number their points differently, so the agreement
+    // above is about the points and not about two identical arrays.
+    expect([...a.keys()]).not.toEqual([...b.keys()]);
+  });
+
+  it("a cell's edges keep the identities they have in the whole-region network", async () => {
+    // The full recipe, through a serialized graph, with unreferencedPoints
+    // "drop" so the surviving points are renumbered onto a domain that
+    // holds neither the halo nor the whole cloud. Nothing moved, so nothing
+    // may re-roll.
+    const geo = partitionCloud();
+    const whole = identityByEdge(await connect(geo, { radius: partitionRadius }));
+    let seen = 0;
+    for (const w of partitionWindows) {
+      const cell = identityByEdge(await cookCell(geo, w, partitionRadius, "drop"));
+      expect(cell.size).toBeGreaterThan(0);
+      for (const [key, ident] of cell) {
+        expect(whole.get(key)).toBe(ident);
+        seen++;
+      }
+    }
+    expect(seen).toBeGreaterThan(20);
+    // Distinct edges get distinct identities: an all-collide fold would
+    // satisfy every equality above and mean nothing.
+    expect(new Set(whole.values()).size).toBe(whole.size);
   });
 });

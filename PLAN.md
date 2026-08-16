@@ -35,12 +35,31 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
-**Primitive identity, so primitive-domain randomness stops being
-index-keyed.** Point-domain randomness is keyed on position bits and a
+**~~Primitive identity, so primitive-domain randomness stops being
+index-keyed.~~ SHIPPED 2026-08-16** — `primitiveIdentities` in
+`src/data/identity.ts`, folded order-independently from a primitive's own
+points' identities; see `PLAN-primitive-identity.md`. Vertex and detail
+deliberately still key on the index, having no caller.
+
+**The measurement below does NOT demonstrate what this entry claimed, and
+that is the part worth keeping.** `pointIdentities` hashes the f32 BIT
+PATTERNS of `P`, so a position that moves at all gets a new identity and
+everything derived from it moves too — endpoint-derived primitive identity
+could never have prevented a spine nudge from re-rolling the chords.
+Measured at rig-scale coordinates, 1.9e-6 is 16 ulps at x=1, 2 ulps at
+x=10 and ZERO at x=36, which is also why only a third of the edges
+permuted rather than all of them. Two failures were running at once:
+points moving (unfixable, and correctly so) and primitives reordering
+(fixed). The honest claim for the fix is "stable under reordering", which
+is this entry's OTHER example — a faster spatial grid returning neighbours
+in a different order — not "stable under numerical improvement".
+
+Original analysis, kept because the measurement is still the expensive
+part to re-derive: point-domain randomness is keyed on position bits and a
 seed attribute (`src/data/identity.ts`), so it survives a renumbering.
-Primitive-domain randomness has no such identity and falls back to the
-element index — which means it re-rolls whenever anything upstream changes
-the ORDER primitives come out in, even when the set is unchanged.
+Primitive-domain randomness had no such identity and fell back to the
+element index — which meant it re-rolled whenever anything upstream changed
+the ORDER primitives came out in, even when the set was unchanged.
 - **Measured 2026-08-14 on `examples-rig.json`**, and this is what makes
   it worth an entry rather than a note. Moving the spine by 1.9e-6 world
   units — an f32 rounding, nothing more — left `connectPoints` emitting
