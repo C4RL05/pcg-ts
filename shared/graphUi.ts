@@ -57,13 +57,17 @@ export interface PanelControlSpec {
   readonly also?: readonly string[];
   readonly label?: string;
   /**
-   * Hover text for the row. A node param already has one in its schema and
-   * the node inspector shows it; a knob DERIVED from a field spec has no
-   * schema to carry it, so this is the only place its author can say what
-   * turning it does.
+   * Hover text for the row, OVERRIDING the schema's. Both kinds of knob
+   * carry one already — a node param from its registered schema, a
+   * field-spec param from the `description` written beside its inline value
+   * — so this is where one presentation of a graph says it differently, not
+   * where the graph says it at all. A row that omits it keeps the graph's.
    */
   readonly description?: string;
-  /** Supplying both promotes a typed box to a slider. */
+  /**
+   * Bounds, overriding the schema's. Both present from EITHER source
+   * promotes a typed box to a slider.
+   */
   readonly min?: number;
   readonly max?: number;
   readonly step?: number;
@@ -233,7 +237,14 @@ function controlFor(knob: Knob, spec?: PanelControlSpec): Control<KnobValues> | 
   const schema = knob.schema;
   const min = spec?.min ?? schema.min;
   const max = spec?.max ?? schema.max;
-  const note = spec?.description !== undefined ? { description: spec.description } : {};
+  // Falls back to the schema for the same reason the bounds do, and it was
+  // the omission that made a panel file the only place a field-spec param
+  // could be described. The schema is where a param says what it MEANS —
+  // registered for a node param, written beside the value for an inline one
+  // — and a panel is one presentation of it, so a panel that says nothing
+  // must not erase what the graph says.
+  const described = spec?.description ?? schema.description;
+  const note = described !== undefined ? { description: described } : {};
 
   switch (schema.type) {
     case "f32":

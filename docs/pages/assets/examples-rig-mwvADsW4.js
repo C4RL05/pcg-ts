@@ -7,30 +7,9 @@ var e=`{
         { "param": "spineLine.start", "label": "from" },
         { "param": "spineLine.end", "label": "to" },
         { "param": "spineSpine.count", "label": "samples", "min": 40, "max": 300, "step": 10 },
-        {
-          "param": "spineWander.translate.verticalAmplitude",
-          "label": "wander up",
-          "description": "How far the spine wanders up and down, in world units, multiplied into a perlin fBm that is already centred on zero — so 0 gives a straight spine.",
-          "min": 0,
-          "max": 8,
-          "step": 0.1
-        },
-        {
-          "param": "spineWander.translate.horizontalAmplitude",
-          "label": "wander across",
-          "description": "How far the spine wanders sideways over the same run, on its own noise seed, so the two axes drift independently instead of tracing one curve in a plane.",
-          "min": 0,
-          "max": 12,
-          "step": 0.1
-        },
-        {
-          "param": "spineWander.translate.wanderScale",
-          "label": "wander scale",
-          "description": "Scales the position both noises are sampled at, so larger means a tighter, faster wander and 1 is the wander the graph was authored with. It is a MULTIPLIER rather than a frequency because that is what keeps the default exact: the base frequency stays in the noise, where it multiplies in f64, and x1.0 through the position column is the identity. One name, read twice in one expression — so this single knob reaches both noises.",
-          "min": 0.1,
-          "max": 8,
-          "step": 0.1
-        },
+        { "param": "spineWander.translate.verticalAmplitude", "label": "wander up", "step": 0.1 },
+        { "param": "spineWander.translate.horizontalAmplitude", "label": "wander across", "step": 0.1 },
+        { "param": "spineWander.translate.wanderScale", "label": "wander scale", "step": 0.1 },
         {
           "param": "spineWander.translate.variantUp",
           "label": "variant up",

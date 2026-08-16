@@ -21,13 +21,16 @@
  *   into a noise's `opts.position` to make a saved noise re-roll with the
  *   graph seed, which its literal `opts.seed` cannot
  * - `{ fn: "randomField", key?: 0 | "salt" }`
- * - `{ fn: "param", name: "amplitude", value?: 0.5 }` — the value bound to
- *   that name, substituted at build time as if the literal had been
- *   written; a binding may also be a `Field`, and is then spliced in where
- *   the reference stands (see {@link fieldFromJson}'s `bindings`). The
- *   optional `value` is the spec's OWN fallback, taken when nothing binds
- *   the name — which is what makes a plain node's expression tunable
- *   without a subgraph wrapped around it purely to carry the number
+ * - `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4,
+ *   description?: "..." }` — the value bound to that name, substituted at
+ *   build time as if the literal had been written; a binding may also be a
+ *   `Field`, and is then spliced in where the reference stands (see
+ *   {@link fieldFromJson}'s `bindings`). The optional `value` is the spec's
+ *   OWN fallback, taken when nothing binds the name — which is what makes a
+ *   plain node's expression tunable without a subgraph wrapped around it
+ *   purely to carry the number. `min`/`max`/`description` describe that
+ *   value the way a `ParamSchema` describes a node param, and are read by
+ *   {@link inlineParamMetaOf} (see it for why they live in the graph)
  * - `{ fn: "add", args: [a, b] }` — likewise sub, mul, div, min, max,
  *   lt, le, gt, ge, eq, ne, dot, atan2 (2 args); abs, floor, length,
  *   normalize, sin, cos, tan, asin, acos, atan (1 arg); clamp, lerp,
@@ -511,6 +514,117 @@ function inlineParamValue(
   );
 }
 
+/**
+ * The presentation metadata an inline `param` may carry beside its value:
+ * the subset of `ParamSchema` (`src/graph/params.ts`) that means anything
+ * for a named literal inside an expression.
+ *
+ * `type` and `default` are not here because the value already answers both
+ * — its shape picks the widget and it IS the default. `step` is not here
+ * because `ParamSchema` has no such field, and a second vocabulary for
+ * "how far one drag moves it" is exactly what a panel file is for.
+ */
+export interface InlineParamMeta {
+  /** Inclusive lower bound, componentwise for a tuple value. */
+  readonly min?: number;
+  /** Inclusive upper bound, componentwise for a tuple value. */
+  readonly max?: number;
+  /** What the value does: semantics, units, what turning it changes. */
+  readonly description?: string;
+}
+
+/**
+ * The metadata half of {@link readInlineValue}: the same total, validation-free
+ * read, for the three optional keys an inline `param` may carry.
+ */
+function readInlineMeta(node: Record<string, unknown>): InlineParamMeta | undefined {
+  const min = typeof node.min === "number" && Number.isFinite(node.min) ? node.min : undefined;
+  const max = typeof node.max === "number" && Number.isFinite(node.max) ? node.max : undefined;
+  const description =
+    typeof node.description === "string" && node.description.trim() !== ""
+      ? node.description
+      : undefined;
+  if (min === undefined && max === undefined && description === undefined) return undefined;
+  return {
+    ...(min !== undefined ? { min } : {}),
+    ...(max !== undefined ? { max } : {}),
+    ...(description !== undefined ? { description } : {}),
+  };
+}
+
+/**
+ * The validating half of {@link readInlineMeta}, run on every build for the
+ * reason {@link inlineParamValue} is: a range nothing can satisfy is a fact
+ * about the spec, and a graph that parses only while a binder happens to
+ * override it breaks the day the override goes away.
+ *
+ * Every refusal names the param, because by the time a knob renders there is
+ * nothing left to name it with. The rules are `paramSchemaError`'s, applied
+ * to the one value this node carries: bounds must be finite and ordered, a
+ * description must say something, and the value must be inside the range it
+ * declares — componentwise for a tuple, exactly as `ParamSchema.min` means
+ * it for a vec.
+ *
+ * Metadata with NO `value` is refused rather than ignored. It describes a
+ * control, and a reference that supplies no value has none: standing alone it
+ * is the loud refusal its author chose, and inside a wrapper it is the
+ * wrapper's exposed param that carries the prose. Admitting it would create
+ * a second home for the same sentence, which is the thing this feature exists
+ * to remove.
+ */
+function checkInlineParamMeta(
+  spec: Record<string, unknown>,
+  inline: FieldBindingValue | undefined,
+  path: string,
+): void {
+  const named = `param ${JSON.stringify(spec.name)}`;
+  const present = (["min", "max", "description"] as const).filter(
+    (k) => spec[k] !== undefined,
+  );
+  if (present.length === 0) return;
+  if (inline === undefined) {
+    fail(
+      `${path}.${present[0]}`,
+      `${named}: ${present.join(", ")} ${present.length === 1 ? "describes" : "describe"} an ` +
+        "inline value, and this reference carries none. Add a \"value\" beside them, or move the " +
+        "prose to whatever binds the name (a subgraph's exposed param declares its own " +
+        "description, min and max)",
+    );
+  }
+  for (const bound of ["min", "max"] as const) {
+    const b = spec[bound];
+    if (b === undefined) continue;
+    if (typeof b !== "number" || !Number.isFinite(b)) {
+      fail(`${path}.${bound}`, `${named}: ${bound} must be a finite number, got ${describeValue(b)}`);
+    }
+  }
+  const min = spec.min as number | undefined;
+  const max = spec.max as number | undefined;
+  if (min !== undefined && max !== undefined && min > max) {
+    fail(
+      `${path}.min`,
+      `${named}: min ${min} is above max ${max}, so no value is legal — swap them`,
+    );
+  }
+  const components = typeof inline === "number" ? [inline] : (inline as readonly number[]);
+  for (const c of components) {
+    if (min !== undefined && c < min) {
+      fail(`${path}.value`, `${named}: the inline value ${c} is below its own min ${min}`);
+    }
+    if (max !== undefined && c > max) {
+      fail(`${path}.value`, `${named}: the inline value ${c} is above its own max ${max}`);
+    }
+  }
+  const description = spec.description;
+  if (description !== undefined && (typeof description !== "string" || description.trim() === "")) {
+    fail(
+      `${path}.description`,
+      `${named}: description must be a non-empty string saying what turning this value does, got ` +
+        `${describeValue(description)}; omit the key rather than writing an empty one`,
+    );
+  }
+}
+
 // A named value standing where a literal would: the value is
 // SUBSTITUTED here, so the field this returns is the field the literal
 // would have produced, key included. That is not an optimization but the
@@ -535,8 +649,8 @@ function inlineParamValue(
 register(
   "param",
   "per-element",
-  ["name", "value"],
-  `{ fn: "param", name: "amplitude", value?: 0.5 }`,
+  ["name", "value", "min", "max", "description"],
+  `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4, description?: "..." }`,
   (spec, path) => {
     const name = spec.name;
     if (typeof name !== "string" || name === "") {
@@ -555,6 +669,11 @@ register(
     // while something happens to override it is a graph that breaks the
     // day the override goes away.
     const inline = inlineParamValue(spec, path);
+    // Checked here and NOWHERE in what the handler returns: the range and
+    // the prose describe the value, they are not part of it, so they never
+    // reach the field. See `checkInlineParamMeta` for why an unsatisfiable
+    // range is refused now rather than at the widget.
+    checkInlineParamMeta(spec, inline, path);
     if (currentBindings === undefined || !Object.hasOwn(currentBindings, name)) {
       // Nothing bound in THIS call, but the node may still carry the spec
       // of a field a previous one spliced here (see `fieldFromJson`). That
@@ -981,6 +1100,44 @@ export function inlineParamValuesOf(spec: FieldSpec): Readonly<Record<string, Fi
 }
 
 /**
+ * The presentation metadata each name in {@link inlineParamValuesOf}
+ * declares — its range and what turning it does — so a knob can be labelled
+ * and bounded from the GRAPH and not from a file beside it.
+ *
+ * This exists because the form it replaced already had it. A subgraph
+ * wrapper declares a full `ParamSchema` per exposed param, description and
+ * bounds included, INSIDE the graph; flattening such a wrapper into inline
+ * `param` values moved that prose into `graphs/panels/*.json`, and a graph
+ * opened without its panel then knew less about itself than it had before.
+ * A panel is one presentation of a graph; what a value MEANS is the graph's.
+ *
+ * Read per KEY rather than per node, first definition winning, for the
+ * reason {@link inlineParamValuesOf} reports the first of two values: one
+ * name is one knob within one expression. A name read twice — the rig's
+ * `wanderScale` reaches two noises — is documented once, beside whichever
+ * reference its author chose, and neither reference is the privileged one.
+ *
+ * Tolerant of malformed input like its siblings: it reads, it does not
+ * validate. {@link fieldFromJson} is where a range nothing satisfies is
+ * refused, and it names the param when it does.
+ */
+export function inlineParamMetaOf(spec: FieldSpec): Readonly<Record<string, InlineParamMeta>> {
+  // Null-prototype for the reason `inlineParamValuesOf` is: `__proto__` is a
+  // legal param name and a setter on a plain object.
+  const meta: Record<string, InlineParamMeta> = Object.create(null) as Record<
+    string,
+    InlineParamMeta
+  >;
+  eachParam(spec, (node, name) => {
+    const read = readInlineMeta(node);
+    if (read === undefined) return;
+    const have = Object.hasOwn(meta, name) ? meta[name] : {};
+    meta[name] = { ...read, ...have };
+  });
+  return meta;
+}
+
+/**
  * `spec` with the inline value of every `param` node named `name`
  * rewritten — the write half of {@link inlineParamValuesOf}, and what a
  * panel calls before handing the result back to {@link fieldFromJson}.
@@ -997,6 +1154,10 @@ export function inlineParamValuesOf(spec: FieldSpec): Readonly<Record<string, Fi
  * clone: the caller believes it is moving a value, and a write that
  * reports success while changing nothing is the failure a panel cannot
  * see.
+ *
+ * Rewrites `value` and nothing else, so the node's `min`, `max` and
+ * `description` survive every knob turn: a range is a property of the param,
+ * not of the number currently sitting in it.
  *
  * Deep-copies, so the spec handed in is never mutated; the caller's is
  * usually the one a live `Field` is still carrying. The copy is a plain

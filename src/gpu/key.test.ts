@@ -95,4 +95,27 @@ describe("specialization key", () => {
     );
     expect(renamed.key).not.toBe(a.key);
   });
+
+  it("ignores a param's min, max and description", () => {
+    // The second rebuild site, pinned for the reason the inline value had
+    // to be: `specKernelKey` rebuilds the spec, so anything written INSIDE
+    // the node can leak into a key that must be shared. A range and a
+    // sentence emit no WGSL at all, so a kernel per description would be
+    // pure cache churn.
+    const bare = {
+      fn: "mul",
+      args: [{ fn: "attribute", name: "density" }, { fn: "param", name: "amp", value: 1 }],
+    };
+    const described = {
+      fn: "mul",
+      args: [
+        { fn: "attribute", name: "density" },
+        { fn: "param", name: "amp", value: 1, min: 0, max: 4, description: "How tall." },
+      ],
+    };
+    const a = compileFieldSpec(bare, LAYOUT);
+    const b = compileFieldSpec(described, LAYOUT);
+    expect(b.key).toBe(a.key);
+    expect(b.wgsl).toBe(a.wgsl);
+  });
 });

@@ -33,6 +33,7 @@ import {
   fieldToJson,
   fnVariation,
   listFieldFns,
+  inlineParamMetaOf,
   inlineParamValuesOf,
   paramNamesOf,
   unboundParamNamesOf,
@@ -1179,6 +1180,142 @@ describe("inlineParamValuesOf / withInlineParamValue — the panel's two halves"
     expect(Object.keys(values)).toEqual(["__proto__"]);
     expect(values.__proto__).toEqual([1, 2, 3]);
     expect(inlineParamValuesOf(withInlineParamValue(spec, "__proto__", 4)).__proto__).toBe(4);
+  });
+});
+
+describe("inlineParamMetaOf — the schema an inline param carries in the graph", () => {
+  const described: FieldSpec = {
+    fn: "param",
+    name: "amplitude",
+    value: 1.2,
+    min: 0,
+    max: 8,
+    description: "How far the spine wanders up and down, in world units.",
+  };
+
+  it("reads the three optional keys, and reports nothing for a param without them", () => {
+    expect(inlineParamMetaOf(described)).toEqual({
+      amplitude: {
+        min: 0,
+        max: 8,
+        description: "How far the spine wanders up and down, in world units.",
+      },
+    });
+    expect(inlineParamMetaOf({ fn: "param", name: "plain", value: 1 })).toEqual({});
+  });
+
+  it("round-trips through fieldToJson unchanged", () => {
+    // The metadata is written IN the node, so it survives serialization the
+    // way the inline value does and for the same reason.
+    expect(fieldToJson(fieldFromJson(described))).toEqual(described);
+  });
+
+  it("NEVER reaches Field.key — the per-evaluation cache is content-keyed on it", () => {
+    // Two fields with equal keys are handed each other's columns, so a key
+    // that carried prose would stop two equal values sharing a column and
+    // would make editing a sentence recook the graph.
+    const bare: FieldSpec = { fn: "param", name: "amplitude", value: 1.2 };
+    const other: FieldSpec = {
+      fn: "param",
+      name: "amplitude",
+      value: 1.2,
+      min: -100,
+      max: 100,
+      description: "Entirely different prose, entirely different bounds.",
+    };
+    expect(fieldFromJson(described).key).toBe(fieldFromJson(bare).key);
+    expect(fieldFromJson(other).key).toBe(fieldFromJson(bare).key);
+    // And it is the key the literal itself builds, which is the property the
+    // inline value was given in the first place.
+    expect(fieldFromJson(bare).key).toBe(constant(1.2).key);
+    // The VALUE still moves it, because the value is what changes the answer.
+    expect(fieldFromJson({ ...described, value: 1.3 }).key).not.toBe(
+      fieldFromJson(bare).key,
+    );
+    const ctx = testCloud(3);
+    // Same column, to the last bit of the f32 the value rounds to.
+    expect(Array.from(evaluateField(fieldFromJson(described), ctx).data)).toEqual(
+      Array.from(evaluateField(fieldFromJson(bare), ctx).data),
+    );
+  });
+
+  it("survives a knob turn: the range describes the param, not the number in it", () => {
+    const next = withInlineParamValue(described, "amplitude", 5);
+    expect(inlineParamValuesOf(next)).toEqual({ amplitude: 5 });
+    expect(inlineParamMetaOf(next)).toEqual(inlineParamMetaOf(described));
+  });
+
+  it("documents a twice-read name once, wherever its author wrote it", () => {
+    // The rig's `wanderScale` reaches two noises. One name is one knob, so
+    // neither reference is the privileged one and the first DEFINITION of
+    // each key wins.
+    const twice: FieldSpec = {
+      fn: "add",
+      args: [
+        { fn: "param", name: "scale", value: 1, max: 8 },
+        { fn: "param", name: "scale", value: 1, min: 0.1, max: 99, description: "Both noises." },
+      ],
+    };
+    expect(inlineParamMetaOf(twice)).toEqual({
+      scale: { min: 0.1, max: 8, description: "Both noises." },
+    });
+  });
+
+  it("refuses a range nothing can satisfy, naming the param", () => {
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1, min: 4, max: 2 })).toThrow(
+      /param "a": min 4 is above max 2/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1, min: 2 })).toThrow(
+      /param "a": the inline value 1 is below its own min 2/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 9, max: 2 })).toThrow(
+      /param "a": the inline value 9 is above its own max 2/,
+    );
+    // Componentwise for a tuple, which is what `ParamSchema.min` means for a
+    // vec — so one bad axis is enough.
+    expect(() =>
+      fieldFromJson({ fn: "param", name: "a", value: [1, 2, 9], min: 0, max: 3 }),
+    ).toThrow(/param "a": the inline value 9 is above its own max 3/);
+    expect(() =>
+      fieldFromJson({ fn: "param", name: "a", value: [1, 2, 3], min: 0, max: 3 }),
+    ).not.toThrow();
+  });
+
+  it("refuses metadata with no value to describe, and says where the prose belongs", () => {
+    expect(() => fieldFromJson({ fn: "param", name: "a", description: "..." })).toThrow(
+      /param "a": description describes an inline value, and this reference carries none/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "a", min: 0, max: 1 })).toThrow(
+      /a subgraph's exposed param declares its own description, min and max/,
+    );
+  });
+
+  it("refuses a bound or a description the schema vocabulary would not accept", () => {
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1, min: "0" })).toThrow(
+      /param "a": min must be a finite number/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1, max: Number.NaN })).toThrow(
+      /param "a": max must be a finite number/,
+    );
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1, description: "  " })).toThrow(
+      /param "a": description must be a non-empty string/,
+    );
+  });
+
+  it("still refuses a key the grammar does not know", () => {
+    // The keys are admitted by NAME, not by "anything beside a param node is
+    // fine": a typo stays an error that names the allowed set.
+    expect(() => fieldFromJson({ fn: "param", name: "a", value: 1, step: 0.1 })).toThrow(
+      /unknown key "step" for fn "param"; allowed keys: fn, name, value, min, max, description/,
+    );
+  });
+
+  it("checks the spec even when a binding overrides the value", () => {
+    // A graph that parses only while something happens to bind it is a graph
+    // that breaks the day the binding goes away.
+    expect(() =>
+      fieldFromJson({ fn: "param", name: "a", value: 1, min: 4, max: 2 }, { a: 3 }),
+    ).toThrow(/param "a": min 4 is above max 2/);
   });
 });
 

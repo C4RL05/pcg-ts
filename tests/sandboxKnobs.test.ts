@@ -196,6 +196,26 @@ describe("turning a field-spec knob rewrites the spec", () => {
     );
     expect(problem).toMatch(/field-spec param "amplitude" takes a number/);
   });
+
+  it("names the NODE when a write falls outside the range the param declares", () => {
+    // A widget can offer a value the grammar refuses now that a `param` can
+    // declare bounds: a panel row may name a wider range than the graph
+    // does. The grammar names the param and the bound; this frame is the
+    // only one that knows whose spec it was writing.
+    const c = controller();
+    const text = graphText().replace(
+      '{"fn":"param","name":"amplitude","value":18}',
+      JSON.stringify({ fn: "param", name: "amplitude", value: 18, min: 0, max: 20 }),
+    );
+    expect(c.importText(text)).not.toHaveProperty("error");
+    const problem = c.setKnob({ node: "dunes", name: "translate", fieldParam: "amplitude" }, 50);
+    expect(problem).toMatch(
+      /node "dunes" param "translate": .*param "amplitude": the inline value 50 is above its own max 20/,
+    );
+    // And the graph still holds what it held: a refused write is not a
+    // half-applied one.
+    expect(byKey(c.knobs(), "dunes.translate.amplitude")?.value).toBe(18);
+  });
 });
 
 describe("the panel a field-spec knob gets", () => {
@@ -253,6 +273,80 @@ describe("the panel a field-spec knob gets", () => {
       min: 0,
       max: 50,
       step: 0.5,
+    });
+  });
+});
+
+describe("a `param` that describes itself needs no panel file", () => {
+  /** The same fixture, with the three optional keys on `amplitude`. */
+  const described = (): readonly Knob[] => {
+    const c = controller();
+    const text = graphText().replace(
+      '{"fn":"param","name":"amplitude","value":18}',
+      JSON.stringify({
+        fn: "param",
+        name: "amplitude",
+        value: 18,
+        min: 0,
+        max: 50,
+        description: "Dune height, before the fBm's ~0.4x normalization.",
+      }),
+    );
+    expect(text).not.toBe(graphText()); // the replace found its target
+    expect(c.importText(text)).not.toHaveProperty("error");
+    return c.knobs();
+  };
+
+  it("carries the range and the prose into the derived schema", () => {
+    const amplitude = byKey(described(), "dunes.translate.amplitude");
+    expect(amplitude?.schema).toMatchObject({
+      type: "f32",
+      default: 18,
+      min: 0,
+      max: 50,
+      description: "Dune height, before the fBm's ~0.4x normalization.",
+    });
+    // The sibling declares nothing and is unaffected — additive is the whole
+    // argument for not bumping formatVersion.
+    const frequency = byKey(described(), "dunes.translate.frequency");
+    expect(frequency?.schema.min).toBeUndefined();
+    expect(frequency?.schema.max).toBeUndefined();
+  });
+
+  it("renders as a described SLIDER with no panel spec — the regression this closes", () => {
+    // Before this, the same graph with its panel file deleted showed a bare
+    // number box with placeholder hover text: a graph knew less about itself
+    // than the subgraph wrapper it replaced did.
+    const panel = buildKnobPanel(described());
+    const control = panel.sections
+      .flatMap((s) => s.controls)
+      .find((ctl) => "key" in ctl && ctl.key === "dunes.translate.amplitude");
+    expect(control).toMatchObject({
+      kind: "slider",
+      description: "Dune height, before the fBm's ~0.4x normalization.",
+      min: 0,
+      max: 50,
+    });
+  });
+
+  it("still yields to a panel row, key by key", () => {
+    // The relationship a registered schema already had with a panel: the
+    // panel refines, and what it leaves out stays the graph's.
+    const spec: GraphPanelSpec = {
+      sections: [
+        {
+          title: "dunes",
+          controls: [{ param: "dunes.translate.amplitude", label: "height", max: 30 }],
+        },
+      ],
+    };
+    const control = buildKnobPanel(described(), spec).sections[0].controls[0];
+    expect(control).toMatchObject({
+      kind: "slider",
+      label: "height",
+      min: 0, // the graph's — the row says nothing about it
+      max: 30, // the row's
+      description: "Dune height, before the fBm's ~0.4x normalization.",
     });
   });
 });

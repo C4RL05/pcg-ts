@@ -580,11 +580,35 @@ name, addressed by that three-part key; `inlineParamValuesOf(spec)` and
 `withInlineParamValue(spec, name, value)` are the read and write halves.
 The control's type comes from the value's shape — a number is `f32`, a
 3-number array `vec3`, a 4-number array `vec4` — so a graph gets a working
-knob with no extra files, and a panel spec under `graphs/panels/` then adds
-the `min`/`max` that makes it a slider and the `description` that says what
-it does. A reference with NO inline value gets no control, deliberately: it
-is an unbound reference waiting for a binder, and a widget for one would
-write a literal where its author chose to leave none.
+knob with no extra files. A reference with NO inline value gets no control,
+deliberately: it is an unbound reference waiting for a binder, and a widget
+for one would write a literal where its author chose to leave none.
+
+**And the reference says what its value MEANS**, through three more
+optional keys beside it: `{"fn": "param", "name": "freq", "value": 0.05,
+"min": 0.01, "max": 0.4, "description": "..."}`. They are the subset of
+`ParamSchema` a named literal can answer — `type` and `default` come from
+the value itself, and there is no `step`, because `ParamSchema` has none
+and one vocabulary is enough. Both bounds present make the knob a slider;
+`inlineParamMetaOf(spec)` is the reader.
+
+They live in the GRAPH because the form this replaced kept them there. A
+subgraph wrapper declares a full schema per exposed param, so flattening
+one into inline values used to move its prose into a presentation file and
+a graph opened without that file knew less about itself than before. A
+panel spec under `graphs/panels/` still refines all three, key by key and
+exactly as it refines a registered node param's schema: what a row omits
+stays the graph's. What belongs only to the panel is what the graph cannot
+know — the row's `label`, its `step`, its `unit`, its section.
+
+The metadata never reaches `Field.key`. The value is in the key because it
+changes the answer; a range and a sentence do not, and the per-evaluation
+cache is content-keyed on that key — so two nodes holding 0.05 under
+different prose still share one column, and editing a description recooks
+nothing. What IS checked at parse time is that the description describes
+something real: bounds must be finite and ordered, the value must lie
+inside them (componentwise for a tuple), and metadata with no `value` to
+describe is refused rather than silently ignored.
 
 **With neither, a `param` builds but refuses to evaluate.** Its key is
 `param("amplitude")` and its WGSL kernel needs only the name, so a spec

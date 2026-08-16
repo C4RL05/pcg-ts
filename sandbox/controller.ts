@@ -26,6 +26,7 @@ import {
   getFieldSpec,
   getNodeType,
   getRegisteredSubgraph,
+  inlineParamMetaOf,
   inlineParamValuesOf,
   isField,
   resolveExposedParam,
@@ -35,10 +36,12 @@ import {
   type DataItem,
   type ExposedParam,
   type ExposedPin,
+  type Field,
   type FieldBindingValue,
   type FieldSpec,
   type GpuCookStats,
   type GpuFieldResolver,
+  type InlineParamMeta,
   type NodeHandle,
   type ParamSchema,
   type ParamValue,
@@ -210,14 +213,21 @@ export function clampToSchema(schema: ParamSchema, raw: number): number {
 
 /**
  * The `ParamSchema` a field-spec knob does not have, derived from the
- * shape of the literal its author wrote.
+ * shape of the literal its author wrote and from whatever the `param` node
+ * says about it.
  *
  * A node param carries a registered schema; a `param` node inside a field
- * expression carries a name and a number, and nothing else exists to
- * describe it. The value's shape is enough to pick a widget — the same
- * rule a targetless exposed param already uses to type itself from its
- * default — so a graph gets a working control with no panel file at all,
- * and a panel then refines the range.
+ * expression carries a name and a number. The value's shape is enough to
+ * pick a widget — the same rule a targetless exposed param already uses to
+ * type itself from its default — so a graph gets a working control with no
+ * panel file at all.
+ *
+ * The range and the prose come from the node too when it declares them
+ * (`min`, `max`, `description`), which is what puts them in the GRAPH: the
+ * subgraph wrapper this form replaced declared a full schema inside the
+ * graph, and a panel is one presentation of a graph rather than the place
+ * its params are defined. A panel spec still refines all three, exactly as
+ * it refines a registered schema's.
  *
  * A tuple the param vocabulary cannot name — 1 or 2 components, or more
  * than 4 — gets no schema and therefore no knob: the grammar accepts any
@@ -228,13 +238,22 @@ export function clampToSchema(schema: ParamSchema, raw: number): number {
 function derivedFieldParamSchema(
   name: string,
   value: FieldBindingValue,
+  meta: InlineParamMeta | undefined,
 ): ParamSchema | undefined {
+  // The fallback is addressed to whoever is looking at an undocumented
+  // knob, so it says where the missing sentence goes rather than restating
+  // the mechanism.
   const description =
-    `Inline value of the field-spec param "${name}". Its type comes from the shape of the value ` +
-    "the expression carries; a panel spec supplies the range and says what turning it does.";
-  if (typeof value === "number") return { type: "f32", default: value, description };
-  if (value.length === 3) return { type: "vec3", default: [...value], description };
-  if (value.length === 4) return { type: "vec4", default: [...value], description };
+    meta?.description ??
+    `Inline value "${name}" inside this node's field expression. The graph says nothing else ` +
+      'about it — write "description", "min" and "max" beside the value to say what turning it does.';
+  const bounds = {
+    ...(meta?.min !== undefined ? { min: meta.min } : {}),
+    ...(meta?.max !== undefined ? { max: meta.max } : {}),
+  };
+  if (typeof value === "number") return { type: "f32", default: value, description, ...bounds };
+  if (value.length === 3) return { type: "vec3", default: [...value], description, ...bounds };
+  if (value.length === 4) return { type: "vec4", default: [...value], description, ...bounds };
   return undefined;
 }
 
@@ -261,8 +280,13 @@ function fieldSpecKnobs(
   const spec = getFieldSpec(value);
   if (spec === undefined) return [];
   const out: Knob[] = [];
+  // Two reads of one walk's worth of information, kept apart because they
+  // are two questions: what the knob's value IS, and what the graph says
+  // about it. The second is empty for every param authored before the keys
+  // existed, which is what makes them additive.
+  const meta = inlineParamMetaOf(spec);
   for (const [fieldParam, inline] of Object.entries(inlineParamValuesOf(spec))) {
-    const schema = derivedFieldParamSchema(fieldParam, inline);
+    const schema = derivedFieldParamSchema(fieldParam, inline, meta[fieldParam]);
     if (schema === undefined) continue;
     out.push({
       key: `${node}.${name}.${fieldParam}`,
@@ -663,17 +687,22 @@ export class EditorController {
           JSON.stringify(value),
       );
     }
-    let rewritten: FieldSpec;
+    let built: Field;
     try {
-      rewritten = withInlineParamValue(spec, knob.fieldParam, value);
+      // The BUILD is inside too, not just the rewrite. A `param` that
+      // declares its own `min`/`max` refuses a value outside them, and the
+      // widget can offer one — a panel row may declare a wider range than
+      // the graph does, and two references to one name may declare
+      // different ones. The grammar names the param and the bound it broke;
+      // only this frame knows which node's spec it was writing.
+      built = fieldFromJson(withInlineParamValue(spec, knob.fieldParam, value));
     } catch (err) {
-      // The grammar names the param and what the spec does supply; only
-      // this frame knows which node's spec it was reading. Reached when the
-      // spec has moved under the panel — edited in the field editor between
-      // the knob being listed and the slider being released.
+      // Also reached when the spec has moved under the panel — edited in the
+      // field editor between the knob being listed and the slider being
+      // released.
       throw new Error(`node "${knob.node}" param "${knob.name}": ${errorMessage(err)}`);
     }
-    this.mirror.setParam(handle, knob.name, fieldFromJson(rewritten));
+    this.mirror.setParam(handle, knob.name, built);
   }
 
   /**

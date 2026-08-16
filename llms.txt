@@ -328,7 +328,8 @@ into `constant`). All 45 fns (`listFieldFns()`):
     does not need to be — the executor's node memo key already carries the
     node seed, so every node recooks when the graph seed moves
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
-  - `{ fn: "param", name: "amplitude", value?: 0.5 }` — the value bound to
+  - `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4,
+    description?: "..." }` — the value bound to
     that name by an enclosing wrapper's exposed param of the same name
     (every `subgraph` and `forEach` exposed param binds into its body's
     field scope), substituted where the literal would have stood, so the
@@ -348,7 +349,16 @@ into `constant`). All 45 fns (`listFieldFns()`):
     A name may not contain a `.`. Only argument positions can hold one
     (`args` entries, noise `opts.position`);
     `opts.frequency`/`seed`/`offset` are read as plain numbers, so a
-    tunable frequency multiplies `opts.position` instead
+    tunable frequency multiplies `opts.position` instead.
+    `min`, `max` and `description` describe that inline value the way an
+    exposed param's declaration describes its own — the graph stays
+    self-describing when a wrapper is flattened into inline values, and a
+    panel file refines them rather than owning them. All three are
+    optional, require a `value` to describe, and are refused at parse time
+    if the bounds are unordered or exclude the value (componentwise for a
+    tuple). None of them reaches `Field.key`: they do not change the
+    answer, so they must not move a memo key. There is no `step` —
+    `ParamSchema` has none
 - Elementwise, `args` with exact arity (scalars broadcast; f64 math, f32 storage):
   - 2 args: `add sub mul div min max lt le gt ge eq ne dot atan2`
     (comparisons emit 1/0, and `ne` is the exact complement of `eq`;

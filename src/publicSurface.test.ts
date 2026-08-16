@@ -28,7 +28,7 @@ const ROOT_SURFACE = [
   "getFieldSpec",
   "getNodeType", "getRegisteredSubgraph", "getSubgraphPlumbing", "getSubgraphSpec", "gt",
   "hasNodeType", "hasRegisteredSubgraph", "hashCombine", "hashFloat", "hashString",
-  "index", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
+  "index", "inlineParamMetaOf", "inlineParamValuesOf", "isDeviceInstanceBatch", "isDeviceResidentInstances", "isField", "jitterPoints",
   "keyNum", "keyRef", "le", "length", "lerp", "listFieldFnInfos", "listFieldFns",
   "listNodeTypes", "listSubgraphs", "lt", "makeDeviceInstancesItem", "makeField",
   "makeGeometryItem", "makeInstancesItem", "makeValueItem", "max", "mergePoints", "mergePrimitives",

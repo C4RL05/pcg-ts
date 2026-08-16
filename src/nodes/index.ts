@@ -22,6 +22,7 @@ export {
   fieldFromJson,
   fieldToJson,
   getFieldSpec,
+  inlineParamMetaOf,
   inlineParamValuesOf,
   listFieldFnInfos,
   listFieldFns,
@@ -32,6 +33,7 @@ export {
   type FieldFnInfo,
   type FieldSpec,
   type FieldSpecArg,
+  type InlineParamMeta,
 } from "../fields/fieldJson.js";
 export * from "./subgraphParams.js";
 export * from "./serialize.js";

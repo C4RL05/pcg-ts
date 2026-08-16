@@ -68,14 +68,20 @@ gap 8, which is the reason.
    script emulating the library's staged f32 rounding. Wants a
    zero-centred `nodeSeedOffset` needing no calibration, or `pcg`
    printing derived node seeds.
-5. **An inline `param` cannot carry `min`/`max`/`step`/`description`, and
-   the subgraph form can. THIS IS A REGRESSION THIS WEEK'S WORK CAUSED**:
-   flattening `spineWander` moved three param descriptions out of the
+5. **~~An inline `param` cannot carry `min`/`max`/`description`, and the
+   subgraph form can.~~ SHIPPED 2026-08-16** — the regression this week's
+   work caused, and the only gap here that was fixed rather than recorded.
+   Flattening `spineWander` had moved three param descriptions out of the
    graph and into a presentation-only panel file, where a graph opened
-   without its panel loses them. `PLAN-spec-params.md` decided the panel
-   was the right home for min/max; it did not notice that the subgraph
-   form kept them IN the graph. The fix is small — let the inline form
-   carry them too — and it should happen before more graphs are flattened.
+   without its panel lost them; `PLAN-spec-params.md` decided the panel
+   was the right home for min/max and did not notice that the subgraph
+   form kept them IN the graph. A `param` node now takes `min`, `max` and
+   `description` beside its `value` (`inlineParamMetaOf`), the rig's three
+   are back in `graphs/examples-rig.json`, and the panel keeps only what
+   the graph cannot know — label, step, section. NOT `step`: `ParamSchema`
+   has no such field and a second vocabulary is what a panel file is for.
+   None of the three reaches `Field.key`, so the rig cooks to the same
+   hash (`2778aafc`) either side of the change.
 6. **No `switch` / `cases` over a string.** Three nested `lerp`s over
    three `attributeIs` calls; a fifth kind means editing three axes. Worse,
    a typo'd literal returns all-zeros silently, and the rig's fourth part
