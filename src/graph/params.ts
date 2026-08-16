@@ -26,7 +26,12 @@ import type { DataItem } from "./data.js";
  * graphs carry an empty list — live items are never part of the JSON.
  * `stringList` is an ordered list of strings that is authoring data
  * (e.g. the value list of a string `setAttribute`): unlike `items`, its
- * contents serialize with the graph.
+ * contents serialize with the graph. `numberList` is its numeric sibling,
+ * for a list of numbers that is authoring data too — the weights beside
+ * those values. It exists because the alternative was spelling numbers as
+ * digit strings (`["4","2","1","2"]`), which asks every reader of the
+ * machine-readable schema to learn a convention the type could simply
+ * state.
  */
 export type ParamType =
   | "f32"
@@ -38,7 +43,8 @@ export type ParamType =
   | "vec4"
   | "enum"
   | "items"
-  | "stringList";
+  | "stringList"
+  | "numberList";
 
 /** Plain (non-field) values a param can hold. */
 export type ParamValue =
@@ -304,6 +310,14 @@ export function paramSchemaError(schema: ParamSchema): string | undefined {
         return "cannot declare min/max — item lists have no numeric bounds";
       }
       break;
+    case "numberList":
+      if (!Array.isArray(d) || !d.every((v) => typeof v === "number" && Number.isFinite(v))) {
+        return "default must be an array of finite numbers ([] for an empty list)";
+      }
+      if (schema.acceptsField === true) {
+        return "cannot accept fields — number lists are authoring data, not per-element values";
+      }
+      break;
     case "stringList":
       if (!Array.isArray(d) || !d.every((v) => typeof v === "string")) {
         return "default must be an array of strings ([] for an empty list)";
@@ -466,6 +480,14 @@ function valueError(schema: ParamSchema, value: unknown, allowInfinite: boolean)
       // serialize with the graph.
       return !Array.isArray(value) || !value.every((v) => typeof v === "string")
         ? `expected an array of strings, got ${JSON.stringify(value)}`
+        : undefined;
+    case "numberList":
+      // Finite, because a list that serializes must survive JSON, and
+      // `JSON.stringify(Infinity)` is `null`. Same rule the numeric
+      // scalars keep.
+      return !Array.isArray(value) ||
+        !value.every((v) => typeof v === "number" && Number.isFinite(v))
+        ? `expected an array of finite numbers, got ${JSON.stringify(value)}`
         : undefined;
   }
   return undefined;

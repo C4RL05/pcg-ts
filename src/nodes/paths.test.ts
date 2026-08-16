@@ -594,6 +594,252 @@ describe("pathResample", () => {
     expect(msg).toContain("removeAttribute");
     expect(msg).not.toBe('attribute "tangent" already exists');
   });
+
+  it("writes neither report by default, and an empty name is the default", async () => {
+    const src = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const resample = async (params: Record<string, unknown>) =>
+      firstGeo(
+        (
+          await runNode(
+            pathResample,
+            { mode: "count", count: 5, ...params },
+            { in: [makeGeometryItem(src)] },
+          )
+        ).out,
+      );
+    const byDefault = await resample({});
+    // The column list, spelled out: a comparison of two runs would agree
+    // just as happily if the reports leaked into BOTH of them, so what
+    // pins "off means off" is the absence of a name, not an equality.
+    expect(byDefault.attrs.primitive.names()).toEqual([PRIMTYPE_ATTR, "roadWidth"]);
+    expect(byDefault.attrs.point.names()).toEqual([
+      "P",
+      "rot",
+      "scale",
+      "density",
+      "boundsMin",
+      "boundsMax",
+      "color",
+      "seed",
+      "tangent",
+      "curveU",
+      "roadWidth",
+    ]);
+    // An empty name is not a name: it writes nothing, byte for byte.
+    expect(snapshotGeometry(await resample({ lengthAttr: "", stepAttr: "" }))).toEqual(
+      snapshotGeometry(byDefault),
+    );
+  });
+
+  it("adds the reports without moving anything it already wrote", async () => {
+    const src = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const resample = async (params: Record<string, unknown>) =>
+      snapshotGeometry(
+        firstGeo(
+          (
+            await runNode(
+              pathResample,
+              { mode: "count", count: 5, ...params },
+              { in: [makeGeometryItem(src)] },
+            )
+          ).out,
+        ),
+      );
+    const off = await resample({});
+    const on = await resample({ lengthAttr: "pathLength", stepAttr: "sampleStep" });
+    // Every domain but the one the reports land on, and the topology with
+    // them. The point domain is the interesting half: a per-path number
+    // repeated once per sample would be the convenient place to put it,
+    // and it does not go there.
+    expect(on.point).toEqual(off.point);
+    expect(on.vertex).toEqual(off.vertex);
+    expect(on.detail).toEqual(off.detail);
+    expect(on.topology).toEqual(off.topology);
+  });
+
+  it("reports the TRUE arc length, not the span the author can measure", async () => {
+    // A right angle: 3 along +X, then 4 along +Y. The arc is 3 + 4 = 7 and
+    // the straight line between the two ends is 5 — the second is the
+    // number a field can already compute from two positions and the first
+    // is the one nothing in a graph can walk to, which is the entire
+    // reason this attribute exists.
+    const bend = createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 8, lengthAttr: "pathLength" },
+          { in: [makeGeometryItem(bend)] },
+        )
+      ).out,
+    );
+    const length = geo.attrs.primitive.require("pathLength");
+    expect(length.get(0)).toBe(7);
+    expect(length.get(0)).not.toBe(5);
+    // On the primitive domain, one value for the whole path, and nowhere
+    // else — a length is a fact about a path, not about a sample.
+    expect(geo.attrs.primitive.names()).toEqual([PRIMTYPE_ATTR, "pathLength"]);
+    expect(geo.attrs.point.has("pathLength")).toBe(false);
+  });
+
+  it("gives each path its own length and its own step", async () => {
+    // twoPaths is 1 unit and 4 units long. count 5 divides each on ITS
+    // OWN arc, so one graph-wide step does not exist and the report has
+    // to be per path: 0.25 and 1.
+    const geo = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 5, lengthAttr: "pathLength", stepAttr: "sampleStep" },
+          { in: [makeGeometryItem(twoPaths())] },
+        )
+      ).out,
+    );
+    const length = geo.attrs.primitive.require("pathLength");
+    const step = geo.attrs.primitive.require("sampleStep");
+    expect([length.get(0), length.get(1)]).toEqual([1, 4]);
+    expect([step.get(0), step.get(1)]).toEqual([0.25, 1]);
+    // And it is the sampling's own number, not one measured back off it:
+    // the gap between the first two samples IS the reported step.
+    const P = positionsOf(geo);
+    expect(P[1][0] - P[0][0]).toBe(step.get(0));
+    // The second path's run starts at 5: five samples each.
+    expect(P[6][0] - P[5][0]).toBe(step.get(1));
+  });
+
+  it("divides a closed path by count and an open one by count - 1", async () => {
+    const open = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 5, lengthAttr: "pathLength", stepAttr: "sampleStep" },
+          { in: [makeGeometryItem(createPolyline([0, 0, 0, 10, 0, 0]))] },
+        )
+      ).out,
+    );
+    // 5 samples land on both ends, so there are 4 gaps.
+    expect(open.attrs.primitive.require("pathLength").get(0)).toBe(10);
+    expect(open.attrs.primitive.require("sampleStep").get(0)).toBe(2.5);
+    const loop = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 4, lengthAttr: "pathLength", stepAttr: "sampleStep" },
+          {
+            in: [
+              makeGeometryItem(
+                createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+              ),
+            ],
+          },
+        )
+      ).out,
+    );
+    // 4 samples around a 4-unit loop with no duplicate at the seam: 4
+    // gaps, not 3, so the step is 1 and not 4/3.
+    expect(loop.attrs.primitive.require("pathLength").get(0)).toBe(4);
+    expect(loop.attrs.primitive.require("sampleStep").get(0)).toBe(1);
+  });
+
+  it("reports the step it takes in spacing mode, not the remainder it leaves", async () => {
+    // The 43-unit loop from the seam test: 9 samples exactly 5 apart, and
+    // a 3-unit remainder at the seam. The report is 5 — the step the node
+    // TAKES — because a size written as a multiple of it must not mean
+    // something else at the one short segment.
+    const side = 10.75;
+    const square = createPolyline([0, 0, 0, side, 0, 0, side, side, 0, 0, side, 0], {
+      closed: true,
+    });
+    const geo = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "spacing", spacing: 5, lengthAttr: "pathLength", stepAttr: "sampleStep" },
+          { in: [makeGeometryItem(square)] },
+        )
+      ).out,
+    );
+    expect(geo.pointCount).toBe(9);
+    expect(geo.attrs.primitive.require("pathLength").get(0)).toBe(43);
+    expect(geo.attrs.primitive.require("sampleStep").get(0)).toBe(5);
+  });
+
+  it("refuses a report name that would delete a differently shaped column", async () => {
+    const roads = withPrimString(twoPaths(), "roadKind", ["avenue", "lane"]);
+    const msg = await rejection(
+      runNode(pathResample, { lengthAttr: "roadKind" }, { in: [makeGeometryItem(roads)] }),
+    );
+    expect(msg).toContain('pathResample: lengthAttr "roadKind"');
+    expect(msg).toContain("primitive domain");
+    expect(msg).toContain("removeAttribute");
+    // The one that would leave the output unrecognisable downstream.
+    const tagMsg = await rejection(
+      runNode(pathResample, { stepAttr: PRIMTYPE_ATTR }, { in: [makeGeometryItem(twoPaths())] }),
+    );
+    expect(tagMsg).toContain(`pathResample: stepAttr "${PRIMTYPE_ATTR}"`);
+    // A same-shape column is reset rather than refused — that is the rule
+    // everywhere, and it is what the re-resample below relies on.
+    const width = withPrimValue(twoPaths(), "roadWidth", [2, 7]);
+    const reused = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 3, lengthAttr: "roadWidth" },
+          { in: [makeGeometryItem(width)] },
+        )
+      ).out,
+    );
+    expect([0, 1].map((p) => reused.attrs.primitive.require("roadWidth").get(p))).toEqual([1, 4]);
+  });
+
+  it("refuses lengthAttr and stepAttr naming the same attribute", async () => {
+    // Both are f32 tuple 1, so the shape check would wave this through and
+    // the step would quietly overwrite the length. Reported before the
+    // geometry is looked at: an empty cloud never gets that far.
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { lengthAttr: "size", stepAttr: "size" },
+        { in: [makeGeometryItem(createPointCloud(0))] },
+      ),
+    );
+    expect(msg).toContain('pathResample: params "lengthAttr" and "stepAttr" are both "size"');
+    expect(msg).toContain("two attributes");
+  });
+
+  it("resets its own report when a resampled path is resampled again", async () => {
+    // The report lands on the domain the NEXT run carries, so it is
+    // written after the carry: written before it, this would collide with
+    // itself and re-running a node over its own output has to stay
+    // ordinary.
+    const bend = createPolyline([0, 0, 0, 3, 0, 0, 3, 4, 0]);
+    const once = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 3, lengthAttr: "pathLength" },
+          { in: [makeGeometryItem(bend)] },
+        )
+      ).out,
+    );
+    expect(once.attrs.primitive.require("pathLength").get(0)).toBe(7);
+    const twice = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "count", count: 3, lengthAttr: "pathLength" },
+          { in: [makeGeometryItem(once)] },
+        )
+      ).out,
+    );
+    // Three samples cut the corner, so the second pass measures a
+    // genuinely shorter curve — 3 + 4 became hypot(3, 0.5) + 3.5 — and the
+    // column holds THAT, not the 7 it arrived carrying.
+    expect(twice.attrs.primitive.require("pathLength").get(0)).toBeCloseTo(6.5414, 4);
+    // The carry itself is unchanged: the old length still rides onto the
+    // points, exactly as every other primitive attribute does here.
+    expect(twice.attrs.point.require("pathLength").get(0)).toBe(7);
+  });
 });
 
 describe("pathSegments", () => {
@@ -793,6 +1039,138 @@ describe("pathSegments", () => {
     P.setTuple(3, [1, 0, 0]);
     setPolylineTopology(b, [1, 3, 0, 2], [0, 2], [2, 2]);
     expect(positionsOf(await segments({}, b))).toEqual(positionsOf(await segments({}, a)));
+  });
+
+  /**
+   * Two paths over one cloud: 4 points then 3, so 3 segments then 2. An
+   * ODD segment count on the first path is the point — it is what makes
+   * the per-path index and the global point index disagree, which is the
+   * failure that has no diagnostic today.
+   */
+  function unevenPaths(): Geometry {
+    const geo = createPointCloud(7);
+    const P = geo.attrs.point.require("P");
+    for (let i = 0; i < 4; i++) P.setTuple(i, [i, 0, 0]);
+    for (let i = 0; i < 3; i++) P.setTuple(4 + i, [i, 5, 0]);
+    setPolylineTopology(geo, [0, 1, 2, 3, 4, 5, 6], [0, 4], [4, 3]);
+    return geo;
+  }
+
+  /** Every value of a scalar point attribute, as a plain array. */
+  function scalarsOf(geo: Geometry, name: string): number[] {
+    const attr = geo.attrs.point.require(name);
+    return Array.from({ length: geo.pointCount }, (_, i) => attr.get(i));
+  }
+
+  it("writes no segment index by default, and an empty name is the default", async () => {
+    const off = await segments({}, unevenPaths());
+    // Spelled out rather than compared: two runs that both leaked the
+    // column would still be equal to each other.
+    expect(off.attrs.point.names()).toEqual([
+      "P",
+      "rot",
+      "scale",
+      "density",
+      "boundsMin",
+      "boundsMax",
+      "color",
+      "seed",
+      "tangent",
+      "curveU",
+    ]);
+    expect(snapshotGeometry(await segments({ segmentIndexAttr: "" }, unevenPaths()))).toEqual(
+      snapshotGeometry(off),
+    );
+  });
+
+  it("adds the index without moving anything it already wrote", async () => {
+    const src = unevenPaths();
+    const off = await segments({ radius: 0.3, extend: 0.1 }, src);
+    const on = await segments(
+      { radius: 0.3, extend: 0.1, segmentIndexAttr: "segmentIndex" },
+      src,
+    );
+    expect(on.attrs.point.names()).toEqual([...off.attrs.point.names(), "segmentIndex"]);
+    // Column by column, element for element: the new one is added, and
+    // nothing the node already emitted moves by a bit.
+    for (const name of off.attrs.point.names()) {
+      const a = off.attrs.point.require(name);
+      const b = on.attrs.point.require(name);
+      const n = off.pointCount * a.tupleSize;
+      expect(Array.from(b.data.subarray(0, n)), name).toEqual(Array.from(a.data.subarray(0, n)));
+    }
+  });
+
+  it("restarts the index at 0 for each path, where the global index does not", async () => {
+    const geo = await segments({ segmentIndexAttr: "segmentIndex" }, unevenPaths());
+    expect(geo.pointCount).toBe(5); // 3 segments, then 2
+    expect(geo.attrs.point.require("segmentIndex").type).toBe("i32");
+    expect(scalarsOf(geo, "segmentIndex")).toEqual([0, 1, 2, 0, 1]);
+    // The bug this closes, in miniature. Point 3 is the SECOND path's
+    // first link: even by the index within its own path, odd by the
+    // global one. Alternating on the global index therefore starts the
+    // two chains on opposite orientations, and only an even segment
+    // count per path hides it.
+    const parity = (n: number): number => n - 2 * Math.floor(n / 2);
+    const index = geo.attrs.point.require("segmentIndex");
+    expect(parity(index.get(3))).toBe(parity(index.get(0)));
+    expect(parity(3)).not.toBe(parity(0));
+  });
+
+  it("leaves no gap where a zero-length segment was skipped", async () => {
+    // The middle two points coincide, so the middle segment is degenerate
+    // and never emitted. The index counts what came OUT — 0, 1, not 0, 2
+    // — because a hole would flip the parity of every link after it, and
+    // an index into a segment list this output does not contain addresses
+    // nothing.
+    const geo = await segments(
+      { segmentIndexAttr: "segmentIndex" },
+      createPolyline([0, 0, 0, 1, 0, 0, 1, 0, 0, 2, 0, 0]),
+    );
+    expect(geo.pointCount).toBe(2);
+    expect(scalarsOf(geo, "segmentIndex")).toEqual([0, 1]);
+  });
+
+  it("counts a closed path's closing segment like any other", async () => {
+    const geo = await segments(
+      { segmentIndexAttr: "segmentIndex" },
+      createPolyline([0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1], { closed: true }),
+    );
+    expect(scalarsOf(geo, "segmentIndex")).toEqual([0, 1, 2, 3]);
+  });
+
+  it("refuses a segmentIndexAttr that would delete a column it writes", async () => {
+    const msg = await rejection(
+      runNode(
+        pathSegments,
+        { segmentIndexAttr: "curveU" },
+        { in: [makeGeometryItem(elbow())] },
+      ),
+    );
+    expect(msg).toContain('pathSegments: segmentIndexAttr "curveU"');
+    expect(msg).toContain("point domain");
+    expect(msg).toContain("removeAttribute");
+    // `seed` is the near miss: same tuple size, same scalar shape to the
+    // eye, u32 rather than i32 — and refused, because replacing it would
+    // delete the column the whole determinism story runs through.
+    const seedMsg = await rejection(
+      runNode(pathSegments, { segmentIndexAttr: "seed" }, { in: [makeGeometryItem(elbow())] }),
+    );
+    expect(seedMsg).toContain('pathSegments: segmentIndexAttr "seed"');
+  });
+
+  it("refuses a carried primitive attribute that would collide with the index", async () => {
+    const roads = withPrimValue(twoPaths(), "segmentIndex", [0, 0]);
+    const msg = await rejection(
+      runNode(
+        pathSegments,
+        { segmentIndexAttr: "segmentIndex" },
+        { in: [makeGeometryItem(roads)] },
+      ),
+    );
+    expect(msg).toContain("pathSegments");
+    expect(msg).toContain('"segmentIndex"');
+    expect(msg).toContain("removeAttribute");
   });
 
   it("draws a path built and resampled in-graph, end to end", async () => {

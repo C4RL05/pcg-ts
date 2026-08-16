@@ -235,6 +235,21 @@ export function parseParamValue(
       // "" is the empty list, not a list holding one empty string: an
       // empty string is not a name anything downstream can use.
       return raw === "" ? [] : raw.split(",");
+    case "numberList": {
+      // Same comma spelling as its string sibling, so one flag syntax
+      // covers both; each entry is parsed, and a non-number is reported
+      // with its position rather than silently becoming NaN.
+      if (raw === "") return [];
+      return raw.split(",").map((part, i) => {
+        const n = Number(part);
+        if (!Number.isFinite(n)) {
+          throw new CliUsageError(
+            `--param ${name}: entry ${i} is ${JSON.stringify(part)}, which is not a finite number; a number list is spelled "4,2,1,2"`,
+          );
+        }
+        return n;
+      });
+    }
     case "string":
       return raw;
   }

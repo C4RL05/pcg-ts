@@ -69,48 +69,153 @@ export const pointGrid = standardNode<PointGridParams>({
 
 /** Params of {@link pointLine}. */
 export interface PointLineParams {
+  mode: string;
   count: number;
   start: readonly number[];
   end: readonly number[];
   includeEnd: boolean;
+  spacing: number;
 }
 
-/** Evenly spaced points on the segment from `start` to `end`. */
+/**
+ * Evenly spaced points on the line through `start` and `end`.
+ *
+ * Two modes, named for what the AUTHOR states and not for what the node
+ * derives — the sibling `pathResample` splits the same question the same
+ * way ('count' vs 'spacing'), and the divergence in the first name is
+ * deliberate: there, `count` is the discriminator because a spacing
+ * resample derives its own count. Here `count` is read in BOTH modes (it
+ * is the number of points, which nothing else can supply), so the thing
+ * that actually differs is which end of the line is authored: 'endpoints'
+ * pins both and derives the step, 'spacing' states the step and derives
+ * the far end. Calling the default mode "count" would name a param that
+ * is never ignored, which is the one reading a `pathResample` author
+ * would carry over and the one that is false.
+ */
 export const pointLine = standardNode<PointLineParams>({
   type: "pointLine",
   category: "source",
   description:
-    "Creates `count` evenly spaced points on the straight segment from start to end. By default both endpoints are included, so the last point sits exactly on end; set includeEnd false to sample the half-open range instead, stopping one step short of end — which is what a sweep that wraps back on itself needs so its first and last samples are not the same place. count 1 places a single point at start in either mode. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
+    "Creates `count` evenly spaced points on a straight line. mode 'endpoints' (the default) pins both ends: the points spread between start and end, so the STEP is derived and changes whenever the count does. mode 'spacing' states the step instead: the points run from start toward end, exactly `spacing` world units apart, so the FAR END is derived (start + spacing * (count - 1) along the direction) and raising the count APPENDS points rather than re-spacing the ones already there — which is what any consumer keyed on position needs (a forEach item key, a nearest-neighbour transfer), and what forces an author of the default mode to restate count - 1 inside `end` to keep a known step. In 'endpoints' mode both endpoints are included by default, so the last point sits exactly on end; set includeEnd false to sample the half-open range instead, stopping one step short of end — which is what a sweep that wraps back on itself needs so its first and last samples are not the same place. count 1 places a single point at start in every mode. Emits a standard point cloud; per-point seed is hashed from the node seed and point index.",
   inputs: [],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
-    count: { type: "i32", default: 10, min: 1, description: "Number of points to place. Minimum 1." },
-    start: { type: "vec3", default: [0, 0, 0], description: "World position of the first point." },
-    end: { type: "vec3", default: [10, 0, 0], description: "World position of the last point." },
+    mode: {
+      type: "enum",
+      default: "endpoints",
+      enum: ["endpoints", "spacing"],
+      description:
+        "Which end of the line the author states: 'endpoints' places `count` points between start and end, deriving the step; 'spacing' places `count` points stepping `spacing` units from start toward end, deriving the far end. `count` is read in both.",
+    },
+    count: {
+      type: "i32",
+      default: 10,
+      min: 1,
+      description:
+        "Number of points to place, in both modes — it is never the derived quantity here. Minimum 1.",
+    },
+    start: {
+      type: "vec3",
+      default: [0, 0, 0],
+      description: "World position of the first point, in both modes.",
+    },
+    end: {
+      type: "vec3",
+      default: [10, 0, 0],
+      description:
+        "World position of the last point in 'endpoints' mode. In 'spacing' mode only the DIRECTION from start to end is read: the line runs that way and its far end is derived as start + spacing * (count - 1) along it, so the distance from start is not read and the last point generally does NOT sit on end — put end anywhere along the direction you want (one unit away is the clearest way to write it). Must not coincide with start in 'spacing' mode: two identical positions name no direction to step along.",
+    },
     includeEnd: {
       type: "bool",
       default: true,
       description:
-        "Whether `end` is one of the emitted positions. true (the default) samples the closed range [start, end]: `count` points stepping (end - start) / (count - 1), the first on start and the last exactly on end — use it for a run of points with both ends pinned, such as a fence between two posts. false samples the half-open range [start, end): `count` points stepping (end - start) / count, the last one step short of end — use it when the segment is a parameter that wraps, so a closed shape gets `count` distinct positions and no duplicate seam. count 1 emits a single point at start in both modes; count 0 emits nothing.",
+        "Whether `end` is one of the emitted positions, in 'endpoints' mode. true (the default) samples the closed range [start, end]: `count` points stepping (end - start) / (count - 1), the first on start and the last exactly on end — use it for a run of points with both ends pinned, such as a fence between two posts. false samples the half-open range [start, end): `count` points stepping (end - start) / count, the last one step short of end — use it when the segment is a parameter that wraps, so a closed shape gets `count` distinct positions and no duplicate seam. count 1 emits a single point at start in both modes; count 0 emits nothing. 'spacing' mode has no authored endpoint to include or exclude — its derived far end IS the last point, and the same run is equally the half-open sampling of [start, start + count * spacing) — so the choice does not arise there and false is REFUSED rather than accepted as a setting that moves nothing.",
+    },
+    spacing: {
+      type: "f32",
+      default: 1,
+      min: 0,
+      description:
+        "Distance between consecutive points in world units when mode is 'spacing'. The step is EXACT and independent of the count: point i sits at start + i * spacing along the direction, a function of i alone, so raising `count` leaves every point already placed byte-identical and appends the new ones. That is the whole difference from 'endpoints' mode, where the count and the step are one number seen from two sides and one more point re-spaces the entire line. Must be > 0 and finite. Ignored in 'endpoints' mode.",
     },
   },
   execute({ params, seed }) {
+    // Params before points, the way pathResample validates before it
+    // reads geometry: a bad step reported as a stray position sends the
+    // author to debug whatever node is standing over the mess.
+    if (params.mode !== "endpoints" && params.mode !== "spacing") {
+      throw new Error(
+        `pointLine: unknown mode "${params.mode}"; valid modes: endpoints, spacing`,
+      );
+    }
     const n = params.count;
     const [ax, ay, az] = params.start;
     const [bx, by, bz] = params.end;
+    const spacingMode = params.mode === "spacing";
+    // Unit direction for 'spacing' mode. Math.sqrt and not Math.hypot:
+    // sqrt is correctly rounded by IEEE-754 on every platform, hypot is
+    // implementation-defined, and determinism is not negotiable.
+    let ux = 0;
+    let uy = 0;
+    let uz = 0;
+    if (spacingMode) {
+      // Both guards fire whatever the count is, including counts of 0 and
+      // 1 that take no step at all: `count` is a knob (the whole reason
+      // this mode exists), so a spacing that is wrong is wrong now rather
+      // than at whatever value the author turns the knob to next.
+      if (!(params.spacing > 0) || !Number.isFinite(params.spacing)) {
+        throw new Error(
+          `pointLine: spacing must be a finite number > 0 in 'spacing' mode, got ${params.spacing}; state the distance you want between consecutive points, or switch mode to 'endpoints' to spread count points between start and end instead`,
+        );
+      }
+      const dx = bx - ax;
+      const dy = by - ay;
+      const dz = bz - az;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (!(len > 0) || !Number.isFinite(len)) {
+        throw new Error(
+          `pointLine: 'spacing' mode takes its direction from start to end, but start [${ax}, ${ay}, ${az}] and end [${bx}, ${by}, ${bz}] are ${len === 0 ? "the same position" : `${len} apart`}, so there is no direction to step along; move end off start — only its DIRECTION is read in this mode, the distance being derived as spacing * (count - 1) — or switch mode to 'endpoints'`,
+        );
+      }
+      ux = dx / len;
+      uy = dy / len;
+      uz = dz / len;
+      // A non-default includeEnd in this mode would be a bool sitting in
+      // the graph file changing no byte — invisible to a fingerprint, to
+      // --params and to a reader, which is the class of hazard this whole
+      // node change exists to remove. The DEFAULT is the author saying
+      // nothing, so it passes; false is a statement the mode cannot honor.
+      if (!params.includeEnd) {
+        throw new Error(
+          `pointLine: includeEnd false is not available in 'spacing' mode, because there is no authored endpoint to exclude: the far end is derived as start + spacing * (count - 1), so the run is already both closed on its last point and half-open below start + count * spacing. Drop includeEnd (its default, true, is the only setting this mode can honor), or switch mode to 'endpoints' to sample the half-open range between start and end`,
+        );
+      }
+    }
     const geo = createPointCloud(n);
     const P = geo.attrs.point.require("P").data;
     const seeds = geo.attrs.point.require("seed").data;
-    // Inclusive divides by the number of GAPS (n - 1), so the last point
-    // lands on `end`; exclusive divides by the number of SAMPLES (n), so
-    // the last point stops one step short. Only the inclusive branch can
-    // divide by zero, and it keeps its original n === 1 guard so its
-    // output is bit-identical to the pre-includeEnd node.
+    // 'endpoints': inclusive divides by the number of GAPS (n - 1), so the
+    // last point lands on `end`; exclusive divides by the number of
+    // SAMPLES (n), so the last point stops one step short. Only the
+    // inclusive branch can divide by zero, and it keeps its original
+    // n === 1 guard so its output is bit-identical to the pre-includeEnd
+    // node — and to the pre-mode node, since nothing in this branch reads
+    // a param that did not exist then.
     for (let i = 0; i < n; i++) {
-      const t = params.includeEnd ? (n === 1 ? 0 : i / (n - 1)) : i / n;
-      P[i * 3] = ax + (bx - ax) * t;
-      P[i * 3 + 1] = ay + (by - ay) * t;
-      P[i * 3 + 2] = az + (bz - az) * t;
+      if (spacingMode) {
+        // i * spacing, never a running sum: no accumulated drift, and —
+        // the point of the mode — position i is a function of i alone, so
+        // a larger count cannot move a point that is already there.
+        const d = i * params.spacing;
+        P[i * 3] = ax + ux * d;
+        P[i * 3 + 1] = ay + uy * d;
+        P[i * 3 + 2] = az + uz * d;
+      } else {
+        const t = params.includeEnd ? (n === 1 ? 0 : i / (n - 1)) : i / n;
+        P[i * 3] = ax + (bx - ax) * t;
+        P[i * 3 + 1] = ay + (by - ay) * t;
+        P[i * 3 + 2] = az + (bz - az) * t;
+      }
       seeds[i] = hashCombine(seed, i);
     }
     return { out: [makeGeometryItem(geo)] };

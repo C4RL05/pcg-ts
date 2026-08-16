@@ -48,7 +48,7 @@ Generated from the named-subgraph registry (`listSubgraphs()`) by `node scripts/
 
 Concatenates two point clouds and stamps a string attribute on each side first, so the result remembers where every point came from — then `partitionByAttribute` can route them apart again, or the spawner can read the same attribute and give each source a different asset. ONE knob names the attribute on both sides, which is the point: a hand-written version has the same string typed twice and drifts the first time one is edited. Note that merging unions the attribute sets and FAILS when the two inputs disagree on a name's type, so a scratch column left on one side can break a merge that used to work. Fully deterministic. Writes the kind attribute; carries every other attribute through.
 
-**Content hash:** `8a21d7c3d364ba8b`
+**Content hash:** `beeef6ae3fc70113`
 
 **Tags:** `compose`, `merge`, `routing`
 
@@ -122,7 +122,7 @@ Run it: `pcg run fill/scatter-by-density`
 
 Scatters a few cluster centres through a box, then copies a small local cloud onto each one, so points arrive in groups — villages, groves, boulder fields. COUNT: the output is clusters x perCluster exactly, which multiplies fast. SHAPE: a group is a BOX running -spread to +spread around its centre and all three components of `spread` are live. It ships flat — the default is [4, 0, 4], a ground-plane patch, because that is what a village or a grove is — so raise `spread.y` to make the group volumetric (a swarm, an asteroid field, a cave's boulders) rather than reaching for a box scatter. The groups OVERHANG the bounds by up to `spread`, deliberately and unclamped: `boundsMin`/`boundsMax` place the CENTRES, and a group straddling the edge is a whole group rather than a clipped one — inset the bounds by `spread` if the points themselves have to stay inside a region. VARIATION: yes — both scatters are context-seeded, so two instances differ, and `seed` re-rolls both explicitly. The local cloud's own `scale` is reset before copying, so `spread` sizes the cluster and not the assets in it.
 
-**Content hash:** `c6fbb5a67bdadfd1`
+**Content hash:** `84e6d02c5fa48592`
 
 **Tags:** `fill`, `scatter`, `clusters`
 
@@ -275,7 +275,7 @@ Run it: `pcg run filter/by-neighbor-count`
 
 Keeps the points whose distance to a centre satisfies a comparison — 'le' for a circular district, 'ge' for an exclusion zone around a landmark. The distance is the true 3D distance, not a squared one and not a planar one, which are the two ways a hand-written version goes wrong. Fully deterministic. Reads `P`; writes nothing (the scratch distance column is removed again).
 
-**Content hash:** `6453da45726fc30c`
+**Content hash:** `980a8b52f53c9a64`
 
 **Tags:** `filter`, `spatial`, `mask`
 
@@ -323,7 +323,7 @@ Run it: `pcg run filter/mask-by-noise`
 
 Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, so no reference of any kind can stand there and no knob can move it — two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.
 
-**Content hash:** `c7eab56acaf8bf4e`
+**Content hash:** `a94d6d5d2f3d9ad4`
 
 **Tags:** `filter`, `noise`, `density`
 
@@ -372,7 +372,7 @@ Run it: `pcg run place/align-to-surface`
 
 Places points at even arc-length steps along every path of the supplied `curve` and turns each one to face the way the curve is going — fence posts, streetlights, bollards, sleepers. Each path is measured and resampled on its OWN length, so several paths in one input stay separate and each gets its own run of points; `splineSample` would treat them as one concatenated curve instead. PRECONDITION: `curve` must carry polyline topology — `shape/path-loop`, `shape/path-meander` or a `pointsToPath` node, never a bare point cloud, and never anything that has been through a step that can REMOVE points: the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy topology, and `filterByAttribute` does so even when its predicate keeps every point. Category is not the rule — `projectToPlane` is a `filter` that preserves it, because it clones. The points are NEW: they carry `P`, the unit `tangent`, `curveU` (0..1 along their own path) and `rot`, plus the standard attributes at their defaults. Nothing written on the curve's own POINTS survives, which is what `write/orient-along-path` is for — but every PRIMITIVE attribute does: a post placed along a road carries that road's `roadWidth` and `roadKind`, because a sample inherits the primitive it was taken from. The output is still a path, so it can be resampled again. Fully deterministic.
 
-**Content hash:** `76f7ab52571ed822`
+**Content hash:** `7ac69e839d461b15`
 
 **Tags:** `place`, `curve`, `path`, `instancing`
 
@@ -471,7 +471,7 @@ Run it: `pcg run place/plantable`
 
 Places points at even arc-length steps along every path of the supplied `curve`, then rolls each one to a random angle AROUND the curve — spikes on a mace, bristles on a brush, brackets round a mast, leaves up a stem, buds on a branch. It is deliberately distinct from `place/along-curve`, which spaces points the same way but aims them ALONG the tangent with a CONSTANT world `up`: that fixes every asset in the same world orientation, and it flips them a half turn wherever the curve turns over. Here the up hint is per point — cos(a) * `curveNormal` + sin(a) * `curveBinormal`, the unit vector at a random angle a in the plane perpendicular to the tangent, taken from the rotation-minimizing frame `write/curve-frame` describes — so the assets fan out around the path and the fan follows the path however it bends. A constant up simply cannot express that, which is the whole reason to reach for this one. GEOMETRY: the asset's local +z runs along the curve and its local +y is the radial direction, so a prop that must stick OUT of the path wants its length on +y. The points are NEW: they carry `P`, the unit `tangent`, `curveU`, `curveNormal`, `curveBinormal` and `rot`, plus the standard attributes at their defaults, and nothing written on the curve's own POINTS survives — use `write/curve-frame` and an `orientAlongVector` of your own if it must. Every PRIMITIVE attribute does survive, since a sample inherits the polyline it was taken from. PRECONDITION: `curve` must carry polyline topology and must not have been through anything that can REMOVE points — the `filter/*` family, `partitionByAttribute` and `mergePoints` all destroy it, and `filterByAttribute` does so even when its predicate keeps every point. VARIATION: yes — the angle is drawn from the evaluation context, so two instances in one graph fan differently on their own; there is no seed knob, so an explicit re-roll means a different `spread`. A CLOSED path does not come back seamless: the frame is transported around the loop and returns rotated by that curve's residual angle, so the fan does not line up across the seam. The output is still a path and can be resampled again.
 
-**Content hash:** `412bf5157e3edf44`
+**Content hash:** `eb37e7014fb3b60b`
 
 **Tags:** `place`, `curve`, `path`, `instancing`
 
@@ -494,7 +494,7 @@ Run it: `pcg run place/radial-on-curve`
 
 Scatters points uniformly inside a disc in the XZ plane by scattering a square and rejecting the corners — the circular counterpart to scattering a box, and the right answer when scattering a square and hoping is wrong. COUNT: `count` is the number of CANDIDATES; the disc keeps about 78.5% of them, so asking for 1000 gives roughly 785 points. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly. Writes `P`; leaves the per-point `scale` attribute at 1.
 
-**Content hash:** `47763b3db8aefc2d`
+**Content hash:** `04436e88391a9fb8`
 
 **Tags:** `shape`, `scatter`, `radial`
 
@@ -545,7 +545,7 @@ Run it: `pcg run shape/path-loop`
 
 Builds an open PATH — polyline topology — that runs along X and wanders off the straight line by a noise field, then evens the spacing out again by arc length. The resampling is the content: displacing a polyline sideways stretches the segments where the wander is steep, so points placed along it afterwards would bunch on the straight parts, and the fix cannot be seen in a picture until something is spawned on it. Use it for a road, a river, a fence line or a trail. COUNT: `count` is both the number of corners the wander is built from and the number of points emitted, evenly spaced along the finished curve. VARIATION: none by default — noise carries its own seed inside its field spec, so two instances wander IDENTICALLY unless their `variant` differs. Writes `P`, the unit `tangent` and `curveU` (0..1 along the path) on points the resample creates, so the recipe writes no working column at all and the per-point `scale` is 1. TOPOLOGY IS FRAGILE: anything that can REMOVE points destroys it — the `filter/*` family, `partitionByAttribute` and `mergePoints` — so a path has to reach its consumer before them. Being a `filter` is not the rule: `projectToPlane` PRESERVES topology (it clones), while `filterByAttribute` drops it even when its predicate keeps every point.
 
-**Content hash:** `597f419da9624691`
+**Content hash:** `bad7066a523e99ff`
 
 **Tags:** `shape`, `curve`, `path`, `noise`
 
@@ -573,7 +573,7 @@ Run it: `pcg run shape/path-meander`
 
 Places points evenly around a circle in the XZ plane, optionally sweeping only part of the way round, then sizes, rotates and moves the result. COUNT: `count` is exactly the number of points emitted, whatever `sweep` and `includeEnd` are. The seam is handled by `includeEnd`, not by deleting a point: left false (the default) the samples divide the sweep and the last one stops one step short, which is what a full circle needs — the end of a full sweep IS its start. Set it true for an arc that must touch both ends. Emits a loose point CLOUD, not a path: for polyline topology use `shape/path-loop`, which is this primitive plus the closure. Fully deterministic: two instances with the same params are identical, which is what a ring should be. Writes `P`; leaves the per-point `scale` attribute at 1 so the ring's size does not become the asset's size.
 
-**Content hash:** `8bfa819950fabbb7`
+**Content hash:** `61c2a9c21755544f`
 
 **Tags:** `shape`, `radial`, `outline`
 
@@ -600,7 +600,7 @@ Run it: `pcg run shape/ring`
 
 Scatters points uniformly over the surface of a sphere, by rejecting a cube scatter down to the ball first and then pushing every survivor out to the surface. The rejection step is the content: normalizing a cube scatter directly piles points up toward the eight corner directions, and the result looks wrong without looking obviously wrong. COUNT: `count` is the number of CANDIDATES; the ball keeps about 52.4% of them. VARIATION: yes — two instances in one graph scatter differently, and `seed` re-rolls one explicitly. Writes `P`; leaves the per-point `scale` attribute at 1.
 
-**Content hash:** `3156102d0ccd5bf2`
+**Content hash:** `9bb9972d74d6b2da`
 
 **Tags:** `shape`, `scatter`, `radial`
 
@@ -626,7 +626,7 @@ Run it: `pcg run shape/sphere-points`
 
 Winds points outward from the origin over a given number of turns in the XZ plane — an Archimedean spiral, evenly spaced in angle — then sizes, rotates and moves the result. `size` is the OUTER radius: the innermost point sits at the centre and the outermost exactly on the rim. Emits a loose point CLOUD, not a path. Fully deterministic: two instances with the same params are identical. Writes `P`; leaves the per-point `scale` attribute at 1.
 
-**Content hash:** `77b5b04eb9649255`
+**Content hash:** `61244d9febfed57d`
 
 **Tags:** `shape`, `radial`, `outline`
 
@@ -744,7 +744,7 @@ Run it: `pcg run transform/snap-to-grid`
 
 Rescales any numeric point attribute to 0..1 over its OWN observed range, then maps it through a blue-green-yellow-red heat ramp into the standard `color` attribute (f32, tuple 4, alpha 1). Fitting to the observed range is what makes it work on an invented quantity — a neighbour count, a hand-built score — without knowing its scale in advance. Fully deterministic: two instances produce identical output. Writes `color`; reads the attribute named by `source`, which must exist on the point domain.
 
-**Content hash:** `fc1cc477358f2ace`
+**Content hash:** `c49261568d4e645b`
 
 **Tags:** `write`, `color`, `debug`
 
@@ -790,7 +790,7 @@ Run it: `pcg run write/curve-frame`
 
 Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, and only an argument position can hold a reference. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.
 
-**Content hash:** `66dc6b192f780d49`
+**Content hash:** `2e7fc0e994278fb0`
 
 **Tags:** `write`, `noise`, `density`
 
@@ -813,7 +813,7 @@ Run it: `pcg run write/density-from-noise`
 
 Writes the two standard terrain quantities onto points that already carry a surface normal: `height` (f32) is the world Y of each point, and `slope` (f32) is 1 - normal.y, so 0 is dead flat and 1 is a vertical wall. That scale is 1 - cos(angle) and so is NOT linear in degrees — it is compressed at the flat end, where 30 degrees is only 0.134 and 45 is 0.293, and half the scale (0.5) is already 60 degrees. Downstream filters can then test ground suitability without re-deriving either. PRECONDITION: the input must carry a `normal` point attribute (f32, tuple 3) — `surfaceSample` writes one, and `place/align-to-surface` transfers one from a mesh; without it the cook fails naming the missing attribute. Fully deterministic: two instances of this primitive produce identical output.
 
-**Content hash:** `06e0b90b4acc0e56`
+**Content hash:** `8ef9938364bb9298`
 
 **Tags:** `write`, `terrain`, `attributes`
 
@@ -831,7 +831,7 @@ Run it: `pcg run write/height-slope`
 
 Chooses an asset id per point from a list and emits the instance batches — the multi-asset spawn. The point of the primitive is the string coupling: one param names BOTH the attribute the choice is written to and the attribute the spawner reads it back from, so the two can never drift apart. The built-in selector spreads uniformly over FOUR entries, so pass exactly four assets and repeat one to weight it (['pine','pine','birch','bush'] is 50/25/25). VARIATION: yes — the choice comes from the evaluation context, so two instances differ automatically, and `seed` re-rolls one explicitly. Writes the species attribute; reads `P`, `rot` and `scale` through the spawner.
 
-**Content hash:** `2f5877b2a62d791d`
+**Content hash:** `0b3a9c8e048b9a12`
 
 **Tags:** `write`, `spawn`, `instancing`
 
@@ -901,7 +901,7 @@ Run it: `pcg run write/orient-along-path`
 
 Writes the standard `scale` attribute (f32, tuple 3) as ONE random size per point, drawn uniformly between min and max — both ends reachable — and written the same on all three axes. It REPLACES `scale` rather than multiplying it, so anything an earlier node wrote there is discarded and two of these in a chain do not compound. The uniformity is the content: a hand-written version reaches for a separate random per axis and gets an asset stretched differently in x, y and z, which reads as a modelling error rather than as variety. VARIATION: yes — the draw comes from the evaluation context, so two instances in one graph differ automatically, and `seed` re-rolls one of them explicitly. Writes `scale`; reads nothing.
 
-**Content hash:** `45343acef3bf3ab8`
+**Content hash:** `b52724f8e8c38fa0`
 
 **Tags:** `write`, `scatter`, `instancing`
 

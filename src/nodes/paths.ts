@@ -45,6 +45,7 @@ import {
   createPointCloud,
   setPolylineTopology,
   type Attribute,
+  type AttributeSet,
   type Geometry,
 } from "../data/index.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
@@ -272,6 +273,52 @@ export interface PathResampleParams {
   mode: string;
   count: number;
   spacing: number;
+  lengthAttr: string;
+  stepAttr: string;
+}
+
+/**
+ * The two opt-in reports {@link pathResample} writes, checked against one
+ * attribute set.
+ *
+ * BOTH LAND ON THE PRIMITIVE DOMAIN, and that is the whole design
+ * decision. A path has ONE arc length, and in 'count' mode it has ONE
+ * step — `count` samples divide that path's own length, so two paths of
+ * different lengths get different steps and neither number varies from
+ * sample to sample. A per-path value on the point domain would be the
+ * same number repeated `count` times, which is not a cheaper spelling of
+ * the fact but a weaker one: it says nothing about the path, it is free
+ * to disagree with itself, and it costs a column the length of the cloud.
+ * `connectPoints.lengthAttr` already writes a per-edge length on the
+ * primitive domain for exactly this reason, and a resampled path's length
+ * is the same kind of fact about the same kind of element. A field that
+ * needs it per sample promotes it (promoteAttribute, primitive to point),
+ * which is the route `pathSegments.radius` already documents.
+ *
+ * Run TWICE: once against the INPUT's primitive domain, where a refusal
+ * costs nothing and where every column that is about to be carried onto
+ * the output already lives, and once against the OUTPUT's, which is the
+ * domain actually written and the only one guaranteed to hold `primtype`
+ * (an input with no `primtype` at all still has its polylines read).
+ */
+function requireResampleReports(attrs: AttributeSet, params: PathResampleParams): void {
+  const slots = [
+    ["lengthAttr", params.lengthAttr, "pathLength"],
+    ["stepAttr", params.stepAttr, "sampleStep"],
+  ] as const;
+  for (const [param, name, suggestion] of slots) {
+    if (name === "") continue;
+    requireReportSlot({
+      attrs,
+      nodeType: "pathResample",
+      param,
+      name,
+      type: "f32",
+      tupleSize: 1,
+      domain: "primitive",
+      suggestion,
+    });
+  }
 }
 
 /**
@@ -287,7 +334,7 @@ export const pathResample = standardNode<PathResampleParams>({
   type: "pathResample",
   category: "sampler",
   description:
-    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
+    "Resamples every polyline primitive at even arc-length steps and emits a PATH, not a cloud: the new points carry polyline topology, and a path that was closed comes back closed. Unlike splineSample, each polyline is resampled on its own arc length rather than as one concatenated curve, so a graph with several paths keeps them separate. mode 'count' places exactly `count` samples per path (endpoints included on an open path; a closed path divides its length without duplicating the start). mode 'spacing' steps every `spacing` world units, keeping that step exact rather than stretching it to fit: an open path always ends on its true endpoint, so it never comes back shorter than it went in, and a closed path closes with a REMAINDER segment at the seam that is shorter than `spacing` (use 'count' to divide a loop evenly — see the `spacing` param). Output points are new: they carry the standard point-cloud attributes plus the unit segment `tangent` (f32 tuple 3) and `curveU` (f32, normalized position within that path), and the input's point attributes are NOT carried across. Its PRIMITIVE attributes ARE, in both directions: every attribute of the polyline a sample came from lands on that sample, and each output polyline keeps the attributes of the input polyline it replaces (output primitive i resamples input polyline i and nothing else), so a road resampled here comes back still a road rather than a nameless polyline. `primtype` is the one exception, being a type tag rather than a value, and there is no opt-out: a carried name that collides with one this node writes (P, tangent, curveU, seed, ...) is refused with an error naming the attribute and the fix. TWO OPT-IN REPORTS publish what the resampling already computed, so anything sized in units of the sampling can be stated as a multiple of it instead of retyped as a literal that the count knob then invalidates: `lengthAttr` writes each path's TRUE ARC LENGTH and `stepAttr` the distance between its samples, both on the PRIMITIVE domain because both are facts about a PATH. Both are empty by default and the output is byte-identical to a cook without them. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a resampled path that passes through one stops being a path. Category is not the rule: projectToPlane is categorised `filter` but preserves topology, and filterByAttribute drops it even when its predicate keeps every point.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -312,6 +359,18 @@ export const pathResample = standardNode<PathResampleParams>({
       description:
         `Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than \`spacing\` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under \`spacing\`. To divide a loop EVENLY, switch mode to 'count': it splits the length into \`count\` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under ${MAX_RESAMPLE_POINTS} samples. Ignored in 'count' mode.`,
     },
+    lengthAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 PRIMITIVE attribute receiving each path's TRUE ARC LENGTH in world units — the sum of its input polyline's segment lengths. Empty (the default) writes none. This is the number the graph cannot otherwise know: the straight-line span between a curve's endpoints is SHORTER than the curve, and no field can walk a polyline's vertices to find the difference, so a size derived from the length is authored today as a literal measured by hand elsewhere. It lands on the PRIMITIVE domain because a length is a fact about a PATH, one per path, exactly like `connectPoints.lengthAttr`; promote it (promoteAttribute, primitive to point) for a field to read per sample, or filter on it with filterPrimitivesByAttribute. The length reported is the INPUT polyline's, not the polyline through the new samples: a coarse resample of a curve cuts corners and comes back shorter, and reporting that would report the approximation rather than the curve — it is also what makes `stepAttr` times the divisions equal it exactly. The shape is this node's to pick (f32, tuple 1), so a name arriving on the output's primitive domain under a DIFFERENT shape is REFUSED rather than deleted and re-added; a same-shape column is RESET, which is what keeps resampling a resampled path under the same name ordinary.",
+    },
+    stepAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
+    },
   },
   execute({ inputs, params, seed, checkCancelled }) {
     // Params before geometry: a bad param reported as "no polyline
@@ -324,13 +383,30 @@ export const pathResample = standardNode<PathResampleParams>({
     if (params.mode === "spacing" && !(params.spacing > 0)) {
       throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${params.spacing}`);
     }
+    // Both reports are f32 tuple 1, so a shared name passes the shape
+    // check and the second write silently replaces the first — the same
+    // reason writeCurveFrame refuses two of its three names being equal.
+    if (params.lengthAttr !== "" && params.lengthAttr === params.stepAttr) {
+      throw new Error(
+        `pathResample: params "lengthAttr" and "stepAttr" are both "${params.lengthAttr}"; a length and a step are two values and need two attributes, or the step would overwrite the length`,
+      );
+    }
     const geo = requireGeometry(inputs, "in", "pathResample");
+    // Against the INPUT first, where a refusal costs nothing: its
+    // primitive columns are the ones carried onto the output, so this
+    // catches every collision except a `primtype` the input lacks.
+    requireResampleReports(geo.attrs.primitive, params);
     const tables = polylineArcTables(geo, "pathResample");
     // Only needed to name a spacing that would fit the budget below.
     const totalLength = tables.reduce((sum, table) => sum + table.length, 0);
 
     // Arc-length positions per path, validated before anything is built.
     const perPath: number[][] = [];
+    // The step each path was sampled at, taken from the same expression
+    // that placed the samples rather than measured back off them — see
+    // `stepAttr`. Always computed: it is one division per path, and a
+    // number the node needs anyway to have placed anything.
+    const steps: number[] = [];
     let total = 0;
     for (const table of tables) {
       const L = table.length;
@@ -352,6 +428,10 @@ export const pathResample = standardNode<PathResampleParams>({
         // Closed paths divide the loop; open paths land on both ends.
         const denom = table.closed ? n : n - 1;
         for (let i = 0; i < n; i++) positions.push((i * L) / denom);
+        // The same division, so the reported step IS positions[1] to the
+        // bit: `1 * L` is `L`. Recovering it as a difference of two
+        // positions instead would report a number the sampling never used.
+        steps.push(L / denom);
       } else {
         const sp = params.spacing;
         // The epsilon is load-bearing on a closed path: without it a step
@@ -379,6 +459,11 @@ export const pathResample = standardNode<PathResampleParams>({
             `pathResample: spacing ${sp} leaves ${positions.length} sample(s) on the ${kind} path at primitive ${table.prim} (length ${L}), fewer than the ${least} a path needs; use spacing <= ${L / least} or switch mode to 'count'`,
           );
         }
+        // The step this mode takes is the one the author typed, on every
+        // path. The short LAST step — the seam remainder on a closed path,
+        // the run to the true endpoint on an open one — is deliberately
+        // not what is reported; see `stepAttr`.
+        steps.push(sp);
       }
       perPath.push(positions);
       total += positions.length;
@@ -462,6 +547,26 @@ export const pathResample = standardNode<PathResampleParams>({
       "pathResample",
       "primitive",
     );
+
+    // The reports go LAST, after the carry, and the order is load-bearing:
+    // resampling a resampled path under the SAME lengthAttr must RESET the
+    // previous run's column, which is what `replace` does to a column of
+    // the same shape. Written before the carry it would instead collide
+    // with itself and be refused, and re-running a node over its own
+    // output has to stay ordinary. The general shape check runs again here
+    // because this is the domain actually written — the early one saw the
+    // input's.
+    requireResampleReports(out.attrs.primitive, params);
+    if (params.lengthAttr !== "") {
+      const data = out.attrs.primitive.replace(params.lengthAttr, "f32", 1, 0).data;
+      // Output primitive `ti` resamples `tables[ti]` and nothing else, the
+      // same 1:1 the primitive carry above relies on.
+      for (let ti = 0; ti < tables.length; ti++) data[ti] = tables[ti].length;
+    }
+    if (params.stepAttr !== "") {
+      const data = out.attrs.primitive.replace(params.stepAttr, "f32", 1, 0).data;
+      for (let ti = 0; ti < tables.length; ti++) data[ti] = steps[ti];
+    }
     return { out: [makeGeometryItem(out)] };
   },
 });
@@ -471,6 +576,7 @@ export interface PathSegmentsParams {
   axis: string;
   radius: FieldParam;
   extend: number;
+  segmentIndexAttr: string;
 }
 
 /** One oriented instance point per polyline segment. */
@@ -478,7 +584,7 @@ export const pathSegments = standardNode<PathSegmentsParams>({
   type: "pathSegments",
   category: "sampler",
   description:
-    "Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is the DISCRETE way to draw a curve: one asset per segment, which is what a chain of separate links, a row of sleepers or a string of beads is. For a continuous skin use sweepProfile instead — it emits a real triangle mesh, shares rings between segments, and needs no `extend` because it leaves no gap to fill. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.",
+    "Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is the DISCRETE way to draw a curve: one asset per segment, which is what a chain of separate links, a row of sleepers or a string of beads is. For a continuous skin use sweepProfile instead — it emits a real triangle mesh, shares rings between segments, and needs no `extend` because it leaves no gap to fill. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. An opt-in `segmentIndexAttr` adds the segment's 0-based index WITHIN ITS OWN PATH, which is otherwise unrecoverable here — a point attribute written upstream does not survive this node, and `curveU` is a fraction that needs the count back to become an index. It is empty by default and the output is byte-identical to a cook without it. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -503,6 +609,12 @@ export const pathSegments = standardNode<PathSegmentsParams>({
       min: 0,
       description:
         "World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely.",
+    },
+    segmentIndexAttr: {
+      type: "string",
+      default: "",
+      description:
+        "Name of an i32 POINT attribute receiving each segment's 0-BASED INDEX WITHIN ITS OWN PATH, restarting at 0 for every polyline. Empty (the default) writes none. It is the per-path coordinate this node otherwise has no way to state: `curveU` is a fraction, and turning one back into an index needs the segment count again, while an index written upstream with setAttribute does not survive — this node emits a NEW point per segment and carries no point attributes. Without it, 'every other link of THIS chain' has to be spelled on the GLOBAL point index, which agrees with the per-path one only while every path has the same, EVEN, number of segments, and nothing reports when that stops being true. It counts the segments this node EMITTED, so a skipped zero-length segment leaves NO GAP and an alternation over it (index - 2 * floor(index / 2)) keeps its parity through a degenerate path; an index into the input's segment list would not, and would also address elements that are not in this output. The shape is this node's to pick (i32, tuple 1), so a name already among the columns written here — P, rot, scale, density, boundsMin, boundsMax, color, seed, tangent, curveU — under a DIFFERENT shape is REFUSED rather than deleted and re-added, and a carried PRIMITIVE attribute of the same name is refused too, with the fix.",
     },
   },
   // `radius` may resolve on the GPU. It is evaluated on the INPUT
@@ -553,6 +665,27 @@ export const pathSegments = standardNode<PathSegmentsParams>({
     const seeds = out.attrs.point.require("seed").data;
     const tangent = out.attrs.point.add("tangent", "f32", 3, [0, 0, 0]).data;
     const curveU = out.attrs.point.add("curveU", "f32", 1, 0).data;
+    // The opt-in per-path index, checked the moment the columns it must
+    // not destroy exist. There is no earlier point that knows them: this
+    // node builds a FRESH cloud rather than cloning, so the domain the
+    // slot lands on is one it has just declared itself, and the input's
+    // point attributes — which never reach the output — are the wrong
+    // thing to check against. Before the fill loop and before the
+    // primitive carry, so it still costs no work that matters.
+    let segmentIndex: Int32Array | undefined;
+    if (params.segmentIndexAttr !== "") {
+      requireReportSlot({
+        attrs: out.attrs.point,
+        nodeType: "pathSegments",
+        param: "segmentIndexAttr",
+        name: params.segmentIndexAttr,
+        type: "i32",
+        tupleSize: 1,
+        domain: "point",
+        suggestion: "segmentIndex",
+      });
+      segmentIndex = out.attrs.point.replace(params.segmentIndexAttr, "i32", 1, 0).data;
+    }
     // Which input polyline each segment came from. There is no output
     // primitive domain to carry onto — the output is a cloud.
     const samplePrim = new Uint32Array(total);
@@ -565,6 +698,11 @@ export const pathSegments = standardNode<PathSegmentsParams>({
     for (const table of tables) {
       const L = table.length;
       const pts = table.points;
+      // Where this path's run of output points begins. `w` only advances
+      // for a segment that was actually emitted, so `w - pathStart` is a
+      // DENSE 0-based index within the path — see `segmentIndexAttr` for
+      // why a skipped degenerate segment must not leave a hole in it.
+      const pathStart = w;
       for (let k = 0; k < table.segLen.length; k++) {
         if ((w & 1023) === 0) checkCancelled();
         // The geometric length of the delta this node also takes the
@@ -607,6 +745,7 @@ export const pathSegments = standardNode<PathSegmentsParams>({
         scale[w * 3 + lengthComp] = len + 2 * extend;
         seeds[w] = hashCombine(seed, w);
         samplePrim[w] = table.prim;
+        if (segmentIndex) segmentIndex[w] = w - pathStart;
         w++;
       }
     }

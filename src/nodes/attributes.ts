@@ -10,6 +10,7 @@ import {
   transferUv,
   type AttrType,
   type Domain,
+  type Geometry,
   type PromoteMode,
   type TransferAttrDomain,
   type TransferRaycastOptions,
@@ -38,9 +39,190 @@ export interface SetAttributeParams {
   type: string;
   tupleSize: number;
   value: FieldParam;
+  select: FieldParam;
   values: readonly string[];
+  weights: readonly number[];
   stringValue: string;
   seed: number;
+}
+
+/**
+ * Is this a legal weight — whole, non-negative, finite?
+ *
+ * `weights` is a `numberList`, which is a param type this feature caused:
+ * the vocabulary had no variable-length numeric list, and the alternative
+ * was spelling numbers as decimal-digit strings (`["4","2","1","2"]`),
+ * which asks every reader of the machine-readable schema to learn a
+ * convention the type can simply state. The list type validates that the
+ * entries are finite numbers; this validates what a WEIGHT additionally is.
+ */
+function isWeight(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * The weighted table's cumulative bucket ends, or the refusal that says why
+ * the table is not one.
+ *
+ * DETERMINISM. Every number here is a whole count below `2^53`, so every
+ * addition is exact in a double: there is no rounding to accumulate and
+ * therefore nothing that could land differently on another engine or in
+ * another cook order. That is the reason weights are whole counts and not
+ * arbitrary reals — a cumulative sum of `0.1`s is a different number
+ * depending on how many came before it, and a selection table built out of
+ * one would be a table whose boundaries depend on rounding. Only the RATIO
+ * of the weights means anything, so nothing is expressible in reals that is
+ * not expressible in integers: `[0.7, 0.3]` is `[7, 3]`.
+ *
+ * What the returned array is: `ends[v]` is the count of table slots at or
+ * before entry `v`, so entry `v` owns the half-open slot range
+ * `[ends[v-1], ends[v])` and a weight of 0 owns nothing at all. This is
+ * literally the repeated table the author no longer has to write — weight
+ * `k` is `k` rows — which is why an integer-weighted table and the repeated
+ * one it replaces select the same entry for the same slot.
+ */
+function weightedBucketEnds(
+  values: readonly string[],
+  weights: readonly number[],
+): Float64Array {
+  if (weights.length !== values.length) {
+    throw new Error(
+      `setAttribute: param "weights" has ${weights.length} ${weights.length === 1 ? "entry" : "entries"} but "values" has ${values.length}; a weighted table carries one weight per value, in the same order (values ["rod","bar"] with weights [4, 1] draws "rod" four times as often as "bar")`,
+    );
+  }
+  const ends = new Float64Array(values.length);
+  let total = 0;
+  for (let v = 0; v < weights.length; v++) {
+    const weight = weights[v];
+    if (!isWeight(weight)) {
+      throw new Error(
+        `setAttribute: param "weights" entry ${v} is ${JSON.stringify(weight)}, which is not a whole count; a weight is a non-negative whole number, because it stands for the repeated table rows it replaces. Only the ratio matters, so a fraction is spelled whole: [0.7, 0.3] is [7, 3], and a share of nothing is 0 (that entry is never chosen)`,
+      );
+    }
+    total += weight;
+    // Checked per entry rather than once at the end, so the message can
+    // name the entry that pushed the sum out of exact range.
+    if (!Number.isSafeInteger(total)) {
+      throw new Error(
+        `setAttribute: param "weights" sums past ${Number.MAX_SAFE_INTEGER} at entry ${v}, and above that a whole count is no longer exact in a double; the selection walks these counts exactly, so scale the whole list down (only the ratio between weights means anything)`,
+      );
+    }
+    ends[v] = total;
+  }
+  if (total === 0) {
+    throw new Error(
+      `setAttribute: param "weights" sums to 0, so every entry of "values" is switched off and there is nothing left to select; give at least one entry a positive weight (a single 0 is how ONE entry is switched off without leaving the table)`,
+    );
+  }
+  return ends;
+}
+
+/**
+ * The FRACTION selector: `select` in [0, 1) spread across `values` in
+ * proportion to `weights`, written into the string attribute.
+ *
+ * THE CONVENTION, and why it is a second param rather than a second
+ * meaning for `value`. A weighted table wants a selector that knows nothing
+ * about the table's size — `randomField` already lands in [0, 1) — while
+ * the index selector wants one scaled to `values.length`. The same number
+ * means different things under the two, and a distribution that is wrong
+ * because the convention moved under it reports nothing: it just draws a
+ * different mix. So the convention is carried by the SLOT the expression
+ * sits in, the two slots cannot both be set, and neither can be silently
+ * reinterpreted by setting a third param.
+ *
+ * TOTALITY is preserved exactly as the index selector defines it: every
+ * double lands on an entry and no element ever throws. NaN and -Infinity
+ * take the first entry, +Infinity the last — with the one refinement a
+ * weighted table forces, that "first" and "last" mean the first and last
+ * entry with a NONZERO weight, because "this entry is never drawn" has to
+ * hold at the ends of the table too or a zero weight would be a lie.
+ *
+ * WHY THE FRACTIONAL PART IS TAKEN rather than clamping into [0, 1). This
+ * is the safety net under the convention split. If an expression scaled for
+ * the index selector does reach `select` (an author moves the expression
+ * and forgets to unscale it), clamping would pin nearly every element on
+ * the last entry — a silently wrong mix. Discarding the integer part
+ * instead maps `k * u` back onto a uniform [0, 1) for whole `k`, so the
+ * PROPORTIONS survive the mistake and only the per-element assignment
+ * changes. The half-open reading also matches every other [0, 1)
+ * parameterization in the library (`curveU` on a closed loop).
+ */
+function writeWeightedSelection(
+  geo: Geometry,
+  domain: Domain,
+  params: SetAttributeParams,
+  ts: number,
+  seed: number,
+): void {
+  const values = params.values;
+  if (params.value !== 0) {
+    throw new Error(
+      `setAttribute: params "value" and "select" are both set, and they select the same table by two different conventions — "value" is an INDEX into "values" (floor, then clamp into [0, ${values.length - 1}]) and "select" is a FRACTION in [0, 1) spread across it. Keep one: leave "value" at its default 0 to select by fraction (with "weights" if the entries are not equally likely), or clear "select" to select by index`,
+    );
+  }
+  // Equal shares are the same table with every weight 1, which keeps ONE
+  // selection rule rather than two: `slot = floor(f * n)` over ends
+  // 1..n is exactly "cut [0, 1) into n equal pieces".
+  const ends =
+    params.weights.length > 0
+      ? weightedBucketEnds(values, params.weights)
+      : Float64Array.from(values, (_, v) => v + 1);
+  const total = ends[values.length - 1];
+  // The ends of the table, skipping switched-off entries. Entry v has
+  // weight `ends[v] - ends[v-1]` (and `ends[0]` for v = 0), so a zero
+  // weight is a repeated end.
+  let firstPick = 0;
+  while (ends[firstPick] === 0) firstPick++;
+  let lastPick = values.length - 1;
+  while (lastPick > 0 && ends[lastPick] === ends[lastPick - 1]) lastPick--;
+  // Non-finite selectors are a defined selection here for the same reason
+  // they are in the index mode — see the comment at the index loop.
+  const col = resolveOnAllowingNonFinite(geo, domain, params.select, seed);
+  if (col.tupleSize !== 1 && col.tupleSize !== ts) {
+    throw new Error(
+      `setAttribute: select evaluates to tuple size ${col.tupleSize}, which is neither 1 (broadcast) nor tupleSize ${ts}`,
+    );
+  }
+  // No aliasing snapshot, for the reason the index loop states: the
+  // selector column can only view NUMERIC storage, and `replace` never
+  // resets a numeric buffer while handing back a view of it.
+  const set = geo.attrs[domain];
+  const attr = set.replace(params.name, "string", ts);
+  const tableIdx = new Uint32Array(values.length);
+  for (let v = 0; v < values.length; v++) tableIdx[v] = attr.internString(values[v]);
+  const data = attr.data;
+  const n = set.count;
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < ts; k++) {
+      const s = col.tupleSize === 1 ? col.data[i] : col.data[i * ts + k];
+      let pick: number;
+      // `s > -Infinity && s < Infinity` is the finite test that also
+      // answers false for NaN without a second comparison.
+      if (s > Number.NEGATIVE_INFINITY && s < Number.POSITIVE_INFINITY) {
+        let f = s - Math.floor(s);
+        // A fractional part can round UP to exactly 1 for a selector just
+        // below zero (-5e-324 - -1 is 1 in a double). Congruent to 0, and
+        // the guard is what keeps `f` inside [0, 1) as claimed.
+        if (f >= 1) f = 0;
+        let slot = Math.floor(f * total);
+        // f < 1 and `total` is exact, so the product is below `total`
+        // mathematically; one rounding step can still land on it.
+        if (slot >= total) slot = total - 1;
+        // Walk the cumulative ends. Exact integer comparisons, in table
+        // order, so the entry a slot belongs to cannot depend on rounding
+        // or on the order elements are visited. A linear walk rather than
+        // a binary search or a slot->entry lookup: `values` is authoring
+        // data with a handful of entries, and one selection rule that is
+        // obviously exact beats two that have to be proved equal.
+        pick = firstPick;
+        while (ends[pick] <= slot) pick++;
+      } else {
+        pick = s === Number.POSITIVE_INFINITY ? lastPick : firstPick;
+      }
+      data[i * ts + k] = tableIdx[pick];
+    }
+  }
 }
 
 /** Create or overwrite an attribute from a field. */
@@ -48,7 +230,7 @@ export const setAttribute = standardNode<SetAttributeParams>({
   type: "setAttribute",
   category: "attribute",
   description:
-    "Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in two modes: with a non-empty `values` list, `value` acts as a per-element numeric selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — choosing one entry per element (e.g. for per-point asset ids consumed by spawnInstances assetAttr); with `values` empty, the constant `stringValue` is written to every element.",
+    "Creates or overwrites an attribute on the chosen domain. Numeric types fill from `value`, which is field-capable and resolves per element of that domain (so it can read position, other attributes, or noise); the evaluated field must be scalar (broadcast across the tuple) or match tupleSize exactly, and stores with the target type's conversion: i32/u32 truncate, bool stores nonzero as 1. Type 'string' writes through the geometry's string table in three modes, and the mode is decided by which params are set. With `values` empty, the constant `stringValue` is written to every element. With a non-empty `values` list there are two SELECTORS, and exactly one of them may be set: `value` is the INDEX selector — floor(selector), then clamped into [0, values.length - 1]; NaN selects 0 — while `select` is the FRACTION selector, a number in [0, 1) spread across the table, weighted by `weights` when that is set. The two conventions live in two params on purpose: a fraction read as an index (or the reverse) is a wrong distribution with nothing to report it, so the convention is named by the slot the expression sits in and setting both is refused. `select` with `weights` is what says 'these four kinds, in a 4:2:1:2 mix' in one place — the alternative is repeating table entries and scaling the selector by the table's own length. Either way one entry lands per element (e.g. per-point asset ids consumed by spawnInstances assetAttr).",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -68,7 +250,7 @@ export const setAttribute = standardNode<SetAttributeParams>({
       default: "f32",
       enum: ["f32", "i32", "u32", "bool", "string"],
       description:
-        "Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1); string interns into the geometry's string table and writes via `values` + selector or `stringValue` (see those params).",
+        "Storage type. f32 keeps fractions; i32/u32 truncate toward zero; bool stores 0/1 (nonzero field values become 1); string interns into the geometry's string table and writes via `values` plus one selector (`value` by index, or `select` by fraction with optional `weights`), or via `stringValue` (see those params).",
     },
     tupleSize: {
       type: "i32",
@@ -82,13 +264,26 @@ export const setAttribute = standardNode<SetAttributeParams>({
       default: 0,
       acceptsField: true,
       description:
-        "Numeric value written to every element — or, for type 'string' with a non-empty `values` list, the per-element selector into it: floor(selector) clamped into [0, values.length - 1], NaN selects 0 (a total function; out-of-range never errors per element). Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. Ignored for type 'string' with `values` empty.",
+        "Numeric value written to every element — or, for type 'string' with a non-empty `values` list, the per-element INDEX selector into it: floor(selector) clamped into [0, values.length - 1], NaN selects 0 (a total function; out-of-range never errors per element). Field-capable: evaluated on the target domain; scalar results broadcast across the tuple, otherwise the tuple size must match tupleSize. Ignored for type 'string' with `values` empty, and refused alongside `select`, which selects the same table by fraction instead.",
+    },
+    select: {
+      type: "f32",
+      default: 0,
+      acceptsField: true,
+      description:
+        "The other selector for type 'string' with a non-empty `values` list: a FRACTION in [0, 1) spread across the table, weighted by `weights` when that is set and in equal shares otherwise. This is what randomField produces natively, so `select` = randomField('part') needs no scaling by the table's length — which is the whole reason it exists beside `value`, whose index convention makes the author restate values.length in the expression. Total, like `value`: the fractional part is what is read (an integer part is discarded, so a selector accidentally left scaled still draws the same PROPORTIONS), NaN and -Infinity land on the first entry with a nonzero weight and +Infinity on the last, and no element ever throws. Field-capable, evaluated on the target domain; a scalar result broadcasts across the tuple. 0 (the default) means UNSET — a selector that is constantly 0 is a constant string, which is what `stringValue` is for. Setting it with a numeric type, with an empty `values`, or alongside a nonzero `value` is an error.",
     },
     values: {
       type: "stringList",
       default: [],
       description:
-        "String values to choose among when type is 'string': `value` selects per element (floor, then clamp into range). Leave empty to write the constant `stringValue` instead. Setting this with a numeric type is an error. Note: when the attribute feeds spawnInstances via assetAttr, an empty-string entry never names an asset — the spawner falls back to its assetId param for those elements.",
+        "String values to choose among when type is 'string': `value` selects per element by index (floor, then clamp into range), or `select` by fraction (optionally weighted by `weights`). Leave empty to write the constant `stringValue` instead. Setting this with a numeric type is an error. Note: when the attribute feeds spawnInstances via assetAttr, an empty-string entry never names an asset — the spawner falls back to its assetId param for those elements.",
+    },
+    weights: {
+      type: "numberList",
+      default: [],
+      description:
+        "How often each entry of `values` is drawn, one weight per value in the same order: values ['rod','bar','panel','clamp'] with weights [4, 2, 1, 2] is a 4:2:1:2 mix. Each weight is a non-negative whole number (it stands for the repeated table rows it replaces, and only the ratio matters, so [0.7, 0.3] is spelled [7, 3]); 0 switches one entry off without taking it out of the table, and an all-zero list is refused because nothing would be left to draw. Empty (the default) means equal shares. Requires the `select` selector — with `value`'s index convention a weight would silently change what the same number means, so the combination is refused rather than reinterpreted. Setting it with a numeric type or with an empty `values` is an error.",
     },
     stringValue: {
       type: "string",
@@ -100,7 +295,7 @@ export const setAttribute = standardNode<SetAttributeParams>({
       type: "u32",
       default: 0,
       description:
-        "Extra seed for evaluating `value`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but a noise only if it ASKS: a noise field carries its own seed inside its spec, so `valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise` and `fbm` are unaffected here unless their `opts.position` reads the seed through the `nodeSeed` field. Otherwise they are varied through their own `opts.seed`, or by moving the positions they sample some other way. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level — and note that a `nodeSeed`-folded noise then samples a different region in every cell, so it must not feed anything that has to agree across a seam.",
+        "Extra seed for evaluating whichever selector is set, `value` or `select`: 0 (the default) uses the node's derived seed unchanged, so pre-existing graphs keep bit-identical output; any nonzero value folds in as hashCombine(nodeSeed, seed). This re-rolls randomness drawn from the EVALUATION CONTEXT — randomField, and the per-point seed attribute — but a noise only if it ASKS: a noise field carries its own seed inside its spec, so `valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise` and `fbm` are unaffected here unless their `opts.position` reads the seed through the `nodeSeed` field. Otherwise they are varied through their own `opts.seed`, or by moving the positions they sample some other way. Bind a per-cell value (such as ctx.seed) here for per-cell variation in a World level — and note that a `nodeSeed`-folded noise then samples a different region in every cell, so it must not feed anything that has to agree across a seam.",
     },
   },
   // Numeric mode resolves `value` on the GPU when a cook carries a
@@ -114,8 +309,17 @@ export const setAttribute = standardNode<SetAttributeParams>({
   // exact CPU error messages) is unchanged.
   resident: {
     kind: "setAttribute",
+    // `weights`/`select` join `values`/`stringValue` here for the reason
+    // the comment above gives: they are string-mode params whose misuse on
+    // a numeric type is a REFUSAL, and a fused run that skipped the refusal
+    // would cook a graph the per-node path rejects.
     eligible: (p) =>
-      p.type !== "string" && p.domain === "point" && p.values.length === 0 && p.stringValue === "",
+      p.type !== "string" &&
+      p.domain === "point" &&
+      p.values.length === 0 &&
+      p.stringValue === "" &&
+      p.weights.length === 0 &&
+      p.select === 0,
   },
   async execute({ inputs, params, seed: nodeSeed, gpu }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "setAttribute"));
@@ -127,12 +331,47 @@ export const setAttribute = standardNode<SetAttributeParams>({
     // the sampler nodes fold their seed params.
     const seed = params.seed === 0 ? nodeSeed : hashCombine(nodeSeed, params.seed);
     const set = geo.attrs[domain];
+    // `select` is UNSET at its default, and the default is the number 0 —
+    // the same sentinel `stringValue: ""` and `values: []` already use. A
+    // Field, an array, or any nonzero number is a selector; a constant 0
+    // selector would name one entry for every element, which is
+    // `stringValue`'s job and not worth a second spelling.
+    const selecting = params.select !== 0;
     if (type === "string") {
       if (params.values.length === 0) {
-        // Constant-string mode: intern once, fill every element with it.
+        // Constant-string mode. Both table params are refused here rather
+        // than ignored: silently dropping a weighting is how a graph ships
+        // with a mix nobody notices is not being applied.
+        if (params.weights.length > 0) {
+          throw new Error(
+            `setAttribute: param "weights" is set but "values" is empty, so there is no table to weight — an empty "values" writes the constant "stringValue" to every element. List the values the weights apply to, or clear weights`,
+          );
+        }
+        if (selecting) {
+          throw new Error(
+            `setAttribute: param "select" is set but "values" is empty, so there is nothing to select among — an empty "values" writes the constant "stringValue" to every element. List the values to choose from, or clear select`,
+          );
+        }
+        // Intern once, fill every element with it.
         const attr = set.replace(params.name, "string", ts);
         attr.fill(params.stringValue, 0, set.count);
         return { out: [makeGeometryItem(geo)] };
+      }
+      if (selecting) {
+        writeWeightedSelection(geo, domain, params, ts, seed);
+        return { out: [makeGeometryItem(geo)] };
+      }
+      // A weighting under the INDEX selector is refused rather than
+      // applied. This is the whole reason the two selectors are two params:
+      // if `weights` changed what `value` means, then adding a weighting to
+      // a working graph would silently reinterpret the number already in
+      // `value` — the exact failure this feature exists to remove, moved
+      // one param over. The refusal is static (it reads no data), so it
+      // fires on the first cook and never on the thousandth.
+      if (params.weights.length > 0) {
+        throw new Error(
+          `setAttribute: param "weights" is set but the table is still selected by "value", which is an INDEX into "values" (floor, then clamp into [0, ${params.values.length - 1}]) — a weight cannot change what that number means without changing every existing reading of it. A weighted table is selected by "select", a FRACTION in [0, 1): move the expression there and drop any scaling by the table's length, since randomField already lands in [0, 1) (mul(randomField(...), ${params.values.length}) becomes randomField(...))`,
+        );
       }
       // Value-list mode: `value` selects per element among `values`.
       // Deliberately NOT guarded against non-finite values (the one
@@ -179,6 +418,16 @@ export const setAttribute = standardNode<SetAttributeParams>({
     if (params.values.length > 0) {
       throw new Error(
         `setAttribute: param "values" (${params.values.length} strings) is only used when type is "string", got type "${type}"; set type to "string" or clear values`,
+      );
+    }
+    if (params.weights.length > 0) {
+      throw new Error(
+        `setAttribute: param "weights" (${params.weights.length} entries) is only used when type is "string", got type "${type}"; it weights the entries of "values", which a numeric type has none of — set type to "string" or clear weights`,
+      );
+    }
+    if (selecting) {
+      throw new Error(
+        `setAttribute: param "select" is only used when type is "string", got type "${type}"; it selects among the entries of "values", and a numeric type fills from "value" instead — set type to "string" or clear select`,
       );
     }
     if (params.stringValue !== "") {
