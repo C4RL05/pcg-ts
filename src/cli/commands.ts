@@ -360,7 +360,16 @@ const validateCommand: Command = {
     const { graph, path } = loadGraph(io, args.positional[0]);
     const description = graph.describe();
     const meta = graph.meta;
-    const nodes = description.nodes.map((n) => ({ id: n.id, type: n.defType ?? "(unregistered)" }));
+    // The DERIVED seed rides along, because it is the number that decides
+    // what a node draws and the only way to see it was to cook and infer.
+    // It is `hash(graphSeed, nodeId)`, so it moves when a node is RENAMED
+    // — the rename hazard `nodeSeed` carries, made visible where an author
+    // can check it rather than discovered as a graph that quietly changed.
+    const nodes = description.nodes.map((n) => ({
+      id: n.id,
+      type: n.defType ?? "(unregistered)",
+      seed: n.seed,
+    }));
     const lines = [
       `ok  ${path}`,
       `seed ${graph.seed}  ${plural(nodes.length, "node")}  ${plural(
@@ -375,7 +384,7 @@ const validateCommand: Command = {
       if (meta.tags !== undefined) lines.push(`tags:        ${meta.tags.join(", ")}`);
     }
     lines.push("", "nodes:");
-    lines.push(...table(nodes.map((n) => [n.id, n.type])));
+    lines.push(...table(nodes.map((n) => [n.id, n.type, String(n.seed)])));
     lines.push("", "outputs:");
     lines.push(
       ...(description.outputs.length === 0

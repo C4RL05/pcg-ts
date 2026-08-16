@@ -41,7 +41,17 @@ Ten things the rig wanted to say and could not, found by taking
 `graphs/examples-rig.json` through the four features that shipped
 because of its *previous* gap list. That loop is what the rig is for, so
 these are recorded as found rather than triaged into other sections.
-Nothing here is scheduled.
+
+**Worked through 2026-08-16, and the loop closed on all ten.** Seven
+shipped (1, 2's string half, 3, 4's calibration half, 5, 6, 7, 8, 10),
+one was measured and deliberately deferred with the numbers that killed
+it (9), and two entries turned out to be WRONG about their own case in
+ways worth more than the features would have been: gap 2's `curveU`
+dissolved when gap 1 shipped, and gap 7 named three sites when its real
+case was eighteen. Two entries also record something the asking could not
+have known — that a fractional group key is unsafe under the parity
+promise (2), and that no seed derivation can be the identity at an
+unnamed seed (4).
 
 Adopted in that pass: inline `param` values (three ways — the
 `spineWander` wrapper subgraph is gone, six noises gained an independent
@@ -89,15 +99,47 @@ gap 8, which is the reason.
    now has `copyToPoints` write that id itself, so the rig wants the
    fractional key nowhere. What shipped therefore has no corpus consumer
    yet — the graphs that group by name are the ones nobody has written.
-3. **A noise's `opts.seed` / `opts.frequency` cannot hold a field spec.**
-   "Re-roll this noise, plus a variant" cost a 7-node fold, x2 branches x3
-   axes x6 noises — 36 copies of one idiom. Wants field-valued noise opts,
-   or one `{"fn":"seedOffset","scale":900,"variant":…}` node.
-4. **Renaming a node silently changes its geometry**, because `nodeSeed`
-   is `hash(graphSeed, nodeId)`. Re-zeroing the fold needed a throwaway
-   script emulating the library's staged f32 rounding. Wants a
-   zero-centred `nodeSeedOffset` needing no calibration, or `pcg`
-   printing derived node seeds.
+3. **~~A noise's `opts.seed` / `opts.frequency` cannot hold a field
+   spec.~~ SHIPPED 2026-08-16**, but NOT as field-valued opts — see
+   `PLAN-noise-seeds.md`. `opts.seed` accepts exactly one non-numeric
+   form, `{"from":"node","variant":N}`, resolved as
+   `hashCombine(ctx.seed, variant)` in u32. **The restriction is the
+   design, not a shortcut.** Every field column is f32, so an arbitrary
+   field-valued seed would derive an integer through float arithmetic —
+   and a ULP in a SEED is a different noise, not a value within a
+   tolerance, which is the one thing this library's CPU/GPU promise does
+   not cover. The safe subset is value-dependent and unnameable in the
+   grammar, so the grammar names the safe CONSTRUCT instead.
+   **Field-valued `opts.frequency` is refused because it already
+   exists**: `{"position": mul(pos, F), "frequency": 1}` is the same
+   sample point, fbm octaves included. One paragraph of docs beats a
+   second field-valued option, and the refusal says so.
+   Extending `opts.seed` rather than adding an `fn` also skips the whole
+   new-fn tax — mandatory WGSL handler, two `MINIMAL_SPECS` corpora, four
+   `listFieldFns().length` claims, the closed-set blocks in
+   `docs/manual.html` and `llms.txt` — and stays FUSED on the device,
+   which `attributeIs` does not.
+4. **~~Renaming a node silently changes its geometry~~ HALF SHIPPED, HALF
+   IMPOSSIBLE, and saying which is the point.** The calibration constant
+   is gone: `{"from":"node","variant":N}` needs no `W0`, so nothing has to
+   be re-derived when a node is renamed. The rename HAZARD is not gone and
+   cannot be: `nodeSeed` is `hash(graphSeed, nodeId)`, so no function of
+   (graphSeed, nodeId, variant) can be the identity at a seed nobody
+   names. Adopting the new form therefore RE-ROLLS the noise rather than
+   preserving it, which is why the corpus migration is a look change and
+   is authorized as one.
+   **What made the calibration indefensible is a measurement, not a
+   preference.** All 117 `W0` literals in the corpus were recomputed from
+   the shipped derivation: 111 match and SIX do not —
+   `basics-field-params.json` and `basics-inline-field-params.json` share
+   a triple correct for neither, so both have silently had no
+   seed-neutrality for as long as they have existed. A constant a human
+   derives per site is a constant that is wrong somewhere.
+   The other half shipped with it: `pcg validate` prints each node's
+   DERIVED seed beside its type (and carries it in `--json`). It was
+   already in `DescribedNode.seed` and the CLI was throwing it away, so
+   the number that decides what a node draws could only be seen by cooking
+   and inferring.
 5. **~~An inline `param` cannot carry `min`/`max`/`description`, and the
    subgraph form can.~~ SHIPPED 2026-08-16** — the regression this week's
    work caused, and the only gap here that was fixed rather than recorded.
@@ -127,10 +169,30 @@ gap 8, which is the reason.
    collapses duplicate object keys before the grammar ever sees them. So
    a misspelled key is still dead code; what the form buys is that the
    fall-through is NAMED and the case set is enumerable in one place.
-7. **No graph-scoped param.** "Cable radius" lives in three nodes and only
-   the panel's `also` knows they are one thing. Inline params are
-   node-scoped by design, so they cannot fix this. Wants a top-level
-   `params` block a node's field expression binds by name.
+7. **~~No graph-scoped param.~~ SHIPPED 2026-08-16** as a top-level
+   `params` array bound by name at deserialize; see
+   `PLAN-graph-scoped-params.md`. Binding SUBSTITUTES when the field is
+   built, which is forced rather than chosen — `Field.key` is fixed at
+   construction and is what the memo key hashes, so a value arriving later
+   would cook the previous value's bytes. Two consequences, both tested: a
+   declared value is byte-identical to the number written out longhand,
+   and `setGraphParam` re-keys exactly the readers.
+   **The entry named the smaller half of its own case.** Cable radius is
+   three sites; the truss half-width is EIGHTEEN readings across nine
+   nodes, in four different float spellings of 0.425, and `also` cannot
+   express that one at all — `mirrorsFor` performs no transformation, so a
+   mirror can only assign, where a name can sit inside `mul(name, √2)`.
+   Gap 7 read as a panel problem and was a graph problem.
+   **The migration's byte question answered itself.** The design expected
+   the rig's bytes to move ~1e-16 because one declared value cannot
+   reproduce four spellings. Measured: they do not move at all. Every
+   combinator stores f32, all four f64 spellings round to the same f32,
+   and `0.425 * 1.4142135623730951` reproduces the diagonal literal
+   exactly in f64 — byte-identical under `graphFingerprint`, against a
+   seed+1 control that reports different.
+   `also` survives for what a field reference cannot occupy:
+   `sweepProfile.sides` is `i32`, six copies, and no expression can reach
+   it.
 8. **~~Point filters drop all topology.~~ SHIPPED 2026-08-16** as
    `topology: "drop" | "keep"` on the five point filters
    (`filterByDensity`, `filterByBounds`, `filterByAttribute`,

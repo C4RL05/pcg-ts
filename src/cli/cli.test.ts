@@ -226,6 +226,21 @@ describe("pcg cli — validate", () => {
     expect(lineFor(text, "points")).toMatch(/^\s+points\s+<- keep\.out$/);
   });
 
+  it("prints each node's DERIVED seed, which is what a rename moves", async () => {
+    const io = withGraph();
+    expect(await runCli(["validate", GRAPH], io.io)).toBe(EXIT_OK);
+    // `hash(graphSeed, nodeId)` — the number that decides what the node
+    // draws, and the only way to see it used to be to cook and infer.
+    const row = lineFor(io.stdout(), "scatter");
+    expect(row).toMatch(/^\s+scatter\s+pointScatterInBounds\s+\d+$/);
+    const json = withGraph();
+    expect(await runCli(["validate", GRAPH, "--json"], json.io)).toBe(EXIT_OK);
+    const seeds = JSON.parse(json.stdout()).nodes.map((n: { seed: number }) => n.seed);
+    expect(seeds).toHaveLength(3);
+    expect(new Set(seeds).size).toBe(3); // one per id, not one per graph
+    expect(seeds.every((s: number) => Number.isInteger(s) && s >= 0)).toBe(true);
+  });
+
   it("--json carries the meta block through", async () => {
     const io = withGraph();
     expect(await runCli(["validate", GRAPH, "--json"], io.io)).toBe(EXIT_OK);
