@@ -35,6 +35,97 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### The rig's gap list, round three, 2026-08-16
+
+Ten more, found by taking the rig through the five mechanisms that shipped
+because of round two. Every byte claim below is `graphFingerprint` against
+a control that reports DIFFERENT at another seed, so "byte-identical" is a
+measurement. Nothing here is scheduled.
+
+**Round three's headline is a BUG, not a feature, and it was in our own
+work.** Gap 10: the cable wraps carried a frozen `0.6010407640085654`
+inside the `forEach` body — `0.425 * √2`, the truss half-diagonal, which
+is to say readings NINETEEN and TWENTY of `$trussHalfWidth`. The migration
+that collapsed the other eighteen skipped subgraph payloads, correctly (a
+body is bound by its wrapper and by nothing else) and silently. Turning
+the knob that says "this is the knob that sizes the truss" therefore
+dragged the truss out through its own cables: at 1.2 the chords sit at
+1.698 and the cables stayed at 0.743, a full unit inside. FIXED — the
+wrapper declares a targetless param and the body reads it, the same hop
+`$cableRadius` already uses, byte-identical at the default.
+**The durable part is that nothing could have told anyone.** A body
+literal that is a copy of an outer value is invisible to `--params` (a
+constant is not an address), invisible to the fingerprint (byte-identical
+until the knob moves), and invisible to a text migration (a subgraph
+boundary is where search-and-replace stops). Gap 1 would make this class
+WORSE, so a lint belongs with it: `pcg validate` reporting constants
+inside a body that equal a declared graph param.
+
+1. **A graph-scoped param cannot declare `targets`, so nothing structural
+   is shareable.** Six `sweepProfile` nodes repeat six non-field params
+   each — 36 literals no name can reach. Across the whole 46-type registry
+   there are exactly 19 field-capable params and every one is `f32` or
+   `vec3`, so a graph param reaches only a number inside an expression;
+   counts, sides, enums, booleans and attribute names are structurally out.
+   Round two's closing line ("`also` survives for `sides`, six copies")
+   undersells it by a whole half of the format. The resolver already exists
+   — `resolveExposedParam` merges targets' registered schemas and accepts
+   `i32`/`bool`/`string`/`enum` alike; graph scope refuses `targets` only
+   because the top-level key set is closed.
+2. **A resampled path publishes neither its length nor its step**, so
+   anything sized in units of the sampling is frozen. `partScatter.amount`
+   is 17/900 — half a step of a 900-sample resample of a nominally 34-unit
+   spine — and the panel moves that count from 100 to 2000, where the same
+   literal is 0.05x the step at one end and 1.10x at the other. It is also
+   derived from the nominal span rather than the true arc length (34.213),
+   which the author could not know. `connectPoints.lengthAttr` is the
+   precedent, one branch over.
+3. **`pointLine` cannot say "count points, one unit apart"**, so
+   `wrapCarrierLine` restates its own count in `end: [15,0,0]`. Turning the
+   "wraps" knob 16 → 17 therefore re-spaces the line and re-keys every
+   `forEach` item: 1 of 16 cables survives, where moving `end` to 16 by
+   hand keeps all 16 and adds one. Its sibling `pathResample` already has
+   the `count | spacing` mode-pair; the two source-side nodes that place
+   evenly spaced things answer the same question differently.
+4. **No index within a path**, so the chain's alternation is right only by
+   parity luck: `chainAlternate` reads the GLOBAL index and means "every
+   other link of THIS chain", and the two agree only because 35 points give
+   34 segments. At `count: 36` the chains disagree with each other and
+   nothing reports it. A `strandIndex` written on the source survives
+   `copyToPoints` and is then destroyed by `pathSegments`, which drops
+   point attributes — so the workaround is blocked, not merely ugly.
+5. **`setAttribute` type `string` restates its own `values.length`.**
+   `partPart` selects with `mul(randomField, 9)` over a nine-entry table
+   whose repetitions ARE a weighting nothing says is one. Append a fifth
+   kind and leave the selector: the cook reports zero instances of it, with
+   no diagnostic. Wants `weights` beside `values`.
+6. **`copyToPoints` drops the source's topology**, so an array of a PATH is
+   rebuilt by hand — measured: a 5-point polyline onto 3 targets gives 15
+   points and 0 primitives. The rig pays twice, and both `targetIndexAttr`
+   writes exist to feed those rebuilds. This REFRAMES round-two gap 1
+   rather than contradicting it: that made the rebuild cheaper and left it
+   standing. Copies are contiguous blocks of `nS`, so `topology: "keep"`
+   here is what `mergePrimitives` already does.
+7. **A curve frame cannot be carried across a resample**, so the rig
+   computes three and they disagree — the parts are mounted on a different
+   frame from the chords they are bolted to. **The mechanism is genuinely
+   missing and the rig does not suffer from it**, which is why the
+   measurement is the point: 0.107° mean and 0.366° max at the authored 46
+   stations, 2.7 mm at the truss radius, converging as counts rise and
+   reaching 1.883° only at the coarsest setting the panel offers.
+8. **The refusal at a non-field param states no fix**, unlike the model
+   message the same probe gets inside a `forEach` body, which names the
+   missing name, lists the params that do exist, and states the non-obvious
+   half. One sentence in `paramValueError`, gated on the value being a
+   field spec.
+9. **`--params` counts reader SLOTS, not readings.** `$trussHalfWidth`
+   reports "9 slots" where round two's own headline was eighteen readings,
+   and `$stretchMin` reports one slot while being read four times inside
+   one expression — which is the entire reason it is a param. `paramScan`
+   already walks to each reference.
+10. **~~The cable wrap radius is a frozen copy of `$trussHalfWidth`.~~
+    FIXED 2026-08-16** — see the headline above.
+
 ### The rig's gap list, 2026-08-16
 
 Ten things the rig wanted to say and could not, found by taking
