@@ -169,6 +169,20 @@
   const label = $derived(copyLabel(copyState, "copy link"));
   /** A refused clipboard reveals the link, which is the point of the button. */
   const copyLink = (): Promise<CopyState> => copier.copy(shareUrl(patch), () => (showPatch = true));
+
+  /**
+   * Select the whole link when the input takes focus, so copying it by hand
+   * is one gesture — which is why it is an `<input readonly>` rather than a
+   * `<pre>` in the first place.
+   *
+   * It was referenced and never defined: the handler named a function that
+   * did not exist, so focusing the field did nothing and the fallback for a
+   * refused clipboard quietly did not work. Nothing in the build read
+   * `.svelte`, so nothing said so.
+   */
+  const selectAll = (event: FocusEvent): void => {
+    (event.currentTarget as HTMLInputElement | null)?.select();
+  };
 </script>
 
 <div class="overview">

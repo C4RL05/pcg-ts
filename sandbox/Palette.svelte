@@ -143,6 +143,7 @@
     bind:this={menuEl}
     role="dialog"
     aria-label="add a node"
+    tabindex="-1"
     style="left: {Math.min(at.x, Math.max(8, window.innerWidth - 260))}px; top: {Math.min(
       at.y,
       Math.max(8, window.innerHeight - 340),

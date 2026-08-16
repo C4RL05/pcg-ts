@@ -142,7 +142,8 @@
       cursor: pointer;
     }
     .chevron {
-      display: inline-block;
+      /* No `display: inline-block` beside the float: a floated box is
+         treated as `block` regardless, so the declaration was inert. */
       float: right;
       color: #8b98ab;
       transition: transform 0.2s;

@@ -111,9 +111,13 @@
    * behind the canvas to reach.
    */
   let shiftHeld = $state(false);
-  const sceneHasPointer = $derived(shiftHeld && view.id === "both");
   let viewIndex = $state(1);
   const view = $derived(VIEWS[viewIndex]);
+  // Declared after `view`, which it reads. A `$derived` is lazy, so the
+  // original order happened to work — but it read a block-scoped binding
+  // from above its declaration, which is a TDZ error the moment anything
+  // evaluates it eagerly.
+  const sceneHasPointer = $derived(shiftHeld && view.id === "both");
 
   /**
    * HOW FAR THE RENDER IS PUSHED BACK SO THE GRAPH CAN BE READ.
