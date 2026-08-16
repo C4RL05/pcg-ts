@@ -393,6 +393,88 @@ describe("copyToPoints", () => {
       snapshotGeometry(carried),
     );
   });
+
+  it("writes the target index, one value per block", async () => {
+    const { source, target } = carryCase();
+    const geo = firstGeo(
+      (
+        await runNode(copyToPoints, { targetIndexAttr: "anchorId" }, {
+          source: [makeGeometryItem(source)],
+          target: [makeGeometryItem(target)],
+        })
+      ).out,
+    );
+    const anchor = geo.attrs.point.require("anchorId");
+    expect([anchor.type, anchor.tupleSize, anchor.defaultValue]).toEqual(["i32", 1, [-1]]);
+    // Blocks of nS = 2, in target order — the same `i = t * nS + s` the
+    // transforms use, which is the point of not restating it upstream.
+    expect([0, 1, 2, 3, 4, 5].map((i) => anchor.get(i))).toEqual([0, 0, 1, 1, 2, 2]);
+  });
+
+  it("is the setAttribute-plus-carry idiom it replaces, byte for byte", async () => {
+    const { source, target } = carryCase();
+    // What the graphs wrote before this param existed: an index column on
+    // the TARGET, carried across. The two must agree on every byte,
+    // because that is the edit an existing graph makes to adopt it.
+    const carriedTarget = carryCase().target;
+    const idx = carriedTarget.attrs.point.add("anchorId", "i32", 1, -1);
+    for (let t = 0; t < carriedTarget.pointCount; t++) idx.set(t, t);
+    const viaCarry = firstGeo(
+      (
+        await runNode(copyToPoints, { targetNames: ["anchorId"] }, {
+          source: [makeGeometryItem(source)],
+          target: [makeGeometryItem(carriedTarget)],
+        })
+      ).out,
+    );
+    const viaParam = firstGeo(
+      (
+        await runNode(copyToPoints, { targetIndexAttr: "anchorId" }, {
+          source: [makeGeometryItem(source)],
+          target: [makeGeometryItem(target)],
+        })
+      ).out,
+    );
+    expect(snapshotGeometry(viaParam)).toEqual(snapshotGeometry(viaCarry));
+  });
+
+  it("refuses a composed standard, a source collision and a name targetNames carries", async () => {
+    const run = async (targetIndexAttr: string, targetNames: string[] = [], source?: Geometry) => {
+      const c = carryCase();
+      await runNode(copyToPoints, { targetIndexAttr, targetNames }, {
+        source: [makeGeometryItem(source ?? c.source)],
+        target: [makeGeometryItem(c.target)],
+      });
+    };
+    for (const name of ["P", "rot", "scale", "seed"]) {
+      await expect(run(name)).rejects.toThrow(
+        new RegExp(`copyToPoints: param "targetIndexAttr" cannot write "${name}" — P, rot`),
+      );
+    }
+    await expect(run("age", ["age"])).rejects.toThrow(
+      /writes "age", which param "targetNames" is already carrying/,
+    );
+    const clash = carryCase();
+    clash.source.attrs.point.add("anchorId", "i32", 1, 0);
+    await expect(run("anchorId", [], clash.source)).rejects.toThrow(
+      /cannot write "anchorId" — the source carries a point attribute of that name too/,
+    );
+    // A name the TARGET happens to carry is not a collision: an uncarried
+    // target column never reaches the output.
+    await expect(run("species")).resolves.toBeUndefined();
+  });
+
+  it("writes nothing by default", async () => {
+    const { source, target } = carryCase();
+    const call = (targetIndexAttr: string) =>
+      runNode(copyToPoints, { targetIndexAttr }, {
+        source: [makeGeometryItem(source)],
+        target: [makeGeometryItem(target)],
+      });
+    const bare = firstGeo((await call("")).out);
+    expect(bare.attrs.point.names()).toEqual(source.attrs.point.names());
+    expect(snapshotGeometry(firstGeo((await call("")).out))).toEqual(snapshotGeometry(bare));
+  });
 });
 
 describe("mergePoints", () => {

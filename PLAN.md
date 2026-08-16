@@ -52,10 +52,22 @@ size now varies by kind), and `copyToPoints` `targetNames` (two
 happens BEFORE topology exists, so there is nothing to preserve — see
 gap 8, which is the reason.
 
-1. **`copyToPoints` will not write the target index.** Wanting "one chain
-   per anchor" cost a whole `setAttribute anchorId = index` node purely to
-   give `targetNames` something to carry. It already computes
-   `i = t*nS + s`; a `targetIndexAttr` param would hand that over.
+1. **~~`copyToPoints` will not write the target index.~~ SHIPPED
+   2026-08-16** as `targetIndexAttr`, exactly the param this entry asked
+   for: name it and every copy in a target's block gets that target's
+   index, i32, defaulted to -1 because that is the value no copy can have.
+   The rig's two `setAttribute anchorId = index` nodes are gone (68 nodes
+   to 66, 73 connections to 71) and `tests/graphs.golden.json` did not
+   move by a byte — which is the whole claim, since a node whose only
+   reader was `targetNames` was restating what the copy loop already
+   computes as `i = t * nS + s`.
+   **Its refusals are `targetNames`' refusals, and that is deliberate**:
+   a composed standard (P / rot / scale / seed), a name the source
+   already writes, and — the one that is new — a name `targetNames` is
+   carrying, since those two would write the same column from opposite
+   sides. A name the TARGET happens to carry is NOT refused: an uncarried
+   target column never reaches the output, so there is nothing to collide
+   with.
 2. **`pointsToPath.groupAttr` requires whole numbers.** The natural key
    `curveU` is already on the target and is rejected. Group identity is
    usually a NAME, so this wants a string attribute too.
@@ -120,7 +132,9 @@ gap 8, which is the reason.
    the rig actually wants is `mergePrimitives` in place of `mergePoints`
    at `trussMove0/2/4/6`, which makes `trussChordPath` / `trussBracePath`
    and eight `trussTag*` nodes dead — ten nodes, wiring in the plan doc.
-   NOT YET APPLIED.
+   APPLIED 2026-08-16 (`948f235`): 78 nodes to 68, 83 connections to 73,
+   and the only difference in the whole cook is that the dead
+   `point.strutId` column stops appearing on three outputs.
 9. **`attributeIs` disqualifies a fused GPU run** (`run-plan-failed`), so
    adding string variation silently makes a node CPU-only. Known and
    documented when it shipped; the rig is the first graph to pay it.

@@ -197,6 +197,7 @@ const COPY_STANDARD: ReadonlyArray<{
 /** Params of {@link copyToPoints}. */
 export interface CopyToPointsParams {
   targetNames: readonly string[];
+  targetIndexAttr: string;
 }
 
 /** Copy a source cloud onto every target point, composing transforms. */
@@ -204,7 +205,7 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
   type: "copyToPoints",
   category: "point op",
   description:
-    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error.",
+    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error. `targetIndexAttr` writes the target's INDEX rather than one of its attributes, which is what makes \"one thing per target\" — one path per anchor, one group per instance — expressible without an upstream setAttribute whose only job was to give this node something to carry.",
   inputs: [
     { name: "source", kind: "geometry" },
     { name: "target", kind: "geometry" },
@@ -216,6 +217,12 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
       default: [],
       description:
         'Target point attributes to carry onto the copies, in any order. Each copy in a target\'s block gets that target\'s value, and the column arrives with the target\'s type, tuple size and default. An empty list carries nothing, which is the default and not an error. Three kinds of name are refused rather than resolved silently: "P", "rot", "scale" and "seed", because they are composed per copy and already hold the target\'s contribution (copy one to another name on the target with setAttribute and carry that to get the raw value); a name repeated in the list; and a name the source also carries, because the two would write the same column. A name absent from the target is an error listing what the target does carry.',
+    },
+    targetIndexAttr: {
+      type: "string",
+      default: "",
+      description:
+        'Name of an i32 point attribute to write the TARGET INDEX into — 0 for every copy that landed on the first target point, 1 for the second, and so on. Empty (the default) writes nothing. This is the key downstream nodes group by: pointsToPath\'s `groupAttr` turns "the copies of one target" into one path per target, and partitionByAttribute turns them into one item each. The node already computes this index to place the copies, so naming it here replaces the setAttribute writing `{"fn":"index"}` on the target purely so `targetNames` had something to carry. The column is i32, tuple size 1, default -1 (which no copy ever gets, so an element appended later reads as belonging to no target). Refused for the same three reasons `targetNames` refuses a name: "P", "rot", "scale" and "seed" are composed per copy, a name the source already carries would have two writers, and so would a name `targetNames` is carrying.',
     },
   },
   execute({ inputs, params }) {
@@ -281,7 +288,54 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
       carried.push(attr);
     }
 
+    // The target index is SYNTHESIZED rather than carried, so it takes the
+    // same three refusals a carried name takes and takes them in the same
+    // order — a composed standard, a name the source already writes, a name
+    // `targetNames` is already carrying — each naming the param the author
+    // typed the name into. It is added after the carried columns so those
+    // refusals happen first: a name that is wrong for both reasons reports
+    // the one the author is more likely to have meant.
+    const indexName = params.targetIndexAttr;
+    if (indexName !== "") {
+      if (COPY_STANDARD.some((std) => std.name === indexName)) {
+        throw new Error(
+          `copyToPoints: param "targetIndexAttr" cannot write "${indexName}" — P, rot, scale and seed ` +
+            "are composed per copy, so writing the target index over one would destroy the placement " +
+            "this node exists to compute. Name an attribute of your own instead.",
+        );
+      }
+      if (listed.has(indexName)) {
+        throw new Error(
+          `copyToPoints: param "targetIndexAttr" writes "${indexName}", which param "targetNames" is ` +
+            "already carrying from the target; the two would write the same column. Drop it from " +
+            "targetNames (the index this writes is the same for every copy in a target's block), or " +
+            "give one of them another name.",
+        );
+      }
+      if (srcSet.has(indexName)) {
+        throw new Error(
+          `copyToPoints: param "targetIndexAttr" cannot write "${indexName}" — the source carries a ` +
+            "point attribute of that name too, and the two would write the same column. Rename one " +
+            `side with setAttribute, or drop it from the source upstream with removeAttribute (domain ` +
+            `"point", names ["${indexName}"]).`,
+        );
+      }
+      // i32 like every other index column the library writes
+      // (`sampleNearestPoint.indexAttr`), and defaulted to -1 for the same
+      // reason: -1 is the value no target has, so an element appended after
+      // this node reads as belonging to no target rather than to the first.
+      outSet.add(indexName, "i32", 1, -1);
+    }
+
     outSet.resize(total);
+
+    // Written per TARGET, not per copy: one fill over the block of nS
+    // copies that landed on it, which is the same index the transform loop
+    // below derives as `i = t * nS + s`.
+    if (indexName !== "") {
+      const dst = outSet.require(indexName).data;
+      for (let t = 0; t < nT; t++) dst.fill(t, t * nS, (t + 1) * nS);
+    }
 
     // Bulk-carry every source attribute into each target block, then
     // overwrite the composed transform attributes.
