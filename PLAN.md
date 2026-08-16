@@ -58,11 +58,38 @@ literal that is a copy of an outer value is invisible to `--params` (a
 constant is not an address), invisible to the fingerprint (byte-identical
 until the knob moves), and invisible to a text migration (a subgraph
 boundary is where search-and-replace stops). Gap 1 would make this class
-WORSE, so a lint belongs with it: `pcg validate` reporting constants
-inside a body that equal a declared graph param.
+WORSE, so a lint belongs with it — and it shipped with it: `pcg validate`
+reports constants inside a body that equal a declared graph param.
+Verified against history rather than a fixture, and made CHOOSY by
+measurement: reporting every exact match produced one finding on the whole
+corpus and it was a coincidence, so a match now counts only when the
+constant is distinctive or equals the value times √2.
 
-1. **A graph-scoped param cannot declare `targets`, so nothing structural
-   is shareable.** Six `sweepProfile` nodes repeat six non-field params
+1. **~~A graph-scoped param cannot declare `targets`~~ SHIPPED
+   2026-08-16.** It reaches `i32`, `bool`, `string`, `enum` and non-field
+   vectors now, by being WRITTEN into named node params rather than
+   substituted into an expression, with the schema derived from those
+   params by `resolveExposedParam` — the subgraph resolver, unchanged, so
+   a declaration can never claim a type or a capability the slots it
+   drives do not have.
+   **What the rig then earned is ONE param, not thirty-six**, and the
+   restraint is the finding. `$tubeSides` gangs the `sides` of all six
+   skins because a tessellation budget is one decision — cost is linear,
+   six skins pay it, and nothing about a 0.03-radius brace wants a
+   different roundness from the 0.055 chord beside it. The other five
+   repeated literals stay written out, measured rather than assumed:
+   `profile` means two different things at its six sites, `caps` turns on
+   whether a tube has visible ends at all, `frame` is invisible on a
+   circular section, and `joint`/`miterLimit` never move (the sharpest
+   bend anywhere is the braces’ 100° zigzag, a stretch of 1.56 against a
+   limit of 4). A shared name asserts that slots must move together, and
+   asserting that falsely is worse than the repetition.
+   The `writeCurveFrame` attribute names stay too, for a sharper reason:
+   `curveNormal` is written 3 times and READ 11, and `sweepProfile` reads
+   it by that name in the library — the name is a shared vocabulary, not
+   this graph’s to rename.
+   Original entry: a graph-scoped param cannot declare `targets`, so
+   nothing structural is shareable. Six `sweepProfile` nodes repeat six non-field params
    each — 36 literals no name can reach. Across the whole 46-type registry
    there are exactly 19 field-capable params and every one is `f32` or
    `vec3`, so a graph param reaches only a number inside an expression;
@@ -99,13 +126,26 @@ inside a body that equal a declared graph param.
    whose repetitions ARE a weighting nothing says is one. Append a fifth
    kind and leave the selector: the cook reports zero instances of it, with
    no diagnostic. Wants `weights` beside `values`.
-6. **`copyToPoints` drops the source's topology**, so an array of a PATH is
-   rebuilt by hand — measured: a 5-point polyline onto 3 targets gives 15
-   points and 0 primitives. The rig pays twice, and both `targetIndexAttr`
-   writes exist to feed those rebuilds. This REFRAMES round-two gap 1
-   rather than contradicting it: that made the rebuild cheaper and left it
-   standing. Copies are contiguous blocks of `nS`, so `topology: "keep"`
-   here is what `mergePrimitives` already does.
+6. **~~`copyToPoints` drops the source's topology~~ SHIPPED 2026-08-16**
+   as `topology: "drop" | "keep"`, default `"drop"` and byte-identical
+   there, reusing `mergePrimitives`' block shift because a copy array IS a
+   union whose terms are equal.
+   **The entry's account of the RIG was wrong, and the adoption is better
+   for it.** It said the two sites rebuild a path the copy destroyed. They
+   do not: both sources are `pointLine`, which emits ZERO primitives, so
+   the `pointsToPath` downstream was BUILDING topology and not restoring
+   it — `"keep"` alone would have been a no-op. The equivalent adoption is
+   to path each strand BEFORE the copy, so the copy carries one polyline
+   across per anchor. What that retires is not a node but a ROUND TRIP:
+   the copy no longer labels its output with `targetIndexAttr` so a
+   rebuild can group on the label, the fringe's swept surface stops
+   carrying a dead `anchorId` on all 17,100 points, and the path is built
+   once over the 35-point strand instead of over the 245 points the copies
+   make of it. Node and connection counts are unchanged (66/71) because a
+   node moved upstream at each site rather than vanishing.
+   That label was itself the second version of the problem — round-two gap
+   1 replaced `floor(index / 35)` with `targetIndexAttr`, and this
+   replaces the label entirely.
 7. **A curve frame cannot be carried across a resample**, so the rig
    computes three and they disagree — the parts are mounted on a different
    frame from the chords they are bolted to. **The mechanism is genuinely
@@ -113,12 +153,19 @@ inside a body that equal a declared graph param.
    measurement is the point: 0.107° mean and 0.366° max at the authored 46
    stations, 2.7 mm at the truss radius, converging as counts rise and
    reaching 1.883° only at the coarsest setting the panel offers.
-8. **The refusal at a non-field param states no fix**, unlike the model
+8. **~~The refusal at a non-field param states no fix~~ SHIPPED
+   2026-08-16** — it now states the RULE (no `i32`, `enum`, `bool` or
+   `string` param is ever field-capable) and the route that works (gap
+   1’s `targets`), gated on the value actually looking like a field spec.
+   Original entry: the refusal at a non-field param states no fix, unlike the model
    message the same probe gets inside a `forEach` body, which names the
    missing name, lists the params that do exist, and states the non-obvious
    half. One sentence in `paramValueError`, gated on the value being a
    field spec.
-9. **`--params` counts reader SLOTS, not readings.** `$trussHalfWidth`
+9. **~~`--params` counts reader SLOTS, not readings.~~ SHIPPED
+   2026-08-16** — both numbers, so the rig reads `$trussHalfWidth` in
+   “10 slots, 19 readings”.
+   Original entry: `--params` counts reader SLOTS, not readings. `$trussHalfWidth`
    reports "9 slots" where round two's own headline was eighteen readings,
    and `$stretchMin` reports one slot while being read four times inside
    one expression — which is the entire reason it is a param. `paramScan`

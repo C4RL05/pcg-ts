@@ -2752,7 +2752,6 @@
                 "color:f32x4",
                 "seed:u32",
                 "cableU:f32",
-                "anchorId:i32",
                 "normal:f32x3",
                 "uv:f32x2"
               ],

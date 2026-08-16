@@ -113,6 +113,10 @@
           "step": 1
         }
       ]
+    },
+    {
+      "title": "skins",
+      "controls": [{ "param": "$tubeSides", "label": "tube sides", "step": 1 }]
     }
   ]
 }

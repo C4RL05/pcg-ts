@@ -3,7 +3,7 @@ var e=`{\r
   "seed": 3,\r
   "meta": {\r
     "title": "a suspended rig, built from curves",\r
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Six numbers this graph reads over and over are declared once at the top, under \`params\`, and read by name from the expressions that need them: \`trussHalfWidth\` was TWENTY literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2 — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. Four more say it about smaller things. \`braceRadius\` gangs the diagonal braces to the station frames, and it retired the last \`also\` row in the whole corpus: no fact about this graph's structure lives in a presentation file any more. \`stretchMin\` and \`stretchMax\` are the two ends of ONE draw that the component sizes write once per axis — \`lerp(0.55, 1.6, randomField(\\"stretch\\"))\`, four times over, for the rod, the bar and the panel's two faces — where how far a component may stretch is a single decision and eight literals were spelling it. \`bundles\` is the fringe's 7, read twice inside one expression: \`floor(u × 7)\` bins each strand and the \`/ 7\` puts the bin back in [0, 1), so the two have to agree, and until the number had a name nothing said so. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe reach that same grouping from the other end: \`copyToPoints\` writes each copy's anchor index itself, through \`targetIndexAttr\`, and \`pointsToPath\` groups by it. Carrying it needed a \`setAttribute\` on the anchors first, writing an \`index\` field into a column whose only reader was \`targetNames\` — the node had already computed that index to place the copies, so both of those are gone. Before that the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the source strand's point count written out a second time, in another node, with nothing holding the two together. Editing the strand welded every chain into one path and said nothing. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: all eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. The six outside the cable body each carry their \`variant\` as an inline \`param\` of their own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The last two are the cable wobble, inside the \`forEach\` body, and they were held back as the deliberate exception — the body's seed varies per item, so its wobble was said to re-roll already. That was true of the sample WINDOW and false of the FIELD. Freeze the four per-carrier picks and cook: on the old literal seed the sixteen cables come back as ONE geometry, on the node seed as sixteen. A body node's seed is hashed with the item's own key, so \`{ \\"from\\": \\"node\\" }\` there means per-cable, and what it replaced was a fourth pick — \`wofs\`, transferred onto the wrap and multiplied by 1000 — whose whole job was to walk one frozen field far enough sideways that no two cables sampled the same place. That pick and its transfer are gone with it: the body is eight nodes where it was ten. Variants 0 and 1 keep the wobble's two components apart, the one riding the curve normal and the one riding the binormal, which a single literal seed had collapsed into the same number twice.",\r
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Seven values this graph repeats are declared once at the top, under \`params\`. Six are numbers read by name from the expressions that need them: \`trussHalfWidth\` was TWENTY literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2 — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. Four more say it about smaller things. \`braceRadius\` gangs the diagonal braces to the station frames, and it retired the last \`also\` row in the whole corpus: no fact about this graph's structure lives in a presentation file any more. \`stretchMin\` and \`stretchMax\` are the two ends of ONE draw that the component sizes write once per axis — \`lerp(0.55, 1.6, randomField(\\"stretch\\"))\`, four times over, for the rod, the bar and the panel's two faces — where how far a component may stretch is a single decision and eight literals were spelling it. \`bundles\` is the fringe's 7, read twice inside one expression: \`floor(u × 7)\` bins each strand and the \`/ 7\` puts the bin back in [0, 1), so the two have to agree, and until the number had a name nothing said so. The seventh travels the other way. \`tubeSides\` is an \`i32\`, and no expression can ever carry one — a field resolves per element and only f32, vec3 and vec4 read one — so it declares \`targets\` and is WRITTEN into the \`sides\` slot of all six skins — five \`sweepProfile\` nodes and, through its wrapper, the sixth inside the cable body — rather than substituted into a field, which is how one name reaches the half of the format that counts, enums, booleans and attribute names live in. It is one decision because it is a BUDGET and not a dimension: cost is linear in it, six skins pay it at once, and nothing about a 0.03-radius brace wants a different roundness from the 0.055-radius chord standing next to it. The gauge params say the opposite about the very same nodes — \`cableRadius\` and \`braceRadius\` gang radii precisely because a radius legitimately differs from member to member — which is why \`sides\` is the only one of the six non-field literals every sweep repeats that earns a name. The other five stay written out, and that is a measurement rather than an oversight: \`profile\` means \\"a rope is round\\" at three sites and \\"the stock is round tube\\" at the other three, \`caps\` turns on whether a tube's ends are visible at all (the station frames are closed rings and have no ends, the braces bury theirs inside the chords), \`frame\` is invisible on a circular section — as are the field-capable \`up\` and \`roll\` written out beside it — and \`joint\` with its \`miterLimit\` is one pair rather than two decisions, neither of which moves: \`miter\` is simply the right answer at the two places this rig actually bends and indistinguishable from \`perpendicular\` everywhere else, and the limit is never reached, because the sharpest bend anywhere a sweep sees is the braces' zigzag at 100°, a stretch of 1.56 against a limit of 4, with the frame ring's square corner next at 1.41 and every resampled curve under 1.02. A shared name asserts that several slots must move together, and asserting that falsely is worse than the repetition. The sixth reading is inside the cable \`forEach\` body and gets there through a \`sides\` param on the wrapper, sitting next to \`halfWidth\` and working by the opposite mechanism: \`halfWidth\` declares NO targets and is read by the body's own expression, \`sides\` names one and is written into it. A body is bound by its wrapper either way and by nothing else, so ganging five of six would have left the cables at 8 while everything else moved. The three \`writeCurveFrame\` nodes repeat their three attribute names and KEEP them, now that a \`string\` param could reach them: \`curveNormal\` is named fourteen times here and only three of those are the writes — the other eleven are \`attribute(\\"curveNormal\\")\` inside expressions, where no param can follow — and \`sweepProfile\`'s own \`curveFrame\` mode reads that attribute by that name in the library itself. The name is a shared vocabulary rather than this graph's to rename, so a knob over the three writers would only break the eleven readers. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe do not regroup at all any more, and that is the other half of the contrast: each strand is made a path BEFORE it is copied, and \`copyToPoints\` carries it across with \`topology: \\"keep\\"\` — the source's one polyline re-emitted per anchor, shifted onto that anchor's block of points. What that retires is not a node but a round trip. The copy no longer has to label its output with \`targetIndexAttr\` so that a rebuild can group on the label, and the fringe's swept surface stops carrying a dead \`anchorId\` on all 17,100 of its points; the path is built once over the strand itself — 35 points for a chain, 17 for a fringe strand — instead of over the 245 and the 1700 the copies make of them. The label was itself the second version of this problem: before \`targetIndexAttr\` the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the strand's point count written out a second time, in another node, with nothing holding the two together, so editing the strand welded every chain into one path and said nothing. A strand that is already a path cannot fall out of step with itself, which is the version that has no number in it at all. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: all eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. The six outside the cable body each carry their \`variant\` as an inline \`param\` of their own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The last two are the cable wobble, inside the \`forEach\` body, and they were held back as the deliberate exception — the body's seed varies per item, so its wobble was said to re-roll already. That was true of the sample WINDOW and false of the FIELD. Freeze the four per-carrier picks and cook: on the old literal seed the sixteen cables come back as ONE geometry, on the node seed as sixteen. A body node's seed is hashed with the item's own key, so \`{ \\"from\\": \\"node\\" }\` there means per-cable, and what it replaced was a fourth pick — \`wofs\`, transferred onto the wrap and multiplied by 1000 — whose whole job was to walk one frozen field far enough sideways that no two cables sampled the same place. That pick and its transfer are gone with it: the body is eight nodes where it was ten. Variants 0 and 1 keep the wobble's two components apart, the one riding the curve normal and the one riding the binormal, which a single literal seed had collapsed into the same number twice.",\r
     "tags": [\r
       "examples",\r
       "curves",\r
@@ -55,6 +55,39 @@ var e=`{\r
       "min": 1,\r
       "max": 20,\r
       "description": "How many bundles the fringe is gathered into. \`danglerBundling\` bins each strand's \`curveU\` with \`floor(u × $bundles)\` and then divides by the same number to put the bin back in [0, 1) — the two readings must agree, and until the number had a name nothing said so. Raise it for more and thinner tufts; at 1 the whole fringe gathers to one point. A whole number: \`floor\` makes a fraction mean a ragged last bundle."\r
+    },\r
+    {\r
+      "name": "tubeSides",\r
+      "value": 8,\r
+      "targets": [\r
+        {\r
+          "node": "trussChordSkin",\r
+          "param": "sides"\r
+        },\r
+        {\r
+          "node": "trussBraceSkin",\r
+          "param": "sides"\r
+        },\r
+        {\r
+          "node": "trussFrameSkin",\r
+          "param": "sides"\r
+        },\r
+        {\r
+          "node": "wrapWraps",\r
+          "param": "sides"\r
+        },\r
+        {\r
+          "node": "danglerDanglerSkin",\r
+          "param": "sides"\r
+        },\r
+        {\r
+          "node": "drapeDrapeSkin",\r
+          "param": "sides"\r
+        }\r
+      ],\r
+      "min": 3,\r
+      "max": 32,\r
+      "description": "Points around the section of EVERY tube this rig sweeps — the chords, the braces, the station frames, the cable wraps, the fringe and the swags. An \`i32\`, so no expression could ever have carried it: this is the first param here that travels by being WRITTEN into six node slots rather than substituted into a field. It is one decision because it is a TESSELLATION BUDGET and not a dimension: cost is linear in it and six skins pay it at once, and nothing about a 0.03-radius brace wants a different roundness from a 0.055-radius chord seen in the same object at the same distance. The gauge params say the opposite about the very same nodes — \`cableRadius\` and \`braceRadius\` gang radii precisely because a radius is a design dimension that legitimately differs from member to member — which is what makes \`sides\` the one of the six repeated non-field literals on \`sweepProfile\` that earns a name. 8 is the radial segment count of the \`tube\` asset every one of these skins replaced — a unit cylinder landing on each segment — so a swept tube still reads like the instanced one it grew out of, and raising it is a deliberate step away from that. The range is the node's own 3..256 narrowed to 3..32, which is the one direction a declaration may move a bound: past 32 sides on a 0.03-radius tube there is nothing left to see, and a declaration that could WIDEN one would be claiming a range its targets never agreed to. The sixth reading is inside the cable \`forEach\` body and reaches it through the wrapper's own \`sides\` param, because a body is bound by its wrapper and by nothing else — ganging five of six would leave the cables at 8 while the rest moved, which is the desync \`trussHalfWidth\` had to be fixed for."\r
     }\r
   ],\r
   "nodes": [\r
@@ -1796,7 +1829,8 @@ var e=`{\r
         "halfWidth": {\r
           "fn": "param",\r
           "name": "trussHalfWidth"\r
-        }\r
+        },\r
+        "sides": 8\r
       },\r
       "subgraph": {\r
         "graph": {\r
@@ -2400,6 +2434,17 @@ var e=`{\r
             "default": 0.425,\r
             "min": 0.15,\r
             "max": 1.2\r
+          },\r
+          {\r
+            "name": "sides",\r
+            "targets": [\r
+              {\r
+                "node": "wrapSkin",\r
+                "param": "sides"\r
+              }\r
+            ],\r
+            "description": "Points around the swept section of a wrap, exposed only so the outer graph's \`$tubeSides\` has something to write: an \`i32\` cannot ride into a body as an expression the way \`halfWidth\` does, so a wrapper param is the route.",\r
+            "default": 8\r
           }\r
         ]\r
       }\r
@@ -2420,6 +2465,15 @@ var e=`{\r
           0\r
         ],\r
         "includeEnd": true\r
+      }\r
+    },\r
+    {\r
+      "id": "chainStrandPath",\r
+      "type": "pointsToPath",\r
+      "params": {\r
+        "closed": false,\r
+        "groupAttr": "",\r
+        "orderAttr": ""\r
       }\r
     },\r
     {\r
@@ -2480,16 +2534,8 @@ var e=`{\r
       "type": "copyToPoints",\r
       "params": {\r
         "targetNames": [],\r
-        "targetIndexAttr": "anchorId"\r
-      }\r
-    },\r
-    {\r
-      "id": "chainChainPath",\r
-      "type": "pointsToPath",\r
-      "params": {\r
-        "closed": false,\r
-        "groupAttr": "anchorId",\r
-        "orderAttr": ""\r
+        "targetIndexAttr": "",\r
+        "topology": "keep"\r
       }\r
     },\r
     {\r
@@ -2721,6 +2767,15 @@ var e=`{\r
       }\r
     },\r
     {\r
+      "id": "danglerStrandPath",\r
+      "type": "pointsToPath",\r
+      "params": {\r
+        "closed": false,\r
+        "groupAttr": "",\r
+        "orderAttr": ""\r
+      }\r
+    },\r
+    {\r
       "id": "danglerAnchors",\r
       "type": "pathResample",\r
       "params": {\r
@@ -2844,7 +2899,8 @@ var e=`{\r
       "type": "copyToPoints",\r
       "params": {\r
         "targetNames": [],\r
-        "targetIndexAttr": "anchorId"\r
+        "targetIndexAttr": "",\r
+        "topology": "keep"\r
       }\r
     },\r
     {\r
@@ -2976,15 +3032,6 @@ var e=`{\r
           1,\r
           1\r
         ]\r
-      }\r
-    },\r
-    {\r
-      "id": "danglerDanglerPath",\r
-      "type": "pointsToPath",\r
-      "params": {\r
-        "closed": false,\r
-        "groupAttr": "anchorId",\r
-        "orderAttr": ""\r
       }\r
     },\r
     {\r
@@ -3704,6 +3751,16 @@ var e=`{\r
         "out"\r
       ],\r
       "to": [\r
+        "chainStrandPath",\r
+        "in"\r
+      ]\r
+    },\r
+    {\r
+      "from": [\r
+        "chainStrandPath",\r
+        "out"\r
+      ],\r
+      "to": [\r
         "chainCopies",\r
         "source"\r
       ]\r
@@ -3721,16 +3778,6 @@ var e=`{\r
     {\r
       "from": [\r
         "chainCopies",\r
-        "out"\r
-      ],\r
-      "to": [\r
-        "chainChainPath",\r
-        "in"\r
-      ]\r
-    },\r
-    {\r
-      "from": [\r
-        "chainChainPath",\r
         "out"\r
       ],\r
       "to": [\r
@@ -3814,6 +3861,16 @@ var e=`{\r
         "out"\r
       ],\r
       "to": [\r
+        "danglerStrandPath",\r
+        "in"\r
+      ]\r
+    },\r
+    {\r
+      "from": [\r
+        "danglerStrandPath",\r
+        "out"\r
+      ],\r
+      "to": [\r
         "danglerCopies",\r
         "source"\r
       ]\r
@@ -3835,16 +3892,6 @@ var e=`{\r
       ],\r
       "to": [\r
         "danglerCurl",\r
-        "in"\r
-      ]\r
-    },\r
-    {\r
-      "from": [\r
-        "danglerCurl",\r
-        "out"\r
-      ],\r
-      "to": [\r
-        "danglerDanglerPath",\r
         "in"\r
       ]\r
     },\r
@@ -3900,7 +3947,7 @@ var e=`{\r
     },\r
     {\r
       "from": [\r
-        "danglerDanglerPath",\r
+        "danglerCurl",\r
         "out"\r
       ],\r
       "to": [\r
