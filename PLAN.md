@@ -146,13 +146,26 @@ constant is distinctive or equals the value times √2.
    That label was itself the second version of the problem — round-two gap
    1 replaced `floor(index / 35)` with `targetIndexAttr`, and this
    replaces the label entirely.
-7. **A curve frame cannot be carried across a resample**, so the rig
-   computes three and they disagree — the parts are mounted on a different
-   frame from the chords they are bolted to. **The mechanism is genuinely
-   missing and the rig does not suffer from it**, which is why the
-   measurement is the point: 0.107° mean and 0.366° max at the authored 46
-   stations, 2.7 mm at the truss radius, converging as counts rise and
+7. **A curve frame cannot be carried across a resample.** The rig computes
+   three frames on one spine and they disagree, so the parts are mounted on
+   a different frame from the chords they are bolted to. **The mechanism is
+   genuinely missing and the rig does not suffer from it**, which is why
+   the measurement is the point: 0.107° mean and 0.366° max at the authored
+   46 stations, 2.7 mm at the truss radius, converging as counts rise and
    reaching 1.883° only at the coarsest setting the panel offers.
+   **NOT BUILT, 2026-08-16, and the second look is why.** The general
+   mechanism this wants is `pathResample` carrying named POINT attributes
+   across (it states in its own description that it does not), and that
+   looked like it had a consumer besides frames: the cable body carries
+   three scalars over a resample with `transferAttribute` `nearest`, which
+   is piecewise-constant. Measured on the shipped graph — `wphase` reports
+   min, max and mean all 0.491225 with a standard deviation of ZERO. The
+   three scalars are per-cable CONSTANTS, so `nearest` is exact for them by
+   construction and an interpolating carrier would buy exactly nothing.
+   With that consumer withdrawn the entry has none at all, and the
+   discipline this file opens with applies: let the consumer specify the
+   mechanism. The number above is kept because re-deriving it is the
+   expensive part.
 8. **~~The refusal at a non-field param states no fix~~ SHIPPED
    2026-08-16** — it now states the RULE (no `i32`, `enum`, `bool` or
    `string` param is ever field-capable) and the route that works (gap
