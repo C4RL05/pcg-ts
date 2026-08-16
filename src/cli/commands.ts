@@ -8,6 +8,7 @@ import {
   DOMAINS,
   type DataItem,
   type DescribedGraphParam,
+  type StrandedGraphParamValue,
   type Domain,
   type Graph,
   type NodeDoneInfo,
@@ -17,6 +18,7 @@ import {
   describeGraphParams,
   describeSubgraphParams,
   deserializeGraph,
+  strandedGraphParamValues,
   getNodeType,
   getRegisteredSubgraph,
   listFieldFnInfos,
@@ -397,6 +399,10 @@ const validateCommand: Command = {
         : table(description.outputs.map((o) => [o.name, `<- ${o.id}.${o.pin}`]))),
     );
     const params = boolFlag(args, "params") ? describeGraphParams(graph) : undefined;
+    // Reported with or without the flag: this is a suspected DEFECT rather
+    // than a listing, and the defect nobody thought to ask about is exactly
+    // the one worth volunteering.
+    const stranded = strandedGraphParamValues(graph);
     if (params !== undefined) {
       const declared = params.filter((p) => p.exposed).length;
       const scoped = params.filter((p) => p.scope === "graph").length;
@@ -417,12 +423,34 @@ const validateCommand: Command = {
           : table(params.map(graphParamRow))),
       );
     }
+    if (stranded.length > 0) {
+      lines.push(
+        "",
+        `suspected stranded ${plural(stranded.length, "value")}: a constant inside a subgraph body equals a declared graph param`,
+        "  A body is bound by its wrapper and by nothing else, so the graph's",
+        '  "params" block cannot reach in. These cook correctly today and desync',
+        "  the moment the knob moves. Pass the value in through the wrapper's own",
+        "  param (declare it with no targets and have the body's expression read",
+        "  the name), or confirm the match is a coincidence.",
+        "",
+      );
+      lines.push(
+        ...table(
+          stranded.map((v: StrandedGraphParamValue) => [
+            `$${v.name}`,
+            `= ${v.value}`,
+            `inside "${v.slot}" at ${v.innerSlot}`,
+          ]),
+        ),
+      );
+    }
     return Promise.resolve({
       text: lines.join("\n") + "\n",
       json: {
         ok: true,
         path,
         seed: graph.seed,
+        ...(stranded.length > 0 ? { stranded } : {}),
         ...(meta !== undefined ? { meta } : {}),
         nodes,
         connections: description.connections.map((c) => ({ from: c.from, to: c.to })),

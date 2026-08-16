@@ -32,13 +32,14 @@ import {
   inlineParamMetaOf,
   inlineParamValuesOf,
 } from "../fields/fieldJson.js";
-import { peekFieldSpec } from "../fields/spec.js";
+import { type FieldSpec, peekFieldSpec, specChildren } from "../fields/spec.js";
 import {
   type Graph,
   type NodeHandle,
   type ParamSchema,
   type ParamValue,
   describeSubgraphParams,
+  getSubgraphSpec,
 } from "../graph/index.js";
 // By module: the scan is the graph layer's internal, and this is the
 // second caller of it rather than a new public surface.
@@ -332,6 +333,118 @@ export function describeGraphParams(graph: Graph): DescribedGraphParam[] {
         exposed,
       });
       out.push(...fieldParamsOf(node, type, name, value));
+    }
+  }
+  return out;
+}
+
+/** One constant inside a subgraph body that equals a declared graph param. */
+export interface StrandedGraphParamValue {
+  /** The declared param whose value it duplicates. */
+  readonly name: string;
+  /** `"<node>.<param>"` of the wrapper whose body holds the constant. */
+  readonly slot: string;
+  /** `"<innerNode>.<param>"` inside that body. */
+  readonly innerSlot: string;
+  /** The value both carry. */
+  readonly value: number;
+}
+
+/**
+ * Constants inside subgraph bodies that equal a declared graph param's
+ * value — the class of bug that a boundary hides.
+ *
+ * WHY THIS EXISTS. A body is bound by its WRAPPER and by nothing else, so
+ * the graph's `params` block cannot reach into one. That is the correct
+ * rule and it is silent: a literal in a body that is a copy of a declared
+ * value keeps working, keeps cooking byte-identically, and desyncs the
+ * moment the knob moves. It happened in the rig — the cable wraps carried
+ * `0.425 * √2` while the eighteen siblings of that number became live, so
+ * turning "half width" dragged the truss out through its own cables — and
+ * nothing could have reported it: `--params` sees addresses and a constant
+ * is not one, the fingerprint sees the default cook and that was
+ * unchanged, and a text migration stops at the boundary.
+ *
+ * WHAT IT REPORTS, and why it is choosy. A numeric equality is a SUSPICION,
+ * not a defect — a body may hold a number that happens to match — so the
+ * rule is built to earn its noise. Measured on the rig, which is the only
+ * graph with both a declared param and a body: reporting every exact match
+ * gave ONE finding and it was a coincidence (`$stretchMin` is 0.55 and the
+ * cable body holds an unrelated 0.55), while the real bug's constant was
+ * `0.6010407640085654`. So a match counts when EITHER
+ *
+ *   - the constant is DISTINCTIVE — more significant digits than anyone
+ *     types by hand, which is what a value computed from another value
+ *     looks like; or
+ *   - it matches the declared value times √2, a relationship no coincidence
+ *     produces and exactly the "half width / half diagonal" pair the rig's
+ *     bug was.
+ *
+ * A short round number matching exactly is left alone, because that is what
+ * a coincidence looks like and a lint nobody believes is worse than none.
+ * The cost is stated plainly: a body that freezes a declared 0.5 is not
+ * caught. The relationship set is deliberately two entries rather than
+ * general arithmetic, which would either miss most relationships or flag
+ * every number in the graph.
+ */
+export function strandedGraphParamValues(graph: Graph): StrandedGraphParamValue[] {
+  const declared = graph.graphParams.filter((p) => typeof p.value === "number");
+  if (declared.length === 0) return [];
+  const out: StrandedGraphParamValue[] = [];
+  for (const state of graph._nodes.values()) {
+    const spec = getSubgraphSpec(state.def);
+    if (spec === undefined) continue;
+    // EVERY field spec in the body, not `paramScan`'s refs: that scan keeps
+    // only specs which already read a name, and a stranded constant is
+    // precisely one that reads nothing. Filtering by refs made this lint
+    // silent on the exact bug it was written for.
+    for (const inner of spec.graph._nodes.values()) {
+      for (const [param, value] of Object.entries(inner.params)) {
+        if (!isField(value)) continue;
+        const innerSpec = peekFieldSpec(value);
+        if (innerSpec === undefined) continue;
+        const ref = { node: inner.id, param };
+        for (const constant of specConstants(innerSpec)) {
+          for (const declaredParam of declared) {
+            const declaredValue = declaredParam.value as number;
+            const derived = declaredValue !== 0 && constant === declaredValue * Math.SQRT2;
+            if ((constant === declaredValue && isDistinctive(constant)) || derived) {
+              out.push({
+                name: declaredParam.name,
+                slot: state.id,
+                innerSlot: `${ref.node}.${ref.param}`,
+                value: constant,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+
+/**
+ * Does this number look computed rather than typed?
+ *
+ * The shortest round-trip decimal of a hand-typed constant is short — 0.55,
+ * 7, 0.03. A value derived from another (0.425 * √2) carries the full f64
+ * mantissa, and that is the signature this lint keys on. Ten significant
+ * digits is well above anything an author types and well below the 16 a
+ * derived double shows.
+ */
+function isDistinctive(value: number): boolean {
+  const digits = String(value).replace(/^-/, "").replace(".", "").replace(/^0+/, "").replace(/e.*$/, "");
+  return digits.length >= 10;
+}
+
+/** Every `constant` value in a spec, however deep. */
+function specConstants(spec: FieldSpec, out: number[] = []): number[] {
+  if (spec.fn === "constant" && typeof spec.value === "number") out.push(spec.value);
+  for (const child of specChildren(spec)) {
+    if (typeof child === "object" && child !== null && !Array.isArray(child)) {
+      specConstants(child as FieldSpec, out);
     }
   }
   return out;

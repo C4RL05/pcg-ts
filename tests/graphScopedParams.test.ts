@@ -20,6 +20,7 @@ import {
   deserializeGraph,
   describeGraphParams,
   serializeGraph,
+  strandedGraphParamValues,
 } from "../src/index.js";
 
 /**
@@ -483,5 +484,95 @@ describe("what a listing and a refusal now say", () => {
     };
     expect(() => deserializeGraph(json)).toThrow(/expected an integer/);
     expect(() => deserializeGraph(json)).not.toThrow(/field-capable/);
+  });
+});
+
+/**
+ * THE LINT FOR THE CLASS OF BUG A SUBGRAPH BOUNDARY HIDES.
+ *
+ * A body is bound by its wrapper and by nothing else, so a constant in a
+ * body that is a copy of a declared graph param keeps cooking correctly and
+ * desyncs the moment the knob moves. It happened in the rig. Nothing could
+ * report it: `--params` sees addresses and a constant is not one, the
+ * fingerprint sees the default cook and that is unchanged, and a text
+ * migration stops at the boundary.
+ */
+describe("strandedGraphParamValues", () => {
+  const bodyHolding = (constant: number, declaredValue: number): Graph =>
+    deserializeGraph(
+      JSON.parse(
+        JSON.stringify({
+          formatVersion: 1,
+          seed: 3,
+          params: [{ name: "halfWidth", value: declaredValue }],
+          nodes: [
+            {
+              id: "wrap",
+              type: "subgraph",
+              params: {},
+              subgraph: {
+                graph: {
+                  formatVersion: 1,
+                  seed: 0,
+                  nodes: [
+                    { id: "grid", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+                    {
+                      id: "move",
+                      type: "transformPoints",
+                      params: {
+                        translate: {
+                          fn: "vec",
+                          args: [{ fn: "constant", value: constant }, 0, 0],
+                        },
+                      },
+                    },
+                  ],
+                  connections: [{ from: ["grid", "out"], to: ["move", "in"] }],
+                  outputs: [{ id: "move", pin: "out", name: "out" }],
+                },
+                inputs: [],
+                outputs: [{ name: "out", node: "move", pin: "out" }],
+              },
+            },
+          ],
+          connections: [],
+          outputs: [{ id: "wrap", pin: "out", name: "points" }],
+        }),
+      ),
+    );
+
+  it("catches the rig's actual bug: a half-diagonal frozen in a body", () => {
+    // 0.425 * √2 — the relationship, not a coincidence, and the exact
+    // number the cable wraps carried while its eighteen siblings went live.
+    const found = strandedGraphParamValues(bodyHolding(0.425 * Math.SQRT2, 0.425));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      name: "halfWidth",
+      slot: "wrap",
+      innerSlot: "move.translate",
+      value: 0.425 * Math.SQRT2,
+    });
+  });
+
+  it("catches a derived-looking exact copy", () => {
+    expect(strandedGraphParamValues(bodyHolding(0.6010407640085654, 0.6010407640085654))).toHaveLength(1);
+  });
+
+  it("stays quiet on a short round number, which is what a coincidence is", () => {
+    // Measured on the rig: reporting every exact match produced exactly one
+    // finding and it was a coincidence. A lint nobody believes is worse
+    // than no lint, and the cost — a frozen 0.5 goes uncaught — is the
+    // trade this makes on purpose.
+    expect(strandedGraphParamValues(bodyHolding(0.55, 0.55))).toEqual([]);
+    expect(strandedGraphParamValues(bodyHolding(7, 7))).toEqual([]);
+  });
+
+  it("stays quiet when the body holds an unrelated number", () => {
+    expect(strandedGraphParamValues(bodyHolding(1.2345678901234, 0.425))).toEqual([]);
+  });
+
+  it("has nothing to say about a graph that declares no params", () => {
+    const graph = deserializeGraph(JSON.parse(graphText({ declared: false })));
+    expect(strandedGraphParamValues(graph)).toEqual([]);
   });
 });
