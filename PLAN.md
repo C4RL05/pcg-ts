@@ -153,10 +153,34 @@ gap 8, which is the reason.
    APPLIED 2026-08-16 (`948f235`): 78 nodes to 68, 83 connections to 73,
    and the only difference in the whole cook is that the dead
    `point.strutId` column stops appearing on three outputs.
-9. **`attributeIs` disqualifies a fused GPU run** (`run-plan-failed`), so
-   adding string variation silently makes a node CPU-only. Known and
-   documented when it shipped; the rig is the first graph to pay it.
-   Wants the interned index lowered to a u32 device column.
+9. **~~`attributeIs` disqualifies a fused GPU run~~ MEASURED AND
+   DEFERRED 2026-08-16; the design is in `PLAN-attribute-is-gpu.md`, and
+   this entry was wrong twice in a way that inflated it.** It does NOT
+   make a node CPU-only: the field still resolves on the device per node
+   — `compile.ts` gives `attributeIs` a pre-assigned uniform slot, and
+   `compile.test.ts` asserts there is no such thing as a CPU-only field
+   fn — what is lost is membership in a FUSED run. And there is no "u32
+   device column" to add: a string column already binds as u32, and the
+   literal's resolved index is a per-dispatch uniform lane rather than a
+   column.
+   **The stake, measured:** two corpus graphs use `attributeIs` /
+   `byAttribute` and no demo does. `basics-mask-by-species.json` forms no
+   resident run at all, so it loses nothing. In the rig the maximal
+   fusable chain containing the `byAttribute` is `[partSize,
+   partPartSpawn]` — `partOrient` is already out for a field-valued `up`
+   and `partPart` for being a string write — and `narrowRun` falls back
+   to `[partPartSpawn]`, which plans, so **the rig keeps its
+   device-resident spawner today**. The whole win is fusing one
+   `setAttribute` over 666 points: one readback and one clone, bounded
+   above by that node's entire cost, 0.8 ms of a 104.9 ms cook.
+   The fix is real and small when a caller earns it (two blockers, both
+   in `run.ts`: `KernelStep` must carry the attributeIs PAIRS and resolve
+   them at execute time where the geometry exists, and `slotFor` must
+   stop refusing a string column). The rule to keep: the pairs belong in
+   the kernel key, the resolved index belongs in NO key and NO plan —
+   two cells of one world routinely share a point count and differ in
+   table order, and the count is the executor's only guard, so a baked
+   index would fail silently.
 10. **~~No CLI listing of a graph's knob addresses.~~ SHIPPED
     2026-08-16** as `pcg validate <graph.json> --params`, which prints
     every address with its value and range and marks the ones an author
