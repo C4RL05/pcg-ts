@@ -5,6 +5,7 @@
  */
 import {
   type AttrDefault,
+  type Attribute,
   type AttributeSet,
   type Domain,
   Geometry,
@@ -193,22 +194,31 @@ const COPY_STANDARD: ReadonlyArray<{
   { name: "seed", type: "u32", tupleSize: 1, defaultValue: 0 },
 ];
 
-/** Params of {@link copyToPoints} (none). */
-export type CopyToPointsParams = Record<string, never>;
+/** Params of {@link copyToPoints}. */
+export interface CopyToPointsParams {
+  targetNames: readonly string[];
+}
 
 /** Copy a source cloud onto every target point, composing transforms. */
 export const copyToPoints = standardNode<CopyToPointsParams>({
   type: "copyToPoints",
   category: "point op",
   description:
-    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity.",
+    "Copies the source point cloud onto every target point (output count = source points * target points, grouped by target). Transforms compose per copy: P = targetP + targetRot * (targetScale * sourceP), rot = targetRot * sourceRot (quaternion product), scale = targetScale * sourceScale (componentwise), and each copied seed is hashCombine(sourceSeed, targetSeed). All other source point attributes are carried through unchanged; missing transform attributes are treated as identity. `targetNames` additionally carries named TARGET point attributes onto the copies: every copy in a target's block receives that target's value, in a column keeping the target's type, tuple size and default. That is what lets copies vary by what the author computed on the target cloud — a species tag, an age, a noise sampled per target — since the copies are otherwise identical in everything but placement. The composed transform attributes cannot be carried, a name the source already carries is refused rather than silently overwritten, a name repeated in the list is refused, and a name absent from the target is an error.",
   inputs: [
     { name: "source", kind: "geometry" },
     { name: "target", kind: "geometry" },
   ],
   outputs: [{ name: "out", kind: "geometry" }],
-  params: {},
-  execute({ inputs }) {
+  params: {
+    targetNames: {
+      type: "stringList",
+      default: [],
+      description:
+        'Target point attributes to carry onto the copies, in any order. Each copy in a target\'s block gets that target\'s value, and the column arrives with the target\'s type, tuple size and default. An empty list carries nothing, which is the default and not an error. Three kinds of name are refused rather than resolved silently: "P", "rot", "scale" and "seed", because they are composed per copy and already hold the target\'s contribution (copy one to another name on the target with setAttribute and carry that to get the raw value); a name repeated in the list; and a name the source also carries, because the two would write the same column. A name absent from the target is an error listing what the target does carry.',
+    },
+  },
+  execute({ inputs, params }) {
     const src = requireGeometry(inputs, "source", "copyToPoints");
     const tgt = requireGeometry(inputs, "target", "copyToPoints");
     const srcSet = src.attrs.point;
@@ -227,6 +237,50 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
         outSet.add(std.name, std.type, std.tupleSize, std.defaultValue as AttrDefault);
       }
     }
+
+    // Carried target columns are added LAST, after the source columns and
+    // the standards, so every way a name could already be taken is
+    // refused first and by name. The alternative is the attribute layer's
+    // own "already exists", which names neither this node nor the param
+    // the author typed the name into. Type, tuple size and default come
+    // from the target column and nothing else — the same derivation
+    // `promote` and `transferNearest` use when they move a column.
+    const carried: Attribute[] = [];
+    const listed = new Set<string>();
+    for (const name of params.targetNames) {
+      if (COPY_STANDARD.some((std) => std.name === name)) {
+        throw new Error(
+          `copyToPoints: param "targetNames" cannot carry "${name}" — P, rot, scale and seed are ` +
+            "composed per copy and already hold the target's contribution, so carrying one would " +
+            "overwrite every copy in a target's block with the target's own value. Copy it to another " +
+            "name on the target upstream with setAttribute and carry that name instead.",
+        );
+      }
+      if (listed.has(name)) {
+        throw new Error(
+          `copyToPoints: param "targetNames" lists "${name}" twice; name each attribute once.`,
+        );
+      }
+      listed.add(name);
+      const attr = tgtSet.get(name);
+      if (!attr) {
+        throw new Error(
+          `copyToPoints: param "targetNames" names "${name}", which the target has no point attribute ` +
+            `for; available: ${tgtSet.names().join(", ") || "(none)"}.`,
+        );
+      }
+      if (srcSet.has(name)) {
+        throw new Error(
+          `copyToPoints: param "targetNames" cannot carry "${name}" — the source carries a point ` +
+            "attribute of that name too, and the two would write the same column. Rename one side with " +
+            `setAttribute, or drop it from the source upstream with removeAttribute (domain "point", ` +
+            `names ["${name}"]).`,
+        );
+      }
+      outSet.add(name, attr.type, attr.tupleSize, attr.defaultValue as AttrDefault);
+      carried.push(attr);
+    }
+
     outSet.resize(total);
 
     // Bulk-carry every source attribute into each target block, then
@@ -234,6 +288,35 @@ export const copyToPoints = standardNode<CopyToPointsParams>({
     for (const attr of srcSet) {
       const dst = outSet.require(attr.name);
       for (let t = 0; t < nT; t++) dst.copyFrom(attr, 0, t * nS, nS);
+    }
+
+    // The target carry is a BROADCAST, not a range copy: one target
+    // element spread over the nS copies that landed on it. So it reads
+    // the element once per TARGET and writes it nS times, rather than
+    // calling copyFrom per copy — that one allocates a subarray view on
+    // every call, which is nS * nT of them in an inner loop. Strings go
+    // through internString because a string column's data holds indices
+    // into ITS OWN table, and an index means nothing in another
+    // geometry's; interning per target (nT times, not nS * nT) is what
+    // makes the output column say the same words the target did.
+    const vals: number[] = [];
+    for (const attr of carried) {
+      const dst = outSet.require(attr.name);
+      const ts = dst.tupleSize;
+      const dd = dst.data;
+      const sd = attr.data;
+      const isString = attr.type === "string";
+      vals.length = ts;
+      for (let t = 0; t < nT; t++) {
+        for (let k = 0; k < ts; k++) {
+          vals[k] = isString ? dst.internString(attr.getString(t, k)) : sd[t * ts + k];
+        }
+        const base = t * nS * ts;
+        for (let s = 0; s < nS; s++) {
+          const o = base + s * ts;
+          for (let k = 0; k < ts; k++) dd[o + k] = vals[k];
+        }
+      }
     }
 
     const readVec = (geoAttr: ReturnType<typeof srcSet.get>, tuple: number): Float32Array | undefined =>

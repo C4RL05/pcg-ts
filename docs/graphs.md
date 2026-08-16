@@ -4,11 +4,12 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-53 examples, alphabetical by file:
+54 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
 - [basics-compose-primitives.json](#basics-compose-primitivesjson) — compose several primitives into a scatter
+- [basics-copy-to-points.json](#basics-copy-to-pointsjson) — give every copy the attributes of the point it landed on
 - [basics-even-spacing.json](#basics-even-spacingjson) — enforce a minimum distance between points
 - [basics-extrude-polygon.json](#basics-extrude-polygonjson) — turn a footprint into massing
 - [basics-field-params.json](#basics-field-paramsjson) — read a field's shaping numbers from a knob
@@ -113,6 +114,24 @@ Four primitives and one terminal node build a complete placement pass: scatter w
 **Outputs:** `instances` (from `spawn`.`instances`)
 
 Cook it: `pcg cook graphs/basics-compose-primitives.json --stats`
+
+## basics-copy-to-points.json
+
+**give every copy the attributes of the point it landed on**
+
+`copyToPoints` stamps the whole `source` cloud onto every `target` point and composes the transforms per copy — P, rot and scale fold the target's frame into the source's, and each copied seed is hashCombine(sourceSeed, targetSeed) so the copies of one clump stay distinguishable. What the copies do NOT get by default is any idea of WHICH target they landed on, which makes them identical in everything but placement. `targetNames` is the fix: each named target point attribute arrives as a column on the copies, with the target's type, tuple size and default, and every copy in a target's block holds that target's value. Here the clump of nine props is a bare `pointGrid` around the origin, and the two things that vary between clumps — `species` and `vigour` — are computed once per plot and carried. `species` is the case nothing else reaches: it is a STRING, so `spawnInstances`' `assetAttr` can split the copies into one batch per asset id, and no amount of transform composition can decide an asset id. `vigour` is the case that shows why a carried value beats a composed one — the `scale` written after the copy multiplies the plot's vigour by a per-copy `randomField`, so a clump's props agree on how well the plot is doing and still differ from each other. The transform attributes are refused by name rather than resolved silently: carrying the target's `P` would put all nine props on top of the plot and the cook would stay clean, so `targetNames` rejects P, rot, scale and seed, and rejects a name the source already carries instead of letting statement order decide the winner.
+
+**Tags:** `basics`, `copy`, `instancing`, `attributes`
+
+**Seed:** 1051
+
+**Node types:** `copyToPoints`, `pointGrid`, `pointScatterInBounds`, `setAttribute`, `spawnInstances`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `size`.`out`), `instances` (from `spawn`.`instances`)
+
+Cook it: `pcg cook graphs/basics-copy-to-points.json --stats`
 
 ## basics-even-spacing.json
 

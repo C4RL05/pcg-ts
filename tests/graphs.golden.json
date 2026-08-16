@@ -106,6 +106,66 @@
         ]
       }
     },
+    "basics-copy-to-points.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 216,
+            "batches": [
+              {
+                "assetId": "pine",
+                "count": 144
+              },
+              {
+                "assetId": "birch",
+                "count": 72
+              }
+            ]
+          }
+        ],
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 216,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "species:string",
+                "vigour:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -31.2103,
+                0,
+                -30.7025
+              ],
+              "max": [
+                28.7092,
+                0,
+                30.4363
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-even-spacing.json": {
       "outputs": {
         "points": [

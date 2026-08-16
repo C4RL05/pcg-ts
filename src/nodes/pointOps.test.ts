@@ -259,6 +259,140 @@ describe("copyToPoints", () => {
     const values = [0, 1, 2, 3].map((i) => seeds.get(i));
     expect(new Set(values).size).toBe(4); // all distinct: hash(srcSeed, tgtSeed)
   });
+
+  const SRC_SEEDS = [100, 200];
+  const TGT_SEEDS = [1, 2, 3];
+
+  /** Two source points and three targets: blocks of 2, one per target. */
+  function carryCase(): { source: Geometry; target: Geometry } {
+    const source = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    const target = cloudAt([
+      [0, 0, 0],
+      [10, 0, 0],
+      [20, 0, 0],
+    ]);
+    SRC_SEEDS.forEach((s, i) => source.attrs.point.require("seed").set(i, s));
+    TGT_SEEDS.forEach((s, i) => target.attrs.point.require("seed").set(i, s));
+    const set = target.attrs.point;
+    const species = set.add("species", "string", 1, "");
+    species.setString(0, "oak");
+    species.setString(1, "fir");
+    species.setString(2, "oak");
+    const age = set.add("age", "u32", 1, 0);
+    [7, 8, 9].forEach((v, i) => age.set(i, v));
+    const tint = set.add("tint", "f32", 3, [1, 1, 1]);
+    [
+      [0.25, 0.5, 0.75],
+      [1, 0, 0],
+      [0, 1, 0],
+    ].forEach((v, i) => tint.setTuple(i, v));
+    return { source, target };
+  }
+
+  it("carries named target attributes onto every copy of that target", async () => {
+    const { source, target } = carryCase();
+    const geo = firstGeo(
+      (
+        await runNode(copyToPoints, { targetNames: ["age", "species", "tint"] }, {
+          source: [makeGeometryItem(source)],
+          target: [makeGeometryItem(target)],
+        })
+      ).out,
+    );
+    expect(geo.pointCount).toBe(6);
+    const age = geo.attrs.point.require("age");
+    // Blocks of nS = 2, in target order: each copy reads ITS OWN target.
+    expect([0, 1, 2, 3, 4, 5].map((i) => age.get(i))).toEqual([7, 7, 8, 8, 9, 9]);
+    // Strings cross the geometry boundary BY VALUE — the target's table
+    // index means nothing here, so assert the words, not the numbers.
+    const species = geo.attrs.point.require("species");
+    expect([0, 1, 2, 3, 4, 5].map((i) => species.getString(i))).toEqual([
+      "oak",
+      "oak",
+      "fir",
+      "fir",
+      "oak",
+      "oak",
+    ]);
+    const tint = geo.attrs.point.require("tint");
+    expect(tint.getTuple(0)).toEqual([0.25, 0.5, 0.75]);
+    expect(tint.getTuple(1)).toEqual([0.25, 0.5, 0.75]);
+    expect(tint.getTuple(4)).toEqual([0, 1, 0]);
+  });
+
+  it("carried columns keep the target's type, tuple size and default", async () => {
+    const { source, target } = carryCase();
+    const geo = firstGeo(
+      (
+        await runNode(copyToPoints, { targetNames: ["age", "species", "tint"] }, {
+          source: [makeGeometryItem(source)],
+          target: [makeGeometryItem(target)],
+        })
+      ).out,
+    );
+    for (const name of ["age", "species", "tint"]) {
+      const src = target.attrs.point.require(name);
+      const dst = geo.attrs.point.require(name);
+      expect([dst.type, dst.tupleSize, dst.defaultValue], name).toEqual([
+        src.type,
+        src.tupleSize,
+        src.defaultValue,
+      ]);
+    }
+  });
+
+  it("refuses the composed transform attributes, a source collision, a repeat and a missing name", async () => {
+    const run = async (targetNames: string[], source?: Geometry, target?: Geometry) => {
+      const c = carryCase();
+      await runNode(copyToPoints, { targetNames }, {
+        source: [makeGeometryItem(source ?? c.source)],
+        target: [makeGeometryItem(target ?? c.target)],
+      });
+    };
+    for (const name of ["P", "rot", "scale", "seed"]) {
+      await expect(run([name])).rejects.toThrow(
+        new RegExp(`copyToPoints: param "targetNames" cannot carry "${name}" — P, rot`),
+      );
+    }
+    const clash = carryCase();
+    clash.source.attrs.point.add("age", "u32", 1, 0);
+    await expect(run(["age"], clash.source, clash.target)).rejects.toThrow(
+      /cannot carry "age" — the source carries a point attribute of that name too/,
+    );
+    await expect(run(["age", "age"])).rejects.toThrow(/lists "age" twice/);
+    await expect(run(["height"])).rejects.toThrow(
+      /names "height", which the target has no point attribute for; available: .*, species, age, tint\./,
+    );
+  });
+
+  it("carries nothing by default, and repeats byte for byte", async () => {
+    const { source, target } = carryCase();
+    const call = (targetNames?: string[]) =>
+      runNode(copyToPoints, targetNames ? { targetNames } : {}, {
+        source: [makeGeometryItem(source)],
+        target: [makeGeometryItem(target)],
+      });
+    const bare = firstGeo((await call()).out);
+    const standard = bare.attrs.point.names();
+    expect(standard).toEqual(source.attrs.point.names());
+    // An explicit empty list is the default path, not a second one.
+    expect(snapshotGeometry(firstGeo((await call([])).out))).toEqual(snapshotGeometry(bare));
+    // Carrying appends columns in the order given and disturbs nothing
+    // else — including the seed chain, hashCombine(sourceSeed, targetSeed).
+    const carried = firstGeo((await call(["age", "species"])).out);
+    expect(carried.attrs.point.names()).toEqual([...standard, "age", "species"]);
+    expect(positionsOf(carried)).toEqual(positionsOf(bare));
+    const seeds = carried.attrs.point.require("seed");
+    expect([0, 1, 2, 3, 4, 5].map((i) => seeds.get(i))).toEqual(
+      [0, 1, 2, 3, 4, 5].map((i) => hashCombine(SRC_SEEDS[i % 2], TGT_SEEDS[Math.floor(i / 2)])),
+    );
+    expect(snapshotGeometry(firstGeo((await call(["age", "species"])).out))).toEqual(
+      snapshotGeometry(carried),
+    );
+  });
 });
 
 describe("mergePoints", () => {
