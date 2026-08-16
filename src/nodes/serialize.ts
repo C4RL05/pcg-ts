@@ -554,6 +554,19 @@ function applyGraphParamTargets(graph: Graph, params: readonly GraphParam[]): Gr
     const bad = graphParamError(withSchema, "params");
     if (bad !== undefined) fail(bad);
     for (const t of targets) {
+      // A target holding a FIELD is refused rather than overwritten.
+      // Writing the value would leave the authored expression in the FILE
+      // and dead in the COOK — measured: a `translate` of
+      // `mul(position, 2)` under a declared 3 cooks a flat 3, while the
+      // JSON still shows the expression. That is the hazard this session
+      // keeps closing: a graph that does something its own text does not
+      // say. Both readings are defensible, so neither is chosen silently.
+      const held = graph.getParams({ id: t.node } as NodeHandle<Record<string, unknown>>)[t.param];
+      if (isField(held)) {
+        fail(
+          `graph param "${param.name}" targets "${t.node}".${t.param}, which holds a FIELD EXPRESSION. Writing the declared value there would leave that expression in the file and dead in the cook, so it is refused rather than chosen for you: either drop the expression from that param (the declaration then drives it), or drop the target and have the expression READ the name instead — a `+"`param`"+` reference inside it binds to the same declared value.`,
+        );
+      }
       try {
         graph.setParam({ id: t.node } as NodeHandle<Record<string, unknown>>, t.param, param.value as never);
       } catch (err) {

@@ -576,3 +576,51 @@ describe("strandedGraphParamValues", () => {
     expect(strandedGraphParamValues(graph)).toEqual([]);
   });
 });
+
+describe("a target that already holds an expression", () => {
+  const drivingAField = (declaredValue: number) =>
+    JSON.parse(
+      JSON.stringify({
+        formatVersion: 1,
+        seed: 5,
+        params: [{ name: "lift", value: declaredValue, targets: [{ node: "t", param: "translate" }] }],
+        nodes: [
+          { id: "g", type: "pointGrid", params: { countX: 2, countZ: 2 } },
+          {
+            id: "t",
+            type: "transformPoints",
+            params: { translate: { fn: "mul", args: [{ fn: "position" }, 2] } },
+          },
+        ],
+        connections: [{ from: ["g", "out"], to: ["t", "in"] }],
+        outputs: [{ id: "t", pin: "out", name: "points" }],
+      }),
+    );
+
+  it("is refused, because the alternative is a file that lies", () => {
+    // Measured before this refusal existed: the declared 3 won, the cook
+    // produced a flat 3, and the JSON still showed `mul(position, 2)` — a
+    // graph doing something its own text does not say, which is the hazard
+    // class the stranded-value lint exists for.
+    expect(() => deserializeGraph(drivingAField(3))).toThrow(/holds a FIELD EXPRESSION/);
+    // And it names both ways out rather than only the problem.
+    expect(() => deserializeGraph(drivingAField(3))).toThrow(/drop the expression|READ the name/);
+  });
+
+  it("still allows the same value to reach that param by being READ", () => {
+    // The other route the refusal names: no target, and the expression
+    // itself references the name. Same one declared value, no dead text.
+    const json = drivingAField(3) as {
+      params: { targets?: unknown }[];
+      nodes: { id: string; params: Record<string, unknown> }[];
+    };
+    delete json.params[0].targets;
+    json.nodes[1].params.translate = {
+      fn: "mul",
+      args: [{ fn: "position" }, { fn: "param", name: "lift" }],
+    };
+    const graph = deserializeGraph(json);
+    const described = describeGraphParams(graph)[0];
+    expect(described.scope === "graph" && described.readers).toEqual(["t.translate"]);
+  });
+});
