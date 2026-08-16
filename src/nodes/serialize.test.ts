@@ -228,6 +228,57 @@ describe("negative zero", () => {
     g.add(jitterPoints, { amount: [0.5, 0, 0.5], seed: 0 }, "jit");
     expect(() => serializeGraph(g)).not.toThrow();
   });
+
+  it("is refused INSIDE a field spec, at any depth", () => {
+    // The hole this had until 2026-08-16: the check looked at a scalar and
+    // one array level, and a field-valued param is a TREE. Both ways in
+    // are covered — a `constant`'s value, and the inline `value` a `param`
+    // node carries — because the two arrived a year apart and the second
+    // would have reopened the first.
+    const constG = new Graph(1);
+    constG.add(
+      jitterPoints,
+      { amount: fieldFromJson({ fn: "mul", args: [{ fn: "constant", value: -0 }, 2] }) },
+      "jit",
+    );
+    expect(() => serializeGraph(constG)).toThrow(/holds -0, which JSON cannot represent/);
+
+    const paramG = new Graph(1);
+    paramG.add(
+      jitterPoints,
+      { amount: fieldFromJson({ fn: "param", name: "amp", value: -0 }) },
+      "jit",
+    );
+    expect(() => serializeGraph(paramG)).toThrow(/holds -0, which JSON cannot represent/);
+  });
+
+  it("names the path to a -0 buried in a field spec", () => {
+    // The whole point of the walk is that the message stays useful: an
+    // author with a deep expression needs to be told WHERE, not merely
+    // that the graph will not save.
+    const g = new Graph(1);
+    g.add(
+      jitterPoints,
+      {
+        amount: fieldFromJson({
+          fn: "add",
+          args: [{ fn: "position" }, { fn: "vec", args: [1, { fn: "constant", value: -0 }, 3] }],
+        }),
+      },
+      "jit",
+    );
+    expect(() => serializeGraph(g)).toThrow(/"amount"\.args\[1\]\.args\[1\]\.value: holds -0/);
+  });
+
+  it("does not refuse a field spec whose zeros are ordinary", () => {
+    const g = new Graph(1);
+    g.add(
+      jitterPoints,
+      { amount: fieldFromJson({ fn: "mul", args: [{ fn: "constant", value: 0 }, 2] }) },
+      "jit",
+    );
+    expect(() => serializeGraph(g)).not.toThrow();
+  });
 });
 
 describe("deserializeGraph round trip", () => {

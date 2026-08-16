@@ -370,11 +370,20 @@ function serializeParamValue(
     if (schema.acceptsField !== true) {
       fail(`${where}: holds a Field but the param is not field-capable`);
     }
+    let spec: unknown;
     try {
-      return fieldToJson(value);
+      spec = fieldToJson(value);
     } catch (err) {
       fail(`${where}: ${err instanceof Error ? err.message : String(err)}`);
     }
+    // Through the SAME guard the plain path takes. This branch used to
+    // return straight from `fieldToJson`, so every number inside a field
+    // spec skipped the -0 check — `{fn:"constant",value:-0}` saved as
+    // `0` and cooked different bytes on reload, which is the one thing
+    // that check exists to prevent. A field is a param like any other and
+    // the numbers inside it are param numbers.
+    refuseNegativeZero(spec, where);
+    return spec;
   }
   // Field-capable vec params accept a runtime-legal scalar (tuple-1
   // broadcast); canonicalize it to the vec arity so the serialized form
@@ -410,14 +419,31 @@ function serializeParamValue(
  */
 function refuseNegativeZero(value: unknown, where: string): void {
   const negZero = (n: unknown): boolean => typeof n === "number" && Object.is(n, -0);
-  const at = negZero(value)
-    ? ""
-    : Array.isArray(value)
-      ? (() => {
-          const i = value.findIndex(negZero);
-          return i === -1 ? undefined : `[${i}]`;
-        })()
-      : undefined;
+  // Walks the whole value, because a param may BE a field spec: a tree of
+  // objects whose `value`, `args` and `opts` hold the numbers. Checking
+  // only the top level and one array deep — which is all this did — let
+  // `{fn:"constant",value:-0}` through, and then the inline `value` on a
+  // `param` node gave it a second way in. Both reload as +0 and cook
+  // different bytes, which is exactly what this function exists to stop,
+  // so it has to go as deep as the numbers do.
+  const find = (v: unknown, path: string): string | undefined => {
+    if (negZero(v)) return path;
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        const hit = find(v[i], `${path}[${i}]`);
+        if (hit !== undefined) return hit;
+      }
+      return undefined;
+    }
+    if (typeof v === "object" && v !== null) {
+      for (const [k, child] of Object.entries(v)) {
+        const hit = find(child, `${path}.${k}`);
+        if (hit !== undefined) return hit;
+      }
+    }
+    return undefined;
+  };
+  const at = find(value, "");
   if (at === undefined) return;
   fail(
     `${where}${at}: holds -0, which JSON cannot represent — it would reload as 0 and cook different bytes. ` +

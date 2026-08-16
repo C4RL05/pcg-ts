@@ -83,11 +83,14 @@ the ORDER primitives came out in, even when the set was unchanged.
   first time someone is bitten by a corpus diff they cannot explain, or
   the first graph that needs a stable per-edge random across an edit.
 
-**Strings readable as fields.** A field cannot read a string attribute,
-so a `species` or `biome` string cannot drive a density field. Workaround
-today: `setAttribute` in string mode already takes a NUMERIC selector to
-index its `values` list, so an author has that number in hand and can
-write it to an int attribute with one extra node.
+**~~Strings readable as fields.~~ SHIPPED 2026-08-16** as
+`attributeIs(name, value)` — see `PLAN-attribute-is.md`. The analysis
+below is kept because it is what made the design safe, and because the
+GPU half of it was wrong in a way worth not repeating.
+
+Original entry: a field could not read a string attribute, so a `species`
+or `biome` string could not drive a density field. The workaround was to
+carry a parallel numeric column by hand.
 - **The obvious design is a determinism bug, and this is the part worth
   keeping.** A field fn returning the string's TABLE INDEX would expose
   an insertion-ordered artifact: the same logical value can intern at
@@ -119,12 +122,22 @@ write it to an int attribute with one extra node.
   `supportedGpuFieldFns() === listFieldFns()` most sharply: there is no
   such thing as a CPU-only field fn.
 
-**A knob that reaches into a field spec.** `nodeSeed` shipped and the
+**~~A knob that reaches into a field spec.~~ SHIPPED 2026-08-16.** A
+`param` spec node carries an optional inline `value`, and the sandbox
+surfaces each inline-valued one as a knob keyed
+`"<nodeId>.<paramKey>.<fieldParamName>"` with a schema derived from the
+value's shape, refinable by a panel file. See `PLAN-spec-params.md`. The
+entry's own guess — "expose a plain node's field-spec `param` names on the
+panel, not a new mechanism" — was right; what it did not anticipate is
+that a plain node had nowhere to keep the VALUE, which is why the grammar
+gained a key rather than the panel gaining a lookup.
+
+Original entry: `nodeSeed` shipped and the
 corpus has been rewritten around it: 38 noise specs across 23 graphs now
 fold a bounded seed shift into `opts.position`, zero at each graph's own
 default seed, so the seed box moves the shapes as well as the scatters.
-What is still missing is the part an EDIT cannot supply. A panel knob
-addresses `"<nodeId>.<param>"` and cannot reach INTO a field spec, so a
+What was still missing was the part an EDIT cannot supply. A panel knob
+addressed `"<nodeId>.<param>"` and could not reach INTO a field spec, so a
 graph gains a working seed box only by being rewritten, and a knob that
 is not the seed still cannot touch a noise at all. `param` is the
 closest thing to an answer (a name inside a spec, bound from outside)
