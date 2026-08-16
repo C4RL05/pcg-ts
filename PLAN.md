@@ -129,20 +129,29 @@ gap 8, which is the reason.
     `spineWander.verticalAmplitude` had become
     `spineWander.translate.verticalAmplitude` required launching a
     browser. Wants `pcg validate --params`.
-11. **`tests/graphs.golden.json` CANNOT SEE INSTANCE TRANSFORMS**, added
-    2026-08-16 and not an expressiveness gap like the ten above — a
-    coverage one, found while fixing gap 6. The rig's `clamp` parts were
+11. **~~`tests/graphs.golden.json` cannot see instance transforms.~~
+    CLOSED 2026-08-16** — never an expressiveness gap like the ten above,
+    a coverage one, found while fixing gap 6. The rig's `clamp` parts were
     resized from `(1,1,1)` to `(1.25, 0.5, 1.25)`, which is plainly
     visible in the render, and the golden entry did not move by one byte
-    in any of the three states the rewrite passed through. That is how
-    the silent fall-through survived in the first place: the golden pins
-    per-domain counts and `P` bounds, and an instances output contributes
-    neither. Combined with what `tests/foldCorpus.test.ts` already
-    records — the golden is a SHAPE gate within a 1e-3 tolerance, not a
-    byte gate — the honest summary is that no committed artifact would
-    notice a graph's instance transforms all changing. Wants the golden
-    to carry a digest of each instances output's transforms, which is
-    cheap and would have caught this without anyone looking.
+    in any of the three states the rewrite passed through: the golden
+    pinned per-domain counts and `P` bounds, and an instances output
+    contributes neither.
+
+    Closed by per-batch transform STATISTICS in `src/docs/graphGolden.ts`
+    — translation, scale and rotation as min/max/mean, the three factors
+    `InstanceBatch.transforms` is defined by — not by the digest this
+    entry originally asked for. A digest was rejected on the golden's own
+    stated grounds: it is exactness against a STORED constant, and the
+    reason the tolerance exists names this case outright ("a different
+    rounding in a transform"), so it would have gone stale on the next
+    reassociated sum. It also fails uninformatively, where the statistics
+    name the batch and the direction — the reverted-clamp proof reports
+    `batch 2 "clamp" scale mean y 0.9963 (golden 0.4982)`. Byte-exactness
+    over transforms already lives in `graphFingerprint`, run against run,
+    where it cannot go stale but also cannot see an intended edit. 13 of
+    the 54 corpus entries carry the new data, over 47 batches; the other
+    41 are byte-identical.
 
 **~~Primitive identity, so primitive-domain randomness stops being
 index-keyed.~~ SHIPPED 2026-08-16** — `primitiveIdentities` in

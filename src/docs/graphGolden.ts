@@ -4,17 +4,32 @@
  *
  * TWO COMPARISONS, AND THE SPLIT IS THE WHOLE DESIGN.
  *
- * 1. **Against a stored golden — count-level only.** {@link graphStats}
+ * 1. **Against a stored golden — shape-level only.** {@link graphStats}
  *    keeps element counts per domain, attribute presence (name, type and
- *    tuple size), instance batch shape, and the bounds of `P` compared
- *    within a tolerance. It deliberately throws away every float it
- *    computes on the way: a golden holding float dumps fights every
- *    legitimate change — a faster spatial grid, a reassociated sum, a
- *    different rounding in a transform — and a suite that cries wolf on
- *    improvements gets relaxed or deleted. What survives here still
- *    catches the failures that matter: a graph that stopped filtering, a
- *    node that stopped writing its attribute, a cloud that landed in the
- *    wrong place.
+ *    tuple size), instance batch shape, the bounds of `P`, and a per-batch
+ *    reduction of the instance transforms — the last two compared within a
+ *    tolerance. It deliberately throws away every raw float it computes on
+ *    the way: a golden holding float dumps fights every legitimate change —
+ *    a faster spatial grid, a reassociated sum, a different rounding in a
+ *    transform — and a suite that cries wolf on improvements gets relaxed
+ *    or deleted. What survives here still catches the failures that
+ *    matter: a graph that stopped filtering, a node that stopped writing
+ *    its attribute, a cloud that landed in the wrong place, a whole class
+ *    of instances that changed size or orientation.
+ *
+ *    WHY THE TRANSFORMS ARE STATISTICS AND NOT A HASH. A hash of the
+ *    transform bytes would be exact and compact, and it was the obvious
+ *    first idea. It is the wrong instrument twice over. Exactness against
+ *    a STORED constant is precisely what the paragraph above rejects, and
+ *    the reason it gives names this case outright — "a different rounding
+ *    in a transform". And a hash fails uninformatively: "the bytes moved"
+ *    is not a bug report, whereas "batch 3 \"clamp\" scale mean y 0.9091
+ *    (golden 0.4545)" names the batch, the quantity and the direction.
+ *    Byte-exactness over transforms already ships in
+ *    {@link graphFingerprint} below, where it compares a run against a run
+ *    and cannot go stale — but that comparison moves WITH an intended
+ *    edit, so it can never notice that a graph's instances all changed. A
+ *    stored record is the only thing that can, and this is it.
  * 2. **Against itself — byte-exact.** {@link graphFingerprint} hashes
  *    the raw attribute bytes, the topology arrays and the instance
  *    transforms. This is where float-exactness belongs: comparing a run
@@ -44,6 +59,7 @@ import {
   DOMAINS,
   type Domain,
   type Geometry,
+  type InstancesItem,
   cook,
   deserializeGraph,
   isDeviceResidentInstances,
@@ -86,14 +102,25 @@ export const GRAPHS_BUDGET_MS = 8;
  */
 export const GRAPHS_TIME_LIMIT_MS = 10000;
 
-/** Decimal places bounds are rounded to before they are stored. */
-export const BOUNDS_DECIMALS = 4;
+/** Decimal places every recorded number is rounded to before it is stored. */
+export const ROUND_DECIMALS = 4;
 
-/** Absolute part of the bounds comparison tolerance, in world units. */
-export const BOUNDS_ABS_TOL = 1e-3;
+/**
+ * Absolute part of the comparison tolerance, in the quantity's own units.
+ *
+ * ONE TOLERANCE, GOVERNING EVERY NUMBER THE GOLDEN COMPARES: the bounds of
+ * `P` and the instance-transform statistics. It was introduced with the
+ * golden itself and has never been tuned, and its stated adversary is our
+ * OWN intended change — a reassociated sum, a faster spatial grid, a
+ * different rounding in a transform — not machine-to-machine float drift,
+ * which no commit in this repository has ever reported. That is why it is
+ * three orders of magnitude wider than f32 noise: it is sized for
+ * reformulation, not for ulps.
+ */
+export const TOLERANCE_ABS = 1e-3;
 
-/** Relative part of the bounds comparison tolerance, scaled by the golden value. */
-export const BOUNDS_REL_TOL = 1e-3;
+/** Relative part of the comparison tolerance, scaled by the golden value. */
+export const TOLERANCE_REL = 1e-3;
 
 // ---------------------------------------------------------------------------
 // Cooking.
@@ -121,11 +148,64 @@ export async function cookGraph(json: unknown): Promise<GraphCookResult> {
 }
 
 // ---------------------------------------------------------------------------
-// The golden: count-level statistics.
+// The golden: shape-level statistics.
 // ---------------------------------------------------------------------------
 
 /** Element counts per domain. */
 export type DomainCounts = { readonly [K in Domain]: number };
+
+/** min / max / mean of a per-axis quantity over a batch's instances. */
+export interface AxisStats {
+  readonly min: readonly number[];
+  readonly max: readonly number[];
+  readonly mean: readonly number[];
+}
+
+/** min / max / mean of a scalar quantity over a batch's instances. */
+export interface ScalarStats {
+  readonly min: number;
+  readonly max: number;
+  readonly mean: number;
+}
+
+/**
+ * One instance batch, reduced.
+ *
+ * The three statistics are the three factors the batch is DEFINED by —
+ * `InstanceBatch.transforms` documents each block as `T(P) * R(rot) *
+ * S(scale)` — so the golden records the composition in the same terms the
+ * protocol states it, rather than sixteen anonymous matrix entries a
+ * reader would have to re-derive meaning from.
+ *
+ * `min`/`max` catch anything that moves the extremes; `mean` is what
+ * catches a change confined to the INTERIOR of the batch, where the
+ * extremes hold still — half the instances shifting is invisible to a
+ * range and immediate in a mean.
+ *
+ * All three are ABSENT on a device-resident batch, whose transforms were
+ * never composed on the host; see {@link batchStats}.
+ */
+export interface BatchStats {
+  readonly assetId: string;
+  readonly count: number;
+  /** World position of each instance: column 3 of its matrix. */
+  readonly translation?: AxisStats;
+  /** Per-axis scale: the length of each basis column. */
+  readonly scale?: AxisStats;
+  /**
+   * Rotation MAGNITUDE in radians, scale divided out; 0 is unrotated.
+   *
+   * A magnitude and not an orientation, which is the one blind spot worth
+   * knowing about: re-aiming every instance about a different axis through
+   * the same angle leaves this untouched. A full orientation record would
+   * be a quaternion whose sign and basis conventions a reader would have
+   * to hold in their head to diff, and the failures this gate exists for —
+   * a spawner that stopped orienting, an orient node reading the wrong
+   * attribute, a whole part kind falling through to an unrotated default —
+   * all move the magnitude.
+   */
+  readonly rotation?: ScalarStats;
+}
 
 /** One cooked item, reduced to what the golden pins. */
 export interface GraphItemStats {
@@ -141,8 +221,8 @@ export interface GraphItemStats {
   readonly residency?: "cpu" | "device";
   /** Instances: total across batches. */
   readonly instances?: number;
-  /** Instances: one entry per asset id, in batch order. */
-  readonly batches?: readonly { readonly assetId: string; readonly count: number }[];
+  /** Instances: one entry per batch, in batch order. */
+  readonly batches?: readonly BatchStats[];
   /** Value items: the emitted value. */
   readonly value?: unknown;
 }
@@ -152,19 +232,145 @@ export interface GraphStats {
   readonly outputs: Readonly<Record<string, readonly GraphItemStats[]>>;
 }
 
-/** The golden file's shape. */
+/**
+ * The golden file's shape.
+ *
+ * `formatVersion` went to 2 when instance batches gained their transform
+ * statistics: a reader holding a version-1 file would find batches with no
+ * transforms and conclude the corpus had none, which is the one wrong
+ * answer available. Nothing migrates old files — the golden is derived,
+ * and `npm run graphs:golden` re-derives it.
+ */
 export interface GraphsGolden {
-  readonly formatVersion: 1;
-  readonly boundsTolerance: { readonly absolute: number; readonly relative: number };
+  readonly formatVersion: 2;
+  /** The tolerance every compared number in the file is checked within. */
+  readonly tolerance: { readonly absolute: number; readonly relative: number };
   readonly examples: Readonly<Record<string, GraphStats>>;
 }
 
 /** Round for storage, and normalize `-0` to `0` so the bytes are stable. */
 function round(v: number): number {
   if (!Number.isFinite(v)) return v;
-  const factor = 10 ** BOUNDS_DECIMALS;
+  const factor = 10 ** ROUND_DECIMALS;
   const r = Math.round(v * factor) / factor;
   return r === 0 ? 0 : r;
+}
+
+/**
+ * Reduce one batch's packed transforms to translation, scale and rotation
+ * statistics. `undefined` when the batch holds no instances — a batch with
+ * nothing in it has no distribution, and recording `Infinity` extremes
+ * would only be a rounding hazard.
+ *
+ * The block layout is the one `InstanceBatch.transforms` commits to: 16
+ * floats per instance, column-major, columns 0-2 the basis (rotation
+ * times scale) and offsets 12-14 the translation. Scale comes back as each
+ * basis column's length; dividing it out of the diagonal leaves the
+ * rotation's trace, and `acos((trace - 1) / 2)` turns that into the angle
+ * of the rotation regardless of which axis it is about.
+ *
+ * TWO DEGENERACIES, BOTH DELIBERATE. A zero-length column has no direction
+ * to recover, so it contributes nothing to the trace — the same batch's
+ * `scale` min reports the degeneracy in terms a reader can act on, which
+ * an `undefined` angle would not. And a column length cannot be negative,
+ * so a MIRRORED basis reads as unmirrored scale plus a rotation the sign
+ * convention did not intend; nothing in this library composes one (the
+ * spawner builds `T*R*S` from a quaternion and a non-negative scale), and
+ * a golden is the wrong place to discover that it started.
+ *
+ * Accumulated in f64 over instances in index order, which is the order the
+ * spawner wrote them: the sums are therefore as deterministic as the cook.
+ * `Math.hypot` and `Math.acos` are only implementation-DEFINED in their
+ * precision, so a different engine may land an ulp away — which is the
+ * second reason these are compared within a tolerance rather than hashed.
+ * `acos` is ill-conditioned at its endpoint and most corpus batches sit
+ * near an angle of 0, but the amplification is `sqrt`: an ulp of trace
+ * disagreement surfaces around 1e-8 radians, five orders inside the
+ * tolerance and below the fourth decimal this is stored at.
+ */
+function batchTransformStats(
+  assetId: string,
+  transforms: Float32Array,
+  count: number,
+): { translation: AxisStats; scale: AxisStats; rotation: ScalarStats } | undefined {
+  if (count <= 0) return undefined;
+  // Not a defensive `min`: a short array against a declared count is a
+  // broken batch, and reducing the prefix would record confident statistics
+  // for instances that do not exist.
+  if (transforms.length < count * 16) {
+    throw new Error(
+      `instance batch "${assetId}" declares ${count} instance(s) but carries ` +
+        `${transforms.length} float(s); InstanceBatch.transforms is 16 floats per instance, ` +
+        `so this batch needs ${count * 16}. Fix the spawner that produced it.`,
+    );
+  }
+  const n = count;
+
+  const tMin = [Infinity, Infinity, Infinity];
+  const tMax = [-Infinity, -Infinity, -Infinity];
+  const tSum = [0, 0, 0];
+  const sMin = [Infinity, Infinity, Infinity];
+  const sMax = [-Infinity, -Infinity, -Infinity];
+  const sSum = [0, 0, 0];
+  let rMin = Infinity;
+  let rMax = -Infinity;
+  let rSum = 0;
+
+  for (let i = 0; i < n; i++) {
+    const o = i * 16;
+    let trace = 0;
+    for (let axis = 0; axis < 3; axis++) {
+      const c = o + axis * 4;
+      const x = transforms[c]!;
+      const y = transforms[c + 1]!;
+      const z = transforms[c + 2]!;
+      const length = Math.hypot(x, y, z);
+      if (length > 0) trace += transforms[c + axis]! / length;
+      if (length < sMin[axis]!) sMin[axis] = length;
+      if (length > sMax[axis]!) sMax[axis] = length;
+      sSum[axis]! += length;
+
+      const t = transforms[o + 12 + axis]!;
+      if (t < tMin[axis]!) tMin[axis] = t;
+      if (t > tMax[axis]!) tMax[axis] = t;
+      tSum[axis]! += t;
+    }
+    const angle = Math.acos(Math.min(1, Math.max(-1, (trace - 1) / 2)));
+    if (angle < rMin) rMin = angle;
+    if (angle > rMax) rMax = angle;
+    rSum += angle;
+  }
+
+  const mean = (sum: readonly number[]): number[] => sum.map((v) => round(v / n));
+  return {
+    translation: { min: tMin.map(round), max: tMax.map(round), mean: mean(tSum) },
+    scale: { min: sMin.map(round), max: sMax.map(round), mean: mean(sSum) },
+    rotation: { min: round(rMin), max: round(rMax), mean: round(rSum / n) },
+  };
+}
+
+/**
+ * Per-batch statistics, transforms included.
+ *
+ * THIS READS THE ITEM AND NOT ITS SUMMARY BECAUSE OF DEVICE RESIDENCY. A
+ * device-resident item's `batches` accessor THROWS by design (see
+ * `makeDeviceInstancesItem`): its transforms were written straight into
+ * GPU buffers and never composed on the host, so there is nothing here to
+ * reduce and no way to ask for it. Such a batch records its shape and no
+ * transform statistics, and `residency` in the same entry is what tells a
+ * reader why they are absent. The corpus cooks without a GPU, so this is a
+ * guard rather than a path — but the golden generator is exactly the kind
+ * of caller that would otherwise trip it.
+ */
+function batchStats(item: InstancesItem): BatchStats[] {
+  if (isDeviceResidentInstances(item)) {
+    return (item.deviceBatches ?? []).map((b) => ({ assetId: b.assetId, count: b.count }));
+  }
+  return item.batches.map((b) => ({
+    assetId: b.assetId,
+    count: b.count,
+    ...batchTransformStats(b.assetId, b.transforms, b.count),
+  }));
 }
 
 /** `P:f32x3`, `density:f32`, `seed:u32` — name, type, and tuple size when it is not 1. */
@@ -173,13 +379,13 @@ function attrSignature(a: { name: string; type: string; tupleSize: number }): st
 }
 
 /**
- * Reduce one cooked item to its count-level statistics.
+ * Reduce one cooked item to its shape-level statistics.
  *
  * It goes through the CLI's `summarizeItem`, which computes per-attribute
  * minima, maxima and means — and then drops all of them but the `P`
  * bounds. Reusing the summarizer keeps one implementation of "what is in
  * this geometry" behind both `pcg inspect` and the golden; discarding
- * most of its output is the point of a count-level golden.
+ * most of its output is the point of a shape-level golden.
  */
 function itemStats(item: DataItem): GraphItemStats {
   const summary = summarizeItem(item);
@@ -209,16 +415,27 @@ function itemStats(item: DataItem): GraphItemStats {
   if (summary.kind === "value") {
     return { kind: "value", tags: summary.tags, value: summary.value };
   }
+  // `summarizeItem` reports the batch SHAPE for either residency and stops
+  // there, so the transforms it does not carry are read off the item — and
+  // `batchStats` needs the item anyway, to reach `deviceBatches`. The
+  // summary's kind mirrors the item's, but the summary union does not carry
+  // that correspondence, so the narrowing happens here. Loudly: a silent
+  // empty list would record a spawner's output as spawning nothing.
+  if (item.kind !== "instances") {
+    throw new Error(
+      `graphGolden: summarizeItem reported an "instances" summary for a "${item.kind}" item`,
+    );
+  }
   return {
     kind: "instances",
     tags: summary.tags,
     residency: summary.residency,
     instances: summary.instances,
-    batches: summary.batches.map((b) => ({ assetId: b.assetId, count: b.count })),
+    batches: batchStats(item),
   };
 }
 
-/** Reduce a whole cook to the golden's count-level statistics. */
+/** Reduce a whole cook to the golden's shape-level statistics. */
 export function graphStats(outputs: Record<string, DataCollection>): GraphStats {
   const reduced: Record<string, readonly GraphItemStats[]> = {};
   for (const name of Object.keys(outputs).sort()) {
@@ -234,10 +451,10 @@ export function graphStats(outputs: Record<string, DataCollection>): GraphStats 
  * regeneration script depends on all of them: examples are keyed by file
  * name and inserted in sorted order, output names are sorted in
  * {@link graphStats}, object keys are emitted in the fixed order of the
- * literals above, bounds are rounded to {@link BOUNDS_DECIMALS} places
- * with `-0` normalized away, and the file ends in a single LF. Nothing
- * carries a timestamp, so regenerating an unchanged corpus rewrites the
- * same bytes.
+ * literals above, every recorded number is rounded to
+ * {@link ROUND_DECIMALS} places with `-0` normalized away, and the file
+ * ends in a single LF. Nothing carries a timestamp, so regenerating an
+ * unchanged corpus rewrites the same bytes.
  */
 export function renderGraphsGolden(
   entries: readonly { readonly file: string; readonly stats: GraphStats }[],
@@ -247,8 +464,8 @@ export function renderGraphsGolden(
     examples[e.file] = e.stats;
   }
   const golden: GraphsGolden = {
-    formatVersion: 1,
-    boundsTolerance: { absolute: BOUNDS_ABS_TOL, relative: BOUNDS_REL_TOL },
+    formatVersion: 2,
+    tolerance: { absolute: TOLERANCE_ABS, relative: TOLERANCE_REL },
     examples,
   };
   return JSON.stringify(golden, null, 2) + "\n";
@@ -260,7 +477,12 @@ export function renderGraphsGolden(
 
 function within(actual: number, expected: number): boolean {
   if (!Number.isFinite(actual) || !Number.isFinite(expected)) return Object.is(actual, expected);
-  return Math.abs(actual - expected) <= BOUNDS_ABS_TOL + BOUNDS_REL_TOL * Math.abs(expected);
+  return Math.abs(actual - expected) <= TOLERANCE_ABS + TOLERANCE_REL * Math.abs(expected);
+}
+
+/** The window `expected` was allowed, rendered for the failure line. */
+function toleranceOf(expected: number): string {
+  return (TOLERANCE_ABS + TOLERANCE_REL * Math.abs(expected)).toPrecision(3);
 }
 
 function listDiff(actual: readonly string[], expected: readonly string[]): string | undefined {
@@ -276,6 +498,70 @@ function listDiff(actual: readonly string[], expected: readonly string[]): strin
 }
 
 const AXES = ["x", "y", "z"];
+
+const STATS = ["min", "max", "mean"] as const;
+
+/**
+ * Compare one per-axis statistic. Every line names the batch, the
+ * quantity, which of min/max/mean moved and along which axis, because
+ * "the transforms differ" is not something a reader can act on.
+ */
+function diffAxisStats(
+  where: string,
+  quantity: string,
+  actual: AxisStats | undefined,
+  expected: AxisStats | undefined,
+  out: string[],
+): void {
+  if (actual === undefined && expected === undefined) return;
+  if (actual === undefined || expected === undefined) {
+    out.push(
+      `${where} ${quantity} statistics ${actual === undefined ? "absent" : "present"} (golden the ` +
+        "opposite); an empty batch and a device-resident one both record none, so check `count` and `residency`",
+    );
+    return;
+  }
+  for (const stat of STATS) {
+    const a = actual[stat];
+    const e = expected[stat];
+    for (let i = 0; i < Math.max(a.length, e.length); i++) {
+      const av = a[i] ?? Number.NaN;
+      const ev = e[i] ?? Number.NaN;
+      if (!within(av, ev)) {
+        out.push(
+          `${where} ${quantity} ${stat} ${AXES[i] ?? i} ${av} (golden ${ev}, tolerance ${toleranceOf(ev)})`,
+        );
+      }
+    }
+  }
+}
+
+/** Compare one scalar statistic; see {@link diffAxisStats}. */
+function diffScalarStats(
+  where: string,
+  quantity: string,
+  actual: ScalarStats | undefined,
+  expected: ScalarStats | undefined,
+  out: string[],
+): void {
+  if (actual === undefined && expected === undefined) return;
+  if (actual === undefined || expected === undefined) {
+    out.push(
+      `${where} ${quantity} statistics ${actual === undefined ? "absent" : "present"} (golden the ` +
+        "opposite); an empty batch and a device-resident one both record none, so check `count` and `residency`",
+    );
+    return;
+  }
+  for (const stat of STATS) {
+    if (!within(actual[stat], expected[stat])) {
+      out.push(
+        `${where} ${quantity} ${stat} ${actual[stat]} (golden ${expected[stat]}, tolerance ${toleranceOf(
+          expected[stat],
+        )})`,
+      );
+    }
+  }
+}
 
 function diffItem(where: string, actual: GraphItemStats, expected: GraphItemStats): string[] {
   const out: string[] = [];
@@ -313,10 +599,7 @@ function diffItem(where: string, actual: GraphItemStats, expected: GraphItemStat
         const ev = e[i] ?? Number.NaN;
         if (!within(av, ev)) {
           out.push(
-            `${where}: bounds ${side} ${AXES[i] ?? i} ${av} (golden ${ev}, tolerance ${(
-              BOUNDS_ABS_TOL +
-              BOUNDS_REL_TOL * Math.abs(ev)
-            ).toPrecision(3)})`,
+            `${where}: bounds ${side} ${AXES[i] ?? i} ${av} (golden ${ev}, tolerance ${toleranceOf(ev)})`,
           );
         }
       }
@@ -332,10 +615,25 @@ function diffItem(where: string, actual: GraphItemStats, expected: GraphItemStat
     if (actual.residency !== expected.residency) {
       out.push(`${where}: residency "${actual.residency}" (golden "${expected.residency}")`);
     }
-    const a = (actual.batches ?? []).map((b) => `${b.assetId}=${b.count}`);
-    const e = (expected.batches ?? []).map((b) => `${b.assetId}=${b.count}`);
+    const actualBatches = actual.batches ?? [];
+    const expectedBatches = expected.batches ?? [];
+    const a = actualBatches.map((b) => `${b.assetId}=${b.count}`);
+    const e = expectedBatches.map((b) => `${b.assetId}=${b.count}`);
     const diff = listDiff(a, e);
     if (diff !== undefined) out.push(`${where}: batches ${diff}`);
+
+    for (let i = 0; i < Math.min(actualBatches.length, expectedBatches.length); i++) {
+      const ab = actualBatches[i]!;
+      const eb = expectedBatches[i]!;
+      // A batch that is no longer the same batch is already reported by the
+      // shape diff above; comparing one asset's transforms against another
+      // asset's would bury that line under statistics nobody asked for.
+      if (ab.assetId !== eb.assetId) continue;
+      const at = `${where}: batch ${i} "${eb.assetId}"`;
+      diffAxisStats(at, "translation", ab.translation, eb.translation, out);
+      diffAxisStats(at, "scale", ab.scale, eb.scale, out);
+      diffScalarStats(at, "rotation", ab.rotation, eb.rotation, out);
+    }
   }
 
   if (expected.kind === "value" && !Object.is(actual.value, expected.value)) {

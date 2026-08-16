@@ -378,7 +378,7 @@ describe("staged pipeline", () => {
   for (const [base, ext] of CHAIN) {
     it(`${ext} reproduces every output ${base} declares`, async () => {
       // TWO granularities, and the coarse one alone would not be the claim
-      // the docstring makes. The golden is count-level: re-derived from a
+      // the docstring makes. The golden is shape-level: re-derived from a
       // real cook of both files, so an output that moved shows up as a
       // count, an attribute or a bounds difference — but two cooks can
       // agree on all of those and still differ in every float. The

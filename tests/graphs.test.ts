@@ -5,14 +5,23 @@
  *
  * WHAT THE GOLDEN PINS, AND WHY IT IS NOT A FLOAT DUMP. It holds element
  * counts per domain, attribute presence (name, type, tuple size),
- * instance batch shape, and the bounds of `P` compared within a
- * tolerance. A float-exact corpus fights every legitimate change — a
- * faster spatial grid, a reassociated sum, a rounding difference in a
- * transform — and a suite that fails on improvements is a suite that
- * gets relaxed until it catches nothing. Counts and attribute shape
- * survive an unrelated numerical improvement while still catching what
- * actually breaks: a filter that stopped filtering, a node that stopped
- * writing its attribute, a cloud that landed somewhere else.
+ * instance batch shape, the bounds of `P`, and per-batch instance
+ * transform statistics — the last two compared within a tolerance. A
+ * float-exact corpus fights every legitimate change — a faster spatial
+ * grid, a reassociated sum, a rounding difference in a transform — and a
+ * suite that fails on improvements is a suite that gets relaxed until it
+ * catches nothing. Counts, attribute shape and reduced statistics survive
+ * an unrelated numerical improvement while still catching what actually
+ * breaks: a filter that stopped filtering, a node that stopped writing its
+ * attribute, a cloud that landed somewhere else, a whole class of
+ * instances that quietly changed size or orientation.
+ *
+ * THE TRANSFORM STATISTICS ARE HERE BECAUSE COUNTS ARE NOT ENOUGH. An
+ * instances output contributes no per-domain count and no `P` bounds, so
+ * before they existed a graph could change the size, position and
+ * orientation of every instance it spawns and this file would pass
+ * without moving one byte — which is exactly how a silent fall-through in
+ * `examples-rig.json` survived three rewrites in a row.
  *
  * Float-exactness belongs in the last two tests instead, which cook each
  * graph twice and compare the raw bytes. Those compare a run against
@@ -32,6 +41,8 @@ import { type DataCollection, cook, deserializeGraph } from "../src/index.js";
 import {
   GRAPHS_TIME_LIMIT_MS,
   type GraphsGolden,
+  TOLERANCE_ABS,
+  TOLERANCE_REL,
   cookGraph,
   graphFingerprint,
   graphStats,
@@ -147,6 +158,38 @@ describe("example corpus", () => {
     }
   });
 
+  it("declares the schema and tolerance this build compares under", () => {
+    // The two header fields are DOCUMENTATION until something reads them,
+    // and documentation that nothing checks is how a file starts lying.
+    // The comparison uses the compiled-in constants, so a golden carrying a
+    // different tolerance was recorded by a different build — which is
+    // exactly the case where its numbers cannot be trusted, and exactly the
+    // case a silent header would hide.
+    const problems: string[] = [];
+    if (golden.formatVersion !== 2) {
+      problems.push(
+        `  formatVersion ${JSON.stringify(golden.formatVersion)}; this build writes and reads 2 ` +
+          "(version 2 added per-batch instance transform statistics)",
+      );
+    }
+    if (golden.tolerance?.absolute !== TOLERANCE_ABS || golden.tolerance?.relative !== TOLERANCE_REL) {
+      problems.push(
+        `  tolerance ${JSON.stringify(golden.tolerance)}; this build compares within ` +
+          `{ absolute: ${TOLERANCE_ABS}, relative: ${TOLERANCE_REL} }`,
+      );
+    }
+    if (problems.length > 0) {
+      throw new Error(
+        [
+          "tests/graphs.golden.json was recorded by a different build:",
+          ...problems,
+          "",
+          "  npm run build && npm run graphs:golden",
+        ].join("\n"),
+      );
+    }
+  });
+
   it("cooks from JSON alone — no dataInput anywhere", () => {
     // `dataInput` items are runtime-injected and a saved graph carries
     // none, so an example using one would deserialize, cook to nothing,
@@ -198,9 +241,10 @@ describe("example corpus", () => {
               ...diffs.map((d) => `  ${d}`),
               "",
               "The golden pins element counts, attribute names and types, instance",
-              "batches, and bounds within a tolerance — never floats — so an unrelated",
-              "numerical improvement should not have moved it. If this change is",
-              "intended, re-derive the golden and read the diff before committing:",
+              "batches, and bounds plus instance transform statistics within a tolerance —",
+              "never raw floats — so an unrelated numerical improvement should not have",
+              "moved it. If this change is intended, re-derive the golden and read the",
+              "diff before committing:",
               "",
               "  npm run build && npm run graphs:golden",
             ].join("\n"),

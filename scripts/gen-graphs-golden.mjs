@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Regenerate the corpus golden (tests/graphs.golden.json) by cooking every
- * example under `graphs/` and recording its COUNT-LEVEL statistics:
- * element counts per domain, attribute presence, instance batch shape, and
- * the bounds of `P`.
+ * example under `graphs/` and recording its SHAPE-LEVEL statistics:
+ * element counts per domain, attribute presence, instance batch shape, the
+ * bounds of `P`, and a per-batch reduction of the instance transforms
+ * (translation, scale and rotation, as min/max/mean).
  *
  * Usage: node scripts/gen-graphs-golden.mjs
  *
@@ -22,8 +23,8 @@
  *
  * Reads dist/docs/index.js (run `npm run build` first). Output is
  * deterministic: examples keyed in sorted order, canonical key order,
- * bounds rounded, LF newlines, no timestamp — running twice over an
- * unchanged corpus rewrites identical bytes.
+ * every recorded number rounded, LF newlines, no timestamp — running twice
+ * over an unchanged corpus rewrites identical bytes.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
