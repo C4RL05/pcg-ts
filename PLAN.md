@@ -118,7 +118,20 @@ gap 8, which is the reason.
    new-fn tax — mandatory WGSL handler, two `MINIMAL_SPECS` corpora, four
    `listFieldFns().length` claims, the closed-set blocks in
    `docs/manual.html` and `llms.txt` — and stays FUSED on the device,
-   which `attributeIs` does not.
+   which `attributeIs` does not. (Confirmed after the migration: the
+   `examples-gpu-fields` capture still reports `1 / 2 run / fused`.)
+   **The corpus migrated, and it took the fold's only subject with it.**
+   39 folds across 25 files, ~1,270 spec nodes deleted. `param` is
+   registered per-element and `constant` is declined by `isWorthFolding`,
+   so `nodeSeed` was the ONLY uniform leaf that could seed a foldable
+   subtree — with the idiom gone, the graphs contain zero domain-constant
+   expressions and `tests/foldCorpus.test.ts` measured `actuallyFolded`
+   at 0. `src/fields/fold.ts` is NOT dead: the idiom is still legal
+   grammar and still documented, so a user's graph may be full of it. But
+   nothing we ship exercises it any more, which is worth knowing before
+   anyone reads that module's break-even measurements as live. Its teeth
+   now bite on fixtures the test states outright; no threshold was
+   lowered.
 4. **~~Renaming a node silently changes its geometry~~ HALF SHIPPED, HALF
    IMPOSSIBLE, and saying which is the point.** The calibration constant
    is gone: `{"from":"node","variant":N}` needs no `W0`, so nothing has to
