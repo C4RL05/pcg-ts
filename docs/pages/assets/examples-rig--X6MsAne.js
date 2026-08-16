@@ -3,7 +3,7 @@ var e=`{\r
   "seed": 3,\r
   "meta": {\r
     "title": "a suspended rig, built from curves",\r
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Two numbers this graph reads over and over are declared once at the top, under \`params\`, and read by name from the expressions that need them: \`trussHalfWidth\` was eighteen literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2 — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe reach that same grouping from the other end: \`copyToPoints\` writes each copy's anchor index itself, through \`targetIndexAttr\`, and \`pointsToPath\` groups by it. Carrying it needed a \`setAttribute\` on the anchors first, writing an \`index\` field into a column whose only reader was \`targetNames\` — the node had already computed that index to place the copies, so both of those are gone. Before that the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the source strand's point count written out a second time, in another node, with nothing holding the two together. Editing the strand welded every chain into one path and said nothing. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: six of the eight fbm fields fold \`nodeSeed\` into \`opts.position\` as a bounded shift, so the spine takes a different wander and the clusters a different shape, rather than the same frozen field being walked over by points that moved. Each of those six also carries a \`variant\` param of its own, an inline value added into the fold before it is scaled, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, so until a param could sit inside a plain node's expression the spine's two noises could only move together, and the four scalars this graph needed had to be folded into literal noise seeds before it was saved. Every variant defaults to 0, so the shift is still exactly zero at seed 3 and the spine is the spine this file has always cooked — the flattening moved the node's id, and with it the seed the fold is calibrated against, so the three constants that zero it were re-derived rather than left to drift. The cable wraps are the deliberate exception: their body is a \`forEach\`, whose seed varies per item, and their wobble already re-rolls through \`randomField\`.",\r
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the sandbox reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Two numbers this graph reads over and over are declared once at the top, under \`params\`, and read by name from the expressions that need them: \`trussHalfWidth\` was eighteen literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2 — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe reach that same grouping from the other end: \`copyToPoints\` writes each copy's anchor index itself, through \`targetIndexAttr\`, and \`pointsToPath\` groups by it. Carrying it needed a \`setAttribute\` on the anchors first, writing an \`index\` field into a column whose only reader was \`targetNames\` — the node had already computed that index to place the copies, so both of those are gone. Before that the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the source strand's point count written out a second time, in another node, with nothing holding the two together. Editing the strand welded every chain into one path and said nothing. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so \`filterPrimitivesByAttribute\` cuts 456 chords to 63 while they are still polylines — gating the segment cloud afterwards, which is what this graph used to do, meant building 7.24 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: six of the eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. Each of those six carries its \`variant\` as an inline \`param\` of its own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The cable wraps are the deliberate exception: their body is a \`forEach\`, whose seed varies per item, and their wobble already re-rolls through \`randomField\`.",\r
     "tags": [\r
       "examples",\r
       "curves",\r
@@ -74,34 +74,28 @@ var e=`{\r
                   "fn": "fbm",\r
                   "base": "perlinNoise",\r
                   "opts": {\r
-                    "seed": 4178438610,\r
+                    "seed": {\r
+                      "from": "node",\r
+                      "variant": {\r
+                        "fn": "param",\r
+                        "name": "variantUp",\r
+                        "value": 0\r
+                      }\r
+                    },\r
                     "frequency": 0.035,\r
                     "position": {\r
-                      "fn": "add",\r
+                      "fn": "mul",\r
                       "args": [\r
                         {\r
-                          "fn": "mul",\r
-                          "args": [\r
-                            {\r
-                              "fn": "position"\r
-                            },\r
-                            {\r
-                              "fn": "param",\r
-                              "name": "wanderScale",\r
-                              "value": 1,\r
-                              "min": 0.1,\r
-                              "max": 8,\r
-                              "description": "Scales the position both noises are sampled at, so larger means a tighter, faster wander and 1 is the wander the graph was authored with. It is a MULTIPLIER rather than a frequency because that is what keeps the default exact: the base frequency stays in the noise, where it multiplies in f64, and x1.0 through the position column is the identity. One name, read twice in one expression — so this single knob reaches both noises."\r
-                            }\r
-                          ]\r
+                          "fn": "position"\r
                         },\r
                         {\r
-                          "fn": "vec",\r
-                          "args": [\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 1021] }] }] }, 0.6426391602] }, 900] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 3067] }] }] }, 0.2977294922] }, 900] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantUp", "value": 0 }] }, 8191] }] }] }, 0.0173339844] }, 900] }\r
-                          ]\r
+                          "fn": "param",\r
+                          "name": "wanderScale",\r
+                          "value": 1,\r
+                          "min": 0.1,\r
+                          "max": 8,\r
+                          "description": "Scales the position both noises are sampled at, so larger means a tighter, faster wander and 1 is the wander the graph was authored with. It is a MULTIPLIER rather than a frequency because that is what keeps the default exact: the base frequency stays in the noise, where it multiplies in f64, and x1.0 through the position column is the identity. One name, read twice in one expression — so this single knob reaches both noises."\r
                         }\r
                       ]\r
                     },\r
@@ -132,31 +126,25 @@ var e=`{\r
                   "fn": "fbm",\r
                   "base": "perlinNoise",\r
                   "opts": {\r
-                    "seed": 2443226542,\r
+                    "seed": {\r
+                      "from": "node",\r
+                      "variant": {\r
+                        "fn": "param",\r
+                        "name": "variantAcross",\r
+                        "value": 1\r
+                      }\r
+                    },\r
                     "frequency": 0.035,\r
                     "position": {\r
-                      "fn": "add",\r
+                      "fn": "mul",\r
                       "args": [\r
                         {\r
-                          "fn": "mul",\r
-                          "args": [\r
-                            {\r
-                              "fn": "position"\r
-                            },\r
-                            {\r
-                              "fn": "param",\r
-                              "name": "wanderScale",\r
-                              "value": 1\r
-                            }\r
-                          ]\r
+                          "fn": "position"\r
                         },\r
                         {\r
-                          "fn": "vec",\r
-                          "args": [\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 3067] }] }] }, 0.2977294922] }, 900] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 8191] }] }] }, 0.0173339844] }, 900] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "variantAcross", "value": 0 }] }, 1021] }] }] }, 0.6426391602] }, 900] }\r
-                          ]\r
+                          "fn": "param",\r
+                          "name": "wanderScale",\r
+                          "value": 1\r
                         }\r
                       ]\r
                     },\r
@@ -1285,7 +1273,14 @@ var e=`{\r
           "fn": "fbm",\r
           "base": "perlinNoise",\r
           "opts": {\r
-            "seed": 2616234397,\r
+            "seed": {\r
+              "from": "node",\r
+              "variant": {\r
+                "fn": "param",\r
+                "name": "clusterVariant",\r
+                "value": 0\r
+              }\r
+            },\r
             "frequency": 14,\r
             "offset": [\r
               0,\r
@@ -1293,33 +1288,20 @@ var e=`{\r
               0\r
             ],\r
             "position": {\r
-              "fn": "add",\r
+              "fn": "vec",\r
               "args": [\r
                 {\r
-                  "fn": "vec",\r
-                  "args": [\r
-                    {\r
-                      "fn": "attribute",\r
-                      "name": "curveU",\r
-                      "tupleSize": 1\r
-                    },\r
-                    {\r
-                      "fn": "constant",\r
-                      "value": 0\r
-                    },\r
-                    {\r
-                      "fn": "constant",\r
-                      "value": 0\r
-                    }\r
-                  ]\r
+                  "fn": "attribute",\r
+                  "name": "curveU",\r
+                  "tupleSize": 1\r
                 },\r
                 {\r
-                  "fn": "vec",\r
-                  "args": [\r
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 1021] }] }] }, 0.0648269653] }, 2.5] },\r
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 3067] }] }] }, 0.660949707] }, 2.5] },\r
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "clusterVariant", "value": 0 }] }, 8191] }] }] }, 0.200744629] }, 2.5] }\r
-                  ]\r
+                  "fn": "constant",\r
+                  "value": 0\r
+                },\r
+                {\r
+                  "fn": "constant",\r
+                  "value": 0\r
                 }\r
               ]\r
             },\r
@@ -2975,7 +2957,14 @@ var e=`{\r
                   "fn": "fbm",\r
                   "base": "perlinNoise",\r
                   "opts": {\r
-                    "seed": 2098766061,\r
+                    "seed": {\r
+                      "from": "node",\r
+                      "variant": {\r
+                        "fn": "param",\r
+                        "name": "curlVariantX",\r
+                        "value": 0\r
+                      }\r
+                    },\r
                     "frequency": 0.5,\r
                     "offset": [\r
                       0,\r
@@ -2985,20 +2974,7 @@ var e=`{\r
                     "octaves": 2,\r
                     "lacunarity": 2,\r
                     "gain": 0.5,\r
-                    "position": {\r
-                      "fn": "add",\r
-                      "args": [\r
-                        { "fn": "position" },\r
-                        {\r
-                          "fn": "vec",\r
-                          "args": [\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 1021] }] }] }, 0.51373291] }, 64] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 3067] }] }] }, 0.395263672] }, 64] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantX", "value": 0 }] }, 8191] }] }] }, 0.520996094] }, 64] }\r
-                          ]\r
-                        }\r
-                      ]\r
-                    }\r
+                    "position": { "fn": "position" }\r
                   }\r
                 }\r
               ]\r
@@ -3038,7 +3014,14 @@ var e=`{\r
                   "fn": "fbm",\r
                   "base": "perlinNoise",\r
                   "opts": {\r
-                    "seed": 1211183335,\r
+                    "seed": {\r
+                      "from": "node",\r
+                      "variant": {\r
+                        "fn": "param",\r
+                        "name": "curlVariantZ",\r
+                        "value": 1\r
+                      }\r
+                    },\r
                     "frequency": 0.5,\r
                     "offset": [\r
                       0,\r
@@ -3048,20 +3031,7 @@ var e=`{\r
                     "octaves": 2,\r
                     "lacunarity": 2,\r
                     "gain": 0.5,\r
-                    "position": {\r
-                      "fn": "add",\r
-                      "args": [\r
-                        { "fn": "position" },\r
-                        {\r
-                          "fn": "vec",\r
-                          "args": [\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 3067] }] }] }, 0.395263672] }, 64] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 8191] }] }] }, 0.520996094] }, 64] },\r
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "curlVariantZ", "value": 0 }] }, 1021] }] }] }, 0.51373291] }, 64] }\r
-                          ]\r
-                        }\r
-                      ]\r
-                    }\r
+                    "position": { "fn": "position" }\r
                   }\r
                 }\r
               ]\r
@@ -3195,7 +3165,14 @@ var e=`{\r
                               "fn": "fbm",\r
                               "base": "perlinNoise",\r
                               "opts": {\r
-                                "seed": 1367222746,\r
+                                "seed": {\r
+                                  "from": "node",\r
+                                  "variant": {\r
+                                    "fn": "param",\r
+                                    "name": "sagVariant",\r
+                                    "value": 0\r
+                                  }\r
+                                },\r
                                 "frequency": 0.06,\r
                                 "offset": [\r
                                   0,\r
@@ -3205,20 +3182,7 @@ var e=`{\r
                                 "octaves": 1,\r
                                 "lacunarity": 2,\r
                                 "gain": 0.5,\r
-                                "position": {\r
-                                  "fn": "add",\r
-                                  "args": [\r
-                                    { "fn": "position" },\r
-                                    {\r
-                                      "fn": "vec",\r
-                                      "args": [\r
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 1021] }] }] }, 0.0917510986] }, 500] },\r
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 3067] }] }] }, 0.761413574] }, 500] },\r
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "add", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, { "fn": "param", "name": "sagVariant", "value": 0 }] }, 8191] }] }] }, 0.529418945] }, 500] }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
+                                "position": { "fn": "position" }\r
                               }\r
                             }\r
                           ]\r

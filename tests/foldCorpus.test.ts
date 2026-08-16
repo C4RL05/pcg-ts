@@ -152,6 +152,90 @@ for (const entry of loadGraphs(ROOT)) {
   collect(json.nodes, entry.path, cases);
 }
 
+/**
+ * One bounded seed shift, `A * (fract(nodeSeed * 2^-32 * K) - W0)` — the
+ * shape `nodeSeed()`'s own documentation prescribes. Uniform over the
+ * domain, which is precisely what the fold collapses.
+ */
+function seedShift(k: number, w0: number, a: number, variant?: FieldSpec): FieldSpec {
+  const scaled: FieldSpec =
+    variant === undefined
+      ? ({ fn: "mul", args: [{ fn: "nodeSeed" }, 2.3283064365386963e-10] } as FieldSpec)
+      : ({
+          fn: "add",
+          args: [{ fn: "mul", args: [{ fn: "nodeSeed" }, 2.3283064365386963e-10] }, variant],
+        } as FieldSpec);
+  const term = { fn: "mul", args: [scaled, k] } as FieldSpec;
+  return {
+    fn: "mul",
+    args: [
+      { fn: "sub", args: [{ fn: "sub", args: [term, { fn: "floor", args: [term] }] }, w0] },
+      a,
+    ],
+  } as FieldSpec;
+}
+
+/**
+ * THE FOLD'S OWN FIXTURES, and why they are stated here rather than
+ * scavenged from the graphs like everything above.
+ *
+ * This suite used to find its foldable expressions in the corpus, because
+ * 39 specs folded a seed shift into a noise's `opts.position` — the only
+ * way a saved noise could re-roll with the graph seed. `opts.seed` now
+ * takes `{"from":"node","variant":N}` directly, the corpus was migrated off
+ * the idiom, and the last domain-constant expression left the graphs with
+ * it: `param` is registered per-element and `constant` is declined by
+ * `isWorthFolding`, so `nodeSeed` was the ONLY uniform leaf that could seed
+ * a foldable subtree.
+ *
+ * That does not make the fold inert, which is what the teeth below guard
+ * against — it makes the CORPUS a place that no longer happens to contain
+ * the fold's subject. The idiom is still legal grammar and still
+ * documented, so a user's graph may be full of it and the fold still has to
+ * be exactly correct on it. The teeth therefore bite on expressions this
+ * file states outright, while the corpus sweep above goes on doing what
+ * only it can: proving the fold changes no byte of what actually ships.
+ */
+const FIXTURES: readonly Case[] = [
+  { graph: "(fixture)", node: "seed shift, one axis", spec: seedShift(1021, 0.245422363, 1600) },
+  {
+    graph: "(fixture)",
+    node: "seed shift, three axes added to a position",
+    spec: {
+      fn: "add",
+      args: [
+        { fn: "position" },
+        {
+          fn: "vec",
+          args: [
+            seedShift(1021, 0.6426391602, 900),
+            seedShift(3067, 0.2977294922, 900),
+            seedShift(8191, 0.0173339844, 900),
+          ],
+        },
+      ],
+    } as FieldSpec,
+  },
+  {
+    graph: "(fixture)",
+    node: "seed shift carrying a bound param",
+    spec: seedShift(1021, 0.245422363, 1600, { fn: "param", name: "variant" } as FieldSpec),
+    bindings: { variant: 0.25 },
+  },
+  {
+    graph: "(fixture)",
+    node: "seed shift scaling an attribute",
+    spec: {
+      fn: "mul",
+      args: [
+        { fn: "attribute", name: "density", tupleSize: 1 },
+        seedShift(3067, 0.2977294922, 12),
+      ],
+    } as FieldSpec,
+  },
+];
+cases.push(...FIXTURES);
+
 describe(`field expressions across ${GRAPHS_DIR}/ fold without changing a byte`, () => {
   it("found expressions to check", () => {
     // Vacuity guard. Everything below is a loop over `cases`, so an empty
@@ -225,6 +309,11 @@ describe(`field expressions across ${GRAPHS_DIR}/ fold without changing a byte`,
     // everything, so the suite has to prove it did work. If this fails
     // after a grammar change, the fold has gone silently inert — which is
     // a real defect and not a reason to lower the number.
+    //
+    // The work now comes from FIXTURES rather than from the graphs, for
+    // the reason given where they are declared: the corpus was migrated
+    // off the one idiom that produced domain-constant expressions. The
+    // numbers were NOT lowered to accommodate that.
     expect(built).toBeGreaterThan(20);
     expect(actuallyFolded).toBeGreaterThan(10);
     // And on an expression carrying a `param`, which the corpus reaches

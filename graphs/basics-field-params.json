@@ -3,7 +3,7 @@
   "seed": 1044,
   "meta": {
     "title": "read a field's shaping numbers from a knob",
-    "description": "A field expression can read a named value instead of baking one: `{ \"fn\": \"param\", \"name\": \"amplitude\" }` inside the body's `translate` spec takes whatever the wrapping node's `amplitude` knob holds, so the two numbers that shape this surface are knobs rather than literals a caller would have to edit the graph to move. Every exposed param binds its name into its body's field scope, which is why both declarations here list no `targets` at all — neither writes into an inner param slot, so their type comes from the shape of `default` (a number is f32, a 3-number array vec3, a 4-number array vec4). The value is SUBSTITUTED before the field is built, so what cooks is exactly the field the literal would have built, cache key included: turning the knob invalidates precisely what editing the number would have. `frequency` multiplies the sample position rather than sitting in `opts.frequency`, because the noise options are read as plain numbers and cannot hold a spec — folding the scale into the position is the same move every noise-bearing primitive makes.",
+    "description": "A field expression can read a named value instead of baking one: `{ \"fn\": \"param\", \"name\": \"amplitude\" }` inside the body's `translate` spec takes whatever the wrapping node's `amplitude` knob holds, so the two numbers that shape this surface are knobs rather than literals a caller would have to edit the graph to move. Every exposed param binds its name into its body's field scope, which is why both declarations here list no `targets` at all — neither writes into an inner param slot, so their type comes from the shape of `default` (a number is f32, a 3-number array vec3, a 4-number array vec4). The value is SUBSTITUTED before the field is built, so what cooks is exactly the field the literal would have built, cache key included: turning the knob invalidates precisely what editing the number would have. `frequency` multiplies the sample position rather than sitting in `opts.frequency`, because that option is read as a plain number and cannot hold a spec — folding the scale into the position is the same move every noise-bearing primitive makes.",
     "tags": ["basics", "fields", "subgraph", "params"]
   },
   "nodes": [
@@ -44,26 +44,14 @@
                               "fn": "fbm",
                               "base": "perlinNoise",
                               "opts": {
+                                "seed": { "from": "node", "variant": 0 },
                                 "octaves": 4,
                                 "normalized": true,
                                 "position": {
-                                  "fn": "add",
+                                  "fn": "mul",
                                   "args": [
-                                    {
-                                      "fn": "mul",
-                                      "args": [
-                                        { "fn": "position" },
-                                        { "fn": "param", "name": "frequency" }
-                                      ]
-                                    },
-                                    {
-                                      "fn": "vec",
-                                      "args": [
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.814971924] }, 32] },
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.14050293] }, 32] },
-                                        { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.269775391] }, 32] }
-                                      ]
-                                    }
+                                    { "fn": "position" },
+                                    { "fn": "param", "name": "frequency" }
                                   ]
                                 }
                               }

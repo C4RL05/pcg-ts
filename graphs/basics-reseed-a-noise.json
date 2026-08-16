@@ -3,7 +3,7 @@
   "seed": 1048,
   "meta": {
     "title": "make a saved noise re-roll with the graph seed",
-    "description": "A serialized field expression bakes its numbers, so a noise carries `opts.seed` as a literal and the graph's seed box moves every scatter and jitter while leaving the shape exactly where it was. `{ \"fn\": \"nodeSeed\" }` is the way out: it resolves to the cooking node's own seed — `deriveNodeSeed(graph seed, node id)`, the same number `randomField` hashes — and `opts.position` is an ordinary argument position where `opts.seed` is read as a plain number and cannot hold a spec. So the seed is folded into the SAMPLE POSITION instead, one `A * (fract(nodeSeed * 2^-32 * K) - W0)` per axis. Every part of that shape is load-bearing. Multiplying by 2^-32 is exact, so the fold reads the seed's HIGH bits rather than the low ones an f32 column has already rounded away. `A` is about 32 noise cells (`32 / opts.frequency`, so 700 here): far enough to decorrelate, near enough that an f32 still resolves a lattice cell at the sample point. `K` is 1021, 3067 and 8191 so the three axes do not move together. And `W0` is the expression's own value at seed 1048, which makes the offset exactly zero at this graph's default seed — folding this into a saved graph costs nothing until someone moves the seed. It is built from `add`, `sub`, `mul` and `floor` alone, because those four are bit-exact on CPU and GPU and a one-ULP disagreement inside a `floor` would move the offset by a whole unit rather than a ULP. Change the seed and this surface becomes a different surface; delete the `add` and it is deaf to the seed again. Every noise-bearing graph in this corpus carries the same fold, and `docs/authoring.md` has the derivation.",
+    "description": "A serialized field expression bakes its numbers, so a noise that carries `opts.seed` as a literal leaves the graph's seed box moving every scatter and jitter while the shape stays exactly where it was. `opts.seed` is the way out, because besides an integer it takes one tagged form: `{ \"from\": \"node\", \"variant\": 5 }` derives this noise's seed as `hashCombine(the cooking node's own seed, variant)`, the node seed being `deriveNodeSeed(graph seed, node id)` — the same number `randomField` hashes. So the seed box now moves this surface and not merely the points on it. Every part of that shape is load-bearing. The whole derivation is u32 murmur with no float anywhere in it, which is why it is bit-exact on CPU and GPU rather than budgeted the way a noise interior is: a seed has no tolerance, since a one-ULP disagreement in one is not a rounding error in the output but `hashCombine` avalanching to an unrelated number and the two paths cooking different noises. That is also why the position is the one noise option that takes a spec and the seed admits no arbitrary expression — every field column is f32, so a seed read through one would arrive already rounded to 24 bits. `variant` stands where the old literal seed stood, and it picks WHICH draw off this node: two noises on one node with different variants are two independent fields, which is how a single node yields several. It is capped at 2^24, where an f32 stops holding every integer, because the GPU may read it back through a uniform slot — a variant is a slot number, not a seed. Adopting the form RE-ROLLS the noise: frequency, amplitude, position and normalization are untouched, but the field is a different draw from the same family, so it is an edit made once and deliberately rather than a new default. Change the seed and this surface becomes a different surface; write a literal back into `opts.seed` and it is deaf to the seed again.",
     "tags": ["basics", "fields", "noise", "determinism"]
   },
   "nodes": [
@@ -32,23 +32,10 @@
                 {
                   "fn": "perlinNoise",
                   "opts": {
-                    "seed": 5,
+                    "seed": { "from": "node", "variant": 5 },
                     "frequency": 0.045,
                     "normalized": true,
-                    "position": {
-                      "fn": "add",
-                      "args": [
-                        { "fn": "position" },
-                        {
-                          "fn": "vec",
-                          "args": [
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.891418457] }, 700] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.258544922] }, 700] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.741210938] }, 700] }
-                          ]
-                        }
-                      ]
-                    }
+                    "position": { "fn": "position" }
                   }
                 },
                 0,

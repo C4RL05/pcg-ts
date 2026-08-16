@@ -30,23 +30,11 @@ var e=`{
           "fn": "fbm",
           "base": "perlinNoise",
           "opts": {
+            "seed": { "from": "node", "variant": 0 },
             "frequency": 0.03,
             "octaves": 4,
             "normalized": true,
-            "position": {
-              "fn": "add",
-              "args": [
-                { "fn": "position" },
-                {
-                  "fn": "vec",
-                  "args": [
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.885986328] }, 1000] },
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.608520508] }, 1000] },
-                    { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.303710938] }, 1000] }
-                  ]
-                }
-              ]
-            }
+            "position": { "fn": "position" }
           }
         }
       }

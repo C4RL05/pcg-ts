@@ -2,13 +2,13 @@ var e=`{
   "formatVersion": 1,
   "seed": 40100,
   "meta": {
-    "title": "staged pipeline 4/5, edited — the full settlement with authored plots",
-    "description": "\`pipeline-4-detail.json\` verbatim plus the same authored edit layer \`pipeline-3-lots-edits.json\` adds, so it is a superset of BOTH. It is the whole point of the arrangement: \`terrain\`, \`boundary\` and \`districts\` stay bit-identical to the unedited stage 4, while \`lots\`, \`footprints\`, \`buildings\` and everything downstream of them respond to the hand-placed geometry. An edit reaches exactly as far as the dependency graph says it does, and no further.",
+    "title": "staged pipeline 5/5, edited — the settlement, its roads and authored plots",
+    "description": "\`pipeline-5-roads.json\` verbatim plus the same authored edit layer \`pipeline-3-lots-edits.json\` adds, so it is a superset of BOTH. The road net is built from the district centres, upstream of the \`edits\` slot, so \`roads\` and \`lamps\` join \`terrain\`, \`boundary\` and \`districts\` on the list of outputs an edit provably cannot reach — while \`lots\`, \`footprints\`, \`buildings\` and everything downstream of them respond to the hand-placed geometry. An edit reaches exactly as far as the dependency graph says it does, and no further.",
     "tags": [
       "pipeline",
       "staged",
       "edits",
-      "spawn"
+      "network"
     ]
   },
   "nodes": [
@@ -78,22 +78,10 @@ var e=`{
                 {
                   "fn": "perlinNoise",
                   "opts": {
+                    "seed": { "from": "node", "variant": 0 },
                     "frequency": 0.02,
                     "normalized": true,
-                    "position": {
-                      "fn": "add",
-                      "args": [
-                        { "fn": "position" },
-                        {
-                          "fn": "vec",
-                          "args": [
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.245422363] }, 1600] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.852783203] }, 1600] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.133300781] }, 1600] }
-                          ]
-                        }
-                      ]
-                    }
+                    "position": { "fn": "position" }
                   }
                 },
                 0,
@@ -726,6 +714,140 @@ var e=`{
         "tupleSize": 1,
         "value": 1
       }
+    },
+    {
+      "id": "roadWeight",
+      "type": "setAttribute",
+      "params": {
+        "name": "roadWeight",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "sub",
+          "args": [
+            1,
+            {
+              "fn": "div",
+              "args": [
+                {
+                  "fn": "length",
+                  "args": [
+                    {
+                      "fn": "vec",
+                      "args": [
+                        {
+                          "fn": "component",
+                          "args": [
+                            {
+                              "fn": "position"
+                            }
+                          ],
+                          "index": 0
+                        },
+                        0,
+                        {
+                          "fn": "component",
+                          "args": [
+                            {
+                              "fn": "position"
+                            }
+                          ],
+                          "index": 2
+                        }
+                      ]
+                    }
+                  ]
+                },
+                63
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "roadNet",
+      "type": "connectPoints",
+      "params": {
+        "mode": "relativeNeighborhood",
+        "radius": 70,
+        "degreeAttr": "degree",
+        "lengthAttr": "roadLength"
+      }
+    },
+    {
+      "id": "roadClass",
+      "type": "promoteAttribute",
+      "params": {
+        "name": "roadWeight",
+        "from": "point",
+        "to": "primitive",
+        "mode": "min"
+      }
+    },
+    {
+      "id": "roadKind",
+      "type": "promoteAttribute",
+      "params": {
+        "name": "districtKind",
+        "from": "point",
+        "to": "primitive",
+        "mode": "first"
+      }
+    },
+    {
+      "id": "roadWidth",
+      "type": "setAttribute",
+      "params": {
+        "name": "roadWidth",
+        "domain": "primitive",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "remap",
+          "args": [
+            {
+              "fn": "attribute",
+              "name": "roadWeight",
+              "tupleSize": 1
+            },
+            0,
+            1,
+            1.5,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "id": "roadJunction",
+      "type": "promoteAttribute",
+      "params": {
+        "name": "roadWidth",
+        "from": "primitive",
+        "to": "point",
+        "mode": "max"
+      }
+    },
+    {
+      "id": "roadPosts",
+      "type": "subgraph",
+      "params": {
+        "mode": "spacing",
+        "spacing": 14,
+        "axis": "+z"
+      },
+      "ref": {
+        "name": "place/along-curve"
+      }
+    },
+    {
+      "id": "roadSpawn",
+      "type": "spawnInstances",
+      "params": {
+        "assetId": "lamp"
+      }
     }
   ],
   "connections": [
@@ -1208,6 +1330,86 @@ var e=`{
         "edits",
         "in"
       ]
+    },
+    {
+      "from": [
+        "centreKind",
+        "out"
+      ],
+      "to": [
+        "roadWeight",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "roadWeight",
+        "out"
+      ],
+      "to": [
+        "roadNet",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "roadNet",
+        "out"
+      ],
+      "to": [
+        "roadClass",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "roadClass",
+        "out"
+      ],
+      "to": [
+        "roadKind",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "roadKind",
+        "out"
+      ],
+      "to": [
+        "roadWidth",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "roadWidth",
+        "out"
+      ],
+      "to": [
+        "roadJunction",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "roadJunction",
+        "out"
+      ],
+      "to": [
+        "roadPosts",
+        "curve"
+      ]
+    },
+    {
+      "from": [
+        "roadPosts",
+        "out"
+      ],
+      "to": [
+        "roadSpawn",
+        "in"
+      ]
     }
   ],
   "outputs": [
@@ -1250,6 +1452,16 @@ var e=`{
       "id": "trees",
       "pin": "instances",
       "name": "vegetation"
+    },
+    {
+      "id": "roadJunction",
+      "pin": "out",
+      "name": "roads"
+    },
+    {
+      "id": "roadSpawn",
+      "pin": "instances",
+      "name": "lamps"
     }
   ]
 }

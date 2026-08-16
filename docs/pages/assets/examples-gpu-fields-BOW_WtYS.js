@@ -1,4 +1,4 @@
-{
+var e=`{
   "formatVersion": 1,
   "seed": 1,
   "meta": {
@@ -549,3 +549,4 @@
     }
   ]
 }
+`;export{e as default};

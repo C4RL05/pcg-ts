@@ -13,18 +13,18 @@
         {
           "param": "spineWander.translate.variantUp",
           "label": "variant up",
-          "description": "Which of the up-and-down wanders, of the many the same noise holds. It is added to the node seed before the fold into `opts.position`, so it re-rolls THIS noise and nothing else — the seed box moves every noise at once, this moves one.",
+          "description": "Which of the up-and-down wanders, of the many this node can draw. It is the `variant` in the noise's `opts.seed`, hashed with the node's own seed, so it re-rolls THIS noise and nothing else — the seed box moves every noise at once, this moves one. A whole number: it names a draw, it does not scale one.",
           "min": 0,
-          "max": 1,
-          "step": 0.01
+          "max": 16,
+          "step": 1
         },
         {
           "param": "spineWander.translate.variantAcross",
           "label": "variant across",
           "description": "The same dial for the sideways wander. Two dials rather than one is the whole point: a node has a single seed, so before inline params the two noises could only be re-rolled together.",
           "min": 0,
-          "max": 1,
-          "step": 0.01
+          "max": 16,
+          "step": 1
         }
       ]
     },
@@ -69,8 +69,8 @@
           "label": "cluster variant",
           "description": "Re-rolls the noise that decides WHERE the components clump, without moving the spine or anything else the seed box would move with it.",
           "min": 0,
-          "max": 1,
-          "step": 0.01
+          "max": 16,
+          "step": 1
         }
       ]
     },
@@ -86,16 +86,16 @@
           "param": "danglerCurl.translate.curlVariantX",
           "label": "curl variant x",
           "min": 0,
-          "max": 1,
-          "step": 0.01
+          "max": 16,
+          "step": 1
         },
         {
           "param": "danglerCurl.translate.curlVariantZ",
           "label": "curl variant z",
           "description": "The fringe curls on two noises, one per horizontal axis. A dial each, so a cable bundle can be pushed out of a plane it happened to fall into.",
           "min": 0,
-          "max": 1,
-          "step": 0.01
+          "max": 16,
+          "step": 1
         }
       ]
     },
@@ -113,8 +113,8 @@
           "label": "sag variant",
           "description": "Re-rolls how deep each swag hangs. The picks that decide WHICH chords are hung are keyed on primitive identity, so they move with the anchors rather than with this.",
           "min": 0,
-          "max": 1,
-          "step": 0.01
+          "max": 16,
+          "step": 1
         }
       ]
     }

@@ -2,13 +2,13 @@ var e=`{
   "formatVersion": 1,
   "seed": 40100,
   "meta": {
-    "title": "staged pipeline 4/5 — buildings, wall posts and forest",
-    "description": "Stages 1-3 verbatim, plus everything that gets drawn. ADDS \`buildings\` (one asset per lot, chosen per point and spawned), \`props\` (posts spaced every 6 units along the boundary wall and turned to follow it) and \`vegetation\` (plantable scatter on the terrain, cut to the ground outside the wall, yawed at random and split into species batches). Every earlier output — \`terrain\`, \`boundary\`, \`districts\`, \`lots\`, \`footprints\` — is bit-identical to the stage that introduced it. Staging works because a node's seed is hashCombine(graphSeed, hashString(nodeId)) — node-local, independent of where the node sits in the DAG — so every earlier stage reproduces bit-identically inside every later one.",
+    "title": "staged pipeline 4/5, edited — the full settlement with authored plots",
+    "description": "\`pipeline-4-detail.json\` verbatim plus the same authored edit layer \`pipeline-3-lots-edits.json\` adds, so it is a superset of BOTH. It is the whole point of the arrangement: \`terrain\`, \`boundary\` and \`districts\` stay bit-identical to the unedited stage 4, while \`lots\`, \`footprints\`, \`buildings\` and everything downstream of them respond to the hand-placed geometry. An edit reaches exactly as far as the dependency graph says it does, and no further.",
     "tags": [
       "pipeline",
       "staged",
-      "spawn",
-      "instancing"
+      "edits",
+      "spawn"
     ]
   },
   "nodes": [
@@ -78,22 +78,10 @@ var e=`{
                 {
                   "fn": "perlinNoise",
                   "opts": {
+                    "seed": { "from": "node", "variant": 0 },
                     "frequency": 0.02,
                     "normalized": true,
-                    "position": {
-                      "fn": "add",
-                      "args": [
-                        { "fn": "position" },
-                        {
-                          "fn": "vec",
-                          "args": [
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 1021] }] }] }, 0.245422363] }, 1600] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 3067] }] }] }, 0.852783203] }, 1600] },
-                            { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }, { "fn": "floor", "args": [{ "fn": "mul", "args": [{ "fn": "mul", "args": [{ "fn": "nodeSeed" }, 2.3283064365386963e-10] }, 8191] }] }] }, 0.133300781] }, 1600] }
-                          ]
-                        }
-                      ]
-                    }
+                    "position": { "fn": "position" }
                   }
                 },
                 0,
@@ -658,6 +646,74 @@ var e=`{
       "ref": {
         "name": "write/instances-by-species"
       }
+    },
+    {
+      "id": "editRow",
+      "type": "pointLine",
+      "params": {
+        "count": 6,
+        "start": [
+          -34,
+          40,
+          -44
+        ],
+        "end": [
+          16,
+          40,
+          -44
+        ],
+        "includeEnd": true
+      }
+    },
+    {
+      "id": "editBlock",
+      "type": "pointGrid",
+      "params": {
+        "countX": 3,
+        "countY": 1,
+        "countZ": 2,
+        "spacing": [
+          9,
+          1,
+          9
+        ],
+        "origin": [
+          22,
+          40,
+          16
+        ]
+      }
+    },
+    {
+      "id": "editPts",
+      "type": "mergePoints",
+      "params": {}
+    },
+    {
+      "id": "editDrop",
+      "type": "subgraph",
+      "params": {
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "maxDistance": 0
+      },
+      "ref": {
+        "name": "place/drop-to-surface"
+      }
+    },
+    {
+      "id": "editLock",
+      "type": "setAttribute",
+      "params": {
+        "name": "locked",
+        "domain": "point",
+        "type": "i32",
+        "tupleSize": 1,
+        "value": 1
+      }
     }
   ],
   "connections": [
@@ -1078,6 +1134,66 @@ var e=`{
       ],
       "to": [
         "trees",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "editRow",
+        "out"
+      ],
+      "to": [
+        "editPts",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "editBlock",
+        "out"
+      ],
+      "to": [
+        "editPts",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "editPts",
+        "out"
+      ],
+      "to": [
+        "editDrop",
+        "points"
+      ]
+    },
+    {
+      "from": [
+        "terrain",
+        "out"
+      ],
+      "to": [
+        "editDrop",
+        "surface"
+      ]
+    },
+    {
+      "from": [
+        "editDrop",
+        "out"
+      ],
+      "to": [
+        "editLock",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "editLock",
+        "out"
+      ],
+      "to": [
+        "edits",
         "in"
       ]
     }
