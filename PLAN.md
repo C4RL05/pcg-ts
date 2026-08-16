@@ -40,7 +40,24 @@ re-deriving it is the expensive part.
 Ten more, found by taking the rig through the five mechanisms that shipped
 because of round two. Every byte claim below is `graphFingerprint` against
 a control that reports DIFFERENT at another seed, so "byte-identical" is a
-measurement. Nothing here is scheduled.
+measurement.
+
+**Worked through 2026-08-16 in one pass. Nine of the ten shipped; the
+tenth was refused with a measurement, which is the same result.** Gap 7 —
+carrying a curve frame across a resample — is the refusal, and it got
+STRONGER on the second look rather than weaker: the general mechanism
+appeared to have a consumer besides frames, three scalars the cable body
+carries with a piecewise-constant `nearest` transfer, and those scalars
+measure as per-cable CONSTANTS (min = max = mean, standard deviation
+zero), so an interpolating carrier would buy exactly nothing. With that
+consumer withdrawn the entry has none, and this file's opening discipline
+applies.
+
+Two entries corrected their own reasoning while being built, which is what
+these lists keep earning: gap 1 undersold itself by a whole half of the
+format (19 field-capable params in 46 node types, all f32/vec3/vec4), and
+gap 6 was wrong about the rig — both copy sources emit zero primitives, so
+the rebuild it wanted to retire was BUILDING topology, not restoring it.
 
 **Round three's headline is a BUG, not a feature, and it was in our own
 work.** Gap 10: the cable wraps carried a frozen `0.6010407640085654`
@@ -99,7 +116,16 @@ constant is distinctive or equals the value times √2.
    — `resolveExposedParam` merges targets' registered schemas and accepts
    `i32`/`bool`/`string`/`enum` alike; graph scope refuses `targets` only
    because the top-level key set is closed.
-2. **A resampled path publishes neither its length nor its step**, so
+2. **~~A resampled path publishes neither its length nor its step~~
+   SHIPPED 2026-08-16** as opt-in `lengthAttr` / `stepAttr`, both on the
+   PRIMITIVE domain because a length is one fact per path — per-point it
+   would be the same number repeated, free to disagree with itself — and
+   reporting the TRUE arc length, which is the number the author cannot
+   compute. In `spacing` mode it reports the step the node TAKES rather
+   than the short seam remainder, so a downstream multiple keeps its
+   meaning when the mode changes.
+   Original entry: a resampled path publishes neither its length nor its
+   step, so
    anything sized in units of the sampling is frozen. `partScatter.amount`
    is 17/900 — half a step of a 900-sample resample of a nominally 34-unit
    spine — and the panel moves that count from 100 to 2000, where the same
@@ -107,21 +133,49 @@ constant is distinctive or equals the value times √2.
    derived from the nominal span rather than the true arc length (34.213),
    which the author could not know. `connectPoints.lengthAttr` is the
    precedent, one branch over.
-3. **`pointLine` cannot say "count points, one unit apart"**, so
+3. **~~`pointLine` cannot say "count points, one unit apart"~~ SHIPPED
+   2026-08-16** as `mode: "endpoints" | "spacing"`. The names diverge from
+   `pathResample`'s pair on purpose and the node says why: there `count`
+   is the discriminator because a spacing resample derives it, here
+   `count` is read in BOTH modes, so what differs is which END is
+   authored. `includeEnd: false` is REFUSED in the new mode rather than
+   accepted as a no-op — the derived far end is the last point, and a
+   setting that moves no byte is invisible to the fingerprint, to
+   `--params` and to a reader, which is gap 10's hazard class.
+   Original entry: `pointLine` cannot say "count points, one unit apart",
+   so
    `wrapCarrierLine` restates its own count in `end: [15,0,0]`. Turning the
    "wraps" knob 16 → 17 therefore re-spaces the line and re-keys every
    `forEach` item: 1 of 16 cables survives, where moving `end` to 16 by
    hand keeps all 16 and adds one. Its sibling `pathResample` already has
    the `count | spacing` mode-pair; the two source-side nodes that place
    evenly spaced things answer the same question differently.
-4. **No index within a path**, so the chain's alternation is right only by
+4. **~~No index within a path~~ SHIPPED 2026-08-16** as `pathSegments`'
+   opt-in `segmentIndexAttr`, DENSE — it counts emitted segments — so a
+   skipped zero-length segment cannot flip the parity it exists to feed.
+   Original entry: no index within a path, so the chain's alternation is right only by
    parity luck: `chainAlternate` reads the GLOBAL index and means "every
    other link of THIS chain", and the two agree only because 35 points give
    34 segments. At `count: 36` the chains disagree with each other and
    nothing reports it. A `strandIndex` written on the source survives
    `copyToPoints` and is then destroyed by `pathSegments`, which drops
    point attributes — so the workaround is blocked, not merely ugly.
-5. **`setAttribute` type `string` restates its own `values.length`.**
+5. **~~`setAttribute` type `string` restates its own `values.length`.~~
+   SHIPPED 2026-08-16** as `weights` beside `values`, with its OWN
+   selector: `select` is a fraction in [0, 1) — what `randomField`
+   produces natively — because a fraction read as an index is a wrong
+   distribution with nothing to report it, so the convention is carried by
+   the slot the expression sits in and setting both is refused. Weights
+   are whole counts, which makes the bucket ends exact integers below 2^53
+   and the weighted table literally the repeated table.
+   **It also caused a param type.** `weights` first shipped as a
+   `stringList` of digit strings, because the vocabulary had no
+   variable-length numeric list — a second convention every reader of the
+   machine-readable schema would have to learn for something a type can
+   state. `ParamType` gains `numberList`, and this file's own rule is the
+   argument: never compromise a design to avoid a format break.
+   Original entry: `setAttribute` type `string` restates its own
+   `values.length`.
    `partPart` selects with `mul(randomField, 9)` over a nine-entry table
    whose repetitions ARE a weighting nothing says is one. Append a fifth
    kind and leave the selector: the cook reports zero instances of it, with
