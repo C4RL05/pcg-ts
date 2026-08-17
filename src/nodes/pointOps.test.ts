@@ -937,6 +937,53 @@ describe("setBounds", () => {
       expect(geo.attrs.point.require("boundsMax").getTuple(i)).toEqual([4, 5, 6]);
     }
   });
+
+  it("takes a per-point corner as a field, which one constant cannot say", async () => {
+    // Each point gets the box IT asks for: the corner is read from the
+    // point's own position, so the two points end up with different
+    // extents in a single cook.
+    const input = cloudAt([
+      [0, 0, 0],
+      [2, 0, 0],
+    ]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          setBounds,
+          { boundsMin: vec(0, 0, 0), boundsMax: vec(component(position(), 0), 1, 1) },
+          { in: [makeGeometryItem(input)] },
+        )
+      ).out,
+    );
+    expect(geo.attrs.point.require("boundsMax").getTuple(0)).toEqual([0, 1, 1]);
+    expect(geo.attrs.point.require("boundsMax").getTuple(1)).toEqual([2, 1, 1]);
+  });
+
+  it("a constant field equals the plain corner, with a control that differs", async () => {
+    // f32-exact values on purpose: a field resolves into an f32 column,
+    // so an inexact literal would differ for a real reason and this test
+    // would be asserting the wrong thing.
+    const input = cloudAt([[0, 0, 0], [1, 1, 1]]);
+    const run = async (min: unknown, max: unknown) =>
+      firstGeo(
+        (
+          await runNode(setBounds, { boundsMin: min, boundsMax: max } as never, {
+            in: [makeGeometryItem(input)],
+          })
+        ).out,
+      ).attrs.point.require("boundsMax").getTuple(1);
+    expect(await run([0, 0, 0], constant([2.5, 0.25, 4]))).toEqual(await run([0, 0, 0], [2.5, 0.25, 4]));
+    // CONTROL: the comparison must be able to report a difference.
+    expect(await run([0, 0, 0], [2.5, 0.25, 4])).not.toEqual(await run([0, 0, 0], [2.5, 0.25, 8]));
+  });
+
+  it("refuses a scalar corner rather than broadcasting it to a cube", async () => {
+    await expect(
+      runNode(setBounds, { boundsMax: constant(3) } as never, {
+        in: [makeGeometryItem(cloudAt([[0, 0, 0]]))] ,
+      }),
+    ).rejects.toThrow(/must evaluate to THREE numbers per point/);
+  });
 });
 
 describe("orientAlongVector", () => {

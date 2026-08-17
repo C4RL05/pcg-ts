@@ -359,11 +359,15 @@ element; the only place the library tells the two spellings apart is GPU
 eligibility (AUTHORED vs DERIVED spec, below). README.md "Fields" is the
 TypeScript side.
 
-WHICH PARAMS ACCEPT ONE — 21 of the standard library's 180. A param can
+WHICH PARAMS ACCEPT ONE — 43 of the standard library's 180, across 24
+node types, after the rule was swept over every numeric param rather
+than applied case by case (it started at 20; the sweep refused five:
+`connectPoints.radius` on symmetry, `splineSample.spacing` and
+`volumeSample.cellSize`/bounds on allocation). A param can
 be a field exactly when its value is read PER ELEMENT; everything
 settled before the elements are walked cannot be one:
 
-- The column is f32: all 21 are `f32` (14) or `vec3` (7). No `i32`,
+- The column is f32: all 43 are `f32` (26) or `vec3` (17). No `i32`,
   `u32`, `enum`, `bool`, `string` or list param, ever — a field resolves
   per element into a column, and only f32 and its tuples read one. Part
   of it is executable: `acceptsField` on `items`/`numberList`/
@@ -378,15 +382,34 @@ settled before the elements are walked cannot be one:
   builds its elements FROM those params.
 - Read before the walk stays eager: all 8 `seed` params hash-combine
   into the node's derived seed at cook start, with no element in hand.
-- Nothing that decides how many elements come OUT:
-  `pathResample.spacing`, `splineSample.spacing`,
-  `volumeSample.cellSize` and its bounds size their own output.
-- Nothing that defines a SYMMETRIC RELATION: `connectPoints.radius`, and
-  its schema says why — a per-point radius would make "A is near B"
-  disagree with "B is near A", and an edge would depend on which
-  endpoint asked. A per-POINT query has no such obligation, so
-  `selfPrune.minDistance` IS field-capable, symmetrising on the larger
-  of the two radii.
+- Nothing read ONCE to size a single allocation: `volumeSample.cellSize`
+  and its bounds, because that node builds ONE grid — one value, no
+  element to read it per. This clause first read "nothing that decides
+  how many elements come out", and the C2 sweep proved that wrong:
+  `pathResample.spacing` decides exactly that and IS field-capable,
+  because the node resamples every polyline on its own arc length, so the
+  field resolves per PRIMITIVE — one spacing per path, each path's count
+  from its own value. `splineSample.spacing` is the same word in the same
+  units and cannot be one — it DOES keep each sample's source primitive,
+  but walks the concatenated length from s = 0, so which polyline a
+  sample lands on is known only AFTER the step that placed it: the value
+  cannot precede the element it would be indexed by. The question is never what the param decides, it
+  is whether an element exists to read it per; a global cap on a fielded
+  allocation param becomes a post-resolution check. `volumeSample` shows
+  both halves in ONE node: `jitter` is a field (read per output centre),
+  `cellSize` cannot be (it sizes the grid those centres come from).
+- Nothing that defines a SYMMETRIC RELATION without a stated
+  symmetrisation: a per-point radius makes "A is near B" and "B is near
+  A" two tests, so a relation needs a rule for which wins.
+  `selfPrune.minDistance` HAS one (the larger of the two radii,
+  `filtering.ts:1252`) and is field-capable because of it; a per-POINT
+  measurement like `pointNeighborhood.radius` owes nothing here at all.
+  `connectPoints.radius` has adopted no rule and stays eager — POLICY,
+  not impossibility, and this clause first overstated it as one. The
+  costs are ordinary: MAX_EDGES measured at the widest resolved radius,
+  and its documented halo ("widen the cell's rectangle by `radius`")
+  becoming the field's global maximum, author-supplied, as `selfPrune`
+  already documents.
 
 NON-reasons, both of them plausible: grid cell size (`selfPrune`
 resolves the field to a column FIRST and sizes its cells from the

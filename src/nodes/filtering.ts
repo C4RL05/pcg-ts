@@ -36,9 +36,69 @@ import {
   type FieldParam,
   gatherPoints,
   gatherPrimitives,
+  readComp,
   requireGeometry,
+  resolveOn,
   resolveOnAllowingNonFinite,
 } from "./util.js";
+
+/**
+ * Resolve one of this file's SCALAR field-capable params — a density
+ * threshold, or a comparison's right-hand side — to exactly one number per
+ * element of the filter's OWN domain. `domain` is the filter's domain, not
+ * always the point domain: the two primitive filters read one value per
+ * PRIMITIVE.
+ *
+ * GUARDED (`resolveOn`), unlike {@link selfPruneScalar} beside it: none of
+ * the three params routed through here has a documented meaning for NaN or
+ * ±Infinity, so a non-finite value is a broken expression rather than data
+ * and the refusal names the param. The message below is the other half of
+ * that contract — a vector here is the likely mistake, since the standard
+ * `scale` attribute is a vec3 and a threshold is one number.
+ */
+function filterScalarColumn(
+  nodeType: string,
+  geo: Geometry,
+  domain: "point" | "primitive",
+  param: string,
+  value: FieldParam,
+  seed: number,
+  what: string,
+): Column {
+  const col = resolveOn(geo, domain, value, seed, nodeType, param);
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `${nodeType}: param "${param}" must evaluate to ONE number per ${domain} (tupleSize 1), got tupleSize ${col.tupleSize} — ${what} is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per ${domain}. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
+    );
+  }
+  return col;
+}
+
+/**
+ * The width check every VEC3 field-capable param here shares: a corner or a
+ * direction is three numbers, and a scalar broadcasts to all three exactly
+ * as a plain scalar written in a graph does.
+ *
+ * Only the guard is shared, never the resolver — which of the two the
+ * caller used is a property of the PARAM (see
+ * `resolveOnAllowingNonFinite`): the bounds params document ±Infinity as
+ * the way to leave an axis unbounded and so must not be guarded, while
+ * `projectToPlane`'s plane has no meaning for a non-finite component at all.
+ */
+function requireVec3Column(
+  nodeType: string,
+  param: string,
+  domain: string,
+  col: Column,
+  what: string,
+): Column {
+  if (col.tupleSize !== 1 && col.tupleSize !== 3) {
+    throw new Error(
+      `${nodeType}: param "${param}" must evaluate to three components [x, y, z] (tupleSize 3) per ${domain}, or to one number broadcast to all three (tupleSize 1), got tupleSize ${col.tupleSize} — ${what}. Build it with vec(x, y, z), e.g. vec(attribute("minX"), -1000, attribute("minZ")).`,
+    );
+  }
+  return col;
+}
 
 /**
  * The `topology` param, ONE object shared verbatim by all five point
@@ -123,7 +183,7 @@ function rebuildFiltered(geo: Geometry, keep: ArrayLike<number>, keepTopology: b
 /** Params of {@link filterByDensity}. */
 export interface FilterByDensityParams {
   mode: string;
-  threshold: number;
+  threshold: FieldParam;
   seed: number;
   topology: string;
 }
@@ -147,7 +207,9 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
     threshold: {
       type: "f32",
       default: 0.5,
-      description: "Minimum density a point needs to survive in 'threshold' mode. Ignored in 'probabilistic' mode.",
+      acceptsField: true,
+      description:
+        "Minimum density a point needs to survive in 'threshold' mode: a point is kept when its own `density` attribute is >= this. Ignored in 'probabilistic' mode, and a field written here is not even evaluated in that mode — the param nothing reads costs nothing and refuses nothing. As a FIELD it is a PER-POINT threshold, evaluated on the input's points, so each point is tested against the bar IT was given rather than against one number shared by the cloud: attribute(\"minDensity\") lets a value written upstream set each point's own bar, and a noise or a position expression makes the bar vary across the world, which thins one region at 0.8 while another survives at 0.2 in a single cook. The comparison is unchanged and still `density >= threshold`, so a constant field matches the plain number wherever that number is exactly representable in f32 — which is the honest form of the claim, because a field resolves into an f32 COLUMN while a plain param stays the f64 the author wrote. `constant(0.7)` is 0.699999988079071 and a datum sitting between the two lands on different sides of them. That is not a defect to be fixed here but clause 1 of the capability rule showing through, and it is why the equality tests use f32-exact values on purpose. Non-finite values are REFUSED rather than read: a field resolving to NaN or ±Infinity here names this param and stops, because a threshold has no documented meaning for one — unlike selfPrune's radius, where NaN means 'claims no room'. Guard the expression itself (max(x, 1e-6) under a div) if it can produce one.",
     },
     seed: {
       type: "u32",
@@ -169,8 +231,30 @@ export const filterByDensity = standardNode<FilterByDensityParams>({
     const n = geo.pointCount;
     const keep: number[] = [];
     if (params.mode === "threshold") {
-      for (let i = 0; i < n; i++) {
-        if (density.data[i] >= params.threshold) keep.push(i);
+      // Resolved ONCE, before the scan, and only in the mode that reads it.
+      // A plain threshold keeps the path it always had rather than going
+      // through a column: `constant()` stores f32, and a bar that is not
+      // f32-exact would move the point sitting on it.
+      if (typeof params.threshold === "number") {
+        const t = params.threshold;
+        for (let i = 0; i < n; i++) {
+          if (density.data[i] >= t) keep.push(i);
+        }
+      } else {
+        // The node's own seed: `seed` above is documented as the extra seed
+        // for the probabilistic draw, and this mode never makes one.
+        const t = filterScalarColumn(
+          "filterByDensity",
+          geo,
+          "point",
+          "threshold",
+          params.threshold,
+          nodeSeed,
+          "a threshold",
+        ).data;
+        for (let i = 0; i < n; i++) {
+          if (density.data[i] >= t[i]) keep.push(i);
+        }
       }
     } else {
       // Keyed on identity, not on `i`: the same world point gets a
@@ -243,16 +327,19 @@ function requireUnreferencedPointsRule(nodeType: string, value: string): boolean
  * 'outside' quietly hold everything). The likely source is a World "xz"
  * cell, whose ctx.min / ctx.max ARE 2D, which is exactly the binding these
  * nodes are most often used for.
+ *
+ * A FIELD bound is skipped here and checked on its resolved column instead
+ * ({@link requireVec3Column}), which is the only place its width exists: a
+ * field is a recipe until it lands on a domain, and the same
+ * two-components-is-a-mistake rule is applied there in the same shape.
  */
-function requireBounds3(
-  nodeType: string,
-  boundsMin: readonly number[],
-  boundsMax: readonly number[],
-): void {
-  for (const [name, v] of [
+function requireBounds3(nodeType: string, boundsMin: FieldParam, boundsMax: FieldParam): void {
+  for (const [name, value] of [
     ["boundsMin", boundsMin],
     ["boundsMax", boundsMax],
   ] as const) {
+    if (isField(value)) continue;
+    const v = value as readonly number[];
     if (v.length < 3) {
       throw new Error(
         `${nodeType}: ${name} needs three components [x, y, z], got ${v.length}; a World "xz" cell's ctx.min / ctx.max are 2D [x, z], so spell the box out as [ctx.min[0], -Infinity, ctx.min[1]] and [ctx.max[0], Infinity, ctx.max[1]]`,
@@ -262,54 +349,137 @@ function requireBounds3(
 }
 
 /**
- * THE box test, built once per cook and shared by both bounds filters:
- * given a point index, is it inside `[boundsMin, boundsMax]` under the
- * active `boundary` rule?
+ * THE face rule: the ONE expression in this library that decides which side
+ * of a box face a coordinate falls on.
  *
  * One boolean, which each caller negates for its 'outside' mode, so the
  * complement is exact by construction under either rule — a second
  * predicate for the outside case is how a gap or an overlap gets in. And
- * ONE definition across the two nodes, because which side of a FACE a
- * coordinate falls on is the single decision they both exist to make, and
- * the one a partitioned cook is silently wrong about when two boxes answer
- * it differently. The guards above it were already shared for that reason;
- * the decision itself is what actually had to be.
+ * ONE definition across the two nodes (and now across the uniform and
+ * per-element closures below), because which side of a FACE a coordinate
+ * falls on is the single decision they all exist to make, and the one a
+ * partitioned cook is silently wrong about when two boxes answer it
+ * differently. The guards above it were already shared for that reason; the
+ * decision itself is what actually had to be.
  *
- * A NaN coordinate satisfies no comparison, so such a point is never
- * inside and always lands in 'outside'.
+ * A NaN anywhere in it satisfies no comparison, so a point with a NaN
+ * coordinate — or one whose own box has a NaN corner — is never inside and
+ * always lands in 'outside'.
  *
- * The `inclusive` ternary stays INSIDE the predicate rather than splitting
- * it into two closures: hoisting it would re-duplicate the face rule, which
- * is exactly what this exists to prevent, and the branch is uniform across
- * a whole cook.
+ * The `inclusive` ternary stays INSIDE rather than splitting into two
+ * functions: hoisting it would re-duplicate the face rule, which is exactly
+ * what this exists to prevent, and the branch is uniform across a whole
+ * cook.
+ */
+function insideBox(
+  x: number,
+  y: number,
+  z: number,
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  inclusive: boolean,
+): boolean {
+  return (
+    x >= ax &&
+    y >= ay &&
+    z >= az &&
+    (inclusive ? x <= bx && y <= by && z <= bz : x < bx && y < by && z < bz)
+  );
+}
+
+/**
+ * The box test, built once per cook and shared by both bounds filters:
+ * given a point index and the index of the ELEMENT asking, is that point
+ * inside `[boundsMin, boundsMax]` under the active `boundary` rule?
+ *
+ * The two indices are the same number for `filterByBounds`, whose elements
+ * ARE the points it tests. They differ for `filterPrimitivesByBounds`,
+ * which asks about a POINT reached through a vertex while the box belongs
+ * to the PRIMITIVE doing the asking — so a field bound there is one box per
+ * primitive, and every vertex of that primitive is tested against it.
+ *
+ * A corner arrives either as the plain param (a `readonly number[]`) or as
+ * a resolved {@link Column}, and the two are kept on separate closures on
+ * purpose. Routing a plain corner through a column would store it as f32,
+ * and a face at a bound that is not f32-exact would MOVE — so the uniform
+ * closure below is the one that always shipped, reading the raw f64 param.
  */
 function insideBoxPredicate(
   pd: ArrayLike<number>,
   ps: number,
-  boundsMin: readonly number[],
-  boundsMax: readonly number[],
+  boundsMin: readonly number[] | Column,
+  boundsMax: readonly number[] | Column,
   inclusive: boolean,
-): (pt: number) => boolean {
-  const [ax, ay, az] = boundsMin;
-  const [bx, by, bz] = boundsMax;
-  return (pt: number): boolean => {
+): (pt: number, elem: number) => boolean {
+  const minCol = Array.isArray(boundsMin) ? undefined : (boundsMin as Column);
+  const maxCol = Array.isArray(boundsMax) ? undefined : (boundsMax as Column);
+  if (minCol === undefined && maxCol === undefined) {
+    const [ax, ay, az] = boundsMin as readonly number[];
+    const [bx, by, bz] = boundsMax as readonly number[];
+    return (pt: number): boolean => {
+      const o = pt * ps;
+      return insideBox(pd[o], pd[o + 1], pd[o + 2], ax, ay, az, bx, by, bz, inclusive);
+    };
+  }
+  // At least one corner varies per element; whichever does not still reads
+  // its raw f64 numbers, so mixing a field min with a plain max costs the
+  // max nothing.
+  const [ax, ay, az] = minCol === undefined ? (boundsMin as readonly number[]) : [0, 0, 0];
+  const [bx, by, bz] = maxCol === undefined ? (boundsMax as readonly number[]) : [0, 0, 0];
+  return (pt: number, elem: number): boolean => {
     const o = pt * ps;
-    const x = pd[o];
-    const y = pd[o + 1];
-    const z = pd[o + 2];
-    return (
-      x >= ax &&
-      y >= ay &&
-      z >= az &&
-      (inclusive ? x <= bx && y <= by && z <= bz : x < bx && y < by && z < bz)
+    return insideBox(
+      pd[o],
+      pd[o + 1],
+      pd[o + 2],
+      minCol === undefined ? ax : readComp(minCol, elem, 0),
+      minCol === undefined ? ay : readComp(minCol, elem, 1),
+      minCol === undefined ? az : readComp(minCol, elem, 2),
+      maxCol === undefined ? bx : readComp(maxCol, elem, 0),
+      maxCol === undefined ? by : readComp(maxCol, elem, 1),
+      maxCol === undefined ? bz : readComp(maxCol, elem, 2),
+      inclusive,
     );
   };
 }
 
+/**
+ * Resolve a bounds corner to one box per element of the filter's own
+ * domain.
+ *
+ * Deliberately NOT guarded against non-finite values (see
+ * `resolveOnAllowingNonFinite`): both bounds params carry
+ * `acceptsInfinite: true` and both descriptions name ±Infinity as the way
+ * to leave an axis unbounded, so a throw here would delete a documented
+ * meaning rather than protect anything. A NaN component bounds nothing —
+ * every comparison against it is false — so that element is never inside,
+ * which is exactly what a NaN COORDINATE already does in these nodes.
+ */
+function boundsColumn(
+  nodeType: string,
+  geo: Geometry,
+  domain: "point" | "primitive",
+  param: string,
+  value: FieldParam,
+  seed: number,
+): Column {
+  return requireVec3Column(
+    nodeType,
+    param,
+    domain,
+    resolveOnAllowingNonFinite(geo, domain, value, seed),
+    "a box corner is a position in space",
+  );
+}
+
 /** Params of {@link filterByBounds}. */
 export interface FilterByBoundsParams {
-  boundsMin: readonly number[];
-  boundsMax: readonly number[];
+  boundsMin: FieldParam;
+  boundsMax: FieldParam;
   mode: string;
   boundary: string;
   topology: string;
@@ -328,15 +498,17 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
       type: "vec3",
       default: [0, 0, 0],
       acceptsInfinite: true,
+      acceptsField: true,
       description:
-        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world). As a FIELD it is a PER-POINT corner, evaluated on the input's points, so each point is tested against its OWN box rather than against one box shared by the cloud — which turns this node from 'keep what is in this region' into 'keep every point that is inside the box it carries', the test a per-point cell, plot or footprint written upstream asks for. Build the corner with vec(x, y, z); a scalar field broadcasts to all three axes exactly as a plain scalar would. NON-FINITE VALUES ARE READ, NOT REFUSED — this is one of the few field params where they are data: -Infinity on a component leaves that axis unbounded for that point, exactly as the plain value does, and a NaN component satisfies no comparison at all, so that point is never inside and lands in 'outside'. `inside` and `outside` stay exact complements point by point, since both read the same resolved value for a point — with one caveat a plain box does not have: two SEPARATE nodes resolve their own columns, so a bound built from randomField or nodeSeed differs between them and the pair no longer partitions. Give both nodes the same bounds field to keep it exact.",
     },
     boundsMax: {
       type: "vec3",
       default: [1, 1, 1],
       acceptsInfinite: true,
+      acceptsField: true,
       description:
-        "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane.",
+        "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane. As a FIELD it is a PER-POINT corner on the input's points, with the same reading boundsMin's description gives, and the two are independent: a field min with a plain max is legal and the plain one costs nothing per point. The max <= min rule above then applies PER POINT — a point whose own box is empty on any axis simply fails the test and lands in 'outside'. Non-finite components are read rather than refused (±Infinity unbounds an axis, NaN keeps nothing), and a scalar field broadcasts to all three axes.",
     },
     mode: {
       type: "enum",
@@ -354,25 +526,37 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
     },
     topology: TOPOLOGY_PARAM,
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = requireGeometry(inputs, "in", "filterByBounds");
     const keepTopology = requireTopologyRule("filterByBounds", params.topology);
     const wantInside = requireInsideOutside("filterByBounds", params.mode);
     const inclusive = requireBoundaryRule("filterByBounds", params.boundary);
     requireBounds3("filterByBounds", params.boundsMin, params.boundsMax);
     const P = geo.attrs.point.require("P");
+    // Each corner resolves ONCE, before the scan — never per point, and
+    // never per test. A plain corner is not resolved at all; see
+    // insideBoxPredicate for why routing one through a column would move a
+    // face.
+    const minCol = isField(params.boundsMin)
+      ? boundsColumn("filterByBounds", geo, "point", "boundsMin", params.boundsMin, nodeSeed)
+      : undefined;
+    const maxCol = isField(params.boundsMax)
+      ? boundsColumn("filterByBounds", geo, "point", "boundsMax", params.boundsMax, nodeSeed)
+      : undefined;
     // Built once per cook, never per point — the SoA rule stands.
     const insidePoint = insideBoxPredicate(
       P.data,
       P.tupleSize,
-      params.boundsMin,
-      params.boundsMax,
+      minCol ?? (params.boundsMin as readonly number[]),
+      maxCol ?? (params.boundsMax as readonly number[]),
       inclusive,
     );
     const keep: number[] = [];
     const nPoints = geo.pointCount;
     for (let i = 0; i < nPoints; i++) {
-      if (insidePoint(i) === wantInside) keep.push(i);
+      // The point being tested and the element whose box is being read are
+      // the same element here: this filter's domain IS the point domain.
+      if (insidePoint(i, i) === wantInside) keep.push(i);
     }
     return { out: [makeGeometryItem(rebuildFiltered(geo, keep, keepTopology))] };
   },
@@ -380,8 +564,8 @@ export const filterByBounds = standardNode<FilterByBoundsParams>({
 
 /** Params of {@link filterPrimitivesByBounds}. */
 export interface FilterPrimitivesByBoundsParams {
-  boundsMin: readonly number[];
-  boundsMax: readonly number[];
+  boundsMin: FieldParam;
+  boundsMax: FieldParam;
   vertex: string;
   mode: string;
   boundary: string;
@@ -401,15 +585,17 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
       type: "vec3",
       default: [0, 0, 0],
       acceptsInfinite: true,
+      acceptsField: true,
       description:
-        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+        "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world). As a FIELD it is evaluated on the PRIMITIVE DOMAIN, not on the points — one corner per primitive, so each primitive is tested against the box IT carries, and every vertex the `vertex` rule consults is tested against that same box. Read a primitive column (attribute(\"cellMinX\") and friends, promoteAttribute lifts a point column onto primitives) or build one with vec(x, y, z); a scalar field broadcasts to all three axes. The reading it enables is 'does this edge lie in ITS OWN cell', which one shared box cannot ask. TILING IS THEN THE AUTHOR'S TO PRESERVE: the ownership guarantee this node's description makes — abutting boxes claim each primitive exactly once — is a property of the BOXES, so per-primitive boxes tile only if they were built to, and boxes that overlap or leave a gap double-count or lose primitives with no error to say so. Non-finite components are read rather than refused: ±Infinity unbounds an axis exactly as the plain value does, and a NaN component satisfies no comparison, so a primitive whose box has one is never inside and lands in 'outside'.",
     },
     boundsMax: {
       type: "vec3",
       default: [1, 1, 1],
       acceptsInfinite: true,
+      acceptsField: true,
       description:
-        "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin.",
+        "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin. As a FIELD it is one corner PER PRIMITIVE, with the same reading boundsMin's description gives, and the two are independent: a field min with a plain max is legal and the plain one costs nothing per primitive. A primitive whose own box is empty on an axis (max <= min under 'halfOpen') keeps nothing and lands in 'outside'; non-finite components are read rather than refused; a scalar field broadcasts to all three axes.",
     },
     vertex: {
       type: "enum",
@@ -440,7 +626,7 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
         "What happens to points no surviving primitive references. 'keep' (the default) leaves the point domain completely untouched: same points in the same order, so every point index, attribute and identity is still the input's and anything computed per point upstream still lines up — a partition cell keeps its halo points as isolated leftovers beside the network it owns. 'drop' removes them and renumbers the topology onto the points that remain, in ascending input order, which yields a clean network with nothing dangling; the cost is that point indices move, and that a point kept by one cell may also be kept by its neighbour, since an edge crossing a seam needs both of its endpoints wherever it is emitted. Note that 'drop' also drops points that had NO primitive to begin with, so a cloud carrying both a road network and unrelated scatter loses the scatter — filter such a cloud before the network is built, or keep the leftovers.",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = requireGeometry(inputs, "in", "filterPrimitivesByBounds");
     const who = "filterPrimitivesByBounds";
     const wantInside = requireInsideOutside(who, params.mode);
@@ -473,13 +659,23 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
         `${who}: point attribute "P" is ${P.type}${P.tupleSize === 1 ? "" : `x${P.tupleSize}`}, but a box test needs x, y and z (f32, tupleSize 3); something upstream overwrote P`,
       );
     }
+    // Each corner resolves ONCE, before the scan, on THIS node's own domain:
+    // a field bound here is one box per PRIMITIVE, not per point, so the
+    // element index below is `p` while the position read is a vertex's
+    // point. A plain corner is not resolved at all.
+    const minCol = isField(params.boundsMin)
+      ? boundsColumn(who, geo, "primitive", "boundsMin", params.boundsMin, nodeSeed)
+      : undefined;
+    const maxCol = isField(params.boundsMax)
+      ? boundsColumn(who, geo, "primitive", "boundsMax", params.boundsMax, nodeSeed)
+      : undefined;
     // The same box test filterByBounds runs, built once per cook and never
     // per vertex, so the two nodes cannot disagree about a face.
     const insidePoint = insideBoxPredicate(
       P.data,
       P.tupleSize,
-      params.boundsMin,
-      params.boundsMax,
+      minCol ?? (params.boundsMin as readonly number[]),
+      maxCol ?? (params.boundsMax as readonly number[]),
       inclusive,
     );
     const v2p = geo.vertexToPoint;
@@ -496,14 +692,14 @@ export const filterPrimitivesByBounds = standardNode<FilterPrimitivesByBoundsPar
         // vacuous-truth reading of "all", so the four rules agree.
         inside = false;
       } else if (vertexRule === "first") {
-        inside = insidePoint(v2p[s]);
+        inside = insidePoint(v2p[s], p);
       } else if (vertexRule === "last") {
-        inside = insidePoint(v2p[s + c - 1]);
+        inside = insidePoint(v2p[s + c - 1], p);
       } else {
         const wantAll = vertexRule === "all";
         inside = wantAll;
         for (let j = 0; j < c; j++) {
-          if (insidePoint(v2p[s + j]) !== wantAll) {
+          if (insidePoint(v2p[s + j], p) !== wantAll) {
             inside = !wantAll;
             break;
           }
@@ -634,17 +830,26 @@ function requireFilterAttribute(
  * value satisfy the test?
  *
  * One definition across the two nodes for the reason
- * {@link insideBoxPredicate} is one: `ge` on a bool, `eq` against a NaN
- * and the string/numeric split are the decisions they both exist to make,
- * and a graph that moves a filter from the point domain to the primitive
- * domain must not change its answer.
+ * {@link insideBox} is one: `ge` on a bool, `eq` against a NaN and the
+ * string/numeric split are the decisions they both exist to make, and a
+ * graph that moves a filter from the point domain to the primitive domain
+ * must not change its answer.
+ *
+ * `value` is the right-hand side: one number for every element, or a
+ * resolved {@link Column} holding one per element of the filter's own
+ * domain — read at the same index as the value it is compared against, so
+ * `data[i] >= rhs[i]` is each element tested against its own bar. The two
+ * arms are written out rather than funnelled through a per-element reader
+ * closure, because the twelve one-line comparisons ARE the definition this
+ * function exists to keep in one place; a plain value also keeps its raw
+ * f64 self this way, where a column would have rounded it to f32.
  */
 function comparisonPredicate(
   nodeType: string,
   domain: "point" | "primitive",
   attr: Attribute,
   comparison: Comparison,
-  value: number,
+  value: number | Column,
   stringValue: string,
 ): (i: number) => boolean {
   if (attr.type === "string") {
@@ -658,8 +863,27 @@ function comparisonPredicate(
     const wantEqual = comparison === "eq";
     return (i: number): boolean => (attr.getString(i) === stringValue) === wantEqual;
   }
-  const rhs = value;
   const data = attr.data;
+  if (typeof value !== "number") {
+    // A per-element right-hand side (tupleSize 1, guaranteed by
+    // filterScalarColumn), read at the element's own index.
+    const rhs = value.data;
+    switch (comparison) {
+      case "eq":
+        return (i: number): boolean => data[i] === rhs[i];
+      case "ne":
+        return (i: number): boolean => data[i] !== rhs[i];
+      case "lt":
+        return (i: number): boolean => data[i] < rhs[i];
+      case "le":
+        return (i: number): boolean => data[i] <= rhs[i];
+      case "gt":
+        return (i: number): boolean => data[i] > rhs[i];
+      default:
+        return (i: number): boolean => data[i] >= rhs[i];
+    }
+  }
+  const rhs = value;
   switch (comparison) {
     case "eq":
       return (i: number): boolean => data[i] === rhs;
@@ -676,11 +900,43 @@ function comparisonPredicate(
   }
 }
 
+/**
+ * The right-hand side an attribute filter compares against: `value` as it
+ * stands when it is a plain number, one number per element when it is a
+ * field, and an unread 0 when the attribute is a STRING one.
+ *
+ * A field is resolved only for a NUMERIC attribute, deliberately. `value`
+ * is documented as ignored for a string attribute, and evaluating a field
+ * no comparison reads would spend a column on nothing — and could refuse
+ * the graph outright (the resolver rejects a non-finite result) over a
+ * param nobody consulted.
+ */
+function comparisonRhs(
+  nodeType: string,
+  geo: Geometry,
+  domain: "point" | "primitive",
+  attr: Attribute,
+  value: FieldParam,
+  seed: number,
+): number | Column {
+  if (typeof value === "number") return value;
+  if (attr.type === "string") return 0;
+  return filterScalarColumn(
+    nodeType,
+    geo,
+    domain,
+    "value",
+    value,
+    seed,
+    "a right-hand side to compare against",
+  );
+}
+
 /** Params of {@link filterByAttribute}. */
 export interface FilterByAttributeParams {
   attribute: string;
   comparison: string;
-  value: number;
+  value: FieldParam;
   stringValue: string;
   topology: string;
 }
@@ -710,7 +966,9 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
     value: {
       type: "f32",
       default: 0,
-      description: "Right-hand side for numeric attributes. Ignored for string attributes.",
+      acceptsField: true,
+      description:
+        "Right-hand side for numeric attributes. Ignored for string attributes, and a field written here is not even evaluated for one — the param nothing reads costs nothing and refuses nothing. As a FIELD it is a PER-POINT right-hand side, evaluated on the input's points, so each point is compared against its own number: `attribute(\"minLevel\")` with comparison 'ge' keeps every point that clears the bar it was given, and a noise or a position expression makes the bar vary across the world. The comparison itself is unchanged — the same six operators, the same meaning per point — so this is the two-column test (attribute against attribute) that otherwise needs a scratch column plus filterByExpression. A a constant field matches the plain number wherever that number is exactly representable in f32 — which is the honest form of the claim, because a field resolves into an f32 COLUMN while a plain param stays the f64 the author wrote. `constant(0.7)` is 0.699999988079071 and a datum sitting between the two lands on different sides of them. That is not a defect to be fixed here but clause 1 of the capability rule showing through, and it is why the equality tests use f32-exact values on purpose. Non-finite values are REFUSED rather than read: a field resolving to NaN or ±Infinity names this param and stops, because a right-hand side has no documented meaning for one. Note that this refusal is about the FIELD, never about the attribute — a NaN in the COLUMN being tested is still data and still passes only 'ne'.",
     },
     stringValue: {
       type: "string",
@@ -719,14 +977,17 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
     },
     topology: TOPOLOGY_PARAM,
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const who = "filterByAttribute";
     const geo = requireGeometry(inputs, "in", who);
     const cmp = requireComparison(who, params.comparison);
     const keepTopology = requireTopologyRule(who, params.topology);
     const attr = requireFilterAttribute(who, geo, "point", params.attribute);
+    // Resolved ONCE, before the scan; nothing below mutates the geometry, so
+    // a column aliasing attribute storage stays valid for the whole walk.
+    const rhs = comparisonRhs(who, geo, "point", attr, params.value, nodeSeed);
     // Built once per cook, never per point — the SoA rule stands.
-    const pass = comparisonPredicate(who, "point", attr, cmp, params.value, params.stringValue);
+    const pass = comparisonPredicate(who, "point", attr, cmp, rhs, params.stringValue);
     const keep: number[] = [];
     for (let i = 0; i < geo.pointCount; i++) {
       if (pass(i)) keep.push(i);
@@ -739,7 +1000,7 @@ export const filterByAttribute = standardNode<FilterByAttributeParams>({
 export interface FilterPrimitivesByAttributeParams {
   attribute: string;
   comparison: string;
-  value: number;
+  value: FieldParam;
   stringValue: string;
   unreferencedPoints: string;
 }
@@ -769,7 +1030,9 @@ export const filterPrimitivesByAttribute = standardNode<FilterPrimitivesByAttrib
     value: {
       type: "f32",
       default: 0,
-      description: "Right-hand side for numeric attributes. Ignored for string attributes.",
+      acceptsField: true,
+      description:
+        "Right-hand side for numeric attributes. Ignored for string attributes, and a field written here is not even evaluated for one. As a FIELD it is evaluated on the PRIMITIVE DOMAIN — one right-hand side per primitive, never per point — so each primitive is compared against its own number: `attribute(\"maxLength\")` with comparison 'le' keeps every edge shorter than the limit IT carries, which is the per-primitive budget one shared number cannot express. Everything else is unchanged: the same six operators with the same meaning, the same scalar-only rule, and a a constant field matches the plain number wherever that number is exactly representable in f32 — which is the honest form of the claim, because a field resolves into an f32 COLUMN while a plain param stays the f64 the author wrote. `constant(0.7)` is 0.699999988079071 and a datum sitting between the two lands on different sides of them. That is not a defect to be fixed here but clause 1 of the capability rule showing through, and it is why the equality tests use f32-exact values on purpose. Because the value is read per primitive and nothing else — not its index, not its neighbours, not how many primitives there are — the determinism the node's description promises is unaffected, PROVIDED the field is too: a field reading position or a primitive attribute is partition-independent, while randomField and nodeSeed are per-node and per-cell like any other seeded draw. Non-finite values are REFUSED rather than read, naming this param: a right-hand side has no documented meaning for NaN or ±Infinity. That is about the FIELD only — a NaN in the primitive COLUMN being tested is still data, and still passes only 'ne'.",
     },
     stringValue: {
       type: "string",
@@ -784,7 +1047,7 @@ export const filterPrimitivesByAttribute = standardNode<FilterPrimitivesByAttrib
         "What happens to points no surviving primitive references, exactly as in filterPrimitivesByBounds. 'keep' (the default) leaves the point domain completely untouched: same points in the same order, so every point index, attribute and identity is still the input's. 'drop' removes them and renumbers the topology onto the points that remain, in ascending input order, which yields a clean network with nothing dangling; the cost is that point indices move. Note that 'drop' also drops points that had NO primitive to begin with, so a cloud carrying both a network and unrelated scatter loses the scatter.",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const who = "filterPrimitivesByAttribute";
     const geo = requireGeometry(inputs, "in", who);
     // Params before the attribute lookup, so a misspelled comparison is
@@ -793,7 +1056,10 @@ export const filterPrimitivesByAttribute = standardNode<FilterPrimitivesByAttrib
     const cmp = requireComparison(who, params.comparison);
     const drop = requireUnreferencedPointsRule(who, params.unreferencedPoints);
     const attr = requireFilterAttribute(who, geo, "primitive", params.attribute);
-    const pass = comparisonPredicate(who, "primitive", attr, cmp, params.value, params.stringValue);
+    // Resolved ONCE, on THIS node's own domain: one right-hand side per
+    // primitive, aligned with the primitive column it is compared against.
+    const rhs = comparisonRhs(who, geo, "primitive", attr, params.value, nodeSeed);
+    const pass = comparisonPredicate(who, "primitive", attr, cmp, rhs, params.stringValue);
     const keep: number[] = [];
     const nPrims = geo.primitiveCount;
     for (let p = 0; p < nPrims; p++) {
@@ -1253,8 +1519,8 @@ export const selfPrune = standardNode<SelfPruneParams>({
 
 /** Params of {@link projectToPlane}. */
 export interface ProjectToPlaneParams {
-  origin: readonly number[];
-  normal: readonly number[];
+  origin: FieldParam;
+  normal: FieldParam;
   keepOffset: boolean;
 }
 
@@ -1263,15 +1529,23 @@ export const projectToPlane = standardNode<ProjectToPlaneParams>({
   type: "projectToPlane",
   category: "filter",
   description:
-    "Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero). With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible.",
+    "Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally). As plain vectors they describe ONE plane and the normal must be non-zero; as fields they are read per point, so each point falls onto the plane IT was given and a zero normal there is not a plane at all — that point is left exactly where it stands. With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible. This node is categorised as a filter but removes nothing: the point count, the attributes and the topology all come out as they went in.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
-    origin: { type: "vec3", default: [0, 0, 0], description: "A point on the plane, in world units." },
+    origin: {
+      type: "vec3",
+      default: [0, 0, 0],
+      acceptsField: true,
+      description:
+        "A point on the plane, in world units. As a FIELD it is a PER-POINT origin, evaluated on the input's points, so each point is projected onto a plane sliding with it — with a constant normal that is a per-point OFFSET along that normal, which is how a stepped or terraced flattening is written (floor the height, feed it back as the origin) rather than one flat sheet. Build it with vec(x, y, z); a scalar field broadcasts to all three axes. Only the component along the normal can matter, since the projection subtracts (P - origin) . n: two origins differing by anything perpendicular to the normal name the same plane and move nothing. Non-finite values are REFUSED rather than read, naming this param — a plane through NaN has no meaning, and the resulting positions would draw nothing downstream.",
+    },
     normal: {
       type: "vec3",
       default: [0, 1, 0],
-      description: "Plane normal; any non-zero vector (normalized internally).",
+      acceptsField: true,
+      description:
+        "Plane normal; any non-zero vector (normalized internally). As a FIELD it is a PER-POINT normal, evaluated on the input's points, so each point is projected along the direction IT carries — attribute(\"N\") flattens every point onto its own surface plane, and a varying normal collapses a cloud onto a fan of planes rather than one. A ZERO-LENGTH NORMAL IS THE ONE REFUSAL THAT CHANGES SHAPE HERE, and it changes only for a field: a plain zero vector is still refused outright, because one plane that does not exist is an authoring mistake with nothing to salvage, while a field's zero is a per-point answer — that point has no plane, so it is left exactly where it stands and its planeOffset is 0 (it moved nothing). Nothing is invented for it and nothing is dropped; a point that did not move is visible as an offset of 0. Scale is free either way, since the vector is normalized before use, and a scalar field broadcasts to all three axes — note that vec(1,1,1) is a diagonal plane, not an axis one. Non-finite components are REFUSED rather than read, naming this param: a NaN normal would normalize to NaN and send every coordinate of that point to NaN.",
     },
     keepOffset: {
       type: "bool",
@@ -1280,17 +1554,57 @@ export const projectToPlane = standardNode<ProjectToPlaneParams>({
         "When true, store each point's signed pre-projection distance to the plane in a `planeOffset` point attribute (f32).",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "projectToPlane"));
-    const [nxr, nyr, nzr] = params.normal;
-    const len = Math.sqrt(nxr * nxr + nyr * nyr + nzr * nzr);
-    if (!(len > 0)) {
-      throw new Error("projectToPlane: normal must be a non-zero vector");
+    // Both resolve ONCE, before the walk, and BEFORE `planeOffset` is
+    // created below: a column may alias attribute storage, and adding a
+    // column can reallocate the set. A plain vector is not resolved at all
+    // — `constant()` stores f32, so routing one through a column would tilt
+    // every plane whose normal is not f32-exact.
+    const normalCol = isField(params.normal)
+      ? requireVec3Column(
+          "projectToPlane",
+          "normal",
+          "point",
+          resolveOn(geo, "point", params.normal, nodeSeed, "projectToPlane", "normal"),
+          "a plane normal is a direction",
+        )
+      : undefined;
+    const originCol = isField(params.origin)
+      ? requireVec3Column(
+          "projectToPlane",
+          "origin",
+          "point",
+          resolveOn(geo, "point", params.origin, nodeSeed, "projectToPlane", "origin"),
+          "a plane origin is a position in space",
+        )
+      : undefined;
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    if (normalCol === undefined) {
+      const [nxr, nyr, nzr] = params.normal as readonly number[];
+      const len = Math.sqrt(nxr * nxr + nyr * nyr + nzr * nzr);
+      if (!(len > 0)) {
+        throw new Error(
+          "projectToPlane: normal must be a non-zero vector — as a plain param it names ONE plane, " +
+            "and a zero vector names none. A FIELD normal is read per point instead, and a point " +
+            "whose own normal is zero is left exactly where it stands rather than refused.",
+        );
+      }
+      nx = nxr / len;
+      ny = nyr / len;
+      nz = nzr / len;
     }
-    const nx = nxr / len;
-    const ny = nyr / len;
-    const nz = nzr / len;
-    const [ox, oy, oz] = params.origin;
+    let ox = 0;
+    let oy = 0;
+    let oz = 0;
+    if (originCol === undefined) {
+      const origin = params.origin as readonly number[];
+      ox = origin[0];
+      oy = origin[1];
+      oz = origin[2];
+    }
     const P = geo.attrs.point.require("P");
     const pd = P.data;
     const ps = P.tupleSize;
@@ -1302,6 +1616,29 @@ export const projectToPlane = standardNode<ProjectToPlaneParams>({
       offsets = set.add("planeOffset", "f32", 1, 0).data;
     }
     for (let i = 0; i < n; i++) {
+      if (normalCol !== undefined) {
+        const rx = readComp(normalCol, i, 0);
+        const ry = readComp(normalCol, i, 1);
+        const rz = readComp(normalCol, i, 2);
+        const len = Math.sqrt(rx * rx + ry * ry + rz * rz);
+        // No direction is no plane. This point keeps its position and
+        // records an offset of 0, because 0 is exactly how far it moved —
+        // the alternatives (a guessed axis, a dropped point) would invent
+        // a value or change what the output IS, and neither is a
+        // projection.
+        if (!(len > 0)) {
+          if (offsets) offsets[i] = 0;
+          continue;
+        }
+        nx = rx / len;
+        ny = ry / len;
+        nz = rz / len;
+      }
+      if (originCol !== undefined) {
+        ox = readComp(originCol, i, 0);
+        oy = readComp(originCol, i, 1);
+        oz = readComp(originCol, i, 2);
+      }
       const d =
         (pd[i * ps] - ox) * nx + (pd[i * ps + 1] - oy) * ny + (pd[i * ps + 2] - oz) * nz;
       if (offsets) offsets[i] = d;

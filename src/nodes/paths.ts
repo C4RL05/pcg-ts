@@ -48,12 +48,14 @@ import {
   type AttributeSet,
   type Geometry,
 } from "../data/index.js";
+import type { Column } from "../fields/index.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
 import {
   ORIENT_AXES,
   type FieldParam,
+  type PolylineArcTable,
   carryPrimitiveAttributes,
   locateOnArcLength,
   orientQuat,
@@ -62,6 +64,7 @@ import {
   requireGeometry,
   requireReportSlot,
   requireTuple,
+  resolveOn,
   resolveOnMaybeGpu,
   writePolylineTangents,
 } from "./util.js";
@@ -272,7 +275,7 @@ export const pointsToPath = standardNode<PointsToPathParams>({
 export interface PathResampleParams {
   mode: string;
   count: number;
-  spacing: number;
+  spacing: FieldParam;
   lengthAttr: string;
   stepAttr: string;
 }
@@ -334,6 +337,64 @@ function requireResampleReports(
  */
 const MAX_RESAMPLE_POINTS = 1_048_576;
 
+/**
+ * `pathResample.spacing` as one step per PATH, resolved on the INPUT's
+ * PRIMITIVE domain.
+ *
+ * That domain is the whole reason this param can be a field at all. The
+ * rule is that a param is field-capable exactly when its value is read PER
+ * ELEMENT, and "nothing that decides how many elements come OUT" reads like
+ * it should disqualify a spacing — it sizes the output. It does not here,
+ * because this node resamples every polyline ON ITS OWN ARC LENGTH: there
+ * IS an element per reading, the primitive, and each path's sample count
+ * follows that path's own value. `splineSample.spacing` stays disqualified
+ * for exactly the reason this one is not — it concatenates every polyline
+ * into ONE curve and reads its spacing once, against no element.
+ *
+ * Guarded (`resolveOn`, not the allowing variant): a NaN or infinite
+ * spacing has no documented meaning here — it is a broken expression, and
+ * an infinite one would place one sample on a path that needs two.
+ */
+function resampleSpacingColumn(geo: Geometry, value: FieldParam, seed: number): Column {
+  const col = resolveOn(geo, "primitive", value, seed, "pathResample", "spacing");
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `pathResample: param "spacing" must evaluate to ONE number per path (tupleSize 1), got tupleSize ${col.tupleSize} — a spacing is a single distance, and fields broadcast elementwise, so a vec3 such as attribute("size") yields three numbers per path. Reduce it to a scalar first, e.g. component(attribute("size"), 0).`,
+    );
+  }
+  return col;
+}
+
+/**
+ * The refusal when the samples placed so far, plus this path's, would pass
+ * {@link MAX_RESAMPLE_POINTS}.
+ *
+ * The cap is on the TOTAL and always has been — the running count is
+ * global, so a field cannot buy ten paths of 200 000 samples each by
+ * keeping every one of them under the cap on its own. What the field
+ * changes is only what can be SAID about the fix: a plain spacing has one
+ * number to raise, while a field has one per path, so the message names the
+ * path the running total ran out on and offers the bound that would make
+ * even a uniform spacing fit.
+ */
+function resampleBudgetError(
+  sp: number,
+  table: PolylineArcTable,
+  tables: readonly PolylineArcTable[],
+  totalLength: number,
+  fielded: boolean,
+): Error {
+  const fit = totalLength / Math.max(1, MAX_RESAMPLE_POINTS - tables.length);
+  if (!fielded) {
+    return new Error(
+      `pathResample: spacing ${sp} would place more than ${MAX_RESAMPLE_POINTS} samples over the input's ${tables.length} path(s), whose total length is ${totalLength}; use spacing >= ${fit}, or switch mode to 'count'`,
+    );
+  }
+  return new Error(
+    `pathResample: the "spacing" field resolved to ${sp} on the path at primitive ${table.prim} (length ${table.length}), and the resolved spacings would place more than ${MAX_RESAMPLE_POINTS} samples over the input's ${tables.length} path(s), whose total length is ${totalLength}. The cap is on the TOTAL, not on one path: the field is read once per path and the samples are counted as they are placed, so this is the path the running total ran out on rather than necessarily the coarsest offender. A field is not range-checked the way a plain value is — a schema's min binds a number, and a field is a recipe with no number to check until it lands on a domain — so bound the expression itself: max(<the spacing field>, ${fit}) fits the whole input even if every path takes it. Or switch mode to 'count', whose output size is a number you typed.`,
+  );
+}
+
 /** Even arc-length resampling of each polyline primitive. */
 export const pathResample = standardNode<PathResampleParams>({
   type: "pathResample",
@@ -361,8 +422,9 @@ export const pathResample = standardNode<PathResampleParams>({
       type: "f32",
       default: 1,
       min: 0,
+      acceptsField: true,
       description:
-        `Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than \`spacing\` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under \`spacing\`. To divide a loop EVENLY, switch mode to 'count': it splits the length into \`count\` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under ${MAX_RESAMPLE_POINTS} samples. Ignored in 'count' mode.`,
+        `Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than \`spacing\` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under \`spacing\`. To divide a loop EVENLY, switch mode to 'count': it splits the length into \`count\` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under ${MAX_RESAMPLE_POINTS} samples. Ignored in 'count' mode. AS A FIELD IT IS ONE SPACING PER PATH, resolved on the INPUT's PRIMITIVE domain: a wide road and a footpath in one geometry take different steps in ONE COOK, each path's count following its own value against its own arc length. That is why this param can be a field where splineSample's spacing cannot — this node resamples every polyline ON ITS OWN ARC LENGTH, so there is a primitive element to read one value per, while splineSample concatenates every polyline into ONE curve and reads its spacing exactly once, against no element at all. The field sees the PRIMITIVE domain, so what it can read is what a path carries: a primitive attribute (written with setAttribute domain 'primitive', or carried up from the points with promoteAttribute point → primitive), index() and fraction() over the paths, randomField(), and nodeSeed(). A POINT attribute is not in scope there, and position() is not either — a path has no one position. Both limits stay, and they are enforced differently on purpose. The MINIMUM is PER PATH: a path whose own resolved spacing is too coarse to leave 2 samples (3 when closed) is REFUSED, naming that primitive and the spacing it resolved to — never quietly dropped from the output, since a path missing from an otherwise fine-looking cook is the plausible failure this library exists to refuse. The BUDGET is on the TOTAL: samples are counted as they are placed, across every path in primitive order, and the cook is refused as soon as they add up past ${MAX_RESAMPLE_POINTS} — a per-path cap would pass ten paths of 200 000 samples each. A field is not range-checked the way a plain value is (a schema's min binds a number, not a recipe), so bound the expression itself — max(<expr>, <the smallest step you meant>) — and note that a NaN or infinite spacing is refused rather than read as a meaning.`,
     },
     lengthAttr: {
       type: "string",
@@ -374,7 +436,7 @@ export const pathResample = standardNode<PathResampleParams>({
       type: "string",
       default: "",
       description:
-        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
+        "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — or, when `spacing` is a field, that path's OWN resolved value, which is the same statement once the param is read per path — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree.",
     },
   },
   execute({ inputs, params, seed, checkCancelled }) {
@@ -385,8 +447,13 @@ export const pathResample = standardNode<PathResampleParams>({
         `pathResample: unknown mode "${params.mode}"; valid modes: count, spacing`,
       );
     }
-    if (params.mode === "spacing" && !(params.spacing > 0)) {
-      throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${params.spacing}`);
+    // A PLAIN spacing is still checked here, before the geometry is even
+    // looked at: a param error reported as "no polyline primitives" sends
+    // the author to debug topology. A FIELD has no number to check yet —
+    // its values arrive per path below, and each one is checked there.
+    const scalarSpacing = typeof params.spacing === "number" ? params.spacing : undefined;
+    if (params.mode === "spacing" && scalarSpacing !== undefined && !(scalarSpacing > 0)) {
+      throw new Error(`pathResample: spacing must be > 0 in 'spacing' mode, got ${scalarSpacing}`);
     }
     // Both reports are f32 tuple 1, so a shared name passes the shape
     // check and the second write silently replaces the first — the same
@@ -404,6 +471,16 @@ export const pathResample = standardNode<PathResampleParams>({
     const tables = polylineArcTables(geo, "pathResample");
     // Only needed to name a spacing that would fit the budget below.
     const totalLength = tables.reduce((sum, table) => sum + table.length, 0);
+    // Resolved ONCE, before the walk, and only in the mode that reads it:
+    // 'count' ignores `spacing` entirely, so evaluating a field there would
+    // let a param the mode never reads fail the cook. `undefined` means the
+    // scalar path, which keeps its f64 number rather than the f32 a column
+    // would round it to — a plain spacing must cook byte-identically to
+    // what it always did.
+    const spacings =
+      params.mode === "spacing" && scalarSpacing === undefined
+        ? resampleSpacingColumn(geo, params.spacing, seed)
+        : undefined;
 
     // Arc-length positions per path, validated before anything is built.
     const perPath: number[][] = [];
@@ -438,7 +515,18 @@ export const pathResample = standardNode<PathResampleParams>({
         // positions instead would report a number the sampling never used.
         steps.push(L / denom);
       } else {
-        const sp = params.spacing;
+        // One value per PATH: the column is over the input's primitive
+        // domain, and `table.prim` is this path's index in it.
+        const sp = spacings === undefined ? (scalarSpacing as number) : spacings.data[table.prim];
+        if (spacings !== undefined && !(sp > 0)) {
+          // Only a field reaches here — a plain spacing was checked before
+          // the geometry was read. Per path, and refused rather than
+          // skipped: dropping the path would return a cook that looks fine
+          // and is missing a road.
+          throw new Error(
+            `pathResample: the "spacing" field resolved to ${sp} on the ${kind} path at primitive ${table.prim}, but every path's spacing must be > 0 — a step of 0 or less places no samples, and this node refuses the cook rather than dropping that path from the output. Bound the expression with max(<the spacing field>, <the smallest step you meant>), or switch mode to 'count'.`,
+          );
+        }
         // The epsilon is load-bearing on a closed path: without it a step
         // that lands a float-hair short of the total length slips in as an
         // extra sample on the seam, duplicating the start point and
@@ -450,18 +538,22 @@ export const pathResample = standardNode<PathResampleParams>({
           if ((i & 1023) === 0) checkCancelled();
           const s = i * sp;
           if (s >= L - eps) break;
+          // `total` is the samples every EARLIER path already claimed, so
+          // this is a running check against the global cap and not a
+          // per-path one — see resampleBudgetError. It also lives inside
+          // the placing loop on purpose: a spacing of 1e-9 must be refused
+          // in a million steps rather than counted out to the end first.
           if (total + positions.length >= MAX_RESAMPLE_POINTS) {
-            const fit = totalLength / Math.max(1, MAX_RESAMPLE_POINTS - tables.length);
-            throw new Error(
-              `pathResample: spacing ${sp} would place more than ${MAX_RESAMPLE_POINTS} samples over the input's ${tables.length} path(s), whose total length is ${totalLength}; use spacing >= ${fit}, or switch mode to 'count'`,
-            );
+            throw resampleBudgetError(sp, table, tables, totalLength, spacings !== undefined);
           }
           positions.push(s);
         }
         if (!table.closed) positions.push(L);
         if (positions.length < least) {
           throw new Error(
-            `pathResample: spacing ${sp} leaves ${positions.length} sample(s) on the ${kind} path at primitive ${table.prim} (length ${L}), fewer than the ${least} a path needs; use spacing <= ${L / least} or switch mode to 'count'`,
+            spacings === undefined
+              ? `pathResample: spacing ${sp} leaves ${positions.length} sample(s) on the ${kind} path at primitive ${table.prim} (length ${L}), fewer than the ${least} a path needs; use spacing <= ${L / least} or switch mode to 'count'`
+              : `pathResample: the "spacing" field resolved to ${sp} on the ${kind} path at primitive ${table.prim} (length ${L}), which leaves ${positions.length} sample(s) — fewer than the ${least} a path needs. The minimum is PER PATH, and a path too coarse for its own spacing is refused rather than dropped from the output: give that path a spacing <= ${L / least}, for instance by bounding the field with min(<the spacing field>, ${L / least}), or switch mode to 'count'.`,
           );
         }
         // The step this mode takes is the one the author typed, on every
@@ -584,7 +676,7 @@ export const pathResample = standardNode<PathResampleParams>({
 export interface PathSegmentsParams {
   axis: string;
   radius: FieldParam;
-  extend: number;
+  extend: FieldParam;
   segmentIndexAttr: string;
 }
 
@@ -616,8 +708,9 @@ export const pathSegments = standardNode<PathSegmentsParams>({
       type: "f32",
       default: 0,
       min: 0,
+      acceptsField: true,
       description:
-        "World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely.",
+        "World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely. Field-capable, and it resolves EXACTLY WHERE `radius` DOES — on the INPUT points (the path's own points, since the segments this node emits have no domain yet), then AVERAGED over the two points a segment runs between — so it is one filler PER SEGMENT and the two params take the same expression: a taper that thins the tube thins its joints with it, and 'about one radius' becomes a fill that follows the radius instead of a literal that stops matching the moment the radius moves. It follows that a field here reads what the input POINTS carry; a per-path extend living on the PRIMITIVE domain has to be promoted onto the points first (promoteAttribute, primitive to point), the same route `radius` documents. A PLAIN value must be finite and >= 0 and is refused otherwise. A FIELD's negative value is clamped to 0 per segment, exactly as `radius` is — a filler is a length, and a negative one would shorten the segment away from its own endpoints — while a NaN or infinite one is refused, naming this param.",
     },
     segmentIndexAttr: {
       type: "string",
@@ -626,9 +719,10 @@ export const pathSegments = standardNode<PathSegmentsParams>({
         "Name of an i32 POINT attribute receiving each segment's 0-BASED INDEX WITHIN ITS OWN PATH, restarting at 0 for every polyline. Empty (the default) writes none. It is the per-path coordinate this node otherwise has no way to state: `curveU` is a fraction, and turning one back into an index needs the segment count again, while an index written upstream with setAttribute does not survive — this node emits a NEW point per segment and carries no point attributes. Without it, 'every other link of THIS chain' has to be spelled on the GLOBAL point index, which agrees with the per-path one only while every path has the same, EVEN, number of segments, and nothing reports when that stops being true. It counts the segments this node EMITTED, so a skipped zero-length segment leaves NO GAP and an alternation over it (index - 2 * floor(index / 2)) keeps its parity through a degenerate path; an index into the input's segment list would not, and would also address elements that are not in this output. The shape is this node's to pick (i32, tuple 1), so a name already among the columns written here — P, rot, scale, density, boundsMin, boundsMax, color, seed, tangent, curveU — under a DIFFERENT shape is REFUSED rather than deleted and re-added, and a carried PRIMITIVE attribute of the same name is refused too, with the fix.",
     },
   },
-  // `radius` may resolve on the GPU. It is evaluated on the INPUT
-  // geometry, which this node never mutates (it builds a fresh cloud),
-  // so the resolver and the CPU fallback see identical bytes.
+  // `radius` and `extend` may both resolve on the GPU. Both are evaluated
+  // on the INPUT geometry, which this node never mutates (it builds a
+  // fresh cloud), so the resolver and the CPU fallback see identical
+  // bytes.
   gpu: "fields",
   async execute({ inputs, params, seed, gpu, checkCancelled }) {
     const axis = params.axis;
@@ -637,10 +731,14 @@ export const pathSegments = standardNode<PathSegmentsParams>({
         `pathSegments: param "axis" must be one of ${ORIENT_AXES.join(", ")}; got "${axis}"`,
       );
     }
-    const extend = params.extend;
-    if (!Number.isFinite(extend) || extend < 0) {
+    // A PLAIN extend is checked here, before the geometry is read, exactly
+    // as it always was. A FIELD has no number to check yet — it resolves
+    // per point below, where a negative value clamps and a non-finite one
+    // is refused by the guarded resolve.
+    const scalarExtend = typeof params.extend === "number" ? params.extend : undefined;
+    if (scalarExtend !== undefined && (!Number.isFinite(scalarExtend) || scalarExtend < 0)) {
       throw new Error(
-        `pathSegments: param "extend" must be a finite number >= 0, got ${extend}`,
+        `pathSegments: param "extend" must be a finite number >= 0, got ${scalarExtend}`,
       );
     }
     const geo = requireGeometry(inputs, "in", "pathSegments");
@@ -651,6 +749,19 @@ export const pathSegments = standardNode<PathSegmentsParams>({
       "pathSegments",
       "radius",
     );
+    // Resolved once, before the walk, and only when it is a field: a plain
+    // extend keeps its f64 number rather than the f32 a column would round
+    // it to, so the scalar path cooks byte-identically to what it did
+    // before this param took a field.
+    const extend =
+      scalarExtend === undefined
+        ? requireTuple(
+            await resolveOnMaybeGpu(gpu, geo, "point", params.extend, seed, "pathSegments", "extend"),
+            [1],
+            "pathSegments",
+            "extend",
+          )
+        : undefined;
 
     // Count first: zero-length segments are skipped, so the output size
     // is not simply the vertex count and the cloud must be sized before
@@ -755,7 +866,14 @@ export const pathSegments = standardNode<PathSegmentsParams>({
         scale[w * 3] = r;
         scale[w * 3 + 1] = r;
         scale[w * 3 + 2] = r;
-        scale[w * 3 + lengthComp] = len + 2 * extend;
+        // `extend` is averaged over the same two endpoints as `radius`, so
+        // one expression drives both and a joint filler follows the tube it
+        // fills. A plain value skips the column entirely (see above).
+        const e =
+          extend === undefined
+            ? (scalarExtend as number)
+            : Math.max(0, (extend.data[pts[k]] + extend.data[pts[k + 1]]) * 0.5);
+        scale[w * 3 + lengthComp] = len + 2 * e;
         seeds[w] = hashCombine(seed, w);
         samplePrim[w] = table.prim;
         if (segmentIndex) segmentIndex[w] = w - pathStart;

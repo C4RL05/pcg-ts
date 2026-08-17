@@ -29,6 +29,8 @@ import {
   positionView,
   requireGeometry,
   requireReportSlot,
+  requireTuple,
+  resolveOn,
   resolveOnAllowingNonFinite,
   type FieldParam,
 } from "./util.js";
@@ -403,7 +405,7 @@ export interface SampleNearestPointParams {
   indexAttr: string;
   attribute: string;
   outAttribute: string;
-  maxDistance: number;
+  maxDistance: FieldParam;
 }
 
 /** Nearest point of a second cloud: its distance, index, and attributes. */
@@ -446,11 +448,12 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
       type: "f32",
       default: 0,
       min: 0,
+      acceptsField: true,
       description:
-        "Largest distance that still counts as a find, in world units. 0 (the default) means unlimited; beyond it a point is a miss.",
+        "Largest distance that still counts as a find, in world units. 0 (the default) means unlimited; beyond it a point is a miss. As a FIELD it is PER POINT, evaluated on the points being sampled rather than on the source, so each point can accept a find at its own reach — a small prop giving up on a far road while a large one still finds it, in one cook. The unlimited sentinel is per point too, and it is 0 OR LESS: a field returning 0 — or a negative, which a subtraction easily produces — makes THOSE points unlimited rather than making them miss. So 'find nothing' is a small POSITIVE distance, never 0 and never a negative one, which would do the opposite of what it looks like. This param does not size the spatial index — cell size comes from the source cloud — so a mixed set of reaches costs nothing extra and changes no answer.",
     },
   },
-  execute({ inputs, params, checkCancelled }) {
+  execute({ inputs, params, checkCancelled, seed: nodeSeed }) {
     const dst = cloneGeometry(requireGeometry(inputs, "in", "sampleNearestPoint"));
     const src = requireGeometry(inputs, "source", "sampleNearestPoint");
     const wantDistance = params.distanceAttr !== "";
@@ -507,7 +510,22 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
     const found = new Int32Array(n);
     const distances = wantDistance ? new Float64Array(n) : undefined;
     const grid = UniformGrid.build(srcView, deriveCellSize(srcView));
-    const maxRadius = params.maxDistance > 0 ? params.maxDistance : Number.POSITIVE_INFINITY;
+    // 0 means unlimited, per point as well as plainly: a field returning
+    // 0 somewhere makes THOSE points unlimited rather than making them
+    // miss. Resolved on `dst`, the cloud being sampled, because the
+    // reach belongs to the point doing the asking and not to the source.
+    const uniformMax = typeof params.maxDistance === "number" ? params.maxDistance : undefined;
+    const reaches =
+      uniformMax === undefined
+        ? requireTuple(
+            resolveOn(dst, "point", params.maxDistance, nodeSeed, "sampleNearestPoint", "maxDistance"),
+            [1],
+            "sampleNearestPoint",
+            "maxDistance",
+          )
+        : undefined;
+    const maxRadius =
+      uniformMax !== undefined && uniformMax > 0 ? uniformMax : Number.POSITIVE_INFINITY;
     const pd = dstView.data;
     const ps = dstView.stride;
     const sd = srcView.data;
@@ -518,7 +536,13 @@ export const sampleNearestPoint = standardNode<SampleNearestPointParams>({
       const x = pd[o];
       const y = pd[o + 1];
       const z = pd[o + 2];
-      const j = grid.nearest(x, y, z, maxRadius);
+      const reach =
+        reaches === undefined
+          ? maxRadius
+          : reaches.data[i] > 0
+            ? reaches.data[i]
+            : Number.POSITIVE_INFINITY;
+      const j = grid.nearest(x, y, z, reach);
       found[i] = j;
       if (distances) {
         if (j < 0) {

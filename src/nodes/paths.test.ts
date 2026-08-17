@@ -6,7 +6,7 @@ import {
   createPolyline,
   setPolylineTopology,
 } from "../data/index.js";
-import { attribute, lerp } from "../fields/index.js";
+import { attribute, lerp, type FieldLike } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem } from "../graph/index.js";
 import { dataInput } from "../runtime/index.js";
 import {
@@ -452,6 +452,221 @@ describe("pathResample", () => {
     ).rejects.toThrow(
       /pathResample: spacing 0\.0009 would place more than 1048576 samples.*use spacing >= 0\.00095/,
     );
+  });
+
+  /**
+   * Two OPEN polylines over one cloud: primitive 0 runs 10 units along +X,
+   * primitive 1 runs 4 units along +Y. Two paths of different lengths is
+   * the whole point — a per-path spacing has nothing to say about one.
+   */
+  function twoOpenPaths(): Geometry {
+    const geo = createPointCloud(4);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [10, 0, 0]);
+    P.setTuple(2, [0, 10, 0]);
+    P.setTuple(3, [0, 14, 0]);
+    setPolylineTopology(geo, [0, 1, 2, 3], [0, 2], [2, 2]);
+    return geo;
+  }
+
+  /** An open 10-unit line (primitive 0) and a closed unit square (primitive 1). */
+  function openAndClosed(): Geometry {
+    const geo = createPointCloud(6);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [1, 0, 0]);
+    P.setTuple(2, [1, 1, 0]);
+    P.setTuple(3, [0, 1, 0]);
+    P.setTuple(4, [0, 5, 0]);
+    P.setTuple(5, [10, 5, 0]);
+    setPolylineTopology(geo, [4, 5, 0, 1, 2, 3, 0], [0, 2], [2, 5]);
+    return geo;
+  }
+
+  /** `spacing` read from a per-primitive attribute — the per-path field. */
+  const spacingPerPath = fieldFromJson({ fn: "attribute", name: "sp" });
+
+  it("reads a spacing field PER PATH, sampling two paths at two steps in one cook", async () => {
+    // 10 units at 2.5 is 5 samples; 4 units at 4 is 2. No single scalar
+    // produces that pair — 2.5 everywhere gives (5, 3) and 4 gives (4, 2) —
+    // which is exactly what a per-path field buys and what the primitive
+    // domain makes possible here (splineSample, concatenating, cannot).
+    const src = withPrimValue(twoOpenPaths(), "sp", [2.5, 4]);
+    const geo = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          { mode: "spacing", spacing: spacingPerPath, stepAttr: "sampleStep" },
+          { in: [makeGeometryItem(src)] },
+        )
+      ).out,
+    );
+    expect(topologyOf(geo).count).toEqual([5, 2]);
+    expect(positionsOf(geo)).toEqual([
+      [0, 0, 0],
+      [2.5, 0, 0],
+      [5, 0, 0],
+      [7.5, 0, 0],
+      [10, 0, 0],
+      [0, 10, 0],
+      [0, 14, 0],
+    ]);
+    // The step report follows the field, one value per path.
+    const step = geo.attrs.primitive.require("sampleStep");
+    expect([step.get(0), step.get(1)]).toEqual([2.5, 4]);
+
+    // The control: both scalars the field mixes, neither of which can say
+    // what it said. Without these the pair above proves nothing.
+    const scalar = async (spacing: number) =>
+      topologyOf(
+        firstGeo(
+          (
+            await runNode(
+              pathResample,
+              { mode: "spacing", spacing },
+              { in: [makeGeometryItem(src)] },
+            )
+          ).out,
+        ),
+      ).count;
+    expect(await scalar(2.5)).toEqual([5, 3]);
+    expect(await scalar(4)).toEqual([4, 2]);
+  });
+
+  it("cooks a constant spacing field exactly as the plain number", async () => {
+    // 2.5 is exact in f32, so a field column holds the same number the
+    // plain param does and any difference would be a real one.
+    const line = createPolyline([0, 0, 0, 10, 0, 0]);
+    const run = async (spacing: FieldLike) =>
+      snapshotGeometry(
+        firstGeo(
+          (
+            await runNode(
+              pathResample,
+              { mode: "spacing", spacing },
+              { in: [makeGeometryItem(line)] },
+            )
+          ).out,
+        ),
+      );
+    expect(await run(fieldFromJson({ fn: "constant", value: 2.5 }))).toEqual(await run(2.5));
+    // The control: the comparison above can report "different" too.
+    expect(await run(fieldFromJson({ fn: "constant", value: 4 }))).not.toEqual(await run(2.5));
+  });
+
+  it("refuses a spacing field whose resolved steps bust the TOTAL budget", async () => {
+    // Primitive 0 is cheap (3 samples) and primitive 1 is not (2 048 000):
+    // the cap is on the sum, so the refusal lands on the path the running
+    // total ran out on. 2^-11 is exact in f32, so the message quotes the
+    // step the field really resolved to.
+    const geo = createPointCloud(4);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [10, 0, 0]);
+    P.setTuple(2, [0, 20, 0]);
+    P.setTuple(3, [1000, 20, 0]);
+    setPolylineTopology(geo, [0, 1, 2, 3], [0, 2], [2, 2]);
+    const src = withPrimValue(geo, "sp", [5, 0.00048828125]);
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { mode: "spacing", spacing: spacingPerPath },
+        { in: [makeGeometryItem(src)] },
+      ),
+    );
+    expect(msg).toContain('pathResample: the "spacing" field resolved to 0.00048828125');
+    expect(msg).toContain("at primitive 1");
+    expect(msg).toContain("more than 1048576 samples");
+    expect(msg).toContain("The cap is on the TOTAL");
+    expect(msg).toContain("max(<the spacing field>");
+  });
+
+  it("caps the TOTAL, not each path: two paths that each fit are refused together", async () => {
+    // 100 units at 2^-13 is 819 200 samples — comfortably under the cap on
+    // its own. Two such paths are not, and a per-path budget would wave
+    // both through and emit 1 638 400 points. This is the test that tells
+    // a global cap from a per-path one; the one above does not, since its
+    // long path busts either way.
+    const geo = createPointCloud(4);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [100, 0, 0]);
+    P.setTuple(2, [0, 50, 0]);
+    P.setTuple(3, [100, 50, 0]);
+    setPolylineTopology(geo, [0, 1, 2, 3], [0, 2], [2, 2]);
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { mode: "spacing", spacing: fieldFromJson({ fn: "constant", value: 0.0001220703125 }) },
+        { in: [makeGeometryItem(geo)] },
+      ),
+    );
+    expect(msg).toContain("at primitive 1");
+    expect(msg).toContain("more than 1048576 samples");
+    expect(msg).toContain("The cap is on the TOTAL");
+  });
+
+  it("refuses the PATH whose own resolved spacing is too coarse, rather than dropping it", async () => {
+    // The closed square is 4 around and its own spacing is 3: two samples
+    // where a closed path needs three. Refused, naming that primitive —
+    // silently emitting one path where two went in is the plausible-looking
+    // cook this library exists to refuse.
+    const src = withPrimValue(openAndClosed(), "sp", [1, 3]);
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { mode: "spacing", spacing: spacingPerPath },
+        { in: [makeGeometryItem(src)] },
+      ),
+    );
+    expect(msg).toContain('the "spacing" field resolved to 3 on the closed path at primitive 1');
+    expect(msg).toContain("fewer than the 3 a path needs");
+    expect(msg).toContain("min(<the spacing field>");
+  });
+
+  it("refuses a path whose resolved spacing is not positive, naming it", async () => {
+    const src = withPrimValue(openAndClosed(), "sp", [1, 0]);
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { mode: "spacing", spacing: spacingPerPath },
+        { in: [makeGeometryItem(src)] },
+      ),
+    );
+    expect(msg).toContain('the "spacing" field resolved to 0 on the closed path at primitive 1');
+    expect(msg).toContain("must be > 0");
+  });
+
+  it("refuses a spacing field that resolves to a tuple, naming the fix", async () => {
+    const msg = await rejection(
+      runNode(
+        pathResample,
+        { mode: "spacing", spacing: fieldFromJson({ fn: "vec", args: [1, 2, 3] }) },
+        { in: [makeGeometryItem(createPolyline([0, 0, 0, 10, 0, 0]))] },
+      ),
+    );
+    expect(msg).toContain('param "spacing" must evaluate to ONE number per path');
+    expect(msg).toContain("component(");
+  });
+
+  it("does not read the spacing field at all in 'count' mode", async () => {
+    // `spacing` is documented as ignored there, so a field that could not
+    // possibly resolve must not be resolved.
+    const geo = firstGeo(
+      (
+        await runNode(
+          pathResample,
+          {
+            mode: "count",
+            count: 3,
+            spacing: fieldFromJson({ fn: "attribute", name: "nothingWritesThis" }),
+          },
+          { in: [makeGeometryItem(createPolyline([0, 0, 0, 10, 0, 0]))] },
+        )
+      ).out,
+    );
+    expect(geo.pointCount).toBe(3);
   });
 
   it("checks for cancellation while it walks a long path", async () => {
@@ -955,6 +1170,66 @@ describe("pathSegments", () => {
       [0.25, 0.25],
       [0.25, 0.25],
     ]);
+  });
+
+  it("reads an extend field per SEGMENT, off the input points it runs between", async () => {
+    // An extend attribute of 0, 1, 3 on the L's three points: the segments
+    // between them take 0.5 and 2, so the 2-long segment grows to 3 and the
+    // 4-long one to 8. A plain value adds the SAME 2 * extend to both, so
+    // no scalar can open a gap of 5 between them — the controls below are
+    // the two the field mixes.
+    const src = withAttr(elbow(), "ext", [0, 1, 3]);
+    const geo = await segments(
+      { radius: 0.25, extend: fieldFromJson({ fn: "attribute", name: "ext" }) },
+      src,
+    );
+    expect(tuplesOf(geo, "scale").map((s) => s[1])).toEqual([3, 8]);
+    // Only the axis component grows; the radius is untouched.
+    expect(tuplesOf(geo, "scale").map((s) => [s[0], s[2]])).toEqual([
+      [0.25, 0.25],
+      [0.25, 0.25],
+    ]);
+    // The midpoints do not move, field or not.
+    expect(positionsOf(geo)).toEqual(positionsOf(await segments({ radius: 0.25 }, src)));
+    const scalar = async (extend: number) =>
+      tuplesOf(await segments({ radius: 0.25, extend }, src), "scale").map((s) => s[1]);
+    expect(await scalar(0.5)).toEqual([3, 5]);
+    expect(await scalar(2)).toEqual([6, 8]);
+  });
+
+  it("cooks a constant extend field exactly as the plain number", async () => {
+    // 0.25 is exact in f32, so a field column holds the same number the
+    // plain param does and any difference would be a real one.
+    const run = async (extend: unknown) =>
+      snapshotGeometry(await segments({ radius: 0.25, extend }, elbow()));
+    expect(await run(fieldFromJson({ fn: "constant", value: 0.25 }))).toEqual(await run(0.25));
+    // The control: the comparison above can report "different" too.
+    expect(await run(fieldFromJson({ fn: "constant", value: 0.5 }))).not.toEqual(await run(0.25));
+  });
+
+  it("clamps a negative extend field to zero per segment, and refuses a non-finite one", async () => {
+    // Segment 0 averages (-4 + -2)/2 = -3 and clamps to 0; segment 1
+    // averages (-2 + 6)/2 = 2 and DOES extend. The third value used to be
+    // 2, which made segment 1 average 0 — so both segments came out at
+    // the `extend: 0` default and an implementation ignoring the field
+    // entirely passed this test. The point of the case is the contrast
+    // between the clamped segment and the extended one.
+    const src = withAttr(elbow(), "ext", [-4, -2, 6]);
+    const geo = await segments({ extend: fieldFromJson({ fn: "attribute", name: "ext" }) }, src);
+    const lengths = tuplesOf(geo, "scale").map((s) => s[1]);
+    const base = tuplesOf(await segments({}, elbow()), "scale").map((s) => s[1]);
+    expect(base).toEqual([2, 4]);
+    expect(lengths[0]).toBe(base[0]);
+    expect(lengths[1]).toBeGreaterThan(base[1]);
+    const msg = await rejection(
+      runNode(
+        pathSegments,
+        { extend: fieldFromJson({ fn: "div", args: [1, 0] }) },
+        { in: [makeGeometryItem(elbow())] },
+      ),
+    );
+    expect(msg).toContain('pathSegments: param "extend"');
+    expect(msg).toContain("+Infinity");
   });
 
   it("resolves radius on the input points and averages it across each segment", async () => {

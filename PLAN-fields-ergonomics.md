@@ -142,8 +142,8 @@ wording (numeric and vector params only — 83 of 180):
 
 | bucket | count (as audited, 2026-08-17) |
 | --- | --- |
-| already field-capable | 20 — now 21 |
-| **CANDIDATE — the real cost of C2** | **24 — now 23** |
+| already field-capable | 20 — now 43, C2 swept |
+| **CANDIDATE — the real cost of C2** | **24 as audited; 27 by the rule, 22 done, 5 refused** |
 | structural, correctly refused | 38 |
 | unclear | 1 (`valueConstant.value`, see §2.4) |
 
@@ -368,13 +368,34 @@ state the two counterexamples in §2.3, not just the allocation clause —
 a rule with unstated exceptions is how this whitelist got here. Fixes the
 noise-opts edge.
 
-**C2 — flip the default.** **23 params**, not 160 and no longer 24:
-`pointNeighborhood.radius` is done. ~5 days of plumbing for the easy and
-medium ones. `connectPoints.radius` needs no decision either — the rule
-says it can NEVER be a field, so it leaves the candidate set rather than
-waiting in it. The non-mechanical part is that each newly-fielded param
-converts an eager refusal
-(`extend >= 0`, `vector != 0`) into a per-element policy plus a test.
+**C2 — flip the default. SHIPPED.** Field-capable params went from 20 of
+180 to **43 of 180, across 24 node types**: 22 implemented, 5 refused by
+the rule (`connectPoints.radius` on symmetry; `splineSample.spacing` and
+`volumeSample`'s `cellSize` and bounds on allocation).
+
+The audit's "24 candidates" was an estimate; applying the written rule to
+the registry gave **27**. The sizing was also wrong in the other
+direction — this was called "closer to a month than a week" and it was a
+day, because the rule turned a judgement call per param into a lookup,
+which is the whole argument for having written it down first.
+
+THE SWEEP FALSIFIED THE RULE'S OWN CLAUSE 4, which had read "nothing that
+decides how many elements come out". `pathResample.spacing` decides
+exactly that and is field-capable anyway, because that node resamples
+each polyline on its own arc length — the field resolves per PRIMITIVE,
+one spacing per path. `splineSample.spacing` is the same word in the same
+units and cannot be one, because that node concatenates every polyline
+into a single curve. The clause is now "nothing read ONCE to size a
+single allocation": the question is never what the param decides, it is
+whether an element exists to read it per. `volumeSample` shows both
+halves inside one node — `jitter` is a field, `cellSize` cannot be.
+
+The non-mechanical part was as predicted: each newly-fielded param
+converts an eager refusal into a stated per-element policy. A zero
+extrusion vector now refuses THAT primitive by index rather than the
+cook; a zero ray direction MISSES that point and is counted by
+`hitAttr`; `attributeRemap`'s window ends are not evaluated at all under
+`mode: "fit"`, which the description now says.
 
 ### D. Visibility and reuse
 
@@ -431,7 +452,7 @@ understanding the model, not about line count.
 | ~~E1~~ | docs framing — lead with `Field<T>`, not the JSON | — | **SHIPPED** `a3d3b94` |
 | ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
 | ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
-| C2 | flip the default over 24 params | ~1 month | §7.2 + one design call, on `connectPoints.radius` |
+| ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 22 done, 5 refused by rule |
 | B2 | text syntax | medium-large | §7.1 |
 | A3 | subexpression binding | medium | thin mandate — 11 specs |
 | D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |
@@ -519,17 +540,12 @@ and D3 qualify; E1 and C1 do not.
    save?** Blocks B2. Normalizing means the first sandbox save silently
    destroys what someone wrote; storing the string as the authored form
    has knock-on effects on diffing and the golden file.
-2. **~~C1 or C2?~~ Now just: C2 or not.** C1 shipped in `a3d3b94`, so the
-   rule is written and pinned; the remaining question is whether to flip
-   the default over the 24 candidate params. Writing it down changed the
-   shape of that question rather than only deferring it. The rule turned
-   out to have a clause the audit missed; it named one candidate
-   (`pointNeighborhood.radius`) that should already have been
-   field-capable, which is now shipped; and it ruled one
-   (`connectPoints.radius`) out permanently, which removes it from the
-   set rather than parking it. 23 remain, and a sweep would be applying a
-   stated rule rather than extending a whitelist by taste — most of what
-   made C2 look expensive.
+2. **~~C1 or C2?~~ CLOSED — both shipped.** C1 wrote the rule down
+   (`a3d3b94`), and C2 swept it over the library: 43 of 180 params are
+   field-capable now, 22 added and 5 refused by the rule. Writing the
+   rule first is what made the sweep a day's work instead of a month's,
+   and the sweep is what corrected the rule (clause 4, above). Neither
+   half would have been right alone.
 3. **~~Is unit 3 (corpus rewrite) in scope?~~** Moot — done by `8faf95d`.
 4. **Is D3 ever wanted?** §2.6 gives it a real number (447 lines nothing
    else can remove) but that number is one graph. This decides whether

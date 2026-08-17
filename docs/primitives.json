@@ -680,6 +680,7 @@
           "type": "f32",
           "default": 5,
           "description": "The band edge, in world units.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -748,6 +749,7 @@
           "type": "f32",
           "default": 5,
           "description": "The band edge, in world units — how far from the curve the decision flips.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -826,6 +828,7 @@
           "type": "f32",
           "default": 2,
           "description": "How many neighbours the comparison is made against. The point itself is not counted.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -919,6 +922,7 @@
           "type": "f32",
           "default": 10,
           "description": "The distance the comparison is made against, in world units.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -1108,7 +1112,8 @@
             -1,
             0
           ],
-          "description": "Which way the ray travels to find the surface. [0,-1,0] looks straight down."
+          "description": "Which way the ray travels to find the surface. [0,-1,0] looks straight down.",
+          "acceptsField": true
         },
         "targets": [
           {
@@ -1123,6 +1128,7 @@
           "type": "f32",
           "default": 0,
           "description": "Longest ray that still counts as a find, in world units. 0 means unlimited.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -1239,6 +1245,7 @@
           "type": "f32",
           "default": 1,
           "description": "Distance between points in world units in 'spacing' mode — exact for every step except the LAST, which is the leftover. The walk starts at the beginning of each path, steps `spacing` until another step would overshoot, then puts a final point exactly on the end: a 40-unit path at spacing 7 comes out with gaps 7, 7, 7, 7, 7, 5. So the count per path is floor(length / spacing) + 2, or length / spacing + 1 when it divides exactly, and the far end is always the short one. For props that must be evenly pitched the whole way, pick a `spacing` that divides the path length. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -1307,7 +1314,8 @@
             -1,
             0
           ],
-          "description": "Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss."
+          "description": "Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss.",
+          "acceptsField": true
         },
         "targets": [
           {
@@ -1322,6 +1330,7 @@
           "type": "f32",
           "default": 0,
           "description": "Longest drop that still counts as a landing, in world units. 0 means unlimited.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -1468,7 +1477,8 @@
         "schema": {
           "type": "f32",
           "default": 60,
-          "description": "Highest world Y still plantable — a tree line."
+          "description": "Highest world Y still plantable — a tree line.",
+          "acceptsField": true
         },
         "targets": [
           {
@@ -1482,7 +1492,8 @@
         "schema": {
           "type": "f32",
           "default": 0.3,
-          "description": "Steepest ground still plantable, on the `slope` scale `write/height-slope` writes — which is 1 - cos(angle), NOT a fraction of 90 degrees, so it is heavily compressed at the flat end and half the scale already covers two thirds of the range of real slopes. The default 0.3 is therefore a 45-degree limit, not the 27-degree one a linear reading gives. The anchors, measured: 10 degrees is 0.015, 20 is 0.060, 30 is 0.134, 45 is 0.293, 60 is 0.500, 75 is 0.741, 90 is 1. Inverted, for a limit of A degrees pass 1 - cos(A)."
+          "description": "Steepest ground still plantable, on the `slope` scale `write/height-slope` writes — which is 1 - cos(angle), NOT a fraction of 90 degrees, so it is heavily compressed at the flat end and half the scale already covers two thirds of the range of real slopes. The default 0.3 is therefore a 45-degree limit, not the 27-degree one a linear reading gives. The anchors, measured: 10 degrees is 0.015, 20 is 0.060, 30 is 0.134, 45 is 0.293, 60 is 0.500, 75 is 0.741, 90 is 1. Inverted, for a limit of A degrees pass 1 - cos(A).",
+          "acceptsField": true
         },
         "targets": [
           {

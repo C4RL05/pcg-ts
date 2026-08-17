@@ -14,7 +14,7 @@ import {
   setPolylineTopology,
   type Geometry,
 } from "../data/index.js";
-import { attribute } from "../fields/index.js";
+import { attribute, constant } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import {
   extrudePolygon,
@@ -653,6 +653,142 @@ describe("param validation names the offender and the valid set", () => {
   });
 });
 
+describe("a field param answers per element, where a number cannot", () => {
+  // Both params here used to be settled before the walk. What is asserted
+  // is the thing that separates a field from a number: ONE cook giving
+  // two elements two different answers. Every constant-field comparison
+  // carries a CONTROL that differs, so an equality that cannot fail is
+  // never mistaken for a passing one, and every number in one is f32-exact
+  // so a difference would be a real difference and not a rounding.
+  it("extrudes two polygons of one input along two different vectors", async () => {
+    const geo = twoSquares();
+    geo.attrs.primitive.add("dir", "f32", 3, 0).data.set([0, 4, 0, 4, 0, 0]);
+    const out = await extrude(geo, {
+      direction: "vector",
+      vector: attribute("dir"),
+      distance: 2,
+    });
+    // 24 output points per polygon (16 wall + 4 bottom + 4 top).
+    expect(out.pointCount).toBe(48);
+    // Square A rises; square B travels along +x and never leaves y = 0.
+    expect(span(out, 0, 24, 1)).toEqual([0, 2]);
+    expect(span(out, 0, 24, 0)).toEqual([0, 1]);
+    expect(span(out, 24, 48, 1)).toEqual([0, 0]);
+    expect(span(out, 24, 48, 0)).toEqual([4, 7]);
+    expectNormalsMatchWinding(out, "two vectors");
+
+    // The control: one plain vector cannot say both things, and the same
+    // measurement reports the other answer for it.
+    const one = await extrude(twoSquares(), {
+      direction: "vector",
+      vector: [0, 4, 0],
+      distance: 2,
+    });
+    expect(span(one, 24, 48, 1)).toEqual([0, 2]);
+    expect(span(one, 24, 48, 0)).toEqual([4, 5]);
+  });
+
+  it("extrudes along a constant vector field exactly as along the plain vector", async () => {
+    const plain = await extrude(unitSquare(), {
+      direction: "vector",
+      vector: [0.25, 4, 0],
+      distance: 2.5,
+    });
+    const field = await extrude(unitSquare(), {
+      direction: "vector",
+      vector: constant([0.25, 4, 0]),
+      distance: 2.5,
+    });
+    expect(snapshotGeometry(field)).toEqual(snapshotGeometry(plain));
+    // Control: a different constant field is a different solid, so the
+    // equality above is one the comparison could have refused.
+    const other = await extrude(unitSquare(), {
+      direction: "vector",
+      vector: constant([0, 4, 0]),
+      distance: 2.5,
+    });
+    expect(snapshotGeometry(other)).not.toEqual(snapshotGeometry(plain));
+  });
+
+  it("refuses a zero vector BY PRIMITIVE, and a plain zero by the param", async () => {
+    const geo = twoSquares();
+    geo.attrs.primitive.add("dir", "f32", 3, 0).data.set([0, 4, 0, 0, 0, 0]);
+    // Primitive 0 is fine; primitive 1 names no direction, and the
+    // message says which polygon and what to do about it.
+    await expect(
+      extrude(geo, { direction: "vector", vector: attribute("dir"), distance: 2 }),
+    ).rejects.toThrow(/param "vector" resolved to \[0, 0, 0\] on primitive 1.*polygonNormal/s);
+    await expect(
+      extrude(twoSquares(), { direction: "vector", vector: [0, 0, 0] }),
+    ).rejects.toThrow(/param "vector" is \[0, 0, 0\], which names no direction/);
+  });
+
+  it("does not even evaluate the vector in the other direction modes", async () => {
+    // `attribute("dir")` throws when it is read and there is no such
+    // attribute, so cooking at all is the assertion.
+    const geo = twoSquares();
+    const ignored = await extrude(geo, { direction: "+y", vector: attribute("dir"), distance: 2 });
+    const plain = await extrude(twoSquares(), { direction: "+y", distance: 2 });
+    expect(snapshotGeometry(ignored)).toEqual(snapshotGeometry(plain));
+  });
+
+  it("miters one bend and pinches an identical one in the same sweep", async () => {
+    const path = zigzag();
+    path.attrs.point.add("lim", "f32", 1, 0).data.set([1, 1.25, 2, 1, 1]);
+    // Both bends turn 90 degrees and want the same stretch of sqrt(2);
+    // ring 1's own limit refuses it and ring 2's allows it.
+    const geo = await sweep(path, { radius: 0.2, miterLimit: attribute("lim"), caps: false });
+    const wide = 0.2 * Math.SQRT2;
+    expect(ringWidest(geo, 1, [0, 0, 0])).toBeCloseTo(0.2, 5);
+    expect(ringWidest(geo, 2, [0, 0, -1])).toBeCloseTo(wide, 5);
+
+    // The controls: neither plain limit produces that pair, and the same
+    // two measurements report both of the answers a number can give.
+    const tight = await sweep(zigzag(), { radius: 0.2, miterLimit: 1.25, caps: false });
+    expect(ringWidest(tight, 1, [0, 0, 0])).toBeCloseTo(0.2, 5);
+    expect(ringWidest(tight, 2, [0, 0, -1])).toBeCloseTo(0.2, 5);
+    const loose = await sweep(zigzag(), { radius: 0.2, miterLimit: 2, caps: false });
+    expect(ringWidest(loose, 1, [0, 0, 0])).toBeCloseTo(wide, 5);
+    expect(ringWidest(loose, 2, [0, 0, -1])).toBeCloseTo(wide, 5);
+  });
+
+  it("sweeps with a constant miterLimit field exactly as with the plain number", async () => {
+    const plain = await sweep(zigzag(), { radius: 0.25, miterLimit: 2, caps: false });
+    const field = await sweep(zigzag(), { radius: 0.25, miterLimit: constant(2), caps: false });
+    expect(snapshotGeometry(field)).toEqual(snapshotGeometry(plain));
+    // Control: a limit the bends exceed builds a different surface.
+    const other = await sweep(zigzag(), { radius: 0.25, miterLimit: constant(1.25), caps: false });
+    expect(snapshotGeometry(other)).not.toEqual(snapshotGeometry(plain));
+  });
+
+  it("reads a resolved limit below 1 as 'no miter here' rather than refusing it", async () => {
+    const geo = await sweep(zigzag(), { radius: 0.2, miterLimit: constant(0.25), caps: false });
+    expect(ringWidest(geo, 1, [0, 0, 0])).toBeCloseTo(0.2, 5);
+    expect(ringWidest(geo, 2, [0, 0, -1])).toBeCloseTo(0.2, 5);
+    // A PLAIN limit below 1 is still refused at the door, unchanged.
+    await expect(sweep(zigzag(), { miterLimit: 0.25 })).rejects.toThrow(/miterLimit.*>= 1/s);
+  });
+
+  it("does not evaluate miterLimit at all under joint 'perpendicular'", async () => {
+    const path = zigzag();
+    const ignored = await sweep(path, {
+      joint: "perpendicular",
+      miterLimit: attribute("lim"),
+      caps: false,
+    });
+    const plain = await sweep(zigzag(), { joint: "perpendicular", caps: false });
+    expect(snapshotGeometry(ignored)).toEqual(snapshotGeometry(plain));
+  });
+
+  it("refuses a non-finite miterLimit field, naming the param and the element", async () => {
+    const path = zigzag();
+    path.attrs.point.add("lim", "f32", 1, 0).data.set([1, Infinity, 2, 1, 1]);
+    await expect(sweep(path, { miterLimit: attribute("lim"), caps: false })).rejects.toThrow(
+      /param "miterLimit" resolved to \+Infinity at element 1/,
+    );
+  });
+});
+
 describe("determinism", () => {
   it("sweeps identically across runs", async () => {
     const path = straight(9);
@@ -683,6 +819,56 @@ describe("determinism", () => {
     expect(snapshotGeometry(a)).toEqual(snapshotGeometry(b));
   });
 });
+
+/**
+ * Two unit squares in one input, as two CLOSED polyline primitives —
+ * the shape that makes a per-primitive answer visible: the blocks are
+ * separated in x, so which polygon a point came from is readable off its
+ * position alone.
+ */
+function twoSquares(): Geometry {
+  const geo = createPolyline([
+    0, 0, 0, 1, 0, 0, 1, 0, -1, 0, 0, -1, 4, 0, 0, 5, 0, 0, 5, 0, -1, 4, 0, -1,
+  ]);
+  setPolylineTopology(
+    geo,
+    Uint32Array.of(0, 1, 2, 3, 0, 4, 5, 6, 7, 4),
+    Uint32Array.of(0, 5),
+    Uint32Array.of(5, 5),
+  );
+  return geo;
+}
+
+/** An open path with two IDENTICAL 90-degree bends, at points 1 and 2. */
+function zigzag(): Geometry {
+  return createPolyline([-1, 0, 0, 0, 0, 0, 0, 0, -1, 1, 0, -1, 2, 0, -1]);
+}
+
+/** [min, max] of component `k` of P over the output points [from, to). */
+function span(geo: Geometry, from: number, to: number, k: number): [number, number] {
+  const P = geo.attrs.point.require("P");
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = from; i < to; i++) {
+    min = Math.min(min, P.get(i, k));
+    max = Math.max(max, P.get(i, k));
+  }
+  return [min, max];
+}
+
+/**
+ * Widest half-extent of one 9-point ring about the path point it stands
+ * on — `radius` unmitered, `radius / cos(half the turn)` mitered.
+ */
+function ringWidest(geo: Geometry, ring: number, center: readonly number[]): number {
+  const P = geo.attrs.point.require("P");
+  let max = 0;
+  for (let i = ring * 9; i < ring * 9 + 9; i++) {
+    const [x, y, z] = P.getTuple(i);
+    max = Math.max(max, Math.hypot(x - center[0], y - center[1], z - center[2]));
+  }
+  return max;
+}
 
 /** Two separate 2-point polylines, optionally in the other order. */
 function twoPaths(swapped = false): Geometry {

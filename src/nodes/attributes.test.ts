@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createPointCloud, createTriangleMesh } from "../data/index.js";
+import { createPointCloud, createTriangleMesh, type Geometry } from "../data/index.js";
 import { evaluateField, randomField } from "../fields/index.js";
 import { makeGeometryItem, type GeometryItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import {
+  attributeRemap,
+  type AttributeRemapParams,
+  type TransferAttributeParams,
   fieldFromJson,
   partitionByAttribute,
   promoteAttribute,
@@ -918,3 +921,380 @@ describe("partitionByAttribute", () => {
   });
 });
 
+/** A cloud whose points sit at the given y, carrying a scalar "d". */
+function cloudWithD(ys: number[], ds: number[]): Geometry {
+  const geo = cloudAt(ys.map((y) => [0, y, 0]));
+  const d = geo.attrs.point.add("d", "f32", 1, 0);
+  ds.forEach((v, i) => d.set(i, v));
+  return geo;
+}
+
+/** P.y as a field — the per-point driver every window test below reads. */
+const pointY = () => fieldFromJson({ fn: "component", args: [{ fn: "position" }], index: 1 });
+
+/** Remap "d" into "out" and read the result back, element by element. */
+async function remapped(geo: Geometry, params: Partial<AttributeRemapParams>): Promise<number[]> {
+  const out = firstGeo(
+    (
+      await runNode(
+        attributeRemap,
+        { name: "d", outName: "out", ...params },
+        { in: [makeGeometryItem(geo)] },
+      )
+    ).out,
+  );
+  const attr = out.attrs.point.require("out");
+  return Array.from({ length: out.pointCount }, (_, i) => attr.get(i));
+}
+
+describe("attributeRemap field windows", () => {
+  it("inMin as a field is a per-element window no single number could give", async () => {
+    // Identical source values, three different windows: only a field can
+    // separate them, and the plain-number control proves it.
+    const geo = cloudWithD([0, 0, 0], [1, 1, 1]);
+    const perElement = await remapped(geo, {
+      inMin: fieldFromJson({ fn: "index" }),
+      inMax: 4,
+      outMin: 0,
+      outMax: 1,
+    });
+    expect(perElement).toEqual([0.25, 0, -0.5]);
+    // Control: the same graph with a plain inMin cannot vary at all.
+    expect(await remapped(geo, { inMin: 0, inMax: 4, outMin: 0, outMax: 1 })).toEqual([
+      0.25, 0.25, 0.25,
+    ]);
+  });
+
+  it("inMax as a field rescales each element against its own ceiling", async () => {
+    const geo = cloudWithD([1, 2, 4], [1, 1, 1]);
+    expect(await remapped(geo, { inMin: 0, inMax: pointY(), outMin: 0, outMax: 1 })).toEqual([
+      1, 0.5, 0.25,
+    ]);
+    expect(await remapped(geo, { inMin: 0, inMax: 1, outMin: 0, outMax: 1 })).toEqual([1, 1, 1]);
+  });
+
+  it("outMin and outMax as fields give each element its own output band", async () => {
+    const geo = cloudWithD([1, 2, 4], [0.5, 0.5, 0.5]);
+    // outMin fielded: mapped = y + 0.5 * (4 - y).
+    expect(await remapped(geo, { inMin: 0, inMax: 1, outMin: pointY(), outMax: 4 })).toEqual([
+      2.5, 3, 4,
+    ]);
+    // outMax fielded: mapped = 0.5 * y.
+    expect(await remapped(geo, { inMin: 0, inMax: 1, outMin: 0, outMax: pointY() })).toEqual([
+      0.5, 1, 2,
+    ]);
+    // Control: plain ends give one band for the whole domain.
+    expect(await remapped(geo, { inMin: 0, inMax: 1, outMin: 0, outMax: 4 })).toEqual([2, 2, 2]);
+  });
+
+  it("an empty window is per element: that element takes its own outMin, NaN stays NaN", async () => {
+    const geo = cloudWithD([1, 2, 4, 2], [3, 3, 3, Number.NaN]);
+    const out = await remapped(geo, { inMin: pointY(), inMax: 2, outMin: 10, outMax: 20 });
+    // Element 1's window collapsed (y == inMax) and took outMin; its
+    // neighbours remapped normally, and element 3 collapsed onto a NaN
+    // source, which stays NaN rather than becoming a valid-looking 10.
+    expect(out.slice(0, 3)).toEqual([30, 10, 15]);
+    expect(Number.isNaN(out[3])).toBe(true);
+  });
+
+  it("a constant field equals the plain number, and a different constant does not", async () => {
+    const geo = cloudWithD([0, 0, 0], [2.5, 3, 4]);
+    const plain = await remapped(geo, { inMin: 2.5, inMax: 4, outMin: 0, outMax: 1 });
+    const constant = await remapped(geo, {
+      inMin: fieldFromJson({ fn: "constant", value: 2.5 }),
+      inMax: 4,
+      outMin: 0,
+      outMax: 1,
+    });
+    expect(constant).toEqual(plain);
+    // The control: the comparison above can report "different" too.
+    const other = await remapped(geo, {
+      inMin: fieldFromJson({ fn: "constant", value: 2.25 }),
+      inMax: 4,
+      outMin: 0,
+      outMax: 1,
+    });
+    expect(other).not.toEqual(plain);
+  });
+
+  it("mode 'fit' ignores a fielded inMin/inMax and never evaluates it", async () => {
+    const geo = cloudWithD([1, 2, 4], [0, 2, 4]);
+    // A window end that WOULD be refused the moment it is evaluated.
+    const broken = () => fieldFromJson({ fn: "div", args: [1, 0] });
+    expect(
+      await remapped(geo, { mode: "fit", inMin: broken(), inMax: broken(), outMin: 0, outMax: 1 }),
+    ).toEqual([0, 0.5, 1]);
+    // Same field, mode 'range': evaluated, and refused by name.
+    await expect(
+      remapped(geo, { mode: "range", inMin: broken(), inMax: 4, outMin: 0, outMax: 1 }),
+    ).rejects.toThrow(/param "inMin" resolved to \+Infinity/);
+    // 'fit' measures the INPUT window only: outMax is still read per element.
+    expect(await remapped(geo, { mode: "fit", outMin: 0, outMax: pointY() })).toEqual([0, 1, 4]);
+  });
+
+  it("a window end that is not one number per element names the fix", async () => {
+    const geo = cloudWithD([1, 2], [1, 1]);
+    await expect(
+      remapped(geo, { inMin: fieldFromJson({ fn: "position" }), inMax: 4 }),
+    ).rejects.toThrow(/param "inMin" must evaluate to ONE number per element[\s\S]*component\(/);
+  });
+});
+
+/** Two horizontal planes: upper (y = 2) carries 7, lower (y = -2) carries 3. */
+function stackedPlanes(): Geometry {
+  const mesh = createTriangleMesh(
+    [
+      -10, 2, -10, 10, 2, -10, 10, 2, 10, -10, 2, 10, -10, -2, -10, 10, -2, -10, 10, -2, 10, -10,
+      -2, 10,
+    ],
+    [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+  );
+  mesh.attrs.primitive.add("val", "f32", 1, 0).data.set([7, 7, 3, 3]);
+  return mesh;
+}
+
+/** Cast from `dst` against the stacked planes and read the transfer back. */
+async function castOnto(
+  dst: Geometry,
+  params: Partial<TransferAttributeParams>,
+): Promise<{ val: number[]; hit: number[]; missed: number; names: string[] }> {
+  const out = firstGeo(
+    (
+      await runNode(
+        transferAttribute,
+        {
+          name: "val",
+          mapping: "raycast",
+          attrDomain: "primitive",
+          hitAttr: "__hit",
+          missCountAttr: "__missed",
+          ...params,
+        },
+        { in: [makeGeometryItem(dst)], source: [makeGeometryItem(stackedPlanes())] },
+      )
+    ).out,
+  );
+  const val = out.attrs.point.require("val");
+  const hit = out.attrs.point.require("__hit");
+  return {
+    val: Array.from({ length: out.pointCount }, (_, i) => val.get(i)),
+    hit: Array.from({ length: out.pointCount }, (_, i) => hit.get(i)),
+    missed: out.attrs.detail.require("__missed").get(0),
+    names: out.attrs.point.names(),
+  };
+}
+
+describe("transferAttribute raycast direction as a field", () => {
+  // vec(0, P.x, 0): the point at x = 1 casts up, the one at x = -1 casts
+  // down, and a point at x = 0 casts nowhere.
+  const dirFromX = () =>
+    fieldFromJson({
+      fn: "vec",
+      args: [0, { fn: "component", args: [{ fn: "position" }], index: 0 }, 0],
+    });
+  const twoPoints = () =>
+    cloudAt([
+      [1, 0, 0],
+      [-1, 0, 0],
+    ]);
+
+  it("aims each point's own ray, which no single direction could", async () => {
+    const res = await castOnto(twoPoints(), { direction: dirFromX() });
+    expect(res.val).toEqual([7, 3]);
+    expect(res.hit).toEqual([1, 1]);
+    // Controls: one shared direction reaches one plane for everybody.
+    expect((await castOnto(twoPoints(), { direction: [0, 1, 0] })).val).toEqual([7, 7]);
+    expect((await castOnto(twoPoints(), { direction: [0, -1, 0] })).val).toEqual([3, 3]);
+  });
+
+  it("a constant field equals the plain vector, and another constant does not", async () => {
+    const plain = await castOnto(twoPoints(), { direction: [0, 1, 0] });
+    const constant = await castOnto(twoPoints(), {
+      direction: fieldFromJson({ fn: "constant", value: [0, 1, 0] }),
+    });
+    expect(constant.val).toEqual(plain.val);
+    const other = await castOnto(twoPoints(), {
+      direction: fieldFromJson({ fn: "constant", value: [0, -1, 0] }),
+    });
+    expect(other.val).not.toEqual(plain.val);
+  });
+
+  it("a per-point zero direction misses where a plain zero refuses the whole cook", async () => {
+    const res = await castOnto(
+      cloudAt([
+        [1, 0, 0],
+        [0, 0, 0],
+      ]),
+      { direction: dirFromX() },
+    );
+    expect(res.val).toEqual([7, 0]);
+    expect(res.hit).toEqual([1, 0]);
+    expect(res.missed).toBe(1);
+    // The eager refusal is unchanged for a plain vector.
+    await expect(castOnto(cloudAt([[1, 0, 0]]), { direction: [0, 0, 0] })).rejects.toThrow(
+      /direction must be a finite, non-zero/,
+    );
+  });
+
+  it("leaves no scratch direction column on the output", async () => {
+    const res = await castOnto(cloudAt([[1, 0, 0]]), { direction: dirFromX() });
+    expect(res.names.filter((n) => n.startsWith("__transferDirection"))).toEqual([]);
+  });
+
+  it("directionAttr still wins, and the field is not evaluated at all", async () => {
+    const dst = twoPoints();
+    dst.attrs.point.add("dir", "f32", 3, 0).data.set([0, 1, 0, 0, 1, 0]);
+    const res = await castOnto(dst, {
+      directionAttr: "dir",
+      // Would be refused (non-finite) the moment it was resolved.
+      direction: fieldFromJson({ fn: "div", args: [1, 0] }),
+    });
+    expect(res.val).toEqual([7, 7]);
+  });
+
+  it("a direction that is not three numbers per point names the fix", async () => {
+    await expect(
+      castOnto(cloudAt([[1, 0, 0]]), { direction: fieldFromJson({ fn: "index" }) }),
+    ).rejects.toThrow(
+      /param "direction" must evaluate to THREE numbers per point[\s\S]*vec\(x, y, z\)/,
+    );
+  });
+
+  it("refuses a non-finite per-point direction, naming the param", async () => {
+    await expect(
+      castOnto(cloudAt([[1, 0, 0]]), {
+        direction: fieldFromJson({ fn: "vec", args: [0, { fn: "div", args: [1, 0] }, 0] }),
+      }),
+    ).rejects.toThrow(/param "direction" resolved to \+Infinity/);
+  });
+});
+
+
+describe("transferAttribute raycast maxDistance as a field", () => {
+  // The planes sit at y = ±2, so a ray cast straight up from y = 0 hits
+  // at t = 2. A cap read from P.x therefore discriminates: x = 1 gives up
+  // before the plane, x = 2 reaches it exactly.
+  const capFromX = () =>
+    fieldFromJson({ fn: "component", args: [{ fn: "position" }], index: 0 });
+  const up = [0, 1, 0];
+
+  it("caps each point's own ray, which no single distance could", async () => {
+    const dst = cloudAt([
+      [1, 0, 0],
+      [2, 0, 0],
+    ]);
+    const res = await castOnto(dst, { direction: up, maxDistance: capFromX() });
+    expect(res.hit).toEqual([0, 1]);
+    expect(res.val).toEqual([0, 7]);
+    // Controls: one shared cap answers the same for everybody, either way.
+    expect((await castOnto(cloudAt([[1, 0, 0], [2, 0, 0]]), { direction: up, maxDistance: 1 })).hit)
+      .toEqual([0, 0]);
+    expect((await castOnto(cloudAt([[1, 0, 0], [2, 0, 0]]), { direction: up, maxDistance: 2 })).hit)
+      .toEqual([1, 1]);
+  });
+
+  it("reads a per-point NEGATIVE as unlimited too, like the 0 beside it", async () => {
+    // Same branch as 0, and a negative is what a subtraction produces by
+    // accident. The description promises "0 OR LESS", so this pins it.
+    const dst = cloudAt([[1, 0, 0]]);
+    const res = await castOnto(dst, {
+      direction: up,
+      maxDistance: fieldFromJson({ fn: "constant", value: -4 }),
+    });
+    expect(res.hit).toEqual([1]);
+  });
+
+  it("reads a per-point 0 as unlimited, exactly as the plain param does", async () => {
+    // The sentinel has to survive becoming a field, or "0 is unlimited"
+    // would quietly turn into "0 accepts nothing" for one spelling only.
+    const dst = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+    ]);
+    const res = await castOnto(dst, { direction: up, maxDistance: capFromX() });
+    expect(res.hit).toEqual([1, 0]);
+  });
+
+  it("a constant field equals the plain number, and another constant does not", async () => {
+    const dst = () => cloudAt([[1, 0, 0], [2, 0, 0]]);
+    const plain = await castOnto(dst(), { direction: up, maxDistance: 4 });
+    const same = await castOnto(dst(), {
+      direction: up,
+      maxDistance: fieldFromJson({ fn: "constant", value: 4 }),
+    });
+    expect(same.val).toEqual(plain.val);
+    expect(same.hit).toEqual(plain.hit);
+    // CONTROL: the comparison must be able to report a difference.
+    const other = await castOnto(dst(), {
+      direction: up,
+      maxDistance: fieldFromJson({ fn: "constant", value: 1 }),
+    });
+    expect(other.hit).not.toEqual(plain.hit);
+  });
+
+  it("leaves no scratch cap column behind", async () => {
+    const res = await castOnto(cloudAt([[1, 0, 0]]), {
+      direction: up,
+      maxDistance: capFromX(),
+    });
+    expect(res.names.filter((n) => n.startsWith("__transferMaxDistance"))).toEqual([]);
+  });
+
+  it("refuses a cap that is not one number per point", async () => {
+    await expect(
+      castOnto(cloudAt([[1, 0, 0]]), {
+        direction: up,
+        maxDistance: fieldFromJson({ fn: "constant", value: [1, 2, 3] }),
+      }),
+    ).rejects.toThrow(/must evaluate to ONE number per point/);
+  });
+});
+
+describe("transferAttribute scratch columns cannot shadow the node's own output", () => {
+  // A scratch column is removed on the way out. If its derived name
+  // collided with the attribute being TRANSFERRED, the cleanup deleted the
+  // result — a geometry missing the column the node exists to write, with
+  // no error anywhere. The derivation checked the INPUT's names and never
+  // the node's own outputs.
+  const planesNamed = (attr: string): Geometry => {
+    const mesh = createTriangleMesh(
+      [-10, 2, -10, 10, 2, -10, 10, 2, 10, -10, 2, 10],
+      [0, 1, 2, 0, 2, 3],
+    );
+    mesh.attrs.primitive.add(attr, "f32", 1, 0).data.set([7, 7]);
+    return mesh;
+  };
+
+  const cast = async (attr: string, params: Partial<TransferAttributeParams>) =>
+    firstGeo(
+      (
+        await runNode(
+          transferAttribute,
+          { name: attr, mapping: "raycast", attrDomain: "primitive", ...params },
+          {
+            in: [makeGeometryItem(cloudAt([[0, 0, 0]]))],
+            source: [makeGeometryItem(planesNamed(attr))],
+          },
+        )
+      ).out,
+    ).attrs.point.names();
+
+  it("keeps the transfer when its name matches the direction scratch", async () => {
+    const withField = await cast("__transferDirection", {
+      direction: fieldFromJson({ fn: "vec", args: [0, 1, 0] }),
+    });
+    expect(withField).toContain("__transferDirection");
+    // CONTROL: the plain path allocates no scratch, so it always produced
+    // the column — the field path has to match it, not merely not throw.
+    const withPlain = await cast("__transferDirection", { direction: [0, 1, 0] });
+    expect(withPlain).toContain("__transferDirection");
+  });
+
+  it("keeps the transfer when its name matches the cap scratch", async () => {
+    const names = await cast("__transferMaxDistance", {
+      direction: [0, 1, 0],
+      maxDistance: fieldFromJson({ fn: "constant", value: 8 }),
+    });
+    expect(names).toContain("__transferMaxDistance");
+  });
+});

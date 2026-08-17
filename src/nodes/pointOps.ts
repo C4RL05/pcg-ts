@@ -27,6 +27,7 @@ import {
   readComp,
   requireGeometry,
   requireTuple,
+  resolveOn,
   resolveOnMaybeGpu,
   rotateVec,
 } from "./util.js";
@@ -949,8 +950,30 @@ export const orientAlongVector = standardNode<OrientAlongVectorParams>({
 
 /** Params of {@link setBounds}. */
 export interface SetBoundsParams {
-  boundsMin: readonly number[];
-  boundsMax: readonly number[];
+  boundsMin: FieldParam;
+  boundsMax: FieldParam;
+}
+
+/**
+ * One corner of {@link setBounds}, as three numbers per point.
+ *
+ * The tupleSize guard is the whole check: this writes into an f32 tuple-3
+ * attribute, and a scalar field would broadcast into it silently, giving
+ * every point a cube when the author asked for a box.
+ */
+function boundsCorner(
+  geo: Geometry,
+  param: "boundsMin" | "boundsMax",
+  value: FieldParam,
+  seed: number,
+): Column {
+  const col = resolveOn(geo, "point", value, seed, "setBounds", param);
+  if (col.tupleSize !== 3) {
+    throw new Error(
+      `setBounds: param "${param}" must evaluate to THREE numbers per point (tupleSize 3), got tupleSize ${col.tupleSize} — a bounds corner is a vec3. A scalar would broadcast to a cube rather than fail, which is why this is refused: build the corner with vec(x, y, z), or multiply a vec3 by your scalar.`,
+    );
+  }
+  return col;
 }
 
 /** Stamp the standard boundsMin/boundsMax point attributes. */
@@ -965,15 +988,19 @@ export const setBounds = standardNode<SetBoundsParams>({
     boundsMin: {
       type: "vec3",
       default: [0, 0, 0],
-      description: "Minimum corner written to every point's boundsMin, in world units.",
+      acceptsField: true,
+      description:
+        "Minimum corner written to every point's boundsMin, in world units. As a FIELD it is PER POINT, which is the reading that makes this node worth more than a constant: an extent derived from the point's own `scale`, or from a species attribute, gives every instance the box it actually occupies rather than one box the whole cloud shares. Must evaluate to THREE numbers per point — a scalar is REFUSED rather than broadcast, because broadcasting would quietly hand every point a cube when a box was asked for.",
     },
     boundsMax: {
       type: "vec3",
       default: [1, 1, 1],
-      description: "Maximum corner written to every point's boundsMax, in world units.",
+      acceptsField: true,
+      description:
+        "Maximum corner written to every point's boundsMax, in world units. As a FIELD it is PER POINT, on the same terms as boundsMin, and refuses a scalar for the same reason. Nothing here checks that max exceeds min: the two are written independently, and a point whose corners cross is a point with an inside-out box, which is what the author asked for and what a downstream reader will see.",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "setBounds"));
     const set = geo.attrs.point;
     for (const [name, value] of [
@@ -985,7 +1012,20 @@ export const setBounds = standardNode<SetBoundsParams>({
         if (attr) set.remove(name);
         attr = set.add(name, "f32", 3, [0, 0, 0]);
       }
-      attr.fill(value as AttrDefault, 0, set.count);
+      // A plain corner still goes through `fill`: same bytes, and it does
+      // not pay for a resolved column to write one repeated value.
+      if (!isField(value)) {
+        attr.fill(value as AttrDefault, 0, set.count);
+        continue;
+      }
+      const col = boundsCorner(geo, name, value, nodeSeed);
+      const out = attr.data;
+      for (let i = 0; i < set.count; i++) {
+        const o = i * 3;
+        out[o] = col.data[o];
+        out[o + 1] = col.data[o + 1];
+        out[o + 2] = col.data[o + 2];
+      }
     }
     return { out: [makeGeometryItem(geo)] };
   },

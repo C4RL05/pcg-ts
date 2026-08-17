@@ -247,12 +247,16 @@ export function resolveOn(
  * {@link resolveOn} for the params where a non-finite value is DEFINED
  * behavior rather than a broken expression. Finiteness is a property of
  * the PARAM, not of the number, so the opt-out is a named call at the
- * four sites whose NaN semantics are DOCUMENTED IN THE PARAM'S OWN
- * DESCRIPTION and pinned by tests — five params in all, each quoting the
+ * seven sites whose NaN semantics are DOCUMENTED IN THE PARAM'S OWN
+ * DESCRIPTION and pinned by tests — ten params in all, each quoting the
  * semantics it preserves:
  *
  * - `filterByExpression.predicate` — NaN means DROP THIS POINT, stated in
  *   the node's own description and implemented as the `> 0 || < 0` test.
+ * - `setAttribute.select`, the weighted-table FRACTION selector, on the
+ *   same totality rule as the index selector beside it: NaN and -Infinity
+ *   take the first entry with a nonzero weight, +Infinity the last, and
+ *   no element ever throws.
  * - `setAttribute.value` in string value-list mode — NaN and -Infinity
  *   select entry 0, +Infinity the last, "never a per-element throw". The
  *   NUMERIC mode of the same param is guarded.
@@ -266,7 +270,14 @@ export function resolveOn(
  *   partitioned: no finite halo covers it. Stated in that description and
  *   pinned by `neighborhood.test.ts`.
  *
- * That documented-and-tested pair IS the bar. Adding a sixth param means
+ * - `filterByBounds.boundsMin`/`boundsMax` and
+ *   `filterPrimitivesByBounds.boundsMin`/`boundsMax` — both schemas carry
+ *   `acceptsInfinite: true` and both descriptions name ±Infinity as the
+ *   way to leave an AXIS UNBOUNDED. A guard would delete that meaning, and
+ *   it is the one case here where the non-finite value is the ordinary
+ *   spelling rather than the edge case.
+ *
+ * That documented-and-tested pair IS the bar. Adding a tenth param means
  * the same argument in the same shape: a stated meaning for NaN that a
  * throw would delete. Absent that, the param is guarded.
  *

@@ -947,3 +947,93 @@ describe("pointNeighborhood field radius, at the corners", () => {
     expect(await reachCounts([[0, 0, 0], [1, 0, 0]], [0, 2], { includeSelf: true })).toEqual([0, 2]);
   });
 });
+
+describe("sampleNearestPoint with a field maxDistance", () => {
+  async function runReach(
+    dst: readonly (readonly number[])[],
+    reaches: readonly number[],
+    src: readonly (readonly number[])[],
+    params: Partial<SampleNearestPointParams> = {},
+  ): Promise<number[]> {
+    const cloud = cloudAt(dst);
+    cloud.attrs.point.add("reach", "f32", 1, 0).data.set(reaches);
+    const out = await runNode(
+      sampleNearestPoint,
+      { maxDistance: attribute("reach"), ...params },
+      { in: [makeGeometryItem(cloud)], source: [makeGeometryItem(cloudAt(src))] },
+    );
+    return attrTuples(firstGeo(out.out) as ReturnType<typeof createPointCloud>, "nearIndex").flat();
+  }
+
+  it("lets each point accept a find at its own reach", async () => {
+    // Both points are 6 from the only source point. The first will take a
+    // find that far, the second will not. No single scalar says both.
+    const dst = [[0, 0, 0], [12, 0, 0]];
+    const src = [[6, 0, 0]];
+    expect(await runReach(dst, [8, 3], src, { indexAttr: "nearIndex" })).toEqual([0, -1]);
+    // The two scalars that bracket it, so the per-point answer is shown
+    // to be one neither of them could give.
+    const wide = await runNode(
+      sampleNearestPoint,
+      { maxDistance: 8, indexAttr: "nearIndex" },
+      { in: [makeGeometryItem(cloudAt(dst))], source: [makeGeometryItem(cloudAt(src))] },
+    );
+    const narrow = await runNode(
+      sampleNearestPoint,
+      { maxDistance: 3, indexAttr: "nearIndex" },
+      { in: [makeGeometryItem(cloudAt(dst))], source: [makeGeometryItem(cloudAt(src))] },
+    );
+    expect(attrTuples(firstGeo(wide.out) as ReturnType<typeof createPointCloud>, "nearIndex").flat())
+      .toEqual([0, 0]);
+    expect(
+      attrTuples(firstGeo(narrow.out) as ReturnType<typeof createPointCloud>, "nearIndex").flat(),
+    ).toEqual([-1, -1]);
+  });
+
+  it("reads a per-point NEGATIVE as unlimited too, like the 0 beside it", async () => {
+    // A negative is what a subtraction produces by accident, and it takes
+    // the same branch as 0. Pinned because the description now promises
+    // it: "0 OR LESS" is unlimited, so 'find nothing' must be a small
+    // POSITIVE distance.
+    const dst = [[0, 0, 0], [100, 0, 0]];
+    const src = [[50, 0, 0]];
+    expect(await runReach(dst, [-4, 1], src, { indexAttr: "nearIndex" })).toEqual([0, -1]);
+  });
+
+  it("reads a per-point 0 as unlimited, exactly as the plain param does", async () => {
+    // The sentinel has to mean the same thing per point, or "0 is
+    // unlimited" would quietly become "0 finds nothing" for a field.
+    const dst = [[0, 0, 0], [100, 0, 0]];
+    const src = [[50, 0, 0]];
+    expect(await runReach(dst, [0, 1], src, { indexAttr: "nearIndex" })).toEqual([0, -1]);
+  });
+
+  it("a constant field equals the plain number, with a control that differs", async () => {
+    const dst = [[0, 0, 0], [9, 0, 0]];
+    const src = [[4, 0, 0]];
+    const plain = await runNode(
+      sampleNearestPoint,
+      { maxDistance: 4.5, indexAttr: "nearIndex" },
+      { in: [makeGeometryItem(cloudAt(dst))], source: [makeGeometryItem(cloudAt(src))] },
+    );
+    const field = await runNode(
+      sampleNearestPoint,
+      { maxDistance: constant(4.5), indexAttr: "nearIndex" },
+      { in: [makeGeometryItem(cloudAt(dst))], source: [makeGeometryItem(cloudAt(src))] },
+    );
+    const p = attrTuples(firstGeo(plain.out) as ReturnType<typeof createPointCloud>, "nearIndex").flat();
+    const f = attrTuples(firstGeo(field.out) as ReturnType<typeof createPointCloud>, "nearIndex").flat();
+    expect(f).toEqual(p);
+    expect(p).toEqual([0, -1]);
+    // CONTROL: a different radius must move it, or the equality above is
+    // only evidence that both sides ran.
+    const off = await runNode(
+      sampleNearestPoint,
+      { maxDistance: 6, indexAttr: "nearIndex" },
+      { in: [makeGeometryItem(cloudAt(dst))], source: [makeGeometryItem(cloudAt(src))] },
+    );
+    expect(
+      attrTuples(firstGeo(off.out) as ReturnType<typeof createPointCloud>, "nearIndex").flat(),
+    ).not.toEqual(p);
+  });
+});

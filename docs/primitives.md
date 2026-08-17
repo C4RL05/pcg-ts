@@ -217,7 +217,7 @@ Measures each point's distance to the nearest point of a second cloud and keeps 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `comparison` | enum | `"ge"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | keep.comparison | 'ge' keeps what is far from the features (a clearance), 'le' keeps what is near them (a band). |
-| `distance` | f32 | `5` | >= 0 |  |  | keep.value | The band edge, in world units. |
+| `distance` | f32 | `5` | >= 0 |  | yes | keep.value | The band edge, in world units. |
 
 Run it: `pcg run filter/by-distance-to`
 
@@ -240,7 +240,7 @@ Measures each point's distance to the supplied `curve` and keeps or drops it by 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `comparison` | enum | `"ge"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | dist.comparison | 'ge' keeps what is far from the curve (a clearance either side of it), 'le' keeps what runs alongside it (a band). |
-| `distance` | f32 | `5` | >= 0 |  |  | dist.distance | The band edge, in world units — how far from the curve the decision flips. |
+| `distance` | f32 | `5` | >= 0 |  | yes | dist.distance | The band edge, in world units — how far from the curve the decision flips. |
 | `resolution` | f32 | `1` | >= 0 |  |  | dense.spacing | How finely the curve is sampled before distances are measured, in world units. It is the accuracy of the measurement, and it only ever UNDERSTATES the band — sampling a curve sparsely puts every point further from the nearest sample than it is from the curve, so points are lost from the edges, never gained. Measured against a 5-unit band on a straight curve: resolution 1 (a fifth of `distance`) loses 0.2% of the points, 2 loses 0.7%, 5 (equal to `distance`) loses 4%, 10 loses 18% and 20 loses half. A fifth of `distance` is the practical floor; below that it only costs sample points, one more per step along every path. |
 
 Run it: `pcg run filter/by-distance-to-curve`
@@ -264,7 +264,7 @@ Counts each point's neighbours within a radius and keeps or drops it by that cou
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `comparison` | enum | `"ge"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | keep.comparison | 'ge' keeps the crowded points (cluster cores), 'le' keeps the isolated ones. |
-| `count` | f32 | `2` | >= 0 |  |  | keep.value | How many neighbours the comparison is made against. The point itself is not counted. |
+| `count` | f32 | `2` | >= 0 |  | yes | keep.value | How many neighbours the comparison is made against. The point itself is not counted. |
 | `radius` | f32 | `5` | >= 0 |  | yes | nbr.radius | How far around each point counts as its neighbourhood, in world units. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's. |
 
 Run it: `pcg run filter/by-neighbor-count`
@@ -289,7 +289,7 @@ Keeps the points whose distance to a centre satisfies a comparison — 'le' for 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `center` | vec3 | `[0,0,0]` |  |  | yes | *(nothing — the body's field expressions read it by name)* | World position the distance is measured from, as three numbers [x, y, z]. It is read straight into the distance expression, so the whole triple is set at once — a bare number is not accepted, and the origin is [0, 0, 0]. Field-capable, and resolved on the incoming points: a field moves the centre PER POINT, so distance can be measured from a per-cluster origin rather than from one place. A field may be scalar and broadcasts across all three axes when it is; a plain [x, y, z] is the ordinary case. |
 | `comparison` | enum | `"le"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | keep.comparison | How the distance is tested: 'le' keeps what is inside the radius, 'ge' keeps what is outside it. |
-| `radius` | f32 | `10` | >= 0 |  |  | keep.value | The distance the comparison is made against, in world units. |
+| `radius` | f32 | `10` | >= 0 |  | yes | keep.value | The distance the comparison is made against, in world units. |
 
 Run it: `pcg run filter/inside-radius`
 
@@ -360,8 +360,8 @@ Casts a ray from every point onto a mesh, reads the surface `normal` where it la
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `axis` | enum | `"+y"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | orient.axis | Which local axis of the asset stands along the surface normal. '+y' is upright. |
-| `direction` | vec3 | `[0,-1,0]` |  |  |  | normal.direction | Which way the ray travels to find the surface. [0,-1,0] looks straight down. |
-| `maxDistance` | f32 | `0` | >= 0 |  |  | normal.maxDistance | Longest ray that still counts as a find, in world units. 0 means unlimited. |
+| `direction` | vec3 | `[0,-1,0]` |  |  | yes | normal.direction | Which way the ray travels to find the surface. [0,-1,0] looks straight down. |
+| `maxDistance` | f32 | `0` | >= 0 |  | yes | normal.maxDistance | Longest ray that still counts as a find, in world units. 0 means unlimited. |
 | `up` | vec3 | `[0,1,0]` |  |  | yes | orient.up | Up hint fixing the roll around the normal. |
 
 Run it: `pcg run place/align-to-surface`
@@ -387,7 +387,7 @@ Places points at even arc-length steps along every path of the supplied `curve` 
 | `axis` | enum | `"+z"` |  | `+x`, `-x`, `+y`, `-y`, `+z`, `-z` |  | orient.axis | Which local axis of the asset points along the curve. '+z' is the forward axis assets face by convention. |
 | `count` | i32 | `24` | >= 2 |  |  | resample.count | Points per path in 'count' mode: exactly this many come out, whatever the path's length, and they are evenly spaced at length / (count - 1) — so a 40-unit path at count 5 pitches them every 10 units, and the two ends are always occupied. At least 2 (3 on a closed path); ignored in 'spacing' mode. |
 | `mode` | enum | `"count"` |  | `count`, `spacing` |  | resample.mode | 'count' puts exactly `count` points on each path whatever its length; 'spacing' steps every `spacing` world units, so longer paths get more points — the right one for evenly pitched props. |
-| `spacing` | f32 | `1` | >= 0 |  |  | resample.spacing | Distance between points in world units in 'spacing' mode — exact for every step except the LAST, which is the leftover. The walk starts at the beginning of each path, steps `spacing` until another step would overshoot, then puts a final point exactly on the end: a 40-unit path at spacing 7 comes out with gaps 7, 7, 7, 7, 7, 5. So the count per path is floor(length / spacing) + 2, or length / spacing + 1 when it divides exactly, and the far end is always the short one. For props that must be evenly pitched the whole way, pick a `spacing` that divides the path length. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode. |
+| `spacing` | f32 | `1` | >= 0 |  | yes | resample.spacing | Distance between points in world units in 'spacing' mode — exact for every step except the LAST, which is the leftover. The walk starts at the beginning of each path, steps `spacing` until another step would overshoot, then puts a final point exactly on the end: a 40-unit path at spacing 7 comes out with gaps 7, 7, 7, 7, 7, 5. So the count per path is floor(length / spacing) + 2, or length / spacing + 1 when it divides exactly, and the far end is always the short one. For props that must be evenly pitched the whole way, pick a `spacing` that divides the path length. Must be greater than 0 and short enough to leave 2 points on the shortest path; ignored in 'count' mode. |
 | `up` | vec3 | `[0,1,0]` |  |  | yes | orient.up | Up hint fixing the roll around the curve; leave it at world up for props that stand on the ground. |
 
 Run it: `pcg run place/along-curve`
@@ -410,8 +410,8 @@ Casts a ray from every point along a direction, moves each one to where it hits 
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `direction` | vec3 | `[0,-1,0]` |  |  |  | snap.direction | Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss. |
-| `maxDistance` | f32 | `0` | >= 0 |  |  | snap.maxDistance | Longest drop that still counts as a landing, in world units. 0 means unlimited. |
+| `direction` | vec3 | `[0,-1,0]` |  |  | yes | snap.direction | Which way the ray travels. [0,-1,0] drops straight down; rays are forward-only, so points below the surface miss. |
+| `maxDistance` | f32 | `0` | >= 0 |  | yes | snap.maxDistance | Longest drop that still counts as a landing, in world units. 0 means unlimited. |
 
 Run it: `pcg run place/drop-to-surface`
 
@@ -459,8 +459,8 @@ Scatters points on a mesh and keeps only the ones on gentle enough ground below 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `count` | i32 | `1000` | >= 0 |  |  | pts.count | Candidates placed on the mesh before the slope and height tests. |
 | `density` | f32 | `1` | 0..1 |  | yes | pts.density | Acceptance probability per candidate, 0..1. Pass a field spec to make it vary across the surface. |
-| `maxHeight` | f32 | `60` |  |  |  | height.value | Highest world Y still plantable — a tree line. |
-| `maxSlope` | f32 | `0.3` |  |  |  | slope.value | Steepest ground still plantable, on the `slope` scale `write/height-slope` writes — which is 1 - cos(angle), NOT a fraction of 90 degrees, so it is heavily compressed at the flat end and half the scale already covers two thirds of the range of real slopes. The default 0.3 is therefore a 45-degree limit, not the 27-degree one a linear reading gives. The anchors, measured: 10 degrees is 0.015, 20 is 0.060, 30 is 0.134, 45 is 0.293, 60 is 0.500, 75 is 0.741, 90 is 1. Inverted, for a limit of A degrees pass 1 - cos(A). |
+| `maxHeight` | f32 | `60` |  |  | yes | height.value | Highest world Y still plantable — a tree line. |
+| `maxSlope` | f32 | `0.3` |  |  | yes | slope.value | Steepest ground still plantable, on the `slope` scale `write/height-slope` writes — which is 1 - cos(angle), NOT a fraction of 90 degrees, so it is heavily compressed at the flat end and half the scale already covers two thirds of the range of real slopes. The default 0.3 is therefore a 45-degree limit, not the 27-degree one a linear reading gives. The anchors, measured: 10 degrees is 0.015, 20 is 0.060, 30 is 0.134, 45 is 0.293, 60 is 0.500, 75 is 0.741, 90 is 1. Inverted, for a limit of A degrees pass 1 - cos(A). |
 | `seed` | u32 | `0` |  |  |  | pts.seed | Re-rolls the sampling. Two instances already differ without it. |
 
 Run it: `pcg run place/plantable`

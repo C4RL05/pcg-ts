@@ -180,6 +180,14 @@ export interface TransferRaycastOptions {
    */
   directionAttr?: string;
   /**
+   * Per-point maximum hit distance attribute on the destination point
+   * domain (f32, tupleSize 1), overriding `maxDistance`. A per-point
+   * value of 0 OR LESS reads as UNLIMITED for that point, the same
+   * sentinel `maxDistance` itself uses, so a column that returns 0 — or a
+   * negative — makes those rays unlimited rather than silently missing.
+   */
+  maxDistanceAttr?: string;
+  /**
    * Maximum world-space hit distance (must be a positive finite number
    * when given). Hits farther along the ray are ignored. Unlimited when
    * omitted. Rays are forward-only regardless: hits need t >= 0.
@@ -885,6 +893,19 @@ export function transferRaycast(
   const { dirData, dirStride, cdx, cdy, cdz } = resolveRayDirection(dst, options, fn);
 
   const maxT = options.maxDistance ?? Infinity;
+  // Per-point cap, on the same footing as `directionAttr`: `src/data`
+  // takes per-point data as an ATTRIBUTE NAME, which is how a node hands
+  // it a resolved field without this layer knowing what a field is.
+  const maxData =
+    options.maxDistanceAttr !== undefined && options.maxDistanceAttr !== ""
+      ? requireF32(
+          dst.attrs.point,
+          options.maxDistanceAttr,
+          1,
+          fn,
+          "destination per-point maxDistance",
+        ).data
+      : null;
   if (options.maxDistance !== undefined && (!Number.isFinite(maxT) || maxT <= 0)) {
     throw new Error(
       `${fn}: maxDistance must be a positive finite number (world units), got ${String(options.maxDistance)}; omit it for an unlimited ray`,
@@ -943,7 +964,8 @@ export function transferRaycast(
       // possible hit lies inside the padded triangle bounds, so an empty
       // interval is a guaranteed miss.
       let t0 = 0;
-      let t1 = maxT;
+      const rayMax = maxData !== null ? (maxData[j] > 0 ? maxData[j] : Infinity) : maxT;
+      let t1 = rayMax;
       let outside = false;
       for (let axis = 0; axis < 3; axis++) {
         const o = axis === 0 ? ox : axis === 1 ? oy : oz;
@@ -1025,7 +1047,7 @@ export function transferRaycast(
             const v = (dx * qx + dy * qy + dz * qz) * inv;
             if (v < -TRANSFER_BARY_EPS || u + v > 1 + TRANSFER_BARY_EPS) continue;
             const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
-            if (t < 0 || t > maxT) continue;
+            if (t < 0 || t > rayMax) continue;
             // Containment policy part 2 (mirrors the uv box guard): the
             // hit point must lie inside the triangle's padded 3D box. For
             // sliver triangles the u/v bounds can collapse under fp

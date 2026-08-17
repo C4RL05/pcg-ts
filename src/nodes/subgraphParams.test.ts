@@ -15,6 +15,7 @@ import {
 } from "../graph/index.js";
 import { fieldFromJson } from "../fields/fieldJson.js";
 import {
+  connectPoints,
   filterByDensity,
   jitterPoints,
   meshPrimitive,
@@ -496,24 +497,31 @@ it("rejects a resolved param whose target list is legal but empty at wrap time",
 
 describe("resolveExposedParam — asserting field capability", () => {
   /**
-   * The exact shape a vocabulary survey measured going wrong: a "density"
-   * knob meant to accept a field, fanned across `surfaceSample.densityField`
-   * (field-capable) and `filterByDensity.threshold` (not). The merge is
-   * right to AND the capability away; its silence is what costs the author
-   * the feature they were building.
+   * The exact shape a vocabulary survey measured going wrong: one knob
+   * meant to accept a field, fanned across a field-capable target and an
+   * eager one. The merge is right to AND the capability away; its silence
+   * is what costs the author the feature they were building.
+   *
+   * The eager half is `connectPoints.radius`, and it is chosen because the
+   * capability rule says it can NEVER be a field: a per-point radius would
+   * make "A is near B" disagree with "B is near A", so an edge would
+   * depend on which endpoint asked. This fixture used
+   * `filterByDensity.threshold` until the C2 sweep made that one
+   * field-capable and quietly turned this test green for the wrong reason.
+   * A fixture that is eager BY RULE cannot rot the same way.
    */
   function densityFanout(): { inner: Graph; targets: { node: NodeHandle; param: string }[] } {
     const inner = new Graph(1);
     const mesh = inner.add(meshPrimitive, {}, "mesh");
     const scatter = inner.add(surfaceSample, { count: 50 }, "scatter");
-    const thin = inner.add(filterByDensity, {}, "thin");
+    const net = inner.add(connectPoints, {}, "net");
     inner.connect(mesh, "out", scatter, "in");
-    inner.connect(scatter, "out", thin, "in");
+    inner.connect(scatter, "out", net, "in");
     return {
       inner,
       targets: [
         { node: scatter, param: "densityField" },
-        { node: thin, param: "threshold" },
+        { node: net, param: "radius" },
       ],
     };
   }
@@ -547,7 +555,7 @@ describe("resolveExposedParam — asserting field capability", () => {
         description: "How dense the scatter is.",
         acceptsField: true,
       }),
-    ).toThrow(/"thin"\.threshold does not accept fields.*"scatter"\.densityField would/s);
+    ).toThrow(/"net"\.radius does not accept fields.*"scatter"\.densityField would/s);
   });
 
   it("accepts the assertion when every target is field-capable", () => {

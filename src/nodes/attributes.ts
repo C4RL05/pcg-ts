@@ -15,6 +15,7 @@ import {
   type TransferAttrDomain,
   type TransferRaycastOptions,
 } from "../data/index.js";
+import { isField, type Column } from "../fields/index.js";
 import { cloneGeometry, makeGeometryItem, type DataItem } from "../graph/index.js";
 import { hashCombine } from "../random/index.js";
 import { standardNode } from "./registry.js";
@@ -520,15 +521,102 @@ export const promoteAttribute = standardNode<PromoteAttributeParams>({
   },
 });
 
+/**
+ * A FIELD `transferAttribute.direction` as a per-point ray direction, on a
+ * scratch point attribute `transferRaycast` can read.
+ *
+ * The per-point path already exists — `directionAttr` — and it is a
+ * DESTINATION POINT ATTRIBUTE, so the shortest honest route from a field
+ * to it is to resolve the column and hand it over under a name nothing
+ * else uses. The scratch column is removed again before the geometry
+ * leaves this node (see the call site), so it is invisible to everything
+ * downstream, and the name is derived rather than fixed: `replace` on a
+ * name the input already holds would destroy that column, which is the
+ * failure {@link requireReportSlot} exists to refuse elsewhere.
+ *
+ * Guarded ({@link resolveOn}): a NaN or infinite direction here is a
+ * broken expression, and the plain param refuses exactly the same thing
+ * up front ("must be a finite, non-zero vector"). A ZERO direction is
+ * finite and passes, and per point it MISSES — that is the per-element
+ * reading of the plain param's non-zero refusal, and it is recorded by
+ * `hitAttr`/`missCountAttr` like every other miss.
+ */
+function rayDirectionAttr(
+  dst: Geometry,
+  value: FieldParam,
+  seed: number,
+  reserved: readonly string[],
+): string {
+  const col: Column = resolveOn(dst, "point", value, seed, "transferAttribute", "direction");
+  if (col.tupleSize !== 3) {
+    throw new Error(
+      `transferAttribute: param "direction" must evaluate to THREE numbers per point (tupleSize 3), got tupleSize ${col.tupleSize} — a ray direction is an [x, y, z] vector, and fields broadcast elementwise, so a scalar such as noise() yields one number per point. Build a vector out of scalars with vec(x, y, z), e.g. vec(0, -1, 0) for straight down.`,
+    );
+  }
+  const set = dst.attrs.point;
+  let name = "__transferDirection";
+  // `reserved` is what this node is about to WRITE — the transferred
+  // attribute and the hit flag. Checking only `set.has` checks the INPUT,
+  // and the scratch column is removed on the way out, so a transfer into
+  // an attribute named `__transferDirection` had its result deleted by
+  // this node's own cleanup. Silent, and it produced a geometry missing
+  // the column the node exists to write.
+  for (let n = 2; set.has(name) || reserved.includes(name); n++) {
+    name = `__transferDirection${n}`;
+  }
+  const attr = set.replace(name, "f32", 3);
+  const count = set.count;
+  attr.data.set(col.data.subarray(0, count * 3));
+  return name;
+}
+
+/**
+ * A FIELD `transferAttribute.maxDistance` as a per-point ray cap, on a
+ * scratch point attribute `transferRaycast` can read.
+ *
+ * Same route as {@link rayDirectionAttr} and for the same reason:
+ * `src/data` takes per-point data as an ATTRIBUTE NAME, which is how a
+ * node hands it a resolved field without that layer knowing what a field
+ * is. `transferRaycast` gained `maxDistanceAttr` alongside its existing
+ * `directionAttr` rather than a second mechanism.
+ *
+ * The 0-means-unlimited sentinel is preserved PER POINT — a field that
+ * returns 0 somewhere makes those rays unlimited, not missing — which is
+ * the same reading `sampleNearestPoint.maxDistance` gives its own field,
+ * so one sentinel means one thing across the library.
+ */
+function rayMaxDistanceAttr(
+  dst: Geometry,
+  value: FieldParam,
+  seed: number,
+  reserved: readonly string[],
+): string {
+  const col: Column = resolveOn(dst, "point", value, seed, "transferAttribute", "maxDistance");
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `transferAttribute: param "maxDistance" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — a ray cap is a single distance, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
+    );
+  }
+  const set = dst.attrs.point;
+  let name = "__transferMaxDistance";
+  // Same reservation as rayDirectionAttr, for the same reason.
+  for (let n = 2; set.has(name) || reserved.includes(name); n++) {
+    name = `__transferMaxDistance${n}`;
+  }
+  const attr = set.replace(name, "f32", 1);
+  attr.data.set(col.data.subarray(0, set.count));
+  return name;
+}
+
 /** Params of {@link transferAttribute}. */
 export interface TransferAttributeParams {
   name: string;
   mapping: string;
   attrDomain: string;
   uvAttr: string;
-  direction: readonly number[];
+  direction: FieldParam;
   directionAttr: string;
-  maxDistance: number;
+  maxDistance: FieldParam;
   missCountAttr: string;
   hitAttr: string;
 }
@@ -574,8 +662,9 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
     direction: {
       type: "vec3",
       default: [0, -1, 0],
+      acceptsField: true,
       description:
-        "Constant ray direction for mapping 'raycast' (ignored otherwise, and ignored when directionAttr is set). Normalized internally so maxDistance is world-space; must be non-zero.",
+        "Ray direction for mapping 'raycast'. As a plain vector it is ONE direction shared by every destination point, normalized internally so maxDistance is world-space, and required to be non-zero and finite — a whole cloud casting nowhere is a mistake, not a result. As a FIELD it is a PER-POINT ray direction, evaluated on the destination points, so each point casts the ray it asks for: normalize(sub(attribute(\"target\"), position())) aims every point at a moving target, and a noise-driven direction scatters the rays without a setAttribute node upstream to hold them. Each direction is normalized per point, so only its DIRECTION is read and its length never changes a hit distance. The non-zero refusal becomes a per-element policy: a point whose direction resolves to exactly zero MISSES — it keeps its prior value and is counted by missCountAttr and flagged 0 by hitAttr, exactly like a point whose ray hits nothing — rather than failing the cook for the whole cloud. Non-finite is still refused, naming this param: a NaN direction is a broken expression (a normalize of a zero-length vector, a division by zero upstream), not data. Ignored, and not even evaluated, when mapping is not 'raycast' or when directionAttr is set — directionAttr still wins, so a field here and an attribute there is the attribute, silently, as it already was for a plain vector.",
     },
     directionAttr: {
       type: "string",
@@ -587,8 +676,9 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       type: "f32",
       default: 0,
       min: 0,
+      acceptsField: true,
       description:
-        "Maximum world-space hit distance for mapping 'raycast' (ignored otherwise). 0 (the default) means unlimited; a positive value ignores hits farther along the ray. Rays are forward-only regardless (hits need t >= 0).",
+        "Maximum world-space hit distance for mapping 'raycast' (ignored otherwise). 0 (the default) means unlimited; a positive value ignores hits farther along the ray. Rays are forward-only regardless (hits need t >= 0). As a FIELD it is a PER-POINT cap, evaluated on the destination points, so each point gives up at its own reach — a small prop accepting only a nearby surface while a large one still finds a distant floor, in one cook. The unlimited sentinel is per point too, and it is 0 OR LESS: a field returning 0 — or a negative, which a subtraction easily produces — makes THOSE rays unlimited rather than making them miss. So 'accept nothing' is a small POSITIVE distance, never 0 and never a negative one, which would do the opposite of what it looks like. A point capped short of every hit is an ordinary MISS — it keeps its prior value and is counted by missCountAttr and flagged 0 by hitAttr — not a failed cook. Non-finite is refused, naming this param, because a NaN cap is a broken expression rather than data. Ignored, and not evaluated, when mapping is not 'raycast'.",
     },
     missCountAttr: {
       type: "string",
@@ -603,7 +693,7 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
         "When non-empty, writes a per-point flag of this name onto the OUTPUT'S POINT DOMAIN (bool, tuple 1). The polarity is the HIT, not the miss — the inverse of missCountAttr, which counts the zeros: 1 means this point found a source and received a transferred value, 0 means it missed and kept its prior value (the attribute default when it had none). Every point is written, so the column never carries a stale value: mapping 'nearest' leaves it all 1 (every point is assigned), and a source with nothing to search — every triangle degenerate — leaves it all 0, since nothing was found. Feed it to filterByAttribute (comparison 'eq', value 1) to keep only the points that landed, then removeAttribute to clean it up. Two names are refused rather than written: `name`, which the flag would otherwise overwrite, and any point attribute the input ALREADY holds under a different shape — the flag's shape is this node's to pick, so writing it there would delete that column and everything in it while the cook still looked fine (hitAttr \"P\" would leave a point cloud with no positions). An existing bool tuple-1 column of the same name IS reused and reset, which is what keeps the flag describing THIS transfer only. On a clash, give the flag a name of its own (a \"__\" prefix marks it internal, e.g. \"__hit\") or removeAttribute the existing column first. Empty = don't record.",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const dst = cloneGeometry(requireGeometry(inputs, "in", "transferAttribute"));
     const src = requireGeometry(inputs, "source", "transferAttribute");
     const attrDomain = params.attrDomain as TransferAttrDomain;
@@ -669,10 +759,36 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       missCount = res.missCount;
       hit = res.hit;
     } else if (params.mapping === "raycast") {
-      const opts: TransferRaycastOptions = { direction: params.direction, attrDomain };
-      if (params.directionAttr !== "") opts.directionAttr = params.directionAttr;
-      if (params.maxDistance > 0) opts.maxDistance = params.maxDistance;
+      const opts: TransferRaycastOptions = { attrDomain };
+      // Names this node writes, which a scratch column must not shadow.
+      const reserved = [params.name, params.hitAttr];
+      // A plain vector travels exactly as it did — one constant direction,
+      // validated and normalized inside transferRaycast.
+      if (!isField(params.direction)) opts.direction = params.direction as readonly number[];
+      // A field resolves ONCE, before the cast, onto a scratch column the
+      // per-point path already knows how to read. `directionAttr` keeps
+      // precedence over both spellings, so a field is not resolved at all
+      // when one is set — the same silence a plain vector already gets.
+      let scratch = "";
+      if (params.directionAttr !== "") {
+        opts.directionAttr = params.directionAttr;
+      } else if (isField(params.direction)) {
+        scratch = rayDirectionAttr(dst, params.direction, nodeSeed, reserved);
+        opts.directionAttr = scratch;
+      }
+      let capScratch = "";
+      if (isField(params.maxDistance)) {
+        capScratch = rayMaxDistanceAttr(dst, params.maxDistance, nodeSeed, reserved);
+        opts.maxDistanceAttr = capScratch;
+      } else if ((params.maxDistance as number) > 0) {
+        opts.maxDistance = params.maxDistance as number;
+      }
       const res = transferRaycast(dst, src, params.name, opts);
+      if (capScratch !== "") dst.attrs.point.remove(capScratch);
+      // Removed on the way out: the scratch directions are this node's
+      // working memory, not an output. (A throw above leaves them on a
+      // geometry the error discards.)
+      if (scratch !== "") dst.attrs.point.remove(scratch);
       missCount = res.missCount;
       hit = res.hit;
     } else {
@@ -834,16 +950,42 @@ export const attributeReduce = standardNode<AttributeReduceParams>({
   },
 });
 
+/**
+ * One end of an {@link attributeRemap} window as a column, or `undefined`
+ * when the param is a plain number and the scalar path applies unchanged.
+ *
+ * Guarded ({@link resolveOn}): a window end has no defined meaning for NaN
+ * or ±Infinity — an infinite span maps every value to 0 and a NaN one
+ * erases the attribute — so a broken expression is refused where the param
+ * can still be named, rather than arriving downstream as a column of NaN.
+ */
+function remapWindow(
+  geo: Geometry,
+  domain: Domain,
+  value: FieldParam,
+  seed: number,
+  param: string,
+): Column | undefined {
+  if (typeof value === "number") return undefined;
+  const col = resolveOn(geo, domain, value, seed, "attributeRemap", param);
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `attributeRemap: param "${param}" must evaluate to ONE number per element (tupleSize 1), got tupleSize ${col.tupleSize} — a window end is a single number shared by the tuple being remapped, and fields broadcast elementwise, so a vec3 such as attribute("Cd") yields three numbers per element. Reduce it to a scalar first, e.g. component(attribute("Cd"), 0).`,
+    );
+  }
+  return col;
+}
+
 /** Params of {@link attributeRemap}. */
 export interface AttributeRemapParams {
   name: string;
   outName: string;
   domain: string;
   mode: string;
-  inMin: number;
-  inMax: number;
-  outMin: number;
-  outMax: number;
+  inMin: FieldParam;
+  inMax: FieldParam;
+  outMin: FieldParam;
+  outMax: FieldParam;
   clamp: boolean;
 }
 
@@ -852,7 +994,7 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
   type: "attributeRemap",
   category: "attribute",
   description:
-    "Rescales a numeric attribute linearly from an input range to an output range, writing f32. Mode 'range' uses inMin/inMax as given — the hand-tuned remap(x, -1, 1, 0, 1) that every noise-driven graph writes. Mode 'fit' MEASURES the attribute's own range over the domain first (ignoring NaN) and uses that, which is what turns any invented quantity — a neighbor count, a hand-built score — into a usable 0..1 density or color input without knowing its scale in advance; it is also why this node needs no help from attributeReduce, whose detail-domain output no field or param could have read back anyway. An empty input range (inMin == inMax, or a fit over zero usable elements) maps everything to outMin, matching the `remap` field function. Tuples remap componentwise against one shared range, and NaN stays NaN in every mode — including the empty-range case, so unmeasurable data never turns into a valid-looking value. Reversed output ranges are fine and invert the values.",
+    "Rescales a numeric attribute linearly from an input range to an output range, writing f32. Mode 'range' uses inMin/inMax as given — the hand-tuned remap(x, -1, 1, 0, 1) that every noise-driven graph writes. Mode 'fit' MEASURES the attribute's own range over the domain first (ignoring NaN) and uses that, which is what turns any invented quantity — a neighbor count, a hand-built score — into a usable 0..1 density or color input without knowing its scale in advance; it is also why this node needs no help from attributeReduce, whose detail-domain output no field or param could have read back anyway. An empty input range (inMin == inMax, or a fit over zero usable elements) maps everything to outMin, matching the `remap` field function. Tuples remap componentwise against one shared range, and NaN stays NaN in every mode — including the empty-range case, so unmeasurable data never turns into a valid-looking value. Reversed output ranges are fine and invert the values. All four window ends accept a FIELD, which makes the range PER ELEMENT rather than shared: each element is rescaled against its own window, the tuple still sharing that element's one range, and every rule above (empty range maps to outMin, NaN stays NaN, reversed inverts) then holds element by element instead of domain-wide. Mode 'fit' is the exception it already was — it measures inMin/inMax and never reads them, field or not.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -878,20 +1020,36 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
       default: "range",
       enum: ["range", "fit"],
       description:
-        "'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax.",
+        "'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax — a FIELD in either of them is ignored the same way, and is not evaluated at all. Only the INPUT window is measured: outMin/outMax are read in both modes, fields included.",
     },
     inMin: {
       type: "f32",
       default: -1,
-      description: "Value mapped to outMin, in mode 'range'. Ignored in mode 'fit'.",
+      acceptsField: true,
+      description:
+        "Value mapped to outMin, in mode 'range'. As a FIELD it is a PER-ELEMENT window end, evaluated on `domain`, so each element is rescaled against its OWN input range instead of one range shared by the whole domain: a per-point noise floor, or a threshold read from another attribute, turns the same source values into different results for different elements — which no single number can do. The window is per ELEMENT, not per component: a tuple attribute remaps all of its components against that element's one window, as it already does against the shared one. Mode 'fit' IGNORES this param and does not evaluate it at all — a field there is dead exactly as a plain number is, because fit measures the attribute's own minimum and maximum instead. A degenerate window is a per-element outcome, not a refusal: where inMin resolves equal to inMax that element maps to outMin (NaN sources stay NaN), the same rule the shared empty range follows. Non-finite is refused, naming this param, since an infinite span maps everything to 0 and a NaN one erases the attribute.",
     },
     inMax: {
       type: "f32",
       default: 1,
-      description: "Value mapped to outMax, in mode 'range'. Ignored in mode 'fit'.",
+      acceptsField: true,
+      description:
+        "Value mapped to outMax, in mode 'range'. As a FIELD it is a PER-ELEMENT window end evaluated on `domain`, the upper counterpart of inMin: the two together give each element its own input range, so 'what counts as high here' can vary across the domain — the per-element version of the hand-tuned remap(x, -1, 1, 0, 1). Reversed per element is fine (inMin above inMax) and inverts that element only. Mode 'fit' IGNORES this param and does not evaluate it at all. Where it resolves equal to inMin the window is empty and that element maps to outMin, NaN sources excepted (they stay NaN). Non-finite is refused, naming this param.",
     },
-    outMin: { type: "f32", default: 0, description: "Value inMin maps to." },
-    outMax: { type: "f32", default: 1, description: "Value inMax maps to." },
+    outMin: {
+      type: "f32",
+      default: 0,
+      acceptsField: true,
+      description:
+        "Value inMin maps to. As a FIELD it is a PER-ELEMENT output floor, evaluated on `domain`, so each element lands in its own destination range — the way to remap a shared quantity into per-element bands (a scale whose floor follows the point's size, a colour ramp whose ends differ by region) in one node. Read per element in every mode, INCLUDING 'fit', which measures only the input window; and it is also the value an empty window (inMin == inMax, or a fit over nothing usable) maps that element to, so a fielded outMin decides the degenerate case too. With clamp on, the bounds are this element's own outMin/outMax, whichever is smaller and larger. Non-finite is refused, naming this param.",
+    },
+    outMax: {
+      type: "f32",
+      default: 1,
+      acceptsField: true,
+      description:
+        "Value inMax maps to. As a FIELD it is a PER-ELEMENT output ceiling, evaluated on `domain`, the upper counterpart of outMin: with both fielded, every element gets its own output band, and reversing them per element (outMax below outMin) inverts that element alone. Read per element in every mode, INCLUDING 'fit'. Note that an empty input window maps to outMin, not to this param, so a per-element ceiling has no effect where the window collapsed. Non-finite is refused, naming this param.",
+    },
     clamp: {
       type: "bool",
       default: false,
@@ -899,7 +1057,7 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
         "Hold results inside the output range (whichever of outMin/outMax is smaller or larger). False (the default) extrapolates, matching the `remap` field function; true is the usual choice when the result feeds density or color. In mode 'fit' it only affects NaN-free data trivially, since fitted values already land inside the range.",
     },
   },
-  execute({ inputs, params }) {
+  execute({ inputs, params, seed: nodeSeed }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "attributeRemap"));
     const domain = params.domain as Domain;
     const set = geo.attrs[domain];
@@ -945,9 +1103,23 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
     });
     const n = set.count;
     const source = attr.data;
-    let inMin = params.inMin;
-    let inMax = params.inMax;
-    if (params.mode === "fit") {
+    const fitting = params.mode === "fit";
+    // Every window end resolves ONCE, here, and never inside the scan. A
+    // plain number returns no column and keeps the scalar path exactly as
+    // it was; `fit` measures the input window itself, so a field in
+    // inMin/inMax is not evaluated at all — the same silence a plain
+    // number already gets there, and one fewer full-domain evaluation.
+    const inMinCol = fitting
+      ? undefined
+      : remapWindow(geo, domain, params.inMin, nodeSeed, "inMin");
+    const inMaxCol = fitting
+      ? undefined
+      : remapWindow(geo, domain, params.inMax, nodeSeed, "inMax");
+    const outMinCol = remapWindow(geo, domain, params.outMin, nodeSeed, "outMin");
+    const outMaxCol = remapWindow(geo, domain, params.outMax, nodeSeed, "outMax");
+    let inMin = typeof params.inMin === "number" ? params.inMin : 0;
+    let inMax = typeof params.inMax === "number" ? params.inMax : 0;
+    if (fitting) {
       inMin = Number.POSITIVE_INFINITY;
       inMax = Number.NEGATIVE_INFINITY;
       for (let i = 0; i < n * ts; i++) {
@@ -970,31 +1142,43 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
         inMax = 0;
       }
     }
-    const span = inMax - inMin;
-    const outMin = params.outMin;
-    const outMax = params.outMax;
-    const lo = Math.min(outMin, outMax);
-    const hi = Math.max(outMin, outMax);
+    const outMinValue = typeof params.outMin === "number" ? params.outMin : 0;
+    const outMaxValue = typeof params.outMax === "number" ? params.outMax : 0;
     const clamp = params.clamp;
     // Read every source value before replacing: an in-place remap of an
     // f32 attribute reuses the same storage.
     const values = new Float64Array(n * ts);
-    for (let i = 0; i < n * ts; i++) {
-      const v = source[i];
-      // NaN survives the empty-range shortcut too: turning unmeasurable
-      // data into a valid-looking outMin would hide it from every
-      // downstream test.
-      let mapped =
-        span === 0
-          ? v !== v
-            ? v
-            : outMin
-          : outMin + ((v - inMin) / span) * (outMax - outMin);
-      if (clamp) {
-        if (mapped < lo) mapped = lo;
-        else if (mapped > hi) mapped = hi;
+    // Element by element, so a fielded window end is read once per ELEMENT
+    // and shared by that element's components — the per-element reading of
+    // "tuples remap componentwise against one range". With four plain
+    // numbers the four reads are the same four doubles on every element
+    // and the arithmetic below is unchanged, bit for bit.
+    for (let e = 0; e < n; e++) {
+      const eInMin = inMinCol === undefined ? inMin : inMinCol.data[e];
+      const eInMax = inMaxCol === undefined ? inMax : inMaxCol.data[e];
+      const outMin = outMinCol === undefined ? outMinValue : outMinCol.data[e];
+      const outMax = outMaxCol === undefined ? outMaxValue : outMaxCol.data[e];
+      const span = eInMax - eInMin;
+      const lo = Math.min(outMin, outMax);
+      const hi = Math.max(outMin, outMax);
+      for (let c = 0; c < ts; c++) {
+        const i = e * ts + c;
+        const v = source[i];
+        // NaN survives the empty-range shortcut too: turning unmeasurable
+        // data into a valid-looking outMin would hide it from every
+        // downstream test.
+        let mapped =
+          span === 0
+            ? v !== v
+              ? v
+              : outMin
+            : outMin + ((v - eInMin) / span) * (outMax - outMin);
+        if (clamp) {
+          if (mapped < lo) mapped = lo;
+          else if (mapped > hi) mapped = hi;
+        }
+        values[i] = mapped;
       }
-      values[i] = mapped;
     }
     const target = set.replace(outName, "f32", ts, 0);
     const data = target.data;

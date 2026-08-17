@@ -39,6 +39,7 @@ import {
   requireGeometry,
   requireReportSlot,
   requireTuple,
+  resolveOn,
   resolveOnMaybeGpu,
   rotateVec,
 } from "./util.js";
@@ -265,7 +266,7 @@ export interface SweepProfileParams {
   up: FieldParam;
   roll: FieldParam;
   joint: string;
-  miterLimit: number;
+  miterLimit: FieldParam;
   caps: boolean;
 }
 
@@ -341,8 +342,9 @@ export const sweepProfile = standardNode<SweepProfileParams>({
       type: "f32",
       default: 4,
       min: 1,
+      acceptsField: true,
       description:
-        "Largest stretch 'miter' may apply. Past it the ring falls back to the unstretched 'perpendicular' section for that point ONLY, which pinches rather than shooting a spike out of the corner. A stretch of 4 is a 151-degree turn; the limit is never reached by a path that was resampled at anything like an even spacing, and exists for the pathological input that would otherwise self-intersect. Ignored by 'perpendicular'.",
+        "Largest stretch 'miter' may apply. Past it the ring falls back to the unstretched 'perpendicular' section for that point ONLY, which pinches rather than shooting a spike out of the corner. A stretch of 4 is a 151-degree turn; the limit is never reached by a path that was resampled at anything like an even spacing, and exists for the pathological input that would otherwise self-intersect. Field-capable on the INPUT points — the limit is read at the RING, from the point the ring stands on, so one deliberate spike and a capped remainder are one cook rather than two: a corner attribute lets the one junction that should keep its radius through a hairpin do so while every other corner stays bounded. As a field a value BELOW 1 is not refused at the point the way a plain number is refused at the door; it is read for what it does, which is admit no miter at all (a stretch is always > 1 when there is a bend), so that ring takes the unstretched section — the same fallback the limit already names when it is exceeded. Non-finite is refused with the offending element named, so 'never limit' is spelled as a large finite number rather than as Infinity: a stretch of 64 already admits a 178-degree turn. Ignored by 'perpendicular', where a field is not evaluated at all — exactly as `radius` is left unresolved for a 'ribbon' — while a plain number still meets its >= 1 check wherever the graph is loaded or patched.",
     },
     caps: {
       type: "bool",
@@ -351,8 +353,8 @@ export const sweepProfile = standardNode<SweepProfileParams>({
         "Close the two ends of an OPEN path with a CLOSED profile, as a triangle fan from the path's endpoint. Ignored for a closed path (it has no ends) and for the 'ribbon' profile (it has no hole), so all four combinations are defined rather than merely unsurprising. Cap points are separate from the wall's, so the seam between a flat cap and a round wall stays a real crease instead of being smoothed away. Cap uv is a disc mapping — the unit section mapped into the 0..1 square — not a continuation of the wall's.",
     },
   },
-  // `radius`, `width`, `up` and `roll` may resolve on the GPU. All four
-  // are evaluated on the INPUT geometry, which this node never mutates
+  // `radius`, `width`, `up`, `roll` and `miterLimit` may resolve on the
+  // GPU. All are evaluated on the INPUT geometry, which this node never mutates
   // (it builds a fresh mesh), so the resolver and the CPU fallback see
   // identical bytes. Not `resident`: a resident node must be
   // element-count-preserving on a single geometry input, and a sweep
@@ -383,10 +385,19 @@ export const sweepProfile = standardNode<SweepProfileParams>({
         `sweepProfile: param "sides" must be a whole number in [3, 256] (points around a 'circle' profile), got ${params.sides}`,
       );
     }
-    if (!Number.isFinite(params.miterLimit) || params.miterLimit < 1) {
-      throw new Error(
-        `sweepProfile: param "miterLimit" must be a finite number >= 1 (a limit below 1 would shrink every joint), got ${params.miterLimit}`,
-      );
+    // A PLAIN limit is checked here, in f64, and read from `plainLimit`
+    // below: the eager path keeps both its refusal and its arithmetic
+    // exactly, so making this param field-capable is a pure extension. A
+    // FIELD has no number to check until it lands on the points.
+    const plainLimit = params.miterLimit;
+    let scalarLimit = 0;
+    if (!isField(plainLimit)) {
+      if (typeof plainLimit !== "number" || !Number.isFinite(plainLimit) || plainLimit < 1) {
+        throw new Error(
+          `sweepProfile: param "miterLimit" must be a finite number >= 1 (a limit below 1 would shrink every joint), got ${String(plainLimit)}`,
+        );
+      }
+      scalarLimit = plainLimit;
     }
 
     const src = requireGeometry(inputs, "in", "sweepProfile");
@@ -448,6 +459,29 @@ export const sweepProfile = standardNode<SweepProfileParams>({
       "sweepProfile",
       "roll",
     );
+    // Only a FIELD limit becomes a column, and only under 'miter'. A
+    // plain one stays the f64 number it was validated as, so the scalar
+    // path compares exactly what it always compared rather than the f32
+    // a column would have rounded it to; and a limit nothing reads is
+    // not evaluated at all, the same way `radius` is left unresolved for
+    // a 'ribbon'.
+    const miterCol =
+      jointMode === "miter" && isField(params.miterLimit)
+        ? requireTuple(
+            await resolveOnMaybeGpu(
+              gpu,
+              src,
+              "point",
+              params.miterLimit,
+              seed,
+              "sweepProfile",
+              "miterLimit",
+            ),
+            [1],
+            "sweepProfile",
+            "miterLimit",
+          )
+        : undefined;
     const upIsField = isField(params.up);
     let upCol: Column | undefined;
     let upx = 0;
@@ -662,7 +696,12 @@ export const sweepProfile = standardNode<SweepProfileParams>({
         if (jointMode === "miter") {
           const cosHalf = nx * ox + ny * oy + nz * oz;
           const ms = cosHalf > 0 ? 1 / cosHalf : 0;
-          if (ms > 1 && ms <= params.miterLimit) {
+          // The ring's OWN limit: read at the point this ring stands on,
+          // never resolved here. A resolved value below 1 admits no
+          // stretch, which is the unstretched section this test already
+          // falls back to.
+          const limit = miterCol !== undefined ? readComp(miterCol, pi, 0) : scalarLimit;
+          if (ms > 1 && ms <= limit) {
             let wx = ox - ix;
             let wy = oy - iy;
             let wz = oz - iz;
@@ -857,7 +896,7 @@ interface ExtrudeLayout {
 export interface ExtrudePolygonParams {
   distance: FieldParam;
   direction: string;
-  vector: readonly number[];
+  vector: FieldParam;
   caps: string;
   sides: boolean;
 }
@@ -888,8 +927,9 @@ export const extrudePolygon = standardNode<ExtrudePolygonParams>({
     vector: {
       type: "vec3",
       default: [0, 1, 0],
+      acceptsField: true,
       description:
-        "Direction for the 'vector' mode; need not be unit length, and is normalized before use. Ignored by the other modes. A zero-length vector is refused rather than producing a flat sheet. Not field-capable on purpose: it names the direction of the whole extrusion, and a per-point one would not be a sweep — that is what `distance` is for.",
+        "Direction for the 'vector' mode; need not be unit length, and is normalized before use. Ignored by the other modes. Field-capable on the PRIMITIVE domain — one direction per closed polyline, which is the element a whole extrusion belongs to — so two footprints in one input rise along two different vectors in a single cook: a per-lot `attribute('slope')`, a `byAttribute` over a per-lot string kind, or `randomField` all read there. It is NOT per point and cannot be: a per-point direction would shear the footprint rather than sweep it, and a per-point HEIGHT is what `distance` already is. Read the domain it resolves on before writing the expression — the primitive domain carries no P, so `position()` is not available there and a value the points know reaches it through promoteAttribute (point to primitive). A vector that resolves to [0, 0, 0] refuses THAT PRIMITIVE BY INDEX rather than flattening it into a sheet, exactly as direction 'polygonNormal' refuses a polygon whose Newell normal is zero — the same condition (this polygon names no direction) and the same answer; a plain [0, 0, 0] is still refused before the walk, by the param rather than by a primitive. Resolved on the CPU whether or not the cook carries a GPU device: the primitive domain holds one element per polygon, so a dispatch would cost more than the three multiplies it replaces. `distance` is the param that may resolve on the device.",
     },
     caps: {
       type: "enum",
@@ -907,7 +947,12 @@ export const extrudePolygon = standardNode<ExtrudePolygonParams>({
   },
   // `distance` may resolve on the GPU, evaluated on the INPUT geometry
   // which this node never mutates. Not `resident`: the element count
-  // changes and topology is not device-resident.
+  // changes and topology is not device-resident. `vector` is field-capable
+  // too but stays on the CPU: it resolves on the PRIMITIVE domain, which
+  // holds one element per polygon — too few to pay for a dispatch, and a
+  // domain the device path has never served (no other node resolves a
+  // field off the point domain, and `position`/`randomField` cannot lower
+  // there at all).
   gpu: "fields",
   async execute({ inputs, params, seed, gpu, checkCancelled }) {
     const dirMode = params.direction;
@@ -931,10 +976,15 @@ export const extrudePolygon = standardNode<ExtrudePolygonParams>({
       );
     }
 
+    // A PLAIN vector is checked and normalized once, here, before the
+    // input is even fetched — same refusals, same arithmetic, same order
+    // as before this param took a field. A FIELD becomes one direction
+    // per primitive below, once there is a geometry to resolve against.
+    const vectorIsField = isField(params.vector);
     let gx = 0;
     let gy = 1;
     let gz = 0;
-    if (dirMode === "vector") {
+    if (dirMode === "vector" && !vectorIsField) {
       const v = params.vector;
       if (!Array.isArray(v) || v.length !== 3 || !v.every((c) => Number.isFinite(c))) {
         throw new Error(
@@ -982,6 +1032,18 @@ export const extrudePolygon = standardNode<ExtrudePolygonParams>({
       "extrudePolygon",
       "distance",
     );
+    // One direction per POLYGON, resolved once, before anything is
+    // written and while the input is still untouched. Only in 'vector'
+    // mode: a direction the other modes ignore is not evaluated either.
+    const vectorCol =
+      dirMode === "vector" && vectorIsField
+        ? requireTuple(
+            resolveOn(src, "primitive", params.vector, seed, "extrudePolygon", "vector"),
+            [1, 3],
+            "extrudePolygon",
+            "vector",
+          )
+        : undefined;
     const srcP = src.attrs.point.require("P");
     const pd = srcP.data;
     const ps = srcP.tupleSize;
@@ -1018,6 +1080,24 @@ export const extrudePolygon = standardNode<ExtrudePolygonParams>({
       let dx = gx;
       let dy = gy;
       let dz = gz;
+      if (vectorCol !== undefined) {
+        // This polygon's own direction. A zero one is the same condition
+        // 'polygonNormal' refuses below — the polygon names no direction
+        // — so it gets the same answer, by primitive index.
+        const vx = readComp(vectorCol, table.prim, 0);
+        const vy = readComp(vectorCol, table.prim, 1);
+        const vz = readComp(vectorCol, table.prim, 2);
+        const lenSq = vx * vx + vy * vy + vz * vz;
+        if (lenSq === 0) {
+          throw new Error(
+            `extrudePolygon: param "vector" resolved to [0, 0, 0] on primitive ${table.prim}, which names no direction — that polygon would flatten into a sheet rather than become a solid. Guard the expression so every primitive gets a nonzero vector (a select() or a max() on the component that vanishes), or use direction "+y" or "polygonNormal".`,
+          );
+        }
+        const inv = 1 / Math.sqrt(lenSq);
+        dx = vx * inv;
+        dy = vy * inv;
+        dz = vz * inv;
+      }
       if (dirMode === "polygonNormal") {
         const lenSq = nx * nx + ny * ny + nz * nz;
         if (lenSq === 0) {

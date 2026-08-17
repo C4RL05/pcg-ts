@@ -392,12 +392,19 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 
 ### Which params accept one
 
-21 of the standard library's 180 params do, and one rule separates them
-from the other 159: **a param can be a field exactly when its value is
-read PER ELEMENT.** Everything settled before the elements are walked
-cannot be one, and there are five ways to be settled early.
+43 of the standard library's 180 params do, across 24 node types, and one
+rule separates them from the other 137: **a param can be a field exactly
+when its value is read PER ELEMENT.** Everything settled before the
+elements are walked cannot be one, and there are five ways to be settled
+early.
 
-**The column is f32.** All 21 are `f32` (14) or `vec3` (7). No `i32`,
+Those 43 are what the rule produced when it was swept over every
+numeric param in the library rather than applied case by case. It
+started at 20, and the sweep refused only five: `connectPoints.radius`
+on the symmetry clause, and `splineSample.spacing` plus
+`volumeSample`'s `cellSize` and bounds on the allocation one.
+
+**The column is f32.** All 43 are `f32` (26) or `vec3` (17). No `i32`,
 `u32`, `enum`, `bool`, `string` or list param is ever field-capable,
 because a field resolves per element into a column and only f32 and its
 tuples read one. Part of that is executable rather than editorial: a
@@ -419,16 +426,51 @@ There is no domain to resolve against yet.
 seed is hash-combined into the node's derived seed at cook start, when
 there is no element in hand.
 
-**Nothing that decides how many elements come OUT.**
-`pathResample.spacing`, `splineSample.spacing`, `volumeSample.cellSize`
-and its bounds size their own output.
+**Nothing read ONCE to size a single allocation.** `volumeSample`'s
+`cellSize` and its bounds are the clear case: the node builds ONE grid,
+so there is one value to read and no element to read it per.
 
-**Nothing that defines a SYMMETRIC RELATION.** `connectPoints.radius`
-is the case, and its schema states it: a per-point radius would make "A
-is near B" disagree with "B is near A", and an edge would then depend on
-which endpoint asked. A per-POINT query carries no such obligation,
-which is why `selfPrune.minDistance` IS field-capable — it symmetrises
-with the larger of the two radii.
+This clause was first written as "nothing that decides how many elements
+come out", and sweeping it over the library proved that wrong.
+`pathResample.spacing` decides exactly that and is field-capable anyway,
+because the node "resamples every polyline primitive ... on its own arc
+length": the field resolves over the input's PRIMITIVE domain, one
+spacing per path, and each path's count is derived from its own value.
+`splineSample.spacing` is the same word in the same units and cannot be
+a field, and the reason is sharper than "one curve": that node DOES keep
+each sample's source primitive, but it walks the concatenated length
+from s = 0, so which polyline a sample lands on is known only AFTER the
+step that placed it. A per-primitive spacing would have to be read to
+decide which primitive is being read for — the value cannot precede the
+element it is indexed by. **The question
+is never what the param decides. It is whether an element exists to read
+it per.** Where a fielded allocation param has a global cap, the cap
+becomes a post-resolution check rather than a reason to refuse.
+
+`volumeSample` shows both halves inside ONE node: its `jitter` is
+field-capable because it is read per output centre, and its `cellSize`
+cannot be, because it sizes the grid those centres are made from. Same
+node, same cook, opposite answers, and the reason is which side of the
+allocation each one sits on.
+
+**Nothing that defines a SYMMETRIC RELATION without a stated
+symmetrisation.** A per-point radius makes "A is near B" and "B is near
+A" two different tests, so any relation built from one needs a RULE for
+which wins. `selfPrune.minDistance` HAS such a rule — the larger of the
+two radii (`src/nodes/filtering.ts:1252`), chosen because the smaller
+would let a big point be crowded by a small one — and is field-capable
+because of it. A per-POINT measurement such as `pointNeighborhood.radius`
+owes nothing at all here, since a count is one point's own answer.
+
+`connectPoints.radius` has adopted no such rule and stays eager. **That
+is a policy, not an impossibility**, and the first version of this clause
+overstated it as one. The costs it would take on are real but ordinary:
+`MAX_EDGES` would have to be measured at the widest resolved radius, and
+the partitioned-cook recipe in the node's own description — "widen the
+cell's rectangle by `radius`" — would become the field's global maximum,
+author-supplied, exactly as `selfPrune` already documents for its own
+halo. It stays eager until someone wants it enough to pay that, and the
+honest reason is that nobody has, not that an edge cannot be defined.
 
 Two reasons a reader supplies for themselves, neither of them real.
 **Grid cell size is not one.** `selfPrune` resolves the field to a

@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud, setPolylineTopology, type Geometry } from "../data/index.js";
 import { pointIdentities } from "../data/identity.js";
-import { attribute, constant, position, randomField } from "../fields/index.js";
+import { attribute, constant, position, randomField, vec } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import {
   filterByAttribute,
+  type FilterByAttributeParams,
   filterByBounds,
+  type FilterByBoundsParams,
   filterByDensity,
+  type FilterByDensityParams,
   filterByExpression,
   filterPrimitivesByAttribute,
   type FilterPrimitivesByAttributeParams,
@@ -15,6 +18,7 @@ import {
   type FilterPrimitivesByBoundsParams,
   pointGrid,
   projectToPlane,
+  type ProjectToPlaneParams,
   selfPrune,
 } from "./index.js";
 import { gatherPrimitives } from "./util.js";
@@ -1873,6 +1877,606 @@ describe("projectToPlane", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The field-capable params of this file: nine values read PER ELEMENT
+//
+// Two assertions per param, and the PAIR is what makes either worth having:
+//
+//   1. a field produces an answer NO single scalar could, so the column is
+//      shown to be read per element rather than once;
+//   2. a CONSTANT field equals the plain number exactly, so the extension is
+//      shown to be pure — with a CONTROL that differs beside it, so the
+//      comparison is demonstrated able to report both answers.
+//
+// Every constant below is f32-exact (0, ±1, 0.25, 0.5, 2, 2.5, 3, 5): a field
+// column is f32, so a bar of 0.1 would disagree with the plain 0.1 for a real
+// reason and prove nothing about this code.
+//
+// The two `filterPrimitives*` nodes carry a third assertion each, because
+// their fields land on the PRIMITIVE domain: an attribute of the SAME NAME is
+// planted on the point domain with an answer-changing value, so reading the
+// wrong domain cannot pass.
+
+describe("filterByDensity.threshold as a field", () => {
+  /** Four points with rising density, plus a per-point bar to test against. */
+  function bars(values: number[]): ReturnType<typeof createPointCloud> {
+    const geo = cloudAt([
+      [0, 0, 0],
+      [1, 0, 0],
+      [2, 0, 0],
+      [3, 0, 0],
+    ]);
+    const density = geo.attrs.point.require("density");
+    [0.25, 0.5, 0.75, 1].forEach((d, i) => density.set(i, d));
+    const bar = geo.attrs.point.add("bar", "f32", 1, 0);
+    values.forEach((v, i) => bar.set(i, v));
+    return geo;
+  }
+
+  const survivors = async (
+    geo: ReturnType<typeof createPointCloud>,
+    threshold: FilterByDensityParams["threshold"],
+  ): Promise<number[]> =>
+    positionsOf(
+      firstGeo(
+        (await runNode(filterByDensity, { threshold }, { in: [makeGeometryItem(geo)] })).out,
+      ),
+    ).map((p) => p[0]);
+
+  it("tests each point against ITS OWN bar, which no single threshold can", async () => {
+    // Densities rise 0.25, 0.5, 0.75, 1 along x; the bars zigzag, so the
+    // survivors are the 2nd and 4th points. A plain threshold keeps a
+    // SUFFIX of a rising column — it cannot skip the 3rd and keep the 4th.
+    const geo = bars([0.5, 0.25, 1, 0.5]);
+    expect(await survivors(geo, attribute("bar"))).toEqual([1, 3]);
+    for (const t of [0, 0.25, 0.5, 0.75, 1, 1.5]) {
+      expect(await survivors(geo, t), `plain ${t}`).not.toEqual([1, 3]);
+    }
+  });
+
+  it("is the plain number when the field is a constant, and can tell 0.5 from 0.75", async () => {
+    const geo = bars([0, 0, 0, 0]);
+    const plain = await survivors(geo, 0.5);
+    expect(plain).toEqual([1, 2, 3]);
+    expect(await survivors(geo, constant(0.5)), "constant field").toEqual(plain);
+    // The control: the same comparison run against a different number does
+    // report a different answer, so the equality above is not vacuous.
+    expect(await survivors(geo, 0.75), "control").not.toEqual(plain);
+  });
+
+  it("never evaluates the field in probabilistic mode, where the param is ignored", async () => {
+    const geo = bars([0, 0, 0, 0]);
+    geo.attrs.point.require("density").fill(1, 0, 4);
+    const out = firstGeo(
+      (
+        await runNode(
+          filterByDensity,
+          { mode: "probabilistic", threshold: attribute("nope") },
+          { in: [makeGeometryItem(geo)] },
+        )
+      ).out,
+    );
+    expect(out.pointCount).toBe(4);
+    // And the same field really would have thrown had the mode read it —
+    // otherwise the pass above is a test of nothing.
+    await expect(
+      runNode(
+        filterByDensity,
+        { mode: "threshold", threshold: attribute("nope") },
+        { in: [makeGeometryItem(geo)] },
+      ),
+    ).rejects.toThrow(/"nope"/);
+  });
+});
+
+describe("filterByBounds bounds as fields", () => {
+  /** Four points along x at 0, 1, 2, 3, each carrying its own box floor and ceiling. */
+  function withFloors(lo: number[], hi = [10, 10, 10, 10]): ReturnType<typeof createPointCloud> {
+    return cloudWith(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+      ],
+      { lo, hi },
+    );
+  }
+
+  const survivors = async (
+    geo: ReturnType<typeof createPointCloud>,
+    params: Partial<FilterByBoundsParams>,
+  ): Promise<number[]> =>
+    positionsOf(
+      firstGeo((await runNode(filterByBounds, params, { in: [makeGeometryItem(geo)] })).out),
+    ).map((p) => p[0]);
+
+  it("gives each point its own box, which no single box could", async () => {
+    // Points 1 and 3 are handed a floor above their own x, so the survivors
+    // are 0 and 2 — a gap. One box keeps an INTERVAL of x, so any box
+    // holding both 0 and 2 holds 1 as well, which the control shows.
+    const geo = withFloors([-1, 5, -1, 5], [10, -5, 10, -5]);
+    expect(
+      await survivors(geo, {
+        boundsMin: vec(attribute("lo"), -1, -1),
+        boundsMax: [10, 1, 1],
+      }),
+      "a per-point floor",
+    ).toEqual([0, 2]);
+    // The same gap from the other corner: each point's own CEILING, with a
+    // plain floor. Both corners are read per point, so both are shown to be.
+    expect(
+      await survivors(geo, {
+        boundsMin: [-1, -1, -1],
+        boundsMax: vec(attribute("hi"), 1, 1),
+      }),
+      "a per-point ceiling",
+    ).toEqual([0, 2]);
+    expect(
+      await survivors(geo, { boundsMin: [0, -1, -1], boundsMax: [2.5, 1, 1] }),
+      "the tightest plain box around the survivors",
+    ).toEqual([0, 1, 2]);
+  });
+
+  it("is the plain box when both corners are constants, and can tell two boxes apart", async () => {
+    const geo = withFloors([0, 0, 0, 0]);
+    const plain = await survivors(geo, { boundsMin: [0, -1, -1], boundsMax: [2.5, 1, 1] });
+    expect(plain).toEqual([0, 1, 2]);
+    expect(
+      await survivors(geo, { boundsMin: constant([0, -1, -1]), boundsMax: constant([2.5, 1, 1]) }),
+      "constant fields",
+    ).toEqual(plain);
+    // Mixed spellings are legal, and equal too: a field min with a plain max.
+    expect(
+      await survivors(geo, { boundsMin: constant([0, -1, -1]), boundsMax: [2.5, 1, 1] }),
+      "field min, plain max",
+    ).toEqual(plain);
+    expect(
+      await survivors(geo, { boundsMin: constant([1, -1, -1]), boundsMax: constant([2.5, 1, 1]) }),
+      "control",
+    ).not.toEqual(plain);
+  });
+
+  it("reads ±Infinity and NaN from a field rather than refusing them", async () => {
+    // These params document an infinite bound as the way to leave an axis
+    // unbounded, so the field seam here is the UNGUARDED one. A NaN corner
+    // satisfies no comparison, exactly as a NaN coordinate does not.
+    const geo = withFloors([0, 0, 0, 0]);
+    expect(
+      await survivors(geo, {
+        boundsMin: constant([-Infinity, -Infinity, -Infinity]),
+        boundsMax: constant([Infinity, Infinity, Infinity]),
+      }),
+    ).toEqual([0, 1, 2, 3]);
+    expect(await survivors(geo, { boundsMin: constant([NaN, -1, -1]), boundsMax: [10, 1, 1] })).toEqual(
+      [],
+    );
+    expect(
+      await survivors(geo, {
+        boundsMin: constant([NaN, -1, -1]),
+        boundsMax: [10, 1, 1],
+        mode: "outside",
+      }),
+      "a point that is never inside lands in outside",
+    ).toEqual([0, 1, 2, 3]);
+  });
+
+  it("broadcasts a scalar field to all three axes, and names the fix for any other width", async () => {
+    const geo = withFloors([0, 0, 0, 0]);
+    expect(
+      await survivors(geo, { boundsMin: constant(-1), boundsMax: [2.5, 1, 1] }),
+      "one number, all three axes",
+    ).toEqual([0, 1, 2]);
+    await expect(
+      runNode(
+        filterByBounds,
+        { boundsMin: constant([0, -1]) },
+        { in: [makeGeometryItem(geo)] },
+      ),
+    ).rejects.toThrow(/boundsMin.*tupleSize 3.*vec\(x, y, z\)/s);
+  });
+});
+
+describe("filterPrimitivesByBounds bounds as fields", () => {
+  /**
+   * Three two-vertex roads over four points on the x axis, with the box
+   * floor written on the PRIMITIVE domain — and a DIFFERENT column of the
+   * same name on the point domain, which reading the wrong domain would
+   * pick up.
+   */
+  function roads(
+    primFloors: number[],
+    pointFloors: number[],
+    primCeilings = [10, 10, 10],
+    pointCeilings = [10, 10, 10, 10],
+  ): Geometry {
+    const geo = networkAt(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+      ],
+      [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+      ],
+    );
+    const prim = geo.attrs.primitive.add("lo", "f32", 1, 0);
+    primFloors.forEach((v, p) => prim.set(p, v));
+    const point = geo.attrs.point.add("lo", "f32", 1, 0);
+    pointFloors.forEach((v, i) => point.set(i, v));
+    const primHi = geo.attrs.primitive.add("hi", "f32", 1, 0);
+    primCeilings.forEach((v, p) => primHi.set(p, v));
+    const pointHi = geo.attrs.point.add("hi", "f32", 1, 0);
+    pointCeilings.forEach((v, i) => pointHi.set(i, v));
+    return geo;
+  }
+
+  const survivors = async (
+    geo: Geometry,
+    params: Partial<FilterPrimitivesByBoundsParams>,
+  ): Promise<string[]> =>
+    kindsOf(
+      firstGeo(
+        (
+          await runNode(
+            filterPrimitivesByBounds,
+            { vertex: "all", ...params },
+            { in: [makeGeometryItem(geo)] },
+          )
+        ).out,
+      ),
+    );
+
+  it("gives each PRIMITIVE its own box, read on the primitive domain", async () => {
+    // road1 is handed a floor above its own vertices, so roads 0 and 2
+    // survive with a gap between them — which no single box can produce,
+    // since a box holding road0 and road2 entirely holds road1 too. The
+    // point column of the same name would keep nothing at all, so a field
+    // resolved on the wrong domain cannot pass this.
+    const geo = roads([-1, 5, -1], [5, 5, 5, 5], [10, -5, 10], [-5, -5, -5, -5]);
+    expect(
+      await survivors(geo, { boundsMin: vec(attribute("lo"), -1, -1), boundsMax: [10, 1, 1] }),
+      "a per-primitive floor",
+    ).toEqual(["road0", "road2"]);
+    // The same gap from the other corner, so both corners are shown to be
+    // read per primitive rather than only the min.
+    expect(
+      await survivors(geo, { boundsMin: [-1, -1, -1], boundsMax: vec(attribute("hi"), 1, 1) }),
+      "a per-primitive ceiling",
+    ).toEqual(["road0", "road2"]);
+    expect(
+      await survivors(geo, { boundsMin: [-1, -1, -1], boundsMax: [10, 1, 1] }),
+      "the plain box that holds road0 and road2",
+    ).toEqual(["road0", "road1", "road2"]);
+  });
+
+  it("is the plain box when both corners are constants, and can tell two boxes apart", async () => {
+    const geo = roads([0, 0, 0], [0, 0, 0, 0]);
+    const plain = await survivors(geo, { boundsMin: [0, -1, -1], boundsMax: [2.5, 1, 1] });
+    expect(plain).toEqual(["road0", "road1"]);
+    expect(
+      await survivors(geo, { boundsMin: constant([0, -1, -1]), boundsMax: constant([2.5, 1, 1]) }),
+      "constant fields",
+    ).toEqual(plain);
+    expect(
+      await survivors(geo, { boundsMin: constant([0, -1, -1]), boundsMax: constant([1.5, 1, 1]) }),
+      "control",
+    ).not.toEqual(plain);
+  });
+});
+
+describe("filterByAttribute.value as a field", () => {
+  /** Three points carrying a rising `level` and a per-point bar to clear. */
+  function levels(bar: number[]): ReturnType<typeof createPointCloud> {
+    return cloudWith(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+      ],
+      { level: [1, 2, 3], bar },
+    );
+  }
+
+  const survivors = async (
+    geo: ReturnType<typeof createPointCloud>,
+    value: FilterByAttributeParams["value"],
+  ): Promise<number[]> =>
+    positionsOf(
+      firstGeo(
+        (
+          await runNode(
+            filterByAttribute,
+            { attribute: "level", comparison: "ge", value },
+            { in: [makeGeometryItem(geo)] },
+          )
+        ).out,
+      ),
+    ).map((p) => p[0]);
+
+  it("compares each point against ITS OWN right-hand side, which no single number can", async () => {
+    // level rises 1, 2, 3; the bar is high only for the middle point, so
+    // the survivors skip it. A plain right-hand side keeps a SUFFIX of a
+    // rising column, never a gap — the two controls are the neighbours of
+    // the only cut that could have tried.
+    const geo = levels([0, 5, 0]);
+    expect(await survivors(geo, attribute("bar"))).toEqual([0, 2]);
+    for (const v of [0, 1, 2, 3, 4]) {
+      expect(await survivors(geo, v), `plain ${v}`).not.toEqual([0, 2]);
+    }
+  });
+
+  it("is the plain number when the field is a constant, and can tell 2 from 3", async () => {
+    const geo = levels([0, 0, 0]);
+    const plain = await survivors(geo, 2);
+    expect(plain).toEqual([1, 2]);
+    expect(await survivors(geo, constant(2)), "constant field").toEqual(plain);
+    expect(await survivors(geo, 3), "control").not.toEqual(plain);
+  });
+
+  it("never evaluates the field against a STRING attribute, where the param is ignored", async () => {
+    const geo = levels([0, 0, 0]);
+    const species = geo.attrs.point.add("species", "string", 1, "");
+    ["oak", "fir", "oak"].forEach((s, i) => species.setString(i, s));
+    const out = firstGeo(
+      (
+        await runNode(
+          filterByAttribute,
+          { attribute: "species", comparison: "eq", stringValue: "oak", value: attribute("nope") },
+          { in: [makeGeometryItem(geo)] },
+        )
+      ).out,
+    );
+    expect(positionsOf(out).map((p) => p[0])).toEqual([0, 2]);
+    // The same field against the NUMERIC column does throw, so the pass
+    // above is about the string path and not about a field that never fails.
+    await expect(survivors(geo, attribute("nope"))).rejects.toThrow(/"nope"/);
+  });
+
+  it("refuses a non-finite right-hand side, naming the param", async () => {
+    // The GUARDED seam: unlike the bounds params, a comparison's right-hand
+    // side has no documented meaning for NaN, so it is a broken expression.
+    await expect(survivors(levels([0, 0, 0]), constant(NaN))).rejects.toThrow(
+      /filterByAttribute: param "value" resolved to NaN/,
+    );
+  });
+});
+
+describe("filterPrimitivesByAttribute.value as a field", () => {
+  /**
+   * Three roads with rising edge lengths and a per-primitive limit — plus a
+   * `limit` column on the POINT domain that would keep nothing, so reading
+   * the wrong domain cannot pass.
+   */
+  function roads(limits: number[], pointLimits: number[]): Geometry {
+    const geo = networkWithEdgeLengths(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+      ],
+      [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+      ],
+      [1, 2, 3],
+    );
+    const prim = geo.attrs.primitive.add("limit", "f32", 1, 0);
+    limits.forEach((v, p) => prim.set(p, v));
+    const point = geo.attrs.point.add("limit", "f32", 1, 0);
+    pointLimits.forEach((v, i) => point.set(i, v));
+    return geo;
+  }
+
+  const survivors = async (
+    geo: Geometry,
+    value: FilterPrimitivesByAttributeParams["value"],
+  ): Promise<string[]> =>
+    kindsOf(
+      firstGeo(
+        (
+          await runNode(
+            filterPrimitivesByAttribute,
+            { attribute: "edgeLength", comparison: "le", value },
+            { in: [makeGeometryItem(geo)] },
+          )
+        ).out,
+      ),
+    );
+
+  it("compares each PRIMITIVE against its own limit, read on the primitive domain", async () => {
+    // Lengths rise 1, 2, 3; only the middle road is given a limit under its
+    // own length, so the survivors skip it — a gap no single limit produces
+    // over a rising column. The point column of the same name is 0
+    // everywhere and would keep nothing.
+    const geo = roads([5, 0, 5], [0, 0, 0, 0]);
+    expect(await survivors(geo, attribute("limit"))).toEqual(["road0", "road2"]);
+    for (const v of [0, 1, 2, 3, 4]) {
+      expect(await survivors(geo, v), `plain ${v}`).not.toEqual(["road0", "road2"]);
+    }
+  });
+
+  it("is the plain number when the field is a constant, and can tell 2 from 3", async () => {
+    const geo = roads([0, 0, 0], [0, 0, 0, 0]);
+    const plain = await survivors(geo, 2);
+    expect(plain).toEqual(["road0", "road1"]);
+    expect(await survivors(geo, constant(2)), "constant field").toEqual(plain);
+    expect(await survivors(geo, 3), "control").not.toEqual(plain);
+  });
+
+  it("refuses a non-finite right-hand side, naming the node and the param", async () => {
+    await expect(survivors(roads([0, 0, 0], [0, 0, 0, 0]), constant(NaN))).rejects.toThrow(
+      /filterPrimitivesByAttribute: param "value" resolved to NaN/,
+    );
+  });
+});
+
+describe("projectToPlane origin and normal as fields", () => {
+  /** Two points, each carrying its own plane normal and plane origin. */
+  function planes(normals: number[][], origins: number[][]): ReturnType<typeof createPointCloud> {
+    const geo = cloudAt([
+      [1, 5, 2],
+      [3, -1, 4],
+    ]);
+    const N = geo.attrs.point.add("N", "f32", 3, 0);
+    normals.forEach((v, i) => N.setTuple(i, v));
+    const O = geo.attrs.point.add("orig", "f32", 3, 0);
+    origins.forEach((v, i) => O.setTuple(i, v));
+    return geo;
+  }
+
+  const projected = async (
+    geo: ReturnType<typeof createPointCloud>,
+    params: Partial<ProjectToPlaneParams>,
+  ): Promise<Geometry> =>
+    firstGeo(
+      (
+        await runNode(
+          projectToPlane,
+          { keepOffset: true, ...params },
+          { in: [makeGeometryItem(geo)] },
+        )
+      ).out,
+    );
+
+  const offsetsOf = (geo: Geometry): number[] => {
+    const off = geo.attrs.point.require("planeOffset");
+    return Array.from({ length: geo.pointCount }, (_, i) => off.get(i));
+  };
+
+  it("projects each point along ITS OWN normal, which one plane cannot", async () => {
+    // One point flattens in y and the other in x. A single normal moves
+    // every point along the same axis, so no plain vector reproduces this —
+    // the control is the y plane, which leaves point 1's x alone.
+    const geo = planes(
+      [
+        [0, 1, 0],
+        [1, 0, 0],
+      ],
+      [
+        [0, 0, 0],
+        [0, 0, 0],
+      ],
+    );
+    const out = await projected(geo, { normal: attribute("N") });
+    expect(positionsOf(out)).toEqual([
+      [1, 0, 2],
+      [0, -1, 4],
+    ]);
+    expect(offsetsOf(out)).toEqual([5, 3]);
+    expect(positionsOf(await projected(geo, { normal: [0, 1, 0] })), "control").toEqual([
+      [1, 0, 2],
+      [3, 0, 4],
+    ]);
+  });
+
+  it("projects each point onto ITS OWN plane origin, which one plane cannot", async () => {
+    // Same normal, two different planes: each point lands on the height it
+    // was given, which is the per-point offset a terraced flatten needs.
+    const geo = planes(
+      [
+        [0, 1, 0],
+        [0, 1, 0],
+      ],
+      [
+        [0, 2, 0],
+        [0, -4, 0],
+      ],
+    );
+    const out = await projected(geo, { normal: [0, 1, 0], origin: attribute("orig") });
+    expect(positionsOf(out)).toEqual([
+      [1, 2, 2],
+      [3, -4, 4],
+    ]);
+    expect(offsetsOf(out)).toEqual([3, 3]);
+    expect(positionsOf(await projected(geo, { normal: [0, 1, 0], origin: [0, 2, 0] })), "control").toEqual([
+      [1, 2, 2],
+      [3, 2, 4],
+    ]);
+  });
+
+  it("leaves a point whose own normal is zero exactly where it stands", async () => {
+    // A field's zero normal is a per-point answer — that point has no plane
+    // — where a PLAIN zero is still refused outright, since one plane that
+    // does not exist is an authoring mistake with nothing to salvage.
+    const geo = planes(
+      [
+        [0, 1, 0],
+        [0, 0, 0],
+      ],
+      [
+        [0, 0, 0],
+        [0, 0, 0],
+      ],
+    );
+    const out = await projected(geo, { normal: attribute("N") });
+    expect(positionsOf(out)).toEqual([
+      [1, 0, 2],
+      [3, -1, 4],
+    ]);
+    // It moved nothing, and says so: offset 0 rather than a hole.
+    expect(offsetsOf(out)).toEqual([5, 0]);
+    await expect(projected(geo, { normal: [0, 0, 0] })).rejects.toThrow(/non-zero/);
+  });
+
+  it("is the plain plane when both are constants, and can tell two planes apart", async () => {
+    const geo = planes(
+      [
+        [0, 1, 0],
+        [0, 1, 0],
+      ],
+      [
+        [0, 0, 0],
+        [0, 0, 0],
+      ],
+    );
+    const plain = await projected(geo, { normal: [0, 1, 0], origin: [0, 2, 0] });
+    expect(
+      snapshotGeometry(
+        await projected(geo, { normal: constant([0, 1, 0]), origin: constant([0, 2, 0]) }),
+      ),
+      "constant fields",
+    ).toEqual(snapshotGeometry(plain));
+    expect(
+      snapshotGeometry(await projected(geo, { normal: constant([0, 1, 0]), origin: [0, 2, 0] })),
+      "field normal, plain origin",
+    ).toEqual(snapshotGeometry(plain));
+    expect(
+      snapshotGeometry(
+        await projected(geo, { normal: constant([1, 0, 0]), origin: constant([0, 2, 0]) }),
+      ),
+      "control",
+    ).not.toEqual(snapshotGeometry(plain));
+  });
+
+  it("refuses a non-finite plane, naming the offending param", async () => {
+    // The GUARDED seam, and the reason it is guarded: a NaN normal
+    // normalizes to NaN and sends every coordinate of that point to NaN,
+    // which draws nothing downstream and blames nobody.
+    const geo = planes(
+      [
+        [0, 1, 0],
+        [0, 1, 0],
+      ],
+      [
+        [0, 0, 0],
+        [0, 0, 0],
+      ],
+    );
+    await expect(projected(geo, { normal: constant([NaN, 1, 0]) })).rejects.toThrow(
+      /projectToPlane: param "normal" resolved to NaN/,
+    );
+    await expect(
+      projected(geo, { normal: [0, 1, 0], origin: constant([0, Infinity, 0]) }),
+    ).rejects.toThrow(/projectToPlane: param "origin" resolved to \+Infinity/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // topology "keep": the point filters that leave a network a network
 //
 // ONE block for all five, because it is one decision shared by five nodes
@@ -2113,3 +2717,41 @@ describe('point filters: topology "keep"', () => {
 function item(): { in: ReturnType<typeof makeGeometryItem>[] } {
   return { in: [makeGeometryItem(xNetwork())] };
 }
+
+describe("a constant field is f32, and the plain param is not", () => {
+  // NOT a defect, and pinned so nobody "fixes" it into a promise the
+  // format cannot keep. A field resolves into an f32 COLUMN; a plain
+  // param stays the f64 the author wrote. `constant(0.7)` is therefore
+  // 0.699999988079071, and a datum sitting between the two lands on
+  // different sides of them. This is clause 1 of the capability rule —
+  // "the column is f32" — showing through at the one place it is
+  // observable, and it is why every equivalence test in this file uses
+  // an f32-exact bar on purpose.
+  const keptAt = async (threshold: unknown): Promise<number[]> => {
+    const cloud = cloudAt([[0, 0, 0]]);
+    // Exactly the f32 value `constant(0.7)` resolves to, which is BELOW
+    // the f64 0.7 — so the plain bar rejects it and the field bar keeps it.
+    cloud.attrs.point.require("density").set(0, Math.fround(0.7));
+    const geo = firstGeo(
+      (
+        await runNode(filterByDensity, { mode: "threshold", threshold } as never, {
+          in: [makeGeometryItem(cloud)],
+        })
+      ).out,
+    );
+    return positionsOf(geo).map((p) => p[0]);
+  };
+
+  it("differs from the plain number at an f32-INEXACT bar", async () => {
+    expect(Math.fround(0.7)).not.toBe(0.7);
+    expect(await keptAt(0.7)).toEqual([]);
+    expect(await keptAt(constant(0.7))).toEqual([0]);
+  });
+
+  it("agrees with it at an f32-exact bar, which is why the others use one", async () => {
+    // CONTROL for the test above: the divergence is the literal's, not
+    // the field path's, so an exactly-representable bar must agree.
+    expect(await keptAt(0.5)).toEqual([0]);
+    expect(await keptAt(constant(0.5))).toEqual([0]);
+  });
+});

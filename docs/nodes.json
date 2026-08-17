@@ -55,7 +55,7 @@
   },
   {
     "type": "attributeRemap",
-    "description": "Rescales a numeric attribute linearly from an input range to an output range, writing f32. Mode 'range' uses inMin/inMax as given — the hand-tuned remap(x, -1, 1, 0, 1) that every noise-driven graph writes. Mode 'fit' MEASURES the attribute's own range over the domain first (ignoring NaN) and uses that, which is what turns any invented quantity — a neighbor count, a hand-built score — into a usable 0..1 density or color input without knowing its scale in advance; it is also why this node needs no help from attributeReduce, whose detail-domain output no field or param could have read back anyway. An empty input range (inMin == inMax, or a fit over zero usable elements) maps everything to outMin, matching the `remap` field function. Tuples remap componentwise against one shared range, and NaN stays NaN in every mode — including the empty-range case, so unmeasurable data never turns into a valid-looking value. Reversed output ranges are fine and invert the values.",
+    "description": "Rescales a numeric attribute linearly from an input range to an output range, writing f32. Mode 'range' uses inMin/inMax as given — the hand-tuned remap(x, -1, 1, 0, 1) that every noise-driven graph writes. Mode 'fit' MEASURES the attribute's own range over the domain first (ignoring NaN) and uses that, which is what turns any invented quantity — a neighbor count, a hand-built score — into a usable 0..1 density or color input without knowing its scale in advance; it is also why this node needs no help from attributeReduce, whose detail-domain output no field or param could have read back anyway. An empty input range (inMin == inMax, or a fit over zero usable elements) maps everything to outMin, matching the `remap` field function. Tuples remap componentwise against one shared range, and NaN stays NaN in every mode — including the empty-range case, so unmeasurable data never turns into a valid-looking value. Reversed output ranges are fine and invert the values. All four window ends accept a FIELD, which makes the range PER ELEMENT rather than shared: each element is rescaled against its own window, the tuple still sharing that element's one range, and every rule above (empty range maps to outMin, NaN stays NaN, reversed inverts) then holds element by element instead of domain-wide. Mode 'fit' is the exception it already was — it measures inMin/inMax and never reads them, field or not.",
     "category": "attribute",
     "inputs": [
       {
@@ -96,7 +96,7 @@
       "mode": {
         "type": "enum",
         "default": "range",
-        "description": "'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax.",
+        "description": "'range' takes the input range from inMin/inMax; 'fit' measures the attribute's actual minimum and maximum over the domain and ignores inMin/inMax — a FIELD in either of them is ignored the same way, and is not evaluated at all. Only the INPUT window is measured: outMin/outMax are read in both modes, fields included.",
         "enum": [
           "range",
           "fit"
@@ -105,22 +105,26 @@
       "inMin": {
         "type": "f32",
         "default": -1,
-        "description": "Value mapped to outMin, in mode 'range'. Ignored in mode 'fit'."
+        "description": "Value mapped to outMin, in mode 'range'. As a FIELD it is a PER-ELEMENT window end, evaluated on `domain`, so each element is rescaled against its OWN input range instead of one range shared by the whole domain: a per-point noise floor, or a threshold read from another attribute, turns the same source values into different results for different elements — which no single number can do. The window is per ELEMENT, not per component: a tuple attribute remaps all of its components against that element's one window, as it already does against the shared one. Mode 'fit' IGNORES this param and does not evaluate it at all — a field there is dead exactly as a plain number is, because fit measures the attribute's own minimum and maximum instead. A degenerate window is a per-element outcome, not a refusal: where inMin resolves equal to inMax that element maps to outMin (NaN sources stay NaN), the same rule the shared empty range follows. Non-finite is refused, naming this param, since an infinite span maps everything to 0 and a NaN one erases the attribute.",
+        "acceptsField": true
       },
       "inMax": {
         "type": "f32",
         "default": 1,
-        "description": "Value mapped to outMax, in mode 'range'. Ignored in mode 'fit'."
+        "description": "Value mapped to outMax, in mode 'range'. As a FIELD it is a PER-ELEMENT window end evaluated on `domain`, the upper counterpart of inMin: the two together give each element its own input range, so 'what counts as high here' can vary across the domain — the per-element version of the hand-tuned remap(x, -1, 1, 0, 1). Reversed per element is fine (inMin above inMax) and inverts that element only. Mode 'fit' IGNORES this param and does not evaluate it at all. Where it resolves equal to inMin the window is empty and that element maps to outMin, NaN sources excepted (they stay NaN). Non-finite is refused, naming this param.",
+        "acceptsField": true
       },
       "outMin": {
         "type": "f32",
         "default": 0,
-        "description": "Value inMin maps to."
+        "description": "Value inMin maps to. As a FIELD it is a PER-ELEMENT output floor, evaluated on `domain`, so each element lands in its own destination range — the way to remap a shared quantity into per-element bands (a scale whose floor follows the point's size, a colour ramp whose ends differ by region) in one node. Read per element in every mode, INCLUDING 'fit', which measures only the input window; and it is also the value an empty window (inMin == inMax, or a fit over nothing usable) maps that element to, so a fielded outMin decides the degenerate case too. With clamp on, the bounds are this element's own outMin/outMax, whichever is smaller and larger. Non-finite is refused, naming this param.",
+        "acceptsField": true
       },
       "outMax": {
         "type": "f32",
         "default": 1,
-        "description": "Value inMax maps to."
+        "description": "Value inMax maps to. As a FIELD it is a PER-ELEMENT output ceiling, evaluated on `domain`, the upper counterpart of outMin: with both fielded, every element gets its own output band, and reversing them per element (outMax below outMin) inverts that element alone. Read per element in every mode, INCLUDING 'fit'. Note that an empty input window maps to outMin, not to this param, so a per-element ceiling has no effect where the window collapsed. Non-finite is refused, naming this param.",
+        "acceptsField": true
       },
       "clamp": {
         "type": "bool",
@@ -282,7 +286,8 @@
           1,
           0
         ],
-        "description": "Direction for the 'vector' mode; need not be unit length, and is normalized before use. Ignored by the other modes. A zero-length vector is refused rather than producing a flat sheet. Not field-capable on purpose: it names the direction of the whole extrusion, and a per-point one would not be a sweep — that is what `distance` is for."
+        "description": "Direction for the 'vector' mode; need not be unit length, and is normalized before use. Ignored by the other modes. Field-capable on the PRIMITIVE domain — one direction per closed polyline, which is the element a whole extrusion belongs to — so two footprints in one input rise along two different vectors in a single cook: a per-lot `attribute('slope')`, a `byAttribute` over a per-lot string kind, or `randomField` all read there. It is NOT per point and cannot be: a per-point direction would shear the footprint rather than sweep it, and a per-point HEIGHT is what `distance` already is. Read the domain it resolves on before writing the expression — the primitive domain carries no P, so `position()` is not available there and a value the points know reaches it through promoteAttribute (point to primitive). A vector that resolves to [0, 0, 0] refuses THAT PRIMITIVE BY INDEX rather than flattening it into a sheet, exactly as direction 'polygonNormal' refuses a polygon whose Newell normal is zero — the same condition (this polygon names no direction) and the same answer; a plain [0, 0, 0] is still refused before the walk, by the param rather than by a primitive. Resolved on the CPU whether or not the cook carries a GPU device: the primitive domain holds one element per polygon, so a dispatch would cost more than the three multiplies it replaces. `distance` is the param that may resolve on the device.",
+        "acceptsField": true
       },
       "caps": {
         "type": "enum",
@@ -342,7 +347,8 @@
       "value": {
         "type": "f32",
         "default": 0,
-        "description": "Right-hand side for numeric attributes. Ignored for string attributes."
+        "description": "Right-hand side for numeric attributes. Ignored for string attributes, and a field written here is not even evaluated for one — the param nothing reads costs nothing and refuses nothing. As a FIELD it is a PER-POINT right-hand side, evaluated on the input's points, so each point is compared against its own number: `attribute(\"minLevel\")` with comparison 'ge' keeps every point that clears the bar it was given, and a noise or a position expression makes the bar vary across the world. The comparison itself is unchanged — the same six operators, the same meaning per point — so this is the two-column test (attribute against attribute) that otherwise needs a scratch column plus filterByExpression. A a constant field matches the plain number wherever that number is exactly representable in f32 — which is the honest form of the claim, because a field resolves into an f32 COLUMN while a plain param stays the f64 the author wrote. `constant(0.7)` is 0.699999988079071 and a datum sitting between the two lands on different sides of them. That is not a defect to be fixed here but clause 1 of the capability rule showing through, and it is why the equality tests use f32-exact values on purpose. Non-finite values are REFUSED rather than read: a field resolving to NaN or ±Infinity names this param and stops, because a right-hand side has no documented meaning for one. Note that this refusal is about the FIELD, never about the attribute — a NaN in the COLUMN being tested is still data and still passes only 'ne'.",
+        "acceptsField": true
       },
       "stringValue": {
         "type": "string",
@@ -386,7 +392,8 @@
           0,
           0
         ],
-        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a point lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world). As a FIELD it is a PER-POINT corner, evaluated on the input's points, so each point is tested against its OWN box rather than against one box shared by the cloud — which turns this node from 'keep what is in this region' into 'keep every point that is inside the box it carries', the test a per-point cell, plot or footprint written upstream asks for. Build the corner with vec(x, y, z); a scalar field broadcasts to all three axes exactly as a plain scalar would. NON-FINITE VALUES ARE READ, NOT REFUSED — this is one of the few field params where they are data: -Infinity on a component leaves that axis unbounded for that point, exactly as the plain value does, and a NaN component satisfies no comparison at all, so that point is never inside and lands in 'outside'. `inside` and `outside` stay exact complements point by point, since both read the same resolved value for a point — with one caveat a plain box does not have: two SEPARATE nodes resolve their own columns, so a bound built from randomField or nodeSeed differs between them and the pair no longer partitions. Give both nodes the same bounds field to keep it exact.",
+        "acceptsField": true,
         "acceptsInfinite": true
       },
       "boundsMax": {
@@ -396,7 +403,8 @@
           1,
           1
         ],
-        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane.",
+        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a point exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded. An axis with max <= min keeps nothing under 'halfOpen' — a zero-width box has no interior — while under 'inclusive' max === min still keeps the points lying exactly on that plane. As a FIELD it is a PER-POINT corner on the input's points, with the same reading boundsMin's description gives, and the two are independent: a field min with a plain max is legal and the plain one costs nothing per point. The max <= min rule above then applies PER POINT — a point whose own box is empty on any axis simply fails the test and lands in 'outside'. Non-finite components are read rather than refused (±Infinity unbounds an axis, NaN keeps nothing), and a scalar field broadcasts to all three axes.",
+        "acceptsField": true,
         "acceptsInfinite": true
       },
       "mode": {
@@ -459,7 +467,8 @@
       "threshold": {
         "type": "f32",
         "default": 0.5,
-        "description": "Minimum density a point needs to survive in 'threshold' mode. Ignored in 'probabilistic' mode."
+        "description": "Minimum density a point needs to survive in 'threshold' mode: a point is kept when its own `density` attribute is >= this. Ignored in 'probabilistic' mode, and a field written here is not even evaluated in that mode — the param nothing reads costs nothing and refuses nothing. As a FIELD it is a PER-POINT threshold, evaluated on the input's points, so each point is tested against the bar IT was given rather than against one number shared by the cloud: attribute(\"minDensity\") lets a value written upstream set each point's own bar, and a noise or a position expression makes the bar vary across the world, which thins one region at 0.8 while another survives at 0.2 in a single cook. The comparison is unchanged and still `density >= threshold`, so a constant field matches the plain number wherever that number is exactly representable in f32 — which is the honest form of the claim, because a field resolves into an f32 COLUMN while a plain param stays the f64 the author wrote. `constant(0.7)` is 0.699999988079071 and a datum sitting between the two lands on different sides of them. That is not a defect to be fixed here but clause 1 of the capability rule showing through, and it is why the equality tests use f32-exact values on purpose. Non-finite values are REFUSED rather than read: a field resolving to NaN or ±Infinity here names this param and stops, because a threshold has no documented meaning for one — unlike selfPrune's radius, where NaN means 'claims no room'. Guard the expression itself (max(x, 1e-6) under a div) if it can produce one.",
+        "acceptsField": true
       },
       "seed": {
         "type": "u32",
@@ -558,7 +567,8 @@
       "value": {
         "type": "f32",
         "default": 0,
-        "description": "Right-hand side for numeric attributes. Ignored for string attributes."
+        "description": "Right-hand side for numeric attributes. Ignored for string attributes, and a field written here is not even evaluated for one. As a FIELD it is evaluated on the PRIMITIVE DOMAIN — one right-hand side per primitive, never per point — so each primitive is compared against its own number: `attribute(\"maxLength\")` with comparison 'le' keeps every edge shorter than the limit IT carries, which is the per-primitive budget one shared number cannot express. Everything else is unchanged: the same six operators with the same meaning, the same scalar-only rule, and a a constant field matches the plain number wherever that number is exactly representable in f32 — which is the honest form of the claim, because a field resolves into an f32 COLUMN while a plain param stays the f64 the author wrote. `constant(0.7)` is 0.699999988079071 and a datum sitting between the two lands on different sides of them. That is not a defect to be fixed here but clause 1 of the capability rule showing through, and it is why the equality tests use f32-exact values on purpose. Because the value is read per primitive and nothing else — not its index, not its neighbours, not how many primitives there are — the determinism the node's description promises is unaffected, PROVIDED the field is too: a field reading position or a primitive attribute is partition-independent, while randomField and nodeSeed are per-node and per-cell like any other seeded draw. Non-finite values are REFUSED rather than read, naming this param: a right-hand side has no documented meaning for NaN or ±Infinity. That is about the FIELD only — a NaN in the primitive COLUMN being tested is still data, and still passes only 'ne'.",
+        "acceptsField": true
       },
       "stringValue": {
         "type": "string",
@@ -602,7 +612,8 @@
           0,
           0
         ],
-        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world).",
+        "description": "Minimum corner of the box, in world units. INCLUSIVE under both boundary rules: a vertex lying exactly on this face is inside. Use -Infinity on an axis that should not be bounded (note that an infinity does not survive JSON, so a graph that must serialize needs a finite bound wide enough to hold the world). As a FIELD it is evaluated on the PRIMITIVE DOMAIN, not on the points — one corner per primitive, so each primitive is tested against the box IT carries, and every vertex the `vertex` rule consults is tested against that same box. Read a primitive column (attribute(\"cellMinX\") and friends, promoteAttribute lifts a point column onto primitives) or build one with vec(x, y, z); a scalar field broadcasts to all three axes. The reading it enables is 'does this edge lie in ITS OWN cell', which one shared box cannot ask. TILING IS THEN THE AUTHOR'S TO PRESERVE: the ownership guarantee this node's description makes — abutting boxes claim each primitive exactly once — is a property of the BOXES, so per-primitive boxes tile only if they were built to, and boxes that overlap or leave a gap double-count or lose primitives with no error to say so. Non-finite components are read rather than refused: ±Infinity unbounds an axis exactly as the plain value does, and a NaN component satisfies no comparison, so a primitive whose box has one is never inside and lands in 'outside'.",
+        "acceptsField": true,
         "acceptsInfinite": true
       },
       "boundsMax": {
@@ -612,7 +623,8 @@
           1,
           1
         ],
-        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin.",
+        "description": "Maximum corner of the box, in world units. EXCLUSIVE under the default 'halfOpen' boundary (a vertex exactly on this face belongs to the next box along), INCLUSIVE under 'inclusive'. Use +Infinity on an axis that should not be bounded, subject to the serialization note on boundsMin. As a FIELD it is one corner PER PRIMITIVE, with the same reading boundsMin's description gives, and the two are independent: a field min with a plain max is legal and the plain one costs nothing per primitive. A primitive whose own box is empty on an axis (max <= min under 'halfOpen') keeps nothing and lands in 'outside'; non-finite components are read rather than refused; a scalar field broadcasts to all three axes.",
+        "acceptsField": true,
         "acceptsInfinite": true
       },
       "vertex": {
@@ -960,7 +972,8 @@
       "spacing": {
         "type": "f32",
         "default": 1,
-        "description": "Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than `spacing` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under `spacing`. To divide a loop EVENLY, switch mode to 'count': it splits the length into `count` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under 1048576 samples. Ignored in 'count' mode.",
+        "description": "Distance between samples in world units when mode is 'spacing'. The step is EXACT and is never stretched to make the samples come out even, so a CLOSED path ends on a REMAINDER: the last sample sits at floor(length / spacing) * spacing and the segment from it back to the start is SHORTER than `spacing` — a 43-unit loop at spacing 5 gets 9 samples and closes with a 3-unit segment at the seam. That remainder is whatever the loop's length leaves over, anywhere from a hair above 0 to just under `spacing`. To divide a loop EVENLY, switch mode to 'count': it splits the length into `count` equal steps and has no seam segment. An open path is the same story at its far end — it always lands on its true endpoint, so its last segment is short in the same way. Must be > 0, small enough to leave at least 2 samples on each open path (3 on a closed one), and large enough that the whole input stays under 1048576 samples. Ignored in 'count' mode. AS A FIELD IT IS ONE SPACING PER PATH, resolved on the INPUT's PRIMITIVE domain: a wide road and a footpath in one geometry take different steps in ONE COOK, each path's count following its own value against its own arc length. That is why this param can be a field where splineSample's spacing cannot — this node resamples every polyline ON ITS OWN ARC LENGTH, so there is a primitive element to read one value per, while splineSample concatenates every polyline into ONE curve and reads its spacing exactly once, against no element at all. The field sees the PRIMITIVE domain, so what it can read is what a path carries: a primitive attribute (written with setAttribute domain 'primitive', or carried up from the points with promoteAttribute point → primitive), index() and fraction() over the paths, randomField(), and nodeSeed(). A POINT attribute is not in scope there, and position() is not either — a path has no one position. Both limits stay, and they are enforced differently on purpose. The MINIMUM is PER PATH: a path whose own resolved spacing is too coarse to leave 2 samples (3 when closed) is REFUSED, naming that primitive and the spacing it resolved to — never quietly dropped from the output, since a path missing from an otherwise fine-looking cook is the plausible failure this library exists to refuse. The BUDGET is on the TOTAL: samples are counted as they are placed, across every path in primitive order, and the cook is refused as soon as they add up past 1048576 — a per-path cap would pass ten paths of 200 000 samples each. A field is not range-checked the way a plain value is (a schema's min binds a number, not a recipe), so bound the expression itself — max(<expr>, <the smallest step you meant>) — and note that a NaN or infinite spacing is refused rather than read as a meaning.",
+        "acceptsField": true,
         "min": 0
       },
       "lengthAttr": {
@@ -971,7 +984,7 @@
       "stepAttr": {
         "type": "string",
         "default": "",
-        "description": "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree."
+        "description": "Name of an f32 PRIMITIVE attribute receiving the ARC-LENGTH STEP between consecutive samples on that path. Empty (the default) writes none. Per path and so on the PRIMITIVE domain for the same reason as `lengthAttr`: in 'count' mode the step is that path's OWN length divided by its divisions (length / (count - 1) on an open path, length / count on a closed one, the divisor that leaves no duplicate at the seam), so two paths of different lengths get different steps and neither varies from sample to sample. In 'spacing' mode it reports `spacing` itself, unchanged — or, when `spacing` is a field, that path's OWN resolved value, which is the same statement once the param is read per path — not a tautology but the point of reporting it at all: a downstream size written as a multiple of this attribute follows the sampling when the mode or the knob changes under it, instead of silently meaning something else. Note that in 'spacing' mode the LAST step is the remainder described under `spacing` and is SHORTER than the value reported here; this is the step the node takes, not what the path had left over. Same reporting-slot rule as `lengthAttr`, and the two params may not name the same attribute — the second write would overwrite the first with no complaint, since the shapes agree."
       }
     }
   },
@@ -1017,7 +1030,8 @@
       "extend": {
         "type": "f32",
         "default": 0,
-        "description": "World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely.",
+        "description": "World units added to BOTH ends of every segment (the length on the axis becomes segment + 2 * extend; the midpoint does not move). This is the joint filler: consecutive segments meeting at a bend leave a wedge-shaped gap on the outside of the corner, and overlapping them closes it. About one radius is enough down to right-angle bends. Costs nothing but overlap, and with a capsule asset the rounded caps hide the seam entirely. Field-capable, and it resolves EXACTLY WHERE `radius` DOES — on the INPUT points (the path's own points, since the segments this node emits have no domain yet), then AVERAGED over the two points a segment runs between — so it is one filler PER SEGMENT and the two params take the same expression: a taper that thins the tube thins its joints with it, and 'about one radius' becomes a fill that follows the radius instead of a literal that stops matching the moment the radius moves. It follows that a field here reads what the input POINTS carry; a per-path extend living on the PRIMITIVE domain has to be promoted onto the points first (promoteAttribute, primitive to point), the same route `radius` documents. A PLAIN value must be finite and >= 0 and is refused otherwise. A FIELD's negative value is clamped to 0 per segment, exactly as `radius` is — a filler is a length, and a negative one would shorten the segment away from its own endpoints — while a NaN or infinite one is refused, naming this param.",
+        "acceptsField": true,
         "min": 0
       },
       "segmentIndexAttr": {
@@ -1339,7 +1353,7 @@
   },
   {
     "type": "projectToPlane",
-    "description": "Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally; must be non-zero). With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible.",
+    "description": "Projects every point orthogonally onto the plane through `origin` with normal `normal` (normalized internally). As plain vectors they describe ONE plane and the normal must be non-zero; as fields they are read per point, so each point falls onto the plane IT was given and a zero normal there is not a plane at all — that point is left exactly where it stands. With keepOffset enabled, the signed distance each point moved (positive along the normal) is stored in a `planeOffset` point attribute (f32, tuple 1) before projecting, so the flattening is invertible. This node is categorised as a filter but removes nothing: the point count, the attributes and the topology all come out as they went in.",
     "category": "filter",
     "inputs": [
       {
@@ -1363,7 +1377,8 @@
           0,
           0
         ],
-        "description": "A point on the plane, in world units."
+        "description": "A point on the plane, in world units. As a FIELD it is a PER-POINT origin, evaluated on the input's points, so each point is projected onto a plane sliding with it — with a constant normal that is a per-point OFFSET along that normal, which is how a stepped or terraced flattening is written (floor the height, feed it back as the origin) rather than one flat sheet. Build it with vec(x, y, z); a scalar field broadcasts to all three axes. Only the component along the normal can matter, since the projection subtracts (P - origin) . n: two origins differing by anything perpendicular to the normal name the same plane and move nothing. Non-finite values are REFUSED rather than read, naming this param — a plane through NaN has no meaning, and the resulting positions would draw nothing downstream.",
+        "acceptsField": true
       },
       "normal": {
         "type": "vec3",
@@ -1372,7 +1387,8 @@
           1,
           0
         ],
-        "description": "Plane normal; any non-zero vector (normalized internally)."
+        "description": "Plane normal; any non-zero vector (normalized internally). As a FIELD it is a PER-POINT normal, evaluated on the input's points, so each point is projected along the direction IT carries — attribute(\"N\") flattens every point onto its own surface plane, and a varying normal collapses a cloud onto a fan of planes rather than one. A ZERO-LENGTH NORMAL IS THE ONE REFUSAL THAT CHANGES SHAPE HERE, and it changes only for a field: a plain zero vector is still refused outright, because one plane that does not exist is an authoring mistake with nothing to salvage, while a field's zero is a per-point answer — that point has no plane, so it is left exactly where it stands and its planeOffset is 0 (it moved nothing). Nothing is invented for it and nothing is dropped; a point that did not move is visible as an offset of 0. Scale is free either way, since the vector is normalized before use, and a scalar field broadcasts to all three axes — note that vec(1,1,1) is a diagonal plane, not an axis one. Non-finite components are REFUSED rather than read, naming this param: a NaN normal would normalize to NaN and send every coordinate of that point to NaN.",
+        "acceptsField": true
       },
       "keepOffset": {
         "type": "bool",
@@ -1530,7 +1546,8 @@
       "maxDistance": {
         "type": "f32",
         "default": 0,
-        "description": "Largest distance that still counts as a find, in world units. 0 (the default) means unlimited; beyond it a point is a miss.",
+        "description": "Largest distance that still counts as a find, in world units. 0 (the default) means unlimited; beyond it a point is a miss. As a FIELD it is PER POINT, evaluated on the points being sampled rather than on the source, so each point can accept a find at its own reach — a small prop giving up on a far road while a large one still finds it, in one cook. The unlimited sentinel is per point too, and it is 0 OR LESS: a field returning 0 — or a negative, which a subtraction easily produces — makes THOSE points unlimited rather than making them miss. So 'find nothing' is a small POSITIVE distance, never 0 and never a negative one, which would do the opposite of what it looks like. This param does not size the spatial index — cell size comes from the source cloud — so a mixed set of reaches costs nothing extra and changes no answer.",
+        "acceptsField": true,
         "min": 0
       }
     }
@@ -1701,7 +1718,8 @@
           0,
           0
         ],
-        "description": "Minimum corner written to every point's boundsMin, in world units."
+        "description": "Minimum corner written to every point's boundsMin, in world units. As a FIELD it is PER POINT, which is the reading that makes this node worth more than a constant: an extent derived from the point's own `scale`, or from a species attribute, gives every instance the box it actually occupies rather than one box the whole cloud shares. Must evaluate to THREE numbers per point — a scalar is REFUSED rather than broadcast, because broadcasting would quietly hand every point a cube when a box was asked for.",
+        "acceptsField": true
       },
       "boundsMax": {
         "type": "vec3",
@@ -1710,7 +1728,8 @@
           1,
           1
         ],
-        "description": "Maximum corner written to every point's boundsMax, in world units."
+        "description": "Maximum corner written to every point's boundsMax, in world units. As a FIELD it is PER POINT, on the same terms as boundsMin, and refuses a scalar for the same reason. Nothing here checks that max exceeds min: the two are written independently, and a point whose corners cross is a point with an inside-out box, which is what the author asked for and what a downstream reader will see.",
+        "acceptsField": true
       }
     }
   },
@@ -1933,7 +1952,8 @@
       "miterLimit": {
         "type": "f32",
         "default": 4,
-        "description": "Largest stretch 'miter' may apply. Past it the ring falls back to the unstretched 'perpendicular' section for that point ONLY, which pinches rather than shooting a spike out of the corner. A stretch of 4 is a 151-degree turn; the limit is never reached by a path that was resampled at anything like an even spacing, and exists for the pathological input that would otherwise self-intersect. Ignored by 'perpendicular'.",
+        "description": "Largest stretch 'miter' may apply. Past it the ring falls back to the unstretched 'perpendicular' section for that point ONLY, which pinches rather than shooting a spike out of the corner. A stretch of 4 is a 151-degree turn; the limit is never reached by a path that was resampled at anything like an even spacing, and exists for the pathological input that would otherwise self-intersect. Field-capable on the INPUT points — the limit is read at the RING, from the point the ring stands on, so one deliberate spike and a capped remainder are one cook rather than two: a corner attribute lets the one junction that should keep its radius through a hairpin do so while every other corner stays bounded. As a field a value BELOW 1 is not refused at the point the way a plain number is refused at the door; it is read for what it does, which is admit no miter at all (a stretch is always > 1 when there is a bend), so that ring takes the unstretched section — the same fallback the limit already names when it is exceeded. Non-finite is refused with the offending element named, so 'never limit' is spelled as a large finite number rather than as Infinity: a stretch of 64 already admits a 178-degree turn. Ignored by 'perpendicular', where a field is not evaluated at all — exactly as `radius` is left unresolved for a 'ribbon' — while a plain number still meets its >= 1 check wherever the graph is loaded or patched.",
+        "acceptsField": true,
         "min": 1
       },
       "caps": {
@@ -2004,7 +2024,8 @@
           -1,
           0
         ],
-        "description": "Constant ray direction for mapping 'raycast' (ignored otherwise, and ignored when directionAttr is set). Normalized internally so maxDistance is world-space; must be non-zero."
+        "description": "Ray direction for mapping 'raycast'. As a plain vector it is ONE direction shared by every destination point, normalized internally so maxDistance is world-space, and required to be non-zero and finite — a whole cloud casting nowhere is a mistake, not a result. As a FIELD it is a PER-POINT ray direction, evaluated on the destination points, so each point casts the ray it asks for: normalize(sub(attribute(\"target\"), position())) aims every point at a moving target, and a noise-driven direction scatters the rays without a setAttribute node upstream to hold them. Each direction is normalized per point, so only its DIRECTION is read and its length never changes a hit distance. The non-zero refusal becomes a per-element policy: a point whose direction resolves to exactly zero MISSES — it keeps its prior value and is counted by missCountAttr and flagged 0 by hitAttr, exactly like a point whose ray hits nothing — rather than failing the cook for the whole cloud. Non-finite is still refused, naming this param: a NaN direction is a broken expression (a normalize of a zero-length vector, a division by zero upstream), not data. Ignored, and not even evaluated, when mapping is not 'raycast' or when directionAttr is set — directionAttr still wins, so a field here and an attribute there is the attribute, silently, as it already was for a plain vector.",
+        "acceptsField": true
       },
       "directionAttr": {
         "type": "string",
@@ -2014,7 +2035,8 @@
       "maxDistance": {
         "type": "f32",
         "default": 0,
-        "description": "Maximum world-space hit distance for mapping 'raycast' (ignored otherwise). 0 (the default) means unlimited; a positive value ignores hits farther along the ray. Rays are forward-only regardless (hits need t >= 0).",
+        "description": "Maximum world-space hit distance for mapping 'raycast' (ignored otherwise). 0 (the default) means unlimited; a positive value ignores hits farther along the ray. Rays are forward-only regardless (hits need t >= 0). As a FIELD it is a PER-POINT cap, evaluated on the destination points, so each point gives up at its own reach — a small prop accepting only a nearby surface while a large one still finds a distant floor, in one cook. The unlimited sentinel is per point too, and it is 0 OR LESS: a field returning 0 — or a negative, which a subtraction easily produces — makes THOSE rays unlimited rather than making them miss. So 'accept nothing' is a small POSITIVE distance, never 0 and never a negative one, which would do the opposite of what it looks like. A point capped short of every hit is an ordinary MISS — it keeps its prior value and is counted by missCountAttr and flagged 0 by hitAttr — not a failed cook. Non-finite is refused, naming this param, because a NaN cap is a broken expression rather than data. Ignored, and not evaluated, when mapping is not 'raycast'.",
+        "acceptsField": true,
         "min": 0
       },
       "missCountAttr": {
