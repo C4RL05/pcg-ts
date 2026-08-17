@@ -3918,7 +3918,7 @@
             "instances": 77,
             "batches": [
               {
-                "assetId": "driftwood_log",
+                "assetId": "log",
                 "count": 77,
                 "translation": {
                   "min": [
@@ -4043,7 +4043,7 @@
             "instances": 1425,
             "batches": [
               {
-                "assetId": "tree_birch",
+                "assetId": "birch",
                 "count": 440,
                 "translation": {
                   "min": [
@@ -4086,7 +4086,7 @@
                 }
               },
               {
-                "assetId": "tree_pine",
+                "assetId": "pine",
                 "count": 697,
                 "translation": {
                   "min": [
@@ -4129,7 +4129,7 @@
                 }
               },
               {
-                "assetId": "tree_willow",
+                "assetId": "willow",
                 "count": 288,
                 "translation": {
                   "min": [
