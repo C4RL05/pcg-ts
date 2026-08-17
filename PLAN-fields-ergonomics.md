@@ -463,7 +463,7 @@ understanding the model, not about line count.
 | ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
 | ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
 | ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 23 done, 4 refused by rule |
-| B2 | text syntax | medium-large | §7.1 |
+| B2 | text syntax — parse + print, tree stays the format | medium-large | **unblocked** (§7.1 decided) |
 | A3 | subexpression binding | medium | thin mandate — 11 specs |
 | D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |
 | A1 | remaining math primitives | small each | no demand — wait for a site |
@@ -546,10 +546,44 @@ and D3 qualify; E1 and C1 do not.
 
 ## 7. Open decisions — need the user
 
-1. **Does authored text round-trip verbatim, or normalize to the tree on
-   save?** Blocks B2. Normalizing means the first sandbox save silently
-   destroys what someone wrote; storing the string as the authored form
-   has knock-on effects on diffing and the golden file.
+1. **~~Does authored text round-trip verbatim, or normalize to the tree on
+   save?~~ DECIDED 2026-08-17: NORMALIZE.** Text is an INTERMEDIATE
+   format. The tree stays the format; text is a bidirectional view over
+   it. Nothing is ever saved as text, and no comments are expected in the
+   syntax.
+
+   The question dissolves once framed that way, and one fact decides it
+   rather than a preference: **every write path in this library already
+   edits the tree.** `withInlineParamValue(spec: FieldSpec, …): FieldSpec`
+   is tree-in tree-out, and its callers are `src/runtime/world.ts`,
+   `src/runtime/patches.ts`, `src/worker/host.ts` and the sandbox's knobs;
+   `applyParamPatches` is the same shape, as is everything the
+   agent-ergonomics pillar rests on. So storing the string as the authored
+   form would advertise a guarantee the library breaks on first contact —
+   one World patch, one knob turn, one `pcg` param patch and the text has
+   to be re-printed anyway. It would preserve verbatim text only for
+   graphs nothing ever edits, which under a patch-driven streaming runtime
+   is close to none of them.
+
+   WHAT IT COSTS is the author's specific spelling — redundant parens,
+   `sub(1, p)` printed back as `1 - p` — which is what every formatter
+   costs and what authors accept from them. The original worry, that "the
+   first sandbox save silently destroys what someone wrote", was really
+   about a save that hands back raw JSON; with a canonical printer it
+   becomes "reformats what you wrote", and JSON is never shown again.
+
+   NO COMMENTS, decided with it, which is what keeps this cheap: comments
+   would have to live in the TREE as data to survive a programmatic edit
+   (the way `param`'s `description` already does), and that is a grammar
+   addition this does not need. The closed grammar stays as it is.
+
+   THE GATE, and it is not optional — `src/fields/spec.test.ts` already
+   holds the library's standard for two descriptions of one computation
+   ("any disagreement between them is a silent numeric divergence with no
+   error anywhere"), and it pays for it with a per-constructor proof.
+   Text's equivalent is cheap and must exist before the parser ships:
+   `parse(print(spec)) ≡ spec` over all 149 corpus specs, and
+   `print(parse(text))` idempotent.
 2. **~~C1 or C2?~~ CLOSED — both shipped.** C1 wrote the rule down
    (`a3d3b94`), and C2 swept it over the library: 43 of 180 params are
    field-capable now, 22 added and 5 refused by the rule. Writing the
