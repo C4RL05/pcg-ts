@@ -174,7 +174,14 @@ export class FieldJsonError extends Error {
 // specs — a module the grammar can depend on without depending on the
 // grammar. Re-exported here unchanged: this module is still where the
 // public spec API is documented and imported from.
-export { type FieldBindingValue, type FieldSpec, type FieldSpecArg, getFieldSpec } from "./spec.js";
+export {
+  type FieldBindingValue,
+  type FieldSpec,
+  type FieldSpecArg,
+  type SpecChild,
+  getFieldSpec,
+  specChildEntries,
+} from "./spec.js";
 
 /**
  * Whether a fn introduces per-element variation OF ITS OWN: `"per-element"`

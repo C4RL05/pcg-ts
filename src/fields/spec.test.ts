@@ -70,6 +70,8 @@ import {
   getFieldSpec,
   isDerivedSpec,
   peekFieldSpec,
+  specChildEntries,
+  specChildren,
   specFallbackReason,
 } from "./spec.js";
 import {
@@ -918,5 +920,89 @@ describe("derivation stops at the parser's nesting cap", () => {
     expect(getFieldSpec(fbm(wrapper, { octaves: MAX_DEPTH + 44 }))).toBeUndefined();
     // A built-in base names itself in one level, so it is unaffected.
     expect(getFieldSpec(fbm(perlinNoise, { octaves: MAX_DEPTH + 44 }))?.fn).toBe("fbm");
+  });
+});
+
+describe("specChildEntries", () => {
+  // A spec exercising all five child positions at once: two `args`, a
+  // noise `opts.position`, a tagged seed's `variant`, and `byAttribute`'s
+  // `cases` plus `default`.
+  const everyPosition = {
+    fn: "add",
+    args: [
+      {
+        fn: "perlinNoise",
+        opts: {
+          frequency: 0.05,
+          position: { fn: "position" },
+          seed: { from: "node", variant: { fn: "param", name: "v", value: 0 } },
+        },
+      },
+      {
+        fn: "byAttribute",
+        name: "part",
+        cases: { rod: 1, 'a"b': { fn: "index" } },
+        default: { fn: "fraction" },
+      },
+    ],
+  } as unknown as Record<string, unknown>;
+
+  it("names every position, in specChildren's order", () => {
+    const entries = specChildEntries(everyPosition);
+    expect(entries.map((c) => c.path)).toEqual(["args[0]", "args[1]"]);
+    expect(entries.map((c) => c.kind)).toEqual(["arg", "arg"]);
+
+    const noise = entries[0].value as Record<string, unknown>;
+    expect(specChildEntries(noise).map((c) => [c.kind, c.path])).toEqual([
+      ["position", "opts.position"],
+      ["variant", "opts.seed.variant"],
+    ]);
+
+    const cased = entries[1].value as Record<string, unknown>;
+    expect(specChildEntries(cased).map((c) => [c.kind, c.path])).toEqual([
+      ["case", 'cases["rod"]'],
+      ["case", 'cases["a\\"b"]'],
+      ["default", "default"],
+    ]);
+  });
+
+  it("carries the index of an arg and the key of a case, on the union arm that has one", () => {
+    const args = specChildEntries(everyPosition);
+    expect(args.map((c) => (c.kind === "arg" ? c.index : null))).toEqual([0, 1]);
+    const cased = specChildEntries(args[1].value as Record<string, unknown>);
+    expect(cased.filter((c) => c.kind === "case").map((c) => (c.kind === "case" ? c.key : null)))
+      // The raw key, not the JSON-escaped one that goes in `path`.
+      .toEqual(["rod", 'a"b']);
+  });
+
+  it("is the one enumeration of the positions: specChildren is its values", () => {
+    // Note what this can and cannot catch. It CANNOT catch a position
+    // dropped from `specChildEntries` — `specChildren` derives from it,
+    // so both move together and still agree (the test above is what
+    // catches that). What it catches is `specChildren` being re-implemented
+    // to enumerate the positions ITSELF, which is the drift the doc
+    // comment on it exists to prevent. Verified by doing exactly that:
+    // an independent body missing `cases` reddens this test and no other.
+    const walk = (node: Record<string, unknown>): void => {
+      expect(specChildren(node)).toEqual(specChildEntries(node).map((c) => c.value));
+      for (const child of specChildEntries(node)) {
+        if (typeof child.value === "object" && child.value !== null && !Array.isArray(child.value)) {
+          walk(child.value as Record<string, unknown>);
+        }
+      }
+    };
+    walk(everyPosition);
+  });
+
+  it("returns non-spec positions as they are, and nothing for a childless node", () => {
+    // The contract is "the child POSITIONS", so a raw number in an `args`
+    // slot comes back rather than being filtered into invisibility.
+    expect(specChildEntries({ fn: "mul", args: [{ fn: "position" }, 3] }).map((c) => c.value)).toEqual([
+      { fn: "position" },
+      3,
+    ]);
+    expect(specChildEntries({ fn: "position" })).toEqual([]);
+    // A literal seed holds nothing; only a tagged one has a variant.
+    expect(specChildEntries({ fn: "perlinNoise", opts: { seed: 7 } })).toEqual([]);
   });
 });

@@ -499,27 +499,79 @@ export function isDerivedSpec(spec: FieldSpec): boolean {
  * reach it without reaching the parser.
  */
 export function specChildren(node: Record<string, unknown>): unknown[] {
-  const out: unknown[] = [];
+  return specChildEntries(node).map((child) => child.value);
+}
+
+/**
+ * One spec-valued position, with enough about WHERE it sits to label it.
+ *
+ * A discriminated union rather than optional `index`/`key` fields, so the
+ * type itself says an `arg` always has an index and a `case` always has a
+ * key, instead of leaving a caller to check.
+ *
+ * `path` is the JSON-path fragment naming the position within its own
+ * node — `args[1]`, `opts.position`, `opts.seed.variant`, `cases["rod"]`,
+ * `default`. It is for display and for error messages; branch on `kind`.
+ */
+export type SpecChild =
+  | { readonly kind: "arg"; readonly path: string; readonly index: number; readonly value: unknown }
+  | { readonly kind: "position"; readonly path: string; readonly value: unknown }
+  | { readonly kind: "variant"; readonly path: string; readonly value: unknown }
+  | { readonly kind: "case"; readonly path: string; readonly key: string; readonly value: unknown }
+  | { readonly kind: "default"; readonly path: string; readonly value: unknown };
+
+/**
+ * {@link specChildren} with each position NAMED, for anything that has to
+ * show a spec rather than only walk it — a renderer, an error message, an
+ * editor. `sub(a, b)` is unreadable as two anonymous children, and
+ * `byAttribute`'s case keys are the whole content of its branches.
+ *
+ * This is the function that knows the five positions; `specChildren` is
+ * its values. Keeping it that way around is the point — the doc above
+ * promises ONE answer to "what hangs off this spec", and two functions
+ * each enumerating the positions would be two answers waiting to differ.
+ *
+ * The ORDER is the same, and is part of the contract: args in order, then
+ * position, then variant, then cases in insertion order, then default.
+ *
+ * Names come from structure alone, because this module sits below the
+ * grammar and must not reach the registry: an argument is `args[0]`, not
+ * `edge`. A caller that wants a fn's registered argument NAMES reads them
+ * from `listFieldFnInfos()` and indexes them with `index`.
+ */
+export function specChildEntries(node: Record<string, unknown>): readonly SpecChild[] {
+  const out: SpecChild[] = [];
   const args = node.args;
-  if (Array.isArray(args)) out.push(...args);
+  if (Array.isArray(args)) {
+    args.forEach((value, index) => out.push({ kind: "arg", path: `args[${index}]`, index, value }));
+  }
   const opts = node.opts;
   if (typeof opts === "object" && opts !== null && !Array.isArray(opts)) {
     const position = (opts as Record<string, unknown>).position;
-    if (position !== undefined) out.push(position);
+    if (position !== undefined) {
+      out.push({ kind: "position", path: "opts.position", value: position });
+    }
     const seed = (opts as Record<string, unknown>).seed;
     // A literal seed is a number and holds nothing; a node-seed ref holds
     // its `variant`, which is an integer far more often than it is a
     // `param`. Both come back as they are — this returns POSITIONS.
     if (typeof seed === "object" && seed !== null && !Array.isArray(seed)) {
       const variant = (seed as Record<string, unknown>).variant;
-      if (variant !== undefined) out.push(variant);
+      if (variant !== undefined) {
+        out.push({ kind: "variant", path: "opts.seed.variant", value: variant });
+      }
     }
   }
   const cases = node.cases;
   if (typeof cases === "object" && cases !== null && !Array.isArray(cases)) {
-    out.push(...Object.values(cases as Record<string, unknown>));
+    for (const [key, value] of Object.entries(cases as Record<string, unknown>)) {
+      // JSON.stringify the key so a case named `a"b` reads back as one.
+      out.push({ kind: "case", path: `cases[${JSON.stringify(key)}]`, key, value });
+    }
   }
-  if (node.default !== undefined) out.push(node.default);
+  if (node.default !== undefined) {
+    out.push({ kind: "default", path: "default", value: node.default });
+  }
   return out;
 }
 

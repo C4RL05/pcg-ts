@@ -41,7 +41,7 @@ const ROOT_SURFACE = [
   "randomField", "registerSubgraph", "remap", "removeAttribute", "resolveExposedParam",
   "resolveField", "sampleNearestPoint", "select", "selfPrune", "serializeGraph",
   "setAttribute", "setBounds", "setPolylineTopology", "simplexNoise", "sin",
-  "spawnInstances", "splineSample", "sqrt", "standardNode", "step",
+  "spawnInstances", "specChildEntries", "splineSample", "sqrt", "standardNode", "step",
   "strandedGraphParamValues", "sub",
   "subgraphContentHash",
   "subgraphNode", "surfaceSample", "sweepProfile", "tan", "transferAttribute", "transferNearest",

@@ -8,6 +8,29 @@
   import { paramNamesOf, type FieldSpec } from "pcg-ts";
   import { clampToSchema } from "./controller.js";
   import type { ParamView } from "./controller.js";
+  import FieldTree from "./FieldTree.svelte";
+
+  /**
+   * Move the overlay to `<body>`, WITHOUT which it is not an overlay.
+   *
+   * This widget lives inside `.panel`, which carries
+   * `backdrop-filter: blur(6px)` (Editor.svelte). A filter — backdrop or
+   * otherwise — makes an element the containing block for its `position:
+   * fixed` descendants, so `inset: 0` resolves to the 300px inspector
+   * rather than the viewport and the diagram renders as a sliver down the
+   * right-hand edge. Type-checks clean; visibly wrong.
+   *
+   * Reparenting is the fix that leaves `.panel` alone: dropping the blur
+   * would change every panel in the sandbox to repair one overlay.
+   */
+  function toBody(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
 
   let {
     view,
@@ -28,6 +51,22 @@
     view.specText ?? JSON.stringify({ fn: "constant", value: view.schema.default }, null, 2),
   );
   let error = $state<string | null>(null);
+  /** The read-only diagram of the spec in the textarea, when open. */
+  let diagram = $state(false);
+
+  /**
+   * Whether the textarea currently holds JSON at all. The diagram button
+   * is disabled when it does not: there is nothing to draw, and the
+   * textarea's own error already says why.
+   */
+  const parses = $derived.by((): boolean => {
+    try {
+      JSON.parse(text);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
   /**
    * The `{ fn: "param" }` names the edited spec reads, so the widget says
@@ -96,7 +135,13 @@
     next[index] = clampToSchema(view.schema, v);
     error = onPlain(next);
   }
+
+  function onKeydown(e: KeyboardEvent): void {
+    if (diagram && e.key === "Escape") diagram = false;
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="fieldparam">
   <div class="modes">
@@ -130,6 +175,7 @@
   {:else}
     <textarea rows="7" spellcheck="false" bind:value={text}></textarea>
     <div class="apply-row">
+      <button class="diagram" disabled={!parses} onclick={() => (diagram = true)}>diagram</button>
       <button class="apply" onclick={apply}>apply field</button>
     </div>
     {#if readNames.length > 0}
@@ -140,6 +186,29 @@
     {/if}
     {#if error !== null}
       <div class="error">{error}</div>
+    {/if}
+    {#if diagram}
+      <!-- The diagram's own chrome rather than `Modal.svelte`: that
+           component IS its textarea — title, buttons and a text box, with
+           no slot for anything else — so hosting an SVG in it would mean
+           changing what it is. The surface here is deliberately identical
+           to it: same backdrop, same panel, same head. -->
+      <div
+        class="ft-backdrop"
+        use:toBody
+        role="presentation"
+        onclick={(e) => e.target === e.currentTarget && (diagram = false)}
+      >
+        <div class="ft-modal" role="dialog" aria-label="field expression diagram">
+          <div class="ft-head">
+            <span>field expression — read-only</span>
+            <button onclick={() => (diagram = false)}>close</button>
+          </div>
+          <div class="ft-scroll">
+            <FieldTree {text} />
+          </div>
+        </div>
+      </div>
     {/if}
   {/if}
 </div>
@@ -195,6 +264,23 @@
     margin-top: 4px;
     text-align: right;
   }
+  /* The mode buttons' outlined style, at the apply row's height: this
+     OPENS a view where the button beside it CHANGES the graph, and the
+     two must not read as equals. */
+  .diagram {
+    margin-right: 4px;
+    padding: var(--sb-btn-pad);
+    background: #101010;
+    color: var(--sb-ink-dim);
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-meta) var(--sb-sans);
+    cursor: pointer;
+  }
+  .diagram:disabled {
+    color: var(--sb-ink-ghost);
+    cursor: default;
+  }
   /* The commit control: solid white, so the one button that CHANGES the
      graph is the brightest thing in the row. */
   .apply {
@@ -214,6 +300,70 @@
     border-radius: 5px;
     color: #8b98ab;
     font: 10px/1.5 ui-monospace, monospace;
+  }
+  /* Modal.svelte's surface, repeated for the one thing it cannot host.
+     Kept to its look on purpose — the sandbox has ONE modal appearance,
+     and a second one a few pixels off would read as a bug. The WIDTH is
+     the one deliberate departure: Modal wraps a textarea and 680px is
+     right for prose, while a diagram of the corpus's largest expression
+     is 1638px wide, and at 680 it is a keyhole. It still scrolls, but it
+     should not have to for anything ordinary. */
+  .ft-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.72);
+  }
+  .ft-modal {
+    /* Shrink to the diagram rather than holding one width: most specs are
+       three deep and would sit in a third of the panel with the rest
+       empty, and the big ones still cap and scroll. */
+    width: max-content;
+    max-width: min(1180px, calc(100vw - 48px));
+    min-width: min(420px, calc(100vw - 48px));
+    max-height: calc(100vh - 80px);
+    display: flex;
+    flex-direction: column;
+    padding: 12px 14px;
+    background: #000000;
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius-lg);
+    color: var(--sb-ink);
+    font: 13px var(--sb-sans);
+  }
+  .ft-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .ft-head button {
+    padding: var(--sb-btn-pad);
+    background: var(--sb-raised);
+    color: var(--sb-action);
+    border: 1px solid var(--sb-edge);
+    border-radius: var(--sb-radius);
+    font: var(--sb-t-body) var(--sb-sans);
+    cursor: pointer;
+  }
+  .ft-head button:hover {
+    filter: brightness(1.25);
+  }
+  /* The diagram is routinely wider than the panel — it grows one column
+     per level of nesting — so it scrolls in both axes rather than being
+     scaled down to fit and made unreadable. */
+  .ft-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 6px;
+    background: #0a0a0a;
+    border: 1px solid var(--sb-rule);
+    border-radius: var(--sb-radius);
   }
   .error {
     margin-top: 4px;

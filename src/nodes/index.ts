@@ -27,6 +27,7 @@ export {
   listFieldFnInfos,
   listFieldFns,
   paramNamesOf,
+  specChildEntries,
   withInlineParamValue,
   type FieldBindings,
   type FieldBindingValue,
@@ -34,6 +35,7 @@ export {
   type FieldSpec,
   type FieldSpecArg,
   type InlineParamMeta,
+  type SpecChild,
 } from "../fields/fieldJson.js";
 export * from "./subgraphParams.js";
 export * from "./graphParams.js";
