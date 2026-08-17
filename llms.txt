@@ -399,31 +399,38 @@ into `constant`). All 50 fns (`listFieldFns()`):
     "position along this thing", never "position in the world"
   - `{ fn: "nodeSeed" }` — the cooking node's own seed, `deriveNodeSeed(graph
     seed, node id)`: the same number `randomField` hashes, and the same
-    value on every element. It exists because a serialized field expression
-    bakes its numbers, so a saved noise carries `opts.seed` as a literal and
-    the graph seed re-rolls every scatter while moving no noise at all. The
-    fix enters through an ARGUMENT position — fold it into `opts.position`,
-    since `opts.seed` is read as a plain number and cannot hold a spec.
-    Fold it BOUNDED, per axis
-    `A * (fract(nodeSeed * 2^-32 * K) - W0)`, wrapping the outside of
-    whatever position the noise already sampled: `A ≈ 32 / opts.frequency`
-    (a ~32-cell shift, decorrelating without leaving the range where an
-    f32 resolves a lattice cell), `K ∈ {1021, 3067, 8191}` one per noise
-    on a node so they do not move together, and `W0` the fold's value at
-    that graph's default seed to nine significant figures, which makes the
-    offset exactly zero there — so a saved graph keeps cooking the bytes it
-    already cooks and only gains a working seed box. Build it from
-    `add`/`sub`/`mul`/`floor` only (bit-exact CPU/GPU; `div` inside a
-    `floor` flips the floor), and never the unbounded `mul(nodeSeed, 1e-6)`
-    — that reaches ~1.3e4 world units and degrades to ~73 f32 steps per
-    period at frequency 14. Never fold it inside a `forEach` body, whose
-    seed varies per item. See `docs/authoring.md` "The seed-shift idiom"
-    and `graphs/basics-reseed-a-noise.json`. It lands in an f32
-    column, so it is a
-    decorrelation source and not an integer to compare. Not in `Field.key`
-    (fixed at construction, while the seed arrives at evaluation) and it
-    does not need to be — the executor's node memo key already carries the
-    node seed, so every node recooks when the graph seed moves
+    value on every element. Reach for it when an expression needs that
+    number, and NOT when a noise must answer the seed box: that half is
+    repaired inside `opts.seed` itself, which besides an integer takes the
+    tagged `{ "from": "node", "variant": N }` (Noise, below) — no fn, no
+    argument position, no calibration constant. It lands in an f32 column,
+    so it is a decorrelation source and not an integer to compare. Not in
+    `Field.key` (fixed at construction, while the seed arrives at
+    evaluation) and it does not need to be — the executor's node memo key
+    already carries the node seed, so every node recooks when the graph
+    seed moves. BACKGROUND, not instruction: before `opts.seed` took a
+    tagged form it was read as a plain number, so the only way in was an
+    ARGUMENT position, and graphs folded a bounded per-axis
+    `A * (fract(nodeSeed * 2^-32 * K) - W0)` into `opts.position`
+    (`A ≈ 32 / opts.frequency`, `K ∈ {1021, 3067, 8191}` one per noise on a
+    node, `W0` the fold's value at that graph's default seed, which zeroed
+    the offset exactly there and kept a saved graph's bytes). NO graph
+    under `graphs/` writes it now — commit `8faf95d` converted all 39
+    folds across 25 files, because `W0` is correct for one (graph seed,
+    node id) pair and goes stale on a rename, and six of the corpus' 117
+    were wrong — but it is still legal grammar, four fixtures in
+    `tests/foldCorpus.test.ts` pin the constant-fold against it, and a
+    graph saved earlier may hold one. Two hazards outlive it for anything
+    still folding a seed into a position: never the unbounded
+    `mul(nodeSeed, 1e-6)`, which reaches ~1.3e4 world units and degrades to
+    ~73 f32 steps per period at frequency 14; and inside a `forEach` body
+    BOTH spellings vary per item, since the body cooks at
+    `hashCombine(nodeSeed, hashString("forEach"), itemKey)` — per-item
+    variation where that is wanted, and a noise no two groups can agree
+    about where it is not. See `docs/authoring.md` "Making a saved noise
+    answer the seed box", "The seed-shift idiom" for the fold, and
+    `graphs/basics-reseed-a-noise.json`, whose one noise carries the tagged
+    seed at `variant: 5`
   - `{ fn: "randomField", key?: 0 | "salt" }` — per-element hash random in [0,1)
   - `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4,
     description?: "..." }` — the value bound to
@@ -486,10 +493,11 @@ into `constant`). All 50 fns (`listFieldFns()`):
     piecewise-linear through [position, value] stops, strictly ascending,
     clamped at the ends
 - Noise (scalar fields of the sample position; pure function of seed +
-  position — the context seed does not affect them):
+  position — the context seed reaches them only through the tagged
+  `opts.seed` below):
   - `{ fn: "valueNoise" | "perlinNoise" | "simplexNoise", opts?: {
-      seed?: int, frequency?: number, offset?: [x, y, z], position?: spec,
-      normalized?: false } }`
+      seed?: int | { from: "node", variant?: int }, frequency?: number,
+      offset?: [x, y, z], position?: spec, normalized?: false } }`
     valueNoise in [0,1); perlin/simplex approx [-1,1]
   - `{ fn: "worleyNoise", opts?: { ...same, output?: "f1" | "f2" | "f2-f1",
       exact?: false } }`
@@ -503,6 +511,27 @@ into `constant`). All 50 fns (`listFieldFns()`):
     documented raw range to exactly [0, 1]. Raw ranges are
     machine-readable: `NOISE_RAW_RANGES` (per noise type) and
     `noiseOutputRange(field)` (per field instance, fbm-aware).
+  - `seed` (any noise, fbm included) is an integer or ONE tagged form,
+    `{ "from": "node", "variant": N }`, which derives it as
+    `hashCombine(the cooking node's own seed, variant)` — u32 murmur with
+    no float in it, hence bit-exact CPU/GPU where a noise interior is only
+    budgeted — and is what makes a SAVED noise answer the graph's seed box.
+    `variant` stands where the old literal seed stood and picks WHICH draw
+    off that node: a node has ONE seed, so two noises on it are one field
+    unless their variants differ. Integer, 0..2^24 (above that an f32
+    uniform slot no longer holds every integer), default 0. It is also the
+    only slot inside `opts` a knob can reach, as an inline
+    `{ "fn": "param", "name": "variant", "value": 0 }` carrying a whole
+    number — a panel row with a fractional `step` over it is refused,
+    because a variant NAMES a draw rather than scaling one. Adopting the
+    form RE-ROLLS the noise (no function of graph seed, node id and variant
+    is the identity at a seed nobody named), so it is an edit made once and
+    deliberately, never a silent upgrade. A noise that must agree across a
+    seam keeps its LITERAL: node-seeded, it follows anything that moves
+    that node's seed, so under a partitioned `World` it is a per-cell field
+    wherever the bind is not seed-invariant —
+    `graphs/examples-streamed-terrain.json` pins its density noise for
+    exactly that reason and says so.
 
 Nested example — density in [0,1] from remapped 4-octave noise:
 
@@ -800,12 +829,15 @@ Three rules an agent needs before choosing one:
 2. **Per-instance variation is counter-intuitive.** Two instances of one
    primitive have different node ids, so anything context-seeded
    (scatter, jitter, randomField) differs automatically — but NOISE does
-   not, and no seed param can change that, because a noise field's seed
-   lives in its `opts`, read as a plain number that no reference of any
-   kind can stand in (a `{ fn: "param" }` reaches argument positions only).
-   Every noise-bearing primitive therefore exposes `variant`, an OFFSET
-   added to the noise sample position, and says so in its description.
-   `frequency` is the matching multiplier on that position.
+   not unless its own spec asks, and no exposed seed param can make it:
+   a noise field's seed lives in its `opts`, which admits a literal or the
+   tagged `{ "from": "node", "variant": N }` and nothing else (a
+   `{ fn: "param" }` reaches argument positions, and that one `variant`
+   slot). Every noise-bearing primitive therefore exposes `variant`, an
+   OFFSET added to the noise sample position — the same word one level out
+   and a different mechanism from the seed form's slot number — and says
+   so in its description. `frequency` is the matching multiplier on that
+   position.
 3. **An exposed param's default is a plain value, never a `Field`,** and
    every cook writes it inward — so a primitive's characteristic field
    lives on its inner node and the scalars that field reads back are what

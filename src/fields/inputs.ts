@@ -477,9 +477,12 @@ attachSpec(NODE_SEED, { fn: "nodeSeed" }, 1);
  * graph's default seed, and no form can avoid that without carrying the
  * default seed in the spec.
  *
- * The rest of this block documents the idiom that form replaces, because
- * 39 specs across the graph corpus still use it and a reader meeting one
- * needs to know what it computes.
+ * The rest of this block documents the idiom that form replaces. NO graph
+ * under `graphs/` writes it any more — commit 8faf95d converted all 39 —
+ * but it is still legal grammar, four labelled fixtures in
+ * `tests/foldCorpus.test.ts` pin the constant-fold against it, and a graph
+ * saved before that conversion or an expression written by hand may hold
+ * one, so a reader meeting one needs to know what it computes.
  *
  * It exists because a serialized field expression bakes its numbers, so a
  * saved noise carries a literal `opts.seed` and the graph's seed box

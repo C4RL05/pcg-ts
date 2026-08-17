@@ -446,40 +446,105 @@ what an author expects. A serialized field expression bakes its numbers,
 so a noise carries `opts.seed` as a LITERAL: moving the graph seed
 re-rolls every scatter, jitter and probabilistic filter and moves no
 noise at all. It is a property of the format, not a defect in any one
-graph. The fix has to enter through an ARGUMENT position, because
-`opts.seed` (like `frequency` and `offset`) is read as a plain number
-and cannot hold a spec — `opts.position` can, and folding the seed into
-the sample position decorrelates a noise exactly as changing its seed
-would:
+graph. That half is repaired inside `opts.seed` itself rather than here
+(next section) — so reach for this fn when an expression needs the
+node's seed as a NUMBER, and not when a noise needs to answer the seed
+box.
+
+Three properties follow from where the value comes from, and all three
+are easy to assume wrongly. It is a DECORRELATION SOURCE rather than an
+integer: it arrives in an f32 column, so seeds above 2^24 round to the
+nearest representable multiple and will not compare equal to the seed
+`Graph.describe()` reports. It is the NODE's seed, so two nodes in one
+graph get different values and renaming a node changes its value — the
+same rule every seeded node already lives under. And it is not in
+`Field.key`, which is fixed at construction while the seed arrives at
+evaluation; invalidation stays exact anyway, because the executor's memo
+key carries the node seed itself, so every node recooks when the graph
+seed moves whether or not its fields mention this one.
+
+#### Making a saved noise answer the seed box
+
+Write the seed as the tagged form. Besides an integer, `opts.seed` takes
+exactly one other shape:
 
 ```json
-{ "fn": "perlinNoise", "opts": { "frequency": 0.05, "position":
-  { "fn": "add", "args": [{ "fn": "position" },
-    { "fn": "vec", "args": [0, 0, 0] }] } } }
+{ "fn": "perlinNoise", "opts": { "frequency": 0.05,
+  "seed": { "from": "node", "variant": 0 } } }
 ```
 
-Each zero stands where a per-axis seed shift goes, and the next section
-derives it. Three literal zeros are not a placeholder for nothing,
-though: the shift the corpus uses evaluates to exactly this at each
-graph's own default seed, which is why folding it into a saved graph
-changes none of its output. Writing the shift carelessly is the failure
-worth naming — it gives a noise that re-rolls into a staircase. The
-value itself is
-a DECORRELATION SOURCE rather than an integer: it arrives in an f32
-column, so seeds above 2^24 round to the nearest representable multiple
-and will not compare equal to the seed `Graph.describe()` reports.
+which derives this noise's seed as `hashCombine(the cooking node's own
+seed, variant)`, the node seed being `deriveNodeSeed(graph seed, node
+id)` — the same number `randomField` hashes. So the seed box now moves
+the SURFACE and not merely the points standing on it.
+`graphs/basics-reseed-a-noise.json` is the worked example. Every part of
+the shape is load-bearing.
+
+**The whole derivation is u32 murmur with no float in it**, which is why
+it is bit-exact on CPU and GPU rather than budgeted the way a noise
+interior is. A seed has no tolerance: a one-ULP disagreement in one is
+not a rounding error in the output, it is `hashCombine` avalanching to
+an unrelated number and the two paths cooking different noises. That is
+also why the position is the one noise option admitting a spec and the
+seed admits no arbitrary expression — every field column is f32, so a
+seed read through one would arrive already rounded to 24 bits.
+
+**`variant` picks WHICH draw off the node**, standing exactly where the
+old literal seed stood. A node has ONE seed, so two noises on it are the
+same field twice unless their variants differ; give them 0 and 1 and
+they are two independent draws, which is how a single node yields
+several. It defaults to 0, must be a non-negative integer, and is capped
+at 2^24, where an f32 stops holding every integer — the GPU may read it
+back through a uniform slot, so a variant is a slot number, not a seed.
+
+**It is also the one slot inside `opts` a knob can reach**, as an inline
+`{"fn": "param", "name": "variant", "value": 0}` carrying a whole
+number — the only spec the slot admits. A panel row over it re-rolls one
+noise while the rest hold still, and it is an INTEGER knob, so it steps
+by 1 unless a panel says otherwise. What holds it to whole numbers is
+the value and not the row: `variant` meets the same non-negative-integer
+check wherever it is written, inline `param` and bare literal alike, so
+a fractional value fails with the variant's own error rather than being
+rounded to a neighbouring draw. A variant NAMES a draw rather than
+scaling one, and nothing between two of them is a third.
+
+**Adopting the form re-rolls the noise.** Frequency, amplitude, position
+and normalization are untouched, but the field becomes a different draw
+from the same family: no function of (graph seed, node id, variant) can
+be the identity at a seed nobody named. It is an edit made once and
+deliberately, never a silent upgrade of a saved graph.
+
+**A value that has to agree across a seam keeps its literal.** A noise
+seeded from its node follows anything that moves that node's seed, so
+under a partitioned `World` it is a per-cell field wherever the bind is
+not seed-invariant. `graphs/examples-streamed-terrain.json` pins its
+density noise to a literal for that reason and says so in its
+description.
 
 #### The seed-shift idiom
 
-Every noise-bearing graph in `graphs/` spells the offset the
-same way, and the shape is not arbitrary. Per axis:
+Background rather than instruction, and the distinction matters: NO
+graph under `graphs/` writes this any more. Commit `8faf95d` converted
+all 39 folds, across 25 files, to the tagged form above, and a new graph
+should use that form. The idiom is still legal grammar, four labelled
+fixtures in `tests/foldCorpus.test.ts` pin the constant-fold against it,
+and a graph saved before that conversion or an expression written by
+hand may hold one — so here is what it computes.
+
+Before `opts.seed` took a tagged form it was read as a plain number and
+could hold nothing else, so the only way in was an ARGUMENT position.
+`opts.position` is one, and shifting the sample position decorrelates a
+noise exactly as changing its seed would. Per axis:
 
 ```
 offset = A * (fract(nodeSeed * 2^-32 * K) - W0)
 ```
 
-which in the grammar is (one axis, `K = 1021`, `W0` for this graph and
-node, `A = 1600`):
+added outside whatever position the noise already sampled — where the
+noise sampled a computed position, this became the first argument of
+that `add` — with the shared `nodeSeed * 2^-32` written out twice
+because JSON cannot name a subexpression (one axis, `K = 1021`,
+`A = 1600`):
 
 ```json
 { "fn": "mul", "args": [{ "fn": "sub", "args": [{ "fn": "sub", "args": [
@@ -490,96 +555,54 @@ node, `A = 1600`):
   0.245422363] }, 1600] }
 ```
 
-It always wraps the OUTSIDE of `opts.position`: where the noise already
-sampled a computed position, that expression becomes the first argument
-of the `add`.
+Four constants, each answering a hazard the tagged form simply does not
+have. `2^-32` is exact — a power of two only moves the exponent — so the
+fold reads the seed's HIGH bits rather than the low ones an f32 column
+has already rounded away: over 20 000 graph seeds the obvious
+`fract(S / 1024)` yields 281 distinct values where this yields 25 107.
+Only `add`/`sub`/`mul`/`floor` appear, because those four are bit-exact
+across CPU and GPU while `div` sits within a range-ULP and `sin` far
+worse, and a one-ULP disagreement INSIDE a `floor` moves the offset by a
+whole unit rather than a ULP — which rules out both the textbook modulo
+`x - K * floor(x / K)` and the classic `fract(sin(x) * K)` hash.
+`A ≈ 32 / opts.frequency` puts the shift about 32 noise cells away, far
+enough to decorrelate and near enough that an f32 still resolves a
+lattice cell there, which is why no fixed offset scale copies between
+graphs: the constant that is comfortable at frequency 0.045 is a
+staircase at frequency 14. And `K` differs per noise on one node —
+`[1021, 3067, 8191]` for x/y/z, rotated per slot — because a node has
+one seed, so several folds of it can only be made to LOOK independent.
+Measured over 40 000 graph seeds those three give worst pairwise `|r|`
+0.003, where small multipliers like `fract(u)` and `fract(3u)` lie on
+straight lines at `|r|` 0.339.
 
-**`2^-32` first, and only `add`/`sub`/`mul`/`floor`.** Multiplying by
-`2.3283064365386963e-10` is exact — a power of two only moves the
-exponent — so `u = nodeSeed * 2^-32` keeps every bit the f32 column
-holds and the fold reads the seed's HIGH bits. That matters because the
-low bits are already gone: over 20 000 graph seeds, 99.6% of node seeds
-exceed 2^24, and the obvious `fract(S / 1024)` yields only 281 distinct
-values where `fract(S * 2^-32 * 1021)` yields 25 107.
+`W0` is the fourth, and it is why the idiom was replaced rather than
+merely joined. It is the fold's own value at one graph's default seed —
+`W0 = fround(t - floor(t))`, `t = fround(fround(fround(S) * 2**-32) * K)`
+— written to **nine** significant figures, since eight fails to
+determine an f32 about one case in 160. Subtracting it made the offset
+exactly `+0` there, so folding the idiom into a saved graph left its
+output bit-identical and added only an effect to the seed box. But it is
+correct for exactly ONE (graph seed, node id) pair: a rename, a re-baked
+default seed, or a copy into another graph leaves it stale, and a stale
+`W0` costs seed-neutrality silently, with no test able to say so. That
+was not theoretical — of the 117 `W0` literals the corpus carried, SIX
+were wrong, and two graphs shared a triple correct for neither. A
+constant a human derives per site is a constant that is wrong somewhere.
 
-`div` is deliberately absent. The textbook modulo `x - K * floor(x / K)`
-puts a `div` inside a `floor`, and `div` is only within one range-ULP
-across CPU and GPU while those four ops are bit-exact — inside a
-`floor`, a one-ULP disagreement is not a one-ULP output difference, it
-flips the floor and moves the offset by a whole unit. `fract(sin(x)*K)`,
-the classic hash, is worse for the same reason: `sin` is budgeted at
-several range-ULP and the `fract` amplifies that to O(1).
+Two smaller costs travelled with it. The offset is constant over the
+domain and the grammar has no way to say so, so every op in it
+materialized a full-length column: `examples-gpu-fields`, ten noise
+specs over ~1.6 M attribute elements, cooked about twice as long on the
+CPU path (0.61 s to 1.22 s), while on the GPU it was a handful of extra
+ALU ops inside a kernel already running. And folding `nodeSeed` inside a
+`forEach` body moved the default output whatever `W0` said, because
+`forEach` seeds its body as
+`hashCombine(nodeSeed, hashString("forEach"), itemKey)` with a
+content-derived `itemKey`, so one baked constant could zero at most one
+iteration.
 
-**`A` is tied to the noise's own frequency**, `A ≈ 32 / opts.frequency`
-rounded tidy (`opts.frequency` defaults to 1 when absent). Steps of f32
-resolution per noise period at the shifted sample magnitude work out to
-about `2^23 / k` when `A = k / f`, so the frequency cancels and the
-budget is the same at every frequency: `k = 8` is the decorrelation
-floor (below it the shift is often under one cell), `k = 128` is where
-steps-per-period falls to ~2^16. `k = 32` sits two octaves inside both.
-This is why a single fixed offset scale cannot be copied between
-graphs — the same constant that is comfortable at frequency 0.045 is a
-staircase at frequency 14.
-
-**`K` differs per noise on one node.** There is only one `nodeSeed` per
-node, so two folds of it can never be truly independent; what is
-available is a joint distribution indistinguishable from one. Measured
-over 40 000 graph seeds, `K ∈ {1021, 3067, 8191}` gives worst pairwise
-`|r|` 0.003 and a 12x12 chi-square of 160 against a 143-d.f. critical
-value of 172 — at the noise floor. Small integer multipliers
-(`fract(u)`, `fract(3u)`) are the trap: they lie on straight lines,
-`|r|` 0.339. Slot 0 uses `[1021, 3067, 8191]` for x/y/z, slot 1 rotates
-to `[3067, 8191, 1021]`, slot 2 to `[8191, 1021, 3067]`. Specs that are
-byte-identical today share one slot — giving them separate offsets would
-change what the graph means, not how it answers the seed.
-
-**`W0` is what makes this free.** It is the fold's own value at the
-graph's default seed:
-
-```
-nodeSeed(G, id)           = hashCombine(G, hashString(id))
-inner graph seed          = hashCombine(nodeSeed(G, wrapperId), hashString("subgraph"))
-W0 = fround(t - floor(t)),  t = fround(fround(fround(S) * 2**-32) * K)
-```
-
-written to **nine** significant figures, which uniquely determines an
-f32 (eight is not enough — it fails about one case in 160). Subtracting
-it makes the offset exactly `+0` at the default seed, so folding this
-into a saved graph leaves its output bit-identical and adds only an
-effect to the seed box. Re-baking the graph's seed later leaves `W0`
-stale, and a stale `W0` costs exactly one thing: no seed is the identity
-any more. The offset stays inside `[-A, A]` and the noise stays
-well-conditioned, so the constant is an optimization, not an invariant.
-
-**It is not free on the CPU.** The offset is constant over the domain,
-but the grammar has no way to say so: every op in it materializes a
-full-length column, so one folded noise costs roughly a dozen extra
-passes over the domain, and one carrying three axes on a large point
-count is measurable. Across the corpus it disappears into the noise —
-the rig cooks within measurement error of its unfolded self — but
-`examples-gpu-fields`, which is ten noise specs over ~1.6 M attribute
-elements, cooks about twice as long on the CPU path (0.61 s to 1.22 s).
-Roughly a third of that is the offset arithmetic and the rest is the
-`add`/`vec` that carries it into the sample position. On the GPU path it
-is a handful of extra ALU ops inside a kernel that was already running,
-which is to say free. Budget for it on a CPU-cooked graph with many
-noises over many points; ignore it everywhere else.
-
-**Never fold `nodeSeed` inside a `forEach` body** if the default output
-must not move. `forEach` seeds its body as
-`hashCombine(nodeSeed, hashString("forEach"), itemKey)` and `itemKey` is
-content-derived, so one baked `W0` could zero at most one iteration.
-Bodies that need per-item variation already have `randomField`.
-
-Two more properties follow from where the seed comes from. It is the
-NODE's seed, so two nodes in one graph get different values and renaming
-a node changes its value — the same rule every seeded node already
-lives under. And it is not in `Field.key`, which is fixed at
-construction while the seed arrives at evaluation; invalidation stays
-exact anyway, because the executor's memo key carries the node seed
-itself, so every node recooks when the graph seed moves whether or not
-its fields mention this one. `graphs/basics-reseed-a-noise.json`
-is the worked example.
+#### `param`: a literal something outside can reach
 
 `param` is the only fn with no TypeScript constructor, which is not an
 omission: in TypeScript a shaping number is already a variable, and the
@@ -678,8 +701,12 @@ instead of re-specializing per slider tick.
 **Only argument positions can hold one:** `args` entries and a noise
 `opts.position`. Structure cannot — `octaves`, `base`, `component`'s
 `index`, `attribute`'s `name`, `ramp`'s `stops` — and neither can
-`opts.frequency`, `opts.seed` or `opts.offset`, which are read as plain
-numbers rather than as fields. A tunable frequency has an exact
+`opts.frequency` or `opts.offset`, which are read as plain numbers
+rather than as fields. `opts.seed` is the one partial exception, and it
+is not a field either: its tagged form's `variant` takes an inline
+`param` carrying an integer ([above](#making-a-saved-noise-answer-the-seed-box)),
+substituted like any other and never resolved per element. A tunable
+frequency has an exact
 equivalent, and it is the one the shipped primitives already write: leave
 `opts.frequency` at 1 and scale the sample position instead.
 
@@ -883,10 +910,13 @@ is a pure function of its own `seed` option and the sample position —
 the evaluation-context seed does not affect it, so identical specs give
 identical values on any domain.
 
-Common `opts`: `seed?` (integer, default 0), `frequency?` (position
-scale, default 1), `offset?` (`[x, y, z]` added after scaling),
-`position?` (a nested spec, tuple 3), `normalized?` (boolean, default
-false).
+Common `opts`: `seed?` (an integer, default 0, or the tagged
+`{ "from": "node", "variant": N }` that derives it from the cooking
+node's seed — see
+[Making a saved noise answer the seed box](#making-a-saved-noise-answer-the-seed-box)),
+`frequency?` (position scale, default 1), `offset?` (`[x, y, z]` added
+after scaling), `position?` (a nested spec, tuple 3), `normalized?`
+(boolean, default false).
 
 | fn | Extra opts | Raw output range |
 | --- | --- | --- |

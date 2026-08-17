@@ -1,6 +1,6 @@
 ---
 name: determinism
-description: "Doctrine for keeping pcg-ts output reproducible. Use when adding randomness or noise to a graph, when choosing a seed or a per-instance variation knob, when output changes between runs or between machines, when writing a World level's per-cell bind, when content must look the same from either side of a cell boundary or a halo, when adding or sizing a neighbourhood, prune or topology op, when touching subgraph or GPU code paths, or before claiming any change is deterministic. Covers the seed chain and its one exception, what a seed re-rolls and what it provably cannot, why noise varies through position instead, world-anchoring and identity-keyed randomness, the hop count that decides whether an op can be partitioned at all, the GPU approximation boundary, and how to verify reproducibility rather than assume it."
+description: "Doctrine for keeping pcg-ts output reproducible. Use when adding randomness or noise to a graph, when choosing a seed or a per-instance variation knob, when output changes between runs or between machines, when writing a World level's per-cell bind, when content must look the same from either side of a cell boundary or a halo, when adding or sizing a neighbourhood, prune or topology op, when touching subgraph or GPU code paths, or before claiming any change is deterministic. Covers the seed chain and its one exception, what a seed re-rolls and what it provably cannot, the tagged `opts.seed` that makes a saved noise answer the seed box and when a noise must keep a literal one instead, world-anchoring and identity-keyed randomness, the hop count that decides whether an op can be partitioned at all, the GPU approximation boundary, and how to verify reproducibility rather than assume it."
 ---
 
 # Keeping pcg-ts output reproducible
@@ -61,37 +61,67 @@ means the fn that reads it).
 **It does not touch a noise that does not ask.** A noise field carries its own
 seed *inside its spec*, so `valueNoise` / `perlinNoise` / `simplexNoise` /
 `worleyNoise` / `fbm` — the grammar's actual names, which is what a `fn` field
-must say — are unaffected by a node-level seed unless their `opts.position`
-reads it. Measured, not assumed: on a fixed
+must say — are unaffected by a node-level seed unless the SPEC asks, either
+through an `opts.seed` written as the tagged `{ "from": "node", "variant": N }`
+or through an `opts.position` that reads the node seed. Measured, not
+assumed: on a fixed
 16-point grid, changing `setAttribute.seed` from 0 to 99 moved a
-`randomField` attribute (mean 0.5003 to 0.5584) and left a `perlinNoise`
-attribute bit-identical (min −0.19169002771377563, max 0.20500269532203674,
-identical in both runs).
+`randomField` attribute (mean 0.5003 to 0.5584) and left a literal-seeded
+`perlinNoise` attribute bit-identical (min −0.19169002771377563, max
+0.20500269532203674, identical in both runs).
 
-So there are exactly three ways to vary noise, and two of them are the same
-move:
+So there are exactly three ways to vary noise, and the first is the one a
+saved graph almost always wants:
 
-1. Set `opts.seed` inside the field spec — reachable when you author the spec.
-2. **Move the position it samples** — the only route from outside, because an
-   exposed param cannot reach inside a field spec at all.
-3. Move the position it samples **by the node seed**, with `{ "fn": "nodeSeed" }`
-   folded into `opts.position`. This is (2) with the offset supplied from
-   inside the spec, and it is what makes a SAVED noise answer to the graph's
-   seed box. Fold it BOUNDED — per axis
-   `A * (fract(nodeSeed * 2^-32 * K) - W0)`, built from `add`/`sub`/`mul`/`floor`
-   only, with `A ≈ 32 / opts.frequency`, `K ∈ {1021, 3067, 8191}` one per noise
-   on a node, and `W0` the fold's value at that graph's default seed so the
-   offset is exactly zero there and the saved output does not move. The
-   unbounded `mul(nodeSeed, 1e-6)` is the trap: fine at frequency 0.045,
-   ~73 f32 steps per noise period at frequency 14. Not inside a `forEach`
-   body, whose seed varies per item. See `docs/authoring.md` "The seed-shift
-   idiom" and `graphs/basics-reseed-a-noise.json`, and note that
-   every noise-bearing corpus graph now carries this fold.
+1. **Seed it from the cooking node.** Write `opts.seed` as the tagged
+   `{ "from": "node", "variant": N }`, resolved as `hashCombine(ctx.seed,
+   variant)` in u32 integer math — no float anywhere in it, so it is
+   bit-exact on CPU and GPU rather than budgeted, which a seed has to be
+   since a one-ULP disagreement there is not a rounding error but an
+   unrelated field. This is what makes a SAVED noise answer the graph's seed
+   box, and because it reads the EVALUATION context's seed, a node-level
+   `seed` param (`hashCombine(nodeSeed, seed)`) moves it too. `variant`
+   picks WHICH draw off that node — a node has one seed, so two noises on it
+   are one field unless their variants differ — as an integer in 0..2^24,
+   and it is the one slot inside `opts` a knob can reach, through an inline
+   `{ "fn": "param", "name": "variant" }` carrying a whole number. Adopting
+   the form RE-ROLLS the noise: no function of (graph seed, node id,
+   variant) is the identity at a seed nobody named. Make that edit once and
+   deliberately.
+2. **Set `opts.seed` to a LITERAL** — reachable when you author the spec,
+   and deaf to every seed above it, which is the right answer for anything
+   that must agree across a seam: a node-seeded noise follows whatever moves
+   that node's seed, so under a partitioned `World` it is a per-cell field
+   wherever the bind is not seed-invariant (see Anchoring, below).
+3. **Move the position it samples** — the only route from OUTSIDE a spec,
+   because an exposed param cannot reach inside one.
 
-That is why noise-bearing primitives expose `frequency` and `variant` rather
-than a seed: `variant` is added to the sample position and walks to an
-unrelated part of the same infinite field, which is what a per-instance seed
-would have done. Verified end to end: the same graph through
+Two hazards survive the change of spelling. Never displace a position by the
+unbounded `mul(nodeSeed, 1e-6)`: fine at frequency 0.045, ~73 f32 steps per
+noise period at frequency 14. And inside a `forEach` body both
+`{ "from": "node" }` and `{ "fn": "nodeSeed" }` vary PER ITEM, since the body
+cooks at `hashCombine(nodeSeed, hashString("forEach"), itemKey)` — per-group
+variation where that is wanted, and a noise no two groups can agree about
+where it is not.
+
+The hand-folded seed-shift idiom — a bounded per-axis
+`A * (fract(nodeSeed * 2^-32 * K) - W0)` in `opts.position` — is background
+now and not instruction: NO graph under `graphs/` carries one. Commit
+`8faf95d` converted all 39 folds across 25 files, because `W0` is correct for
+exactly one (graph seed, node id) pair, goes stale on a rename with no test
+able to say so, and six of the corpus' 117 literals were already wrong. It is
+still legal grammar and a graph saved earlier may hold one; do not write a
+new one. See `docs/authoring.md` "Making a saved noise answer the seed box"
+(and "The seed-shift idiom" for what such a graph holds), and
+`graphs/basics-reseed-a-noise.json`, whose single noise now carries
+`"seed": { "from": "node", "variant": 5 }`.
+
+Route 3 is why noise-bearing primitives expose `frequency` and `variant` rather
+than a seed: a primitive's `variant` is added to the sample position and walks
+to an unrelated part of the same infinite field, which is what a per-instance
+seed would have done. Same word as the seed form's slot number, one level out
+and a different mechanism — no shipped primitive uses the tagged form today.
+Verified end to end: the same graph through
 `filter/mask-by-noise` keeps 269 points at `variant: 0` and 289 at
 `variant: 100`, with everything else unchanged. Any two different values are
 unrelated; the same value always reproduces.
