@@ -54,7 +54,7 @@ export function registerWritePrimitives(): void {
   definePrimitive("write/density-from-noise", {
     title: "Write the standard density attribute from a noise field",
     description:
-      "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, and only an argument position can hold a reference. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
+      "Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and this primitive exposes no seed that could change it — its field writes no `opts.seed`, and that slot admits only an integer or the tagged `{\"from\": \"node\", \"variant\": N}` form whose `variant` may be an inline `param`, never an arbitrary expression, because a field column is f32 and a seed rounded through one avalanches to an unrelated noise. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.",
     tags: ["noise", "density"],
     nodes: [
       {
@@ -86,7 +86,7 @@ export function registerWritePrimitives(): void {
         targets: [],
         default: 0,
         description:
-          "Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this.",
+          "Offset added to the noise sample position. This is the per-instance re-roll this primitive offers: any two different values give unrelated patterns, and the same value always reproduces.",
         acceptsField: true,
       },
     ],

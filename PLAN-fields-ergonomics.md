@@ -148,27 +148,60 @@ wording (numeric and vector params only — 83 of 180):
 So C2 is **24 params, not 160.** Spot-checking 12 of them against the
 node sources: 5 easy (already read inside the per-element loop), 5 medium
 (read once into a hoisted scalar that must be dissolved — e.g.
-`attributeRemap.inMin/inMax`, `filterByBounds.boundsMin/Max`), 2 hard
-(`connectPoints.radius` and `pointNeighborhood.radius` both size *and
-cache-key* the uniform grid via `adjacencyFor()`).
+`attributeRemap.inMin/inMax`, `filterByBounds.boundsMin/Max`), and 2 the
+audit called hard for a reason that did not survive reading the source.
 
-**The stated rule has two known counterexamples and needs amending:**
+**The stated rule was not merely unwritten — it was wrong.** The rule that
+shipped is in `docs/authoring.md`, derived clause by clause from what the
+registry actually does. Two corrections to what this section said before
+that derivation:
 
-1. Eight `u32` **seed** params allocate nothing and are not structural,
-   yet must stay eager: they are hash-combined into the node seed before
-   any element exists.
-2. The real boundary is not allocation. `selfPrune.minDistance` is already
-   field-capable and *does* decide how many points survive. What makes a
-   fielded radius expensive is that the partitioned cook's halo width
-   becomes a global bound the author has to supply.
+1. *"`connectPoints.radius` and `pointNeighborhood.radius` both size and
+   cache-key the uniform grid via `adjacencyFor()`."* **False.** Cell size
+   is deliberately EXCLUDED from the adjacency cache key, because it only
+   changes how many cells a query touches and never the answer
+   (`src/spatial/adjacency.ts:110-113`). `selfPrune` resolves its field to
+   a column FIRST and derives cell size from the largest resolved claim
+   (`src/nodes/filtering.ts:1223-1237`), so a mismatch is slow, never
+   wrong.
+2. *"What makes a fielded radius expensive is that the partitioned cook's
+   halo width becomes a global bound the author has to supply."* **Half
+   true.** The author-supplied halo is real and documented on the param
+   (`src/nodes/filtering.ts:1122`), but nothing in `src/runtime/` reads a
+   node's radius to size a halo — it is author code inside `bind`.
 
-Part of the rule is already executable: `src/graph/params.ts:302-331`
-hard-refuses `acceptsField` on list and items types.
+The real boundary is **relational symmetry**, and it splits the two params
+the audit had lumped together: a per-point radius would make "A is near B"
+disagree with "B is near A" (`src/nodes/topology.ts:101`), so
+`connectPoints.radius` genuinely cannot be a field, while a per-POINT
+query carries no such obligation — which is why `selfPrune.minDistance`
+already is one, symmetrising with max(rA, rB). That leaves
+**`pointNeighborhood.radius` as an unexplained gap**: per-point,
+grid-local, symmetry-free, and eager for no reason stated anywhere in the
+source.
+
+The one counterexample that did hold: eight `u32` **seed** params allocate
+nothing and are not structural, yet must stay eager, being hash-combined
+into the node seed before any element exists. Part of the rule is already
+executable — `src/graph/params.ts:302-331` hard-refuses `acceptsField` on
+list and items types — and three clauses of it are now pinned by
+`src/nodes/fieldCapability.test.ts`.
 
 The sharpest symptom is still documented in the corpus.
 `graphs/basics-field-params.json` explains that `frequency` is multiplied
 into the sample position rather than passed as `opts.frequency`, "because
-the noise options are read as plain numbers and cannot hold a spec."
+that option is read as a plain number and cannot hold a spec."
+
+That quote is scoped to ONE option, and the 2026-08-17 draft of this
+section paraphrased it as "the noise options" — a blanket claim the graph
+never made, and one that is now false. `opts.position` takes a full field
+spec, and `opts.seed` takes the tagged `{"from": "node", "variant": N}`
+form whose `variant` accepts an inline `param`. `frequency` and `offset`
+are the ones that genuinely take plain numbers, and `frequency`'s reason
+is EQUIVALENCE rather than impossibility: scaling the position computes
+the same point, so a field-valued frequency already exists
+(`src/fields/fieldJson.ts:1658-1668`). The blanket version of the claim
+had spread to six places in the library and is corrected there.
 
 ### 2.4 There is no field wire — UNCHANGED
 

@@ -362,12 +362,101 @@ on the resolution path is refused by `deserializeGraph`.
 
 ## The field-expression grammar
 
+A field is a VALUE, not a text format. In TypeScript it is what a
+combinator returns — `mul(perlinNoise({ frequency: 0.05 }), 3)` is a
+`Field`, composed out of other fields long before any geometry exists,
+and the README's [Fields](../README.md#fields) section is that side of
+it. What follows is the same object graph WRITTEN DOWN, one JSON object
+per combinator, so that a saved graph can carry one. The expression
+above serializes to
+
+```json
+{ "fn": "mul", "args": [
+  { "fn": "perlinNoise", "opts": { "frequency": 0.05 } },
+  3
+] }
+```
+
+— same fns, same arguments, same column on every element. The one place
+the library tells the two spellings apart is GPU eligibility, where an
+authored (JSON) spec is accepted by default and a derived (combinator)
+one needs `acceptDerivedSpecs`
+([below](#eligibility--what-runs-on-the-gpu)).
+
 Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 `acceptsField: true` in the schemas) accept a declarative spec instead
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 256 levels). `listFieldFns()` returns all 50 names at runtime.
+
+### Which params accept one
+
+20 of the standard library's 180 params do, and one rule separates them
+from the other 160: **a param can be a field exactly when its value is
+read PER ELEMENT.** Everything settled before the elements are walked
+cannot be one, and there are five ways to be settled early.
+
+**The column is f32.** All 20 are `f32` (13) or `vec3` (7). No `i32`,
+`u32`, `enum`, `bool`, `string` or list param is ever field-capable,
+because a field resolves per element into a column and only f32 and its
+tuples read one. Part of that is executable rather than editorial: a
+schema declaring `acceptsField` on `items`, `numberList` or
+`stringList` is refused at node registration, naming the type. It is
+also the reason a noise's `opts.seed` admits no arbitrary expression
+(below) — a seed read through an f32 column arrives rounded to 24 bits,
+and one ULP in a seed is not a rounding error but `hashCombine`
+avalanching to an unrelated u32.
+
+**There must already be elements to evaluate against.** The 9 source
+nodes — `meshPrimitive`, `pointGrid`, `pointLine`,
+`pointScatterInBounds`, `pointScatterInWorld`, `valueConstant` and the
+rest — hold 16 `f32`/`vec3` params between them and not one is
+field-capable, because a source builds its elements FROM those params.
+There is no domain to resolve against yet.
+
+**Anything read before the walk stays eager.** All 8 `seed` params: a
+seed is hash-combined into the node's derived seed at cook start, when
+there is no element in hand.
+
+**Nothing that decides how many elements come OUT.**
+`pathResample.spacing`, `splineSample.spacing`, `volumeSample.cellSize`
+and its bounds size their own output.
+
+**Nothing that defines a SYMMETRIC RELATION.** `connectPoints.radius`
+is the case, and its schema states it: a per-point radius would make "A
+is near B" disagree with "B is near A", and an edge would then depend on
+which endpoint asked. A per-POINT query carries no such obligation,
+which is why `selfPrune.minDistance` IS field-capable — it symmetrises
+with the larger of the two radii.
+
+Two reasons a reader supplies for themselves, neither of them real.
+**Grid cell size is not one.** `selfPrune` resolves the field to a
+column FIRST and derives its cell size from the largest resolved claim,
+and `adjacencyFor` deliberately excludes cell size from its cache key,
+because it decides only how many cells a query touches and never the
+answer: a mismatched cell size is slow, never wrong. **And deciding how
+many elements SURVIVE is not the clause above.**
+`selfPrune.minDistance` decides survival and is field-capable; that
+clause is about ALLOCATION — how much output there is to make — and not
+about how much of the input lives.
+
+**One known inconsistency, stated rather than smoothed over.**
+`pointNeighborhood.radius` is per-point, grid-local and symmetry-free.
+The rule says it could be a field; it is not one, and nothing in the
+source explains why. Read that as a gap in the library rather than as a
+sixth clause.
+
+One caveat travels with every fielded radius. Across a partitioned
+cook's seams the halo has to be the field's GLOBAL MAXIMUM, and the
+author is the one who supplies it: nothing in `src/runtime/` reads a
+node's radius param to size a halo, so the widening is author code
+inside `bind`. Underestimating it does not throw — it keeps pairs
+closer than the field asked for, at the seams only.
+`selfPrune.minDistance`'s schema spells out how to bound a field rather
+than measure it, and [How wide a halo, and when no halo works at
+all](#how-wide-a-halo-and-when-no-halo-works-at-all) is the general
+version.
 
 ### Inputs
 
@@ -1804,8 +1893,11 @@ an edge is in the tree iff no lighter path connects its ends — so it can
 never be made partition-safe. The lune test is local, and that is the
 whole reason it ships. See "Content that must NOT vary per cell".)
 
-`radius` is a plain number and, alone among the distance params in the
-library, deliberately **not** field-capable. A per-point radius would let
+`radius` is a plain number and deliberately **not** field-capable — the
+one param in the library held back for being a SYMMETRIC RELATION rather
+than for anything about fields ([Which params accept
+one](#which-params-accept-one) has the whole rule, and the other
+distance params it excludes). A per-point radius would let
 "A is near B" and "B is near A" disagree, and an edge would then depend on
 which endpoint asked. The test is strict — `d < radius`, so a pair at
 exactly `radius` is not connected — which is what makes a partitioned

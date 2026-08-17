@@ -84,13 +84,17 @@ export function ramp(arg: Arg, stops: readonly (readonly [number, number])[]): S
  * params.
  *
  * This is the whole reason noise-bearing primitives have knobs at all. A
- * noise `frequency`, `seed` or `offset` lives in `opts`, read as a plain
- * number rather than as a field, so no reference of any kind can stand
- * there and none of the three is directly tunable. Scaling and offsetting
- * the position the noise samples is the reachable equivalent: multiplying
- * by the frequency knob is a frequency control, and adding the variant
- * knob walks to an unrelated part of the same infinite field, which is
- * what a per-instance seed would have done.
+ * noise `frequency` and `offset` live in `opts` as plain numbers, and no
+ * reference of any kind can stand there. A `seed` is not like them: it
+ * takes an integer or the tagged `{ from: "node", variant: N }` form,
+ * whose `variant` may be an inline `param` — but a seed is fixed when the
+ * field is BUILT, so it picks a whole draw and can never vary per
+ * element. Scaling and offsetting the position the noise samples is the
+ * reachable equivalent, and for `frequency` an exact one: the point
+ * sampled is `p * frequency + offset`, so multiplying by the frequency
+ * knob computes the same point, and adding the variant knob walks to an
+ * unrelated part of the same infinite field, which is what a per-instance
+ * seed would have done.
  *
  * Both values arrive as {@link param} references. They used to arrive as
  * ATTRIBUTES, because an exposed param fanned out into an inner param slot

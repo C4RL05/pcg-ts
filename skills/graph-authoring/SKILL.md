@@ -136,12 +136,18 @@ Two constraints that decide the design for you:
   body reads it as `{ "fn": "param", "name": "amplitude" }`, and `targets`
   is optional — a param that writes nowhere and is only read by a spec is
   the normal shape. This is what the shipped vocabulary uses.
-- What still cannot be reached is a noise's `seed`, `frequency` or
-  `offset`. Those live in `opts`, which the parser reads as plain numbers;
-  only ARGUMENT positions hold a reference. `opts.position` is an argument
-  position, so a tunable frequency multiplies the sample position instead:
-  `position: { "fn": "mul", "args": [{ "fn": "position" }, { "fn":
-  "param", "name": "scale" }] }`, leaving `frequency` at its base.
+- What still cannot be reached is a noise's `frequency` or `offset`. Those
+  live in `opts` as plain numbers; only ARGUMENT positions hold a reference.
+  `opts.position` is an argument position, so a tunable frequency multiplies
+  the sample position instead: `position: { "fn": "mul", "args": [{ "fn":
+  "position" }, { "fn": "param", "name": "scale" }] }`, leaving `frequency`
+  at its base — the same sample point, exactly. `opts.seed` is the
+  half-reachable one: an integer, or `{ "from": "node", "variant": N }`
+  whose `variant` may be an inline `{ "fn": "param", ... }` and so binds by
+  name. Nothing else stands there — a field column is f32, so a seed read
+  through one rounds to 24 bits and a single ULP avalanches to an unrelated
+  noise — and a seed is fixed when the field is BUILT, so that param picks a
+  draw rather than varying per element.
 
 So keep the noise on an inner node and expose the scalars its spec reads —
 typically a scale on the sample position and a `variant` added to it. See

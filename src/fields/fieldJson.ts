@@ -270,10 +270,11 @@ const BROADCAST =
 /** The four noise options every noise fn shares, said once. */
 const NOISE_OPTS_DOC =
   "Shared options: `seed` (an integer, or {\"from\": \"node\", \"variant\": N} so the graph's seed " +
-  "box re-rolls it), `frequency` and `offset` (the point sampled is `p * frequency + offset`, so a " +
-  "SMALLER frequency means larger features), `position` (replaces `position()` as the point sampled " +
-  "— the one option that takes a field expression, and how a per-element frequency is written), and " +
-  "`normalized` (maps the range below affinely onto [0, 1]).";
+  "box re-rolls it, where `variant` takes an integer or an inline {\"fn\": \"param\"} and no other " +
+  "expression), `frequency` and `offset` (plain numbers; the point sampled is `p * frequency + " +
+  "offset`, so a SMALLER frequency means larger features), `position` (replaces `position()` as the " +
+  "point sampled — the only option that takes a FULL field expression, and how a per-element " +
+  "frequency is written), and `normalized` (a boolean; maps the range below affinely onto [0, 1]).";
 
 /** The `normalized: true` range entry, identical for every noise. */
 const NORMALIZED_RANGE: RangeDoc = { min: 0, max: 1, note: "opts.normalized: true" };

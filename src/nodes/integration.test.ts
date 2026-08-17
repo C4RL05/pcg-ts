@@ -110,9 +110,11 @@ describe("whole-library determinism", () => {
  * The seed box and a frozen noise. A serialized field expression bakes
  * its numbers, so `opts.seed` is a LITERAL and moving the graph's seed
  * re-rolls every scatter and jitter while leaving the noise exactly
- * where it was. `opts.seed` is read as a plain number and cannot hold a
- * spec; `opts.position` is an ordinary argument position and can — so
- * `{"fn":"nodeSeed"}` folded into the sample position is what closes it.
+ * where it was. `opts.seed` holds an integer or the tagged
+ * `{"from":"node"}` form and no other spec; `opts.position` is an
+ * ordinary argument position and holds any — so `{"fn":"nodeSeed"}`
+ * folded into the sample position is what closes it for a noise still
+ * carrying a literal.
  *
  * Both halves are cooked here, because the gap is only visible against
  * its control: the same graph written without the fold has to stay

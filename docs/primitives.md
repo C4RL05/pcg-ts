@@ -321,7 +321,7 @@ Run it: `pcg run filter/mask-by-noise`
 
 **Thin a point cloud by a noise density**
 
-Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, so no reference of any kind can stand there and no knob can move it — two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.
+Writes a normalized noise field into the standard `density` attribute and keeps each point with a probability equal to its density, so dense regions stay full and sparse ones fade out. The result is SOFT-EDGED: individual points thin out gradually, with no boundary. For hard-edged regions with a visible coastline, use `filter/mask-by-noise` instead. VARIATION: which points survive varies per instance (the draw is context-seeded), but the PATTERN does not — this field writes no `opts.seed` at all, and that slot is closed to expressions anyway: it takes an integer, or the tagged `{"from": "node", "variant": N}` form whose `variant` may be an inline `param`, and nothing else, because a field column is f32 and a seed rounded through one avalanches to an unrelated noise — two instances thin the same blobs unless their `variant` differs. Writes `density`; reads `P`.
 
 **Content hash:** `a94d6d5d2f3d9ad4`
 
@@ -788,7 +788,7 @@ Run it: `pcg run write/curve-frame`
 
 **Write the standard density attribute from a noise field**
 
-Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and no seed can change that — a noise field's seed lives in its `opts`, read as a plain number rather than as an argument position, and only an argument position can hold a reference. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.
+Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the exact input `filterByDensity` and the density-aware samplers expect, separated from applying it so one pattern can drive a thin, a colour and a scale. VARIATION: noise does not vary per instance. Two instances of this primitive with the same params write the IDENTICAL pattern, and this primitive exposes no seed that could change it — its field writes no `opts.seed`, and that slot admits only an integer or the tagged `{"from": "node", "variant": N}` form whose `variant` may be an inline `param`, never an arbitrary expression, because a field column is f32 and a seed rounded through one avalanches to an unrelated noise. Pass a different `variant` to move the sample position to an unrelated part of the field, which is the per-instance re-roll. Writes `density`; reads nothing.
 
 **Content hash:** `2e7fc0e994278fb0`
 
@@ -803,7 +803,7 @@ Writes `density` (f32, 0..1) from four octaves of normalized Perlin fBm — the 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `frequency` | f32 | `0.02` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Feature size: the noise sample position is multiplied by this, so smaller means broader blobs. 0.02 gives features tens of world units across. |
-| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position. This is the per-instance re-roll: any two different values give unrelated patterns, and the same value always reproduces. There is no seed that can do this. |
+| `variant` | f32 | `0` |  |  | yes | *(nothing — the body's field expressions read it by name)* | Offset added to the noise sample position. This is the per-instance re-roll this primitive offers: any two different values give unrelated patterns, and the same value always reproduces. |
 
 Run it: `pcg run write/density-from-noise`
 
