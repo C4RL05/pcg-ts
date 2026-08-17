@@ -26,6 +26,7 @@ import {
   clamp,
   component,
   cos,
+  cross,
   div,
   dot,
   floor,
@@ -38,11 +39,14 @@ import {
   mul,
   normalize,
   position,
+  pow,
   ramp,
   randomField,
   remap,
   select,
   sin,
+  sqrt,
+  step,
   sub,
   tan,
   vec,
@@ -111,6 +115,18 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   max: { fn: "max", args: [1, 2] },
   abs: { fn: "abs", args: [-1] },
   floor: { fn: "floor", args: [1.5] },
+  // 2 rather than 4: a perfect square is the one input class the device
+  // gets exactly right (see `sqrt`'s note in combinators.ts), so a
+  // minimal spec built on one would compile the same kernel while
+  // reading as if the fn were exact. The literal is non-negative because
+  // a negative one is NaN on both paths by construction.
+  sqrt: { fn: "sqrt", args: [2] },
+  // Base strictly positive, and that is a DOMAIN requirement rather than
+  // a taste: `pow` follows the device's `exp2(b * log2(a))` identity, so
+  // a zero or negative base is NaN on both paths and the minimal spec
+  // would be a NaN kernel. Exponent 3 is an integer on purpose — the
+  // case a reader is most likely to assume is exact, and is not.
+  pow: { fn: "pow", args: [2, 3] },
   sin: { fn: "sin", args: [1] },
   cos: { fn: "cos", args: [1] },
   tan: { fn: "tan", args: [1] },
@@ -128,7 +144,17 @@ export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
   ge: { fn: "ge", args: [1, 2] },
   eq: { fn: "eq", args: [1, 2] },
   ne: { fn: "ne", args: [1, 2] },
+  // Shaped like the compare fns above rather than like a threshold on a
+  // field, because that is what it IS — `ge` with the operands swapped.
+  // Reading `[1, 2]` as "edge 1, x 2" next to `ge: [1, 2]` is the whole
+  // point: the two rows differ only in argument order.
+  step: { fn: "step", args: [1, 2] },
   dot: { fn: "dot", args: [[1, 2, 3], [4, 5, 6]] },
+  // Two explicit width-3 literals, mirroring `dot` so the pair reads
+  // together — and unlike every other entry here it CANNOT be narrowed
+  // to scalars: `cross` is the grammar's only width-specific fn and a
+  // scalar argument is a compile error rather than a broadcast.
+  cross: { fn: "cross", args: [[1, 2, 3], [4, 5, 6]] },
   length: { fn: "length", args: [[1, 2, 3]] },
   normalize: { fn: "normalize", args: [[1, 2, 3]] },
   vec: { fn: "vec", args: [1, 2, 3] },
@@ -320,8 +346,8 @@ export function paritySpecs(): Array<{ name: string; spec: FieldSpecArg }> {
 // each budget checkable rather than asserted.
 //
 // The four-count sweep is the DERIVATION, taken with a throwaway
-// out-of-process probe (the 1M pass evaluates 38M CPU lanes — 36
-// families, one of them a vec3 — and is not something to pay for on
+// out-of-process probe (the 1M pass evaluates 44M CPU lanes — 40
+// families, two of them vec3 — and is not something to pay for on
 // every test run). What the suite re-checks on every run is
 // PARITY_COUNT for every family, plus PARITY_SWEEP_COUNTS for the
 // count-sensitive ones. Re-deriving means re-running the probe; the
@@ -336,11 +362,12 @@ export function paritySpecs(): Array<{ name: string; spec: FieldSpecArg }> {
 //   What it catches is a lane going structurally wrong.
 // - `meanAbs` bounds the mean of |cpu - gpu| over lanes, in absolute
 //   units. It is SAMPLE-SIZE STABLE: over the sweep it moves by at most
-//   1.04x for every family whose mean is a sampling statistic (fbm
-//   simplex 1.004x, valueNoise 1.026x, ramp 1.032x — the worst).
-//   `fraction` is the sole exception and its own row says why. What this
-//   catches is a shift in the interior, which a widened max budget would
-//   sleep through.
+//   1.05x for every family whose mean is a sampling statistic (fbm
+//   simplex 1.004x, valueNoise 1.026x, ramp 1.032x, sqrt 1.051x — the
+//   worst, and all of that is the 10k pass being a small sample: sqrt's
+//   65k/262k/1M means agree to 1.005x). `fraction` is the sole exception
+//   and its own row says why. What this catches is a shift in the
+//   interior, which a widened max budget would sleep through.
 //
 // Why the counts are swept at all: these budgets were originally
 // max-over-lanes values measured at exactly 10 000 elements, which made
@@ -516,6 +543,20 @@ export const PARITY_CASES: ParityCase[] = [
   { name: "ramp", spec: EXTENDED_SPECS.rampMultiStop, budget: 2, meanAbs: 3.8e-9, countSensitive: true },
   // rangeUlp 0 and maxUlp 0 at every count, away from knife edges.
   { name: "select/compare", spec: EXTENDED_SPECS.selectAway, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and maxUlp 0 at every count, and exact BY CONSTRUCTION
+  // rather than by measurement: `step` lowers to `ge`'s
+  // `select(0, 1, x >= edge)` (see the note in compile.ts on why the
+  // WGSL `step()` builtin is not emitted), and both operands here are
+  // attribute reads that are already bit-identical on the two paths, so
+  // there is no rounding left to disagree about.
+  // Both branches are populated — 49.6/49.8/50.0/50.1% of lanes answer
+  // 1 across the sweep — because an all-zero or all-one output would
+  // score exact while testing nothing. The edge VARIES per lane for the
+  // same reason: a constant edge would not notice the operands being
+  // swapped, which is the one mistake this fn's argument order invites.
+  // Falsifiable, and checked: reversing the CPU comparison to
+  // `v[0] >= v[1]` turns this row red on 99.99% of lanes.
+  { name: "step", spec: { fn: "step", args: [PY, PX] }, exact: true, budget: 0, meanAbs: 0 },
   // rangeUlp 6.50/6.50/7.13/7.13 over inputs in [-8, 8].
   // budget 12 = 1.68x the sweep max; meanAbs 3.2e-7 = 1.28x of 2.51e-7.
   { name: "sin/cos", spec: EXTENDED_SPECS.trigChain, budget: 12, meanAbs: 3.2e-7, countSensitive: true },
@@ -544,9 +585,91 @@ export const PARITY_CASES: ParityCase[] = [
   // the old budget of 2 was EXACTLY the measurement from 65k up.
   // budget 4 = 2.00x the sweep max; meanAbs 2.0e-7 = 1.27x of 1.58e-7.
   { name: "length/normalize", spec: EXTENDED_SPECS.lengthNormalize, budget: 4, meanAbs: 2.0e-7, countSensitive: true },
+  // rangeUlp 0.71/0.71/0.71/0.71 — dead flat (-0.01% over the sweep),
+  // and 0.7071 is not a coincidence: it is 2 / sqrt(8), one f32 ULP in
+  // the binade [2, 4) expressed in units of this family's range top. So
+  // the worst lane is EXACTLY one ULP, which the raw maxUlp confirms
+  // directly — 1 at every count, with 16.2/16.7/16.9/16.8% of lanes off
+  // by one and NONE off by two. The DEVICE is the inaccurate side here
+  // (rsqrt plus refinement, against a correctly rounded `Math.sqrt`),
+  // and its error is bounded by the refinement rather than by the
+  // sampling, so more lanes cannot find a worse one: saturated.
+  // The `abs` is a DOMAIN GUARD, not tidiness — it makes the argument
+  // non-negative over the whole cloud. sqrt of a negative is NaN on both
+  // paths by design; device NaN is 0x7fffffff against JS's 0x7fc00000,
+  // and |cpu - gpu| is NaN whenever either side is, which is not `>` any
+  // budget and would slip through every threshold here. (`nanLanes` in
+  // parity.device.test.ts now catches that too; the guard is what keeps
+  // it from having to.) Domain agreement belongs in the CPU-side unit
+  // tests. Do NOT simplify it away.
+  // budget 1 = 1.41x the sweep max; meanAbs 3.6e-8 = 1.26x of 2.86e-8.
+  { name: "sqrt", spec: { fn: "sqrt", args: [{ fn: "abs", args: [PX] }] }, budget: 1, meanAbs: 3.6e-8 },
+  // rangeUlp 4.31/3.94/5.07/5.05, and the grammar's widest ELEMENTWISE
+  // budget outside the inverse-trig pair. It GROWS with count (+17% from
+  // 10k to 1M, against -4.4%..+0.6% for the saturated families), so it
+  // takes the 1.5x rule and joins the sweep — the same relative-error
+  // tail `tan` and `sin/cos` have, not the absolute-error ceiling that
+  // saturates `asin`. The growth is real but sparse: the worst lane's
+  // ABSOLUTE error takes only two values across the whole sweep (2.75e-4
+  // at 10k and 65k, 3.66e-4 at 262k and 1M) while raw maxUlp climbs
+  // 9/12/12/13. The interior does not move with it — meanAbs varies
+  // 1.03x — and the per-lane distribution is stable to a tenth of a
+  // percent: 37.0% of lanes bit-exact, 40.5% off by 1 ULP, the tail
+  // thinning ~2.8x per further ULP out to 13.
+  // DOMAIN GUARD, load-bearing: the base is `abs(P.x) + 0.5`, so it is
+  // STRICTLY POSITIVE (min 0.500002 at 1M) and finite everywhere. A
+  // negative or zero base is NaN BY DESIGN — the CPU adopts the device's
+  // `exp2(b * log2(a))` domain — and a NaN lane poisons this comparison
+  // rather than failing it (see the sqrt row above for why). That the
+  // two paths agree on WHERE the answer is NaN is a CPU-side unit test's
+  // job, not this float corpus's. Do NOT simplify the guard away.
+  // The exponent is `P.y * 0.375` rather than a `remap` into [-3, 3] on
+  // purpose. Both arguments were measured bit-exact on both paths at
+  // every count (maxUlp 0, 100% of lanes), so this row measures `pow`
+  // ALONE; a remap would have fed a 1-ULP exponent difference into a
+  // function that amplifies it by ~6 ULP at exponent 3, and the row
+  // would have been reporting remap's rounding as pow's.
+  // budget 8 = 1.58x the sweep max; meanAbs 2.9e-6 = 1.29x of 2.24e-6.
+  {
+    name: "pow",
+    spec: {
+      fn: "pow",
+      args: [
+        { fn: "add", args: [{ fn: "abs", args: [PX] }, 0.5] },
+        { fn: "mul", args: [PY, 0.375] },
+      ],
+    },
+    budget: 8,
+    meanAbs: 2.9e-6,
+    countSensitive: true,
+  },
   // rangeUlp 0.70/0.69/0.68/0.67 — saturated (f32 dot accumulation vs
   // CPU f64). budget 1 = 1.43x; meanAbs 7.4e-8 = 1.25x of 5.91e-8.
   { name: "dot", spec: EXTENDED_SPECS.dotField, budget: 1, meanAbs: 7.4e-8 },
+  // rangeUlp 0 and maxUlp 0 at every count, over 3 000 000 lanes at the
+  // 1M pass — and against two genuinely varying vec3 inputs (P crossed
+  // with the unit shading normal), not a vector against a constant,
+  // because a constant operand would exercise three of the six products
+  // as multiplications by a compile-time literal.
+  // The one COMPOUND fn in the grammar that is bit-exact, where its
+  // neighbours `dot` and `length/normalize` both carry budgets, and it
+  // is exact by choice rather than by luck: the CPU rounds each of the
+  // six products to f32 with `Math.fround` before subtracting, matching
+  // the device's `cross` builtin step for step, where accumulating in
+  // f64 and rounding once would be 539 ULP out.
+  // Falsifiable, and checked: dropping a single `Math.fround` from the
+  // CPU expansion turns this row red.
+  // It is also the table's second vec3-valued family, and like the first
+  // (`select/compare`) it is `exact` — which is what keeps measureParity's
+  // one-range-per-column caveat from biting: a budgeted vec family would
+  // score its small component in the largest one's units.
+  {
+    name: "cross",
+    spec: { fn: "cross", args: [P, { fn: "attribute", name: "normal", tupleSize: 3 }] },
+    exact: true,
+    budget: 0,
+    meanAbs: 0,
+  },
   // rangeUlp 6.53/8.02/10.26/10.44 — the family that exposed the whole
   // problem: the old budget of 8 was measured at 10k and is exceeded at
   // 65k by an unchanged compiler. budget 16 = 1.53x the sweep max
@@ -656,6 +779,10 @@ export const DERIVED_FIELDS: Record<string, () => Field> = {
       [6, 0],
     ]),
   "select/compare": () => select(ge(density(), 0.25), position(), vec(1, 2, 3)),
+  step: () => step(py(), px()),
+  sqrt: () => sqrt(abs(px())),
+  pow: () => pow(add(abs(px()), 0.5), mul(py(), 0.375)),
+  cross: () => cross(position(), attribute("normal", 3)),
   "sin/cos": () => add(sin(px()), cos(mul(py(), 0.7))),
   tan: () => tan(remap(px(), -8, 8, -1.45, 1.45)),
   asin: () => asin(clamp(mul(density(), 0.9), -0.9, 0.9)),

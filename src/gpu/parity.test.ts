@@ -131,10 +131,10 @@ describe("parity budget shape", () => {
   });
 
   it("the countSensitive set is exactly the measured growing families", () => {
-    // The structural pin above covers the noise families. Four more grow
+    // The structural pin above covers the noise families. Five more grow
     // with count WITHOUT reading a noise (measured 10k → 1M: ramp +17%,
-    // sin/cos +10%, tan +15%, length/normalize +33%), and nothing about
-    // their specs says so — so they are pinned by name. Dropping the flag
+    // sin/cos +10%, tan +15%, pow +17%, length/normalize +33%), and
+    // nothing about their specs says so — so they are pinned by name. Dropping the flag
     // from one of them would silently do two things at once: remove it
     // from the count sweep, and relax its budget derivation from 1.5x
     // headroom to 1.25x. Neither would fail any other test.
@@ -148,6 +148,7 @@ describe("parity budget shape", () => {
         "length/normalize",
         "perlinNoise normalized",
         "perlinNoise raw",
+        "pow",
         "ramp",
         "simplexNoise normalized",
         "simplexNoise raw",

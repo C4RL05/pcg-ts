@@ -367,7 +367,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 45 names at runtime.
+256 levels). `listFieldFns()` returns all 50 names at runtime.
 
 ### Inputs
 
@@ -839,10 +839,34 @@ store as f32.
 
 | Arity | fns |
 | --- | --- |
-| 1 | `abs`, `floor`, `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero), and trig `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (radians, elementwise) |
-| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq`, `ne` emitting 1/0 (`ne` is the exact complement of `eq`) |
+| 1 | `abs`, `floor`, `sqrt` (negative input is NaN), `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero), and trig `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (radians, elementwise) |
+| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `cross` (see below — the one fn that does NOT broadcast), `pow` (see below — a narrowed domain), `step` (args `[edge, x]`, exactly `ge(x, edge)`), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq`, `ne` emitting 1/0 (`ne` is the exact complement of `eq`) |
 | 3 | `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b — cond non-zero picks a) |
 | 5 | `remap` (x, inMin, inMax, outMin, outMax — linear, unclamped; degenerate input range yields outMin) |
+
+Two of those carry rules the table cannot hold.
+
+**`cross` is the only width-specific fn in the grammar.** Both arguments
+must be tuple size 3, and the scalar broadcast rule is suppressed: a
+width other than 3 is refused by name rather than spread, because
+`cross(t, 1)` meaning a cross against `[1, 1, 1]` is never what an author
+meant. It is right-handed, so `cross(x, y)` is `+z`, and parallel inputs
+give zero rather than a direction. The usual use is a frame from a
+tangent — `normalize(cross(tangent, vec(0, 1, 0)))` is the horizontal
+perpendicular, which collapses to zero where the tangent is vertical.
+
+**`pow` has a narrower domain than a host-language power**, and the
+difference is not an edge case. Every negative base is NaN — where
+`pow(-2, 2)` would ordinarily be 4 — and so are `pow(0, 0)` and
+`pow(x, 0)` for a zero, negative, infinite or NaN `x`. That follows the
+identity `exp2(b * log2(a))`, which measured hardware implements `pow`
+as exactly; adopting it on the CPU too is what stops the two paths from
+silently disagreeing over a whole quadrant. A zero or infinite base
+still behaves for a non-zero exponent: `pow(0, 2)` is 0 and `pow(0, -1)`
+is Infinity. For a signed power write `mul(normalize(x), pow(abs(x), y))`
+— `normalize` on a scalar yields the sign. `pow` also carries the widest
+elementwise GPU budget in the parity table, so prefer `mul` for a square,
+`sqrt` for a root and `ramp` for a falloff rather than spending it.
 
 ### Structure
 
@@ -3023,14 +3047,17 @@ re-measured at more than one count on every test run.
 | family | rangeUlp, 10k → 1M | budget | mean \|cpu−gpu\| budget |
 |---|---|---|---|
 | arith add/sub/mul | 0 | bit-exact | — |
-| clamp/min/max, floor, select/compare | 0 | bit-exact | — |
+| clamp/min/max, floor, select/compare, step | 0 | bit-exact | — |
 | div | 0.76 → 0.75 | 1 | 2.0e-8 |
 | lerp | 0.50 → 0.50 | 1 | 7.3e-8 |
 | remap | 0.00 → 0.00 | 1 | 6.0e-8 |
 | fraction (a function of the count itself) | 0.50 → 0.50 | 1 | 6.0e-8 |
 | ramp (multi-stop) | 1.09 → 1.27 | 2 | 3.8e-9 |
 | dot | 0.70 → 0.67 | 1 | 7.4e-8 |
-| length/normalize (incl. sqrt) | 1.50 → 2.00 | 4 | 2.0e-7 |
+| cross | 0 | bit-exact | — |
+| length/normalize (their internal square root) | 1.50 → 2.00 | 4 | 2.0e-7 |
+| sqrt | 0.71 → 0.71 | 1 | 3.6e-8 |
+| pow, base ≥ 0.5, exponent over [−3, 3] | 4.31 → 5.05 | 8 | 2.9e-6 |
 | sin/cos over [−8, 8] | 6.50 → 7.13 | 12 | 3.2e-7 |
 | tan over [−1.45, 1.45] | 19.48 → 22.34 | 40 | 6.5e-7 |
 | asin over [0, 0.9] | 503.99 → 506.98 | 640 | 3.9e-5 |
@@ -3047,7 +3074,7 @@ re-measured at more than one count on every test run.
 
 The last column is the second budget each family carries: the **mean**
 absolute divergence over lanes. Unlike the max it is stable under
-sample size — across 10k → 1M it moves by at most 1.04× for every
+sample size — across 10k → 1M it moves by at most 1.05× for every
 family above — so it is the one that trips when the interior of the
 distribution actually changes, which a max budget wide enough to
 survive a large cloud would not notice. The two are asserted together

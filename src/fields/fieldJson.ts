@@ -89,6 +89,7 @@ import {
   component,
   constant,
   cos,
+  cross,
   div,
   dot,
   eq,
@@ -111,11 +112,14 @@ import {
   nodeSeed,
   normalize,
   position,
+  pow,
   ramp,
   randomField,
   remap,
   select,
   sin,
+  sqrt,
+  step,
   sub,
   tan,
   vec,
@@ -1099,6 +1103,37 @@ registerFixed(
   (f) => floor(f[0]),
 );
 registerFixed(
+  "sqrt",
+  "uniform",
+  [arg("x", "Value whose square root is taken. NEGATIVE INPUTS ARE NaN.")],
+  "Elementwise square root, component by component. A negative input is NaN on both paths — " +
+    "take `abs` first if the sign was noise rather than meaning. Carries a 1-ULP GPU budget " +
+    "despite IEEE 754 mandating a correctly rounded square root: the CPU honours that, while " +
+    "measured hardware lowers `sqrt` to a reciprocal-square-root plus refinement and lands 1 ULP " +
+    "out on roughly a sixth of inputs. Perfect squares are exact. For a shaped falloff prefer " +
+    "`ramp`, which states its curve; reach for `sqrt` when the geometry actually calls for one.",
+  (f) => sqrt(f[0]),
+);
+registerFixed(
+  "pow",
+  "uniform",
+  [
+    arg("a", "Base. MUST BE strictly above 0 — see the domain note; anything else is NaN."),
+    arg("b", "Exponent. Any value, including fractions and negatives."),
+  ],
+  "Elementwise `a` raised to `b`, over a NARROWER DOMAIN than the usual host-language power, " +
+    "and the difference is not an edge case: every negative base is NaN here (where -2 to the " +
+    "power 2 would be 4), as are `pow(0, 0)` and `pow(x, 0)` for a zero, negative, infinite or " +
+    "NaN `x`. That follows the identity `exp2(b * log2(a))`, which measured hardware implements " +
+    "`pow` as exactly, and adopting it is what stops the two paths from silently disagreeing " +
+    "across a whole quadrant. Zero and infinite bases still behave for a NON-zero exponent: " +
+    "`pow(0, 2)` is 0 and `pow(0, -1)` is Infinity. For a signed power write " +
+    "`mul(normalize(x), pow(abs(x), y))` — `normalize` on a scalar yields the sign. It also " +
+    "carries the grammar's WIDEST elementwise GPU budget, so prefer `mul` for a square, `sqrt` " +
+    `for a root and \`ramp\` for a falloff rather than spending it. ${BROADCAST}`,
+  (f) => pow(f[0], f[1]),
+);
+registerFixed(
   "clamp",
   "uniform",
   [
@@ -1207,23 +1242,51 @@ registerFixed(
   PREDICATE_RANGE,
 );
 registerFixed(
+  "step",
+  "uniform",
+  [
+    arg("edge", "Threshold. NOTE THE ORDER — the threshold comes FIRST, as it does in a shader."),
+    arg("x", "Value tested against `edge`."),
+  ],
+  "Elementwise threshold: 1 where `x` is at or above `edge`, 0 below it. Exactly `ge(x, edge)` " +
+    "with the arguments the other way round — NaN case included, where both give 0 — so it adds a " +
+    "familiar NAME rather than new expressive power, and either spelling is fine. For a soft " +
+    `edge use \`ramp\` or \`clamp\` on a \`remap\`; \`step\` is hard by definition. ${BROADCAST}`,
+  (f) => step(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
   "dot",
   "uniform",
   [arg("a", "First vector."), arg("b", "Second vector.")],
   "Per-element dot product: the sum over components of `a * b`, always SCALAR whatever the input " +
-    "width. With unit vectors it is the cosine of the angle between them. There is no `cross` in " +
-    "the grammar; a flat 2D perpendicular of a tangent `t` is written by hand as `vec(mul(t.z, -1), " +
-    `0, t.x)\` using \`component\`. ${BROADCAST}`,
+    "width. With unit vectors it is the cosine of the angle between them. Its companion is " +
+    `\`cross\`, which returns a vector and takes width 3 only. ${BROADCAST}`,
   (f) => dot(f[0], f[1]),
+);
+registerFixed(
+  "cross",
+  "uniform",
+  [arg("a", "First vector, width 3."), arg("b", "Second vector, width 3.")],
+  "Per-element cross product: the vector perpendicular to both inputs, with length equal to the " +
+    "area of the parallelogram they span, so parallel inputs give zero rather than a direction. " +
+    "The grammar's ONLY width-specific fn — both arguments must be width 3, and a scalar does NOT " +
+    "broadcast into one, because `cross(t, 1)` meaning a cross against [1, 1, 1] is never what an " +
+    "author meant. Right-handed: `cross(x, y)` is +z. The usual use is a frame from a tangent — " +
+    "`normalize(cross(tangent, vec(0, 1, 0)))` is the horizontal perpendicular, and it COLLAPSES " +
+    "to zero where the tangent is vertical, so guard that case if the input can point straight up. " +
+    "BIT-EXACT on the GPU, unlike its neighbours `dot` and `length`, because its products are " +
+    "rounded to f32 individually to match what the device does rather than accumulated in wider " +
+    "precision.",
+  (f) => cross(f[0], f[1]),
 );
 registerFixed(
   "length",
   "uniform",
   [arg("v", "Tuple whose magnitude is taken.")],
   "Euclidean length of each element's tuple, returned as a SCALAR; on a scalar input it is the " +
-    "absolute value. This is the grammar's only way to reach a square root — there is no `sqrt`, " +
-    "`pow`, `exp` or `mod` — so a shaped falloff is written with `ramp` rather than with an " +
-    "exponent.",
+    "absolute value. Equivalent to `sqrt(dot(v, v))` but computed in one pass, and cheaper than " +
+    "spelling it that way.",
   (f) => length(f[0]),
 );
 registerFixed(
@@ -1360,8 +1423,9 @@ register(
       "Positions must be STRICTLY ASCENDING (equal or descending positions are refused), and the " +
       "value between two stops is interpolated linearly. Outside the range the curve CLAMPS and " +
       "never extrapolates: an input at or below the first position yields the first value, at or " +
-      "above the last yields the last, so a single stop is a constant. With no `pow` or `exp` in " +
-      "the grammar this is how a shaped falloff is written. A non-scalar input throws at evaluation.",
+      "above the last yields the last, so a single stop is a constant. Prefer it to `pow` for a " +
+      "shaped falloff: the stops SAY where the curve turns, they clamp at both ends, and they " +
+      "cost no parity budget. A non-scalar input throws at evaluation.",
     args: [arg("scalarField", "The value to look up along the curve. Must be tuple size 1.")],
   },
   (spec, path) => {

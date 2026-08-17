@@ -8,14 +8,19 @@ import {
   component,
   constant,
   cos,
+  cross,
   evaluateField,
   fraction,
   makeField,
   mul,
   nodeSeed,
   position,
+  pow,
   remap,
   sin,
+  sqrt,
+  step,
+  vec,
   type EvalContext,
   type Field,
 } from "./index.js";
@@ -229,6 +234,64 @@ describe("fieldFromJson", () => {
     expect(() => fieldFromJson({ fn: "atan2", args: [1] })).toThrow(/expects exactly 2 args/);
   });
 
+  it("builds sqrt/pow/step matching the hand-built combinators, with round-trip", () => {
+    const spec: FieldSpec = {
+      fn: "step",
+      args: [
+        0.5,
+        {
+          fn: "pow",
+          args: [
+            { fn: "sqrt", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }] },
+            3,
+          ],
+        },
+      ],
+    };
+    const fromJson = fieldFromJson(spec);
+    const handBuilt = step(0.5, pow(sqrt(component(position(), 0)), 3));
+    expect(fromJson.key).toBe(handBuilt.key);
+    const ctx = testCloud();
+    const col = evaluateField(fromJson, ctx);
+    expect(col.tupleSize).toBe(1);
+    expect(Array.from(col.data)).toEqual(Array.from(evaluateField(handBuilt, ctx).data));
+    expect(fieldToJson(fromJson)).toEqual(spec);
+    const rebuilt = fieldFromJson(fieldToJson(fromJson));
+    expect(Array.from(evaluateField(rebuilt, ctx).data)).toEqual(Array.from(col.data));
+    // Each parses at its own arity, and a wrong count is named.
+    expect(fieldFromJson({ fn: "sqrt", args: [0.25] }).tupleSize).toBe(1);
+    expect(() => fieldFromJson({ fn: "sqrt", args: [] })).toThrow(/"sqrt" expects exactly 1 arg/);
+    expect(() => fieldFromJson({ fn: "pow", args: [2] })).toThrow(/"pow" expects exactly 2 args/);
+    expect(() => fieldFromJson({ fn: "step", args: [0, 1, 2] })).toThrow(
+      /"step" expects exactly 2 args/,
+    );
+    // `pow`'s narrowed domain is a property of the FN, not of the
+    // constructor, so it survives the trip through JSON unchanged.
+    const negativeBase = fieldFromJson({ fn: "pow", args: [-2, 2] });
+    expect(Array.from(evaluateField(negativeBase, ctx).data)).toEqual(new Array(16).fill(NaN));
+  });
+
+  it("builds cross, and enforces its width rule on the JSON path too", () => {
+    const spec: FieldSpec = { fn: "cross", args: [{ fn: "position" }, { fn: "vec", args: [0, 1, 0] }] };
+    const fromJson = fieldFromJson(spec);
+    const handBuilt = cross(position(), vec(0, 1, 0));
+    expect(fromJson.key).toBe(handBuilt.key);
+    expect(fromJson.tupleSize).toBe(3);
+    const ctx = testCloud();
+    const col = evaluateField(fromJson, ctx);
+    expect(col.tupleSize).toBe(3);
+    expect(Array.from(col.data)).toEqual(Array.from(evaluateField(handBuilt, ctx).data));
+    expect(fieldToJson(fromJson)).toEqual(spec);
+    expect(() => fieldFromJson({ fn: "cross", args: [{ fn: "position" }] })).toThrow(
+      /"cross" expects exactly 2 args/,
+    );
+    // A scalar is a width error rather than a broadcast here, and the
+    // author of the JSON gets the constructor's refusal verbatim.
+    expect(() => fieldFromJson({ fn: "cross", args: [{ fn: "position" }, 1] })).toThrow(
+      /cross: argument `b` has width 1, but a cross product is defined for width 3 only\./,
+    );
+  });
+
   it("accepts normalized on noise specs and matches the factory-built field", () => {
     const spec: FieldSpec = { fn: "simplexNoise", opts: { seed: 11, normalized: true } };
     const fromJson = fieldFromJson(spec);
@@ -346,6 +409,9 @@ describe("fieldFromJson", () => {
       "max",
       "abs",
       "floor",
+      "sqrt",
+      "pow",
+      "step",
       "clamp",
       "lerp",
       "remap",
@@ -357,6 +423,7 @@ describe("fieldFromJson", () => {
       "eq",
       "ne",
       "dot",
+      "cross",
       "length",
       "normalize",
       "sin",

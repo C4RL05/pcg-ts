@@ -10,6 +10,7 @@ import {
   clamp,
   component,
   cos,
+  cross,
   div,
   dot,
   eq,
@@ -25,10 +26,13 @@ import {
   mul,
   ne,
   normalize,
+  pow,
   ramp,
   remap,
   select,
   sin,
+  sqrt,
+  step,
   sub,
   tan,
   vec,
@@ -99,6 +103,61 @@ describe("arithmetic and broadcasting", () => {
     const ctx = cloudCtx([-1, 0, 1]);
     expect(asArray(ctx, remap(position(), -1, 1, 0, 10))).toEqual([0, 5, 10]);
     expect(asArray(ctx, remap(position(), 2, 2, 3, 7))).toEqual([3, 3, 3]);
+  });
+});
+
+describe("powers and roots", () => {
+  // 0, 4, 2.25 and -9: every value and every answer below is exact in f32,
+  // so these are hand-computed rather than pinned from the implementation.
+  const ctx = cloudCtx([0, 0, 0, 4, 0, 0, 2.25, 0, 0, -9, 0, 0]);
+  const x = component(position(), 0);
+
+  it("takes square roots, zero included, and NaN below zero", () => {
+    expect(asArray(ctx, sqrt(x))).toEqual([0, 2, 1.5, NaN]);
+    // NaN propagates like any other elementwise result — no clamping to 0,
+    // the same rule asin/acos follow outside their domain.
+    expect(asArray(ctx, add(sqrt(x), 1)).at(-1)).toBe(NaN);
+  });
+
+  it("takes square roots componentwise over a tuple", () => {
+    const col = evaluateField(sqrt([9, 0.25, 16]), ctx);
+    expect(col.tupleSize).toBe(3);
+    expect(Array.from(col.data.subarray(0, 3))).toEqual([3, 0.5, 4]);
+  });
+
+  it("raises to whole, fractional and negative exponents", () => {
+    expect(asArray(ctx, pow(x, 2))).toEqual([0, 16, 5.0625, NaN]);
+    expect(asArray(ctx, pow(x, 0.5))).toEqual([0, 2, 1.5, NaN]);
+    // A negative EXPONENT is ordinary — it is the base whose sign is
+    // narrowed, and only the base.
+    expect(asArray(ctx, pow(2, -3))).toEqual([0.125, 0.125, 0.125, 0.125]);
+    expect(asArray(ctx, pow(0.5, -2))).toEqual([4, 4, 4, 4]);
+  });
+
+  it("gives NaN for a NEGATIVE BASE, where the host language gives a number", () => {
+    // The deliberate divergence: the device leaves a negative base
+    // indeterminate, so one NaN on both paths beats two different answers
+    // over a whole quadrant. The host's own answer, for contrast:
+    expect(Math.pow(-2, 2)).toBe(4);
+    expect(asArray(ctx, pow(-2, 2))).toEqual([NaN, NaN, NaN, NaN]);
+    // Not just the exponents with a real signed answer — every one of them.
+    expect(asArray(ctx, pow(-2, 3))).toEqual([NaN, NaN, NaN, NaN]);
+    expect(asArray(ctx, pow(x, 2)).at(-1)).toBe(NaN);
+    // And the documented workaround really does restore the signed power.
+    expect(asArray(ctx, mul(normalize(-2), pow(abs(-2), 3)))).toEqual([-8, -8, -8, -8]);
+  });
+
+  it("gives NaN for `x` to the 0 wherever the base is off the positive axis", () => {
+    // The other half of the narrowed domain, and the same reason: the
+    // device is `exp2(b * log2(a))`, so a base whose log2 is not finite
+    // makes `b * log2(a)` a NaN — including at b = 0, where JS answers 1
+    // for every base at all.
+    expect(Math.pow(0, 0)).toBe(1);
+    expect(asArray(ctx, pow(0, 0))).toEqual([NaN, NaN, NaN, NaN]);
+    expect(asArray(ctx, pow(-9, 0))).toEqual([NaN, NaN, NaN, NaN]);
+    expect(asArray(ctx, pow(x, 0))).toEqual([NaN, 1, 1, NaN]);
+    // A positive finite base keeps the ordinary answer, at any exponent.
+    expect(asArray(ctx, pow(2, 0))).toEqual([1, 1, 1, 1]);
   });
 });
 
@@ -243,6 +302,49 @@ describe("compare and select", () => {
   });
 });
 
+describe("step", () => {
+  // Values either side of the edge, one exactly ON it, and a NaN — the
+  // input that makes "at or above" a three-way question.
+  const ctx = cloudCtx([-1, 0, 0, 0.25, 0, 0, 0.5, 0, 0, 0.75, 0, 0, NaN, 0, 0]);
+  const x = component(position(), 0);
+
+  it("is 1 AT the edge, not only above it", () => {
+    expect(asArray(ctx, step(0.5, x))).toEqual([0, 0, 1, 1, 0]);
+  });
+
+  it("takes the threshold FIRST, so the two arguments are not interchangeable", () => {
+    // The order is the shader convention, and getting it backwards is a
+    // silently inverted mask rather than an error.
+    expect(asArray(ctx, step(x, 0.5))).toEqual([1, 1, 1, 0, 0]);
+  });
+
+  it("gives 0 for a NaN on either side of the comparison", () => {
+    // A NaN is neither above nor below the edge, and `>=` answers false
+    // both ways round — so it lands OUTSIDE the mask, whichever operand
+    // carries it.
+    expect(asArray(ctx, step(0, x)).at(-1)).toBe(0);
+    expect(asArray(ctx, step(x, 0)).at(-1)).toBe(0);
+    expect(asArray(ctx, step(NaN, 0))).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("is exactly ge with the arguments reversed, NaN case included", () => {
+    // The registry documents `step(edge, x)` as `ge(x, edge)` — a familiar
+    // NAME rather than new expressive power — so the two spellings must
+    // not drift apart. Pinned elementwise over the whole domain, both
+    // orders, including the edges that sit exactly on a sample.
+    for (const edge of [-1, 0, 0.25, 0.5, 0.75, NaN]) {
+      expect(asArray(ctx, step(edge, x)), `step(${edge}, x)`).toEqual(asArray(ctx, ge(x, edge)));
+      expect(asArray(ctx, step(x, edge)), `step(x, ${edge})`).toEqual(asArray(ctx, ge(edge, x)));
+    }
+  });
+
+  it("broadcasts a scalar edge across a tuple", () => {
+    const col = evaluateField(step(0.5, position()), cloudCtx([0.25, 0.5, 1]));
+    expect(col.tupleSize).toBe(3);
+    expect(Array.from(col.data)).toEqual([0, 1, 1]);
+  });
+});
+
 describe("vector operations", () => {
   const ctx = cloudCtx([1, 2, 2, 3, 0, 4, 0, 0, 0]);
 
@@ -270,6 +372,75 @@ describe("vector operations", () => {
     expect(col2.tupleSize).toBe(4);
     expect(Array.from(col2.data.subarray(0, 4))).toEqual([1, 2, 2, 7]);
     expect(() => evaluateField(component(position(), 3), ctx)).toThrow(/out of range/);
+  });
+});
+
+describe("cross", () => {
+  // Three points whose components are exact in f32, so the nine products
+  // below are hand-computed. The middle one is parallel to B.
+  const B = [1, 4, -2];
+  const ctx = cloudCtx([2, -3, 0.5, 1, 4, -2, -1, 0.5, 3]);
+
+  /** The first tuple of a column, which is where the basis cases read. */
+  const head = (field: Parameters<typeof evaluateField>[0]) =>
+    Array.from(evaluateField(field, ctx).data.subarray(0, 3));
+
+  it("is right-handed: x cross y is +z, all the way round the cycle", () => {
+    expect(head(cross([1, 0, 0], [0, 1, 0]))).toEqual([0, 0, 1]);
+    expect(head(cross([0, 1, 0], [0, 0, 1]))).toEqual([1, 0, 0]);
+    expect(head(cross([0, 0, 1], [1, 0, 0]))).toEqual([0, 1, 0]);
+  });
+
+  it("anti-commutes: swapping the operands negates every component", () => {
+    const A = [2, -3, 0.5];
+    const ab = asArray(ctx, cross(A, B));
+    expect(ab.slice(0, 3)).toEqual([4, 4.5, 11]);
+    expect(asArray(ctx, cross(B, A))).toEqual(ab.map((v) => -v));
+  });
+
+  it("collapses parallel and anti-parallel inputs to zero", () => {
+    // Zero rather than a direction, which is the property `normalize(cross(
+    // tangent, up))` fails on when the tangent points straight up — the
+    // case the registry entry tells authors to guard.
+    expect(head(cross([1, 2, 3], [2, 4, 6]))).toEqual([0, 0, 0]);
+    expect(head(cross([1, 2, 3], [-2, -4, -6]))).toEqual([0, 0, 0]);
+  });
+
+  it("computes per element, and is width 3 in and width 3 out", () => {
+    const field = cross(position(), B);
+    expect(field.tupleSize, "static width").toBe(3);
+    const col = evaluateField(field, ctx);
+    expect(col.tupleSize, "evaluated width").toBe(3);
+    // Point 2 is B itself, so its cross is the zero the case above pins.
+    expect(Array.from(col.data)).toEqual([4, 4.5, 11, 0, 0, 0, -13, 1, -4.5]);
+  });
+
+  it("refuses a non-3 width at construction, naming the argument and its width", () => {
+    // The grammar's ONLY width-specific fn: a scalar does NOT broadcast
+    // into a vec3 here, because a cross against [1, 1, 1] is never what
+    // was meant. The message has to say which operand and what it was.
+    expect(() => cross(constant(0.5), constant([1, 2, 3]))).toThrow(
+      /^cross: argument `a` has width 1, but a cross product is defined for width 3 only\./,
+    );
+    expect(() => cross(constant([1, 2, 3]), 1)).toThrow(/argument `b` has width 1/);
+    expect(() => cross(constant([1, 2]), position())).toThrow(/argument `a` has width 2/);
+    expect(() => cross(position(), constant([1, 2]))).toThrow(/argument `b` has width 2/);
+    // ...and then what to write instead, which is the half an agent acts on.
+    expect(() => cross(position(), 1)).toThrow(/build a vec3 with `vec\(x, y, z\)`/);
+    expect(() => cross(position(), 1)).toThrow(/use `dot` for a product that works at any width/);
+  });
+
+  it("refuses a width discovered at evaluation in the same words", () => {
+    const uvCtx = cloudCtx([1, 2, 3]);
+    uvCtx.geo.attrs.point.add("uv", "f32", 2);
+    // attribute() with no declared size has no static width, so the check
+    // lands at evaluation instead — and must phrase the refusal identically.
+    expect(() => evaluateField(cross(attribute("uv"), position()), uvCtx)).toThrow(
+      /^cross: argument `a` has width 2, but a cross product is defined for width 3 only\./,
+    );
+    // A width-3 attribute passes both checks.
+    uvCtx.geo.attrs.point.add("N", "f32", 3);
+    expect(() => evaluateField(cross(attribute("N"), position()), uvCtx)).not.toThrow();
   });
 });
 

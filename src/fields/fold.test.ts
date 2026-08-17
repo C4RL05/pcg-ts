@@ -288,10 +288,23 @@ describe("domain-constant folding, differentially", () => {
     component: { fn: "component", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 1, 2] }], index: 2 },
     ramp: { fn: "ramp", args: [{ fn: "nodeSeed" }], stops: [[0, 0.25], [1e9, -3]] },
     dot: { fn: "dot", args: [{ fn: "vec", args: [1, 2, 3] }, { fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }] },
+    // `cross` is the one fn the loops below cannot reach: both operands
+    // must be width 3, so a bare `nodeSeed` is a width error rather than a
+    // broadcast.
+    cross: { fn: "cross", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }, { fn: "vec", args: [1, 2, 3] }] },
+    // `pow` and `step` take the seed through a divide first: raising the
+    // raw seed to 7 overflows to Infinity (which the fold declines) and
+    // thresholding it against 7 is trivially 0, and neither would exercise
+    // anything. Divided, the seed lands near 2.65 — a real base for a
+    // fractional exponent, and a value that straddles the edge below.
+    pow: { fn: "pow", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }, 1.5] },
+    step: { fn: "step", args: [2, { fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
     length: { fn: "length", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }] },
     normalize: { fn: "normalize", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }] },
   };
-  for (const fn of ["abs", "floor", "sin", "cos", "tan", "asin", "acos", "atan", "normalize"]) {
+  // `sqrt` rides the unary loop: the seed scaled by 2^-32 is positive, so
+  // the case is a real root rather than the NaN a negative input gives.
+  for (const fn of ["abs", "floor", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "normalize"]) {
     UNIFORM_CASES[fn] ??= { fn, args: [{ fn: "mul", args: [{ fn: "nodeSeed" }, 2.3283064365386963e-10] }] };
   }
   for (const fn of ["add", "sub", "mul", "div", "min", "max", "atan2", "lt", "le", "gt", "ge", "eq", "ne"]) {

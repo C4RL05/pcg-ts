@@ -761,7 +761,13 @@ of it:
   clamp/min/max/floor/select/compares are bit-exact; div, lerp, remap,
   and dot ≤ 1 — note `fraction` is a DIVISION (`index / (count - 1)`) and
   lands in that class, so it is the one input that does not inherit
-  `index`'s exactness; ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
+  `index`'s exactness; `step` and `cross` are bit-exact, `cross` because
+  its CPU products are rounded to f32 individually to match the device
+  rather than accumulated in f64 as its neighbours are; `sqrt` ≤ 1, and
+  there the DEVICE is the inaccurate side (IEEE mandates a correctly
+  rounded square root; measured hardware lowers it to a reciprocal square
+  root plus refinement); `pow` ≤ 8, the widest elementwise budget;
+  ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
   atan/atan2 ≤ 80, asin/acos ≤ 512 (an absolute-error class per the
   WGSL spec); noise families ≤ 6–24 depending on base and mode.
 - On a single device, results are run-to-run **byte-identical**.
@@ -794,7 +800,12 @@ documented rather than patched: NaN through `min`/`max` may return the
 other operand on GPU (CPU propagates NaN); vector lengths beyond f32
 range overflow to Inf/0 where the CPU's f64 interior survives; noise
 lattice coordinates at or above 2³¹ diverge (JS wraps, WGSL
-saturates); subnormal results flush to exactly 0 on GPU.
+saturates); subnormal results flush to exactly 0 on GPU. `pow` is the
+one fn where a domain was NARROWED rather than documented as divergent:
+the device implements it as `exp2(b · log2(a))` exactly, which is NaN
+for every negative base and for `pow(x, 0)` at any non-positive,
+infinite or NaN `x`, so the CPU adopts that domain instead of returning
+the host answer the device cannot reach.
 
 **Cache provenance.** GPU output is not byte-identical to CPU, so a
 resolver's `cacheSalt` (format version + adapter vendor, architecture,

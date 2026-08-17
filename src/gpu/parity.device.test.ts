@@ -10,7 +10,7 @@
  * different reasons: `rangeUlp` is the worst lane (an extreme-value
  * statistic that climbs as more lanes are sampled — so it is swept
  * across element counts here, never measured at one), and `meanAbs` is
- * the mean absolute divergence (sample-size stable to 1.04x across two
+ * the mean absolute divergence (sample-size stable to 1.05x across two
  * decades of count — so it moves only when the interior really changes).
  *
  * Each float family is measured twice: once for the AUTHORED spec
@@ -111,7 +111,7 @@ function ulpDistance(a: number, b: number): number {
  *   the largest one's units. No non-`exact` family is vec-valued today.
  * - `meanAbs`: mean of `|cpu - gpu|` over lanes, in absolute units. The
  *   budgeted interior metric, and the one that is stable under sample
- *   size (≤ 1.04x across 10k → 1M for every sampled family). A
+ *   size (≤ 1.05x across 10k → 1M for every sampled family). A
  *   regression that shifts the whole distribution moves this even when
  *   the worst lane still fits under a widened max budget.
  * - Infinity for a NaN vs number mismatch.
@@ -421,7 +421,7 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     // in the spec, so seed is inert here and count was the only unpinned
     // axis; sweeping it is what makes a budget a statement about the
     // family. `meanAbs` is swept alongside for the opposite reason: it
-    // must NOT move (≤ 1.04x across two decades), so any shift in it is
+    // must NOT move (≤ 1.05x across two decades), so any shift in it is
     // a real change in the interior rather than a deeper tail.
     const cases = PARITY_CASES.filter((pc) => pc.countSensitive === true);
     expect(cases.length, "count-sensitive families in the table").toBeGreaterThan(0);

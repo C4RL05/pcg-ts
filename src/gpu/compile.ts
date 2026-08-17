@@ -627,6 +627,14 @@ registerElementwise("asin", 1, (a) => `asin(${a[0]})`);
 registerElementwise("acos", 1, (a) => `acos(${a[0]})`);
 registerElementwise("atan", 1, (a) => `atan(${a[0]})`);
 registerElementwise("atan2", 2, (a) => `atan2(${a[0]}, ${a[1]})`);
+// Both sides carry a budget rather than an exactness claim, for opposite
+// reasons: sqrt because the DEVICE is the inaccurate one (rsqrt plus
+// refinement, 1 ULP out on ~16% of inputs, where Math.sqrt is correctly
+// rounded), pow because the device's exp2(b*log2(a)) lowering and the
+// CPU's Math.pow simply are not the same function. The CPU pow adopts that
+// lowering's DOMAIN, so the two agree on where the answer is NaN.
+registerElementwise("sqrt", 1, (a) => `sqrt(${a[0]})`);
+registerElementwise("pow", 2, (a) => `pow(${a[0]}, ${a[1]})`);
 registerElementwise("clamp", 3, (a) => `clamp(${a[0]}, ${a[1]}, ${a[2]})`);
 // CPU lerp is a + (b - a) * t; WGSL mix() is specified as a*(1-t)+b*t,
 // which rounds differently — emit the CPU formula.
@@ -639,6 +647,12 @@ registerElementwise("gt", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(siz
 registerElementwise("ge", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} >= ${a[1]})`);
 registerElementwise("eq", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} == ${a[1]})`);
 registerElementwise("ne", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} != ${a[1]})`);
+// step is `ge` with the operands swapped, so emit `ge`'s comparison rather
+// than WGSL's step() builtin: the CPU answers a NaN `x` with 0 (because
+// `NaN >= edge` is false) and the builtin's NaN behaviour is not specified
+// tightly enough to rely on. Spelling it this way makes the parity exact by
+// construction instead of by measurement.
+registerElementwise("step", 2, (a, size) => `select(${zeroLit(size)}, ${oneLit(size)}, ${a[1]} >= ${a[0]})`);
 
 // remap needs intermediate values (degenerate input span maps to outMin,
 // mirroring the CPU; the divisor is guarded so no Inf/NaN is produced in
@@ -666,6 +680,27 @@ HANDLERS.set("dot", (spec, path, ctx) => {
   const size = broadcastSizes("dot", path, [a.size, b.size]);
   if (size === 1) return ctx.emit(`${a.ref} * ${b.ref}`, 1);
   return ctx.emit(`dot(${splat(a, size)}, ${splat(b, size)})`, 1);
+});
+
+// cross is width 3 on both arguments with no scalar broadcast, so it does
+// not go through broadcastSizes — the refusal has to name the argument the
+// way the CPU constructor does. The builtin is emitted rather than a hand
+// expansion because the two were measured bit-identical on every lane, and
+// both match the CPU's f32-at-each-step rounding exactly.
+HANDLERS.set("cross", (spec, path, ctx) => {
+  const args = specArgs(spec);
+  const a = compileArg(args[0], `${path}.args[0]`, ctx);
+  const b = compileArg(args[1], `${path}.args[1]`, ctx);
+  for (const [which, v] of [["a", a] as const, ["b", b] as const]) {
+    if (v.size !== 3) {
+      throw new GpuCompileError(
+        `${path}: cross: argument \`${which}\` has width ${v.size}, but a cross product is ` +
+          "defined for width 3 only. Scalars do NOT broadcast into one here — build a vec3 " +
+          "with `vec(x, y, z)`, or use `dot` for a product that works at any width.",
+      );
+    }
+  }
+  return ctx.emit(`cross(${a.ref}, ${b.ref})`, 3);
 });
 
 HANDLERS.set("length", (spec, path, ctx) => {

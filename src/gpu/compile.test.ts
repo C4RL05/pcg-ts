@@ -265,6 +265,10 @@ describe("grammar coverage", () => {
     max: { fn: "max", args: [1, 2] },
     abs: { fn: "abs", args: [-1] },
     floor: { fn: "floor", args: [1.5] },
+    sqrt: { fn: "sqrt", args: [2] },
+    // Base above 0: a negative one is NaN on both paths by design.
+    pow: { fn: "pow", args: [2, 3] },
+    step: { fn: "step", args: [1, 2] },
     sin: { fn: "sin", args: [1] },
     cos: { fn: "cos", args: [1] },
     tan: { fn: "tan", args: [1] },
@@ -283,6 +287,8 @@ describe("grammar coverage", () => {
     eq: { fn: "eq", args: [1, 2] },
     ne: { fn: "ne", args: [1, 2] },
     dot: { fn: "dot", args: [[1, 2, 3], [4, 5, 6]] },
+    // Width 3 on both sides is not stylistic — cross refuses anything else.
+    cross: { fn: "cross", args: [[1, 2, 3], [4, 5, 6]] },
     length: { fn: "length", args: [[1, 2, 3]] },
     normalize: { fn: "normalize", args: [[1, 2, 3]] },
     vec: { fn: "vec", args: [1, 2, 3] },

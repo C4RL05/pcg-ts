@@ -52,6 +52,18 @@ function readPage(name: string): string {
   return readFileSync(path, "utf8").replaceAll("\r\n", "\n");
 }
 
+/**
+ * Any committed file a count claim points at, normalized the same way
+ * {@link readPage} normalizes the site pages and for the same reason.
+ * Separate from `readPage` because a claim may live outside `docs/` —
+ * `llms.txt` is at the repository root, and being unreachable from here
+ * is exactly why its count went a release out of date.
+ */
+function readRepoFile(relative: string): string {
+  const path = fileURLToPath(new URL(`../../${relative}`, import.meta.url));
+  return readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+}
+
 function readJson(relative: string): unknown[] {
   const path = fileURLToPath(new URL(`../../${relative}`, import.meta.url));
   return JSON.parse(readFileSync(path, "utf8")) as unknown[];
@@ -155,19 +167,20 @@ describe("site version stamps", () => {
 
 describe("site stated counts", () => {
   for (const claim of COUNT_CLAIMS) {
-    it(`docs/${claim.page}: ${claim.label} matches ${claim.source}`, () => {
+    it(`${claim.page}: ${claim.label} matches ${claim.source}`, () => {
       const expected = TRUTH[claim.source];
       expect(expected, `site.test: no truth registered for "${claim.source}"`).toBeTypeOf("number");
 
       // The roadmap is history — "node types go 25 → 32", "429 tests" —
       // and must never be read as a claim about the current release.
-      const searched = claim.page === "index.html" ? withoutRoadmap(page(claim.page)) : page(claim.page);
+      const text = readRepoFile(claim.page);
+      const searched = claim.page === "docs/index.html" ? withoutRoadmap(text) : text;
       const found = findStatedCounts(searched, claim.pattern);
 
       if (found.length === 0) {
         throw new Error(
           [
-            `docs/${claim.page}: could not find the sentence stating ${claim.label}.`,
+            `${claim.page}: could not find the sentence stating ${claim.label}.`,
             `It was matched by ${String(claim.pattern)}.`,
             "Either the sentence was reworded (update the pattern in src/docs/site.ts,",
             "in COUNT_CLAIMS) or the claim was deleted (remove the entry). A claim that",
@@ -180,10 +193,10 @@ describe("site stated counts", () => {
       if (wrong.length > 0) {
         throw new Error(
           [
-            `docs/${claim.page} states the wrong ${claim.label}.`,
+            `${claim.page} states the wrong ${claim.label}.`,
             `  ${claim.source} reports ${expected}.`,
             ...wrong.map(
-              (f) => `  docs/${claim.page}:${f.line} says ${f.value} — ${JSON.stringify(f.text)}`,
+              (f) => `  ${claim.page}:${f.line} says ${f.value} — ${JSON.stringify(f.text)}`,
             ),
             "",
             `Fix: edit the prose on the line above to say ${expected}. The number is`,

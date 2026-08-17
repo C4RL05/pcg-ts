@@ -57,16 +57,20 @@ frequency yields a silently DEAD field — `perlinNoise` and `fbm` only;
 
 **Still open from that log, both deliberately deferred:**
 
-- **No `cross`, `pow`, `sqrt`, `step`, `and` or `or` in the field
-  grammar.** The riverbank graph hand-rolls a 2D perpendicular nine nested
-  objects deep, and it is left that way on purpose as the record of what
-  the absence costs. Deferred because adding a fn is never just a fn:
-  `compile.test.ts` asserts `supportedGpuFieldFns() === listFieldFns()`,
-  so every new name needs a WGSL handler, an entry in both `MINIMAL_SPECS`
-  corpora, and the parity work behind them. It is its own change with its
-  own GPU half. The working idioms (`mul` = AND, `max` = OR, `sub(1, p)` =
-  NOT) are documented in the catalog now rather than in one unrelated
-  node's description.
+- **~~No `cross`, `pow`, `sqrt`, `step`, `and` or `or` in the field
+  grammar.~~ FOUR OF THE SIX SHIPPED 2026-08-17.** `cross`, `pow`, `sqrt`
+  and `step` are in the grammar; the riverbank's nine-deep hand-rolled
+  perpendicular is now one `cross` call, byte-identical.
+  **`and` and `or` stay out, and that is now a decision rather than a
+  deferral**: `mul` IS logical AND on 0/1 predicates and `max` IS OR,
+  exactly, with no rounding to argue about, and both say so in their own
+  catalog entries. A second spelling of an existing operation would cost
+  the full new-fn tax to buy a synonym. `step` was added knowing it is
+  exactly `ge(x, edge)` with the operands swapped — that one bought a name
+  a shader author reaches for, and its entry says as much — so the line
+  between the two calls is worth stating: `step` renames a fn whose
+  argument ORDER trips people, `and`/`or` would rename ones whose spelling
+  is already the obvious one.
 - **No way to discover a valid asset id.** `spawnInstances.assetId` is a
   free string whose meaning belongs to the renderer, there is no
   `pcg assets`, and the blind author invented two names that cook

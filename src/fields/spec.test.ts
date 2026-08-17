@@ -26,6 +26,7 @@ import {
   clamp,
   component,
   cos,
+  cross,
   div,
   dot,
   eq,
@@ -41,10 +42,13 @@ import {
   mul,
   ne,
   normalize,
+  pow,
   ramp,
   remap,
   select,
   sin,
+  sqrt,
+  step,
   sub,
   tan,
   vec,
@@ -187,6 +191,22 @@ const BINARY: Array<() => FieldLike[]> = [
   () => [DEN(), 0.75],
 ];
 
+/**
+ * Argument tuples for `cross`, which is not broadcast-legal: both operands
+ * must be width 3, so the BINARY set above — scalars and mixed widths
+ * throughout — would be a width error rather than a matrix. Every entry
+ * here is a width-3 operand of a different provenance (literal, attribute,
+ * built tuple, raw array), because the round trip has to preserve the
+ * operands' specs as well as the fn's.
+ */
+const CROSS: Array<() => FieldLike[]> = [
+  () => [T3(), T3()],
+  () => [P(), T3()],
+  () => [N3(), P()],
+  () => [vec(DEN(), RND(), NSE()), P()],
+  () => [T3(), [1, 0, -2.5]],
+];
+
 /** Argument tuples for ternary combinators. */
 const TERNARY: Array<() => FieldLike[]> = [
   () => [S(), S(), S()],
@@ -262,7 +282,7 @@ const CASES: Case[] = [
   { name: "randomField negative key", make: () => randomField(-3) },
   { name: "randomField string key", make: () => randomField("species") },
 
-  // -- elementwise (25) -----------------------------------------------
+  // -- elementwise (28) -----------------------------------------------
   ...spread("add", BINARY, (a) => add(a[0], a[1])),
   ...spread("sub", BINARY, (a) => sub(a[0], a[1])),
   ...spread("mul", BINARY, (a) => mul(a[0], a[1])),
@@ -276,8 +296,16 @@ const CASES: Case[] = [
   ...spread("ge", BINARY, (a) => ge(a[0], a[1])),
   ...spread("eq", BINARY, (a) => eq(a[0], a[1])),
   ...spread("ne", BINARY, (a) => ne(a[0], a[1])),
+  // `step` sits with the predicates because that is what it is: `ge` with
+  // its arguments reversed, threshold first.
+  ...spread("step", BINARY, (a) => step(a[0], a[1])),
   ...spread("abs", UNARY, (a) => abs(a[0])),
   ...spread("floor", UNARY, (a) => floor(a[0])),
+  // Half of UNARY / BINARY is negative, so these two spend most of the
+  // matrix on their NaN branch — which is the branch worth round-tripping,
+  // since `pow` narrows its domain relative to the host's own operator.
+  ...spread("sqrt", UNARY, (a) => sqrt(a[0])),
+  ...spread("pow", BINARY, (a) => pow(a[0], a[1])),
   ...spread("sin", UNARY, (a) => sin(a[0])),
   ...spread("cos", UNARY, (a) => cos(a[0])),
   ...spread("tan", UNARY, (a) => tan(a[0])),
@@ -293,6 +321,7 @@ const CASES: Case[] = [
 
   // -- bespoke combinators --------------------------------------------
   ...spread("dot", BINARY, (a) => dot(a[0], a[1])),
+  ...spread("cross", CROSS, (a) => cross(a[0], a[1])),
   ...spread("length", UNARY, (a) => length(a[0])),
   ...spread("normalize", UNARY, (a) => normalize(a[0])),
   { name: "vec of one", make: () => vec(S()) },
@@ -490,6 +519,8 @@ describe("elementwise kind ↔ grammar fn", () => {
     ["max", () => max(1, 2)],
     ["abs", () => abs(1)],
     ["floor", () => floor(1)],
+    ["sqrt", () => sqrt(4)],
+    ["pow", () => pow(2, 3)],
     ["sin", () => sin(1)],
     ["cos", () => cos(1)],
     ["tan", () => tan(1)],
@@ -507,10 +538,14 @@ describe("elementwise kind ↔ grammar fn", () => {
     ["ge", () => ge(1, 2)],
     ["eq", () => eq(1, 2)],
     ["ne", () => ne(1, 2)],
+    ["step", () => step(1, 2)],
   ];
 
-  it("names 25 constructors, each a registered fn", () => {
-    expect(ELEMENTWISE.length).toBe(25);
+  it("names 28 constructors, each a registered fn", () => {
+    // `cross` is deliberately absent: like `dot` it is bespoke rather than
+    // built on `elementwise`, so it has no `kind` string for this
+    // correspondence to pin.
+    expect(ELEMENTWISE.length).toBe(28);
     const registered = new Set(listFieldFns());
     for (const [name, make] of ELEMENTWISE) {
       expect(getFieldSpec(make())?.fn, `${name}: derived fn`).toBe(name);

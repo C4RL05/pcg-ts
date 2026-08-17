@@ -77,7 +77,7 @@ export const DEVICE_HOOK_TIMEOUT_MS = 40_000;
  * dominated not by the device but by the CPU-side `evaluateField` they
  * compare against, which runs several times slower inside a vitest
  * worker than in the plain-Node runner (measured ~3.8x). The parity
- * suite evaluates 36 families at 65 536 elements twice and 19 of them at
+ * suite evaluates 40 families at 65 536 elements twice and 20 of them at
  * two swept counts, so the default 5 s is not a budget it can respect.
  * A ceiling for a hung device, not a performance assertion.
  */

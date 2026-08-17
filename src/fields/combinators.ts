@@ -39,8 +39,8 @@ function elementwise(
     return { data: out, tupleSize: ts };
   });
   // `kind` IS the grammar fn name for every elementwise combinator — one
-  // derivation covers all 25. `elementwiseKindsAreRegisteredFns` in
-  // spec.test.ts pins that correspondence so it cannot drift.
+  // derivation covers all 28. "names 28 constructors, each a registered fn"
+  // in spec.test.ts pins that correspondence so it cannot drift.
   return attachArgsSpec(field, kind, fields);
 }
 
@@ -82,6 +82,64 @@ export function abs(a: FieldLike): Field {
 /** Elementwise floor. */
 export function floor(a: FieldLike): Field {
   return elementwise("floor", [a], (v) => Math.floor(v[0]));
+}
+
+/**
+ * Elementwise square root, and NOT bit-exact on the GPU despite IEEE 754
+ * mandating a correctly rounded one. `Math.sqrt` does honour that — the
+ * f64 result rounded once at the f32 store is the nearest f32, measured
+ * over 2,000,000 samples with zero mismatches — but the device does not:
+ * it lowers `sqrt` to a reciprocal-square-root plus refinement, which
+ * lands 1 ULP low or high on ~16% of inputs at every magnitude (perfect
+ * squares stay exact). So `sqrt` carries a 1-ULP budget in the parity
+ * table. The CPU is the correctly rounded side of that disagreement.
+ *
+ * Negative inputs are NaN on both paths, matching `Math.sqrt`.
+ */
+export function sqrt(a: FieldLike): Field {
+  return elementwise("sqrt", [a], (v) => Math.sqrt(v[0]));
+}
+
+/**
+ * Elementwise `a` raised to `b`, over a DOMAIN narrower than `Math.pow`'s.
+ *
+ * The device is measured to implement `pow` as exactly `exp2(b * log2(a))`
+ * — 4096 of 4096 samples bit-identical to that expansion — and that
+ * identity is NaN across a whole region where `Math.pow` returns a number:
+ * every negative base (`pow(-2, 2)` is 4 in JS, NaN here), `pow(0, 0)`,
+ * and `pow(x, 0)` for a zero, negative, infinite or NaN `x`. Honouring the
+ * JS answers would leave the two paths silently disagreeing there, so the
+ * CPU adopts the identity's DOMAIN while keeping `Math.pow`'s better
+ * accuracy everywhere the device returns a real number. For a signed power
+ * write `mul(normalize(x), pow(abs(x), y))` — `normalize` on a scalar
+ * yields the sign.
+ *
+ * Inside the shared domain it is still only approximate: the device's
+ * expansion differs from `Math.pow` on ~64% of samples, so `pow` carries
+ * the grammar's widest elementwise budget.
+ */
+export function pow(a: FieldLike, b: FieldLike): Field {
+  return elementwise("pow", [a, b], (v) => {
+    const base = v[0];
+    // Strictly positive and finite: the device returns a real number here,
+    // so use the accurate answer. `+ 0` normalizes a -0 result (which
+    // `Math.pow(-0, 3)` can produce) to the +0 that exp2 always gives.
+    if (base > 0 && base < Infinity) return Math.pow(base, v[1]) + 0;
+    // Otherwise follow the identity itself, so the two paths answer NaN on
+    // exactly the same inputs rather than on nearly the same ones.
+    return Math.pow(2, v[1] * Math.log2(base));
+  });
+}
+
+/**
+ * Elementwise step: 1 where `x` is at or above `edge`, 0 below it.
+ *
+ * Exactly `ge(x, edge)` with the arguments the other way round, NaN case
+ * included — it earns its place as the name a shader author reaches for,
+ * not as new expressive power.
+ */
+export function step(edge: FieldLike, x: FieldLike): Field {
+  return elementwise("step", [edge, x], (v) => (v[1] >= v[0] ? 1 : 0));
 }
 
 // -- trigonometry ----------------------------------------------------------
@@ -249,6 +307,72 @@ export function dot(a: FieldLike, b: FieldLike): Field<1> {
     return { data: out, tupleSize: 1 };
   });
   return attachArgsSpec(field, "dot", [fa, fb]);
+}
+
+/**
+ * @internal The width rule for {@link cross}, applied statically where the
+ * widths are known and again at evaluation where they were not. Its own
+ * function so both checks phrase the refusal identically.
+ */
+function requireCrossWidth(a: number | undefined, b: number | undefined): void {
+  const bad =
+    a !== undefined && a !== 3 ? ["a", a] : b !== undefined && b !== 3 ? ["b", b] : null;
+  if (bad === null) return;
+  throw new Error(
+    `cross: argument \`${bad[0]}\` has width ${bad[1]}, but a cross product is defined for ` +
+      "width 3 only. Scalars do NOT broadcast into one here — build a vec3 with " +
+      "`vec(x, y, z)`, or use `dot` for a product that works at any width.",
+  );
+}
+
+/**
+ * Cross product of two 3-component tuples, per element.
+ *
+ * The grammar's ONLY width-specific fn. Everything else broadcasts, and
+ * the scalar rule is suppressed here on purpose: `cross(t, 1)` is a width
+ * error rather than a cross against `[1, 1, 1]`, because the second
+ * reading is never what an author meant.
+ *
+ * BIT-EXACT on the GPU, and deliberately so — it is the one place in this
+ * module where rounding order is chosen rather than inherited. Every other
+ * compound fn (`dot`, `lerp`, `normalize`) accumulates in f64 and rounds
+ * once at the store, which is why each carries a budget. Here the products
+ * are rounded to f32 individually, with `Math.fround`, before they are
+ * subtracted, because that is what the device does: measured over 12,288
+ * lanes, the device matches f32-at-each-step on 100% and f64-once on 65%,
+ * and the gap is worth 539 ULP. Three roundings buy exactness.
+ *
+ * The device's `cross` builtin and a hand-written expansion are themselves
+ * bit-identical on every lane, and a deliberate `fma` control shader was
+ * used to confirm the comparison can see contraction when it happens — it
+ * simply does not here.
+ */
+export function cross(a: FieldLike, b: FieldLike): Field<3> {
+  const fa = resolveField(a);
+  const fb = resolveField(b);
+  requireCrossWidth(fa.tupleSize, fb.tupleSize); // static check where widths are known
+  const field = makeField<3>(`cross(${keyRef(fa.key)},${keyRef(fb.key)})`, 3, (ctx) => {
+    const ca = evaluateField(fa, ctx);
+    const cb = evaluateField(fb, ctx);
+    requireCrossWidth(ca.tupleSize, cb.tupleSize);
+    const n = elementCount(ctx);
+    const out = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const o = i * 3;
+      const ax = ca.data[o];
+      const ay = ca.data[o + 1];
+      const az = ca.data[o + 2];
+      const bx = cb.data[o];
+      const by = cb.data[o + 1];
+      const bz = cb.data[o + 2];
+      // fround on each product, not on the difference: see the note above.
+      out[o] = Math.fround(ay * bz) - Math.fround(az * by);
+      out[o + 1] = Math.fround(az * bx) - Math.fround(ax * bz);
+      out[o + 2] = Math.fround(ax * by) - Math.fround(ay * bx);
+    }
+    return { data: out, tupleSize: 3 };
+  });
+  return attachArgsSpec(field, "cross", [fa, fb]);
 }
 
 /** Euclidean length of each element tuple. */

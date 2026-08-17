@@ -258,7 +258,14 @@ export function withoutRoadmap(html: string): string {
  * ------------------------------------------------------------------ */
 
 export interface CountClaim {
-  /** Page the claim appears on, relative to `docs/`. */
+  /**
+   * File the claim appears in, relative to the REPOSITORY ROOT — not to
+   * `docs/`, which is what it used to mean and what kept the two
+   * root-level copies of these sentences out of the check. `llms.txt`
+   * and `docs/authoring.md` both state the field-fn count, both drifted
+   * to 45 while the gated pages correctly said 46, and neither was
+   * noticed until a fn was added.
+   */
   readonly page: string;
   /** What the number counts, as the reader sees it. */
   readonly label: string;
@@ -282,43 +289,43 @@ export interface CountClaim {
  */
 export const COUNT_CLAIMS: readonly CountClaim[] = [
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "registered node types (stat row)",
     source: "listNodeTypes().length",
     pattern: /<b>([\d,]+)<\/b><span>registered node types<\/span>/g,
   },
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "node types (Fig. 1, src/nodes)",
     source: "listNodeTypes().length",
     pattern: /src\/nodes — ([\d,]+) types/g,
   },
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "named primitives (stat row)",
     source: "docs/primitives.json entries",
     pattern: /<b>([\d,]+)<\/b><span>named primitives<\/span>/g,
   },
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "named primitives (Fig. 1, src/primitives)",
     source: "docs/primitives.json entries",
     pattern: /src\/primitives — ([\d,]+) named recipes/g,
   },
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "named primitives (Built for agents)",
     source: "docs/primitives.json entries",
     pattern: /([\d,]+) named primitives ship as/g,
   },
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "field-grammar functions (stat row)",
     source: "listFieldFns().length",
     pattern: /<b>([\d,]+)<\/b><span>field-grammar functions<\/span>/g,
   },
   {
-    page: "index.html",
+    page: "docs/index.html",
     label: "corpus graphs",
     source: "docs/graphs.json entries",
     // Was "corpus of N single-concept graphs". The corpus grew a family
@@ -327,70 +334,85 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
     pattern: /corpus of ([\d,]+) graphs/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "node types in the standard library (ch. 8 prose)",
     source: "listNodeTypes().length",
     pattern: /There are ([\d,]+) types in the standard library/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "listNodeTypes().length (ch. 8 code comment)",
     source: "listNodeTypes().length",
     pattern: /types\.length;[^<]*<span class="c">\/\/ ([\d,]+)<\/span>/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "docs/nodes.json entry count (ch. 8 prose)",
     source: "listNodeTypes().length",
     pattern: /same ([\d,]+) entries in the same shape/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "field function names (ch. 8 prose)",
     source: "listFieldFns().length",
     pattern: /sorted array of ([\d,]+) names/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "node types (ch. 8 `pcg nodes` transcript)",
     source: "listNodeTypes().length",
     pattern: /([\d,]+) node types, by category/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "named primitives (ch. 8 prose)",
     source: "docs/primitives.json entries",
     pattern: /([\d,]+) named primitives ship with the library/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "listSubgraphs().length (ch. 8 code comment)",
     source: "docs/primitives.json entries",
     pattern: /all\.length;[^<]*<span class="c">\/\/ ([\d,]+)<\/span>/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "corpus graphs (ch. 8 catalog table)",
     source: "docs/graphs.json entries",
     pattern: /([\d,]+) graphs under <code>graphs\/<\/code>/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "corpus graphs (ch. 14 prose)",
     source: "docs/graphs.json entries",
     pattern: /indexes ([\d,]+) corpus graphs/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "field fns (ch. 8 `pcg fields` transcript)",
     source: "listFieldFns().length",
     pattern: /([\d,]+) field fns/g,
   },
   {
-    page: "manual.html",
+    page: "docs/manual.html",
     label: "field-grammar functions (ch. 12 prose)",
     source: "listFieldFns().length",
     pattern: /Those ([\d,]+) functions, nested arbitrarily/g,
+  },
+  // The two below are the reason `page` is repo-relative. Both state the
+  // field-fn count in the agent-facing docs, both are hand-written, and
+  // both were a full release behind the gated pages before anyone looked.
+  {
+    page: "llms.txt",
+    label: "field fns (grammar section)",
+    source: "listFieldFns().length",
+    pattern: /All ([\d,]+) fns \(`listFieldFns\(\)`\):/g,
+  },
+  {
+    page: "docs/authoring.md",
+    label: "field fn names (elementwise chapter)",
+    source: "listFieldFns().length",
+    pattern: /`listFieldFns\(\)` returns all ([\d,]+) names at runtime/g,
   },
 ];
 
