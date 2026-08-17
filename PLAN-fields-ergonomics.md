@@ -423,7 +423,7 @@ understanding the model, not about line count.
 | --- | --- | --- | --- |
 | ~~E1~~ | docs framing — lead with `Field<T>`, not the JSON | — | **SHIPPED** `a3d3b94` |
 | ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
-| D1 | sandbox read-only field-tree view | medium | nothing |
+| ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
 | C2 | flip the default over 24 params | ~1 month | §7.2 + one design call, on `connectPoints.radius` |
 | B2 | text syntax | medium-large | §7.1 |
 | A3 | subexpression binding | medium | thin mandate — 11 specs |
@@ -445,12 +445,23 @@ here: the rule's fifth clause is RELATIONAL SYMMETRY and not grid sizing
 auditing the gaps turned up seven false claims about what a noise's `opts`
 can hold, two of them shipped in primitive descriptions.
 
-**Recommendation from here: D1, or stop.** Everything else is either
-blocked on a decision in §7 or waiting for evidence it has not got.
+**D1 shipped in `5bb3301`**, and it was the best of the larger items for
+the reason it was picked: the only one that makes an expression legible
+without changing the format, and it cannot be wrong, because a read-only
+view has no correctness stake. It cost the library one export —
+`specChildEntries`, the labelled form of the walk `specChildren` already
+did — rather than the sandbox duplicating the grammar's five child
+positions, which is what the plan's own D1 note had left open.
 
-D1 is the best of the larger items — it is the only one that makes an
-expression legible without changing the format, and it cannot be wrong,
-because a read-only view has no correctness stake.
+Worth recording, because it argues for another entry on this list: the
+diagram makes the THREE IDENTICAL channel chains inside
+`examples-gpu-fields`' `color.value` obvious at a glance — the repetition
+§2.6 had to count subtrees to find. A view that surfaces the evidence for
+A3 by being looked at is doing more than legibility.
+
+**Recommendation from here: stop.** Every remaining unit is blocked on a
+decision in §7, or waiting on evidence it has not got. Nothing on this
+list should be started without one of those changing first.
 
 ### Verification per unit
 
