@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
+import { Pcg32 } from "../random/index.js";
 import {
   add,
   atan2,
@@ -25,13 +26,21 @@ import {
   peekFieldSpec,
   specFallbackReason,
 } from "./spec.js";
-import { fbm, perlinNoise, simplexNoise, worleyNoise } from "../noise/index.js";
+import {
+  NOISE_RAW_RANGES,
+  fbm,
+  noiseOutputRange,
+  perlinNoise,
+  simplexNoise,
+  worleyNoise,
+} from "../noise/index.js";
 import {
   FieldJsonError,
   fieldFromJson,
   fieldFromJsonValueFree,
   fieldToJson,
   fnVariation,
+  listFieldFnInfos,
   listFieldFns,
   inlineParamMetaOf,
   inlineParamValuesOf,
@@ -1587,5 +1596,249 @@ describe("opts.frequency stays a literal", () => {
     const a = evaluateField(scaled, ctx).data;
     const b = evaluateField(literal, ctx).data;
     for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(b[i], 5);
+  });
+});
+
+/**
+ * The catalog `pcg fields` prints and `listFieldFnInfos()` returns. These
+ * tests exist because the field grammar's catalog once published a type
+ * signature and nothing else — `args: [arg0, arg1, arg2]` for `select`,
+ * no output range on any noise — so an agent authoring the half of the
+ * language where the interesting work happens had to build a probe graph
+ * to learn what it was writing. What is asserted here is what stops that
+ * from coming back.
+ */
+describe("listFieldFnInfos — the field-fn catalog", () => {
+  const infos = listFieldFnInfos();
+
+  it("describes every registered fn, and only registered fns", () => {
+    expect(infos.map((i) => i.fn)).toEqual(listFieldFns());
+    for (const info of infos) {
+      // Non-empty and actually prose: a description equal to the name, or
+      // to the usage sketch, is the gap this field closes wearing a
+      // different hat.
+      expect(info.description.trim(), info.fn).not.toBe("");
+      expect(info.description, info.fn).not.toBe(info.fn);
+      expect(info.description, info.fn).not.toBe(info.usage);
+      expect(info.description.length, info.fn).toBeGreaterThan(20);
+    }
+  });
+
+  it("names every args position, and never publishes arg0", () => {
+    for (const info of infos) {
+      // `arg0..argN` was the whole defect: a length is not a signature.
+      expect(info.usage, info.fn).not.toMatch(/\barg\d/);
+      const takesArgs = info.keys.includes("args");
+      expect(info.args !== undefined, `${info.fn} keys=${info.keys.join(",")}`).toBe(takesArgs);
+      if (info.args === undefined) continue;
+      const names = info.args.map((a) => a.name);
+      expect(new Set(names).size, info.fn).toBe(names.length);
+      for (const a of info.args) {
+        expect(a.name.trim(), info.fn).not.toBe("");
+        expect(a.description.trim(), `${info.fn}.${a.name}`).not.toBe("");
+      }
+      // The usage sketch, the arity check and the published names are one
+      // declaration — a fn cannot advertise three names and accept four.
+      // A REPEATED position (a name ending in `…`) is the one exemption:
+      // `vec` has no fixed arity, so its sketch shows an example instead.
+      if (names.some((n) => n.endsWith("…"))) continue;
+      expect(info.usage, info.fn).toContain(`args: [${names.join(", ")}]`);
+    }
+  });
+
+  it("publishes ranges that are ordered and finite wherever it publishes any", () => {
+    for (const info of infos) {
+      if (info.outputRange === undefined) continue;
+      expect(info.outputRange.length, info.fn).toBeGreaterThan(0);
+      for (const r of info.outputRange) {
+        expect(Number.isFinite(r.min) && Number.isFinite(r.max), info.fn).toBe(true);
+        expect(r.min, info.fn).toBeLessThan(r.max);
+      }
+    }
+  });
+
+  it("returns a fresh copy, so a caller cannot edit the registry", () => {
+    const first = listFieldFnInfos().find((i) => i.fn === "select");
+    (first as unknown as { args: { name: string }[] }).args[0].name = "clobbered";
+    expect(listFieldFnInfos().find((i) => i.fn === "select")?.args?.[0].name).toBe("cond");
+  });
+
+  /**
+   * The ranges are read off `NOISE_RAW_RANGES`, the one table the noise
+   * factories are built against, so the catalog cannot advertise a range
+   * the field does not have. Checked against a BUILT field rather than
+   * against the table alone: `noiseOutputRange` is what the library
+   * records on the actual column, and the two agreeing is the claim.
+   */
+  it("publishes each noise's real output range, taken from the built field", () => {
+    const published = (fn: string): readonly { min: number; max: number; note?: string }[] => {
+      const range = infos.find((i) => i.fn === fn)?.outputRange;
+      expect(range, `${fn} publishes no output range`).toBeDefined();
+      return range as readonly { min: number; max: number; note?: string }[];
+    };
+    for (const fn of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
+      const [first] = published(fn);
+      expect([first.min, first.max], fn).toEqual([...NOISE_RAW_RANGES[fn]]);
+      expect(noiseOutputRange(fieldFromJson({ fn })), fn).toEqual([...NOISE_RAW_RANGES[fn]]);
+    }
+    // Worley has one range per `output`, which is exactly why the entries
+    // carry a note: one pair of numbers would be a wrong answer for two of
+    // the three.
+    const worley = published("worleyNoise");
+    for (const output of ["f1", "f2", "f2-f1"] as const) {
+      const entry = worley.find((r) => r.note?.includes(`"${output}"`));
+      expect(entry, `worleyNoise has no entry for output ${output}`).toBeDefined();
+      const real = noiseOutputRange(
+        fieldFromJson({ fn: "worleyNoise", opts: { output } } as unknown as FieldSpec),
+      );
+      expect([entry?.min, entry?.max], output).toEqual([...(real as readonly number[])]);
+    }
+    // fbm's range is per-configuration; the published one is the default
+    // (4 octaves, gain 0.5) over perlin, so it moves if those defaults do.
+    const [fbmDefault] = published("fbm");
+    expect([fbmDefault.min, fbmDefault.max]).toEqual([
+      ...(noiseOutputRange(fieldFromJson({ fn: "fbm", base: "perlinNoise" })) as readonly number[]),
+    ]);
+    // Every noise's `normalized: true` entry, checked against the wrapper.
+    for (const fn of ["valueNoise", "perlinNoise", "simplexNoise", "worleyNoise"] as const) {
+      const normalized = published(fn).find((r) => r.note === "opts.normalized: true");
+      if (normalized === undefined) continue;
+      expect([normalized.min, normalized.max], fn).toEqual([
+        ...(noiseOutputRange(
+          fieldFromJson({ fn, opts: { normalized: true } } as unknown as FieldSpec),
+        ) as readonly number[]),
+      ]);
+    }
+  });
+});
+
+/**
+ * 40 points at unit spacing from [0,0,0] to [39,0,0] — the most natural
+ * thing an author writes (`pointGrid` at its default spacing), and the
+ * arrangement on which perlin is silently dead.
+ */
+function unitLine(n = 40): EvalContext {
+  const geo = createPointCloud(n);
+  const P = geo.attrs.point.require("P");
+  for (let i = 0; i < n; i++) P.setTuple(i, [i, 0, 0]);
+  return { geo, domain: "point", seed: 7 };
+}
+
+function extremes(field: Field, ctx: EvalContext): { min: number; max: number } {
+  const data = Array.from(evaluateField(field, ctx).data);
+  return { min: Math.min(...data), max: Math.max(...data) };
+}
+
+describe("the integer-lattice trap the catalog documents", () => {
+  const ctx = unitLine();
+
+  it("is real: perlin at a whole-number frequency on a unit lattice is all zeros", () => {
+    for (const frequency of [1, 2, 3]) {
+      const { min, max } = extremes(fieldFromJson({ fn: "perlinNoise", opts: { frequency } }), ctx);
+      expect([min, max], `frequency ${frequency}`).toEqual([0, 0]);
+    }
+    // Nothing throws anywhere along the way, which is the whole problem:
+    // the failure is a dead attribute, not an exception.
+    expect(() => fieldFromJson({ fn: "perlinNoise", opts: { frequency: 1 } })).not.toThrow();
+  });
+
+  it("is fixed by a fractional frequency, and NOT by an integer offset", () => {
+    const half = extremes(fieldFromJson({ fn: "perlinNoise", opts: { frequency: 0.5 } }), ctx);
+    expect(half.min).toBeCloseTo(-0.408248, 5);
+    expect(half.max).toBeCloseTo(0.408248, 5);
+    // The remedy the description names has to be the one that works: an
+    // integer offset only moves the samples onto other lattice points.
+    const integerOffset = extremes(
+      fieldFromJson({ fn: "perlinNoise", opts: { frequency: 1, offset: [3, 4, 5] } }),
+      ctx,
+    );
+    expect([integerOffset.min, integerOffset.max]).toEqual([0, 0]);
+    const fractionalOffset = extremes(
+      fieldFromJson({ fn: "perlinNoise", opts: { frequency: 1, offset: [0.37, 0.11, 0.23] } }),
+      ctx,
+    );
+    expect(fractionalOffset.max).toBeGreaterThan(0.1);
+    expect(fractionalOffset.min).toBeLessThan(-0.1);
+  });
+
+  it("reaches every octave of an fbm over perlin, and no other noise", () => {
+    // `lacunarity` defaults to 2, so every octave lands on the lattice
+    // together — the trap is worse under fbm, not diluted by it.
+    const dead = extremes(
+      fieldFromJson({ fn: "fbm", base: "perlinNoise", opts: { frequency: 1 } }),
+      ctx,
+    );
+    expect([dead.min, dead.max]).toEqual([0, 0]);
+    // Value noise returns the lattice point's own random value, and
+    // simplex's lattice is skewed, so neither is degenerate here. The
+    // catalog says so and has to keep being right about it.
+    for (const fn of ["valueNoise", "simplexNoise"] as const) {
+      const { min, max } = extremes(fieldFromJson({ fn, opts: { frequency: 1 } }), ctx);
+      expect(max - min, fn).toBeGreaterThan(0.5);
+    }
+  });
+
+  it("is named, with its remedy, in the descriptions of both fns it bites", () => {
+    // The measurement above is worth nothing if the catalog stops saying
+    // it. Both fns must name the lattice AND a fix an author can apply.
+    for (const fn of ["perlinNoise", "fbm"] as const) {
+      const description = listFieldFnInfos().find((i) => i.fn === fn)?.description ?? "";
+      expect(description, fn).toMatch(/lattice/i);
+      expect(description, fn).toMatch(/fractional/i);
+    }
+  });
+});
+
+/**
+ * 40,000 pseudo-random points in a 1000-unit cube, from a fixed PCG32
+ * seed so the numbers below are the same on every run and platform. This
+ * is the sample the `perlinNoise` and `simplexNoise` descriptions quote.
+ */
+function scatteredCloud(n = 40000): EvalContext {
+  const geo = createPointCloud(n);
+  const P = geo.attrs.point.require("P");
+  const rng = new Pcg32(20260817);
+  for (let i = 0; i < n; i++) {
+    P.setTuple(i, [rng.range(-500, 500), rng.range(-500, 500), rng.range(-500, 500)]);
+  }
+  return { geo, domain: "point", seed: 7 };
+}
+
+/**
+ * The catalog tells authors the published bound is a BOUND and not an
+ * amplitude, and quotes numbers for how far short of it the noises fall.
+ * An unpinned number in a doc goes stale silently, and a stale number here
+ * is the same defect the whole change exists to remove — so the claim is
+ * asserted as a bracket, wide enough not to be a change detector and tight
+ * enough to fail if the amplitude actually moves.
+ */
+describe("the practical noise amplitudes the catalog quotes", () => {
+  const ctx = scatteredCloud();
+
+  it("keeps perlin near ±0.75 and simplex near ±0.94, both inside the published bound", () => {
+    const perlin = extremes(fieldFromJson({ fn: "perlinNoise", opts: { frequency: 0.07 } }), ctx);
+    expect(perlin.min).toBeGreaterThan(-0.85);
+    expect(perlin.min).toBeLessThan(-0.65);
+    expect(perlin.max).toBeLessThan(0.85);
+    expect(perlin.max).toBeGreaterThan(0.65);
+
+    const simplex = extremes(fieldFromJson({ fn: "simplexNoise", opts: { frequency: 0.07 } }), ctx);
+    expect(simplex.min).toBeGreaterThan(-1);
+    expect(simplex.min).toBeLessThan(-0.85);
+    expect(simplex.max).toBeLessThan(1);
+    expect(simplex.max).toBeGreaterThan(0.85);
+
+    // The point the description is making: simplex swings wider than
+    // perlin over the same points, and neither reaches the bound.
+    expect(simplex.max - simplex.min).toBeGreaterThan(perlin.max - perlin.min);
+  });
+
+  it("says so in the descriptions, with the bound named as a bound", () => {
+    const infos = listFieldFnInfos();
+    const perlin = infos.find((i) => i.fn === "perlinNoise")?.description ?? "";
+    expect(perlin).toContain("BOUND and not an");
+    expect(perlin).toContain("0.75");
+    const simplex = infos.find((i) => i.fn === "simplexNoise")?.description ?? "";
+    expect(simplex).toContain("0.94");
   });
 });

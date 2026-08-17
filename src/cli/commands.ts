@@ -8,6 +8,7 @@ import {
   DOMAINS,
   type DataItem,
   type DescribedGraphParam,
+  type FieldFnInfo,
   type StrandedGraphParamValue,
   type Domain,
   type Graph,
@@ -265,11 +266,44 @@ const nodesCommand: Command = {
 // fields
 // ---------------------------------------------------------------------------
 
+/**
+ * One field fn in full — the field grammar's answer to
+ * {@link nodeDetailText}, and deliberately built out of the same pieces:
+ * a name, the prose, then tables. A `pcg nodes <type>` reader is told what
+ * every param means, and until this printed the same an agent authoring
+ * the half of the language where the interesting work happens was reading
+ * a type signature.
+ */
+function fieldFnDetailText(info: FieldFnInfo): string {
+  const lines = [
+    info.fn,
+    "",
+    info.description,
+    "",
+    `keys:  ${info.keys.length === 0 ? "(none besides fn)" : info.keys.join(", ")}`,
+    `usage: ${info.usage}`,
+  ];
+  if (info.args !== undefined && info.args.length > 0) {
+    lines.push("", "args:");
+    lines.push(...table([["name", "description"], ...info.args.map((a) => [a.name, a.description])]));
+  }
+  if (info.outputRange !== undefined && info.outputRange.length > 0) {
+    lines.push("", "output range:");
+    lines.push(
+      ...table(
+        info.outputRange.map((r) => [`${fmtStat(r.min)} .. ${fmtStat(r.max)}`, r.note ?? ""]),
+      ),
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 const fieldsCommand: Command = {
   spec: {
     name: "fields",
     summary:
-      "Print the field-expression catalog: every `fn` a field-valued param accepts in JSON, with its allowed keys and usage.",
+      "Print the field-expression catalog: every `fn` a field-valued param accepts in JSON, with what it does. With an fn, print its named arguments, usage and output range.",
     positionals: [{ name: "fn", required: false, description: "a field constructor, e.g. perlinNoise" }],
     flags: {},
   },
@@ -283,19 +317,17 @@ const fieldsCommand: Command = {
           `unknown field fn "${wanted}"; valid fns: ${infos.map((i) => i.fn).join(", ")}`,
         );
       }
-      const text = [
-        info.fn,
-        "",
-        `keys:  ${info.keys.length === 0 ? "(none besides fn)" : info.keys.join(", ")}`,
-        `usage: ${info.usage}`,
-        "",
-      ].join("\n");
-      return Promise.resolve({ text, json: info });
+      return Promise.resolve({ text: fieldFnDetailText(info), json: info });
     }
+    // One sentence each, exactly as `pcg nodes` summarizes a type: the
+    // usage sketches were what this table used to hold, and 46 of them set
+    // a column width no screen has while saying nothing about what any of
+    // them DOES. They are one `pcg fields <fn>` away, and `--json` still
+    // carries every one of them here.
     const lines = [`${plural(infos.length, "field fn")}`, ""];
-    lines.push(...table(infos.map((i) => [i.fn, i.usage])));
+    lines.push(...table(infos.map((i) => [i.fn, firstSentence(i.description)])));
     lines.push("");
-    lines.push("pcg fields <fn> prints one constructor's keys and usage.");
+    lines.push("pcg fields <fn> prints one constructor's named arguments, usage and output range.");
     return Promise.resolve({ text: lines.join("\n") + "\n", json: infos });
   },
 };

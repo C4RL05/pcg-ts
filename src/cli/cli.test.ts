@@ -197,10 +197,14 @@ describe("pcg cli — catalogs", () => {
     expect(io.stderr()).toContain("pointScatterInBounds");
   });
 
-  it("fields lists the grammar with usage, and one fn in detail", async () => {
+  it("fields lists the grammar with a description each, and one fn in detail", async () => {
     const io = withGraph();
     expect(await runCli(["fields"], io.io)).toBe(EXIT_OK);
     expect(io.stdout()).toContain("perlinNoise");
+    // The list is the `pcg nodes` list's counterpart: one sentence per
+    // entry saying what the thing DOES, not 46 type signatures.
+    expect(io.stdout()).toContain("Perlin gradient noise");
+    expect(io.stdout()).toContain("Elementwise conditional");
 
     const one = withGraph();
     expect(await runCli(["fields", "perlinNoise"], one.io)).toBe(EXIT_OK);
@@ -209,6 +213,87 @@ describe("pcg cli — catalogs", () => {
     const bad = withGraph();
     expect(await runCli(["fields", "perlin"], bad.io)).toBe(EXIT_FAILURE);
     expect(bad.stderr()).toContain('unknown field fn "perlin"; valid fns: ');
+  });
+
+  /**
+   * The detail view is judged against `pcg nodes <type>`, which is the
+   * standard the field catalog was failing: a typed table with a real
+   * sentence per position. Before this, `pcg fields select` printed
+   * `args: [arg0, arg1, arg2]` and nothing else, and an agent had to build
+   * a probe graph to find out which argument was the condition.
+   */
+  it("fields <fn> names each argument in a table, and never prints arg0", async () => {
+    const io = withGraph();
+    expect(await runCli(["fields", "select"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    expect(text).not.toMatch(/\barg\d/);
+    expect(text).toContain('usage: { fn: "select", args: [cond, whenTrue, whenFalse] }');
+    expect(text).toContain("args:");
+    expect(text).toContain("cond");
+    expect(text).toContain("whenTrue");
+    expect(text).toContain("whenFalse");
+    // The prose, not just the names.
+    expect(text).toContain("Elementwise conditional");
+
+    // `remap`'s five positions were the sharpest case: `[arg0..arg4]` is a
+    // length, not a signature.
+    const remap = withGraph();
+    expect(await runCli(["fields", "remap"], remap.io)).toBe(EXIT_OK);
+    expect(remap.stdout()).toContain('args: [x, inMin, inMax, outMin, outMax]');
+  });
+
+  it("fields <fn> prints the output range a noise was always keeping to itself", async () => {
+    const io = withGraph();
+    expect(await runCli(["fields", "perlinNoise"], io.io)).toBe(EXIT_OK);
+    const text = io.stdout();
+    expect(text).toContain("output range:");
+    expect(text).toContain("-1 .. 1");
+    expect(text).toContain("opts.normalized: true");
+    // The measured trap, with a remedy an author can act on.
+    expect(text).toMatch(/lattice/i);
+    expect(text).toMatch(/fractional/i);
+
+    // Worley publishes one range per `output`, because one pair of numbers
+    // would be wrong for two of the three.
+    const worley = withGraph();
+    expect(await runCli(["fields", "worleyNoise"], worley.io)).toBe(EXIT_OK);
+    expect(worley.stdout()).toContain('output: "f1"');
+    expect(worley.stdout()).toContain('output: "f2-f1"');
+  });
+
+  it("--json carries the description, the named args and the ranges", async () => {
+    const one = withGraph();
+    expect(await runCli(["fields", "ramp", "--json"], one.io)).toBe(EXIT_OK);
+    const info = JSON.parse(one.stdout()) as {
+      fn: string;
+      usage: string;
+      description: string;
+      args?: { name: string; description: string }[];
+    };
+    expect(info.fn).toBe("ramp");
+    // The two things the log could not learn from `--json`: what the stops
+    // mean, and what happens outside them.
+    expect(info.description).toMatch(/inputPosition/);
+    expect(info.description).toMatch(/CLAMP/i);
+    expect(info.args?.[0].name).toBe("scalarField");
+
+    const all = withGraph();
+    expect(await runCli(["fields", "--json"], all.io)).toBe(EXIT_OK);
+    const infos = JSON.parse(all.stdout()) as {
+      fn: string;
+      usage: string;
+      description: string;
+      outputRange?: { min: number; max: number; note?: string }[];
+    }[];
+    // The list keeps the usage sketches it always carried — they left the
+    // TEXT table, not the machine-readable report.
+    expect(infos.every((i) => i.usage !== "" && i.description !== "")).toBe(true);
+    const random = infos.find((i) => i.fn === "randomField");
+    expect(random?.outputRange?.[0]).toEqual({
+      min: 0,
+      max: 1,
+      note: "half-open — 0 occurs, 1 never does",
+    });
   });
 });
 

@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-55 examples, alphabetical by file:
+56 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -52,6 +52,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
 - [examples-headless-scatter.json](#examples-headless-scatterjson) — headless scatter
 - [examples-rig.json](#examples-rigjson) — a suspended rig, built from curves
+- [examples-riverbank.json](#examples-riverbankjson) — Riverbank
 - [examples-streamed-terrain.json](#examples-streamed-terrainjson) — one cell of a streamed world, halo and all
 - [pipeline-1-boundary.json](#pipeline-1-boundaryjson) — staged pipeline 1/5 — the ground and the wall
 - [pipeline-2-districts.json](#pipeline-2-districtsjson) — staged pipeline 2/5 — district centres and the field they claim
@@ -889,6 +890,24 @@ A box truss follows a spline pushed around by two noises: four chords with zigza
 **Outputs:** `truss` (from `trussChordSkin`.`out`), `braces` (from `trussBraceSkin`.`out`), `frames` (from `trussFrameSkin`.`out`), `parts` (from `partPartSpawn`.`instances`), `wraps` (from `wrapWraps`.`out`), `chains` (from `chainSpawn`.`instances`), `danglers` (from `danglerDanglerSkin`.`out`), `drapes` (from `drapeDrapeSkin`.`out`), `spinePoints` (from `spineSpine`.`out`)
 
 Cook it: `pcg cook graphs/examples-rig.json --stats`
+
+## examples-riverbank.json
+
+**Riverbank**
+
+Distance to a FEATURE as the thing that shapes everything else, which several graphs use in passing and none is named for. A straight line of points is pushed sideways by a noise and pathed into a river, `splineSample` walks it at even spacing, and `sampleNearestPoint` writes each ground point's distance to the nearest of those samples into `riverDist` — one attribute that then drives three separate decisions: `filterByExpression` thins the trees near the water, their `scale` rises with it, and the driftwood is placed on the river's own samples rather than on the ground at all, pushed to the bank along the curve normal and turned to the `tangent` that `splineSample` already wrote. Measured across three equal-area distance bands, tree counts run 163, 256, 289 outward and mean scale 0.53, 0.81, 1.03, 1.22 — the falloff is in the numbers, not only in the picture. IT WAS AUTHORED BY AN AGENT THAT COULD NOT READ THIS REPOSITORY, and that is why it is here. Given only `pcg nodes`, `pcg fields`, `pcg validate` and `pcg inspect` — no source, no docs, no other graph, not even for the file format — it reverse-engineered the format in eight `validate` probes and reached a clean cook on its second write. What it could NOT learn from the catalog is what got fixed because of it: the field catalog published type signatures with no semantics, the noise output ranges the library already knew were never printed, and nothing warned that gradient noise is exactly zero on the integer lattice. The hand-rolled perpendicular in `driftToBank` is left exactly as it wrote it, nine nested objects deep, because the grammar has no `cross` and that is the honest record of what the absence costs.
+
+**Tags:** `river`, `scatter`, `distance-falloff`, `path`, `spawn`
+
+**Seed:** 20260816
+
+**Node types:** `filterByExpression`, `meshPrimitive`, `orientAlongVector`, `pointLine`, `pointScatterInBounds`, `pointsToPath`, `sampleNearestPoint`, `selfPrune`, `setAttribute`, `spawnInstances`, `splineSample`
+
+**Primitives:** *(none)*
+
+**Outputs:** `trees` (from `trees`.`instances`), `driftwood` (from `driftwood`.`instances`), `river` (from `riverPath`.`out`), `ground` (from `ground`.`out`)
+
+Cook it: `pcg cook graphs/examples-riverbank.json --stats`
 
 ## examples-streamed-terrain.json
 

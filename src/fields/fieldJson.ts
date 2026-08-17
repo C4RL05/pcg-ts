@@ -151,7 +151,11 @@ import {
 } from "../noise/index.js";
 // By path, not through `src/noise/index.ts`: the range bound and the
 // discriminator are the parser's business, not the package's surface.
-import { MAX_SEED_VARIANT } from "../noise/util.js";
+// `NOISE_RAW_RANGES` rides the same import for the catalog's sake — the
+// documented output ranges are published from the ONE table the noise
+// factories are built against, so `pcg fields perlinNoise` cannot print a
+// range the field does not have.
+import { MAX_SEED_VARIANT, NOISE_RAW_RANGES } from "../noise/util.js";
 
 /** Errors raised while converting fields to or from JSON specs. */
 export class FieldJsonError extends Error {
@@ -184,6 +188,50 @@ export { type FieldBindingValue, type FieldSpec, type FieldSpecArg, getFieldSpec
  */
 export type FnVariation = "per-element" | "uniform";
 
+/**
+ * One argument position of a fn's `args` array, named and explained.
+ *
+ * The name is the identifier the usage sketch prints in that slot, so
+ * `select` reads `args: [cond, whenTrue, whenFalse]` rather than
+ * `[arg0, arg1, arg2]` — a length is not a signature. A trailing `…`
+ * marks a REPEATED position (`vec`'s components), the one case where the
+ * list is shorter than the arity.
+ */
+interface ArgDoc {
+  readonly name: string;
+  readonly description: string;
+}
+
+/**
+ * A documented output range, and the configuration it holds under.
+ *
+ * `note` carries the qualification whenever a fn has more than one range
+ * (worley's three outputs, every noise's `normalized: true`) or whenever
+ * the bounds are not both attainable (`randomField` never returns 1).
+ * Without it, one pair of numbers would have to stand for several
+ * different answers, which is how a published range becomes a wrong one.
+ */
+interface RangeDoc {
+  readonly min: number;
+  readonly max: number;
+  readonly note?: string;
+}
+
+/** The catalog half of a registration: what the fn does, and its arguments. */
+interface FnDoc {
+  /**
+   * What the fn COMPUTES, in the voice `ParamSchema.description` uses for
+   * a node param: the operation, then the edges that bite (ranges,
+   * degenerate inputs, what happens outside a domain). Not a restatement
+   * of the name.
+   */
+  readonly description: string;
+  /** One entry per `args` position, in order. Absent for fns taking no `args`. */
+  readonly args?: readonly ArgDoc[];
+  /** Documented output range(s), when the fn has one worth stating. */
+  readonly outputRange?: readonly RangeDoc[];
+}
+
 interface FnDef {
   /** Spec keys allowed besides `fn`. */
   readonly keys: readonly string[];
@@ -197,8 +245,34 @@ interface FnDef {
   readonly variation: FnVariation;
   /** Usage sketch shown in errors. */
   readonly usage: string;
+  /**
+   * REQUIRED for the reason {@link FnVariation} is: a fn registered with
+   * no prose publishes a type signature and calls it a catalog, which is
+   * exactly the gap this field exists to close. `pcg fields` and
+   * {@link listFieldFnInfos} read it, and the completeness test in
+   * fieldJson.test.ts refuses an empty one.
+   */
+  readonly doc: FnDoc;
   build(spec: Record<string, unknown>, path: string): Field;
 }
+
+/**
+ * The broadcast rule, restated on every combinator that has one, because
+ * an author reads ONE entry and must not have to have read another.
+ */
+const BROADCAST =
+  "Arguments broadcast: a scalar spreads across any tuple width, and two non-scalar widths must match.";
+
+/** The four noise options every noise fn shares, said once. */
+const NOISE_OPTS_DOC =
+  "Shared options: `seed` (an integer, or {\"from\": \"node\", \"variant\": N} so the graph's seed " +
+  "box re-rolls it), `frequency` and `offset` (the point sampled is `p * frequency + offset`, so a " +
+  "SMALLER frequency means larger features), `position` (replaces `position()` as the point sampled " +
+  "— the one option that takes a field expression, and how a per-element frequency is written), and " +
+  "`normalized` (maps the range below affinely onto [0, 1]).";
+
+/** The `normalized: true` range entry, identical for every noise. */
+const NORMALIZED_RANGE: RangeDoc = { min: 0, max: 1, note: "opts.normalized: true" };
 
 const FNS = new Map<string, FnDef>();
 
@@ -299,9 +373,10 @@ function register(
   variation: FnVariation,
   keys: readonly string[],
   usage: string,
+  doc: FnDoc,
   build: FnDef["build"],
 ): void {
-  FNS.set(name, { keys, variation, usage, build });
+  FNS.set(name, { keys, variation, usage, doc, build });
 }
 
 /**
@@ -309,18 +384,32 @@ function register(
  * shape: an elementwise combinator over its arguments is uniform, but
  * nothing about "fixed arity" says so, and a per-element fn registered
  * through here would otherwise inherit a classification nobody chose.
+ *
+ * The arity comes from `args.length` rather than from a number beside it,
+ * so the usage sketch, the arity check and the published argument list are
+ * one declaration: a fn cannot advertise three names and accept four.
  */
 function registerFixed(
   name: string,
   variation: FnVariation,
-  arity: number,
+  args: readonly ArgDoc[],
+  description: string,
   make: (fields: Field[]) => Field,
+  outputRange?: readonly RangeDoc[],
 ): void {
-  const argNames = Array.from({ length: arity }, (_, i) => `arg${i}`).join(", ");
-  register(name, variation, ["args"], `{ fn: "${name}", args: [${argNames}] }`, (spec, path) => {
-    const args = requireArgs(spec, path, arity);
-    return make(args.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
-  });
+  const arity = args.length;
+  const usage = `{ fn: "${name}", args: [${args.map((a) => a.name).join(", ")}] }`;
+  register(
+    name,
+    variation,
+    ["args"],
+    usage,
+    { description, args, ...(outputRange !== undefined ? { outputRange } : {}) },
+    (spec, path) => {
+      const parsed = requireArgs(spec, path, arity);
+      return make(parsed.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
+    },
+  );
 }
 
 /**
@@ -335,18 +424,41 @@ export function fnVariation(fn: string): FnVariation | undefined {
 
 // -- inputs ----------------------------------------------------------------
 
-register("constant", "uniform", ["value"], `{ fn: "constant", value: 1 | [1, 2, 3] }`, (spec, path) => {
-  const v = spec.value;
-  if (typeof v === "number" && Number.isFinite(v)) return constant(v);
-  if (isNumberArray(v)) return constant(v);
-  fail(`${path}.value`, "constant requires a finite number or non-empty number array");
-});
+register(
+  "constant",
+  "uniform",
+  ["value"],
+  `{ fn: "constant", value: 1 | [1, 2, 3] }`,
+  {
+    description:
+      "The same value on every element: a finite number for a scalar, or a non-empty array of finite " +
+      "numbers for the matching tuple. Rarely written out — a bare number or number array in any " +
+      "argument position wraps into one automatically, so `{\"fn\": \"mul\", \"args\": [x, 2]}` needs no " +
+      "constant node.",
+  },
+  (spec, path) => {
+    const v = spec.value;
+    if (typeof v === "number" && Number.isFinite(v)) return constant(v);
+    if (isNumberArray(v)) return constant(v);
+    fail(`${path}.value`, "constant requires a finite number or non-empty number array");
+  },
+);
 
 register(
   "attribute",
   "per-element",
   ["name", "tupleSize"],
   `{ fn: "attribute", name: "density", tupleSize?: 1 }`,
+  {
+    description:
+      "Reads a NUMERIC attribute of whatever domain the expression lands on. Any of `P`, `density`, " +
+      "or anything an upstream node wrote. Numeric columns are read in place and a bool column reads as " +
+      "0 or 1. A STRING attribute is refused (drive one with `attributeIs` or `byAttribute`), and so " +
+      "is a missing attribute or a `tupleSize` that disagrees with the stored one. Leave `tupleSize` " +
+      "off to accept whatever width the geometry has; give it to have the width checked against the " +
+      "REST OF THE EXPRESSION when the field is built, since the disagreement with what the geometry " +
+      "actually stores can only be reported once a geometry is in hand.",
+  },
   (spec, path) => {
     if (typeof spec.name !== "string" || spec.name === "") {
       fail(`${path}.name`, "attribute requires a non-empty string name");
@@ -367,6 +479,16 @@ register(
   "per-element",
   ["name", "value"],
   `{ fn: "attributeIs", name: "species", value: "pine" }`,
+  {
+    description:
+      "1 on elements whose STRING attribute `name` equals `value`, 0 everywhere else. This is how a " +
+      "string column drives a field, and it is a predicate rather than an accessor because a string " +
+      "column's indices are rebuilt by ordinary filtering and merging. A literal the geometry's " +
+      "string table does not hold matches nothing and reads as all zeros rather than throwing, so a " +
+      "MISSPELLED value is silent; a missing attribute, or a numeric one, still throws. Use " +
+      "`byAttribute` when there are more than two cases.",
+    outputRange: [{ min: 0, max: 1, note: "1 or 0, nothing between" }],
+  },
   (spec, path) => {
     if (typeof spec.name !== "string" || spec.name === "") {
       fail(`${path}.name`, "attributeIs requires a non-empty string name");
@@ -392,6 +514,17 @@ register(
   "per-element",
   ["name", "cases", "default"],
   `{ fn: "byAttribute", name: "part", cases: { "rod": 1, "panel": [1, 0.7, 1] }, default: 1 }`,
+  {
+    description:
+      "The N-way `attributeIs`. Each element takes the `cases` entry whose KEY equals its `name` " +
+      "string attribute, and `default` where no key does. `default` is REQUIRED — naming the " +
+      "fall-through is the point of the fn. Case values are full argument positions (a nested spec, " +
+      "a number, or a tuple) and broadcast against each other, so the result's width is a property " +
+      "of the expression and never of which case fired. Every case is evaluated and then selected " +
+      "between; at most one can fire, so the order they are written in does not matter. A key the " +
+      "geometry's string table does not hold matches nothing and takes the default, which makes a " +
+      "misspelled key dead code rather than an error.",
+  },
   (spec, path) => {
     if (typeof spec.name !== "string" || spec.name === "") {
       fail(`${path}.name`, "byAttribute requires a non-empty string name");
@@ -463,20 +596,70 @@ function detachedLeaf<N extends number>(shared: Field<N>, spec: FieldSpec): Fiel
   return copy;
 }
 
-register("position", "per-element", [], `{ fn: "position" }`, () =>
-  detachedLeaf(position(), { fn: "position" }),
+register(
+  "position",
+  "per-element",
+  [],
+  `{ fn: "position" }`,
+  {
+    description:
+      "The element's world position: the standard `P` attribute as a tuple-3 field. This is the " +
+      "point every noise samples when its `opts.position` is not set, and the input to scale when a " +
+      "per-element noise frequency is wanted.",
+  },
+  () => detachedLeaf(position(), { fn: "position" }),
 );
-register("index", "per-element", [], `{ fn: "index" }`, () =>
-  detachedLeaf(index(), { fn: "index" }),
+register(
+  "index",
+  "per-element",
+  [],
+  `{ fn: "index" }`,
+  {
+    description:
+      "The element's 0-based index within the domain, in storage order (0, 1, 2, …). It names a " +
+      "SLOT rather than an element, so anything that filters, merges or reorders upstream renumbers " +
+      "it. For a per-element value that survives those, use `randomField`, which is keyed on " +
+      "identity on the point and primitive domains (on vertex and detail it falls back to this same " +
+      "index).",
+  },
+  () => detachedLeaf(index(), { fn: "index" }),
 );
-register("fraction", "per-element", [], `{ fn: "fraction" }`, () =>
-  detachedLeaf(fraction(), { fn: "fraction" }),
+register(
+  "fraction",
+  "per-element",
+  [],
+  `{ fn: "fraction" }`,
+  {
+    description:
+      "The element index normalized onto a CLOSED [0, 1], as `index / (count - 1)`. Exactly 0 on " +
+      "the first element and exactly 1 on the last, so 5 elements give 0, 0.25, 0.5, 0.75, 1; a " +
+      "lone element gives 0. That closed span is why a periodic function of it repeats its start " +
+      "value on the last element — multiply by `(count - 1) / count` for a seam-free loop. Like " +
+      "`index` it reads the slot, so it moves when the domain is filtered.",
+    outputRange: [{ min: 0, max: 1, note: "inclusive at both ends" }],
+  },
+  () => detachedLeaf(fraction(), { fn: "fraction" }),
 );
 // UNIFORM, and the only leaf that is: the node seed is one number for the
 // whole cook, which is exactly what makes the seed-shift idiom built on it
 // worth folding.
-register("nodeSeed", "uniform", [], `{ fn: "nodeSeed" }`, () =>
-  detachedLeaf(nodeSeed(), { fn: "nodeSeed" }),
+register(
+  "nodeSeed",
+  "uniform",
+  [],
+  `{ fn: "nodeSeed" }`,
+  {
+    description:
+      "The cooking node's own seed as a number, CONSTANT over the whole domain. It is the same " +
+      "value `randomField` hashes, moving only when the graph's seed or the node's id changes. To make a " +
+      "saved noise re-roll with the graph's seed box, write `opts.seed: {\"from\": \"node\", " +
+      "\"variant\": N}` on the noise rather than folding this into its `opts.position`; the fold is " +
+      "what older graphs contain and it is correct for exactly one (graph seed, node id) pair. The " +
+      "value lands in an f32 column, so seeds above 2^24 round to a nearby multiple of a power of " +
+      "two: it is a decorrelation source, not an integer to compare for equality against a reported " +
+      "seed.",
+  },
+  () => detachedLeaf(nodeSeed(), { fn: "nodeSeed" }),
 );
 
 /**
@@ -733,6 +916,19 @@ register(
   "per-element",
   ["name", "value", "min", "max", "description"],
   `{ fn: "param", name: "amplitude", value?: 0.5, min?: 0, max?: 4, description?: "..." }`,
+  {
+    description:
+      "A NAMED value standing where a literal would, so one number inside an expression becomes a " +
+      "knob without a subgraph wrapped around it to carry the number. The value is " +
+      "SUBSTITUTED at build time: the field comes out exactly as if the literal had been written, " +
+      "key included. Resolution order is an outer binding first (`fieldFromJson`'s second " +
+      "argument), then a Field an earlier call already spliced onto this node, then this node's own " +
+      "`value`, then a refusal — a name nothing supplies builds but never evaluates, rather than " +
+      "quietly reading zero. `min`, `max` and `description` document the inline `value` the way a " +
+      "node's param schema documents a param, and are what a panel reads to label and bound the " +
+      "knob; they are refused without a `value` to describe. The same name may appear several times " +
+      "in one expression, and a panel then treats them as ONE knob and writes every one of them.",
+  },
   (spec, path) => {
     const name = spec.name;
     if (typeof name !== "string" || name === "") {
@@ -791,58 +987,356 @@ register(
   },
 );
 
-register("randomField", "per-element", ["key"], `{ fn: "randomField", key?: 0 | "salt" }`, (spec, path) => {
-  const key = spec.key;
-  if (key === undefined) return randomField();
-  if (typeof key === "number" || typeof key === "string") return randomField(key);
-  fail(`${path}.key`, "key must be a number or string");
-});
+register(
+  "randomField",
+  "per-element",
+  ["key"],
+  `{ fn: "randomField", key?: 0 | "salt" }`,
+  {
+    description:
+      "A per-element uniform random draw in [0, 1) — 1 is never returned. The distribution is flat, " +
+      "so `lt(randomField(), 0.3)` keeps about 30% of the elements. `key` SALTS the stream " +
+      "(any number or string, default 0), so two `randomField`s in one expression with different " +
+      "keys are independent draws, and the same key on the same node at the same graph seed " +
+      "reproduces the same numbers — the stream also carries the COOKING NODE's seed, so two nodes " +
+      "writing `randomField()` draw differently. On the " +
+      "point domain the draw is keyed on the point's IDENTITY — its stored position together with " +
+      "its `seed` attribute — not on its slot, with two consequences worth knowing: filtering or " +
+      "reordering upstream hands each point the number it already had, and MOVING a point changes " +
+      "its draw, so draw before you jitter. Points that share a position and a seed draw alike (a " +
+      "freshly created cloud is exactly that). On the primitive domain the key is the primitive's " +
+      "own points; on vertex and detail it is the element index. Re-rolls with the graph's seed " +
+      "box, unlike a noise carrying a literal `opts.seed`.",
+    outputRange: [{ min: 0, max: 1, note: "half-open — 0 occurs, 1 never does" }],
+  },
+  (spec, path) => {
+    const key = spec.key;
+    if (key === undefined) return randomField();
+    if (typeof key === "number" || typeof key === "string") return randomField(key);
+    fail(`${path}.key`, "key must be a number or string");
+  },
+);
 
 // -- combinators -----------------------------------------------------------
+
+/** One named argument position. */
+const arg = (name: string, description: string): ArgDoc => ({ name, description });
+
+/** The 1/0 result every comparison produces. */
+const PREDICATE_RANGE: readonly RangeDoc[] = [{ min: 0, max: 1, note: "1 or 0, nothing between" }];
+
+/** The two operands of a comparison, whose prose is the same for all six. */
+const COMPARE_ARGS: readonly ArgDoc[] = [
+  arg("a", "Left-hand value."),
+  arg("b", "Right-hand value."),
+];
 
 // All UNIFORM: an elementwise combinator's value at an element is a
 // function of its arguments' values at that element and of nothing else,
 // so it varies exactly as much as they do — which is what makes "every
 // argument is uniform" a sufficient test for the whole subtree.
-registerFixed("add", "uniform", 2, (f) => add(f[0], f[1]));
-registerFixed("sub", "uniform", 2, (f) => sub(f[0], f[1]));
-registerFixed("mul", "uniform", 2, (f) => mul(f[0], f[1]));
-registerFixed("div", "uniform", 2, (f) => div(f[0], f[1]));
-registerFixed("min", "uniform", 2, (f) => min(f[0], f[1]));
-registerFixed("max", "uniform", 2, (f) => max(f[0], f[1]));
-registerFixed("abs", "uniform", 1, (f) => abs(f[0]));
-registerFixed("floor", "uniform", 1, (f) => floor(f[0]));
-registerFixed("clamp", "uniform", 3, (f) => clamp(f[0], f[1], f[2]));
-registerFixed("lerp", "uniform", 3, (f) => lerp(f[0], f[1], f[2]));
-registerFixed("remap", "uniform", 5, (f) => remap(f[0], f[1], f[2], f[3], f[4]));
-registerFixed("select", "uniform", 3, (f) => select(f[0], f[1], f[2]));
-registerFixed("lt", "uniform", 2, (f) => lt(f[0], f[1]));
-registerFixed("le", "uniform", 2, (f) => le(f[0], f[1]));
-registerFixed("gt", "uniform", 2, (f) => gt(f[0], f[1]));
-registerFixed("ge", "uniform", 2, (f) => ge(f[0], f[1]));
-registerFixed("eq", "uniform", 2, (f) => eq(f[0], f[1]));
-registerFixed("ne", "uniform", 2, (f) => ne(f[0], f[1]));
-registerFixed("dot", "uniform", 2, (f) => dot(f[0], f[1]));
-registerFixed("length", "uniform", 1, (f) => length(f[0]));
-registerFixed("normalize", "uniform", 1, (f) => normalize(f[0]));
-registerFixed("sin", "uniform", 1, (f) => sin(f[0]));
-registerFixed("cos", "uniform", 1, (f) => cos(f[0]));
-registerFixed("tan", "uniform", 1, (f) => tan(f[0]));
-registerFixed("asin", "uniform", 1, (f) => asin(f[0]));
-registerFixed("acos", "uniform", 1, (f) => acos(f[0]));
-registerFixed("atan", "uniform", 1, (f) => atan(f[0]));
-registerFixed("atan2", "uniform", 2, (f) => atan2(f[0], f[1]));
+registerFixed(
+  "add",
+  "uniform",
+  [arg("a", "First addend."), arg("b", "Second addend.")],
+  `Elementwise \`a + b\`. ${BROADCAST}`,
+  (f) => add(f[0], f[1]),
+);
+registerFixed(
+  "sub",
+  "uniform",
+  [arg("a", "Value subtracted FROM."), arg("b", "Value subtracted.")],
+  `Elementwise \`a - b\`. On a 0/1 predicate, \`sub(1, p)\` is logical NOT — the grammar has no ` +
+    `\`not\` of its own. ${BROADCAST}`,
+  (f) => sub(f[0], f[1]),
+);
+registerFixed(
+  "mul",
+  "uniform",
+  [arg("a", "First factor."), arg("b", "Second factor.")],
+  "Elementwise `a * b`. On 0/1 predicates (`lt`, `gt`, `eq`, `attributeIs`, …) this is logical " +
+    `AND: the product is 1 only where both are. ${BROADCAST}`,
+  (f) => mul(f[0], f[1]),
+);
+registerFixed(
+  "div",
+  "uniform",
+  [arg("a", "Dividend."), arg("b", "Divisor. Not checked — see the description.")],
+  "Elementwise `a / b`. Division by zero is NOT an error: it yields ±Infinity (and 0/0 yields " +
+    "NaN), which then propagates through everything downstream and shows up as a non-finite count " +
+    `in \`pcg inspect\`. Guard the divisor with \`max\` when it can reach zero. ${BROADCAST}`,
+  (f) => div(f[0], f[1]),
+);
+registerFixed(
+  "min",
+  "uniform",
+  [arg("a", "First value."), arg("b", "Second value.")],
+  "Elementwise minimum. On 0/1 predicates this is logical AND, the same as `mul`. " + BROADCAST,
+  (f) => min(f[0], f[1]),
+);
+registerFixed(
+  "max",
+  "uniform",
+  [arg("a", "First value."), arg("b", "Second value.")],
+  "Elementwise maximum. On 0/1 predicates this is logical OR: 1 wherever either one is. " +
+    BROADCAST,
+  (f) => max(f[0], f[1]),
+);
+registerFixed(
+  "abs",
+  "uniform",
+  [arg("x", "Value whose sign is discarded.")],
+  "Elementwise absolute value, component by component.",
+  (f) => abs(f[0]),
+);
+registerFixed(
+  "floor",
+  "uniform",
+  [arg("x", "Value to round down.")],
+  "Elementwise floor: the largest integer at or below the value, so it rounds toward -Infinity " +
+    "and `floor(-0.5)` is -1, not 0. `sub(x, floor(x))` is the fractional part, which is how a " +
+    "value is wrapped into [0, 1).",
+  (f) => floor(f[0]),
+);
+registerFixed(
+  "clamp",
+  "uniform",
+  [
+    arg("x", "Value to bound."),
+    arg("lo", "Lower bound, returned wherever `x` falls below it."),
+    arg("hi", "Upper bound, returned wherever `x` rises above it."),
+  ],
+  "Elementwise `min(max(x, lo), hi)`. The bounds are not checked against each other: with " +
+    "`lo` above `hi` every element comes out as `hi`. A NaN `x` stays NaN — clamping does not " +
+    `rescue one. ${BROADCAST}`,
+  (f) => clamp(f[0], f[1], f[2]),
+);
+registerFixed(
+  "lerp",
+  "uniform",
+  [
+    arg("a", "Value at `t` = 0."),
+    arg("b", "Value at `t` = 1."),
+    arg("t", "Blend weight. Not clamped."),
+  ],
+  "Elementwise `a + (b - a) * t`. UNCLAMPED — a `t` outside [0, 1] extrapolates past the " +
+    `endpoints — so wrap \`t\` in \`clamp\` when the result must stay between them. ${BROADCAST}`,
+  (f) => lerp(f[0], f[1], f[2]),
+);
+registerFixed(
+  "remap",
+  "uniform",
+  [
+    arg("x", "Value to rescale."),
+    arg("inMin", "Input value that maps to `outMin`."),
+    arg("inMax", "Input value that maps to `outMax`."),
+    arg("outMin", "Output at `inMin`."),
+    arg("outMax", "Output at `inMax`."),
+  ],
+  "Elementwise linear rescale of `x` from [inMin, inMax] onto [outMin, outMax]. This is the usual " +
+    "way to turn a signed noise into a usable multiplier, as `remap(noise, -1, 1, 0.5, 2)`. " +
+    "UNCLAMPED: an " +
+    "`x` outside the input range lands outside the output range, so wrap it in `clamp` when the " +
+    "result must stay bounded. A degenerate input range (`inMax` equal to `inMin`) yields `outMin` " +
+    `rather than a division by zero, and the ranges may run backwards. ${BROADCAST}`,
+  (f) => remap(f[0], f[1], f[2], f[3], f[4]),
+);
+registerFixed(
+  "select",
+  "uniform",
+  [
+    arg("cond", "Condition. Any non-zero value is true, negatives and NaN included."),
+    arg("whenTrue", "Result where `cond` is non-zero."),
+    arg("whenFalse", "Result where `cond` is exactly 0."),
+  ],
+  "Elementwise conditional: `whenTrue` where `cond` is non-zero, `whenFalse` where it is exactly " +
+    "0. BOTH branches are evaluated on every element — there is no short-circuit — so a branch that " +
+    `would error or divide by zero still does. ${BROADCAST}`,
+  (f) => select(f[0], f[1], f[2]),
+);
+registerFixed(
+  "lt",
+  "uniform",
+  COMPARE_ARGS,
+  `Elementwise \`a < b\` as 1 or 0. ${BROADCAST}`,
+  (f) => lt(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
+  "le",
+  "uniform",
+  COMPARE_ARGS,
+  `Elementwise \`a <= b\` as 1 or 0. ${BROADCAST}`,
+  (f) => le(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
+  "gt",
+  "uniform",
+  COMPARE_ARGS,
+  `Elementwise \`a > b\` as 1 or 0. ${BROADCAST}`,
+  (f) => gt(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
+  "ge",
+  "uniform",
+  COMPARE_ARGS,
+  `Elementwise \`a >= b\` as 1 or 0. ${BROADCAST}`,
+  (f) => ge(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
+  "eq",
+  "uniform",
+  COMPARE_ARGS,
+  "Elementwise EXACT equality as 1 or 0, tolerance-free. The two values are compared with `===` " +
+    "after the usual f32 rounding, so this tests identical results and not 'close enough' — and " +
+    "with the two edges that operator carries: -0 equals 0, and NaN equals nothing, itself " +
+    `included. For an approximate test write \`lt(abs(sub(a, b)), epsilon)\`. ${BROADCAST}`,
+  (f) => eq(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
+  "ne",
+  "uniform",
+  COMPARE_ARGS,
+  "Elementwise exact inequality as 1 or 0 — the complement of `eq`, and tolerance-free the same " +
+    `way. ${BROADCAST}`,
+  (f) => ne(f[0], f[1]),
+  PREDICATE_RANGE,
+);
+registerFixed(
+  "dot",
+  "uniform",
+  [arg("a", "First vector."), arg("b", "Second vector.")],
+  "Per-element dot product: the sum over components of `a * b`, always SCALAR whatever the input " +
+    "width. With unit vectors it is the cosine of the angle between them. There is no `cross` in " +
+    "the grammar; a flat 2D perpendicular of a tangent `t` is written by hand as `vec(mul(t.z, -1), " +
+    `0, t.x)\` using \`component\`. ${BROADCAST}`,
+  (f) => dot(f[0], f[1]),
+);
+registerFixed(
+  "length",
+  "uniform",
+  [arg("v", "Tuple whose magnitude is taken.")],
+  "Euclidean length of each element's tuple, returned as a SCALAR; on a scalar input it is the " +
+    "absolute value. This is the grammar's only way to reach a square root — there is no `sqrt`, " +
+    "`pow`, `exp` or `mod` — so a shaped falloff is written with `ramp` rather than with an " +
+    "exponent.",
+  (f) => length(f[0]),
+);
+registerFixed(
+  "normalize",
+  "uniform",
+  [arg("v", "Tuple to scale to unit length.")],
+  "Scales each element's tuple to unit length, keeping its direction and its width. A zero tuple " +
+    "stays zero rather than producing NaN. On a scalar input it yields the sign: -1, 0 or 1.",
+  (f) => normalize(f[0]),
+);
+registerFixed(
+  "sin",
+  "uniform",
+  [arg("x", "Angle in RADIANS.")],
+  "Elementwise sine of an angle in RADIANS (not degrees). Deterministic within one engine; across " +
+    "engines identical results are the practical norm rather than a spec guarantee.",
+  (f) => sin(f[0]),
+  [{ min: -1, max: 1 }],
+);
+registerFixed(
+  "cos",
+  "uniform",
+  [arg("x", "Angle in RADIANS.")],
+  "Elementwise cosine of an angle in RADIANS (not degrees). Deterministic within one engine; " +
+    "across engines identical results are the practical norm rather than a spec guarantee.",
+  (f) => cos(f[0]),
+  [{ min: -1, max: 1 }],
+);
+registerFixed(
+  "tan",
+  "uniform",
+  [arg("x", "Angle in RADIANS.")],
+  "Elementwise tangent of an angle in RADIANS. UNBOUNDED — it grows without limit near ±π/2 — so " +
+    "clamp the result before it multiplies a position.",
+  (f) => tan(f[0]),
+);
+registerFixed(
+  "asin",
+  "uniform",
+  [arg("x", "Sine value. Outside [-1, 1] the result is NaN.")],
+  "Elementwise arcsine, in radians. An input outside [-1, 1] yields NaN rather than clamping, and " +
+    "the NaN propagates through everything downstream — clamp the input when it is computed.",
+  (f) => asin(f[0]),
+  [{ min: -Math.PI / 2, max: Math.PI / 2 }],
+);
+registerFixed(
+  "acos",
+  "uniform",
+  [arg("x", "Cosine value. Outside [-1, 1] the result is NaN.")],
+  "Elementwise arccosine, in radians. An input outside [-1, 1] yields NaN rather than clamping, " +
+    "and the NaN propagates — which is the usual failure of feeding it an un-normalized `dot`.",
+  (f) => acos(f[0]),
+  [{ min: 0, max: Math.PI }],
+);
+registerFixed(
+  "atan",
+  "uniform",
+  [arg("x", "Tangent value.")],
+  "Elementwise arctangent, in radians. Total over every finite input, unlike `asin` and `acos`. " +
+    "Use `atan2` when you have both legs of the angle and need all four quadrants.",
+  (f) => atan(f[0]),
+  [{ min: -Math.PI / 2, max: Math.PI / 2, note: "open interval — the endpoints are limits" }],
+);
+registerFixed(
+  "atan2",
+  "uniform",
+  [arg("y", "The Y leg. FIRST, as in the C signature."), arg("x", "The X leg.")],
+  "Elementwise two-argument arctangent `atan2(y, x)`, in radians. It is the angle of the vector " +
+    "(x, y), correct in all four quadrants. Note the argument ORDER — `y` comes first — which is " +
+    `the usual way this one is written wrong. ${BROADCAST}`,
+  (f) => atan2(f[0], f[1]),
+  [{ min: -Math.PI, max: Math.PI }],
+);
 
-register("vec", "uniform", ["args"], `{ fn: "vec", args: [x, y, z] }`, (spec, path) => {
-  const args = requireArgs(spec, path, "variadic");
-  return vec(...args.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
-});
+register(
+  "vec",
+  "uniform",
+  ["args"],
+  `{ fn: "vec", args: [x, y, z] }`,
+  {
+    description:
+      "Concatenates its arguments into ONE tuple per element, so `vec(x, y, z)` builds a vec3 out " +
+      "of three scalars. That is how a field-valued position or colour is assembled. A TUPLE argument " +
+      "contributes all of its components, so the result's width is the sum of the inputs' widths " +
+      "and not the number of arguments — `vec(someVec3, 1)` is a vec4. Takes one argument or more; " +
+      "there is no broadcasting here, because nothing is being combined.",
+    args: [
+      arg(
+        "components…",
+        "One or more fields, numbers or tuples, concatenated in the order written. At least one.",
+      ),
+    ],
+  },
+  (spec, path) => {
+    const args = requireArgs(spec, path, "variadic");
+    return vec(...args.map((a, i) => buildArg(a, `${path}.args[${i}]`)));
+  },
+);
 
 register(
   "component",
   "uniform",
   ["args", "index"],
   `{ fn: "component", args: [tupleField], index: 0 }`,
+  {
+    description:
+      "Extracts ONE component of each element's tuple as a scalar field: `index` 0 is x, 1 is y, 2 " +
+      "is z, 3 is w. The inverse of `vec`, and how a single axis of `position` or of a `tangent` " +
+      "attribute is read. An `index` at or beyond the input's tuple size throws when the field is " +
+      "EVALUATED rather than when the graph is validated, because the width is not known until a " +
+      "geometry is in hand.",
+    args: [arg("tupleField", "The tuple-valued field to read one component of.")],
+  },
   (spec, path) => {
     const args = requireArgs(spec, path, 1);
     const idx = spec.index;
@@ -858,6 +1352,18 @@ register(
   "uniform",
   ["args", "stops"],
   `{ fn: "ramp", args: [scalarField], stops: [[0, 0], [1, 1]] }`,
+  {
+    description:
+      "A piecewise-linear curve applied to a SCALAR field. `stops` is a list of `[inputPosition, " +
+      "outputValue]` pairs — NOT normalized to 0..1: the positions are read in the input's own " +
+      "units, so `[[4, 0], [30, 1]]` fades in between a distance of 4 and a distance of 30. " +
+      "Positions must be STRICTLY ASCENDING (equal or descending positions are refused), and the " +
+      "value between two stops is interpolated linearly. Outside the range the curve CLAMPS and " +
+      "never extrapolates: an input at or below the first position yields the first value, at or " +
+      "above the last yields the last, so a single stop is a constant. With no `pow` or `exp` in " +
+      "the grammar this is how a shaped falloff is written. A non-scalar input throws at evaluation.",
+    args: [arg("scalarField", "The value to look up along the curve. Must be tuple size 1.")],
+  },
   (spec, path) => {
     const args = requireArgs(spec, path, 1);
     const stops = spec.stops;
@@ -1119,6 +1625,83 @@ function parseNoiseOpts(
   return { opts, raw: rawOpts };
 }
 
+/** One documented range entry, read off the table the factories are built against. */
+function noiseRange(range: readonly [number, number], note?: string): RangeDoc {
+  return { min: range[0], max: range[1], ...(note !== undefined ? { note } : {}) };
+}
+
+/**
+ * The integer-lattice trap, said in full on the two fns it bites.
+ *
+ * Perlin's gradients live AT the lattice points and the value it blends is
+ * the dot product of a gradient with the offset FROM its lattice point, so
+ * at an integer coordinate every offset is zero and so is the result — for
+ * every seed, silently, with no error anywhere. It is documented here
+ * rather than left to be discovered because a unit-spaced `pointGrid` with
+ * a whole-number frequency is the most natural thing an author writes.
+ *
+ * Measured on this build: 40 points at unit spacing from [0,0,0] to
+ * [39,0,0], `perlinNoise` at `frequency` 1 (and at 2, and at 3) gives min
+ * 0, max 0, mean 0 — a dead attribute. The same points at 0.5 give
+ * -0.408..0.408, and at 0.97 give -0.378..0.403. An INTEGER `offset` does
+ * not help ([3,4,5] is still all zeros); a fractional one does. The
+ * `the integer-lattice trap the catalog documents` suite in
+ * fieldJson.test.ts pins the measurement so the prose cannot go stale.
+ */
+const LATTICE_TRAP =
+  "TRAP: gradient noise is exactly 0 at every integer lattice point, so a sample position that " +
+  "lands on whole numbers gives a SILENTLY DEAD field — no error, every element 0. Measured on " +
+  "this build: 40 points at unit spacing from [0,0,0] to [39,0,0] at `frequency` 1 (or 2, or any " +
+  "whole number) give min 0, max 0, stddev 0; the same points at `frequency` 0.5 give " +
+  "-0.408..0.408. A unit-spaced `pointGrid` with a whole-number frequency is the most natural " +
+  "thing to write, so check for it first. The fix is a fractional `frequency`, or a fractional " +
+  "`offset` — an INTEGER offset such as [3, 4, 5] leaves the field just as dead.";
+
+/** The three simple noises' catalog entries; the loop below registers them. */
+const SIMPLE_NOISE_DOCS: Readonly<Record<string, FnDoc>> = {
+  valueNoise: {
+    description:
+      "Value noise: one independent random value per integer lattice point, blended with a quintic " +
+      "fade. UNSIGNED — the lattice values are drawn from [0, 1) and blended " +
+      "convexly, so the output stays inside [0, 1] and `normalized: true` is the identity here. " +
+      "Unlike `perlinNoise` it is not degenerate on integer coordinates: at a lattice point it " +
+      "returns that point's own random value. Cheapest of the noises and the blockiest. " +
+      NOISE_OPTS_DOC,
+    outputRange: [noiseRange(NOISE_RAW_RANGES.valueNoise)],
+  },
+  perlinNoise: {
+    description:
+      "Perlin gradient noise: hash-selected cube-edge gradients, quintic fade, trilinear blend. " +
+      "SIGNED and centred on 0. The documented bound is [-1, 1], but it is a BOUND and not an " +
+      "amplitude — over 40,000 pseudo-random sample points the extremes reach only about ±0.75, and " +
+      "most values sit far inside that — so size a multiplier against a measured cook (`pcg " +
+      "inspect` reports min/max/mean per attribute) rather than against the bound. " +
+      `${LATTICE_TRAP} ${NOISE_OPTS_DOC}`,
+    outputRange: [
+      noiseRange(NOISE_RAW_RANGES.perlinNoise, "documented bound; 40,000 samples reach only ~±0.75"),
+      NORMALIZED_RANGE,
+    ],
+  },
+  simplexNoise: {
+    description:
+      "Simplex noise, in Gustavson's 3D formulation with hashed gradients. SIGNED and centred on 0, " +
+      "bounded by APPROXIMATELY [-1, 1] — the output scale is empirical, fitted to the largest raw " +
+      "kernel sum seen over 1.28M samples with about 6% headroom left for rarer peaks, so unlike " +
+      "perlin's this bound is not proved — and it is the widest-swinging of the three in practice: " +
+      "the same 40,000 sample points that take `perlinNoise` to ±0.75 take this to ±0.94. The " +
+      "kernel radius is r² = 0.5 so the field stays continuous across skew-cell boundaries, and the " +
+      "lattice is SKEWED, so unlike `perlinNoise` it is not degenerate on integer world positions. " +
+      NOISE_OPTS_DOC,
+    outputRange: [
+      noiseRange(
+        NOISE_RAW_RANGES.simplexNoise,
+        "approximate — an empirical scale with ~6% headroom, not a proved bound",
+      ),
+      NORMALIZED_RANGE,
+    ],
+  },
+};
+
 // PER-ELEMENT, all five of them: a noise samples a POSITION, which is the
 // per-element leaf by definition, and it keeps doing so when `opts.position`
 // names another expression — the fold recurses INTO that option (a seed
@@ -1130,6 +1713,7 @@ for (const name of ["valueNoise", "perlinNoise", "simplexNoise"] as const) {
     "per-element",
     ["opts"],
     `{ fn: "${name}", opts?: { seed?, frequency?, offset?: [x,y,z], position?, normalized? } }`,
+    SIMPLE_NOISE_DOCS[name],
     (spec, path) => NOISE_FACTORIES[name](parseNoiseOpts(spec, path, []).opts),
   );
 }
@@ -1139,6 +1723,25 @@ register(
   "per-element",
   ["opts"],
   `{ fn: "worleyNoise", opts?: { seed?, frequency?, offset?, position?, normalized?, output?: "f1" | "f2" | "f2-f1", exact? } }`,
+  {
+    description:
+      "Worley (cellular) noise: the Euclidean DISTANCE from the sample point to hashed feature " +
+      "points, one per unit cell. It is a distance field — never negative, cell-shaped rather than " +
+      "smooth. `opts.output` picks which distance: `f1` is the nearest feature (the " +
+      "default), `f2` the second nearest, and `f2-f1` their difference, which is the ridged one " +
+      "that outlines cell borders. The default search covers the 3x3x3 neighbouring cells and can " +
+      "miss a closer feature just outside that block — measured over corner-adjacent queries, about " +
+      "7e-5 of them return a wrong f1 and about 7e-4 a wrong f2, so the `f2` and `f2-f1` outputs " +
+      "are the ones that miss most often. Error magnitudes run around 0.016, with an adversarial " +
+      "worst case near 0.036. `opts.exact: true` widens the search until provably correct, at the " +
+      `cost of more work. ${NOISE_OPTS_DOC}`,
+    outputRange: [
+      noiseRange(NOISE_RAW_RANGES.worleyNoise.f1, 'output: "f1" (the default) — at most a cube diagonal'),
+      noiseRange(NOISE_RAW_RANGES.worleyNoise.f2, 'output: "f2"'),
+      noiseRange(NOISE_RAW_RANGES.worleyNoise["f2-f1"], 'output: "f2-f1"'),
+      NORMALIZED_RANGE,
+    ],
+  },
   (spec, path) => {
     const { opts, raw } = parseNoiseOpts(spec, path, ["output", "exact"]);
     const worleyOpts: WorleyNoiseOpts = { ...opts };
@@ -1163,6 +1766,29 @@ register(
   "per-element",
   ["base", "opts"],
   `{ fn: "fbm", base: "perlinNoise", opts?: { seed?, frequency?, offset?, position?, normalized?, octaves?, lacunarity?, gain? } }`,
+  {
+    description:
+      "Fractal Brownian motion: `octaves` layers of `base` summed at rising frequency and falling " +
+      "amplitude, which turns one smooth noise into terrain-like detail. Octave o is " +
+      "sampled at `frequency * lacunarity^o` with amplitude `gain^o` and its own derived seed; " +
+      "`base` names one of valueNoise, perlinNoise, simplexNoise or worleyNoise. The sum is NOT " +
+      "renormalized, so the raw range is the base's range times `(1 - gain^octaves) / (1 - gain)` — " +
+      "with the defaults (4 octaves, gain 0.5) that factor is 1.875, so an fbm over `perlinNoise` " +
+      "spans [-1.875, 1.875] rather than [-1, 1]. It INHERITS perlin's integer-lattice trap and " +
+      "makes it worse: `lacunarity` defaults to 2, so every octave lands on the lattice together " +
+      "and an fbm over `perlinNoise` sampled at a whole-number frequency on a unit-spaced grid is " +
+      "measured dead — min 0, max 0, no error. Use a fractional `frequency` or a fractional " +
+      "`offset`. `normalized: true` maps the per-configuration range onto [0, 1] and needs a base " +
+      `whose fields carry range metadata, which the four standard factories do. ${NOISE_OPTS_DOC}`,
+    outputRange: [
+      {
+        min: NOISE_RAW_RANGES.perlinNoise[0] * 1.875,
+        max: NOISE_RAW_RANGES.perlinNoise[1] * 1.875,
+        note: 'base: "perlinNoise" at the default octaves 4 / gain 0.5 — otherwise scale the base range by (1 - gain^octaves) / (1 - gain)',
+      },
+      NORMALIZED_RANGE,
+    ],
+  },
   (spec, path) => {
     const base = spec.base;
     if (typeof base !== "string" || !(base in NOISE_FACTORIES)) {
@@ -1199,7 +1825,17 @@ export function listFieldFns(): string[] {
   return [...FNS.keys()].sort();
 }
 
-/** JSON-safe metadata of one field-expression constructor. */
+/**
+ * JSON-safe metadata of one field-expression constructor.
+ *
+ * The shape mirrors what `NodeTypeInfo` publishes for a node type, because
+ * the two catalogs answer the same question about the two halves of the
+ * authoring language and an agent reading one must not be told less than
+ * an agent reading the other: `description` is the prose a
+ * `ParamSchema.description` would carry, `args` names the positions that
+ * were otherwise `arg0..argN`, and `outputRange` states the numbers a
+ * multiplier has to be sized against.
+ */
 export interface FieldFnInfo {
   /** The `fn` value in a spec. */
   readonly fn: string;
@@ -1207,6 +1843,30 @@ export interface FieldFnInfo {
   readonly keys: readonly string[];
   /** Usage sketch — the same text the validation errors quote. */
   readonly usage: string;
+  /**
+   * What the fn computes, and the edges that bite: ranges, degenerate
+   * inputs, what happens outside a domain. Never empty.
+   */
+  readonly description: string;
+  /**
+   * The `args` positions, in order, each named as the usage sketch spells
+   * it. Absent for a fn that takes no `args` array. A name ending in `…`
+   * marks a REPEATED position, so the list is shorter than the arity.
+   */
+  readonly args?: readonly { readonly name: string; readonly description: string }[];
+  /**
+   * The documented output range(s), where the fn has one worth stating —
+   * every noise, the predicates, `randomField`, `fraction`, the inverse
+   * trig. `note` names the configuration a range holds under (worley's
+   * `output`, a noise's `normalized`) or qualifies the bounds where they
+   * are not both attainable. Absent when the output is unbounded or
+   * entirely a function of the inputs.
+   */
+  readonly outputRange?: readonly {
+    readonly min: number;
+    readonly max: number;
+    readonly note?: string;
+  }[];
 }
 
 /**
@@ -1217,7 +1877,18 @@ export interface FieldFnInfo {
 export function listFieldFnInfos(): FieldFnInfo[] {
   return listFieldFns().map((fn) => {
     const def = FNS.get(fn) as FnDef;
-    return { fn, keys: [...def.keys], usage: def.usage };
+    const { description, args, outputRange } = def.doc;
+    return {
+      fn,
+      keys: [...def.keys],
+      usage: def.usage,
+      description,
+      // Copied out rather than shared: the registry's arrays are module
+      // state, and a caller that mutated a returned one would edit the
+      // catalog every later call reads.
+      ...(args !== undefined ? { args: args.map((a) => ({ ...a })) } : {}),
+      ...(outputRange !== undefined ? { outputRange: outputRange.map((r) => ({ ...r })) } : {}),
+    };
   });
 }
 

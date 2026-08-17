@@ -3908,6 +3908,274 @@
         ]
       }
     },
+    "examples-riverbank.json": {
+      "outputs": {
+        "driftwood": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 77,
+            "batches": [
+              {
+                "assetId": "driftwood_log",
+                "count": 77,
+                "translation": {
+                  "min": [
+                    -77.6657,
+                    0,
+                    -45.9335
+                  ],
+                  "max": [
+                    79.095,
+                    0,
+                    18.4742
+                  ],
+                  "mean": [
+                    5.4232,
+                    0,
+                    -6.0406
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    0.5545,
+                    0.5545,
+                    0.5545
+                  ],
+                  "max": [
+                    1.4343,
+                    1.4343,
+                    1.4343
+                  ],
+                  "mean": [
+                    1.0094,
+                    1.0094,
+                    1.0094
+                  ]
+                },
+                "rotation": {
+                  "min": 0.6674,
+                  "max": 2.7077,
+                  "mean": 1.8154
+                }
+              }
+            ]
+          }
+        ],
+        "ground": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 625,
+              "vertex": 3456,
+              "primitive": 1152,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "uv:f32x2"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -75,
+                0,
+                -75
+              ],
+              "max": [
+                75,
+                0,
+                75
+              ]
+            }
+          }
+        ],
+        "river": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 48,
+              "vertex": 48,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ],
+              "primitive": [
+                "primtype:string"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -78,
+                0,
+                -41.3177
+              ],
+              "max": [
+                78,
+                0,
+                14.6874
+              ]
+            }
+          }
+        ],
+        "trees": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 1425,
+            "batches": [
+              {
+                "assetId": "tree_birch",
+                "count": 440,
+                "translation": {
+                  "min": [
+                    -71.0624,
+                    0,
+                    -71.7961
+                  ],
+                  "max": [
+                    71.5056,
+                    0,
+                    71.962
+                  ],
+                  "mean": [
+                    1.4588,
+                    0,
+                    2.2971
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    0.3061,
+                    0.3061,
+                    0.3061
+                  ],
+                  "max": [
+                    1.4957,
+                    1.4957,
+                    1.4957
+                  ],
+                  "mean": [
+                    1.0337,
+                    1.0337,
+                    1.0337
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              },
+              {
+                "assetId": "tree_pine",
+                "count": 697,
+                "translation": {
+                  "min": [
+                    -71.778,
+                    0,
+                    -71.9484
+                  ],
+                  "max": [
+                    71.9282,
+                    0,
+                    71.9338
+                  ],
+                  "mean": [
+                    0.4082,
+                    0,
+                    -0.4447
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    0.2429,
+                    0.2429,
+                    0.2429
+                  ],
+                  "max": [
+                    1.4974,
+                    1.4974,
+                    1.4974
+                  ],
+                  "mean": [
+                    1.0301,
+                    1.0301,
+                    1.0301
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              },
+              {
+                "assetId": "tree_willow",
+                "count": 288,
+                "translation": {
+                  "min": [
+                    -71.7497,
+                    0,
+                    -71.9576
+                  ],
+                  "max": [
+                    71.8444,
+                    0,
+                    71.7769
+                  ],
+                  "mean": [
+                    0.0526,
+                    0,
+                    -0.6406
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    0.3005,
+                    0.3005,
+                    0.3005
+                  ],
+                  "max": [
+                    1.4884,
+                    1.4884,
+                    1.4884
+                  ],
+                  "mean": [
+                    1.0491,
+                    1.0491,
+                    1.0491
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
     "examples-streamed-terrain.json": {
       "outputs": {
         "points": [
