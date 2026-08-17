@@ -1,7 +1,16 @@
 # Fields ergonomics — making a field expression readable, reusable, and consistent
 
-Written 2026-08-16 from external reviewer feedback. **Re-derived 2026-08-17
-against HEAD `e178368`, 46 commits later.** Most of the original evidence
+Written 2026-08-16 from external reviewer feedback. **CLOSED 2026-08-17 —
+this is a RECORD, not a tracker.** Five of its eight units shipped the same
+day (E1, C1, D1, C2, B2). The three that did not — A1, A3, D3 — moved to
+`PLAN.md`'s Backlog, which is where this repository keeps what is still
+ahead; look for "Field-expression reuse: A3 and D3" and "The seven
+remaining math primitives" there, analysis and triggers included. Nothing
+below is a to-do list any more. It is kept because §2 and §9 record how
+badly a plan's own evidence can expire, and re-deriving that is the
+expensive part.
+
+**Re-derived 2026-08-17 against HEAD `e178368`, 46 commits later.** Most of the original evidence
 had expired: the defect it called "the single best-evidenced ergonomic
 defect in the library" was fixed by other work three hours after this file
 was committed, and the primitive it called "the single highest-leverage
@@ -464,9 +473,9 @@ understanding the model, not about line count.
 | ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
 | ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 23 done, 4 refused by rule |
 | ~~B2~~ | text syntax — parse + print, tree stays the format | — | **SHIPPED** |
-| A3 | subexpression binding | medium | thin mandate — 11 specs |
-| D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |
-| A1 | remaining math primitives | small each | no demand — wait for a site |
+| A3 | subexpression binding | medium | **MOVED** to `PLAN.md` Backlog |
+| D3 | `field` pin kind over a restricted sub-registry | large | **MOVED** to `PLAN.md` Backlog |
+| A1 | remaining math primitives | small each | **MOVED** to `PLAN.md` Backlog |
 
 Retired: A2, A4, B3, unit 3.
 
@@ -506,11 +515,18 @@ stay distinct from a bare `3`, because the corpus holds both spellings —
 they are different TREES. Collapsing them would have made the round trip
 rewrite one into the other, silently.
 
-**Recommendation from here: stop.** The three remaining units are waiting
-on evidence rather than on a decision — A3 on a thin mandate (45 bindable
-repeats in 11 of 149 specs), D3 on §7.4, A1 on any site at all wanting
-one of the seven remaining math primitives. None should be started
-without one of those changing.
+**The three remaining units moved to `PLAN.md`'s Backlog**, with one
+correction that matters more than the move. This section repeatedly called
+A3's mandate thin on the strength of "45 bindable repeats in 11 of 149
+specs". THE DENOMINATOR IS WRONG. The corpus is roughly 140 `basics-*`
+graphs that are one node doing one thing — a single-concept demo cannot
+exhibit subexpression reuse — plus a handful of real graphs. Dividing by
+them manufactures a thin mandate out of an unrepresentative population,
+which is the same defect this file catalogues elsewhere: a true-sounding
+number computed over the wrong set. Six of the eight worst A3 cases are in
+`examples-rig` and the worst single one is in `examples-gpu-fields`, the
+two most complex graphs. Demand tracks complexity, the corpus is expected
+to gain more complex examples, and the backlog entry says so.
 
 The obvious FOLLOW-ON, deliberately not done here: the sandbox still
 shows a JSON textarea. `printFieldSpec` is what it should show, beside

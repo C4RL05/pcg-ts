@@ -35,6 +35,111 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### Field-expression reuse: A3 and D3, 2026-08-17
+
+From `PLAN-fields-ergonomics.md`, which is otherwise closed — E1, C1, D1,
+C2 and B2 all shipped today. These two did not, and they are here rather
+than there because this file is where what is still ahead lives.
+
+**A3 — naming a subexpression inside ONE expression.** A repeated
+sub-formula is written out in full at every occurrence; nothing lets you
+bind it. Not a performance problem — invariant subtrees are already
+hoisted at evaluation and fields carry content-addressed keys — purely
+what an author types and reads. The worked case is
+`examples-gpu-fields`' `color.value`: three colour channels, each
+`ramp(CORE, differentStops)`, where CORE is an identical 340-character
+terrain formula written three times. `let h = …` says the thing the
+original only implies — one height, three ways of colouring it.
+
+**D3 — a `field` pin kind over a RESTRICTED sub-registry.** Grammar ops
+get output pins, wires between them are inlined into one spec tree before
+cooking, and eligibility is unaffected because the sub-registry stays
+closed. The naive version — any node emits a field — forfeits the fusion
+guarantee and is not on the table. The worked case is `examples-rig`'s
+four `trussMove*.translate`: 149 lines and 33 operations each,
+structurally identical, differing in four of twelve numbers that are all
++/-sqrt(2)/2 in three different roundings. 447 redundant lines, 63% of all
+within-file duplication in the corpus, and **the only rung nothing else
+reaches**: graph params share a VALUE across nodes, A3 shares a
+subexpression WITHIN one expression, and only D3 shares an expression
+ACROSS nodes.
+
+**READ THE CORPUS RATE AS A FLOOR, NOT A VERDICT.** The first survey
+reported "45 bindable repeats in 11 of 149 specs" and called the mandate
+thin. That denominator is wrong and will keep being wrong: the corpus is
+roughly 140 `basics-*` graphs that are deliberately one node doing one
+thing — a single-concept demo CANNOT exhibit subexpression reuse — plus a
+handful of real ones. Divide by them and you manufacture a thin mandate
+out of an unrepresentative population. Where the demand actually sits is
+the tell: six of the eight worst A3 cases are in `examples-rig` and the
+single worst is in `examples-gpu-fields`, which are the two most complex
+graphs. Demand tracks COMPLEXITY, and this file already documents that
+pattern under its own headings — the rig has generated three gap lists,
+the streamed level one, and the blind-authored graph drove `cross`, the
+field-catalog semantics and `pcg assets`. Every substantial example so far
+has produced a feature list. The base rate among complex graphs is close
+to 1; only the sample is small.
+
+**Why they are parked anyway**, and it is this file's own discipline
+rather than weak demand: let the consumer specify the mechanism. A3 has a
+real open question — what a name bound twice means, and whether a binding
+survives a programmatic edit, given every write path in the library edits
+the TREE — that the next rig-sized graph will answer better than a guess
+will. Building the guess risks a mechanism the next real example does not
+fit.
+
+**Triggers.**
+
+- Both: the NEXT COMPLEX EXAMPLE is the measurement. Re-derive when it
+  lands, expecting these to strengthen rather than soften, and count over
+  complex graphs rather than over the whole corpus.
+- D3 specifically, and cheaply, FIRST: try the data fix. Make the truss's
+  four +/-sqrt(2)/2 signs an attribute or a param and see whether the four
+  expressions collapse into one shared formula on their own. A field is
+  deferred and evaluated once per consumer, so one shared formula
+  genuinely can produce four answers — but only if the varying part stops
+  being a literal. If they collapse, D3 was not needed FOR THAT CASE
+  (n=1, not a verdict); if they do not, D3's case is established on a real
+  graph. A day against a large feature, and either outcome generalises to
+  every complex graph after it.
+- Also worth re-checking before either is built: both numbers were counted
+  by walking JSON, and an expression now reads as TEXT and as a DIAGRAM
+  (`printFieldSpec`, and the sandbox's field-tree view). The duplication
+  that motivates A3 used to be invisible. Whether it grates more or less
+  once you can see it at a glance is unknown, and it is cheap to find out
+  by living with the new views.
+
+**The decision D3 still needs** is §7.4 of the fields plan: whether
+cross-node expression reuse is a goal at all. The truss experiment above
+is the honest way to settle it.
+
+One suggestive detail for whoever picks D3 up: the graph already defines
+a `value` pin kind that NO node consumes — a wire type with a producer
+and no destination (`src/graph/node.ts`, `valueConstant`). A vestige
+pointing at exactly the model D3 would complete.
+
+### The seven remaining math primitives, 2026-08-17
+
+`fract mod smoothstep exp log sign distance`. `3b58a31` added `cross`,
+`pow`, `sqrt` and `step`; these are what the original list had left.
+
+Measured demand in the corpus is zero — no `fract` idiom
+(`sub(x, floor(x))`), no `distance` idiom (`length(sub(a, b))`), and all
+20 surviving `floor` uses are genuine integer binning. Read that with the
+same caution as the entry above: a corpus of single-concept demos is the
+wrong place to look for demand on a math primitive, and the one that DID
+get demanded got demanded by a real graph — `cross` shipped because
+`examples-riverbank` open-coded it nine nested objects deep, and now reads
+as one call.
+
+So the trigger is a SITE, not a count: build one when a graph wants it.
+Each costs a CPU implementation, a WGSL lowering, parse/emit, a parity
+test and a real device probe — `3b58a31` overturned three of four
+assumptions about parity by measurement — plus permanent catalog surface.
+`mod` additionally forces a semantic choice (truncated against floored
+remainder) that then has to be documented forever, so it wants a caller
+that says which one it means.
+
 ### The graph written blind, 2026-08-17
 
 A third vehicle: an agent given ONLY the CLI — no source, no docs, no other
