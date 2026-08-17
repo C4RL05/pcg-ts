@@ -1,40 +1,27 @@
 # Fields ergonomics — making a field expression readable, reusable, and consistent
 
-Written 2026-08-16 from external reviewer feedback. **Not started.** No
-code in this plan has been written; the repository state below was read,
-not changed.
+Written 2026-08-16 from external reviewer feedback. **Re-derived 2026-08-17
+against HEAD `e178368`, 46 commits later.** Most of the original evidence
+had expired: the defect it called "the single best-evidenced ergonomic
+defect in the library" was fixed by other work three hours after this file
+was committed, and the primitive it called "the single highest-leverage
+item" had already been rejected by name in another plan.
+
+The re-derivation is §2. What is still live is §5. The original numbers are
+kept in §9 so the correction is auditable rather than quietly applied.
 
 ---
 
 ## 0. Read this first
 
-This plan was written while ANOTHER SESSION was actively committing to
-`main` in this same working tree. At the time of writing, HEAD was
-`72d6ec5` and there were ~1000 uncommitted lines across 15 files, most of
-them in `src/fields/` and `src/gpu/compile.ts`. `src/nodes/filtering.ts`
-had been written to seconds earlier.
+Every number below is dated 2026-08-17 and comes with the command that
+re-derives it. This file has been wrong once by being read a day late; run
+the commands before acting on anything.
 
-**Every number in section 2 is therefore a snapshot and may be wrong by
-the time you read this.** Each one comes with the command that re-derives
-it. Run them before acting on anything.
-
-Two in-flight plans overlapped this work and may have landed:
-
-- `PLAN-by-attribute.md` — an N-way case primitive for the grammar. Same
-  family as §4.A here, and its motivation is the same diagnosis reached
-  from a different graph.
-- `PLAN-filter-topology.md` — `topology: "keep"` on the five point
-  filters, one of which is `filterByExpression`.
-
-**First action in the new session:**
-
-```sh
-git log --oneline 72d6ec5..HEAD
-git status --short
-ls PLAN-*.md
-```
-
-Then re-run the checks in §2 and strike whatever is already done.
+Two plans that overlapped this one have both landed:
+`PLAN-by-attribute.md` (`a433e73`, `byAttribute`) and
+`PLAN-filter-topology.md` (`a6905ed`, `topology: "keep"`). A third,
+`PLAN-noise-seeds.md`, landed the work that killed §4.A2 here.
 
 ---
 
@@ -71,27 +58,25 @@ correction worth making regardless: in the TypeScript API, fields are not
 text — they are `Field<T>` values built with combinators. The text is the
 serialization. The reviewer met the serialization first.
 
+**The re-derivation strengthens this reading.** Every *size* measurement
+below came in smaller than the original plan assumed, and the one that
+motivated the whole document had already gone to zero. The complaint was
+about not understanding the model. It was never really about line count,
+and this plan spent its first draft treating it as though it were.
+
 ---
 
-## 2. Evidence
+## 2. Evidence, re-derived 2026-08-17
 
-### 2.1 The worked example: 80% of a predicate is one open-coded idiom
+### 2.1 The worked example: EXPIRED
 
 `graphs/basics-filter-by-expression.json`, node `keep`:
 
-| measure | lines |
-| --- | --- |
-| whole node JSON | 207 |
-| the `predicate` param | 201 |
-| the vec3 seed offset inside it | **161** |
-
-The predicate means, in full:
-
-```
-length(P) < 20  AND  valueNoise(P + seedOffset, frequency 0.06, seed 3) > 0.4
-```
-
-Re-derive:
+| measure | 2026-08-16 | 2026-08-17 |
+| --- | --- | --- |
+| whole node JSON | 207 | **44** |
+| the `predicate` param | 201 | **38** |
+| the vec3 seed offset inside it | 161 | **0** |
 
 ```sh
 node -e "const g=require('./graphs/basics-filter-by-expression.json');
@@ -100,59 +85,48 @@ console.log(JSON.stringify(n,null,2).split('\n').length,
             JSON.stringify(n.params.predicate,null,2).split('\n').length);"
 ```
 
-The 161 lines are three axes of
-`A * (fract(nodeSeed * 2^-32 * K) - W0)`, the decorrelation idiom that
-makes a saved noise re-roll with the graph seed. It is now documented at
-length in `src/fields/inputs.ts` (the `nodeSeed` doc comment), which
-states the cause outright: *"the shared `nodeSeed * 2^-32` written out
-both times because JSON has no way to name a subexpression."*
+Commit `8faf95d` converted the whole corpus onto the tagged seed form
+`"seed": {"from": "node", "variant": N}` — 39 folds across 25 files, ~1270
+spec nodes deleted. The idiom now appears in **zero** graphs; it survives
+only as four labelled fixtures in `tests/foldCorpus.test.ts:156-232`.
 
-Two multipliers, three axes, two missing features. It is the single
-best-evidenced ergonomic defect in the library.
+**The claim "it is the single best-evidenced ergonomic defect in the
+library" is retired, not weakened.** So is unit 3 (corpus rewrite): done.
 
-### 2.2 `fract` is not in the grammar
+Note `8faf95d` deliberately abandoned §6 invariant 4 (bit-identity at the
+authored seed), on the grounds that of 117 `W0` literals six were already
+wrong and two graphs shared a triple correct for neither. The look changed
+and the committed screenshots caught up in `22b07d5`. That invariant is
+struck below.
 
-It appears only in prose:
+### 2.2 Grammar contents: 50 fns, and the gap has no corpus demand
 
-```sh
-grep -rn "\bfract\b" src/fields/ src/gpu/ --include=*.ts | grep -v "\.test\."
-```
+`3b58a31` added `cross`, `pow`, `sqrt` and `step`. `cross` had a measured
+site — a nine-nested-object hand-rolled perpendicular in
+`graphs/examples-riverbank.json` — and now reads as one call.
 
-Because it is spelled `x - floor(x)`, every use serializes `x` twice.
-That alone roughly doubles the idiom above.
+Still absent: `fract mod smoothstep exp log sign distance`.
 
-Present in `src/fields/combinators.ts`: `add sub mul div min max abs floor
-sin cos tan asin acos atan atan2 clamp lerp remap select lt le gt ge eq ne
-dot length normalize vec component ramp`.
-
-Present in `src/fields/inputs.ts`: `constant attribute attributeIs
-position index fraction nodeSeed randomField`.
-
-Absent and wanted: `fract mod step smoothstep sqrt pow exp log sign cross
-distance`.
+**Measured demand for those, in the corpus: zero.**
 
 ```sh
-grep -n "^export function [a-zA-Z0-9]*" src/fields/combinators.ts | sed 's/(.*//'
+# fract idiom sub(x, floor(x)): 0 hits.  distance idiom length(sub(a,b)): 0 hits.
+# All 20 surviving `floor` uses are integer binning — floor(index/2), floor(u*7).
 ```
 
-### 2.3 Field-capability is a whitelist with no stated rule
+Each remaining fn is still one WGSL builtin plus a CPU implementation plus
+parse/emit plus a parity test — and, per `3b58a31`, a real device probe,
+because three of four assumptions about parity were overturned by
+measurement there. That is a non-trivial cost against zero demand.
+`mod` additionally forces a semantic choice (truncated vs floored
+remainder) that must then be documented forever.
 
-From `docs/nodes.json`: **19 of 166 params, across 12 of 46 nodes.**
+**Downgraded from "first by a wide margin" to speculative completeness.**
 
-| node | field-capable params |
-| --- | --- |
-| `transformPoints` | translate, rotateEuler, scale (3 of 3) |
-| `sweepProfile` | radius, width, up, roll (4 of 10) |
-| `orientAlongVector` | direction, up |
-| `selfPrune` | minDistance, priority |
-| `filterByExpression` | predicate |
-| `setAttribute` | value |
-| `surfaceSample` | densityField |
-| `jitterPoints` | amount |
-| `pathPointAt` | parameter |
-| `pathSegments` | radius |
-| `extrudePolygon` | distance |
-| `volumeSample` | jitter |
+### 2.3 Field-capability is a whitelist with no stated rule — UNCHANGED
+
+**20 of 180 params, across 12 of 46 nodes.** The only §2 measurement that
+did not shrink.
 
 ```sh
 node -e "const n=require('./docs/nodes.json');let t=0,f=0;
@@ -161,17 +135,42 @@ f+=p.filter(([,s])=>s.acceptsField===true).length;}
 console.log(f,'of',t,'params across',n.length,'nodes');"
 ```
 
-Note `docs/nodes.json` is generated; regenerate with `npm run docs`
-before trusting it.
+Full classification: `scratchpad/coverage-audit.md`. Against C2's own
+wording (numeric and vector params only — 83 of 180):
 
-The sharpest symptom is documented in the library's own corpus.
+| bucket | count |
+| --- | --- |
+| already field-capable | 20 |
+| **CANDIDATE — the real cost of C2** | **24** |
+| structural, correctly refused | 38 |
+| unclear | 1 (`valueConstant.value`, see §2.4) |
+
+So C2 is **24 params, not 160.** Spot-checking 12 of them against the
+node sources: 5 easy (already read inside the per-element loop), 5 medium
+(read once into a hoisted scalar that must be dissolved — e.g.
+`attributeRemap.inMin/inMax`, `filterByBounds.boundsMin/Max`), 2 hard
+(`connectPoints.radius` and `pointNeighborhood.radius` both size *and
+cache-key* the uniform grid via `adjacencyFor()`).
+
+**The stated rule has two known counterexamples and needs amending:**
+
+1. Eight `u32` **seed** params allocate nothing and are not structural,
+   yet must stay eager: they are hash-combined into the node seed before
+   any element exists.
+2. The real boundary is not allocation. `selfPrune.minDistance` is already
+   field-capable and *does* decide how many points survive. What makes a
+   fielded radius expensive is that the partitioned cook's halo width
+   becomes a global bound the author has to supply.
+
+Part of the rule is already executable: `src/graph/params.ts:302-331`
+hard-refuses `acceptsField` on list and items types.
+
+The sharpest symptom is still documented in the corpus.
 `graphs/basics-field-params.json` explains that `frequency` is multiplied
 into the sample position rather than passed as `opts.frequency`, "because
-the noise options are read as plain numbers and cannot hold a spec." So
-`valueNoise`'s position accepts a field and its frequency does not, and
-the fix is to fold one into the other.
+the noise options are read as plain numbers and cannot hold a spec."
 
-### 2.4 There is no field wire
+### 2.4 There is no field wire — UNCHANGED
 
 ```ts
 // src/graph/node.ts:5
@@ -181,169 +180,233 @@ export type PinKind = "geometry" | "value" | "instances" | "any";
 No `field` kind. A field never travels on a wire and no node emits one.
 The reviewer's description is literally accurate.
 
-One curiosity: `valueConstant` (`src/nodes/mathNodes.ts:20`) emits a
-`value` pin, and **no node in the catalog declares a `value` input.** It
-is a wire type with no consumer — a vestige pointing at the model the
-reviewer expected.
+The curiosity holds: `valueConstant.out` is the only `value` pin in the
+catalog and **no node declares a `value` input.** A wire type with no
+consumer, pointing at the model the reviewer expected.
+
+### 2.5 NEW — how big field expressions actually are
+
+149 top-level field-spec params across the corpus, 4714 serialized lines.
+
+| measure | value |
+| --- | --- |
+| mean lines | 31.6 |
+| **median lines** | **19** |
+| median nesting depth | 3 |
+| p90 depth | 5 |
+| over 80 lines | 12 specs |
+| deeper than 5 | 14 of 149 |
+| largest | 296 lines, depth 8 (`examples-gpu-fields.json color.value`) |
+
+This is the measurement the original plan never took, and it reframes
+problem B. The typical field expression is 19 lines and three deep — not
+pleasant JSON, but not the catastrophe a 201-line predicate implied. The
+tail is real and concentrated: 12 specs carry the pain.
+
+### 2.6 NEW — repetition, split into the two kinds
+
+**Within one expression (this is A3's demand).** Counting repeated
+subtrees, but *only those worth binding* — a repeated
+`{"fn":"constant","value":2}` is already minimal and sharing it saves
+nothing:
+
+| repeated subtree size | occurrences |
+| --- | --- |
+| 1 fn-node (leaf) | 138 — sharing saves nothing |
+| 2 fn-nodes | 14 — marginal |
+| **3+ fn-nodes** | **45 — worth binding** |
+
+**11 of 149 specs** contain a 3+ repeat. The worst: a 70-line `clamp`
+written three times inside `examples-gpu-fields.json color.value`, and a
+55-line `add` twice inside `examples-rig.json partMount.translate`. Six of
+the top eight are in `examples-rig.json`.
+
+A first cut of this measurement said 197 repeats and 22%. That counted
+leaves, and counted nested repeats twice. **The number is 45, in 11
+files' worth of specs.** Real, narrow, and concentrated in two graphs.
+
+**Across nodes in one file (this is D's demand).** 712 redundant lines,
+15% of the corpus's field-spec text — and **447 of those 712 are one
+group**:
+
+```
+447 redundant  4x 149L  examples-rig.json  trussMove1/3/5/7.translate
+ 35 redundant  2x  35L  pipeline-*.json    cellMask.predicate, seedMask.predicate  (x7 files)
+```
+
+The truss group is worth stating precisely, because it is now the best
+single piece of evidence in this document. Four `transformPoints.translate`
+expressions, 149 lines each, depth 9, 33 fn-nodes — **structurally
+identical, differing in exactly 4 of 12 literals.** All four differing
+literals are ±√2/2, spelled four different ways:
+
+```
+0.7071067811865476 | -0.7071067811865475 | -0.7071067811865477 | 0.7071067811865474
+```
+
+Three distinct roundings of one constant, in expressions that are
+otherwise the same expression. `trussMove0/2/4/6` are 33/39/45/39 lines
+and share nothing — so this is four of eight, not a symmetric pattern.
+
+Cross-file repetition (1772 lines) is **excluded as a defect**: the
+`pipeline-1..5` graphs are a deliberately incremental tutorial series, and
+each stage repeating the last plus one change is the point of the series.
+
+Note what A3 would *not* fix here: these are four different nodes. Naming
+a subexpression within one expression does nothing for them. Graph-scoped
+params (`9888815`) already share a *value* across nodes — `trussHalfWidth`
+is read as a `param` inside these very expressions — but there is no way
+to share an *expression*. That is the one thing only D3 buys.
 
 ---
 
-## 3. The four problems, separated
+## 3. The four problems, re-scored
 
-They were reported as one complaint. They have independent fixes and can
-be adopted in any combination.
+| # | problem | evidence 2026-08-16 | evidence 2026-08-17 | verdict |
+| --- | --- | --- | --- | --- |
+| A | grammar missing primitives | 161 of 201 lines | 4 shipped; 0 corpus demand for the rest | **mostly closed** |
+| B | JSON is a hostile concrete syntax | unreadable | median 19 lines, depth 3; 12 bad specs | **reduced** |
+| C | field-capability is an unstated whitelist | 19 of 166 | 20 of 180, rule has 2 counterexamples | **unchanged — now the strongest** |
+| D | expressions invisible and unshareable | copy-paste, unquantified | 447 redundant lines in one 4-way group | **strengthened** |
 
-| # | problem | symptom | fix axis |
-| --- | --- | --- | --- |
-| A | grammar is missing primitives | 161 of 201 lines | §4.A |
-| B | JSON is a hostile concrete syntax | unreadable, unwritable | §4.B |
-| C | field-capability is an unstated whitelist | 19 of 166, arbitrary | §4.C |
-| D | expressions are invisible and unshareable | copy-paste reuse | §4.D |
-
-Ordered by evidence strength, A is first by a wide margin.
+The original ordering ("A is first by a wide margin") has inverted.
 
 ---
 
 ## 4. Options
 
+Struck items are retired with the reason; live items keep their original
+letters so cross-references from other plans still resolve.
+
 ### A. Grammar completeness
 
-**A1 — the missing math primitives.** `fract mod step smoothstep sqrt pow
-exp log sign cross distance`. Each is one WGSL builtin plus one CPU
-implementation plus grammar parse/emit plus a parity test. Mechanical,
-additive, low risk. `fract` is the one that matters for §2.1.
+**A1 — the remaining math primitives** (`fract mod smoothstep exp log sign
+distance`). Live but unmotivated: zero corpus demand (§2.2), real cost per
+fn (CPU + WGSL + parity test + device probe + catalog prose + permanent
+surface). **Do these when a graph wants one, not before.** `cross` is the
+model: it shipped because a real site open-coded it nine objects deep.
 
-**A2 — a `seedOffset` primitive.** The single highest-leverage item. One
-grammar fn replacing ~161 lines wherever the idiom appears.
+**~~A2 — a `seedOffset` primitive.~~ DEAD.** Rejected by name in
+`PLAN-noise-seeds.md:281` ("Gap 3's own suggestion is
+`{"fn":"seedOffset","scale":900,"variant":N}`. Rejected on two counts"),
+and the underlying problem was solved without a new fn by the tagged seed
+form `{"from":"node","variant":N}` (`9888815`, `src/fields/fieldJson.ts`
+:1468, :1557-1570). **~~Unit 3, the corpus rewrite~~: done by `8faf95d`.**
 
-*The hard part is not the arithmetic.* The idiom's `W0` term is the
-expression's own value at the graph's authored seed, chosen so the offset
-is exactly `+0` there — which is what makes folding it into a saved graph
-leave existing output **bit-identical**. A primitive must preserve that
-property or it is not a drop-in replacement. Design questions:
+**A3 — subexpression binding.** Live, demand now measured at 45 bindable
+repeats in 11 specs (§2.6). Still true that **automatic CSE does not solve
+this** — fields already carry content-addressed keys (`8e10d5e`) and
+invariant subtrees are hoisted at evaluation (`1a09b60`); the complaint is
+serialized size, which needs a binding form in the grammar. But 11 specs,
+six of them in one graph, is a thin mandate for a format change.
 
-- Is `W0` a parameter the author supplies, or computed from a `zeroAt`
-  seed the node records?
-- Are the per-axis keys (`1021, 3067, 8191`) baked, parameterized, or
-  derived from an index so several noises on one node stay decorrelated?
-- Is amplitude `A` explicit, or derived from frequency
-  (the doc comment says `A ≈ 32 / opts.frequency`)?
-
-Read the `nodeSeed` doc comment in `src/fields/inputs.ts` in full before
-designing this. It is the specification.
-
-**A3 — subexpression binding.** A `let`-style form so a shared subtree is
-written once. Note carefully: **automatic CSE at compile time does not
-solve this.** Fields already carry content-addressed keys (`8e10d5e`) and
-invariant subexpressions are already hoisted at evaluation (`1a09b60`), so
-codegen and runtime are fine. The complaint is *serialized size*, which
-needs a binding form in the grammar itself. Verbose in JSON, natural in
-text — pairs with B2.
-
-**A4 — the N-way case form.** See `PLAN-by-attribute.md`. Likely already
-landed; check before duplicating.
+**~~A4 — the N-way case form.~~ SHIPPED** as `byAttribute` (`a433e73`).
 
 ### B. Concrete syntax
 
-**B1 — leave the JSON.** The authoring cost stays and so does the
-impression that prompted this. Listed for completeness.
-
 **B2 — a parsed text syntax.** `length(P) < 20 && valueNoise(P * 0.06) > 0.4`.
-A string is accepted anywhere a spec node is; `src/fields/fieldJson.ts`
-gains a parser and a printer; the tree stays canonical so programmatic
-edits still work. Bounded but real work: precedence, type rules, and error
-messages with source spans — errors are part of the agent API here, so a
-parse failure must name the offending token and the valid alternatives.
+A string accepted anywhere a spec node is; `src/fields/fieldJson.ts` gains
+a parser and a printer; the tree stays canonical so programmatic edits
+still work.
 
-Worth stating explicitly: this is an **agent** ergonomics win as much as a
-human one. Models emit infix expressions far more reliably than 200-line
-nested JSON, and agent ergonomics is one of the four design pillars.
+The size argument for this is weaker than the plan assumed (§2.5). The
+**agent-ergonomics** argument is not, and it now has direct evidence:
+`graphs/examples-riverbank.json` was authored by an agent given only the
+CLI catalogs, and it hand-rolled a perpendicular nine nested objects deep
+because it could not see that a single call would do. Models emit infix
+expressions far more reliably than nested JSON, and agent ergonomics is
+one of the four design pillars.
 
-**B3 — text only, drop the tree.** Rejected. It turns programmatic edits
-into string surgery and loses machine manipulability.
+Blocked on decision §7.1.
+
+**~~B3 — text only, drop the tree.~~** Rejected: turns programmatic edits
+into string surgery.
 
 ### C. Coverage consistency
 
-**C1 — document the rule, audit the gaps.** Cheapest. Fixes the noise-opts
-edge (§2.3) without a sweep.
+**C1 — write the rule down, audit the gaps.** Cheapest live item. Must now
+state the two counterexamples in §2.3, not just the allocation clause —
+a rule with unstated exceptions is how this whitelist got here. Fixes the
+noise-opts edge.
 
-**C2 — flip the default.** Every numeric and vector param is
-field-capable unless it declares `acceptsField: false`. The opt-out rule
-is statable and defensible:
-
-> A param cannot be a field if it determines allocation or structure.
-
-Counts, topology, enums and strings must be known before there are
-elements to evaluate against. Everything else can vary per element. This
-is the closest thing to the reviewer's "if you can plug it in, it can be a
-field," and it converts a scattered permission into a property of the
-system. Large but mostly mechanical; every newly-capable param needs a
-CPU path, a GPU lowering, and a test.
+**C2 — flip the default.** Now correctly sized at **24 params**, not 160.
+~5 days of plumbing for the easy and medium ones; `connectPoints.radius`
+and `pointNeighborhood.radius` need a design decision first (a fielded
+radius makes the partitioned-cook halo a global bound). The non-mechanical
+part is that each newly-fielded param converts an eager refusal
+(`extend >= 0`, `vector != 0`) into a per-element policy plus a test.
 
 ### D. Visibility and reuse
 
 **D1 — render the field tree as a node diagram in the sandbox,
-read-only.** The spec is a typed tree of named fns, so a generic renderer
-is mechanical. Buys the visual legibility at near-zero cost; editing stays
-textual. Note the sandbox already grew a field-spec knob (`1154bd7`), so
-check what exists.
+read-only.** Costed. Today a field param is a raw JSON `<textarea rows=7>`
+in `sandbox/FieldParam.svelte:131`, and on the canvas it collapses to one
+row reading `ƒ mul` (`sandbox/model.ts:82-92`). `1154bd7` added knobs over
+inline `param` values, not a viewer.
 
-**D2 — make that view editable.** Boxes in, same tree out. Wire-style UX
-on an expression-language substrate. No architecture change; sandbox work.
+`sandbox/autoLayout.ts:478` is **hard-wired** to `NodeView`/`EdgeView`
+(`nodeHeight` at :509, `slot.node.inputs/outputs` at :520-525, fixed
+`NODE_W` at :575). But a spec tree is a DAG, so the cheap path is a
+spec→`{nodes, edges}` adapter minting synthetic ids rather than a second
+layout engine.
 
-**D3 — a real `field` pin kind.** The reviewer's literal model. The naive
-version — any node emits a field — destroys the fusion guarantee (§6.1).
-The workable version is a **restricted sub-registry**: pure grammar ops
-get a `field` output pin, wires between them are inlined into a spec tree
-before cooking, and eligibility is unaffected because the sub-registry is
-still closed. Cost: two authoring surfaces for one concept, plus an
-inlining pass, plus sandbox work.
+Reuses `getFieldSpec`/`fieldToJson`, `listFieldFnInfos()` for labels and
+arg names, `inlineParamValuesOf`/`inlineParamMetaOf` for leaves. Needs: a
+public child accessor (`specChildren` exists at `src/fields/spec.ts:501`
+but is `@internal` and absent from `src/publicSurface.test.ts`), the
+adapter, a read-only SVG component (`Canvas.svelte`/`NodeBox.svelte` carry
+drag/connect gestures a viewer does not want), and a mount point in
+`FieldParam.svelte`.
 
-**Defer D3 and revisit after D1.** The complaint reads as "I cannot read
-this," not "I need to connect these." But note what only D3 buys: sharing
-one named field across *different nodes*. A3 gets naming within a single
-expression; nothing else on this list gets cross-node reuse. If reuse
-turns out to be the real pain, that is the argument that promotes D3.
+**D3 — a real `field` pin kind.** The naive version destroys the fusion
+guarantee (§6.1). The workable version is a **restricted sub-registry**:
+pure grammar ops get a `field` output pin, wires between them are inlined
+into a spec tree before cooking, eligibility is unaffected because the
+sub-registry is still closed.
+
+§2.6 is the argument that promotes it: the truss group is 447 redundant
+lines that **nothing else on this list can remove**. Graph-scoped params
+share a value across nodes; A3 shares a subexpression within one
+expression; only D3 shares an expression across nodes. Still expensive
+(two authoring surfaces, an inlining pass, sandbox work) and still gated
+on decision §7.4.
 
 ### E. Framing
 
 **E1.** Lead the docs with the TypeScript and text forms rather than the
 graph JSON. The reviewer's entire impression formed from an artifact that
-has no analogue in the system they were comparing against. Worth doing
-regardless of everything above.
+has no analogue in the system they were comparing against.
+
+**This is now the item that most directly answers the complaint that
+started the file**, and §2 is why: every size defect the plan proposed to
+fix has shrunk or gone, and the reviewer's sentence was about not
+understanding the model, not about line count.
 
 ---
 
-## 5. Recommended sequence
+## 5. What is actually live
 
-Each unit is independently shippable, tested and committed on its own.
-
-| unit | scope | touches | corpus churn |
+| unit | scope | cost | blocked on |
 | --- | --- | --- | --- |
-| 1 | A1 — missing math primitives | `src/fields/`, `src/gpu/compile.ts` | none |
-| 2 | A2 — `seedOffset` primitive | `src/fields/`, `src/gpu/compile.ts` | none |
-| 3 | A2b — rewrite graphs onto it | `graphs/*.json`, derived files | **yes** |
-| 4 | A3 — subexpression binding | `src/fields/` | none |
-| 5 | B2 — text syntax parse + print | `src/fields/fieldJson.ts` | none |
-| 6 | D1 — sandbox tree view | `sandbox/` | none |
-| 7 | C1 → C2 — coverage rule, then sweep | `src/nodes/`, `src/graph/params.ts` | none |
-| 8 | E1 — docs framing | `README.md`, `docs/` | none |
+| **E1** | docs framing — lead with `Field<T>`, not the JSON | small | nothing |
+| **C1** | state the capability rule, incl. its 2 exceptions | small | nothing |
+| D1 | sandbox read-only field-tree view | medium | nothing |
+| C2 | flip the default over 24 params | ~1 month | §7.2 + a design call on 2 spatial params |
+| B2 | text syntax | medium-large | §7.1 |
+| A3 | subexpression binding | medium | thin mandate — 11 specs |
+| D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |
+| A1 | remaining math primitives | small each | no demand — wait for a site |
 
-Rationale for the order:
+Retired: A2, A4, B3, unit 3.
 
-- **Units 1–2 first** because they are additive, low-risk, and unit 2
-  alone plausibly removes more serialized bloat than everything else
-  combined.
-- **Unit 3 is deliberately split from unit 2.** Adding a primitive does
-  not require rewriting any graph. Corpus churn is optional, deferrable,
-  and should be its own commit so it can be reviewed as a mechanical
-  transform. Do it when nothing else is in flight.
-- **Unit 5 after unit 4** so the text form has a clean grammar to compile
-  to, rather than being retrofitted.
-- **Unit 7 last of the code units.** It fixes a different complaint
-  (inconsistency) than the one that prompted this (illegibility), it is
-  the long pole, and sequencing it after unit 5 keeps the audit and the
-  parser from fighting over `src/fields/fieldJson.ts`.
+**Recommendation: E1 and C1 now; everything else on evidence.** Both are
+small, neither needs a decision, and together they address the complaint
+as stated (a legibility complaint) rather than the complaint as this plan
+first misread it (a size complaint).
+
+D1 is the best of the larger items — it is the only one that makes an
+expression legible without changing the format, and it cannot be wrong,
+because a read-only view has no correctness stake.
 
 ### Verification per unit
 
@@ -354,9 +417,9 @@ npm run docs                    # CI fails if catalogs are stale
 npm run graphs:golden           # only for units that change graph output
 ```
 
-Per the build protocol: a unit is complete only when its tests are green
-and, for anything non-mechanical, an independent agent has re-derived
-correctness. Units 2, 5 and 7 qualify; units 1 and 8 do not.
+A unit is complete only when its tests are green and, for anything
+non-mechanical, an independent agent has re-derived correctness. C2, B2
+and D3 qualify; E1 and C1 do not.
 
 ---
 
@@ -372,10 +435,12 @@ correctness. Units 2, 5 and 7 qualify; units 1 and 8 do not.
    cook orders.
 3. **CPU is the reference, GPU is a documented approximation.** Any new
    primitive needs both paths plus a parity test, within the published
-   per-family tolerances.
-4. **Bit-identical folding for A2.** The `W0` term exists so the offset is
-   `+0` at the authored seed. A replacement primitive that loses this
-   changes existing graph output.
+   per-family tolerances — and a real device probe, not a reading of the
+   spec. `3b58a31` overturned three of four assumptions that way.
+4. **~~Bit-identical folding for A2.~~** Struck. `8faf95d` chose to change
+   the look, on the ground that no function of (graphSeed, nodeId,
+   variant) can be the identity at a seed nobody names, and that six of
+   the 117 `W0` literals were wrong anyway.
 5. **Derived files are regenerated, never hand-merged.** `docs/nodes.json`,
    `docs/graphs.json` and the graphs golden file conflict on any parallel
    branch; the resolution is always to re-run the generator.
@@ -389,16 +454,16 @@ correctness. Units 2, 5 and 7 qualify; units 1 and 8 do not.
 ## 7. Open decisions — need the user
 
 1. **Does authored text round-trip verbatim, or normalize to the tree on
-   save?** Blocks B2 and must be settled before the parser is written.
-   Normalizing means the first sandbox save silently destroys what someone
-   wrote. Storing the string as the authored form with the tree derived
-   avoids that, but has knock-on effects on diffing and the golden file.
-2. **C1 or C2?** Document the rule, or flip the default across all 166
-   params. Materially different scope.
-3. **Is unit 3 (corpus rewrite) in scope,** or does the corpus stay on the
-   open-coded idiom until something else forces it?
-4. **Is D3 ever wanted,** or is the sandbox tree view the intended answer
-   to the reviewer? This decides whether cross-node field reuse is a goal.
+   save?** Blocks B2. Normalizing means the first sandbox save silently
+   destroys what someone wrote; storing the string as the authored form
+   has knock-on effects on diffing and the golden file.
+2. **C1 or C2?** Document the rule, or flip the default over the 24
+   candidate params. Now a much smaller question than when it was posed
+   as 166.
+3. **~~Is unit 3 (corpus rewrite) in scope?~~** Moot — done by `8faf95d`.
+4. **Is D3 ever wanted?** §2.6 gives it a real number (447 lines nothing
+   else can remove) but that number is one graph. This decides whether
+   cross-node expression reuse is a goal.
 
 ---
 
@@ -408,11 +473,44 @@ correctness. Units 2, 5 and 7 qualify; units 1 and 8 do not.
   fusion guarantee and puts scheduler, cache and invalidation machinery on
   individual multiplies. The node graph is the outer dataflow; the field
   grammar is the inner loop. That split is correct.
-- **Do not reach for compile-time CSE to fix §2.1.** Wrong layer; see A3.
+- **Do not reach for compile-time CSE to fix duplication.** Wrong layer;
+  see A3.
+- **Do not add a grammar fn without a site that wants it.** §2.2 is the
+  standing reason: the surface is permanent, the parity work is real, and
+  four of the ten originally listed shipped precisely because one of them
+  had a measured site.
 - **Do not name specific third-party engine or DCC products** in any file
   or commit message in this repository. Describe the mechanism instead —
   as §1 does.
-- **Do not start any unit while another session holds uncommitted work in
-  `src/fields/`.** There is one worktree on `main`; there is no isolation.
-  A worktree would fix file races but not design collisions — two branches
-  each inventing a binding form both compile, and no rebase catches that.
+- **Do not trust a number in this file that is more than a day old.**
+  §9 is what happened last time.
+
+---
+
+## 9. What the 2026-08-16 draft got wrong
+
+Kept so the correction is auditable, and because the failure mode is
+general: a plan is a measurement with a timestamp, and this repository
+moves faster than a plan's shelf life.
+
+| claim | status |
+| --- | --- |
+| node `keep` is 207/201/161 lines | 44/38/0 — `8faf95d` |
+| the seed idiom is "the single best-evidenced ergonomic defect" | it appears in zero graphs |
+| A2 `seedOffset` is "the single highest-leverage item" | rejected by name in `PLAN-noise-seeds.md:281` |
+| unit 3, rewrite the corpus onto it | already done |
+| §6 invariant 4, bit-identity, is binding | deliberately abandoned |
+| C2 means flipping 166 params | 24 are real candidates |
+| C2's rule: "cannot be a field if it determines allocation or structure" | two counterexamples (§2.3) |
+| A4 likely already landed | it had — `a433e73` |
+| 19 of 166 params, 46 nodes | 20 of 180, 46 nodes |
+
+Three measurements taken *during* this re-derivation were also wrong
+before they were checked, and are recorded because the checking is the
+method: field-spec duplication first came out as 38% of all lines (it
+counted a deliberate tutorial series as duplication — 15% within-file is
+the real figure); intra-spec repetition first came out as 1392 redundant
+lines (nested repeats double-counted, giving 468 redundant lines inside a
+296-line spec, which is impossible); and the corrected 197-repeat figure
+still counted 138 leaf repeats where sharing saves nothing. **45 is the
+number.**
