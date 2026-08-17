@@ -577,6 +577,16 @@ and D3 qualify; E1 and C1 do not.
    (the way `param`'s `description` already does), and that is a grammar
    addition this does not need. The closed grammar stays as it is.
 
+   `&&` AND `||` ARE INPUT-ONLY SUGAR, decided 2026-08-17 with the above.
+   The grammar has no boolean type — comparisons yield 1 and 0, and
+   `filterByExpression`'s own description already says that combining them
+   with `mul` acts as AND and `max` as OR. So the parser accepts `&&`/`||`
+   as sugar over exactly those two fns, and THE PRINTER NEVER EMITS THEM:
+   a `mul` prints as `*` whether or not its operands happen to be
+   predicates. That asymmetry is the point. `a && b` on values outside
+   {0, 1} silently multiplies, and printing `&&` back for an arbitrary
+   `mul` would put that trap in front of a reader who never typed it.
+
    THE GATE, and it is not optional — `src/fields/spec.test.ts` already
    holds the library's standard for two descriptions of one computation
    ("any disagreement between them is a silent numeric divergence with no
