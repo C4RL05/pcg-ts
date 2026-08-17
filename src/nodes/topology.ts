@@ -40,7 +40,14 @@ import { canonicalPointRanks } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { adjacencyFor, type Adjacency } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { positionView, requireGeometry, requireReportSlot } from "./util.js";
+import {
+  positionView,
+  requireGeometry,
+  requireReportSlot,
+  requireTuple,
+  resolveOn,
+  type FieldParam,
+} from "./util.js";
 
 /**
  * Ceiling on the edges one {@link connectPoints} may build. The radius is
@@ -72,7 +79,7 @@ const MAX_EDGES_HINT =
 /** Params of {@link connectPoints}. */
 export interface ConnectPointsParams {
   mode: string;
-  radius: number;
+  radius: FieldParam;
   degreeAttr: string;
   lengthAttr: string;
 }
@@ -82,7 +89,7 @@ export const connectPoints = standardNode<ConnectPointsParams>({
   type: "connectPoints",
   category: "point op",
   description:
-    "Connects a point cloud into a NETWORK: one 2-vertex `polyline` primitive per edge, built over the SAME points that arrived, so every point attribute survives and a junction is genuinely one point shared by every edge that meets there. This is how you get roads between district centres, a trail net between camps, or a triangulated-looking scaffold to displace. There is no edge domain and none is needed — per-edge values come from promoteAttribute point->primitive (`min` for a width, `first` for a kind) and setAttribute on domain 'primitive', and per-junction values from promoteAttribute primitive->point (`max`). mode 'radius' connects every pair closer than `radius`. mode 'relativeNeighborhood' keeps such a pair ONLY when no third point is closer to BOTH of its endpoints than they are to each other (the lune test): that thins a dense blob into a road-like net that still CONTAINS a minimum spanning tree — so the network stays connected wherever the radius does — while leaving the cycles a road layout wants and a tree does not have. Distances are 3D over P and the test is STRICT (d < radius), which is what makes this node's answer independent of how the cloud was windowed: a pair at exactly `radius` is not an edge. Edges come out in a canonical order fixed by the POINTS (identity, then position bits, then seed) and never by the order they arrived in, and each edge's FIRST vertex is its lower-keyed endpoint — reorder the input and you get the same network, permuted. PARTITIONING: an edge reads two stored positions and no third point, so a cell that also holds every point within `radius` of its own rectangle decides its edges exactly; emit an edge from the cell that owns its FIRST vertex under the half-open rule (filterByBounds' 'halfOpen'), and the cells tile the network with no duplicate and no gap. The wiring is three NODES, so a partitioned network cook is a serializable graph and needs no host code: widen the cell's rectangle by `radius` and clip the cloud to it with filterByBounds ('halfOpen'), run this node, then run filterPrimitivesByBounds on the UNWIDENED rectangle with vertex 'first' and the same 'halfOpen' boundary — that node keeps the primitives whose FIRST vertex lies back inside the cell, and it is one of the two filters in the library that trim topology instead of dropping it. The relativeNeighborhood witness lies inside the pair's own neighbourhood, so it needs no wider halo. Any existing topology on the input is REPLACED, and its vertex and primitive attributes drop with it. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a network that passes through one stops being a network — use mergePrimitives to combine this node's output with another network, an authored path or a mesh, which concatenates points, vertices AND primitives and renumbers the references; category is not the rule, since projectToPlane is categorised `filter` and PRESERVES topology, and so do filterPrimitivesByBounds and filterPrimitivesByAttribute, which filter the PRIMITIVE domain and are the nodes to reach for when a network has to be cut down rather than a cloud — the second tests a primitive attribute, so a network thinned by its own `lengthAttr` (or by a promoted or setAttribute-authored per-edge value) stays a network, and the thinning happens before anything downstream pays for the edges it removes. degreeAttr and lengthAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it.",
+    "Connects a point cloud into a NETWORK: one 2-vertex `polyline` primitive per edge, built over the SAME points that arrived, so every point attribute survives and a junction is genuinely one point shared by every edge that meets there. This is how you get roads between district centres, a trail net between camps, or a triangulated-looking scaffold to displace. There is no edge domain and none is needed — per-edge values come from promoteAttribute point->primitive (`min` for a width, `first` for a kind) and setAttribute on domain 'primitive', and per-junction values from promoteAttribute primitive->point (`max`). mode 'radius' connects every pair closer than `radius`. mode 'relativeNeighborhood' keeps such a pair ONLY when no third point is closer to BOTH of its endpoints than they are to each other (the lune test): that thins a dense blob into a road-like net that still CONTAINS a minimum spanning tree — so the network stays connected wherever the radius does — while leaving the cycles a road layout wants and a tree does not have. Distances are 3D over P and the test is STRICT (d < radius), which is what makes this node's answer independent of how the cloud was windowed: a pair at exactly `radius` is not an edge. Edges come out in a canonical order fixed by the POINTS (identity, then position bits, then seed) and never by the order they arrived in, and each edge's FIRST vertex is its lower-keyed endpoint — reorder the input and you get the same network, permuted. PARTITIONING: an edge reads two stored positions and no third point, so a cell that also holds every point within `radius` of its own rectangle decides its edges exactly; emit an edge from the cell that owns its FIRST vertex under the half-open rule (filterByBounds' 'halfOpen'), and the cells tile the network with no duplicate and no gap. The wiring is three NODES, so a partitioned network cook is a serializable graph and needs no host code: widen the cell's rectangle by `radius` — or, when `radius` is a field, by the GLOBAL MAXIMUM it can return anywhere in the world — and clip the cloud to it with filterByBounds ('halfOpen'), run this node, then run filterPrimitivesByBounds on the UNWIDENED rectangle with vertex 'first' and the same 'halfOpen' boundary — that node keeps the primitives whose FIRST vertex lies back inside the cell, and it is one of the two filters in the library that trim topology instead of dropping it. The relativeNeighborhood witness lies inside the pair's own neighbourhood, so it needs no wider halo. Any existing topology on the input is REPLACED, and its vertex and primitive attributes drop with it. Downstream, any node that can REMOVE points drops topology — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and so does mergePoints, so a network that passes through one stops being a network — use mergePrimitives to combine this node's output with another network, an authored path or a mesh, which concatenates points, vertices AND primitives and renumbers the references; category is not the rule, since projectToPlane is categorised `filter` and PRESERVES topology, and so do filterPrimitivesByBounds and filterPrimitivesByAttribute, which filter the PRIMITIVE domain and are the nodes to reach for when a network has to be cut down rather than a cloud — the second tests a primitive attribute, so a network thinned by its own `lengthAttr` (or by a promoted or setAttribute-authored per-edge value) stays a network, and the thinning happens before anything downstream pays for the edges it removes. degreeAttr and lengthAttr are reporting slots whose shape this node picks, so pointing either at an existing attribute of a DIFFERENT shape is refused rather than silently deleting it.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -97,8 +104,9 @@ export const connectPoints = standardNode<ConnectPointsParams>({
       type: "f32",
       default: 1,
       min: 0,
+      acceptsField: true,
       description:
-        "Largest distance that can become an edge, in world units, tested STRICTLY: a pair at exactly `radius` is NOT connected. That strictness is deliberate and is what makes a partitioned cook exact — a neighbour lying exactly on a cell's far face is excluded from the cell by the half-open ownership rule, and under a strict test it is not an edge of anything that cell owns either, so the two conventions cannot disagree. 0 builds no edges. This is a plain number and not a field on purpose: a per-point radius would make 'A is near B' disagree with 'B is near A', and an edge would then depend on which endpoint asked.",
+        "Largest distance that can become an edge, in world units, tested STRICTLY: a pair at exactly `radius` is NOT connected. That strictness is deliberate and is what makes a partitioned cook exact — a neighbour lying exactly on a cell's far face is excluded from the cell by the half-open ownership rule, and under a strict test it is not an edge of anything that cell owns either, so the two conventions cannot disagree. 0 builds no edges. As a FIELD it is a PER-POINT REACH, and a pair becomes an edge when it is closer than the LARGER of the two reaches — the same rule selfPrune's minDistance uses, and for the same reason: the SMALLER would let a big point be crowded by a small one, and the SUM would double the spacing of an evenly-sized cloud, so neither agrees with the same number passed plainly. That rule is what keeps the relation SYMMETRIC. Without one a per-point radius makes 'A is near B' and 'B is near A' two different tests and an edge depends on which endpoint asked, which is why a field here needs a stated pair rule and not merely a column. A per-point reach of 0, negative or NaN connects that point to nothing, though a bigger neighbour can still reach IT. TWO COSTS travel with a field, both cost and neither correctness. The candidate scan runs at the WIDEST reach in the cloud, since either endpoint may be the larger, so the edge ceiling is measured on those candidates rather than on the edges that survive. And under a partitioned cook the halo is no longer `radius` but the GLOBAL MAXIMUM this field can return anywhere in the world — a bound to be derived rather than measured, because the cloud a cell sees has already been clipped by the halo being sized. Take a constant times the range of whatever drives it (a noise is in [-1, 1], so `2 + 3 * noise` maxes at 5) and widen by that; underestimating does not throw, it drops the long edges at the seams only.",
     },
     degreeAttr: {
       type: "string",
@@ -113,7 +121,7 @@ export const connectPoints = standardNode<ConnectPointsParams>({
         "Name of an f32 PRIMITIVE attribute receiving each edge's length in world units. Empty (the default) writes none. Handy as a width or cost driver, and as a filter key once the network is promoted. The shape is this node's to pick (f32, tuple 1), so a name already present on the output's primitive domain under a different shape is REFUSED — which in practice means `primtype`, the string attribute that marks these primitives as polylines and without which nothing downstream would recognise them. Note that the input's own primitive attributes are dropped by the topology replacement before this is written.",
     },
   },
-  execute({ inputs, params, checkCancelled }) {
+  execute({ inputs, params, checkCancelled, seed: nodeSeed }) {
     // Params before geometry: a bad mode reported as a geometry problem
     // sends the author to debug the wrong thing entirely.
     const mode = params.mode;
@@ -122,10 +130,13 @@ export const connectPoints = standardNode<ConnectPointsParams>({
         `connectPoints: unknown mode "${mode}"; valid modes: radius, relativeNeighborhood`,
       );
     }
-    const radius = params.radius;
-    if (!(radius >= 0) || !Number.isFinite(radius)) {
+    const uniformRadius = typeof params.radius === "number" ? params.radius : undefined;
+    if (
+      uniformRadius !== undefined &&
+      (!(uniformRadius >= 0) || !Number.isFinite(uniformRadius))
+    ) {
       throw new Error(
-        `connectPoints: radius must be a finite number >= 0, got ${radius}; 0 builds no edges, and an unbounded radius would connect every pair`,
+        `connectPoints: radius must be a finite number >= 0, got ${uniformRadius}; 0 builds no edges, and an unbounded radius would connect every pair`,
       );
     }
     const src = requireGeometry(inputs, "in", "connectPoints");
@@ -165,6 +176,37 @@ export const connectPoints = standardNode<ConnectPointsParams>({
     const pd = view.data;
     const ps = view.stride;
     const wantLength = params.lengthAttr !== "";
+
+    // A FIELD radius is a per-point REACH, and a pair is an edge when it
+    // is closer than the LARGER of the two — the rule selfPrune already
+    // uses, and for its reason: the smaller would let a big point be
+    // crowded by a small one, and the sum would double the spacing of an
+    // evenly-sized cloud, so neither agrees with the same number passed
+    // plainly. That rule is what makes the relation symmetric again;
+    // without one, "A is near B" and "B is near A" are two tests and an
+    // edge would depend on which endpoint asked.
+    const radii =
+      uniformRadius === undefined
+        ? requireTuple(
+            resolveOn(src, "point", params.radius, nodeSeed, "connectPoints", "radius"),
+            [1],
+            "connectPoints",
+            "radius",
+          )
+        : undefined;
+    // The candidate scan runs at the WIDEST reach, because a pair is
+    // decided by the larger of its two radii and either endpoint may be
+    // the larger. Cost is what that costs — MAX_EDGES is measured on the
+    // candidates — and correctness is not, since every candidate is then
+    // tested against its own pair's limit.
+    let widest = 0;
+    if (radii !== undefined) {
+      for (let i = 0; i < n; i++) {
+        const v = radii.data[i];
+        if (v > widest) widest = v; // 0, negative and NaN reach nothing
+      }
+    }
+    const radius = uniformRadius ?? widest;
 
     // Built once and used twice: to pick each edge's `A`, and to order the
     // edges. Both must be the SAME order, or the first vertex of an edge
@@ -218,6 +260,16 @@ export const connectPoints = standardNode<ConnectPointsParams>({
           const dy = pd[oj + 1] - ay;
           const dz = pd[oj + 2] - az;
           const d2 = dx * dx + dy * dy + dz * dz;
+          if (radii !== undefined) {
+            // The candidates came back at the widest reach; this is the
+            // test that belongs to THIS pair. Strict, and negated so a
+            // NaN limit connects nothing, exactly as the scalar path's
+            // membership test in `src/spatial/adjacency.ts` is.
+            const ri = radii.data[i];
+            const rj = radii.data[j];
+            const limit = ri > rj ? ri : rj;
+            if (!(d2 < limit * limit)) continue;
+          }
           if (mode === "relativeNeighborhood" && hasLuneWitness(adj, pd, ps, i, j, d2)) {
             continue;
           }

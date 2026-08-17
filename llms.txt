@@ -359,15 +359,15 @@ element; the only place the library tells the two spellings apart is GPU
 eligibility (AUTHORED vs DERIVED spec, below). README.md "Fields" is the
 TypeScript side.
 
-WHICH PARAMS ACCEPT ONE — 43 of the standard library's 180, across 24
+WHICH PARAMS ACCEPT ONE — 44 of the standard library's 180, across 25
 node types, after the rule was swept over every numeric param rather
-than applied case by case (it started at 20; the sweep refused five:
-`connectPoints.radius` on symmetry, `splineSample.spacing` and
-`volumeSample.cellSize`/bounds on allocation). A param can
+than applied case by case (it started at 20; only four were refused —
+`splineSample.spacing` and `volumeSample.cellSize`/bounds — all on the
+allocation clause). A param can
 be a field exactly when its value is read PER ELEMENT; everything
 settled before the elements are walked cannot be one:
 
-- The column is f32: all 43 are `f32` (26) or `vec3` (17). No `i32`,
+- The column is f32: all 44 are `f32` (27) or `vec3` (17). No `i32`,
   `u32`, `enum`, `bool`, `string` or list param, ever — a field resolves
   per element into a column, and only f32 and its tuples read one. Part
   of it is executable: `acceptsField` on `items`/`numberList`/
@@ -398,18 +398,18 @@ settled before the elements are walked cannot be one:
   allocation param becomes a post-resolution check. `volumeSample` shows
   both halves in ONE node: `jitter` is a field (read per output centre),
   `cellSize` cannot be (it sizes the grid those centres come from).
-- Nothing that defines a SYMMETRIC RELATION without a stated
-  symmetrisation: a per-point radius makes "A is near B" and "B is near
-  A" two tests, so a relation needs a rule for which wins.
-  `selfPrune.minDistance` HAS one (the larger of the two radii,
-  `filtering.ts:1252`) and is field-capable because of it; a per-POINT
-  measurement like `pointNeighborhood.radius` owes nothing here at all.
-  `connectPoints.radius` has adopted no rule and stays eager — POLICY,
-  not impossibility, and this clause first overstated it as one. The
-  costs are ordinary: MAX_EDGES measured at the widest resolved radius,
-  and its documented halo ("widen the cell's rectangle by `radius`")
-  becoming the field's global maximum, author-supplied, as `selfPrune`
-  already documents.
+- A SYMMETRIC RELATION needs a stated symmetrisation — a REQUIREMENT,
+  not an exclusion, and it refuses nothing today. A per-point radius
+  makes "A is near B" and "B is near A" two tests, so a relation needs a
+  rule for which wins; both nodes that define one use the LARGER of the
+  two radii (`selfPrune.minDistance` always has, `filtering.ts:1252`;
+  `connectPoints.radius` adopted it on becoming field-capable). A
+  per-POINT measurement like `pointNeighborhood.radius` owes nothing
+  here. This clause first called such a relation IMPOSSIBLE to field and
+  named connectPoints as the case — wrong twice, since selfPrune was
+  already doing it. Fielding connectPoints costs MAX_EDGES measured at
+  the widest resolved radius, and a partition halo that becomes the
+  field's global maximum rather than `radius`.
 
 NON-reasons, both of them plausible: grid cell size (`selfPrune`
 resolves the field to a column FIRST and sizes its cells from the

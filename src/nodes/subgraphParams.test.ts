@@ -15,7 +15,6 @@ import {
 } from "../graph/index.js";
 import { fieldFromJson } from "../fields/fieldJson.js";
 import {
-  connectPoints,
   filterByDensity,
   jitterPoints,
   meshPrimitive,
@@ -23,6 +22,7 @@ import {
   pointScatterInBounds,
   setAttribute,
   surfaceSample,
+  volumeSample,
   transformPoints,
 } from "./index.js";
 import { dataInput } from "../runtime/dataInput.js";
@@ -502,26 +502,32 @@ describe("resolveExposedParam — asserting field capability", () => {
    * eager one. The merge is right to AND the capability away; its silence
    * is what costs the author the feature they were building.
    *
-   * The eager half is `connectPoints.radius`, and it is chosen because the
-   * capability rule says it can NEVER be a field: a per-point radius would
-   * make "A is near B" disagree with "B is near A", so an edge would
-   * depend on which endpoint asked. This fixture used
-   * `filterByDensity.threshold` until the C2 sweep made that one
-   * field-capable and quietly turned this test green for the wrong reason.
-   * A fixture that is eager BY RULE cannot rot the same way.
+   * The eager half is `volumeSample.cellSize`, and the choice has a
+   * history worth keeping. It was `filterByDensity.threshold` until the C2
+   * sweep made that field-capable and turned this test green for the wrong
+   * reason. It was then `connectPoints.radius`, picked because the rule
+   * called that one impossible — and it was made field-capable the same
+   * day, because the rule had been wrong: a per-point radius only needs a
+   * stated symmetrisation, and `max(rA, rB)` is one.
+   *
+   * So the lesson is not "pick a param that is eager by rule" but "pick
+   * one that is eager STRUCTURALLY". `cellSize` divides ONE grid; there is
+   * no element to read it per, and there cannot be while the node builds a
+   * single grid. That is a fact about the shape of the node rather than a
+   * policy anybody can revisit.
    */
   function densityFanout(): { inner: Graph; targets: { node: NodeHandle; param: string }[] } {
     const inner = new Graph(1);
     const mesh = inner.add(meshPrimitive, {}, "mesh");
     const scatter = inner.add(surfaceSample, { count: 50 }, "scatter");
-    const net = inner.add(connectPoints, {}, "net");
+    const vol = inner.add(volumeSample, {}, "vol");
     inner.connect(mesh, "out", scatter, "in");
-    inner.connect(scatter, "out", net, "in");
+    inner.connect(scatter, "out", vol, "in");
     return {
       inner,
       targets: [
         { node: scatter, param: "densityField" },
-        { node: net, param: "radius" },
+        { node: vol, param: "cellSize" },
       ],
     };
   }
@@ -555,7 +561,7 @@ describe("resolveExposedParam — asserting field capability", () => {
         description: "How dense the scatter is.",
         acceptsField: true,
       }),
-    ).toThrow(/"net"\.radius does not accept fields.*"scatter"\.densityField would/s);
+    ).toThrow(/"vol"\.cellSize does not accept fields.*"scatter"\.densityField would/s);
   });
 
   it("accepts the assertion when every target is field-capable", () => {

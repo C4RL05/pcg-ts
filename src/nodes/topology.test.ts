@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createPointCloud, setPolylineTopology, type Geometry } from "../data/index.js";
 import { primitiveIdentities } from "../data/identity.js";
+import { attribute, constant } from "../fields/index.js";
 import { Graph, cook, makeGeometryItem, type NodeHandle } from "../graph/index.js";
 import { dataInput, type DataInputParams } from "../runtime/index.js";
 import {
@@ -92,7 +93,7 @@ function edgeKeys(geo: Geometry): string[] {
 /** Run connectPoints and return the output geometry. */
 async function connect(
   geo: Geometry,
-  params: Partial<{ mode: string; radius: number; degreeAttr: string; lengthAttr: string }>,
+  params: Partial<{ mode: string; radius: unknown; degreeAttr: string; lengthAttr: string }>,
 ): Promise<Geometry> {
   const out = await runNode(connectPoints, params, { in: [makeGeometryItem(geo)] });
   return firstGeo(out.out);
@@ -812,5 +813,126 @@ describe("the partitioned network cook is expressible entirely in nodes", () => 
     // Distinct edges get distinct identities: an all-collide fold would
     // satisfy every equality above and mean nothing.
     expect(new Set(whole.values()).size).toBe(whole.size);
+  });
+});
+
+describe("connectPoints with a per-point radius", () => {
+  /** A cloud carrying a scalar `reach` attribute for a radius field to read. */
+  function reachCloud(
+    positions: readonly (readonly number[])[],
+    reaches: readonly number[],
+  ): Geometry {
+    const geo = cloud(positions);
+    geo.attrs.point.add("reach", "f32", 1, 0).data.set(reaches);
+    return geo;
+  }
+  const reachField = () => attribute("reach");
+
+  it("connects a pair when the LARGER reach spans it, not the smaller", async () => {
+    // Two points 2 apart. One reaches 3, the other 1. Under max() they are
+    // an edge; under min() or "both must reach" they are not, and under the
+    // SUM (4) a pair 3.5 apart would connect, which the third point checks.
+    const geo = await connect(
+      reachCloud([[0, 0, 0], [2, 0, 0], [5.5, 0, 0]], [3, 1, 1]),
+      { radius: reachField() },
+    );
+    expect(edgeKeys(geo)).toEqual(["0,0,0->2,0,0"]);
+    // The far pair is 3.5 apart with reaches 1 and 1: max is 1, no edge.
+    // If the rule were the SUM it would be 2 — still no edge — so the
+    // discriminating case is the near pair above, where min() says no and
+    // max() says yes.
+    const minWouldSay = await connect(
+      reachCloud([[0, 0, 0], [2, 0, 0]], [1, 1]),
+      { radius: reachField() },
+    );
+    expect(edgeKeys(minWouldSay)).toEqual([]);
+  });
+
+  it("does not depend on WHICH endpoint carries the larger reach", async () => {
+    // The sharp test, and the one a reordering cannot make. Each pair is
+    // visited once, from its lower-RANKED end, and ranks are keyed on
+    // point identity rather than array position — so deciding the pair by
+    // the visiting endpoint's own reach is still perfectly deterministic
+    // and still survives a shuffle. It is nonetheless "the edge depends on
+    // which endpoint asked", which is the thing max() exists to prevent.
+    // Swapping the two reaches across the SAME geometry is what tells them
+    // apart: under max() both spellings connect, under either endpoint's
+    // own reach exactly one does.
+    const at: number[][] = [[0, 0, 0], [2, 0, 0]];
+    const near = await connect(reachCloud(at, [3, 1]), { radius: reachField() });
+    const far = await connect(reachCloud(at, [1, 3]), { radius: reachField() });
+    expect(edgeKeys(near)).toEqual(["0,0,0->2,0,0"]);
+    expect(edgeKeys(far)).toEqual(["0,0,0->2,0,0"]);
+  });
+
+  it("is symmetric: the edge set does not depend on the point order", async () => {
+    // The whole justification for max() is that it restores symmetry, so
+    // the network must be a property of the points and not of the array.
+    const at: number[][] = [[0, 0, 0], [2, 0, 0], [3.5, 0, 0], [9, 0, 0]];
+    const reaches = [3, 1, 0.5, 4];
+    const straight = await connect(reachCloud(at, reaches), { radius: reachField() });
+    const order = [3, 1, 0, 2];
+    const flipped = await connect(
+      reachCloud(order.map((i) => at[i]), order.map((i) => reaches[i])),
+      { radius: reachField() },
+    );
+    expect(new Set(edgeKeys(flipped))).toEqual(new Set(edgeKeys(straight)));
+  });
+
+  it("a reach of 0 connects that point to nothing, but a big neighbour still reaches it", async () => {
+    const geo = await connect(
+      reachCloud([[0, 0, 0], [1, 0, 0]], [4, 0]),
+      { radius: reachField() },
+    );
+    // Asymmetric reaches, symmetric answer: the larger decides the pair.
+    expect(edgeKeys(geo)).toEqual(["0,0,0->1,0,0"]);
+    const neither = await connect(
+      reachCloud([[0, 0, 0], [1, 0, 0]], [0, 0]),
+      { radius: reachField() },
+    );
+    expect(edgeKeys(neither)).toEqual([]);
+  });
+
+  it("a constant field equals the plain radius, with a control that differs", async () => {
+    // f32-exact on purpose: a field resolves into an f32 column.
+    const at: number[][] = [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]];
+    const plain = await connect(cloud(at), { radius: 1.5 });
+    const field = await connect(cloud(at), { radius: constant(1.5) });
+    expect(edgeKeys(field)).toEqual(edgeKeys(plain));
+    expect(edgeKeys(plain).length).toBe(6);
+    const control = await connect(cloud(at), { radius: 1.25 });
+    expect(edgeKeys(control)).not.toEqual(edgeKeys(plain));
+  });
+
+  it("keeps the STRICT test per pair", async () => {
+    // A pair at exactly the larger reach is NOT connected, the same way a
+    // pair at exactly a plain radius is not.
+    const exact = await connect(
+      reachCloud([[0, 0, 0], [2, 0, 0]], [2, 1]),
+      { radius: reachField() },
+    );
+    expect(edgeKeys(exact)).toEqual([]);
+    const under = await connect(
+      reachCloud([[0, 0, 0], [2, 0, 0]], [2.5, 1]),
+      { radius: reachField() },
+    );
+    expect(edgeKeys(under)).toEqual(["0,0,0->2,0,0"]);
+  });
+
+  it("relativeNeighborhood still finds its witness under mixed reaches", async () => {
+    // The lune test is about DISTANCES, so a witness must still be found
+    // even though the candidate scan now runs at the widest reach.
+    const at: number[][] = [[0, 0, 0], [4, 0, 0], [2, 0.5, 0]];
+    const all = await connect(reachCloud(at, [5, 5, 5]), {
+      radius: reachField(),
+      mode: "radius",
+    });
+    expect(all.primitiveCount).toBe(3);
+    const thinned = await connect(reachCloud(at, [5, 5, 5]), {
+      radius: reachField(),
+      mode: "relativeNeighborhood",
+    });
+    // The middle point witnesses against the long 0->4 edge.
+    expect(thinned.primitiveCount).toBe(2);
   });
 });

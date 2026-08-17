@@ -142,8 +142,8 @@ wording (numeric and vector params only — 83 of 180):
 
 | bucket | count (as audited, 2026-08-17) |
 | --- | --- |
-| already field-capable | 20 — now 43, C2 swept |
-| **CANDIDATE — the real cost of C2** | **24 as audited; 27 by the rule, 22 done, 5 refused** |
+| already field-capable | 20 — now 44, C2 swept |
+| **CANDIDATE — the real cost of C2** | **24 as audited; 27 by the rule, 23 done, 4 refused** |
 | structural, correctly refused | 38 |
 | unclear | 1 (`valueConstant.value`, see §2.4) |
 
@@ -369,9 +369,19 @@ a rule with unstated exceptions is how this whitelist got here. Fixes the
 noise-opts edge.
 
 **C2 — flip the default. SHIPPED.** Field-capable params went from 20 of
-180 to **43 of 180, across 24 node types**: 22 implemented, 5 refused by
-the rule (`connectPoints.radius` on symmetry; `splineSample.spacing` and
-`volumeSample`'s `cellSize` and bounds on allocation).
+180 to **44 of 180, across 25 node types**: 23 implemented, 4 refused —
+`splineSample.spacing` and `volumeSample`'s `cellSize` and bounds, every
+one of them on the allocation clause.
+
+THE SYMMETRY CLAUSE NOW REFUSES NOTHING. It was written to exclude
+`connectPoints.radius`, on the ground that a per-point radius makes an
+edge depend on which endpoint asked. That was wrong twice: `selfPrune`
+was already fielding a per-point radius and symmetrising on the larger of
+the two, and `connectPoints` has now adopted the same rule. What survives
+is a REQUIREMENT — a relation fielded without a stated pair rule really
+does depend on which endpoint asked — and the costs turned out ordinary:
+the candidate scan runs at the widest resolved radius, and the documented
+partition halo becomes the field's global maximum rather than `radius`.
 
 The audit's "24 candidates" was an estimate; applying the written rule to
 the registry gave **27**. The sizing was also wrong in the other
@@ -452,7 +462,7 @@ understanding the model, not about line count.
 | ~~E1~~ | docs framing — lead with `Field<T>`, not the JSON | — | **SHIPPED** `a3d3b94` |
 | ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
 | ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
-| ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 22 done, 5 refused by rule |
+| ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 23 done, 4 refused by rule |
 | B2 | text syntax | medium-large | §7.1 |
 | A3 | subexpression binding | medium | thin mandate — 11 specs |
 | D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |

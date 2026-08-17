@@ -392,19 +392,18 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 
 ### Which params accept one
 
-43 of the standard library's 180 params do, across 24 node types, and one
-rule separates them from the other 137: **a param can be a field exactly
+44 of the standard library's 180 params do, across 25 node types, and one
+rule separates them from the other 136: **a param can be a field exactly
 when its value is read PER ELEMENT.** Everything settled before the
 elements are walked cannot be one, and there are five ways to be settled
 early.
 
-Those 43 are what the rule produced when it was swept over every
-numeric param in the library rather than applied case by case. It
-started at 20, and the sweep refused only five: `connectPoints.radius`
-on the symmetry clause, and `splineSample.spacing` plus
-`volumeSample`'s `cellSize` and bounds on the allocation one.
+Those 44 are what the rule produced when it was swept over every numeric
+param in the library rather than applied case by case. It started at 20,
+and only FOUR were refused — `splineSample.spacing` and `volumeSample`'s
+`cellSize` and bounds — every one of them on the allocation clause.
 
-**The column is f32.** All 43 are `f32` (26) or `vec3` (17). No `i32`,
+**The column is f32.** All 44 are `f32` (27) or `vec3` (17). No `i32`,
 `u32`, `enum`, `bool`, `string` or list param is ever field-capable,
 because a field resolves per element into a column and only f32 and its
 tuples read one. Part of that is executable rather than editorial: a
@@ -453,24 +452,25 @@ cannot be, because it sizes the grid those centres are made from. Same
 node, same cook, opposite answers, and the reason is which side of the
 allocation each one sits on.
 
-**Nothing that defines a SYMMETRIC RELATION without a stated
-symmetrisation.** A per-point radius makes "A is near B" and "B is near
-A" two different tests, so any relation built from one needs a RULE for
-which wins. `selfPrune.minDistance` HAS such a rule — the larger of the
-two radii (`src/nodes/filtering.ts:1252`), chosen because the smaller
-would let a big point be crowded by a small one — and is field-capable
-because of it. A per-POINT measurement such as `pointNeighborhood.radius`
-owes nothing at all here, since a count is one point's own answer.
+**A SYMMETRIC RELATION needs a stated symmetrisation — but that is a
+requirement, not an exclusion.** A per-point radius makes "A is near B"
+and "B is near A" two different tests, so any relation built from one
+needs a RULE for which wins. Both nodes that define one have adopted the
+same rule: the LARGER of the two radii, chosen because the smaller would
+let a big point be crowded by a small one and the sum would double the
+spacing of an evenly-sized cloud. `selfPrune.minDistance` has used it all
+along (`src/nodes/filtering.ts:1252`); `connectPoints.radius` adopted it
+when it became field-capable. A per-POINT measurement such as
+`pointNeighborhood.radius` owes nothing here at all, since a count is one
+point's own answer.
 
-`connectPoints.radius` has adopted no such rule and stays eager. **That
-is a policy, not an impossibility**, and the first version of this clause
-overstated it as one. The costs it would take on are real but ordinary:
-`MAX_EDGES` would have to be measured at the widest resolved radius, and
-the partitioned-cook recipe in the node's own description — "widen the
-cell's rectangle by `radius`" — would become the field's global maximum,
-author-supplied, exactly as `selfPrune` already documents for its own
-halo. It stays eager until someone wants it enough to pay that, and the
-honest reason is that nobody has, not that an edge cannot be defined.
+**This clause refuses nothing today**, and its history is why it is still
+written down. It first said a symmetric relation was IMPOSSIBLE to field
+and named `connectPoints.radius` as the case. That was wrong twice over:
+`selfPrune` was already doing it, and `connectPoints` now does too. What
+survives is the requirement — field a relation without stating which
+radius wins and the edge depends on which endpoint asked, which no amount
+of determinism elsewhere repairs.
 
 Two reasons a reader supplies for themselves, neither of them real.
 **Grid cell size is not one.** `selfPrune` resolves the field to a
