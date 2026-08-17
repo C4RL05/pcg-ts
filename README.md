@@ -29,6 +29,13 @@ and reading `pcg cook --stats`). All of them ship inside the npm package.
 **One-page overview:** <https://c4rl05.github.io/pcg-ts/> — what it is,
 architecture and pipeline diagrams, and the roadmap.
 
+<img alt="The pcg-ts editor open on the suspended-rig graph, shaded by surface normals so the swept tubes read as vivid magenta, cyan and green ribbons filling the frame. A toolbar across the top carries the graph picker, seed 3, a shade selector reading normals and a cook selector reading cpu; the status line beside it reads 60 fps, cook 47.3 ms, 56 of 83 cooked and cached, 11 out, 56,900 points and 899 instances, drawn as 21 meshes, 2 instance batches, lines and 2 point clouds. Dozens of connected nodes float over the render as a full-bleed overlay. On the left a curated knobs panel offers tabs for spine, truss, components, cables, swags and skins, with sliders for samples, wander and variant. On the right the inspector shows a selected transformPoints node named trussMove5, its registry prose, and its field-capable translate parameter holding an expression written as TEXT: param("trussHalfWidth") * 1.4142135623730951 * lerp(...) * attribute("curveNormal", 3), with a note that trussHalfWidth is supplied by an exposed param on an enclosing subgraph." src="./docs/manual-assets/pcg-ts-node-editor.jpg" width="100%">
+
+*The editor on `graphs/examples-rig.json`, shaded by normals. The graph is a
+full-bleed overlay over its own cook, the left column is a per-graph knobs
+panel, and the inspector on the right is showing a field expression as TEXT —
+the same tree the JSON holds, printed.*
+
 Three foundations, carried through the whole library:
 
 - **The data model.** Attributes live on domains (point / vertex /
