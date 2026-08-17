@@ -206,17 +206,45 @@ wrong about its own shape is worth being able to read back:
   `shared/assets.ts` now exports `PLACEHOLDER_ASSET_IDS`, so the compare
   is a line of shell today; a format can wait for a second consumer.
 
-### Release state, 2026-08-17
+### Release state, corrected 2026-08-17
 
-`package.json` is 0.15.0, the last tag is v0.9.1 and the last PUBLISH was
-v0.9.0 — so main carries six minors of unreleased API, most of it added in
-the last two days: `numberList`, graph-scoped params with `targets`,
-`copyToPoints.topology`, `pathResample` reports, `pointLine` spacing mode,
-`pathSegments.segmentIndexAttr`, `setAttribute` weights/select, node-seeded
-noise, and four new public functions. A release pass wants the public
-surface audited against `llms.txt` and the README, the dist smoke gate run,
-and a tag. Publishing itself is interactive (npm 2FA is a passkey), so it
-ends with a command for a human to type.
+**The previous version of this entry was WRONG, and the way it was wrong is
+worth keeping.** It said "the last PUBLISH was v0.9.0", and a release pass
+built on that: the version was left at 0.15.0, a v0.15.0 tag was cut and
+pushed, and `npm publish` refused with "you cannot publish over the
+previously published versions: 0.15.0". The registry is the only authority
+on what is published, and it says 0.6.1, 0.8.0, 0.9.0, 0.9.1, 0.14.0,
+0.15.0, with `latest` at 0.15.0 since 2026-08-11.
+
+The contradiction was already inside the repository. `docs/index.html`'s
+roadmap carries a shipped row reading `v0.15.0  2026-08-11`, matching the
+registry's date exactly. Two documents disagreed and the one that was
+checked against nothing won. **Check `npm view pcg-ts versions` before any
+release claim** — it costs one command and it is the only source that
+cannot be stale.
+
+CURRENT STATE. `package.json` and `src/index.ts`'s `VERSION` are 0.16.0.
+Everything after 2026-08-11 is unreleased: the field-capability rule and
+its sweep (20 to 44 params over 25 node types), the text syntax
+(`printFieldSpec`/`parseFieldText`), node-seeded noise, graph-scoped params
+with `targets`, `cross`/`pow`/`sqrt`/`step`, `pcg assets`, the editor
+rename, and the read-only field diagram.
+
+A release pass wants: the version bumped in BOTH `package.json` and
+`src/index.ts` (the export is hand-maintained and `npm run docs` re-stamps
+the two HTML pages from package.json), a roadmap row in
+`docs/index.html` — every shipped version has one — the dist smoke gate,
+and a tag cut only AFTER the version is settled. Publishing is interactive
+(npm 2FA is a passkey), so it ends with a command for a human to type.
+
+STILL OPEN, found by the audit this pass actually did: 41 of 190 runtime
+exports are named in none of `llms.txt`, `README.md` or
+`docs/authoring.md` — including `isField`, `defineNode`,
+`createTriangleMesh`, `getNodeType`, `listFieldFnInfos`,
+`describeGraphAssets` and `specChildEntries`. Some of the rest
+(`FIELD_BRAND`, `keyNum`, `nextRev`, `paramValueError`) read like they
+should not be public at all. Worth a documentation pass before the next
+release rather than a scramble during one.
 
 ### The streamed level, and what it found first, 2026-08-16
 

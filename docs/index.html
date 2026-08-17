@@ -408,12 +408,12 @@
     <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 
     <div class="stats">
-      <div class="stat"><b>2,841</b><span>tests, all green</span></div>
+      <div class="stat"><b>4,323</b><span>tests, all green</span></div>
       <div class="stat"><b>46</b><span>registered node types</span></div>
       <div class="stat"><b>37</b><span>named primitives</span></div>
       <div class="stat"><b>50</b><span>field-grammar functions</span></div>
       <div class="stat"><b>0</b><span>required dependencies</span></div>
-      <div class="stat"><b><!--pcg:version-minor-->v0.15<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
+      <div class="stat"><b><!--pcg:version-minor-->v0.16<!--/pcg:version-minor--></b><span>MIT · ESM · strict TS</span></div>
     </div>
   </section>
 
@@ -692,6 +692,15 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
         </div>
       </li>
       <li>
+        <div class="rm-ver">v0.16.0 <small>2026-08-17</small></div>
+        <div class="rm-body">
+          <span class="chip shipped">shipped</span>
+          <p>Fields you can read, and a rule for where they go. <b>Which params accept a field</b> had never been written down — it was a whitelist of 20 out of 180 that nobody could state, which is how it drifted. Writing the rule first and sweeping it second took the count to <b>44 across 25 node types</b>, in a day against an estimate of a month, because a stated rule turns a judgement call per param into a lookup. The sweep then corrected the rule twice: one clause read &ldquo;nothing that decides how many elements come out&rdquo; and <code>pathResample.spacing</code> decides exactly that and qualifies anyway, because that node resamples each polyline on its own arc length, so the field resolves per primitive; another called a symmetric relation impossible to field when <code>selfPrune</code> was already doing it on the larger of two radii, which <code>connectPoints</code> now does too. Three of the five clauses are pinned against the live registry, each proven able to fail. A plain value stays byte-identical and the whole corpus golden is unchanged.</p>
+          <p>A field expression is now <b>readable as text</b> — <code>printFieldSpec</code> and <code>parseFieldText</code> are a bidirectional view over the same spec tree, so a 38-line predicate is one line and the tree is still the format every programmatic edit touches. Text is never saved: it parses back, which is what makes the view safe when a knob turn, a World patch or a param patch would re-print it anyway. The correspondence is proven rather than argued — parse(print(s)) equals s for every expression in the corpus, and printing is idempotent. The interactive tool is called the <b>editor</b> now, shows an expression as text or as a read-only boxes-and-wires diagram, and shows no JSON at all; its hosted page moved from <code>/pages/sandbox/</code> to <code>/pages/editor/</code>, the one breaking change here.</p>
+          <p>Also: a saved noise answers the seed box through <code>opts.seed: { from: "node", variant: N }</code>, retiring a hand-written offset idiom that had spread to 39 places; <code>cross</code>, <code>pow</code>, <code>sqrt</code> and <code>step</code> join the grammar, three of their four designs chosen by a device probe rather than by reading the spec; graph-scoped params with <code>targets</code> drive the half of the format an expression cannot reach; and <code>pcg assets</code> reports what a graph <em>requires</em> without cooking it, saying plainly when the answer is a lower bound. 4323 tests.</p>
+        </div>
+      </li>
+      <li>
         <div class="rm-ver">next <small>unscheduled</small></div>
         <div class="rm-body">
           <span class="chip next">exploring</span>
@@ -705,7 +714,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 
 <footer>
   <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
-    <span>pcg-ts <!--pcg:version-->v0.15.0<!--/pcg:version--></span>
+    <span>pcg-ts <!--pcg:version-->v0.16.0<!--/pcg:version--></span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
