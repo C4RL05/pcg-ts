@@ -35,6 +35,57 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### The graph written blind, 2026-08-17
+
+A third vehicle: an agent given ONLY the CLI — no source, no docs, no other
+graph, not even to learn the file format — and asked to author a graph from
+an outcome that named no node types. Full friction log kept at
+`PLAN-agent-authoring.md`; the graph it produced ships as
+`graphs/examples-riverbank.json`, description included, because how it was
+made is the interesting part of it.
+
+**What it fixed.** The field catalog published type signatures with no
+semantics (`usage: { fn: "select", args: [arg0, arg1, arg2] }`) while the
+node catalog published a full param table — so half the library's
+expressive power had no agent-facing documentation at all. Every fn now
+carries a description and named args. Two things the library KNEW and did
+not say went with it: each noise's output range (`noiseOutputRange` is a
+public export the catalog never printed), and that gradient noise is
+exactly 0 on the integer lattice, so a unit-spaced grid at a whole-number
+frequency yields a silently DEAD field — `perlinNoise` and `fbm` only;
+`valueNoise` and `simplexNoise` are unaffected.
+
+**Still open from that log, both deliberately deferred:**
+
+- **No `cross`, `pow`, `sqrt`, `step`, `and` or `or` in the field
+  grammar.** The riverbank graph hand-rolls a 2D perpendicular nine nested
+  objects deep, and it is left that way on purpose as the record of what
+  the absence costs. Deferred because adding a fn is never just a fn:
+  `compile.test.ts` asserts `supportedGpuFieldFns() === listFieldFns()`,
+  so every new name needs a WGSL handler, an entry in both `MINIMAL_SPECS`
+  corpora, and the parity work behind them. It is its own change with its
+  own GPU half. The working idioms (`mul` = AND, `max` = OR, `sub(1, p)` =
+  NOT) are documented in the catalog now rather than in one unrelated
+  node's description.
+- **No way to discover a valid asset id.** `spawnInstances.assetId` is a
+  free string whose meaning belongs to the renderer, there is no
+  `pcg assets`, and the blind author invented two names that cook
+  perfectly and may render nothing. The honest shape is probably a
+  registry the host populates and the CLI can list, which wants a caller
+  outside the library before it is designed.
+
+### Release state, 2026-08-17
+
+`package.json` is 0.15.0, the last tag is v0.9.1 and the last PUBLISH was
+v0.9.0 — so main carries six minors of unreleased API, most of it added in
+the last two days: `numberList`, graph-scoped params with `targets`,
+`copyToPoints.topology`, `pathResample` reports, `pointLine` spacing mode,
+`pathSegments.segmentIndexAttr`, `setAttribute` weights/select, node-seeded
+noise, and four new public functions. A release pass wants the public
+surface audited against `llms.txt` and the README, the dist smoke gate run,
+and a tag. Publishing itself is interactive (npm 2FA is a passkey), so it
+ends with a command for a human to type.
+
 ### The streamed level, and what it found first, 2026-08-16
 
 `graphs/examples-streamed-terrain.json` plus `tests/worldStreaming.test.ts`
