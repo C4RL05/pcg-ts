@@ -55,7 +55,12 @@ exactly 0 on the integer lattice, so a unit-spaced grid at a whole-number
 frequency yields a silently DEAD field — `perlinNoise` and `fbm` only;
 `valueNoise` and `simplexNoise` are unaffected.
 
-**Still open from that log, both deliberately deferred:**
+**Both items that log deferred are now CLOSED (2026-08-17), and each
+closed differently from how it was written** — one shipped four of its six
+names and refused the other two on their merits, the other turned out to
+be asking the wrong question. Kept rather than deleted because the
+re-derivation is the expensive part, and because a deferral that was
+wrong about its own shape is worth being able to read back:
 
 - **~~No `cross`, `pow`, `sqrt`, `step`, `and` or `or` in the field
   grammar.~~ FOUR OF THE SIX SHIPPED 2026-08-17.** `cross`, `pow`, `sqrt`
