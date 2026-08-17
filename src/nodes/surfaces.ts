@@ -385,13 +385,15 @@ export const sweepProfile = standardNode<SweepProfileParams>({
         `sweepProfile: param "sides" must be a whole number in [3, 256] (points around a 'circle' profile), got ${params.sides}`,
       );
     }
-    // A PLAIN limit is checked here, in f64, and read from `plainLimit`
+    // A PLAIN limit is checked here, in f64, and read from `scalarLimit`
     // below: the eager path keeps both its refusal and its arithmetic
     // exactly, so making this param field-capable is a pure extension. A
-    // FIELD has no number to check until it lands on the points.
-    const plainLimit = params.miterLimit;
+    // FIELD has no number to check until it lands on the points, so the
+    // answer is named once here and reread rather than recomputed.
+    const limitIsField = isField(params.miterLimit);
     let scalarLimit = 0;
-    if (!isField(plainLimit)) {
+    if (!limitIsField) {
+      const plainLimit = params.miterLimit;
       if (typeof plainLimit !== "number" || !Number.isFinite(plainLimit) || plainLimit < 1) {
         throw new Error(
           `sweepProfile: param "miterLimit" must be a finite number >= 1 (a limit below 1 would shrink every joint), got ${String(plainLimit)}`,
@@ -466,7 +468,7 @@ export const sweepProfile = standardNode<SweepProfileParams>({
     // not evaluated at all, the same way `radius` is left unresolved for
     // a 'ribbon'.
     const miterCol =
-      jointMode === "miter" && isField(params.miterLimit)
+      jointMode === "miter" && limitIsField
         ? requireTuple(
             await resolveOnMaybeGpu(
               gpu,

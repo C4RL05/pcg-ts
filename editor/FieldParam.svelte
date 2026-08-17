@@ -67,18 +67,28 @@
   let diagram = $state(false);
 
   /**
+   * The textarea's text as a spec, or null when it does not parse.
+   *
+   * ONE parse per keystroke, and everything that needs the spec reads it
+   * from here: `bind:value` re-runs this on every character typed, and a
+   * failed parse is not free — the parser runs an edit-distance search
+   * over every registered fn to offer a "did you mean". Parsing twice to
+   * answer two questions paid for that twice.
+   */
+  const parsed = $derived.by((): FieldSpec | null => {
+    try {
+      return parseFieldText(text);
+    } catch {
+      return null;
+    }
+  });
+
+  /**
    * Whether the textarea currently holds a parseable expression. The
    * diagram button is disabled when it does not: there is nothing to
    * draw, and the textarea's own error already says why.
    */
-  const parses = $derived.by((): boolean => {
-    try {
-      parseFieldText(text);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  const parses = $derived(parsed !== null);
 
   /**
    * The `{ fn: "param" }` names the edited spec reads, so the widget says
@@ -88,13 +98,7 @@
    * reads one builds and then fails at cook. Parsing is best-effort: a
    * half-typed expression simply annotates nothing.
    */
-  const readNames = $derived.by((): readonly string[] => {
-    try {
-      return paramNamesOf(parseFieldText(text));
-    } catch {
-      return [];
-    }
-  });
+  const readNames = $derived(parsed === null ? [] : paramNamesOf(parsed));
 
   const asNumbers = (v: unknown): number[] =>
     Array.isArray(v) ? v.map((x) => Number(x)) : typeof v === "number" ? [v] : [];
@@ -217,7 +221,7 @@
             <button onclick={() => (diagram = false)}>close</button>
           </div>
           <div class="ft-scroll">
-            <FieldTree {text} />
+            <FieldTree spec={parsed} />
           </div>
         </div>
       </div>

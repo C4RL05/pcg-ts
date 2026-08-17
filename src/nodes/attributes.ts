@@ -522,39 +522,72 @@ export const promoteAttribute = standardNode<PromoteAttributeParams>({
 });
 
 /**
- * A FIELD `transferAttribute.direction` as a per-point ray direction, on a
+ * The two {@link transferAttribute} raycast params a FIELD can arrive on,
+ * and what each one costs to get wrong. One table rather than two copies
+ * of {@link rayScratchAttr}'s body: the route is identical, and only the
+ * shape, the scratch name and the sentence that names the fix differ.
+ */
+const RAY_SCRATCH = {
+  direction: {
+    tupleSize: 3,
+    scratch: "__transferDirection",
+    count: "THREE numbers",
+    // Guarded ({@link resolveOn}): a NaN or infinite direction here is a
+    // broken expression, and the plain param refuses exactly the same
+    // thing up front ("must be a finite, non-zero vector"). A ZERO
+    // direction is finite and passes, and per point it MISSES — that is
+    // the per-element reading of the plain param's non-zero refusal, and
+    // it is recorded by `hitAttr`/`missCountAttr` like every other miss.
+    explain:
+      'a ray direction is an [x, y, z] vector, and fields broadcast elementwise, so a scalar such as noise() yields one number per point. Build a vector out of scalars with vec(x, y, z), e.g. vec(0, -1, 0) for straight down.',
+  },
+  maxDistance: {
+    tupleSize: 1,
+    scratch: "__transferMaxDistance",
+    count: "ONE number",
+    // The 0-means-unlimited sentinel is preserved PER POINT — a field that
+    // returns 0 somewhere makes those rays unlimited, not missing — which
+    // is the same reading `sampleNearestPoint.maxDistance` gives its own
+    // field, so one sentinel means one thing across the library.
+    explain:
+      'a ray cap is a single distance, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).',
+  },
+} as const;
+
+/**
+ * A FIELD on one of the {@link RAY_SCRATCH} params as per-point data, on a
  * scratch point attribute `transferRaycast` can read.
  *
- * The per-point path already exists — `directionAttr` — and it is a
- * DESTINATION POINT ATTRIBUTE, so the shortest honest route from a field
- * to it is to resolve the column and hand it over under a name nothing
- * else uses. The scratch column is removed again before the geometry
- * leaves this node (see the call site), so it is invisible to everything
- * downstream, and the name is derived rather than fixed: `replace` on a
- * name the input already holds would destroy that column, which is the
- * failure {@link requireReportSlot} exists to refuse elsewhere.
+ * The per-point path already exists — `directionAttr`, `maxDistanceAttr` —
+ * and both are DESTINATION POINT ATTRIBUTES, so the shortest honest route
+ * from a field to one is to resolve the column and hand it over under a
+ * name nothing else uses. `src/data` takes per-point data as an ATTRIBUTE
+ * NAME, which is how a node hands it a resolved field without that layer
+ * knowing what a field is; `transferRaycast` gained `maxDistanceAttr`
+ * alongside its existing `directionAttr` rather than a second mechanism.
  *
- * Guarded ({@link resolveOn}): a NaN or infinite direction here is a
- * broken expression, and the plain param refuses exactly the same thing
- * up front ("must be a finite, non-zero vector"). A ZERO direction is
- * finite and passes, and per point it MISSES — that is the per-element
- * reading of the plain param's non-zero refusal, and it is recorded by
- * `hitAttr`/`missCountAttr` like every other miss.
+ * The scratch column is removed again before the geometry leaves this node
+ * (see the call site), so it is invisible to everything downstream, and
+ * the name is derived rather than fixed: `replace` on a name the input
+ * already holds would destroy that column, which is the failure
+ * {@link requireReportSlot} exists to refuse elsewhere.
  */
-function rayDirectionAttr(
+function rayScratchAttr(
   dst: Geometry,
   value: FieldParam,
   seed: number,
   reserved: readonly string[],
+  param: keyof typeof RAY_SCRATCH,
 ): string {
-  const col: Column = resolveOn(dst, "point", value, seed, "transferAttribute", "direction");
-  if (col.tupleSize !== 3) {
+  const spec = RAY_SCRATCH[param];
+  const col: Column = resolveOn(dst, "point", value, seed, "transferAttribute", param);
+  if (col.tupleSize !== spec.tupleSize) {
     throw new Error(
-      `transferAttribute: param "direction" must evaluate to THREE numbers per point (tupleSize 3), got tupleSize ${col.tupleSize} — a ray direction is an [x, y, z] vector, and fields broadcast elementwise, so a scalar such as noise() yields one number per point. Build a vector out of scalars with vec(x, y, z), e.g. vec(0, -1, 0) for straight down.`,
+      `transferAttribute: param "${param}" must evaluate to ${spec.count} per point (tupleSize ${spec.tupleSize}), got tupleSize ${col.tupleSize} — ${spec.explain}`,
     );
   }
   const set = dst.attrs.point;
-  let name = "__transferDirection";
+  let name: string = spec.scratch;
   // `reserved` is what this node is about to WRITE — the transferred
   // attribute and the hit flag. Checking only `set.has` checks the INPUT,
   // and the scratch column is removed on the way out, so a transfer into
@@ -562,49 +595,10 @@ function rayDirectionAttr(
   // this node's own cleanup. Silent, and it produced a geometry missing
   // the column the node exists to write.
   for (let n = 2; set.has(name) || reserved.includes(name); n++) {
-    name = `__transferDirection${n}`;
+    name = `${spec.scratch}${n}`;
   }
-  const attr = set.replace(name, "f32", 3);
-  const count = set.count;
-  attr.data.set(col.data.subarray(0, count * 3));
-  return name;
-}
-
-/**
- * A FIELD `transferAttribute.maxDistance` as a per-point ray cap, on a
- * scratch point attribute `transferRaycast` can read.
- *
- * Same route as {@link rayDirectionAttr} and for the same reason:
- * `src/data` takes per-point data as an ATTRIBUTE NAME, which is how a
- * node hands it a resolved field without that layer knowing what a field
- * is. `transferRaycast` gained `maxDistanceAttr` alongside its existing
- * `directionAttr` rather than a second mechanism.
- *
- * The 0-means-unlimited sentinel is preserved PER POINT — a field that
- * returns 0 somewhere makes those rays unlimited, not missing — which is
- * the same reading `sampleNearestPoint.maxDistance` gives its own field,
- * so one sentinel means one thing across the library.
- */
-function rayMaxDistanceAttr(
-  dst: Geometry,
-  value: FieldParam,
-  seed: number,
-  reserved: readonly string[],
-): string {
-  const col: Column = resolveOn(dst, "point", value, seed, "transferAttribute", "maxDistance");
-  if (col.tupleSize !== 1) {
-    throw new Error(
-      `transferAttribute: param "maxDistance" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — a ray cap is a single distance, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
-    );
-  }
-  const set = dst.attrs.point;
-  let name = "__transferMaxDistance";
-  // Same reservation as rayDirectionAttr, for the same reason.
-  for (let n = 2; set.has(name) || reserved.includes(name); n++) {
-    name = `__transferMaxDistance${n}`;
-  }
-  const attr = set.replace(name, "f32", 1);
-  attr.data.set(col.data.subarray(0, set.count));
+  const attr = set.replace(name, "f32", spec.tupleSize);
+  attr.data.set(col.data.subarray(0, set.count * spec.tupleSize));
   return name;
 }
 
@@ -773,12 +767,12 @@ export const transferAttribute = standardNode<TransferAttributeParams>({
       if (params.directionAttr !== "") {
         opts.directionAttr = params.directionAttr;
       } else if (isField(params.direction)) {
-        scratch = rayDirectionAttr(dst, params.direction, nodeSeed, reserved);
+        scratch = rayScratchAttr(dst, params.direction, nodeSeed, reserved, "direction");
         opts.directionAttr = scratch;
       }
       let capScratch = "";
       if (isField(params.maxDistance)) {
-        capScratch = rayMaxDistanceAttr(dst, params.maxDistance, nodeSeed, reserved);
+        capScratch = rayScratchAttr(dst, params.maxDistance, nodeSeed, reserved, "maxDistance");
         opts.maxDistanceAttr = capScratch;
       } else if ((params.maxDistance as number) > 0) {
         opts.maxDistance = params.maxDistance as number;
@@ -1148,36 +1142,67 @@ export const attributeRemap = standardNode<AttributeRemapParams>({
     // Read every source value before replacing: an in-place remap of an
     // f32 attribute reuses the same storage.
     const values = new Float64Array(n * ts);
-    // Element by element, so a fielded window end is read once per ELEMENT
-    // and shared by that element's components — the per-element reading of
-    // "tuples remap componentwise against one range". With four plain
-    // numbers the four reads are the same four doubles on every element
-    // and the arithmetic below is unchanged, bit for bit.
-    for (let e = 0; e < n; e++) {
-      const eInMin = inMinCol === undefined ? inMin : inMinCol.data[e];
-      const eInMax = inMaxCol === undefined ? inMax : inMaxCol.data[e];
-      const outMin = outMinCol === undefined ? outMinValue : outMinCol.data[e];
-      const outMax = outMaxCol === undefined ? outMaxValue : outMaxCol.data[e];
-      const span = eInMax - eInMin;
+    if (
+      inMinCol === undefined &&
+      inMaxCol === undefined &&
+      outMinCol === undefined &&
+      outMaxCol === undefined
+    ) {
+      // ALL FOUR WINDOW ENDS PLAIN — the path every graph that never
+      // fielded one takes, and the one this node has always had. The four
+      // reads would return the same four doubles on every element, so span,
+      // lo and hi hoist above a single flat scan and the loop pays nothing
+      // per point for a capability it is not using. The values are the
+      // branch below's, bit for bit — the two differ in when the window is
+      // read, never in what is computed from it.
+      const outMin = outMinValue;
+      const outMax = outMaxValue;
+      const span = inMax - inMin;
       const lo = Math.min(outMin, outMax);
       const hi = Math.max(outMin, outMax);
-      for (let c = 0; c < ts; c++) {
-        const i = e * ts + c;
+      for (let i = 0; i < n * ts; i++) {
         const v = source[i];
         // NaN survives the empty-range shortcut too: turning unmeasurable
         // data into a valid-looking outMin would hide it from every
         // downstream test.
         let mapped =
-          span === 0
-            ? v !== v
-              ? v
-              : outMin
-            : outMin + ((v - eInMin) / span) * (outMax - outMin);
+          span === 0 ? (v !== v ? v : outMin) : outMin + ((v - inMin) / span) * (outMax - outMin);
         if (clamp) {
           if (mapped < lo) mapped = lo;
           else if (mapped > hi) mapped = hi;
         }
         values[i] = mapped;
+      }
+    } else {
+      // At least one end is a FIELD. Element by element, so a fielded window
+      // end is read once per ELEMENT and shared by that element's components
+      // — the per-element reading of "tuples remap componentwise against one
+      // range". The plain ends among them still read as the same double
+      // every time, so the arithmetic is the branch above's, bit for bit.
+      for (let e = 0; e < n; e++) {
+        const eInMin = inMinCol === undefined ? inMin : inMinCol.data[e];
+        const eInMax = inMaxCol === undefined ? inMax : inMaxCol.data[e];
+        const outMin = outMinCol === undefined ? outMinValue : outMinCol.data[e];
+        const outMax = outMaxCol === undefined ? outMaxValue : outMaxCol.data[e];
+        const span = eInMax - eInMin;
+        const lo = Math.min(outMin, outMax);
+        const hi = Math.max(outMin, outMax);
+        for (let c = 0; c < ts; c++) {
+          const i = e * ts + c;
+          const v = source[i];
+          // Same NaN rule as the plain path.
+          let mapped =
+            span === 0
+              ? v !== v
+                ? v
+                : outMin
+              : outMin + ((v - eInMin) / span) * (outMax - outMin);
+          if (clamp) {
+            if (mapped < lo) mapped = lo;
+            else if (mapped > hi) mapped = hi;
+          }
+          values[i] = mapped;
+        }
       }
     }
     const target = set.replace(outName, "f32", ts, 0);

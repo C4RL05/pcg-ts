@@ -26,9 +26,11 @@ import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid, type PositionView } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
 import {
+  cellSizeFromClaims,
   positionView,
   requireGeometry,
   requireReportSlot,
+  requireScalarColumn,
   requireTuple,
   resolveOn,
   resolveOnAllowingNonFinite,
@@ -89,13 +91,13 @@ function deriveCellSize(view: PositionView): number {
  * contradict the documented behaviour rather than protect anything.
  */
 function neighborhoodRadiusColumn(geo: Geometry, value: FieldParam, seed: number): Column {
-  const col = resolveOnAllowingNonFinite(geo, "point", value, seed);
-  if (col.tupleSize !== 1) {
-    throw new Error(
-      `pointNeighborhood: param "radius" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — a radius is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
-    );
-  }
-  return col;
+  return requireScalarColumn(
+    resolveOnAllowingNonFinite(geo, "point", value, seed),
+    "pointNeighborhood",
+    "radius",
+    "point",
+    "a radius",
+  );
 }
 
 /** Params of {@link pointNeighborhood}. */
@@ -252,19 +254,16 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       cellSize = uniformRadius as number;
       anyReach = cellSize > 0;
     } else {
-      let widest = 0;
       for (let i = 0; i < n; i++) {
-        const v = radii.data[i];
-        if (!(v > 0)) continue; // 0, negative and NaN all reach nothing
-        anyReach = true;
-        if (v > widest && v < Number.POSITIVE_INFINITY) widest = v;
+        // 0, negative and NaN all reach nothing; an infinite radius reaches
+        // the whole cloud, so it counts as reach even though it sizes no
+        // cell.
+        if (radii.data[i] > 0) {
+          anyReach = true;
+          break;
+        }
       }
-      // Cell size never decides an answer, only how many cells a query
-      // touches — the distance tests are exact whatever it is. The largest
-      // FINITE radius makes the usual case (radii within a small factor of
-      // each other) a 3x3x3 block; an all-infinite set has no informative
-      // size, so 1 stands in and every query full-scans anyway.
-      cellSize = widest > 0 ? widest : 1;
+      cellSize = cellSizeFromClaims(radii);
     }
 
     if (anyReach && n > 0) {

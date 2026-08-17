@@ -15,12 +15,15 @@
    * `NodeBox.svelte`, so every element it renders is an SVG element and a
    * wrapping `<div>` could not live here.
    *
-   * It takes the raw TEXT rather than a parsed spec so that the two ways
-   * of having nothing to draw — text that is not JSON, and JSON that is
-   * not a field expression — are both answered in the same place, in one
-   * line, instead of leaving an empty canvas open.
+   * It takes the spec ALREADY PARSED — `null` standing for text that did
+   * not parse — because the owner parses the same text anyway to decide
+   * whether the diagram may be opened at all, and a second parse per
+   * keystroke bought nothing. Both ways of having nothing to draw are
+   * still answered here, in one line, rather than leaving an empty canvas
+   * open: `null` for text that is not JSON, an empty layout for JSON that
+   * is not a field expression.
    */
-  import { parseFieldText } from "pcg-ts";
+  import type { FieldSpec } from "pcg-ts";
   import {
     HEADER_H,
     PAD,
@@ -31,17 +34,9 @@
     type FieldTreeEdge,
   } from "./fieldTreeLayout.js";
 
-  let { text }: { text: string } = $props();
+  let { spec }: { spec: FieldSpec | null } = $props();
 
-  const parsed = $derived.by((): { ok: true; value: unknown } | { ok: false } => {
-    try {
-      return { ok: true, value: parseFieldText(text) as unknown };
-    } catch {
-      return { ok: false };
-    }
-  });
-
-  const tree = $derived(parsed.ok ? layoutFieldTree(parsed.value) : null);
+  const tree = $derived(spec === null ? null : layoutFieldTree(spec));
 
   /**
    * The one line shown in place of a diagram, or null.
@@ -79,8 +74,12 @@
     <!-- Wires under the boxes, as on the canvas: a cable that crossed a
          box would read as passing THROUGH it. -->
     {#each tree.edges as e (e.from)}
-      <path class="wire-casing" d={curve(e)} />
-      <path class="wire" d={curve(e)}><title>{e.label}</title></path>
+      <!-- One `d` for the two paths: the casing is the same curve, drawn
+           thicker and underneath, so computing it twice is the same
+           string twice. -->
+      {@const d = curve(e)}
+      <path class="wire-casing" {d} />
+      <path class="wire" {d}><title>{e.label}</title></path>
     {/each}
     {#each tree.nodes as n (n.id)}
       <g transform="translate({n.x}, {n.y})">

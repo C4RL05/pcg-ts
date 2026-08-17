@@ -63,6 +63,7 @@ import {
   readComp,
   requireGeometry,
   requireReportSlot,
+  requireScalarColumn,
   requireTuple,
   resolveOn,
   resolveOnMaybeGpu,
@@ -356,13 +357,16 @@ const MAX_RESAMPLE_POINTS = 1_048_576;
  * an infinite one would place one sample on a path that needs two.
  */
 function resampleSpacingColumn(geo: Geometry, value: FieldParam, seed: number): Column {
-  const col = resolveOn(geo, "primitive", value, seed, "pathResample", "spacing");
-  if (col.tupleSize !== 1) {
-    throw new Error(
-      `pathResample: param "spacing" must evaluate to ONE number per path (tupleSize 1), got tupleSize ${col.tupleSize} — a spacing is a single distance, and fields broadcast elementwise, so a vec3 such as attribute("size") yields three numbers per path. Reduce it to a scalar first, e.g. component(attribute("size"), 0).`,
-    );
-  }
-  return col;
+  return requireScalarColumn(
+    resolveOn(geo, "primitive", value, seed, "pathResample", "spacing"),
+    "pathResample",
+    "spacing",
+    // The word the message uses for one element, which is "path" here even
+    // though the column lands on the primitive domain: that is what a
+    // polyline IS to the author of this node.
+    "path",
+    "a spacing",
+  );
 }
 
 /**

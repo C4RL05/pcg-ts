@@ -34,10 +34,13 @@ import { type PositionView, UniformGrid } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
 import {
   type FieldParam,
+  cellSizeFromClaims,
   gatherPoints,
   gatherPrimitives,
   readComp,
   requireGeometry,
+  requireScalarColumn,
+  requireVec3Column,
   resolveOn,
   resolveOnAllowingNonFinite,
 } from "./util.js";
@@ -52,9 +55,10 @@ import {
  * GUARDED (`resolveOn`), unlike {@link selfPruneScalar} beside it: none of
  * the three params routed through here has a documented meaning for NaN or
  * ±Infinity, so a non-finite value is a broken expression rather than data
- * and the refusal names the param. The message below is the other half of
- * that contract — a vector here is the likely mistake, since the standard
- * `scale` attribute is a vec3 and a threshold is one number.
+ * and the refusal names the param. The width check itself is the library's
+ * one shared `requireScalarColumn` — a vector here is the likely mistake,
+ * since the standard `scale` attribute is a vec3 and a threshold is one
+ * number, and that is the message it carries.
  */
 function filterScalarColumn(
   nodeType: string,
@@ -65,39 +69,13 @@ function filterScalarColumn(
   seed: number,
   what: string,
 ): Column {
-  const col = resolveOn(geo, domain, value, seed, nodeType, param);
-  if (col.tupleSize !== 1) {
-    throw new Error(
-      `${nodeType}: param "${param}" must evaluate to ONE number per ${domain} (tupleSize 1), got tupleSize ${col.tupleSize} — ${what} is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per ${domain}. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
-    );
-  }
-  return col;
-}
-
-/**
- * The width check every VEC3 field-capable param here shares: a corner or a
- * direction is three numbers, and a scalar broadcasts to all three exactly
- * as a plain scalar written in a graph does.
- *
- * Only the guard is shared, never the resolver — which of the two the
- * caller used is a property of the PARAM (see
- * `resolveOnAllowingNonFinite`): the bounds params document ±Infinity as
- * the way to leave an axis unbounded and so must not be guarded, while
- * `projectToPlane`'s plane has no meaning for a non-finite component at all.
- */
-function requireVec3Column(
-  nodeType: string,
-  param: string,
-  domain: string,
-  col: Column,
-  what: string,
-): Column {
-  if (col.tupleSize !== 1 && col.tupleSize !== 3) {
-    throw new Error(
-      `${nodeType}: param "${param}" must evaluate to three components [x, y, z] (tupleSize 3) per ${domain}, or to one number broadcast to all three (tupleSize 1), got tupleSize ${col.tupleSize} — ${what}. Build it with vec(x, y, z), e.g. vec(attribute("minX"), -1000, attribute("minZ")).`,
-    );
-  }
-  return col;
+  return requireScalarColumn(
+    resolveOn(geo, domain, value, seed, nodeType, param),
+    nodeType,
+    param,
+    domain,
+    what,
+  );
 }
 
 /**
@@ -407,6 +385,13 @@ function insideBox(
  * purpose. Routing a plain corner through a column would store it as f32,
  * and a face at a bound that is not f32-exact would MOVE — so the uniform
  * closure below is the one that always shipped, reading the raw f64 param.
+ *
+ * WHICH corner is which is decided ONCE, here, and never inside a returned
+ * closure: there are only four combinations, so each gets its own body
+ * reading exactly what it needs. The alternative — one body re-testing
+ * `minCol === undefined` six times per point — asks a question that cannot
+ * change during a cook, once per component, at every point of every
+ * primitive.
  */
 function insideBoxPredicate(
   pd: ArrayLike<number>,
@@ -428,20 +413,58 @@ function insideBoxPredicate(
   // At least one corner varies per element; whichever does not still reads
   // its raw f64 numbers, so mixing a field min with a plain max costs the
   // max nothing.
-  const [ax, ay, az] = minCol === undefined ? (boundsMin as readonly number[]) : [0, 0, 0];
-  const [bx, by, bz] = maxCol === undefined ? (boundsMax as readonly number[]) : [0, 0, 0];
+  if (minCol !== undefined && maxCol !== undefined) {
+    const mn = minCol;
+    const mx = maxCol;
+    return (pt: number, elem: number): boolean => {
+      const o = pt * ps;
+      return insideBox(
+        pd[o],
+        pd[o + 1],
+        pd[o + 2],
+        readComp(mn, elem, 0),
+        readComp(mn, elem, 1),
+        readComp(mn, elem, 2),
+        readComp(mx, elem, 0),
+        readComp(mx, elem, 1),
+        readComp(mx, elem, 2),
+        inclusive,
+      );
+    };
+  }
+  if (minCol !== undefined) {
+    const mn = minCol;
+    const [bx, by, bz] = boundsMax as readonly number[];
+    return (pt: number, elem: number): boolean => {
+      const o = pt * ps;
+      return insideBox(
+        pd[o],
+        pd[o + 1],
+        pd[o + 2],
+        readComp(mn, elem, 0),
+        readComp(mn, elem, 1),
+        readComp(mn, elem, 2),
+        bx,
+        by,
+        bz,
+        inclusive,
+      );
+    };
+  }
+  const mx = maxCol as Column;
+  const [ax, ay, az] = boundsMin as readonly number[];
   return (pt: number, elem: number): boolean => {
     const o = pt * ps;
     return insideBox(
       pd[o],
       pd[o + 1],
       pd[o + 2],
-      minCol === undefined ? ax : readComp(minCol, elem, 0),
-      minCol === undefined ? ay : readComp(minCol, elem, 1),
-      minCol === undefined ? az : readComp(minCol, elem, 2),
-      maxCol === undefined ? bx : readComp(maxCol, elem, 0),
-      maxCol === undefined ? by : readComp(maxCol, elem, 1),
-      maxCol === undefined ? bz : readComp(maxCol, elem, 2),
+      ax,
+      ay,
+      az,
+      readComp(mx, elem, 0),
+      readComp(mx, elem, 1),
+      readComp(mx, elem, 2),
       inclusive,
     );
   };
@@ -468,10 +491,10 @@ function boundsColumn(
   seed: number,
 ): Column {
   return requireVec3Column(
+    resolveOnAllowingNonFinite(geo, domain, value, seed),
     nodeType,
     param,
     domain,
-    resolveOnAllowingNonFinite(geo, domain, value, seed),
     "a box corner is a position in space",
   );
 }
@@ -1145,9 +1168,10 @@ export interface SelfPruneParams {
 
 /**
  * Resolve one of {@link selfPrune}'s field-capable params to exactly one
- * number per point. The message names the node, the param and the fix,
- * because a vector here is the likely mistake: the standard `scale`
- * attribute is a vec3, and a radius or a rank is a single number.
+ * number per point, through the library's shared width guard — which names
+ * the node, the param and the fix, because a vector here is the likely
+ * mistake: the standard `scale` attribute is a vec3, and a radius or a rank
+ * is a single number.
  */
 function selfPruneScalar(
   geo: Geometry,
@@ -1163,13 +1187,13 @@ function selfPruneScalar(
   // identity tiebreak. Both are stated in the two param descriptions and
   // pinned by tests — "treats 0, negative and NaN radii as claiming
   // nothing, but still prunes them", and "ranks NaN lowest".
-  const col = resolveOnAllowingNonFinite(geo, "point", value, seed);
-  if (col.tupleSize !== 1) {
-    throw new Error(
-      `selfPrune: param "${param}" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — ${what} is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
-    );
-  }
-  return col;
+  return requireScalarColumn(
+    resolveOnAllowingNonFinite(geo, "point", value, seed),
+    "selfPrune",
+    param,
+    "point",
+    what,
+  );
 }
 
 /**
@@ -1487,20 +1511,12 @@ export const selfPrune = standardNode<SelfPruneParams>({
       cellSize = uniform as number;
     } else {
       const claim = new Float64Array(n);
-      let widest = 0;
       for (let i = 0; i < n; i++) {
         const v = radii.data[i];
-        const c = v > 0 ? v : 0;
-        claim[i] = c;
-        if (c > widest && c < Number.POSITIVE_INFINITY) widest = c;
+        claim[i] = v > 0 ? v : 0;
       }
       radius = claim;
-      // Cell size never decides an answer, only how many cells a query
-      // touches — the pair tests are exact whatever it is. The largest
-      // FINITE claim makes the usual case (radii within a small factor of
-      // each other) a 3x3x3 block; an all-zero or all-infinite set has no
-      // informative size, so 1 stands in.
-      cellSize = widest > 0 ? widest : 1;
+      cellSize = cellSizeFromClaims(radii);
     }
     let kept: Uint8Array;
     if (mode === "greedy") {
@@ -1563,19 +1579,19 @@ export const projectToPlane = standardNode<ProjectToPlaneParams>({
     // every plane whose normal is not f32-exact.
     const normalCol = isField(params.normal)
       ? requireVec3Column(
+          resolveOn(geo, "point", params.normal, nodeSeed, "projectToPlane", "normal"),
           "projectToPlane",
           "normal",
           "point",
-          resolveOn(geo, "point", params.normal, nodeSeed, "projectToPlane", "normal"),
           "a plane normal is a direction",
         )
       : undefined;
     const originCol = isField(params.origin)
       ? requireVec3Column(
+          resolveOn(geo, "point", params.origin, nodeSeed, "projectToPlane", "origin"),
           "projectToPlane",
           "origin",
           "point",
-          resolveOn(geo, "point", params.origin, nodeSeed, "projectToPlane", "origin"),
           "a plane origin is a position in space",
         )
       : undefined;

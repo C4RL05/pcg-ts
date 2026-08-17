@@ -375,6 +375,98 @@ export function requireTuple(
   return col;
 }
 
+/**
+ * Require a resolved column to hold exactly ONE number per element, with
+ * the wording every scalar field-capable param in the node library shares.
+ * `domain` is the word the message uses for one element ("point",
+ * "primitive", "path"), which is not always the domain name the column was
+ * resolved on; `what` names the value, e.g. `"a radius"`.
+ *
+ * GUARD ONLY, and deliberately so: WHICH resolver produced `col` —
+ * {@link resolveOn} or {@link resolveOnAllowingNonFinite} — is a property
+ * of the PARAM, not of the width check. `selfPrune.minDistance` and
+ * `pointNeighborhood.radius` document what a NaN radius means and must not
+ * be guarded, while a density threshold or a resample spacing has no
+ * reading for one at all. Each call site therefore resolves its own way and
+ * then comes here; folding the resolve in would force one finiteness policy
+ * on all of them.
+ *
+ * One wording rather than five, for the reason {@link positionView} gives:
+ * these messages ARE the agent API, and an author reading two answers to
+ * "what may this param evaluate to" has to guess which node meant which.
+ */
+export function requireScalarColumn(
+  col: Column,
+  nodeType: string,
+  param: string,
+  domain: string,
+  what: string,
+): Column {
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `${nodeType}: param "${param}" must evaluate to ONE number per ${domain} (tupleSize 1), got tupleSize ${col.tupleSize} — ${what} is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per ${domain}. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
+    );
+  }
+  return col;
+}
+
+/**
+ * The width check every VEC3 field-capable param shares: a corner or a
+ * direction is three numbers, and a scalar broadcasts to all three exactly
+ * as a plain scalar written in a graph does.
+ *
+ * Guard only, for the reason {@link requireScalarColumn} gives — the bounds
+ * params document ±Infinity as the way to leave an axis unbounded and so
+ * must resolve unguarded, while `projectToPlane`'s plane has no meaning for
+ * a non-finite component at all.
+ *
+ * Not the same rule as a param that refuses a scalar OUTRIGHT
+ * (`setBounds.boundsMin`): there, broadcasting would quietly hand every
+ * point a cube when a box was asked for, so tupleSize 1 is an error rather
+ * than a broadcast, and that param keeps its own check and its own message.
+ */
+export function requireVec3Column(
+  col: Column,
+  nodeType: string,
+  param: string,
+  domain: string,
+  what: string,
+): Column {
+  if (col.tupleSize !== 1 && col.tupleSize !== 3) {
+    throw new Error(
+      `${nodeType}: param "${param}" must evaluate to three components [x, y, z] (tupleSize 3) per ${domain}, or to one number broadcast to all three (tupleSize 1), got tupleSize ${col.tupleSize} — ${what}. Build it with vec(x, y, z), e.g. vec(attribute("minX"), -1000, attribute("minZ")).`,
+    );
+  }
+  return col;
+}
+
+/**
+ * Uniform-grid cell size for a query whose radius is PER ELEMENT: the
+ * widest FINITE positive claim in the column, or 1 when there is none.
+ *
+ * Cell size never decides an answer, only how many cells a query touches —
+ * the pair tests are exact whatever it is. The largest FINITE claim makes
+ * the usual case (radii within a small factor of each other) a 3x3x3 block;
+ * an all-zero or all-infinite set has no informative size, so 1 stands in
+ * and every query full-scans anyway. 0, negative and NaN claims are all
+ * skipped, since none of them reaches anything.
+ *
+ * Shared by `selfPrune` and `pointNeighborhood`, which ask exactly this.
+ * `connectPoints` does NOT: its widest radius is a query REACH that must
+ * include an infinite one and has no fallback, so it stays its own loop.
+ */
+export function cellSizeFromClaims(col: Column): number {
+  const data = col.data;
+  let widest = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    // `widest` starts at 0, so `v > widest` already excludes 0, negative
+    // and NaN — the clamp the callers used to apply inline is implied.
+    if (v > widest && v < Number.POSITIVE_INFINITY) widest = v;
+  }
+  return widest > 0 ? widest : 1;
+}
+
 /** Read component k of element i, broadcasting scalar columns. */
 export function readComp(col: Column, i: number, k: number): number {
   return col.tupleSize === 1 ? col.data[i] : col.data[i * col.tupleSize + k];

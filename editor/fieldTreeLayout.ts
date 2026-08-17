@@ -19,16 +19,20 @@
  */
 import { listFieldFnInfos, specChildEntries, type SpecChild } from "pcg-ts";
 
+// The geometry the SVG itself needs is exported; the rest is arithmetic
+// this module does on its own behalf and nothing outside it has ever
+// asked for.
+
 /** Box width. 140 is what fits a two-column row inside the modal. */
-export const BOX_W = 140;
+const BOX_W = 140;
 /** Horizontal distance between one depth and the next, box included. */
-export const COL_W = 210;
+const COL_W = 210;
 /** Vertical pitch of the leaf cursor. */
-export const ROW_H = 96;
+const ROW_H = 96;
 /** Breathing room a box keeps under the one placed before it. */
-export const V_GAP = 18;
+const V_GAP = 18;
 /** Margin around the whole diagram, so no stroke lands on the edge. */
-export const MARGIN = 14;
+const MARGIN = 14;
 
 /** Horizontal inset of the text columns, as `layout.ts` uses `PAD`. */
 export const PAD = 8;
@@ -37,9 +41,9 @@ export const TITLE_Y = 15;
 /** Where the rule under the title sits, and where the rows start. */
 export const HEADER_H = 23;
 /** Vertical pitch of one row. */
-export const ROW_SPACING = 14;
+const ROW_SPACING = 14;
 /** Space under the last row. */
-export const PAD_BOTTOM = 6;
+const PAD_BOTTOM = 6;
 
 /**
  * How deep the walk goes before it stops descending. The JSON is a tree
@@ -86,10 +90,12 @@ export interface FieldTreeNode {
 
 /** One wire, from a child box's right edge to its consumer's row pin. */
 export interface FieldTreeEdge {
-  /** Id of the child box the wire leaves. */
+  /**
+   * Id of the child box the wire leaves. Unique per edge — a box has one
+   * consumer — which is what makes it the `{#each}` key. The consuming
+   * box needs no id here: the wire is drawn from the four coordinates.
+   */
   readonly from: string;
-  /** Id of the consuming box the wire enters. */
-  readonly to: string;
   /** The consuming row's label — what this wire feeds. */
   readonly label: string;
   readonly ax: number;
@@ -106,7 +112,7 @@ export interface FieldTreeLayout {
 }
 
 /** Full height of a box holding `rows` rows. */
-export function boxHeight(rows: number): number {
+function boxHeight(rows: number): number {
   return HEADER_H + rows * ROW_SPACING + PAD_BOTTOM;
 }
 
@@ -150,7 +156,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * A value that becomes a BOX. Only a spec object does; a number in an
  * `args` slot is a literal and renders inline on its consumer's row.
  */
-export function isSpecObject(v: unknown): v is Record<string, unknown> {
+function isSpecObject(v: unknown): v is Record<string, unknown> {
   return isPlainObject(v) && typeof v.fn === "string";
 }
 
@@ -194,18 +200,12 @@ function argName(fn: string, child: SpecChild & { kind: "arg" }): string {
 }
 
 function rowLabel(fn: string, child: SpecChild): string {
-  switch (child.kind) {
-    case "arg":
-      return argName(fn, child);
-    case "position":
-      return "position";
-    case "variant":
-      return "variant";
-    case "case":
-      return child.key;
-    case "default":
-      return "default";
-  }
+  if (child.kind === "arg") return argName(fn, child);
+  if (child.kind === "case") return child.key;
+  // `position`, `variant` and `default` label themselves: the kind IS the
+  // name of the position, and spelling each one out a second time only
+  // creates somewhere for the two spellings to disagree.
+  return child.kind;
 }
 
 /** Spec keys that are structure, not content — the child positions. */
@@ -217,6 +217,14 @@ interface Built {
   readonly depth: number;
   readonly rows: FieldTreeRow[];
   readonly kids: { readonly row: number; readonly node: Built }[];
+  /**
+   * Where this box lands in `placed` — and so in `nodes`, which is built
+   * from it in order. Filled by the placement pass, which visits every
+   * box exactly once, so the wiring pass reads a child's drawn box by
+   * index instead of looking an id up in a map and then testing a miss
+   * that cannot happen.
+   */
+  slot: number;
 }
 
 function build(spec: Record<string, unknown>, id: string, depth: number): Built {
@@ -270,7 +278,7 @@ function build(spec: Record<string, unknown>, id: string, depth: number): Built 
     }
   }
 
-  return { id, fn, depth, rows, kids };
+  return { id, fn, depth, rows, kids, slot: -1 };
 }
 
 interface Placed {
@@ -297,7 +305,7 @@ export function layoutFieldTree(root: unknown): FieldTreeLayout {
   // cursor is what keeps a tall box from landing on the one above it —
   // `ROW_H` alone assumes every box is the same height, and a noise with
   // five settings is not.
-  const placed = new Map<string, Placed>();
+  const placed: Placed[] = [];
   let row = 0;
   let cursor = 0;
   let maxDepth = 0;
@@ -315,7 +323,8 @@ export function layoutFieldTree(root: unknown): FieldTreeLayout {
       const centers = node.kids.map((kid) => place(kid.node));
       cy = (centers[0] + centers[centers.length - 1]) / 2;
     }
-    placed.set(node.id, { built: node, cy, h });
+    node.slot = placed.length;
+    placed.push({ built: node, cy, h });
     return cy;
   }
   place(tree);
@@ -331,12 +340,21 @@ export function layoutFieldTree(root: unknown): FieldTreeLayout {
   // This costs a parent its exact centring, which is the same trade every
   // tidy-tree layout makes: overlapping boxes are unreadable, a parent
   // sitting a few pixels off its children's midpoint is not.
+  //
+  // Centring a parent on its children can also push it above the topmost
+  // leaf, so the extent the sweep settles on is carried out of it: every
+  // box passes through here with its final `cy`, and a second walk to
+  // read back what this loop just decided would only be a way for the two
+  // to drift. The diagram is normalised to the margin from it rather than
+  // assumed to start at zero.
   const columns = new Map<number, Placed[]>();
-  for (const p of placed.values()) {
+  for (const p of placed) {
     const column = columns.get(p.built.depth);
     if (column === undefined) columns.set(p.built.depth, [p]);
     else column.push(p);
   }
+  let minTop = Infinity;
+  let maxBottom = -Infinity;
   for (const column of columns.values()) {
     column.sort((a, b) => a.cy - b.cy);
     let bottom = -Infinity;
@@ -344,46 +362,32 @@ export function layoutFieldTree(root: unknown): FieldTreeLayout {
       const top = Math.max(p.cy - p.h / 2, bottom);
       p.cy = top + p.h / 2;
       bottom = top + p.h + V_GAP;
+      minTop = Math.min(minTop, top);
+      maxBottom = Math.max(maxBottom, top + p.h);
     }
-  }
-
-  // Centring a parent on its children can push it above the topmost leaf,
-  // so the diagram is normalised to the margin rather than assumed to
-  // start at zero.
-  let minTop = Infinity;
-  let maxBottom = -Infinity;
-  for (const p of placed.values()) {
-    minTop = Math.min(minTop, p.cy - p.h / 2);
-    maxBottom = Math.max(maxBottom, p.cy + p.h / 2);
   }
   const shift = MARGIN - minTop;
 
-  const nodes: FieldTreeNode[] = [];
-  const byId = new Map<string, FieldTreeNode>();
-  for (const p of placed.values()) {
-    const node: FieldTreeNode = {
-      id: p.built.id,
-      fn: clip(p.built.fn, MAX_TITLE),
-      x: MARGIN + (maxDepth - p.built.depth) * COL_W,
-      y: p.cy - p.h / 2 + shift,
-      w: BOX_W,
-      h: p.h,
-      rows: p.built.rows,
-    };
-    nodes.push(node);
-    byId.set(node.id, node);
-  }
+  const nodes: FieldTreeNode[] = placed.map((p) => ({
+    id: p.built.id,
+    fn: clip(p.built.fn, MAX_TITLE),
+    x: MARGIN + (maxDepth - p.built.depth) * COL_W,
+    y: p.cy - p.h / 2 + shift,
+    w: BOX_W,
+    h: p.h,
+    rows: p.built.rows,
+  }));
 
+  // `slot` is the index into both arrays, filled by `place` above, so a
+  // parent is `nodes[i]` and its child is `nodes[kid.node.slot]`: every
+  // box was placed, and so every one of them has a drawn node.
   const edges: FieldTreeEdge[] = [];
-  for (const p of placed.values()) {
-    const parent = byId.get(p.built.id);
-    if (parent === undefined) continue;
+  for (const [i, p] of placed.entries()) {
+    const parent = nodes[i];
     for (const kid of p.built.kids) {
-      const child = byId.get(kid.node.id);
-      if (child === undefined) continue;
+      const child = nodes[kid.node.slot];
       edges.push({
         from: child.id,
-        to: parent.id,
         label: parent.rows[kid.row].label,
         ax: child.x + child.w,
         ay: child.y + child.h / 2,

@@ -44,7 +44,7 @@ import {
   positionView,
   requireGeometry,
   requireReportSlot,
-  requireTuple,
+  requireScalarColumn,
   resolveOn,
   type FieldParam,
 } from "./util.js";
@@ -106,7 +106,7 @@ export const connectPoints = standardNode<ConnectPointsParams>({
       min: 0,
       acceptsField: true,
       description:
-        "Largest distance that can become an edge, in world units, tested STRICTLY: a pair at exactly `radius` is NOT connected. That strictness is deliberate and is what makes a partitioned cook exact — a neighbour lying exactly on a cell's far face is excluded from the cell by the half-open ownership rule, and under a strict test it is not an edge of anything that cell owns either, so the two conventions cannot disagree. 0 builds no edges. As a FIELD it is a PER-POINT REACH, and a pair becomes an edge when it is closer than the LARGER of the two reaches — the same rule selfPrune's minDistance uses, and for the same reason: the SMALLER would let a big point be crowded by a small one, and the SUM would double the spacing of an evenly-sized cloud, so neither agrees with the same number passed plainly. That rule is what keeps the relation SYMMETRIC. Without one a per-point radius makes 'A is near B' and 'B is near A' two different tests and an edge depends on which endpoint asked, which is why a field here needs a stated pair rule and not merely a column. A per-point reach of 0, negative or NaN connects that point to nothing, though a bigger neighbour can still reach IT. TWO COSTS travel with a field, both cost and neither correctness. The candidate scan runs at the WIDEST reach in the cloud, since either endpoint may be the larger, so the edge ceiling is measured on those candidates rather than on the edges that survive. And under a partitioned cook the halo is no longer `radius` but the GLOBAL MAXIMUM this field can return anywhere in the world — a bound to be derived rather than measured, because the cloud a cell sees has already been clipped by the halo being sized. Take a constant times the range of whatever drives it (a noise is in [-1, 1], so `2 + 3 * noise` maxes at 5) and widen by that; underestimating does not throw, it drops the long edges at the seams only.",
+        "Largest distance that can become an edge, in world units, tested STRICTLY: a pair at exactly `radius` is NOT connected. That strictness is deliberate and is what makes a partitioned cook exact — a neighbour lying exactly on a cell's far face is excluded from the cell by the half-open ownership rule, and under a strict test it is not an edge of anything that cell owns either, so the two conventions cannot disagree. 0 builds no edges. As a FIELD it is a PER-POINT REACH, and a pair becomes an edge when it is closer than the LARGER of the two reaches — the same rule selfPrune's minDistance uses, and for the same reason: the SMALLER would let a big point be crowded by a small one, and the SUM would double the spacing of an evenly-sized cloud, so neither agrees with the same number passed plainly. That rule is what keeps the relation SYMMETRIC. Without one a per-point radius makes 'A is near B' and 'B is near A' two different tests and an edge depends on which endpoint asked, which is why a field here needs a stated pair rule and not merely a column. A per-point reach of 0 or less connects that point to nothing, though a bigger neighbour can still reach IT. A NON-FINITE reach is REFUSED rather than read as nothing: this param takes the guarded resolver, so a NaN or an Infinity stops the cook naming the offending element, unlike pointNeighborhood's radius, where both are documented values. The distinction is which mistake is likelier — a reach is arithmetic an author writes, and a NaN there is a broken expression rather than a request for no edges. TWO COSTS travel with a field, both cost and neither correctness. The candidate scan runs at the WIDEST reach in the cloud, since either endpoint may be the larger, so the edge ceiling is measured on those candidates rather than on the edges that survive. And under a partitioned cook the halo is no longer `radius` but the GLOBAL MAXIMUM this field can return anywhere in the world — a bound to be derived rather than measured, because the cloud a cell sees has already been clipped by the halo being sized. Take a constant times the range of whatever drives it (a noise is in [-1, 1], so `2 + 3 * noise` maxes at 5) and widen by that; underestimating does not throw, it drops the long edges at the seams only.",
     },
     degreeAttr: {
       type: "string",
@@ -187,11 +187,12 @@ export const connectPoints = standardNode<ConnectPointsParams>({
     // edge would depend on which endpoint asked.
     const radii =
       uniformRadius === undefined
-        ? requireTuple(
+        ? requireScalarColumn(
             resolveOn(src, "point", params.radius, nodeSeed, "connectPoints", "radius"),
-            [1],
             "connectPoints",
             "radius",
+            "point",
+            "a radius",
           )
         : undefined;
     // The candidate scan runs at the WIDEST reach, because a pair is
@@ -199,6 +200,13 @@ export const connectPoints = standardNode<ConnectPointsParams>({
     // the larger. Cost is what that costs — MAX_EDGES is measured on the
     // candidates — and correctness is not, since every candidate is then
     // tested against its own pair's limit.
+    //
+    // NOT `cellSizeFromClaims`, which the two selfPrune/pointNeighborhood
+    // loops share and which this deliberately resembles: this max INCLUDES
+    // an infinite radius (an unbounded reach must widen the query, not be
+    // skipped as uninformative) and has no "else 1" fallback, because an
+    // all-zero set here means "build no edges at all" rather than "pick
+    // some cell size". It is a query reach, not a cell size.
     let widest = 0;
     if (radii !== undefined) {
       for (let i = 0; i < n; i++) {
@@ -239,6 +247,34 @@ export const connectPoints = standardNode<ConnectPointsParams>({
       edgeB = new Uint32Array(cap);
       // Only lengthAttr reads the distances, and it is not the default.
       if (wantLength) edgeD2 = new Float64Array(cap);
+      // Each pair's limit is ONE of its two endpoint radii, so squaring is
+      // done once per POINT here rather than once per candidate PAIR — the
+      // same f64 product either way, which is what keeps the test below
+      // bit-identical to the multiply it replaces.
+      //
+      // Deliberately NOT clamped to 0 for negative and NaN radii, which
+      // would look like the tidier table and would MOVE edges: `limit *
+      // limit` was taken of whichever radius won `ri > rj`, so two negative
+      // radii squared to a positive limit and connected, and a NaN in the
+      // `rj` slot squared to NaN and connected nothing. Both survive here
+      // because the square is stored raw and the winner is still chosen by
+      // the same comparison.
+      const rd = radii?.data;
+      let reach2: Float64Array | undefined;
+      if (rd !== undefined) {
+        reach2 = new Float64Array(n);
+        // CLAMPED, and the clamp is the correctness half rather than a
+        // tidy-up. Squaring a raw reach loses its sign: two points that
+        // both asked for -1 would compare against max(-1, -2)^2 = 1 and
+        // CONNECT, which is the opposite of what this param documents
+        // ("0, negative or NaN connects that point to nothing"). Mapping
+        // every non-positive reach to 0 first makes the promise true —
+        // `d2 < 0` is false for every distance, and NaN fails `> 0` so it
+        // lands on 0 too. It also makes max-of-squares equal
+        // square-of-max, which is what lets the pair test below compare
+        // the squares directly.
+        for (let i = 0; i < n; i++) reach2[i] = rd[i] > 0 ? rd[i] * rd[i] : 0;
+      }
       for (let i = 0; i < n; i++) {
         // Polled tighter than the usual 1023: one point costs O(degree)
         // pairs here, and O(degree^2) in relativeNeighborhood.
@@ -247,6 +283,9 @@ export const connectPoints = standardNode<ConnectPointsParams>({
         const ax = pd[oi];
         const ay = pd[oi + 1];
         const az = pd[oi + 2];
+        // This endpoint's own SQUARED reach, invariant across its whole
+        // candidate walk below.
+        const r2i = reach2 === undefined ? 0 : reach2[i];
         const end = offsets[i + 1];
         for (let k = offsets[i]; k < end; k++) {
           const j = neighbors[k];
@@ -260,15 +299,15 @@ export const connectPoints = standardNode<ConnectPointsParams>({
           const dy = pd[oj + 1] - ay;
           const dz = pd[oj + 2] - az;
           const d2 = dx * dx + dy * dy + dz * dz;
-          if (radii !== undefined) {
+          if (reach2 !== undefined) {
             // The candidates came back at the widest reach; this is the
             // test that belongs to THIS pair. Strict, and negated so a
             // NaN limit connects nothing, exactly as the scalar path's
-            // membership test in `src/spatial/adjacency.ts` is.
-            const ri = radii.data[i];
-            const rj = radii.data[j];
-            const limit = ri > rj ? ri : rj;
-            if (!(d2 < limit * limit)) continue;
+            // membership test in `src/spatial/adjacency.ts` is. The pair's
+            // limit is the LARGER radius, squared — picked here, squared
+            // above.
+            const r2j = reach2[j];
+            if (!(d2 < (r2i > r2j ? r2i : r2j))) continue;
           }
           if (mode === "relativeNeighborhood" && hasLuneWitness(adj, pd, ps, i, j, d2)) {
             continue;

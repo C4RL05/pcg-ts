@@ -451,12 +451,20 @@ describe("names an author reaches for that are not fns", () => {
   });
 
   it("does not quote the word twice when the caller already did", () => {
-    let msg = "";
-    try {
-      parseFieldText("length(P) < 20");
-    } catch (e) {
-      msg = (e as Error).message;
-    }
-    expect(msg.match(/"P"/g)).toHaveLength(1);
+    const message = (text: string): string => {
+      try {
+        parseFieldText(text);
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return "";
+    };
+    // The MEANT_INSTEAD branch…
+    expect(message("length(P) < 20").match(/"P"/g)).toHaveLength(1);
+    // …and the edit-distance one, which is the same sentence with a
+    // different second half and so has the same rule to follow.
+    const typo = message("perlinNose < 20");
+    expect(typo).toContain("closest: perlinNoise");
+    expect(typo.match(/"perlinNose"/g)).toHaveLength(1);
   });
 });

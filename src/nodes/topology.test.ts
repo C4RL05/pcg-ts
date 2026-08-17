@@ -879,6 +879,33 @@ describe("connectPoints with a per-point radius", () => {
     expect(new Set(edgeKeys(flipped))).toEqual(new Set(edgeKeys(straight)));
   });
 
+  it("a NEGATIVE reach connects nothing, the same as 0", async () => {
+    // The param promises a non-positive reach "connects that point to
+    // nothing". Squaring a raw reach loses the sign, so two points that
+    // both asked for -1 were compared against max(-1, -2)^2 = 1 and
+    // CONNECTED — the promise broken by the arithmetic meant to make it
+    // cheap. Points 0.5 apart, so any positive limit would join them.
+    const near: number[][] = [[0, 0, 0], [0.5, 0, 0]];
+    expect(edgeKeys(await connect(reachCloud(near, [-1, -2]), { radius: reachField() }))).toEqual([]);
+    // CONTROL: the same geometry with a real reach on ONE endpoint does
+    // connect, so the assertion above is not passing because nothing ever
+    // connects. Counted rather than named: which endpoint comes first is
+    // a property of point IDENTITY, not of this test.
+    expect(edgeKeys(await connect(reachCloud(near, [1, -2]), { radius: reachField() }))).toHaveLength(1);
+  });
+
+  it("REFUSES a non-finite reach rather than reading it as nothing", async () => {
+    // Unlike pointNeighborhood, which documents NaN and Infinity as
+    // meaningful, this param uses the GUARDED resolver — so a NaN never
+    // reaches the pair test at all and the cook stops with the offending
+    // element named. Pinned because the description used to say NaN
+    // "connects nothing", which is a different promise from this one.
+    const near: number[][] = [[0, 0, 0], [0.5, 0, 0]];
+    await expect(
+      connect(reachCloud(near, [Number.NaN, 1]), { radius: reachField() }),
+    ).rejects.toThrow(/param "radius" resolved to NaN/);
+  });
+
   it("a reach of 0 connects that point to nothing, but a big neighbour still reaches it", async () => {
     const geo = await connect(
       reachCloud([[0, 0, 0], [1, 0, 0]], [4, 0]),

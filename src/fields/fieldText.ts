@@ -314,19 +314,25 @@ const MEANT_INSTEAD = new Map<string, string>([
   ["random", 'randomField("key")'],
 ]);
 
+/**
+ * `named` means the CALLER already quoted the word, so neither branch
+ * below says it a second time — both drop the name, not just the first
+ * one. `failBareWord` is the caller that sets it: its sentence opens with
+ * `"P" is not a value;`, and a message that repeated the word after that
+ * would read `"P" is not a value; unknown field fn "P"`.
+ */
 function unknownFnMessage(name: string, named = false): string {
   const meant = MEANT_INSTEAD.get(name);
   if (meant !== undefined) {
-    // `named` means the caller already quoted the word, so this does
-    // not say it a second time.
     return named
       ? `did you mean ${meant}? — the full list is listFieldFns()`
       : `"${name}" is not a field fn; did you mean ${meant}? — the full list is listFieldFns()`;
   }
   const near = closestFns(name);
+  const unknown = named ? "unknown field fn" : `unknown field fn "${name}"`;
   return near.length > 0
-    ? `unknown field fn "${name}"; closest: ${near.join(", ")} — the full list is listFieldFns()`
-    : `unknown field fn "${name}"; the full list is listFieldFns()`;
+    ? `${unknown}; closest: ${near.join(", ")} — the full list is listFieldFns()`
+    : `${unknown}; the full list is listFieldFns()`;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,8 +398,17 @@ function specPositions(node: Record<string, unknown>): Map<object, string> {
   return out;
 }
 
-/** A literal, or a nested expression where `specPos` says one belongs. */
-function printValue(v: unknown, specPos: Map<object, string>): string {
+/**
+ * A literal, or a nested expression where `specPos` says one belongs.
+ *
+ * `minPrec` is the precedence the enclosing context binds at, passed
+ * straight through to {@link printExpr} when the value turns out to be an
+ * expression. It defaults to 0 — no enclosing operator — which is what
+ * every literal position (an array element, an object value, a call
+ * argument) is; only the two operand positions in {@link printExpr} pass
+ * anything else.
+ */
+function printValue(v: unknown, specPos: Map<object, string>, minPrec = 0): string {
   if (typeof v === "number") return printNumber(v);
   if (typeof v === "string") return JSON.stringify(v);
   if (typeof v === "boolean") return v ? "true" : "false";
@@ -404,7 +419,7 @@ function printValue(v: unknown, specPos: Map<object, string>): string {
       if (typeof v.fn !== "string") {
         printFail(`${path} is a field-expression position but its value has no string "fn" key`);
       }
-      return printExpr(v as FieldSpec, 0);
+      return printExpr(v as FieldSpec, minPrec);
     }
     const entries = Object.entries(v);
     if (entries.length === 0) return "{}";
@@ -513,8 +528,8 @@ function printExpr(node: FieldSpec, minPrec: number): string {
       // Left-associative, all of them: the left operand tolerates an equal
       // precedence, the right one does not — which is what keeps the
       // parens in `a - (b - c)` and drops them from `a - b - c`.
-      const left = printOperand(args[0], specPos, op.prec);
-      const right = printOperand(args[1], specPos, op.prec + 1);
+      const left = printValue(args[0], specPos, op.prec);
+      const right = printValue(args[1], specPos, op.prec + 1);
       const text = `${left} ${op.text} ${right}`;
       return minPrec > op.prec ? `(${text})` : text;
     }
@@ -522,16 +537,6 @@ function printExpr(node: FieldSpec, minPrec: number): string {
   } finally {
     printDepth--;
   }
-}
-
-function printOperand(v: unknown, specPos: Map<object, string>, minPrec: number): string {
-  if (isPlainObject(v) && specPos.has(v)) {
-    if (typeof v.fn !== "string") {
-      printFail(`${specPos.get(v) as string} is a field-expression position but its value has no string "fn" key`);
-    }
-    return printExpr(v as FieldSpec, minPrec);
-  }
-  return printValue(v, specPos);
 }
 
 /**
@@ -944,24 +949,24 @@ class Parser {
     if (shape === undefined) parseFail(nameTok, unknownFnMessage(nameTok.text));
     const values: { value: unknown; tok: Token }[] = [];
     const closing = `to close the call to "${nameTok.text}" opened at ${nameTok.line}:${nameTok.col}`;
-    let close = this.peek();
-    if (this.eat("punct", ")")) {
-      // `close` already points at the `)` this consumed.
-    } else {
+    if (!this.eat("punct", ")")) {
       for (;;) {
         const tok = this.peek();
         const value = this.parseExpr(0);
         values.push({ value, tok });
-        close = this.peek();
         if (this.eat("punct", ",")) {
-          close = this.peek();
           if (this.eat("punct", ")")) break;
           continue;
         }
-        close = this.expect("punct", ")", closing);
+        this.expect("punct", ")", closing);
         break;
       }
     }
+    // Every path out of the region above consumed the `)` — the empty
+    // call, the trailing comma, and `expect`, which throws otherwise — so
+    // the token just read IS the close, and there is no path on which it
+    // has to be tracked as the loop goes.
+    const close = this.toks[this.pos - 1] as Token;
     return this.assignSlots(nameTok, close, shape, values);
   }
 
