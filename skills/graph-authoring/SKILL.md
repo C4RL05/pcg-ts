@@ -151,6 +151,7 @@ the `determinism` skill for why `variant` is the re-roll and a seed is not.
 
 ```
 pcg validate g.json                          # structure, before anything cooks
+pcg assets g.json                            # every asset id it can spawn
 pcg cook g.json --stats                      # what came out, and what recooked
 pcg inspect g.json --node <id> --pin <pin>   # the numbers
 pcg render g.json --out g.svg                # the picture
@@ -159,6 +160,11 @@ pcg render g.json --out g.svg                # the picture
 - **validate** deserializes and reports nodes, connections and outputs. It
   catches unknown types, unknown params, bad pins and cycles before any work
   happens. Run it after every edit; it is nearly free.
+- **assets** lists every asset id the graph can spawn, read from the graph
+  rather than from a cook — so it covers branches one seed never reaches, and
+  it reports an id set it CANNOT determine as open instead of guessing. Run it
+  before handing a graph to a renderer: asset ids are unchecked strings (see
+  the mistake below), and this is the list to check against that renderer.
 - **cook** cooks every declared output and reports element counts, bounds and
   the attributes present. `--stats` adds the per-node breakdown of cooked vs.
   served-from-cache. `--budget <ms>` bounds a pass; `--seed <n>` overrides the
@@ -238,6 +244,18 @@ the partitioned cook a serializable graph rather than host TypeScript:
 `all` and `any` are selections and will double-count or drop at the seams.
 Params per entry in `docs/nodes.md`; the runnable JSON is in
 `docs/authoring.md` ("Owning primitives instead of destroying them").
+
+**Inventing an asset id.** `spawnInstances`' `assetId` and the string tables
+feeding `assetAttr` are FREE STRINGS, and nothing checks them — not the node,
+not `pcg validate`, not the cook. The set of real ids belongs to whatever
+renders the batches, which the library has never met, so a misspelled or
+invented id cooks perfectly, reports its instance count happily, and then
+draws as whatever that renderer does with a name it does not know. A viewer
+built to show arbitrary graphs cannot refuse one, so the usual outcome is a
+stand-in shape rather than an error — the graph looks like it worked. This is
+not hypothetical: a graph in the corpus was authored by an agent that invented
+four ids, all four of which still render as stand-ins. Run `pcg assets
+<graph.json>`, and check its list against the renderer you are targeting.
 
 **Writing a per-instance colour and never naming it.** Colour reaches the
 renderer only when `spawnInstances`' `colorAttr` names the attribute

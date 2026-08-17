@@ -71,12 +71,30 @@ frequency yields a silently DEAD field — `perlinNoise` and `fbm` only;
   between the two calls is worth stating: `step` renames a fn whose
   argument ORDER trips people, `and`/`or` would rename ones whose spelling
   is already the obvious one.
-- **No way to discover a valid asset id.** `spawnInstances.assetId` is a
-  free string whose meaning belongs to the renderer, there is no
-  `pcg assets`, and the blind author invented two names that cook
-  perfectly and may render nothing. The honest shape is probably a
-  registry the host populates and the CLI can list, which wants a caller
-  outside the library before it is designed.
+- **~~No way to discover a valid asset id.~~ SHIPPED 2026-08-17**, and the
+  entry it replaces guessed the shape wrong. It wanted "a registry the
+  host populates and the CLI can list", waiting on a caller outside the
+  library. That caller was never the missing piece: a registry is the
+  HOST's to own — the library is render-agnostic on purpose and cannot
+  hold one — so the answerable question was never "which ids are valid"
+  but "which ids does this graph REQUIRE". `describeGraphAssets` and
+  `pcg assets <graph.json>` answer that, statically, across every branch
+  rather than the one a seed reached, and report an id set they cannot
+  determine as OPEN rather than guessing it.
+  Two counts the old entry got wrong, both now measured: the blind author
+  invented FOUR ids, not two (`tree_pine`, `tree_birch`, `tree_willow`,
+  `driftwood_log`), and they "may render nothing" understates it — all
+  four render as hashed stand-ins, which looks like success. Corpus-wide
+  it is 19 distinct ids against the shipped viewer's 9, overlapping on 6.
+  That gap is BY DESIGN (a viewer of arbitrary graphs must draw
+  something) and is deliberately not asserted anywhere; what was missing
+  was any way to see it.
+  Still open, and now genuinely blocked on a caller: comparing that list
+  against a host's registry. `pcg assets --against <manifest.json>` is
+  one flag, but it would invent a manifest format with no shipped
+  producer — the exact trap this entry fell into the first time.
+  `shared/assets.ts` now exports `PLACEHOLDER_ASSET_IDS`, so the compare
+  is a line of shell today; a format can wait for a second consumer.
 
 ### Release state, 2026-08-17
 
@@ -441,8 +459,14 @@ gap 8, which is the reason.
    so `nodeSeed` was the ONLY uniform leaf that could seed a foldable
    subtree — with the idiom gone, the graphs contain zero domain-constant
    expressions and `tests/foldCorpus.test.ts` measured `actuallyFolded`
-   at 0. `src/fields/fold.ts` is NOT dead: the idiom is still legal
-   grammar and still documented, so a user's graph may be full of it. But
+   at 0. `src/fields/fold.ts` is NOT dead, and the first reason is not a
+   hypothesis: `src/nodes/util.ts:283` calls `foldDomainConstants` on
+   EVERY CPU field resolve, so the module is on the live path of every
+   cook whether or not anything folds. (Stated because the weaker
+   argument below was read on its own once and taken to mean the module
+   had lost its consumer — it never had one removed.) The second reason
+   is the idiom: still legal grammar and still documented, so a user's
+   graph may be full of it. But
    nothing we ship exercises it any more, which is worth knowing before
    anyone reads that module's break-even measurements as live. Its teeth
    now bite on fixtures the test states outright; no threshold was

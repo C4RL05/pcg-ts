@@ -8,6 +8,7 @@ import {
   DOMAINS,
   type DataItem,
   type DescribedGraphParam,
+  type DescribedSpawner,
   type FieldFnInfo,
   type StrandedGraphParamValue,
   type Domain,
@@ -16,6 +17,7 @@ import {
   type NodeTypeInfo,
   type ParamSchema,
   cook,
+  describeGraphAssets,
   describeGraphParams,
   describeSubgraphParams,
   deserializeGraph,
@@ -501,6 +503,155 @@ const validateCommand: Command = {
         ...(params !== undefined ? { params } : {}),
       },
     });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// assets
+// ---------------------------------------------------------------------------
+
+/**
+ * The `assets` report, split from the command so the rendering can be
+ * tested on hand-built descriptions: the shapes that matter most here are
+ * the ones a corpus graph does not happen to contain (an open set, a
+ * spawner with no ids at all, a graph with no spawner), and a report whose
+ * whole job is to be unmissable must be checked against those directly.
+ */
+export function assetsReport(
+  path: string,
+  spawners: readonly DescribedSpawner[],
+): CommandOutcome {
+  const openSpawners = spawners.filter((s) => s.open.length > 0);
+  // First-occurrence order across the whole graph, matching the order
+  // within one spawner: the flat list is the one an author checks against
+  // a host's asset map, so it must be stable for a stable graph.
+  const ids: string[] = [];
+  for (const s of spawners) {
+    for (const origin of s.ids) if (!ids.includes(origin.id)) ids.push(origin.id);
+  }
+  const json = {
+    path,
+    spawnerCount: spawners.length,
+    distinctIds: ids.length,
+    openSpawners: openSpawners.length,
+    /**
+     * False when at least one set is open, i.e. `ids` is a lower bound.
+     * The report's own summary over the whole graph, derived here — a
+     * spawner carries its reasons and nothing else.
+     */
+    complete: openSpawners.length === 0,
+    ids,
+    spawners,
+  };
+
+  // Not an empty table: "no rows" and "no spawners" look identical in one,
+  // and the second is a fact about the graph worth stating outright.
+  if (spawners.length === 0) {
+    return {
+      text:
+        [
+          `assets  ${path}`,
+          "no spawnInstances node in this graph, so it emits no asset ids at all",
+          "",
+          "A graph without a spawner ends in points or geometry: it has nothing to",
+          "hand a renderer as an instance, and so nothing here to check against a",
+          "host's asset map. `pcg validate` lists what it does declare.",
+        ].join("\n") + "\n",
+      json,
+    };
+  }
+
+  // Three places say the set is open, because one is a footnote: the
+  // headline, a "!" on the row itself with the id list ending in "…", and
+  // the block below that prints the reason. A reader who takes an id list
+  // for the whole set has had to skip all three.
+  const lines = [
+    `assets  ${path}`,
+    openSpawners.length === 0
+      ? `${plural(spawners.length, "spawner")}, ${plural(ids.length, "distinct id")}, every set complete`
+      : `${plural(spawners.length, "spawner")}, ${plural(
+          ids.length,
+          "distinct id",
+        )} so far, ${plural(
+          openSpawners.length,
+          "OPEN SET",
+          "OPEN SETS",
+        )} — the ids below are a LOWER BOUND`,
+    "",
+    "spawners:",
+  ];
+  lines.push(
+    ...table([
+      ["", "node", "assetId", "assetAttr", "can emit"],
+      ...spawners.map((s) => {
+        const list = s.ids.map((o) => o.id).join(", ");
+        const closed = s.open.length === 0;
+        return [
+          closed ? "" : "!",
+          s.node,
+          s.assetId,
+          s.assetAttr ?? "—",
+          closed
+            ? list === ""
+              ? "(none)"
+              : list
+            : `${list === "" ? "" : `${list}, `}… OPEN, see below`,
+        ];
+      }),
+    ]),
+  );
+
+  if (openSpawners.length > 0) {
+    lines.push(
+      "",
+      `OPEN SETS — ${openSpawners.length} of ${plural(
+        spawners.length,
+        "spawner",
+      )} can emit ids this walk cannot name.`,
+      'Read every row marked "!" as "at least these ids", never "these ids".',
+      "",
+    );
+    for (const s of openSpawners) {
+      lines.push(`  ! ${s.node}`);
+      // One reason per node that made the set open. A lone reason is the
+      // sentence itself; several become bullets, because two joined into a
+      // paragraph read as one reason a reader then has to take apart.
+      const bullet = s.open.length === 1 ? "" : "- ";
+      for (const reason of s.open) lines.push(`      ${bullet}${reason.reason}`);
+      lines.push("");
+    }
+    lines.push(
+      "A set closes when its ids are authored in the graph itself (setAttribute",
+      'with type "string"). Until then `pcg cook --json` reports the ids one seed',
+      "actually reached, which is a different question and also not the whole set.",
+    );
+  }
+
+  lines.push(
+    "",
+    ids.length === 0
+      ? "distinct ids: (none)"
+      : openSpawners.length === 0
+        ? `distinct ids: ${ids.join(", ")}`
+        : `distinct ids so far (a lower bound): ${ids.join(", ")}`,
+    "",
+    "--json adds where each id came from: the node's own assetId, or the node",
+    "that authored the string-table entry.",
+  );
+  return { text: lines.join("\n") + "\n", json };
+}
+
+const assetsCommand: Command = {
+  spec: {
+    name: "assets",
+    summary:
+      "List every asset id a graph can spawn, statically, without cooking it. Reads the spawnInstances params and the authored string tables together, so the answer covers every branch rather than the one a seed happened to reach; an id set that depends on values the walk cannot see is reported OPEN rather than guessed.",
+    positionals: [GRAPH_ARG],
+    flags: {},
+  },
+  run(args, io) {
+    const { graph, path } = loadGraph(io, args.positional[0]);
+    return Promise.resolve(assetsReport(path, describeGraphAssets(graph)));
   },
 };
 
@@ -1064,6 +1215,7 @@ export const COMMANDS: readonly Command[] = [
   nodesCommand,
   fieldsCommand,
   validateCommand,
+  assetsCommand,
   cookCommand,
   runCommand,
   inspectCommand,

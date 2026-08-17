@@ -857,7 +857,7 @@ describe("pcg cli — the command line itself", () => {
     const command = fakeIo();
     expect(await runCli(["bake", "x.json"], command.io)).toBe(EXIT_USAGE);
     expect(command.stderr()).toContain(
-      'unknown command "bake"; commands: nodes, fields, validate, cook, run, inspect, render',
+      'unknown command "bake"; commands: nodes, fields, validate, assets, cook, run, inspect, render',
     );
 
     const flag = withGraph();

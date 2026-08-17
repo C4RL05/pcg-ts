@@ -96,6 +96,33 @@ const LINK_THICKNESS = 0.085;
 /** The chord radius the collar is sized against — a rig's default. */
 const CLAMP_CHORD = 0.055;
 
+/**
+ * The vocabulary as DATA, so it can be listed without building geometry.
+ *
+ * `createPlaceholderAssets` returns live three.js meshes, which makes the
+ * only existing answer to "what ids does this viewer know?" require a
+ * WebGL-capable context to ask. That is the wrong shape for the question:
+ * `pcg assets <graph.json>` reports the ids a graph NEEDS, and the useful
+ * follow-up is comparing that list against this one — from a script, from
+ * a test, from a terminal.
+ *
+ * Kept honest by `tests/sharedAssets.test.ts` rather than by care: the
+ * map below is asserted to hold exactly these keys, in both directions,
+ * so an asset added to one and not the other is a failure rather than a
+ * silent omission.
+ */
+export const PLACEHOLDER_ASSET_IDS: readonly string[] = [
+  "cone",
+  "box",
+  "sphere",
+  "tube",
+  "chainLink",
+  "rod",
+  "bar",
+  "panel",
+  "clamp",
+];
+
 /** The named placeholder assets plus a factory for unrecognised ids. */
 export interface PlaceholderAssets {
   readonly known: AssetMap;

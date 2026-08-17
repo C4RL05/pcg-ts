@@ -44,7 +44,14 @@ export const spawnInstances = standardNode<SpawnInstancesParams>({
       default: "asset",
       description:
         "Asset id stamped on every instance not overridden per point via assetAttr. The " +
-        "renderer resolves it to an actual renderable (e.g. the three adapter's asset map).",
+        "renderer resolves it to an actual renderable (e.g. the three adapter's asset map). " +
+        "ANY STRING IS ACCEPTED and none is checked, because the set of real ids belongs to " +
+        "the host and the library has never met it — an invented id cooks perfectly and then " +
+        "renders as whatever that host does with a name it does not know, which for a viewer " +
+        "of arbitrary graphs is usually a stand-in shape rather than an error. So confirm the " +
+        "spelling against the renderer you are targeting. `pcg assets <graph.json>` lists " +
+        "every id a graph can emit, this param and the assetAttr tables together, which is " +
+        "the list to check against that host.",
     },
     assetAttr: {
       type: "string",
