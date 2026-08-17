@@ -1,11 +1,16 @@
 <script lang="ts">
   /**
    * Widget for a field-capable param: toggle between a constant value
-   * (number / vec inputs) and a field-expression JSON textarea. The
-   * textarea applies through fieldFromJson in the controller; parse and
-   * validation errors are shown verbatim below it.
+   * (number / vec inputs) and a field EXPRESSION, written as text.
+   *
+   * No JSON is shown here any more. The tree is still the format and is
+   * still what the graph file holds — this prints it on the way in and
+   * parses it on the way out — but a reader never meets the
+   * serialization, which is the whole reason `printFieldSpec` exists.
+   * Parse and validation errors are shown verbatim below the box; the
+   * parser's carry the offending token and its line:col.
    */
-  import { paramNamesOf, type FieldSpec } from "pcg-ts";
+  import { paramNamesOf, parseFieldText, printFieldSpec, type FieldSpec } from "pcg-ts";
   import { clampToSchema } from "./controller.js";
   import type { ParamView } from "./controller.js";
   import FieldTree from "./FieldTree.svelte";
@@ -47,21 +52,28 @@
   // initial view; the component is re-keyed per node so it resets on selection change
   let mode = $state<"constant" | "field">(view.mode === "field" ? "field" : "constant");
   // svelte-ignore state_referenced_locally
-  let text = $state(
-    view.specText ?? JSON.stringify({ fn: "constant", value: view.schema.default }, null, 2),
-  );
+  let text = $state(view.specText ?? defaultText());
+
+  /** The starting expression for a param switched from constant to field. */
+  function defaultText(): string {
+    try {
+      return printFieldSpec({ fn: "constant", value: view.schema.default } as FieldSpec);
+    } catch {
+      return "0";
+    }
+  }
   let error = $state<string | null>(null);
   /** The read-only diagram of the spec in the textarea, when open. */
   let diagram = $state(false);
 
   /**
-   * Whether the textarea currently holds JSON at all. The diagram button
-   * is disabled when it does not: there is nothing to draw, and the
-   * textarea's own error already says why.
+   * Whether the textarea currently holds a parseable expression. The
+   * diagram button is disabled when it does not: there is nothing to
+   * draw, and the textarea's own error already says why.
    */
   const parses = $derived.by((): boolean => {
     try {
-      JSON.parse(text);
+      parseFieldText(text);
       return true;
     } catch {
       return false;
@@ -73,12 +85,12 @@
    * where the value would come from before the cook does. A param is
    * supplied by an ENCLOSING wrapper's exposed param of the same name;
    * this graph's own knobs are not that scope, so a spec typed here that
-   * reads one builds and then fails at cook. Parsing is best-effort:
-   * half-typed JSON simply annotates nothing.
+   * reads one builds and then fails at cook. Parsing is best-effort: a
+   * half-typed expression simply annotates nothing.
    */
   const readNames = $derived.by((): readonly string[] => {
     try {
-      return paramNamesOf(JSON.parse(text) as FieldSpec);
+      return paramNamesOf(parseFieldText(text));
     } catch {
       return [];
     }

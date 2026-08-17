@@ -20,6 +20,7 @@
    * not a field expression — are both answered in the same place, in one
    * line, instead of leaving an empty canvas open.
    */
+  import { parseFieldText } from "pcg-ts";
   import {
     HEADER_H,
     PAD,
@@ -34,7 +35,7 @@
 
   const parsed = $derived.by((): { ok: true; value: unknown } | { ok: false } => {
     try {
-      return { ok: true, value: JSON.parse(text) as unknown };
+      return { ok: true, value: parseFieldText(text) as unknown };
     } catch {
       return { ok: false };
     }

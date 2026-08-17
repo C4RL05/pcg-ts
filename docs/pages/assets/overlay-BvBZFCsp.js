@@ -1,4 +1,4 @@
-import{n as e,t}from"./mobile-C224unXE.js";var n=!1;function r(){if(n)return;n=!0;let e=document.createElement(`style`);e.textContent=`
+import{n as e,t}from"./mobile-BNVzpA-x.js";var n=!1;function r(){if(n)return;n=!0;let e=document.createElement(`style`);e.textContent=`
 .pcg-overlay {
   position: fixed; top: 12px; left: 12px; z-index: 10;
   width: 300px; max-height: calc(100vh - 24px); overflow-y: auto;

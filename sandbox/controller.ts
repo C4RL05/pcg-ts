@@ -48,6 +48,8 @@ import {
   type SerializedGraph,
   type SerializedNode,
   type SerializedSubgraph,
+  parseFieldText,
+  printFieldSpec,
 } from "pcg-ts";
 import { PARTIAL_FUSION } from "../shared/gpu.js";
 import type { Knob, KnobPatch, KnobTarget } from "../shared/graphUi.js";
@@ -427,9 +429,14 @@ export class EditorController {
         return { key, schema, mode: "items", value: null, specText: null };
       }
       if (isField(v)) {
+        // The TEXT view, not the tree. The tree is still the format —
+         // this parses straight back to it — but nothing in the sandbox
+         // shows JSON any more, which is the whole point of having a
+         // printer. A spec the printer refuses falls back to null and the
+         // widget says so, rather than showing half an expression.
         let specText: string | null = null;
         try {
-          specText = JSON.stringify(fieldToJson(v), null, 2);
+          specText = printFieldSpec(fieldToJson(v));
         } catch {
           specText = null;
         }
@@ -662,15 +669,27 @@ export class EditorController {
   }
 
   /**
-   * Parse a field-expression JSON and set it on a field-capable param.
-   * Returns the JSON.parse or fieldFromJson error message verbatim, or
-   * null on success.
+   * Parse a field EXPRESSION and set it on a field-capable param.
+   *
+   * Text, not JSON: `parseFieldText` on the way in and `printFieldSpec`
+   * on the way out (see `specText` above), so nothing in the sandbox
+   * shows the serialization. The tree is still the format — this parses
+   * straight to it and the graph file is unchanged — and the JSON that
+   * remains in this file is the GRAPH's, moved by import and export.
+   *
+   * Returns the parser's or `fieldFromJson`'s message verbatim, or null
+   * on success. The parser's carries the offending token and its
+   * line:col; `fieldFromJson`'s still speaks in tree paths
+   * (`$.opts.seed.variant`), which is the one place a reader can still
+   * meet the shape of the tree — a spec that parses but does not build.
    */
   applyFieldParam(id: string, key: string, text: string): string | null {
     let spec: unknown;
     try {
-      spec = JSON.parse(text);
+      spec = parseFieldText(text);
     } catch (err) {
+      // The parser's message already carries the offending token and its
+      // line:col, so it is shown verbatim exactly as the JSON error was.
       return errorMessage(err);
     }
     let field;

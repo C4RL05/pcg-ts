@@ -83,13 +83,14 @@ function fmtNumber(n: number): string {
 function fmtValue(view: ParamView): string {
   if (view.mode === "field") {
     /**
-     * The OUTERMOST function of the field expression, dug out of the
-     * pretty-printed spec rather than re-serialized: the first `"fn"` in
-     * that JSON is the root of the tree, since its own key precedes its
-     * `args`. A bare "ƒ" would say a field is here; "ƒ mul" says which.
+     * The EXPRESSION, clipped to the row. This used to dig the outermost
+     * `"fn"` out of the pretty-printed JSON and show `ƒ mul`, which named
+     * the root and said nothing about the rest; `specText` is printed
+     * text now, so the row can carry the thing itself. A bare "ƒ" is left
+     * for a spec the printer refused.
      */
-    const fn = view.specText === null ? null : /"fn":\s*"([^"]+)"/.exec(view.specText);
-    return fn === null ? "ƒ" : `ƒ ${fn[1]}`;
+    if (view.specText === null) return "ƒ";
+    return `ƒ ${view.specText.replace(/\s+/g, " ")}`;
   }
   const v = view.value;
   if (typeof v === "number") return fmtNumber(v);
