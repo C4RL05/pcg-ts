@@ -37,6 +37,12 @@ export {
   type InlineParamMeta,
   type SpecChild,
 } from "../fields/fieldJson.js";
+// The TEXT view of the same grammar, published from here for the same
+// reason and by the same route: it sits ABOVE `fieldJson.ts` (it reads the
+// fn registry), so `src/fields/index.ts` cannot re-export it either. It
+// raises `FieldJsonError`, already exported above — reading a field from
+// text and reading one from JSON fail alike, so one `catch` covers both.
+export { parseFieldText, printFieldSpec } from "../fields/fieldText.js";
 export * from "./subgraphParams.js";
 export * from "./graphParams.js";
 export * from "./serialize.js";

@@ -463,7 +463,7 @@ understanding the model, not about line count.
 | ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
 | ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
 | ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 23 done, 4 refused by rule |
-| B2 | text syntax — parse + print, tree stays the format | medium-large | **unblocked** (§7.1 decided) |
+| ~~B2~~ | text syntax — parse + print, tree stays the format | — | **SHIPPED** |
 | A3 | subexpression binding | medium | thin mandate — 11 specs |
 | D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |
 | A1 | remaining math primitives | small each | no demand — wait for a site |
@@ -497,9 +497,25 @@ diagram makes the THREE IDENTICAL channel chains inside
 §2.6 had to count subtrees to find. A view that surfaces the evidence for
 A3 by being looked at is doing more than legibility.
 
-**Recommendation from here: stop.** Every remaining unit is blocked on a
-decision in §7, or waiting on evidence it has not got. Nothing on this
-list should be started without one of those changing first.
+**B2 shipped**, and the corpus survey that preceded it corrected the
+design twice before a line was written: only NINE fns carry keys beyond
+`args`, so object and array literals cover the whole grammar and no
+bespoke sugar was needed for the tagged seed; and `constant(3)` had to
+stay distinct from a bare `3`, because the corpus holds both spellings —
+230 raw numbers in `args` against 105 explicit `constant` nodes — and
+they are different TREES. Collapsing them would have made the round trip
+rewrite one into the other, silently.
+
+**Recommendation from here: stop.** The three remaining units are waiting
+on evidence rather than on a decision — A3 on a thin mandate (45 bindable
+repeats in 11 of 149 specs), D3 on §7.4, A1 on any site at all wanting
+one of the seven remaining math primitives. None should be started
+without one of those changing.
+
+The obvious FOLLOW-ON, deliberately not done here: the sandbox still
+shows a JSON textarea. `printFieldSpec` is what it should show, beside
+the D1 diagram — that is a `sandbox/` change with no library risk, and it
+is where B2's value actually reaches a reader.
 
 ### Verification per unit
 

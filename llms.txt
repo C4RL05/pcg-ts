@@ -359,6 +359,29 @@ element; the only place the library tells the two spellings apart is GPU
 eligibility (AUTHORED vs DERIVED spec, below). README.md "Fields" is the
 TypeScript side.
 
+AS TEXT — `printFieldSpec(spec)` and `parseFieldText(text)` are a
+bidirectional view over the SAME tree. `graphs/basics-filter-by-expression`'s
+38-line predicate is
+`(length(position()) < 20) * (valueNoise({ frequency: 0.06, seed: { from: "node", variant: 3 }, position: position() }) > 0.4)`.
+Text is NEVER saved: it parses to the tree, the tree is the format and is
+what every programmatic edit touches (`withInlineParamValue`,
+`applyParamPatches`, World patches, sandbox knobs), so a stored string
+would be re-printed by the first edit anyway. The syntax reads like the
+TypeScript API: `+ - * /` and `< <= > >= == !=` infix with JS precedence
+and minimal parens; `attribute("density")`, `attribute("tangent", 3)`;
+`byAttribute("part", { rod: 1 }, 1)`; `component(expr, 0)`;
+`ramp(expr, [[4.5, 0.02]])`; a noise takes one object
+`perlinNoise({ frequency: 0.05, seed: { from: "node", variant: 0 } })`;
+everything else is `name(arg, …)`. `constant(3)` and a bare `3` are
+DIFFERENT text because they are different trees — the corpus holds both —
+and collapsing them would make the round trip rewrite one into the other.
+INPUT-ONLY SUGAR, never printed: `&&`/`||` parse as `mul`/`max` (no
+boolean type; comparisons yield 1 and 0), unary `-` folds into a literal
+or becomes `sub(0, x)`, and single quotes / trailing commas / redundant
+parens are accepted. `P` is NOT sugar for `position()`; the error says so.
+Proven rather than asserted: `parseFieldText(printFieldSpec(s))`
+deep-equals `s` for every corpus spec, and printing is idempotent.
+
 WHICH PARAMS ACCEPT ONE — 44 of the standard library's 180, across 25
 node types, after the rule was swept over every numeric param rather
 than applied case by case (it started at 20; only four were refused —

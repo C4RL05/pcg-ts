@@ -503,6 +503,67 @@ than measure it, and [How wide a halo, and when no halo works at
 all](#how-wide-a-halo-and-when-no-halo-works-at-all) is the general
 version.
 
+### The same expression as text
+
+The tree is the format, but you do not have to read it. `printFieldSpec`
+and `parseFieldText` are a bidirectional view over exactly the same tree,
+and they are what the sandbox and the CLI show. The predicate of
+`graphs/basics-filter-by-expression.json` is 38 lines of JSON and this:
+
+```
+(length(position()) < 20) * (valueNoise({ frequency: 0.06, seed: { from: "node", variant: 3 }, position: position() }) > 0.4)
+```
+
+**Text is never saved.** It is an intermediate: you type it, it parses to
+the tree, the tree is what the graph file holds and what every
+programmatic edit touches. That is not a limitation to route around — it
+is why the view is safe. Every write path in the library edits the tree
+(`withInlineParamValue`, `applyParamPatches`, World patches, the sandbox
+knobs), so a stored string would be re-printed by the first knob turn
+anyway. Normalizing costs you your spelling, the way any formatter does,
+and buys you a canonical form that no edit can invalidate.
+
+The syntax reads like the TypeScript API on purpose — one mental model for
+both spellings:
+
+| grammar | text |
+| --- | --- |
+| `add sub mul div` | `+ - * /`, JS precedence, minimal parens |
+| `lt le gt ge eq ne` | `< <= > >= == !=` |
+| a raw number or tuple in `args` | `3`, `[1, 2, 3]` |
+| `{ fn: "constant", value: 3 }` | `constant(3)` — see below |
+| `attribute` | `attribute("density")`, `attribute("tangent", 3)` |
+| `byAttribute` | `byAttribute("part", { rod: 1 }, 1)` |
+| `component` | `component(expr, 0)` |
+| `ramp` | `ramp(expr, [[4.5, 0.02], [14, 0.3]])` |
+| a noise | `perlinNoise({ frequency: 0.05, seed: { from: "node", variant: 0 } })` |
+| everything else | `name(arg, …)` |
+
+**`constant(3)` is not the same text as `3`, and that is not pedantry.**
+The corpus holds both spellings in quantity — raw numbers inside `args`,
+and explicit `constant` nodes — and they are different TREES even though
+they mean the same thing. Printing both as `3` would make the round trip
+quietly rewrite one into the other, so the bare literal means the raw
+argument and `constant(…)` means the node.
+
+**Input-only sugar, which the printer never emits.** `&&` and `||` parse
+as `mul` and `max`: the grammar has no boolean type, comparisons yield 1
+and 0, and combining them that way is already how a predicate is built.
+Printing them back would be the trap — `a && b` on values outside {0, 1}
+silently multiplies — so a `mul` prints as `*` whether or not its operands
+happen to be predicates. Unary `-` is sugar the same way: it folds into a
+number literal, or becomes `sub(0, x)` and prints as `0 - x`. Single
+quotes, trailing commas and redundant parentheses are accepted and never
+printed.
+
+`P` is NOT sugar for `position()`, and the error says so rather than
+guessing: one way to write a thing, and a message that names it.
+
+The correspondence is proven rather than asserted, on the same terms
+`spec.ts` sets for code-authored specs: `parseFieldText(printFieldSpec(s))`
+deep-equals `s` for every spec in the graph corpus, and printing is
+idempotent.
+
 ### Inputs
 
 | fn | Spec | Result |
