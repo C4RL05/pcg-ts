@@ -421,10 +421,10 @@ understanding the model, not about line count.
 
 | unit | scope | cost | blocked on |
 | --- | --- | --- | --- |
-| **E1** | docs framing — lead with `Field<T>`, not the JSON | small | nothing |
-| **C1** | state the capability rule, incl. its 2 exceptions | small | nothing |
+| ~~E1~~ | docs framing — lead with `Field<T>`, not the JSON | — | **SHIPPED** `a3d3b94` |
+| ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
 | D1 | sandbox read-only field-tree view | medium | nothing |
-| C2 | flip the default over 24 params | ~1 month | §7.2 + a design call on 2 spatial params |
+| C2 | flip the default over 24 params | ~1 month | §7.2 + one design call, on `connectPoints.radius` |
 | B2 | text syntax | medium-large | §7.1 |
 | A3 | subexpression binding | medium | thin mandate — 11 specs |
 | D3 | `field` pin kind over a restricted sub-registry | large | §7.4 |
@@ -432,10 +432,21 @@ understanding the model, not about line count.
 
 Retired: A2, A4, B3, unit 3.
 
-**Recommendation: E1 and C1 now; everything else on evidence.** Both are
-small, neither needs a decision, and together they address the complaint
-as stated (a legibility complaint) rather than the complaint as this plan
-first misread it (a size complaint).
+**E1 and C1 shipped in `a3d3b94`.** The rule is in `docs/authoring.md`
+("Which params accept one") and `llms.txt`, with three of its five clauses
+pinned against the live registry by `src/nodes/fieldCapability.test.ts` —
+each proven able to fail by perturbation rather than merely observed
+green. The framing now opens both field sections on the value rather than
+the syntax, which is what the reviewer's sentence actually asked for.
+
+Two things changed in the doing, and both are recorded above rather than
+here: the rule's fifth clause is RELATIONAL SYMMETRY and not grid sizing
+(§2.3), which is why C2's blocker is now one param rather than two; and
+auditing the gaps turned up seven false claims about what a noise's `opts`
+can hold, two of them shipped in primitive descriptions.
+
+**Recommendation from here: D1, or stop.** Everything else is either
+blocked on a decision in §7 or waiting for evidence it has not got.
 
 D1 is the best of the larger items — it is the only one that makes an
 expression legible without changing the format, and it cannot be wrong,
@@ -490,9 +501,15 @@ and D3 qualify; E1 and C1 do not.
    save?** Blocks B2. Normalizing means the first sandbox save silently
    destroys what someone wrote; storing the string as the authored form
    has knock-on effects on diffing and the golden file.
-2. **C1 or C2?** Document the rule, or flip the default over the 24
-   candidate params. Now a much smaller question than when it was posed
-   as 166.
+2. **~~C1 or C2?~~ Now just: C2 or not.** C1 shipped in `a3d3b94`, so the
+   rule is written and pinned; the remaining question is whether to flip
+   the default over the 24 candidate params. Writing it down changed the
+   shape of that question rather than only deferring it — the rule turns
+   out to have a clause the audit missed, one candidate
+   (`pointNeighborhood.radius`) that the rule says should already be
+   field-capable, and one (`connectPoints.radius`) that it says can never
+   be. A sweep would now be applying a stated rule rather than extending
+   a whitelist by taste, which is most of what made C2 look expensive.
 3. **~~Is unit 3 (corpus rewrite) in scope?~~** Moot — done by `8faf95d`.
 4. **Is D3 ever wanted?** §2.6 gives it a real number (447 lines nothing
    else can remove) but that number is one graph. This decides whether
