@@ -478,10 +478,10 @@ green. The framing now opens both field sections on the value rather than
 the syntax, which is what the reviewer's sentence actually asked for.
 
 Two things changed in the doing, and both are recorded above rather than
-here: the rule's fifth clause is RELATIONAL SYMMETRY and not grid sizing
-(§2.3), which is why C2's blocker is now one param rather than two; and
-auditing the gaps turned up seven false claims about what a noise's `opts`
-can hold, two of them shipped in primitive descriptions.
+here: the rule's fifth clause turned out to be RELATIONAL SYMMETRY and not
+grid sizing (§2.3), which unblocked C2; and auditing the gaps turned up
+seven false claims about what a noise's `opts` can hold, two of them
+shipped in primitive descriptions.
 
 **D1 shipped in `5bb3301`**, and it was the best of the larger items for
 the reason it was picked: the only one that makes an expression legible
