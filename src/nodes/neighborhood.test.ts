@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createPointCloud } from "../data/index.js";
+import { attribute, constant } from "../fields/index.js";
 import { makeGeometryItem } from "../graph/index.js";
 import { hashCombine, hashFloat } from "../random/index.js";
 import {
@@ -748,5 +749,201 @@ describe("sampleNearestPoint", () => {
     ) as ReturnType<typeof createPointCloud>;
     expect(attrTuples(geo, "nearDist").flat()).toEqual([3, 7]);
     expect(attrTuples(geo, "nearIdx").flat()).toEqual([0, 0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A per-point radius. `radius` became field-capable because the rule in
+// docs/authoring.md said it already should be: it is a per-POINT query,
+// grid-local, and owes nothing to symmetry — unlike connectPoints.radius,
+// where a per-point reach would make an EDGE depend on which endpoint asked.
+
+/** A cloud carrying a scalar `reach` attribute, for radius fields to read. */
+function cloudWithReach(
+  positions: readonly (readonly number[])[],
+  reaches: readonly number[],
+): ReturnType<typeof createPointCloud> {
+  const cloud = cloudAt(positions);
+  cloud.attrs.point.add("reach", "f32", 1, 0).data.set(reaches);
+  return cloud;
+}
+
+async function reachGeo(
+  positions: readonly (readonly number[])[],
+  reaches: readonly number[],
+  params: Partial<PointNeighborhoodParams> = {},
+): Promise<ReturnType<typeof createPointCloud>> {
+  const out = await runNode(
+    pointNeighborhood,
+    { radius: attribute("reach"), ...params },
+    { in: [makeGeometryItem(cloudWithReach(positions, reaches))] },
+  );
+  return firstGeo(out.out) as ReturnType<typeof createPointCloud>;
+}
+
+async function reachCounts(
+  positions: readonly (readonly number[])[],
+  reaches: readonly number[],
+  params: Partial<PointNeighborhoodParams> = {},
+): Promise<number[]> {
+  return attrTuples(await reachGeo(positions, reaches, params), "nbrCount").flat();
+}
+
+describe("pointNeighborhood with a field radius", () => {
+  it("gives each point the neighborhood IT asked for, and so is not symmetric", async () => {
+    // Two points 3 apart. The first reaches 5 and sees the second; the
+    // second reaches 1 and does not see the first. That disagreement is
+    // the whole meaning of a per-point radius, and no single scalar can
+    // produce it: at 5 both count 1, at 1 both count 0.
+    expect(await reachCounts([[0, 0, 0], [3, 0, 0]], [5, 1])).toEqual([1, 0]);
+    // The two scalars that bracket it, to show the asymmetry is not
+    // something a plain radius could have said.
+    const geoWide = await runNeighborhood([[0, 0, 0], [3, 0, 0]], { radius: 5 });
+    const geoNarrow = await runNeighborhood([[0, 0, 0], [3, 0, 0]], { radius: 1 });
+    expect(attrTuples(geoWide, "nbrCount").flat()).toEqual([1, 1]);
+    expect(attrTuples(geoNarrow, "nbrCount").flat()).toEqual([0, 0]);
+  });
+
+  it("reads 0, negative and NaN as reaching nothing, per point", async () => {
+    // Four coincident-ish points well inside any positive radius, so only
+    // the radius decides. Boundary-inclusive matters here: a 0 radius must
+    // NOT collect the point sitting exactly on top of it.
+    const at = [[0, 0, 0], [0, 0, 0], [1, 0, 0], [1, 0, 0]];
+    expect(await reachCounts(at, [0, -1, Number.NaN, 2])).toEqual([0, 0, 0, 3]);
+  });
+
+  it("reads an infinite radius as the whole cloud", async () => {
+    const at = [[0, 0, 0], [100, 0, 0], [-500, 0, 0]];
+    expect(await reachCounts(at, [Number.POSITIVE_INFINITY, 1, 1])).toEqual([2, 0, 0]);
+  });
+
+  it("a constant field is byte-identical to the same plain number", async () => {
+    // The equivalence that keeps the field path honest: resolving a
+    // constant column must not change the grid's answers, only how the
+    // radius arrived. Cell size differs between the two paths (the field
+    // path sizes from the widest resolved claim), which is exactly the
+    // thing that is supposed not to matter.
+    const at = randomPositions(400, 0xbeef, 12);
+    const plain = await runNeighborhood(at, { radius: 2.5, averageAttr: "P" });
+    const field = await runNode(
+      pointNeighborhood,
+      { radius: constant(2.5), averageAttr: "P" },
+      { in: [makeGeometryItem(cloudAt(at))] },
+    );
+    const fieldGeo = firstGeo(field.out) as ReturnType<typeof createPointCloud>;
+    expect(snapshotGeometry(fieldGeo)).toEqual(snapshotGeometry(plain));
+    // CONTROL: the comparison must be able to report "different", or the
+    // assertion above proves only that both sides ran.
+    const off = await runNeighborhood(at, { radius: 2.6, averageAttr: "P" });
+    expect(snapshotGeometry(off)).not.toEqual(snapshotGeometry(plain));
+  });
+
+  it("does not depend on the order the points arrived in", async () => {
+    // The node's central invariant, now that the radius varies per point:
+    // reordering the cloud must move nothing. A permuted input gets the
+    // permuted radii with it, so each point keeps its own reach.
+    const at = randomPositions(300, 0x51de, 12);
+    const reaches = at.map((p, i) => 0.5 + hashFloat(hashCombine(0x51de, i, 7)) * 3);
+    const order = shuffledOrder(at.length, 0xabc);
+    // BOTH identity surfaces have to be exercised, not just the count: a
+    // capped neighbor SET and a summed AVERAGE are the two places this
+    // node picks an order, and a count would pass while either moved.
+    const opts = { averageAttr: "P", averageOutAttr: "nbrAvg", maxCount: 3 };
+    const straight = await reachGeo(at, reaches, opts);
+    const shuffled = await reachGeo(
+      Array.from(order, (i) => at[i]),
+      Array.from(order, (i) => reaches[i]),
+      opts,
+    );
+    const sc = attrTuples(straight, "nbrCount").flat();
+    const sa = attrTuples(straight, "nbrAvg");
+    const pc = attrTuples(shuffled, "nbrCount").flat();
+    const pa = attrTuples(shuffled, "nbrAvg");
+    expect(Array.from(order, (i) => sc[i])).toEqual(pc);
+    // Bit-for-bit, not approximately: float addition is order-dependent,
+    // so an average that merely rounds the same is not the claim.
+    expect(Array.from(order, (i) => sa[i])).toEqual(pa);
+    // CONTROL: the comparison must be able to report a difference.
+    expect(sa).not.toEqual(pa);
+  });
+
+  it("refuses a radius that is not one number per point, naming the fix", async () => {
+    await expect(
+      runNode(
+        pointNeighborhood,
+        { radius: attribute("P") },
+        { in: [makeGeometryItem(cloudAt([[0, 0, 0]]))] },
+      ),
+    ).rejects.toThrow(/pointNeighborhood: param "radius" must evaluate to ONE number per point/);
+  });
+});
+
+describe("pointNeighborhood field radius, at the corners", () => {
+  it("keeps a non-finite point nobody's neighbor even at an infinite radius", async () => {
+    // The grid's distance test is `d2 <= limit`, and at limit = Infinity a
+    // point at +Infinity passes it. Left alone that makes a non-finite
+    // point everybody's neighbor, poisons a finite point's average, and —
+    // worst — makes the ANSWER depend on cell size, since the plain and
+    // field paths size their grids differently. All three are the same
+    // bug, and this pins the contract the module header states.
+    const at = [[0, 0, 0], [1, 0, 0], [Number.POSITIVE_INFINITY, 0, 0], [Number.NaN, 0, 0]];
+    const inf = Number.POSITIVE_INFINITY;
+    expect(await reachCounts(at, [inf, inf, inf, inf])).toEqual([1, 1, 0, 0]);
+    // The plain param must agree: identical radii, different cell size.
+    const plain = await runNeighborhood(at, { radius: inf });
+    expect(attrTuples(plain, "nbrCount").flat()).toEqual([1, 1, 0, 0]);
+  });
+
+  it("keeps a finite point's average finite next to an infinite one", async () => {
+    const at = [[0, 0, 0], [2, 0, 0], [Number.POSITIVE_INFINITY, 0, 0]];
+    const inf = Number.POSITIVE_INFINITY;
+    const geo = await reachGeo(at, [inf, inf, inf], {
+      averageAttr: "P",
+      averageOutAttr: "nbrAvg",
+    });
+    expect(attrTuples(geo, "nbrAvg")[0].every(Number.isFinite)).toBe(true);
+  });
+
+  it("mixes finite and infinite radii in one cloud", async () => {
+    // cellSize comes from the largest FINITE radius; the infinite one
+    // full-scans. Both have to be right in the same cook.
+    const at = [[0, 0, 0], [3, 0, 0], [50, 0, 0]];
+    expect(await reachCounts(at, [Number.POSITIVE_INFINITY, 3, 3])).toEqual([2, 1, 0]);
+  });
+
+  it("a constant field is f32, so an f32-INEXACT literal is not the plain number", async () => {
+    // Not a defect — it is clause 1 of the capability rule showing
+    // through: a field resolves into an f32 column, so `constant(2.6)`
+    // is 2.5999999046325684 and the plain f64 2.6 is not. The earlier
+    // byte-identity test passes because 2.5 is f32-exact; this one names
+    // the case where the two legitimately differ, so nobody later
+    // "fixes" it into a promise the format cannot keep.
+    expect(Math.fround(2.6)).not.toBe(2.6);
+    const at = [[0, 0, 0], [0.20214228332042694, 1.355056881904602, 2.2097418308258057]];
+    const plain = await runNeighborhood(at, { radius: 2.6 });
+    const field = await runNode(
+      pointNeighborhood,
+      { radius: constant(2.6) },
+      { in: [makeGeometryItem(cloudAt(at))] },
+    );
+    const fieldGeo = firstGeo(field.out) as ReturnType<typeof createPointCloud>;
+    expect(attrTuples(plain, "nbrCount").flat()).toEqual([1, 1]);
+    expect(attrTuples(fieldGeo, "nbrCount").flat()).toEqual([0, 0]);
+  });
+
+  it("cooks an empty cloud, and one where every radius reaches nothing", async () => {
+    const empty = await runNode(
+      pointNeighborhood,
+      { radius: attribute("reach") },
+      { in: [makeGeometryItem(cloudWithReach([], []))] },
+    );
+    expect((firstGeo(empty.out) as ReturnType<typeof createPointCloud>).pointCount).toBe(0);
+    // All-zero radii must not reach UniformGrid.build, which throws on a
+    // cell size that is not > 0.
+    expect(await reachCounts([[0, 0, 0], [0, 0, 0]], [0, 0])).toEqual([0, 0]);
+  });
+
+  it("includeSelf does not resurrect a point whose own reach is nothing", async () => {
+    expect(await reachCounts([[0, 0, 0], [1, 0, 0]], [0, 2], { includeSelf: true })).toEqual([0, 2]);
   });
 });

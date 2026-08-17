@@ -247,8 +247,8 @@ export function resolveOn(
  * {@link resolveOn} for the params where a non-finite value is DEFINED
  * behavior rather than a broken expression. Finiteness is a property of
  * the PARAM, not of the number, so the opt-out is a named call at the
- * three sites whose NaN semantics are DOCUMENTED IN THE PARAM'S OWN
- * DESCRIPTION and pinned by tests — four params in all, each quoting the
+ * four sites whose NaN semantics are DOCUMENTED IN THE PARAM'S OWN
+ * DESCRIPTION and pinned by tests — five params in all, each quoting the
  * semantics it preserves:
  *
  * - `filterByExpression.predicate` — NaN means DROP THIS POINT, stated in
@@ -260,8 +260,13 @@ export function resolveOn(
  *   "a per-point radius that is 0, negative or NaN claims no room of its
  *   own" and "NaN ranks lowest", both in those descriptions and both
  *   pinned by `filtering.test.ts`.
+ * - `pointNeighborhood.radius` — "0 searches nothing ... and a radius
+ *   that is negative or NaN is read the same way", and an INFINITE one
+ *   reaches the whole cloud, which is also the one radius that cannot be
+ *   partitioned: no finite halo covers it. Stated in that description and
+ *   pinned by `neighborhood.test.ts`.
  *
- * That documented-and-tested pair IS the bar. Adding a fifth param means
+ * That documented-and-tested pair IS the bar. Adding a sixth param means
  * the same argument in the same shape: a stated meaning for NaN that a
  * throw would delete. Absent that, the param is guarded.
  *

@@ -240,7 +240,7 @@ export function registerTransformPrimitives(): void {
         name: "radius",
         targets: [{ node: "nbr", param: "radius" }],
         description:
-          "How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move.",
+          "How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's.",
         min: 0,
       },
       {

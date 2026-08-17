@@ -392,12 +392,12 @@ also accepted and wraps into `constant`. Specs nest arbitrarily (up to
 
 ### Which params accept one
 
-20 of the standard library's 180 params do, and one rule separates them
-from the other 160: **a param can be a field exactly when its value is
+21 of the standard library's 180 params do, and one rule separates them
+from the other 159: **a param can be a field exactly when its value is
 read PER ELEMENT.** Everything settled before the elements are walked
 cannot be one, and there are five ways to be settled early.
 
-**The column is f32.** All 20 are `f32` (13) or `vec3` (7). No `i32`,
+**The column is f32.** All 21 are `f32` (14) or `vec3` (7). No `i32`,
 `u32`, `enum`, `bool`, `string` or list param is ever field-capable,
 because a field resolves per element into a column and only f32 and its
 tuples read one. Part of that is executable rather than editorial: a
@@ -441,11 +441,14 @@ many elements SURVIVE is not the clause above.**
 clause is about ALLOCATION — how much output there is to make — and not
 about how much of the input lives.
 
-**One known inconsistency, stated rather than smoothed over.**
-`pointNeighborhood.radius` is per-point, grid-local and symmetry-free.
-The rule says it could be a field; it is not one, and nothing in the
-source explains why. Read that as a gap in the library rather than as a
-sixth clause.
+**The rule has already found one thing, which is the argument for having
+written it down.** When it was first stated, `pointNeighborhood.radius`
+was the one param it disagreed with the library about: per-point,
+grid-local and symmetry-free, so the rule said it could be a field, and
+it was not one, for no reason anything in the source gave. It is a field
+now, and the disagreement was the library's rather than the rule's. A
+rule that only described what was already there would have been a
+summary; this one predicted a gap and the gap was real.
 
 One caveat travels with every fielded radius. Across a partitioned
 cook's seams the halo has to be the field's GLOBAL MAXIMUM, and the

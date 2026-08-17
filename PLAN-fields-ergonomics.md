@@ -123,10 +123,12 @@ remainder) that must then be documented forever.
 
 **Downgraded from "first by a wide margin" to speculative completeness.**
 
-### 2.3 Field-capability is a whitelist with no stated rule — UNCHANGED
+### 2.3 Field-capability was a whitelist with no stated rule — NOW STATED
 
-**20 of 180 params, across 12 of 46 nodes.** The only §2 measurement that
-did not shrink.
+**20 of 180 params, across 12 of 46 nodes**, when this was re-derived on
+2026-08-17: the only §2 measurement that had not shrunk. The rule is
+written down now (`a3d3b94`) and the count is **21 of 180**, because
+stating it exposed one param that belonged on the other side.
 
 ```sh
 node -e "const n=require('./docs/nodes.json');let t=0,f=0;
@@ -138,10 +140,10 @@ console.log(f,'of',t,'params across',n.length,'nodes');"
 Full classification: `scratchpad/coverage-audit.md`. Against C2's own
 wording (numeric and vector params only — 83 of 180):
 
-| bucket | count |
+| bucket | count (as audited, 2026-08-17) |
 | --- | --- |
-| already field-capable | 20 |
-| **CANDIDATE — the real cost of C2** | **24** |
+| already field-capable | 20 — now 21 |
+| **CANDIDATE — the real cost of C2** | **24 — now 23** |
 | structural, correctly refused | 38 |
 | unclear | 1 (`valueConstant.value`, see §2.4) |
 
@@ -175,10 +177,14 @@ the audit had lumped together: a per-point radius would make "A is near B"
 disagree with "B is near A" (`src/nodes/topology.ts:101`), so
 `connectPoints.radius` genuinely cannot be a field, while a per-POINT
 query carries no such obligation — which is why `selfPrune.minDistance`
-already is one, symmetrising with max(rA, rB). That leaves
+already is one, symmetrising with max(rA, rB). That left
 **`pointNeighborhood.radius` as an unexplained gap**: per-point,
 grid-local, symmetry-free, and eager for no reason stated anywhere in the
-source.
+source. IT IS A FIELD NOW — the one param the rule disagreed with the
+library about, and the disagreement was the library's. That is the return
+on writing the rule down: a rule that only described what was already
+there would have been a summary, and this one predicted a gap that turned
+out to be real. Field-capable params are 21 of 180.
 
 The one counterexample that did hold: eight `u32` **seed** params allocate
 nothing and are not structural, yet must stay eager, being hash-combined
@@ -362,11 +368,12 @@ state the two counterexamples in §2.3, not just the allocation clause —
 a rule with unstated exceptions is how this whitelist got here. Fixes the
 noise-opts edge.
 
-**C2 — flip the default.** Now correctly sized at **24 params**, not 160.
-~5 days of plumbing for the easy and medium ones; `connectPoints.radius`
-and `pointNeighborhood.radius` need a design decision first (a fielded
-radius makes the partitioned-cook halo a global bound). The non-mechanical
-part is that each newly-fielded param converts an eager refusal
+**C2 — flip the default.** **23 params**, not 160 and no longer 24:
+`pointNeighborhood.radius` is done. ~5 days of plumbing for the easy and
+medium ones. `connectPoints.radius` needs no decision either — the rule
+says it can NEVER be a field, so it leaves the candidate set rather than
+waiting in it. The non-mechanical part is that each newly-fielded param
+converts an eager refusal
 (`extend >= 0`, `vector != 0`) into a per-element policy plus a test.
 
 ### D. Visibility and reuse
@@ -515,12 +522,14 @@ and D3 qualify; E1 and C1 do not.
 2. **~~C1 or C2?~~ Now just: C2 or not.** C1 shipped in `a3d3b94`, so the
    rule is written and pinned; the remaining question is whether to flip
    the default over the 24 candidate params. Writing it down changed the
-   shape of that question rather than only deferring it — the rule turns
-   out to have a clause the audit missed, one candidate
-   (`pointNeighborhood.radius`) that the rule says should already be
-   field-capable, and one (`connectPoints.radius`) that it says can never
-   be. A sweep would now be applying a stated rule rather than extending
-   a whitelist by taste, which is most of what made C2 look expensive.
+   shape of that question rather than only deferring it. The rule turned
+   out to have a clause the audit missed; it named one candidate
+   (`pointNeighborhood.radius`) that should already have been
+   field-capable, which is now shipped; and it ruled one
+   (`connectPoints.radius`) out permanently, which removes it from the
+   set rather than parking it. 23 remain, and a sweep would be applying a
+   stated rule rather than extending a whitelist by taste — most of what
+   made C2 look expensive.
 3. **~~Is unit 3 (corpus rewrite) in scope?~~** Moot — done by `8faf95d`.
 4. **Is D3 ever wanted?** §2.6 gives it a real number (447 lines nothing
    else can remove) but that number is one graph. This decides whether

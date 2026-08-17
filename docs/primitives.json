@@ -840,7 +840,8 @@
         "schema": {
           "type": "f32",
           "default": 5,
-          "description": "How far around each point counts as its neighbourhood, in world units.",
+          "description": "How far around each point counts as its neighbourhood, in world units. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -2353,7 +2354,8 @@
         "schema": {
           "type": "f32",
           "default": 4,
-          "description": "How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move.",
+          "description": "How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [
@@ -2716,7 +2718,8 @@
         "schema": {
           "type": "f32",
           "default": 5,
-          "description": "How far around each point counts as its neighbourhood, in world units. It changes the ORDERING of the densities, never their range: the counts are refitted to 0..1 over whatever spread they happen to have, so the emptiest point is always exactly 0 and the fullest always exactly 1 at every radius, and even a perfectly uniform scatter comes out spanning the full 0..1 (measured mean 0.56). Two consequences an agent has to plan around: the values are NOT comparable between two clouds, two radii or two cooks with different counts, and a threshold like 0.8 means 'the top of THIS cloud' rather than any absolute crowding. For an absolute measure, read the raw neighbour count with a `pointNeighborhood` node instead.",
+          "description": "How far around each point counts as its neighbourhood, in world units. It changes the ORDERING of the densities, never their range: the counts are refitted to 0..1 over whatever spread they happen to have, so the emptiest point is always exactly 0 and the fullest always exactly 1 at every radius, and even a perfectly uniform scatter comes out spanning the full 0..1 (measured mean 0.56). Two consequences an agent has to plan around: the values are NOT comparable between two clouds, two radii or two cooks with different counts, and a threshold like 0.8 means 'the top of THIS cloud' rather than any absolute crowding. For an absolute measure, read the raw neighbour count with a `pointNeighborhood` node instead. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's.",
+          "acceptsField": true,
           "min": 0
         },
         "targets": [

@@ -19,12 +19,19 @@
  * grid's own lowest-index tie rule: the tie there is between points of a
  * SECOND cloud and lives in `src/spatial`, not here.
  */
-import type { AttrDefault, Attribute } from "../data/index.js";
+import type { AttrDefault, Attribute, Geometry } from "../data/index.js";
+import type { Column } from "../fields/index.js";
 import { pointIdentities } from "../data/identity.js";
 import { cloneGeometry, makeGeometryItem } from "../graph/index.js";
 import { UniformGrid, type PositionView } from "../spatial/index.js";
 import { standardNode } from "./registry.js";
-import { positionView, requireGeometry, requireReportSlot } from "./util.js";
+import {
+  positionView,
+  requireGeometry,
+  requireReportSlot,
+  resolveOnAllowingNonFinite,
+  type FieldParam,
+} from "./util.js";
 
 /**
  * Cell size for a grid over `view`: roughly two mean point spacings over
@@ -70,9 +77,28 @@ function deriveCellSize(view: PositionView): number {
   return Number.isFinite(cell) && cell > 0 ? cell : 1;
 }
 
+/**
+ * `pointNeighborhood.radius` as one number per point.
+ *
+ * Deliberately NOT guarded against non-finite values (see
+ * `resolveOnAllowingNonFinite`): a NaN radius reaches nothing, exactly as
+ * 0 does, and an infinite one reaches the whole cloud. Both are stated in
+ * the param description and pinned by tests, so rejecting them here would
+ * contradict the documented behaviour rather than protect anything.
+ */
+function neighborhoodRadiusColumn(geo: Geometry, value: FieldParam, seed: number): Column {
+  const col = resolveOnAllowingNonFinite(geo, "point", value, seed);
+  if (col.tupleSize !== 1) {
+    throw new Error(
+      `pointNeighborhood: param "radius" must evaluate to ONE number per point (tupleSize 1), got tupleSize ${col.tupleSize} — a radius is a single number, and fields broadcast elementwise, so a vec3 such as attribute("scale") yields three numbers per point. Reduce it to a scalar first, e.g. component(attribute("scale"), 0).`,
+    );
+  }
+  return col;
+}
+
 /** Params of {@link pointNeighborhood}. */
 export interface PointNeighborhoodParams {
-  radius: number;
+  radius: FieldParam;
   maxCount: number;
   includeSelf: boolean;
   countAttr: string;
@@ -93,8 +119,9 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
       type: "f32",
       default: 1,
       min: 0,
+      acceptsField: true,
       description:
-        "Neighborhood radius in world units, boundary included. 0 searches nothing: every count is 0 and every average falls back to the point's own value.",
+        "Neighborhood radius in world units, boundary included. 0 searches nothing: every count is 0 and every average falls back to the point's own value, and a radius that is negative or NaN is read the same way. As a FIELD it is a PER-POINT radius, evaluated on the input's points, so each point measures the neighborhood it asks for — a count of what is within reach of THIS point rather than within one distance shared by the cloud. The reading it enables is 'how crowded am I, at my own scale': a radius read from an attribute lets a big point survey a big neighborhood and a small one a small neighborhood in the same cook. NEIGHBORHOOD IS THEN NOT SYMMETRIC, and that is the point rather than a defect — with a per-point radius, B lying inside A's radius does NOT put A inside B's, so `countAttr` counts what each point can see and two points can disagree about whether they are neighbors. That asymmetry is exactly what a per-point radius means, and it is why this param can be a field where connectPoints' radius cannot: an EDGE is one thing shared by two points and would have to depend on which endpoint asked, while a count is one point's own measurement. Cost, not correctness, is what a mixed set of radii affects: the grid is sized from the largest FINITE radius, and a query wider than that scans more cells rather than returning a different answer. An infinite radius is legal and means the whole cloud — the query falls back to a full scan, so it is O(n) per point. Under a partitioned cook the halo a cell needs is the GLOBAL MAXIMUM this field can return anywhere in the world, which is a bound to be derived and not measured: the cloud a cell sees has already been clipped by the halo being sized, so the far neighbor that would have set it is the one it cannot see. Take a constant times the range of whatever drives it (a noise field is in [-1, 1], so `2 + 3 * noise` maxes at 5) and pass that. Underestimating does not throw — it silently misses neighbors, at the seams only.",
     },
     maxCount: {
       type: "i32",
@@ -128,7 +155,7 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
         "Name of the f32 point attribute receiving the neighbor average; it takes averageAttr's tuple size. Required when averageAttr is set, ignored otherwise. Naming it the same as averageAttr overwrites in place — allowed whenever that attribute is ALREADY f32 at the same tuple size, which \"P\" is. Otherwise the shape is this node's to pick, and a name the input holds under a DIFFERENT shape is REFUSED rather than deleted and re-added: averaging an i32, u32 or bool attribute needs an output name of its own, since the average is always f32. An existing column of the matching f32 shape IS reused and reset.",
     },
   },
-  execute({ inputs, params, checkCancelled }) {
+  execute({ inputs, params, checkCancelled, seed: nodeSeed }) {
     const geo = cloneGeometry(requireGeometry(inputs, "in", "pointNeighborhood"));
     const wantCount = params.countAttr !== "";
     const wantAverage = params.averageAttr !== "";
@@ -200,13 +227,48 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
 
     const counts = wantCount ? new Uint32Array(n) : undefined;
     const means = source ? new Float64Array(n * ts) : undefined;
-    const radius = params.radius;
     const maxCount = params.maxCount;
 
-    if (radius > 0 && n > 0) {
+    // A plain number keeps the scalar path exactly as it was; a field
+    // resolves to one radius per point. Non-finite values are deliberately
+    // NOT rejected here (see resolveOnAllowingNonFinite): NaN reads as
+    // "search nothing", the same as 0, and Infinity reads as "the whole
+    // cloud" — both stated in the param description and pinned by tests.
+    const uniformRadius = typeof params.radius === "number" ? params.radius : undefined;
+    const radii =
+      uniformRadius === undefined
+        ? neighborhoodRadiusColumn(geo, params.radius, nodeSeed)
+        : undefined;
+
+    // The cell size, and whether there is anything to do at all. For a
+    // field both answers need the resolved column: a cloud whose radii are
+    // all <= 0 has no work in it, and one with mixed radii has no single
+    // query width to size cells by.
+    let cellSize = 0;
+    let anyReach = false;
+    if (radii === undefined) {
+      cellSize = uniformRadius as number;
+      anyReach = cellSize > 0;
+    } else {
+      let widest = 0;
+      for (let i = 0; i < n; i++) {
+        const v = radii.data[i];
+        if (!(v > 0)) continue; // 0, negative and NaN all reach nothing
+        anyReach = true;
+        if (v > widest && v < Number.POSITIVE_INFINITY) widest = v;
+      }
+      // Cell size never decides an answer, only how many cells a query
+      // touches — the distance tests are exact whatever it is. The largest
+      // FINITE radius makes the usual case (radii within a small factor of
+      // each other) a 3x3x3 block; an all-infinite set has no informative
+      // size, so 1 stands in and every query full-scans anyway.
+      cellSize = widest > 0 ? widest : 1;
+    }
+
+    if (anyReach && n > 0) {
       // One cell per query radius, so the candidates for a point are the
       // 3x3x3 block around its cell — the policy selfPrune uses.
-      const grid = UniformGrid.build(view, radius);
+      const grid = UniformGrid.build(view, cellSize);
       const pd = view.data;
       const ps = view.stride;
       const src = source?.data;
@@ -230,7 +292,44 @@ export const pointNeighborhood = standardNode<PointNeighborhoodParams>({
         const x = pd[o];
         const y = pd[o + 1];
         const z = pd[o + 2];
-        grid.queryRadius(x, y, z, radius, nbr);
+        // A point whose own radius reaches nothing skips the query rather
+        // than running one at 0: `queryRadius` is boundary-INCLUSIVE, so a
+        // radius of 0 would still collect anything exactly coincident,
+        // and "0 searches nothing" has to mean the same thing whether it
+        // arrived as the plain param or as one value of a field.
+        const reach = radii === undefined ? (uniformRadius as number) : radii.data[i];
+        if (!(reach > 0)) {
+          nbr.length = 0;
+        } else {
+          grid.queryRadius(x, y, z, reach, nbr);
+          // An INFINITE reach is the one case where the grid's "a
+          // non-finite coordinate satisfies no distance predicate" stops
+          // holding: the test is `d2 <= limit`, and at limit = Infinity a
+          // point at +Infinity passes it, because `Infinity <= Infinity`.
+          // That would make a non-finite point everybody's neighbour and
+          // poison a finite point's average, contradicting this node's own
+          // documented contract — and it would make the ANSWER depend on
+          // cell size, which nothing else here does. Restored at the only
+          // radius that can break it, so the ordinary path pays nothing.
+          if (reach === Number.POSITIVE_INFINITY) {
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+              nbr.length = 0;
+            } else {
+              let w = 0;
+              for (let r = 0; r < nbr.length; r++) {
+                const oj = nbr[r] * ps;
+                if (
+                  Number.isFinite(pd[oj]) &&
+                  Number.isFinite(pd[oj + 1]) &&
+                  Number.isFinite(pd[oj + 2])
+                ) {
+                  nbr[w++] = nbr[r];
+                }
+              }
+              nbr.length = w;
+            }
+          }
+        }
         if (!params.includeSelf) {
           // Compact in place rather than splice: no per-point allocation.
           let w = 0;

@@ -265,7 +265,7 @@ Counts each point's neighbours within a radius and keeps or drops it by that cou
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `comparison` | enum | `"ge"` |  | `eq`, `ne`, `lt`, `le`, `gt`, `ge` |  | keep.comparison | 'ge' keeps the crowded points (cluster cores), 'le' keeps the isolated ones. |
 | `count` | f32 | `2` | >= 0 |  |  | keep.value | How many neighbours the comparison is made against. The point itself is not counted. |
-| `radius` | f32 | `5` | >= 0 |  |  | nbr.radius | How far around each point counts as its neighbourhood, in world units. |
+| `radius` | f32 | `5` | >= 0 |  | yes | nbr.radius | How far around each point counts as its neighbourhood, in world units. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's. |
 
 Run it: `pcg run filter/by-neighbor-count`
 
@@ -711,7 +711,7 @@ Nudges every point away from the centroid of its neighbours, so crowded regions 
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `radius` | f32 | `4` | >= 0 |  |  | nbr.radius | How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move. |
+| `radius` | f32 | `4` | >= 0 |  | yes | nbr.radius | How far around each point counts as its neighbourhood, in world units. Points with nothing inside it do not move. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's. |
 | `strength` | f32 | `0.5` |  |  | yes | *(nothing — the body's field expressions read it by name)* | How far along the push each point travels: the point moves exactly strength * (its own position - the mean position of its neighbours inside `radius`), so 0 changes nothing and the travel is exactly linear in strength. It is a fraction of a LOCAL offset, not a world distance, so `radius` sets the scale and this sets the fraction of it: measured on 300 points in a 30x30 box, strength 0.5 moves the average point 0.42 units at radius 4 and 1.5 units at radius 12, and strength 1 moves it exactly twice as far. 0.5 is one relaxation step; run the primitive twice rather than pushing past 1, which overshoots and oscillates. |
 
 Run it: `pcg run transform/relax-spacing`
@@ -868,7 +868,7 @@ Counts each point's neighbours within a radius and rescales the counts to 0..1 o
 
 | Param | Type | Default | Range | Enum | Field | Writes to | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `radius` | f32 | `5` | >= 0 |  |  | nbr.radius | How far around each point counts as its neighbourhood, in world units. It changes the ORDERING of the densities, never their range: the counts are refitted to 0..1 over whatever spread they happen to have, so the emptiest point is always exactly 0 and the fullest always exactly 1 at every radius, and even a perfectly uniform scatter comes out spanning the full 0..1 (measured mean 0.56). Two consequences an agent has to plan around: the values are NOT comparable between two clouds, two radii or two cooks with different counts, and a threshold like 0.8 means 'the top of THIS cloud' rather than any absolute crowding. For an absolute measure, read the raw neighbour count with a `pointNeighborhood` node instead. |
+| `radius` | f32 | `5` | >= 0 |  | yes | nbr.radius | How far around each point counts as its neighbourhood, in world units. It changes the ORDERING of the densities, never their range: the counts are refitted to 0..1 over whatever spread they happen to have, so the emptiest point is always exactly 0 and the fullest always exactly 1 at every radius, and even a perfectly uniform scatter comes out spanning the full 0..1 (measured mean 0.56). Two consequences an agent has to plan around: the values are NOT comparable between two clouds, two radii or two cooks with different counts, and a threshold like 0.8 means 'the top of THIS cloud' rather than any absolute crowding. For an absolute measure, read the raw neighbour count with a `pointNeighborhood` node instead. As a FIELD it is a PER-POINT radius, so each point measures the neighbourhood it asks for and the relation stops being symmetric — B within A's reach does not put A within B's. |
 
 Run it: `pcg run write/local-density`
 

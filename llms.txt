@@ -359,11 +359,11 @@ element; the only place the library tells the two spellings apart is GPU
 eligibility (AUTHORED vs DERIVED spec, below). README.md "Fields" is the
 TypeScript side.
 
-WHICH PARAMS ACCEPT ONE — 20 of the standard library's 180. A param can
+WHICH PARAMS ACCEPT ONE — 21 of the standard library's 180. A param can
 be a field exactly when its value is read PER ELEMENT; everything
 settled before the elements are walked cannot be one:
 
-- The column is f32: all 20 are `f32` (13) or `vec3` (7). No `i32`,
+- The column is f32: all 21 are `f32` (14) or `vec3` (7). No `i32`,
   `u32`, `enum`, `bool`, `string` or list param, ever — a field resolves
   per element into a column, and only f32 and its tuples read one. Part
   of it is executable: `acceptsField` on `items`/`numberList`/
@@ -396,10 +396,13 @@ the answer — a mismatch is slow, never wrong), and deciding how many
 elements SURVIVE (`selfPrune.minDistance` decides survival and is a
 field; the clause above is about ALLOCATION).
 
-KNOWN INCONSISTENCY, stated as one rather than as a rule:
-`pointNeighborhood.radius` is per-point, grid-local and symmetry-free —
-the rule says it could be a field, it is not, and nothing in the source
-explains why. Caveat carried by every fielded radius under a partitioned
+WHAT THE RULE FOUND: when first stated it disagreed with the library on
+exactly one param — `pointNeighborhood.radius`, per-point, grid-local and
+symmetry-free, so the rule said field and the library said no, for no
+stated reason. It is a field now, per point, and neighborhood is
+therefore ASYMMETRIC: B within A's radius does not put A within B's, and
+that is what a per-point radius means. Caveat carried by every fielded
+radius under a partitioned
 cook: the halo must be the field's GLOBAL MAXIMUM and the AUTHOR
 supplies it inside `bind`, since nothing in `src/runtime/` reads a
 node's radius param; underestimating keeps pairs closer than the field
