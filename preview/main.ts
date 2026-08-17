@@ -11,7 +11,7 @@
  * NOT a demo, and deliberately absent from `build.rollupOptions.input` in
  * `vite.config.ts`: it exists to be photographed by a script, it
  * renders nothing without a job, and shipping it to the Pages site would
- * put a blank page beside the sandbox and the demos.
+ * put a blank page beside the editor and the demos.
  *
  * WHY IT LOOKS DIFFERENT FROM THE DEMOS. The demos share a dark studio
  * look from `shared/scene.ts`. This page is judged against outdoor
@@ -227,7 +227,7 @@ interface ItemReport {
 /**
  * This page's look. Daylight, because it is judged against outdoor
  * reference imagery — see the header. What to DRAW is decided by
- * `shared/draw.ts`, which the sandbox shares; only the materials and the
+ * `shared/draw.ts`, which the editor shares; only the materials and the
  * shadow flags below are this page's own, and both are renderer work.
  */
 const PREVIEW_MATERIALS: DrawMaterials = {
@@ -359,7 +359,7 @@ async function main(): Promise<void> {
           "By hand, open /preview/?graph=<name> to load graphs/<name>.json.",
       );
     }
-    // The corpus loader is shared with the sandbox's graph picker, so
+    // The corpus loader is shared with the editor's graph picker, so
     // "which graphs exist" and the message for a name that is not one of
     // them are stated once.
     try {

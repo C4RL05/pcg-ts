@@ -10,7 +10,7 @@
  * check rather than a reminder: an id added to the map and not to the
  * list fails, and so does the reverse.
  *
- * Lives in `tests/` for the reason `sandboxKnobs.test.ts` gives: the
+ * Lives in `tests/` for the reason `editorKnobs.test.ts` gives: the
  * browser pages sit outside vitest's `src/**` include.
  *
  * It deliberately does NOT assert anything about the corpus. Thirteen of

@@ -185,12 +185,12 @@
   }
   .type {
     font-weight: 600;
-    color: var(--sb-ink-hi);
+    color: var(--ed-ink-hi);
     overflow-wrap: anywhere;
   }
   .id {
-    color: var(--sb-ink-faint);
-    font: 10px var(--sb-mono);
+    color: var(--ed-ink-faint);
+    font: 10px var(--ed-mono);
     overflow-wrap: anywhere;
   }
   /* The one destructive control in the column. It reads as such by being
@@ -198,12 +198,12 @@
      weight has to say it. */
   .danger {
     flex: 0 0 auto;
-    padding: var(--sb-btn-pad);
-    background: var(--sb-alert-bg);
+    padding: var(--ed-btn-pad);
+    background: var(--ed-alert-bg);
     color: #ffffff;
-    border: 1px solid var(--sb-edge-err);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) var(--sb-sans);
+    border: 1px solid var(--ed-edge-err);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) var(--ed-sans);
     white-space: nowrap;
     cursor: pointer;
   }
@@ -220,38 +220,38 @@
    */
   .desc {
     margin: 6px 0 10px;
-    color: var(--sb-ink-dim);
-    font-size: var(--sb-t-body);
+    color: var(--ed-ink-dim);
+    font-size: var(--ed-t-body);
     line-height: 1.5;
   }
   .note {
     margin: 0 0 10px;
     padding: 6px 8px;
     background: #101010;
-    border-left: 2px solid var(--sb-edge);
-    border-radius: 0 var(--sb-radius) var(--sb-radius) 0;
-    color: var(--sb-ink-dim);
-    font-size: var(--sb-t-meta);
+    border-left: 2px solid var(--ed-edge);
+    border-radius: 0 var(--ed-radius) var(--ed-radius) 0;
+    color: var(--ed-ink-dim);
+    font-size: var(--ed-t-meta);
     line-height: 1.5;
   }
   .param {
     margin: 9px 0;
     padding-top: 7px;
-    border-top: 1px solid var(--sb-rule-soft);
+    border-top: 1px solid var(--ed-rule-soft);
   }
   .label {
     margin-bottom: 4px;
-    color: var(--sb-ink-mid);
-    font: var(--sb-t-body) var(--sb-mono);
+    color: var(--ed-ink-mid);
+    font: var(--ed-t-body) var(--ed-mono);
     cursor: help;
   }
   .ptype {
-    color: var(--sb-ink-ghost);
+    color: var(--ed-ink-ghost);
     font-size: 10px;
   }
   .readonly {
-    color: var(--sb-ink-faint);
-    font-size: var(--sb-t-meta);
+    color: var(--ed-ink-faint);
+    font-size: var(--ed-t-meta);
     font-style: italic;
   }
   input[type="number"],
@@ -260,11 +260,11 @@
     width: 100%;
     box-sizing: border-box;
     padding: 3px 6px;
-    background: var(--sb-well);
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-mono);
+    background: var(--ed-well);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-mono);
   }
   input[type="checkbox"] {
     accent-color: #ffffff;
@@ -283,16 +283,16 @@
   }
   .list-row button,
   .add {
-    padding: var(--sb-btn-pad);
-    background: var(--sb-raised);
-    color: var(--sb-action);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) var(--sb-sans);
+    padding: var(--ed-btn-pad);
+    background: var(--ed-raised);
+    color: var(--ed-action);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) var(--ed-sans);
     cursor: pointer;
   }
   .list-row button:hover,
   .add:hover {
-    background: var(--sb-raised-hi);
+    background: var(--ed-raised-hi);
   }
 </style>

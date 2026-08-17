@@ -286,7 +286,7 @@ at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
-reference (generated from the registry). The `sandbox/` tool is
+reference (generated from the registry). The `editor/` tool is
 this section as an app: an interactive node editor built entirely on
 `listNodeTypes()` (palette grouped by category), the live graph's
 validation, and `serializeGraph`/`deserializeGraph` — and it edits the
@@ -822,7 +822,7 @@ its cache hits across the toggle. Fused runs use the same salt inside
 the run key above. Pipelines are cached on the evaluator instance and
 persist across cooks.
 
-See it live: the sandbox's `cook` selector switches between the same
+See it live: the editor's `cook` selector switches between the same
 three paths — CPU, GPU per-node (fusion switched off), and one fused
 device-resident run — under a graph that does not change, and its
 status line carries the wall time, the output hash and the full
@@ -1191,14 +1191,14 @@ What the caller must respect (the mutation contracts):
 cannot be on its own: an infinite streaming world, an infinite
 deterministic spiral galaxy with click-to-visit star systems, and a
 streamed world drawing from device-resident instance transforms.
-`sandbox/` beside them is a tool rather than a demo — a registry-driven
+`editor/` beside them is a tool rather than a demo — a registry-driven
 node-graph editor that opens any graph in `graphs/`, edits it live,
 compares the CPU, per-node GPU and fused device-resident cook paths on
 it, and links to the result.
 
 A recipe that is only one cook of one graph is not a demo here; it is a
 file in `graphs/`, cooked by `pcg cook`, rendered by `npm run
-preview`, and editable in the sandbox:
+preview`, and editable in the editor:
 
 ```sh
 npm run examples
@@ -1210,7 +1210,7 @@ npm run examples
 npm test          # vitest: unit + integration + determinism suites
 npm run build     # tsup: dist/ with subpath exports ".", "./three", "./gpu"
 npm run check     # tsc --noEmit
-npm run examples  # vite dev server for sandbox/ and demos/
+npm run examples  # vite dev server for editor/ and demos/
 npm run docs:nodes  # regenerate docs/nodes.{md,json} from the registry
 ```
 

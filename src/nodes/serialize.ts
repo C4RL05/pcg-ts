@@ -519,7 +519,7 @@ function sameParamValue(a: unknown, b: unknown): boolean {
  * value into them, and hand back the params carrying their merged schemas.
  *
  * EXPORTED because `deserializeGraph` is not the only thing that builds a
- * graph from a `SerializedGraph`: the sandbox rebuilds its own mirror node
+ * graph from a `SerializedGraph`: the editor rebuilds its own mirror node
  * by node, and skipping this step left every driven slot holding whatever
  * the file said instead of what its declaration says. That is the second
  * time a hand-rolled rebuild has missed a step this function performs, so

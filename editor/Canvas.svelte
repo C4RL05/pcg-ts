@@ -376,7 +376,7 @@
   }
   /**
    * A cable takes the colour of the KIND it carries, from the same four
-   * `--sb-k-*` tokens the pin dots use — one vocabulary, so the dot you
+   * `--ed-k-*` tokens the pin dots use — one vocabulary, so the dot you
    * drag from and the line you drag out of it are the same colour.
    *
    * IT IS INERT TODAY, AND THAT IS A MEASUREMENT, NOT AN OVERSIGHT.
@@ -428,7 +428,7 @@
      whole length instead of washing out over the bright half. */
   .edge-line {
     fill: none;
-    stroke: var(--sb-k-geometry);
+    stroke: var(--ed-k-geometry);
     stroke-width: 1.6;
     opacity: 0.55;
     pointer-events: none;
@@ -439,11 +439,11 @@
      the two to drift apart. */
   .edge-line.k-instances,
   .wire.k-instances {
-    stroke: var(--sb-k-instances);
+    stroke: var(--ed-k-instances);
   }
   .edge-line.k-value,
   .wire.k-value {
-    stroke: var(--sb-k-value);
+    stroke: var(--ed-k-value);
   }
   .edge-hit {
     fill: none;
@@ -468,7 +468,7 @@
   }
   .wire {
     fill: none;
-    stroke: var(--sb-ink-dim);
+    stroke: var(--ed-ink-dim);
     stroke-width: 1.6;
     stroke-dasharray: 5 4;
     opacity: 0.55;
@@ -484,8 +484,8 @@
     opacity: 1;
   }
   .blank {
-    fill: var(--sb-ink-ghost);
-    font: var(--sb-t-body) var(--sb-sans);
+    fill: var(--ed-ink-ghost);
+    font: var(--ed-t-body) var(--ed-sans);
     text-anchor: middle;
     pointer-events: none;
   }

@@ -12,7 +12,7 @@
  *
  * WHY THE SPECS STAY PLAIN DATA. A control names its param by KEY and
  * carries no functions, so the same shape survives a trip through JSON.
- * That is the whole point: the sandbox reads its sections out of a
+ * That is the whole point: the editor reads its sections out of a
  * `<graph>.ui.json` sidecar, and anything callable here would have to be
  * invented again on the other side of that file. Routing a key to
  * whatever consumes it is the panel's job, not the spec's.

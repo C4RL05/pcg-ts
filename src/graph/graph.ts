@@ -703,7 +703,7 @@ export class Graph {
    * violation throws `GraphValidationError` naming the node, the param,
    * the value and what would be legal. The check belongs here rather than
    * only at the JSON boundary: a graph that is built, patched and cooked
-   * in memory — a host, the sandbox, an agent driving this API — would
+   * in memory — a host, the editor, an agent driving this API — would
    * otherwise carry a value nothing ever refuses, and the damage would
    * surface at a node far from the write, or not at all.
    *

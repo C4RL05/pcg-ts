@@ -6,7 +6,7 @@
  * arbitrary graph is the input and guessing wrong renders an empty frame
  * that looks like a generation bug. That reasoning was worked out on the
  * preview page, which is judged against arbitrary corpus graphs; the
- * sandbox now loads the same corpus, so the logic lives here and both
+ * editor now loads the same corpus, so the logic lives here and both
  * call it.
  *
  * CONSTRUCTION ONLY. Nothing here touches a scene graph or picks a look:

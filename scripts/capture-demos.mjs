@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * capture-demos.mjs — regenerate docs/manual-assets/*.jpg and docs/thumbs/*.jpg
- * from the sandbox (`sandbox/`) and the three hosted demos under `demos/`.
+ * from the editor (`editor/`) and the three hosted demos under `demos/`.
  * (Spelling that second path as a glob would end this comment early — the
  * star-slash closes it — and the file stops parsing. It did once.)
  *
- * Run with `npm run capture` (optionally `-- --only=sandbox,galaxy` / `--no-build`).
+ * Run with `npm run capture` (optionally `-- --only=editor,galaxy` / `--no-build`).
  *
  * ---------------------------------------------------------------------------
  * WHY THIS SCRIPT EXISTS
@@ -43,7 +43,7 @@
  *      every value starts as an en dash "–" until the demo writes it. That
  *      makes the demo's own instrumentation the readiness signal — no
  *      demo-side hooks were added for this script. Per demo we wait for the
- *      specific stat that means "the cook is done": the sandbox toolbar's
+ *      specific stat that means "the cook is done": the editor toolbar's
  *      status line carrying a hash, `pending` reaching 0 for the two
  *      streaming worlds, and, for the one page that exposes a real probe
  *      object, the probe itself (`window.pcgWorld`, gpu-world).
@@ -60,7 +60,7 @@
  *      Neither converging inside the budget is a hard failure.
  *
  * DETERMINISM. Every demo hard-codes its seed (1, or 42 for the galaxy), and
- * the only URL parameter any of them reads is the sandbox's `?graph=`, which
+ * the only URL parameter any of them reads is the editor's `?graph=`, which
  * this script sets deliberately — so content is already reproducible. What is
  * not reproducible is the camera: infinite-world flies forward at 18 u/s from
  * t=0, gpu-world has autopilot on, and the galaxy cruises. Each is stopped
@@ -119,9 +119,9 @@ const THUMB = { css: [1454, 783], out: [640, 345], quality: THUMB_QUALITY };
  * width/height attributes in docs/manual.html.
  */
 const SIZES = {
-  sandbox: { css: [1454, 783], out: [1454, 783] },
-  "sandbox-gpu": { css: [1454, 783], out: [1454, 783] },
-  "sandbox-rig": { css: [1454, 783], out: [1454, 783] },
+  editor: { css: [1454, 783], out: [1454, 783] },
+  "editor-gpu": { css: [1454, 783], out: [1454, 783] },
+  "editor-rig": { css: [1454, 783], out: [1454, 783] },
   "infinite-world": { css: [1454, 783], out: [1454, 783] },
   galaxy: { css: [1454, 783], out: [1454, 783] },
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
@@ -134,7 +134,7 @@ const SIZES = {
  */
 const DEMOS = [
   {
-    id: "sandbox",
+    id: "editor",
     // The graph is cooked behind a 150 ms debounce; the toolbar reads
     // "cooking…" until the first cook lands. There is no stats card to
     // scrape any more — the status line carries the readouts.
@@ -154,13 +154,13 @@ const DEMOS = [
     },
   },
   {
-    // The same page, twice, because the sandbox absorbed what the retired
+    // The same page, twice, because the editor absorbed what the retired
     // gpu-fields demo used to be: a graph is not what changes between
     // the two shots, the cook path under it is. `?graph=` opens it on the
     // fusable chain and `manualOnly` keeps it out of docs/thumbs, since
     // the demo index has one card per PAGE and this is not another page.
-    id: "sandbox-gpu",
-    path: "sandbox/?graph=examples-gpu-fields",
+    id: "editor-gpu",
+    path: "editor/?graph=examples-gpu-fields",
     manualOnly: true,
     // The selector's GPU options stay disabled until the adapter probe
     // answers, so waiting for the option is waiting for the device — and
@@ -222,8 +222,8 @@ const DEMOS = [
     // flattened them into one silhouette; the parts are swept surfaces
     // now, so lit reads properly — but normals still separates twelve
     // pale tubes from each other where one material cannot.
-    id: "sandbox-rig",
-    path: "sandbox/?graph=examples-rig",
+    id: "editor-rig",
+    path: "editor/?graph=examples-rig",
     manualOnly: true,
     settleWait: () => !!document.querySelector(".toolbar .path.shade select"),
     settle: async () => {
@@ -349,7 +349,7 @@ function pageInstrumentation() {
       const spans = row.querySelectorAll("span");
       if (spans.length >= 2) out[text(spans[0])] = text(spans[1]);
     }
-    // Sandbox toolbar: .status holds one .stat per reading. Read the
+    // Editor toolbar: .status holds one .stat per reading. Read the
     // label and the value BY TAG rather than by position — the markup
     // emits them in either order (`labelFirst` puts the <i> first for a
     // count, last for a unit like "21.4 ms"), so an index would pick up
@@ -401,7 +401,7 @@ function pageInstrumentation() {
   };
 
   // There was a `clickButtonByText` here and it is deliberately gone. Its
-  // last caller cycled the sandbox view by matching the label "view ·",
+  // last caller cycled the editor view by matching the label "view ·",
   // and a cosmetic markup change — the separator moving into a span —
   // silently stopped matching, so a figure failed to capture for a reason
   // that had nothing to do with the figure. Select a control by the class

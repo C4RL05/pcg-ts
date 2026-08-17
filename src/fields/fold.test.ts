@@ -611,7 +611,7 @@ describe("folding through a param", () => {
   it("folds a Field binding that is a constant, which binds as its value", () => {
     // `fieldFromJson` records a constant-valued FIELD as the literal it
     // carries, so this arrives here stamped like a number and folds like
-    // one. The sandbox's "field mode" seeds a knob with exactly this.
+    // one. The editor's "field mode" seeds a knob with exactly this.
     const field = fieldFromJson(scaled, { amp: fieldFromJson({ fn: "constant", value: 4 }) });
     const folded = foldDomainConstants(field, SEED, FOLD_ANY_SIZE);
 

@@ -18,7 +18,7 @@
     "src",
     "tests",
     "scripts",
-    "sandbox",
+    "editor",
     "demos",
     "shared",
     "preview",

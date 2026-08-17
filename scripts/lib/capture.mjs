@@ -171,7 +171,7 @@ export async function waitForStableFrame(
  * the guard a colour detector: every pixel of a greyscale render lands on
  * the r==g==b diagonal, so it can produce at most 32 buckets no matter how
  * rich it is, and a floor of 48 was unreachable by construction. The
- * greyscale sandbox tripped it with a picture that was completely fine.
+ * greyscale editor tripped it with a picture that was completely fine.
  * Tone count says what the floor was always meant to say — "this has
  * structure in it" — and says it about colour and greyscale alike.
  *

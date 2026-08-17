@@ -104,7 +104,7 @@ fit.
   every complex graph after it.
 - Also worth re-checking before either is built: both numbers were counted
   by walking JSON, and an expression now reads as TEXT and as a DIAGRAM
-  (`printFieldSpec`, and the sandbox's field-tree view). The duplication
+  (`printFieldSpec`, and the editor's field-tree view). The duplication
   that motivates A3 used to be invisible. Whether it grates more or less
   once you can see it at a glance is unknown, and it is cheap to find out
   by living with the new views.
@@ -228,7 +228,7 @@ were all one cook at defaults.
 
 Two absences made the choice. No serialized graph in `graphs/` could be
 cooked by a `World` at all — every streaming example builds its graph in
-TypeScript, so the format agents and the sandbox actually use had never
+TypeScript, so the format agents and the editor actually use had never
 been exercised for streaming. And the BUDGET x CELL-ORDER product was
 untested: `budgetMs` appeared in World tests only as 0 ("nothing cooks"),
 while `crossPartition.test.ts` says in its own header that it partitions in
@@ -714,7 +714,7 @@ gap 8, which is the reason.
     browser launch to find — is one line of it.
     **The listing is a LIBRARY function, not a CLI one, and that is the
     part worth keeping.** `describeGraphParams(graph)` derives the
-    addresses, and the sandbox now builds its knobs from it rather than
+    addresses, and the editor now builds its knobs from it rather than
     from its own copy of the same rule. Two derivations of one address
     was the real hazard: a panel file, a shared link and a command line
     all spell a knob the same way, and the CLI answering differently from
@@ -833,7 +833,7 @@ carry a parallel numeric column by hand.
   such thing as a CPU-only field fn.
 
 **~~A knob that reaches into a field spec.~~ SHIPPED 2026-08-16.** A
-`param` spec node carries an optional inline `value`, and the sandbox
+`param` spec node carries an optional inline `value`, and the editor
 surfaces each inline-valued one as a knob keyed
 `"<nodeId>.<paramKey>.<fieldParamName>"` with a schema derived from the
 value's shape, refinable by a panel file. See `PLAN-spec-params.md`. The
@@ -909,7 +909,7 @@ vite's base64url hash can itself end with.
 Original entry: 100 tracked files produced by `npm run examples:pages`, which
 neither `npm run docs` nor CI runs — so it drifts from source silently and
 nothing notices. Adding `graphs/basics-mask-by-species.json` proved it:
-the sandbox enumerates graphs with `import.meta.glob` at BUILD time
+the editor enumerates graphs with `import.meta.glob` at BUILD time
 (`shared/presets.ts:33-34`), so until the site was rebuilt by hand,
 `docs/graphs.md` advertised 51 graphs while the hosted tool offered 50.
 The rebuild is cheap and small — 408 ms, 27 files, because vite

@@ -43,7 +43,7 @@ jobs:
       - run: npm ci
 
       # BUILD FIRST. Not the obvious order, and the first CI run proved
-      # why: the browser pages (sandbox/, demos/**, preview/, shared/)
+      # why: the browser pages (editor/, demos/**, preview/, shared/)
       # import the library by package NAME ("pcg-ts", "pcg-ts/three",
       # "pcg-ts/gpu"), which resolves through the
       # package.json exports map into dist/. A clean checkout has no

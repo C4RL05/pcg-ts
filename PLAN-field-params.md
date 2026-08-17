@@ -248,7 +248,7 @@ uniform helpers **XS**.
 **Runtime / worker — no change.** `patches.ts`, `runtime/types.ts`,
 `worker/protocol.ts`, `worker/pool.ts` all untouched.
 
-**Examples (2)** — new `basics-field-params.json` + panel **M**; sandbox
+**Examples (2)** — new `basics-field-params.json` + panel **M**; editor
 `controller.ts`/`FieldParam.svelte` annotation **S** (optional).
 `shared/graphUi.ts` needs **no change** — the knob is
 `exposed: true` and non-field, so `admit()` already accepts it.
@@ -378,5 +378,5 @@ sentence in `authoring.md`, not a blocker.
    from `ctx.geo.attrs[ctx.domain]` only) and index-0 rather than
    `flatIndex(ts,k)` addressing in `loadAttribute` (`compile.ts:233-250`).
 3. **Should a wrapper surface its inner cook stats?** Small, separable,
-   and it is what keeps the sandbox's `cooked / cached` readout honest
+   and it is what keeps the editor's `cooked / cached` readout honest
    once graphs get wrapped.

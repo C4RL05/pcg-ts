@@ -149,7 +149,7 @@
 <style>
   .body {
     fill: #0e0e0e;
-    stroke: var(--sb-edge);
+    stroke: var(--ed-edge);
     /* Never thinner than one screen pixel. `--hairline` is set by the
        canvas from the live zoom (see the transformed group there); the
        `1` fallback is what this was, and is what applies to any NodeBox
@@ -163,7 +163,7 @@
     stroke: #5e5e5e;
   }
   .selected .body {
-    stroke: var(--sb-select);
+    stroke: var(--ed-select);
   }
   /**
    * No UA focus ring on any of these.
@@ -185,7 +185,7 @@
     outline: none;
   }
   .sep {
-    stroke: var(--sb-rule);
+    stroke: var(--ed-rule);
     stroke-width: 1;
     pointer-events: none;
   }
@@ -197,17 +197,17 @@
    * category is context; the name is the thing.
    */
   .icon {
-    fill: var(--sb-ink-mid);
+    fill: var(--ed-ink-mid);
     pointer-events: none;
   }
   .title {
-    fill: var(--sb-ink-hi);
-    font: 600 11px var(--sb-sans);
+    fill: var(--ed-ink-hi);
+    font: 600 11px var(--ed-sans);
     pointer-events: none;
   }
   .nodeid {
-    fill: var(--sb-ink-faint);
-    font: 9px var(--sb-mono);
+    fill: var(--ed-ink-faint);
+    font: 9px var(--ed-mono);
     pointer-events: none;
   }
   .pin {
@@ -225,16 +225,16 @@
    * substrate and `any` is a wildcard, so both stay grey.
    */
   .k-geometry {
-    fill: var(--sb-k-geometry);
+    fill: var(--ed-k-geometry);
   }
   .k-instances {
-    fill: var(--sb-k-instances);
+    fill: var(--ed-k-instances);
   }
   .k-value {
-    fill: var(--sb-k-value);
+    fill: var(--ed-k-value);
   }
   .k-any {
-    fill: var(--sb-k-any);
+    fill: var(--ed-k-any);
   }
   .pin-hit {
     fill: transparent;
@@ -244,21 +244,21 @@
     cursor: crosshair;
   }
   .pinlabel {
-    fill: var(--sb-ink-dim);
-    font: 9px var(--sb-mono);
+    fill: var(--ed-ink-dim);
+    font: 9px var(--ed-mono);
     pointer-events: none;
   }
   .pinlabel.out {
     text-anchor: end;
   }
   .pkey {
-    fill: var(--sb-ink-faint);
-    font: 9px var(--sb-mono);
+    fill: var(--ed-ink-faint);
+    font: 9px var(--ed-mono);
     pointer-events: none;
   }
   .pval {
-    fill: var(--sb-ink-mid);
-    font: 9px var(--sb-mono);
+    fill: var(--ed-ink-mid);
+    font: 9px var(--ed-mono);
     text-anchor: end;
     pointer-events: none;
   }

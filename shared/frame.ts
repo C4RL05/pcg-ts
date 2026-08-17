@@ -1,7 +1,7 @@
 /**
  * Frame a camera, and a floor, on what a cook actually DREW.
  *
- * The sandbox loads arbitrary corpus graphs, so no fixed studio pose can
+ * The editor loads arbitrary corpus graphs, so no fixed studio pose can
  * suit them: the shipped default sat at [20, 15, 20] over a 30-unit
  * ground while `basics-compose-primitives` scatters over ±40, so the page
  * opened on content running off both edges of its own floor. Nothing

@@ -5,7 +5,7 @@ How to author pcg-ts graphs as JSON (the interchange format used by
 live in [nodes.md](./nodes.md) (generated; machine-readable twin:
 [nodes.json](./nodes.json)); at runtime the same metadata comes from
 `listNodeTypes()`. For authoring this format interactively, the
-`sandbox/` tool (`npm run examples`) is a node editor built on
+`editor/` tool (`npm run examples`) is a node editor built on
 the same metadata: registry palette (grouped by node `category`),
 connections checked by the live graph's validation, schema-driven param
 forms, live cook, JSON import/export, and in-place edits through the
@@ -507,7 +507,7 @@ version.
 
 The tree is the format, but you do not have to read it. `printFieldSpec`
 and `parseFieldText` are a bidirectional view over exactly the same tree,
-and they are what the sandbox and the CLI show. The predicate of
+and they are what the editor and the CLI show. The predicate of
 `graphs/basics-filter-by-expression.json` is 38 lines of JSON and this:
 
 ```
@@ -518,7 +518,7 @@ and they are what the sandbox and the CLI show. The predicate of
 the tree, the tree is what the graph file holds and what every
 programmatic edit touches. That is not a limitation to route around — it
 is why the view is safe. Every write path in the library edits the tree
-(`withInlineParamValue`, `applyParamPatches`, World patches, the sandbox
+(`withInlineParamValue`, `applyParamPatches`, World patches, the editor
 knobs), so a stored string would be re-printed by the first knob turn
 anyway. Normalizing costs you your spelling, the way any formatter does,
 and buys you a canonical form that no edit can invalidate.
@@ -847,7 +847,7 @@ editing the literal would (two knob positions are two fields, never one
 served twice), and a param NAME may not contain a `.`, since an editor
 addresses a field-spec param as `<nodeId>.<paramKey>.<fieldParamName>`.
 
-**A value written there IS a knob.** The sandbox's panel enumerates every
+**A value written there IS a knob.** The editor's panel enumerates every
 `param` in a node's field spec that carries one and offers a control per
 name, addressed by that three-part key; `inlineParamValuesOf(spec)` and
 `withInlineParamValue(spec, name, value)` are the read and write halves.
@@ -1030,7 +1030,7 @@ The rest of the rules, each with a reason:
   cell.
 
 The address is `"$<name>"` — one segment and a sigil, so it collides with
-neither `"<node>.<param>"` nor the sandbox's bare `"seed"`, and a graph
+neither `"<node>.<param>"` nor the editor's bare `"seed"`, and a graph
 param named `seed` is addressed `$seed` and is a different knob.
 `describeGraphParams` publishes the graph-scoped rows first, in
 declaration order, each carrying the `"<node>.<param>"` of every slot that
@@ -1476,7 +1476,7 @@ correct.
 ## Editing live graphs
 
 JSON is the interchange format, not the only way to change a graph. A
-tool that keeps one live `Graph` (as the `sandbox/` tool does)
+tool that keeps one live `Graph` (as the `editor/` tool does)
 edits it in place with the mutation API and reads it back with the
 introspection API — preserving node caches that a rebuild through
 `deserializeGraph` would discard:
@@ -3429,7 +3429,7 @@ a 256-byte floor — and
 its bind-layout plan directly, and `supportedGpuFieldFns()` lists the
 compilable fns.
 
-The sandbox shows the whole surface at once: its `cook` selector cooks
+The editor shows the whole surface at once: its `cook` selector cooks
 the graph you have open three ways — CPU, GPU per-node (a resolver
 whose `planRun` returns null), and one fused device-resident run — and
 its status line carries the wall time, the output hash and the full

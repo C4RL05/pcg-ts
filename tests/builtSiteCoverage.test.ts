@@ -1,12 +1,12 @@
 /**
  * `docs/pages/` is a COMMITTED BUILD, and nothing regenerates it.
  *
- * WHY THIS EXISTS. The sandbox enumerates the graph corpus with
+ * WHY THIS EXISTS. The editor enumerates the graph corpus with
  * `import.meta.glob` (`shared/presets.ts`), which vite resolves at BUILD
  * time — so a graph added to `graphs/` is invisible to the hosted page
  * until someone runs `npm run examples:pages` by hand. Neither `npm run
  * docs` nor CI does. Twice in one session a graph landed with its docs
- * updated to "51 graphs" / "53 graphs" while the deployed sandbox still
+ * updated to "51 graphs" / "53 graphs" while the deployed editor still
  * offered the previous count, and both times it was caught by eye rather
  * than by a gate. This is that gate.
  *
@@ -35,7 +35,7 @@
  *     raw body are separate glob entries), but sixteen emit one, because
  *     vite folds them when only one of the two is reachable. A count rule
  *     would be wrong for those and would fail on an unrelated change to
- *     how the sandbox imports.
+ *     how the editor imports.
  *
  * The fix when it fails is one command — `npm run examples:pages` — and
  * the failure message says so, because a gate that reports drift without
@@ -154,7 +154,7 @@ describe("the committed site build covers every graph", () => {
             ...stale.map((c) => `  ${c}`),
             "",
             "The graph was edited without rebuilding the committed site, so the",
-            "hosted sandbox is cooking different geometry from the file in the repo:",
+            "hosted editor is cooking different geometry from the file in the repo:",
             "",
             "  npm run examples:pages",
             "",
@@ -175,7 +175,7 @@ describe("the committed site build covers every graph", () => {
           [
             `graphs/${name}.json has no chunk in docs/pages/assets.`,
             "",
-            "The sandbox globs graphs/ at BUILD time, so the hosted page cannot see",
+            "The editor globs graphs/ at BUILD time, so the hosted page cannot see",
             "this graph until the committed site is rebuilt:",
             "",
             "  npm run examples:pages",

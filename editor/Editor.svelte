@@ -332,7 +332,7 @@
       }
     });
 
-    // A `?graph=` in the URL wins, so a link opens the sandbox on the
+    // A `?graph=` in the URL wins, so a link opens the editor on the
     // graph it names. An unknown name says so and falls back rather than
     // leaving the canvas empty.
     const params = new URLSearchParams(window.location.search);
@@ -363,7 +363,7 @@
     }
     // Otherwise a real graph with real knobs, not the empty-ish starter:
     // landing on something already working is most of what makes a
-    // sandbox one. The starter stays in the picker.
+    // editor one. The starter stays in the picker.
     if (findPreset(DEFAULT_PRESET) !== undefined) {
       void openPreset(DEFAULT_PRESET, { updateUrl: false });
       return;
@@ -856,8 +856,8 @@
     z-index: 10;
     display: flex;
     flex-direction: column;
-    color: var(--sb-ink);
-    font: 13px/1.45 var(--sb-sans);
+    color: var(--ed-ink);
+    font: 13px/1.45 var(--ed-sans);
     pointer-events: none;
   }
   /* Only the parts take the pointer; the overlay itself is a frame, and
@@ -942,9 +942,9 @@
     box-sizing: border-box;
     overflow-y: auto;
     padding: 10px 12px 12px;
-    background: var(--sb-panel);
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius-lg);
+    background: var(--ed-panel);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius-lg);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(6px);
   }
@@ -958,10 +958,10 @@
     max-height: 64px;
     overflow-y: auto;
     padding: 4px 12px;
-    border-bottom: 1px solid var(--sb-edge-err);
-    background: var(--sb-alert-bg);
-    color: var(--sb-danger);
-    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
+    border-bottom: 1px solid var(--ed-edge-err);
+    background: var(--ed-alert-bg);
+    color: var(--ed-danger);
+    font: var(--ed-t-meta) / 1.5 var(--ed-mono);
     white-space: pre-wrap;
   }
   .toast {
@@ -973,8 +973,8 @@
     max-height: 110px;
     overflow-y: auto;
     padding: 8px 14px;
-    border-radius: var(--sb-radius-lg);
-    font-size: var(--sb-t-body);
+    border-radius: var(--ed-radius-lg);
+    font-size: var(--ed-t-body);
     line-height: 1.4;
     box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
   }
@@ -984,16 +984,16 @@
      second cue matters more than usual here — with the greens and reds
      gone, a border alone would be a thin thing to tell them apart by. */
   .toast.info {
-    background: var(--sb-alert-bg);
-    border: 1px solid var(--sb-edge-ok);
-    color: var(--sb-ink);
+    background: var(--ed-alert-bg);
+    border: 1px solid var(--ed-edge-ok);
+    color: var(--ed-ink);
   }
   .toast.error {
-    background: var(--sb-alert-bg);
-    border: 1px solid var(--sb-edge-err);
+    background: var(--ed-alert-bg);
+    border: 1px solid var(--ed-edge-err);
     color: #ffffff;
-    font-family: var(--sb-mono);
-    font-size: var(--sb-t-meta);
+    font-family: var(--ed-mono);
+    font-size: var(--ed-t-meta);
   }
   /* Desktop: the drawer tabs do not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */
@@ -1033,15 +1033,15 @@
       z-index: 16;
       padding: 10px 6px;
       background: rgba(26, 26, 26, 0.94);
-      color: var(--sb-action);
-      border: 1px solid var(--sb-edge);
-      font: var(--sb-t-meta) var(--sb-sans);
+      color: var(--ed-action);
+      border: 1px solid var(--ed-edge);
+      font: var(--ed-t-meta) var(--ed-sans);
       cursor: pointer;
     }
     .drawer-tab.right {
       right: 0;
       border-right: none;
-      border-radius: var(--sb-radius) 0 0 var(--sb-radius);
+      border-radius: var(--ed-radius) 0 0 var(--ed-radius);
     }
     /* The collapsed overlay is a title bar only; the tabs would otherwise
        poke into it, because .body still has a few clipped pixels and the

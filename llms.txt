@@ -256,7 +256,7 @@ frozen snapshots with no mutation path that bypasses version bumps.
   `scope: "graph"` is `{ key: "$<name>", scope, name, readers, schema,
   value, holdsField: false, exposed: true }`, one per top-level `params`
   declaration. `key` is `"$<name>"` — one segment and a sigil, so it
-  collides with neither node shape nor the sandbox's bare `"seed"` (a
+  collides with neither node shape nor the editor's bare `"seed"` (a
   graph param named `seed` is addressed `$seed` and is a different knob).
   `readers` lists the `"<node>.<param>"` of every slot whose expression
   reads that name, and is EMPTY for a declaration nothing reads — legal,
@@ -279,7 +279,7 @@ frozen snapshots with no mutation path that bypasses version bumps.
   standard node's params, which are addressable but mostly wiring.
   `items` params and nodes with no registered schema are omitted; the
   graph's own seed is not a node param and is not in the list. The
-  sandbox builds its knobs from this, so a panel file, a shared link and
+  editor builds its knobs from this, so a panel file, a shared link and
   the CLI cannot disagree about what a param is called. From the command
   line: `pcg validate <graph.json> --params` (add `--json` for the same
   list machine-readable), which prints the graph-scoped rows first and
@@ -365,7 +365,7 @@ bidirectional view over the SAME tree. `graphs/basics-filter-by-expression`'s
 `(length(position()) < 20) * (valueNoise({ frequency: 0.06, seed: { from: "node", variant: 3 }, position: position() }) > 0.4)`.
 Text is NEVER saved: it parses to the tree, the tree is the format and is
 what every programmatic edit touches (`withInlineParamValue`,
-`applyParamPatches`, World patches, sandbox knobs), so a stored string
+`applyParamPatches`, World patches, editor knobs), so a stored string
 would be re-printed by the first edit anyway. The syntax reads like the
 TypeScript API: `+ - * /` and `< <= > >= == !=` infix with JS precedence
 and minimal parens; `attribute("density")`, `attribute("tangent", 3)`;
@@ -1854,14 +1854,14 @@ not raised.
 - docs/design.md — why the data model has the shape it has: why there are
   four domains and not three or five, why an edge is a primitive, what a
   fifth domain would have to prove to exist
-- sandbox/ — not a demo but a TOOL: it opens any corpus graph by
+- editor/ — not a demo but a TOOL: it opens any corpus graph by
   `?graph=<name>`, renders it, and gives you the node canvas, the
   per-node inspector (including field-expression specs), the authored
   param panel, a CPU/GPU cook-path switch, a lit/normals shading
   switch, and export/import. It is the human half of the
   agent-and-human ergonomics claim — start here to see what a graph
   does before writing one.
-- demos/ — THREE vite demos, sitting beside the sandbox and the graph
+- demos/ — THREE vite demos, sitting beside the editor and the graph
   corpus in `graphs/`. A demo exists only where a HOST is required to
   show the thing; anything that is one cook of one graph is a corpus
   file instead, because a graph an agent can run teaches more than a

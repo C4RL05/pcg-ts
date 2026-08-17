@@ -197,9 +197,9 @@
     flex-direction: column;
     padding: 8px;
     box-sizing: border-box;
-    background: var(--sb-solid);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius-lg);
+    background: var(--ed-solid);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius-lg);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
     backdrop-filter: blur(6px);
   }
@@ -212,18 +212,18 @@
     box-sizing: border-box;
     margin-bottom: 6px;
     padding: 4px 8px;
-    background: var(--sb-well);
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-sans);
+    background: var(--ed-well);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-sans);
   }
   .group {
     display: flex;
     align-items: center;
     gap: 5px;
     margin: 8px 0 3px;
-    color: var(--sb-ink-faint);
+    color: var(--ed-ink-faint);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.08em;
@@ -232,7 +232,7 @@
   /* `currentColor`, so the glyph is exactly as faint as the heading it
      belongs to and follows it if that grey is ever retuned. Note this is
      NOT what the node box does: there the icon is pinned to
-     `--sb-ink-mid`, deliberately a step under the title's white. Both are
+     `--ed-ink-mid`, deliberately a step under the title's white. Both are
      grey, and neither borrows the other's rule — a heading is already
      faint enough to inherit from, and a title is not. */
   .gicon {
@@ -248,10 +248,10 @@
     padding: 4px 8px;
     text-align: left;
     background: #101010;
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-mono);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-mono);
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -265,7 +265,7 @@
   }
   .empty {
     margin-top: 10px;
-    color: var(--sb-ink-faint);
-    font-size: var(--sb-t-meta);
+    color: var(--ed-ink-faint);
+    font-size: var(--ed-t-meta);
   }
 </style>

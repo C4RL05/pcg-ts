@@ -254,7 +254,7 @@
   ><!-- The pcg-ts wordmark, inlined rather than linked. `docs/logo-dark.svg`
        is the same artwork, but this page is served from two roots — the
        vite dev server at the repository root and the built site under
-       `docs/pages/sandbox/` — so any src path is right in one and broken in
+       `docs/pages/editor/` — so any src path is right in one and broken in
        the other.
 
        NOT in `icons.ts`: that module's contract is Phosphor bold in a
@@ -265,7 +265,7 @@
        sync. -->
     <svg class="mark" viewBox="0 0 1055 128" aria-hidden="true" focusable="false"
       ><g fill="currentColor" fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg
-    >Sandbox<span class="chevron" class:flip={collapsed}>▾</span></span>
+    >Editor<span class="chevron" class:flip={collapsed}>▾</span></span>
 
   <!-- Grouped by LAYER, with a hairline between groups. The two middle
        groups are the two things on screen — the render and the node
@@ -353,7 +353,7 @@
         : "frame — only while the scene is on. There is no camera to point at anything you can see."}
       >{@render icon(TOOLBAR_ICONS.frame)}</button>
     <!-- `.shade` is not decoration: the capture tooling selects
-         `.toolbar .path.shade select` to shoot the sandbox in both modes.
+         `.toolbar .path.shade select` to shoot the editor in both modes.
          Renaming it silently changes what ships in docs/; MOVING it does
          not, since that is a descendant selector and the bar is its
          ancestor either way. -->
@@ -505,8 +505,8 @@
     align-items: center;
     gap: 6px 14px;
     padding: 8px 12px;
-    background: var(--sb-panel);
-    border-bottom: 1px solid var(--sb-rule);
+    background: var(--ed-panel);
+    border-bottom: 1px solid var(--ed-rule);
     backdrop-filter: blur(6px);
     flex: 0 0 auto;
     /* Wraps at ANY width, not just on phones. A side dock is 420-640px
@@ -540,7 +540,7 @@
   /* A WORDMARK, so height is the only dimension set and the 8.24:1 box
      decides the rest — pinning a width would letterbox or stretch it.
      11px rather than the title's own size: it reads as the product name
-     the page belongs to, with `sandbox` as the louder word for which page
+     the page belongs to, with `editor` as the louder word for which page
      that is, so the mark sits one step down rather than competing. */
   .mark {
     height: 11px;
@@ -556,33 +556,33 @@
        rather than a product followed by which page of it you are on. */
     gap: 12px;
     font-weight: 600;
-    color: var(--sb-ink-hi);
+    color: var(--ed-ink-hi);
     white-space: nowrap;
   }
   label {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: var(--sb-ink-mid);
-    font-size: var(--sb-t-body);
+    color: var(--ed-ink-mid);
+    font-size: var(--ed-t-body);
   }
   input[type="number"] {
     width: 78px;
     padding: 3px 6px;
-    background: var(--sb-well);
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-mono);
+    background: var(--ed-well);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-mono);
   }
   select {
     max-width: 260px;
     padding: 3px 6px;
-    background: var(--sb-well);
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-sans);
+    background: var(--ed-well);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-sans);
   }
   /* The picker is the bar's primary control, but it may not force the bar
      wider than the dock: `min-width: 0` lets its select shrink, and the
@@ -626,12 +626,12 @@
     border-radius: 0;
   }
   .pill button:first-child {
-    border-top-left-radius: var(--sb-radius);
-    border-bottom-left-radius: var(--sb-radius);
+    border-top-left-radius: var(--ed-radius);
+    border-bottom-left-radius: var(--ed-radius);
   }
   .pill button:last-child {
-    border-top-right-radius: var(--sb-radius);
-    border-bottom-right-radius: var(--sb-radius);
+    border-top-right-radius: var(--ed-radius);
+    border-bottom-right-radius: var(--ed-radius);
     margin-left: -1px;
   }
   .pill button:hover {
@@ -655,24 +655,24 @@
      track was never the reason to drop it. */
   .legibility input {
     width: 76px;
-    accent-color: var(--sb-accent);
+    accent-color: var(--ed-accent);
   }
   /* Every button on this bar is an icon now, so the padding is square
      rather than the text token's 3px 10px — a glyph in a wide slab reads
-     as a button with something missing from it. `--sb-btn-pad` still
+     as a button with something missing from it. `--ed-btn-pad` still
      rules the text buttons everywhere else. */
   button {
     display: flex;
     padding: 4px 6px;
-    background: var(--sb-raised);
-    color: var(--sb-action);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-sans);
+    background: var(--ed-raised);
+    color: var(--ed-action);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-sans);
     cursor: pointer;
   }
   button:hover {
-    background: var(--sb-raised-hi);
+    background: var(--ed-raised-hi);
   }
   .ic {
     width: 15px;
@@ -694,23 +694,23 @@
      second is one edit away from losing. */
   button.view {
     flex: 0 0 auto;
-    background: var(--sb-tab);
-    color: var(--sb-ink-faint);
+    background: var(--ed-tab);
+    color: var(--ed-ink-faint);
   }
   button.view:hover {
-    background: var(--sb-raised-hi);
-    color: var(--sb-ink);
+    background: var(--ed-raised-hi);
+    color: var(--ed-ink);
   }
   button.view.on {
-    background: var(--sb-tab-on);
-    border-color: var(--sb-tab-on-edge);
-    color: var(--sb-ink-hi);
+    background: var(--ed-tab-on);
+    border-color: var(--ed-tab-on-edge);
+    color: var(--ed-ink-hi);
   }
   /* An `on` toggle is still a button you can press, so it answers the
      pointer too — without this the lit state outranks every hover rule
      above and the control goes dead under the cursor. */
   button.view.on:hover {
-    background: var(--sb-raised-hi);
+    background: var(--ed-raised-hi);
   }
   /**
    * The readouts. `flex-basis: auto` rather than `100%`, so they ride the
@@ -732,35 +732,35 @@
     justify-content: flex-end;
     gap: 2px 16px;
     min-width: 0;
-    font: var(--sb-t-meta) var(--sb-mono);
+    font: var(--ed-t-meta) var(--ed-mono);
   }
   .stat {
     white-space: nowrap;
   }
   .stat b {
-    color: var(--sb-figure);
+    color: var(--ed-figure);
     font-weight: 400;
   }
   /* The word that names the figure, set back so the figure carries the
      line. This is the whole trick: same information, one level of
      contrast between what changes and what labels it. */
   .stat i {
-    color: var(--sb-ink-ghost);
+    color: var(--ed-ink-ghost);
     font-style: normal;
   }
   /* A warning is dimmer than a figure, an error is the same white but its
      LABEL comes up to meet it — so the pair reads as one loud unit rather
      than one loud half. Hue used to do this; brightness does it now. */
   .stat.warn b {
-    color: var(--sb-ink-mid);
+    color: var(--ed-ink-mid);
   }
   .stat.err b {
-    color: var(--sb-danger);
+    color: var(--ed-danger);
   }
   /* A cook that errored brightens the labels too — at that point the whole
      line is reporting a failed cook, not one bad figure in a good one. */
   .status.err .stat i {
-    color: var(--sb-ink-dim);
+    color: var(--ed-ink-dim);
   }
   /* Desktop: the chevron does not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */
@@ -796,7 +796,7 @@
     .chevron {
       display: inline-block;
       margin-left: 6px;
-      color: var(--sb-ink-dim);
+      color: var(--ed-ink-dim);
       transition: transform 0.2s;
     }
     .chevron.flip {

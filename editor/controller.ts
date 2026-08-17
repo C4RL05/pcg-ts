@@ -430,7 +430,7 @@ export class EditorController {
       }
       if (isField(v)) {
         // The TEXT view, not the tree. The tree is still the format —
-         // this parses straight back to it — but nothing in the sandbox
+         // this parses straight back to it — but nothing in the editor
          // shows JSON any more, which is the whole point of having a
          // printer. A spec the printer refuses falls back to null and the
          // widget says so, rather than showing half an expression.
@@ -672,7 +672,7 @@ export class EditorController {
    * Parse a field EXPRESSION and set it on a field-capable param.
    *
    * Text, not JSON: `parseFieldText` on the way in and `printFieldSpec`
-   * on the way out (see `specText` above), so nothing in the sandbox
+   * on the way out (see `specText` above), so nothing in the editor
    * shows the serialization. The tree is still the format — this parses
    * straight to it and the graph file is unchanged — and the JSON that
    * remains in this file is the GRAPH's, moved by import and export.

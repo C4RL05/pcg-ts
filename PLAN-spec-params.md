@@ -74,7 +74,7 @@ with a node param whose name contains a dot — check whether that is
 possible before choosing the separator.
 
 **Editing a knob rewrites the spec's `value`** and calls `setParam` with
-the rewritten spec — which is a thing the sandbox already does for field
+the rewritten spec — which is a thing the editor already does for field
 params, so the write path is not new.
 
 ## Scope note

@@ -13,7 +13,7 @@
  * they are not ten equal-weight anything. Shape has no such ceiling. The
  * icon therefore spends NO colour and carries its identity entirely in
  * silhouette: it is grey, and which grey is decided by each of the two
- * places that draw it, not here. The node box pins it to `--sb-ink-mid`,
+ * places that draw it, not here. The node box pins it to `--ed-ink-mid`,
  * one step under the title's white, because a fill carries more mass than
  * a run of strokes at the same value; the node menu lets it inherit
  * `currentColor` so it is exactly as faint as the heading it sits in.

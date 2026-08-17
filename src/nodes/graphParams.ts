@@ -9,10 +9,10 @@
  * INSIDE a field expression, where nothing outside the spec names it at
  * all. The address that reaches the third — `<node>.<param>.<fieldParam>`
  * — is not derivable from any catalog, which is why finding one used to
- * mean opening the graph in the sandbox and reading a label.
+ * mean opening the graph in the editor and reading a label.
  *
  * This is the one derivation of those addresses. `pcg validate --params`
- * prints it; the sandbox builds its knobs from it, so a panel file and a
+ * prints it; the editor builds its knobs from it, so a panel file and a
  * command line cannot disagree about what a graph's params are called.
  *
  * It reports what the GRAPH says, and stops there. Whether an address gets
@@ -94,7 +94,7 @@ export interface DescribedNodeParam extends DescribedParamBase {
 /**
  * A param belonging to the GRAPH: declared once at the top level, read by
  * name from any node's expression, addressed `"$<name>"`. One segment and
- * a sigil, so it collides with neither node shape nor with the sandbox's
+ * a sigil, so it collides with neither node shape nor with the editor's
  * bare `"seed"` — and so its KIND is legible without the graph in hand,
  * where a bare name is indistinguishable from a mistyped node id.
  */
@@ -285,7 +285,7 @@ function fieldParamsOf(
  *
  * The graph's own `seed` is NOT in this list. It is a property of the
  * graph rather than of any node, it has no `<node>.<param>` address, and
- * every caller that offers it as a knob (the sandbox does, under the bare
+ * every caller that offers it as a knob (the editor does, under the bare
  * key `"seed"`) already knows where to find it.
  *
  * A node param a declaration's `targets` WRITES INTO reports

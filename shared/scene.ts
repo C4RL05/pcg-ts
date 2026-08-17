@@ -32,7 +32,7 @@ export interface SceneOptions {
   /**
    * Scene background, and the fog colour that has to match it (default
    * {@link BACKGROUND}). Optional because every demo but one wants the
-   * shared dark blue; the sandbox asks for pure black.
+   * shared dark blue; the editor asks for pure black.
    */
   background?: number;
   /**

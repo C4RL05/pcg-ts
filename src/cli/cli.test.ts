@@ -345,7 +345,7 @@ describe("pcg cli — validate", () => {
     expect(text).toContain('addressed as "seed" (currently 5)');
     // The three-part key is the whole point: nothing else in the library
     // or the docs names `lift`, and finding it used to mean opening the
-    // graph in the sandbox and reading a label.
+    // graph in the editor and reading a label.
     expect(lineFor(text, "*")).toMatch(/^\s+\*\s+dunes\.translate\.lift\s+f32\s+2\s+0\.\.9$/);
     // Its container is listed too, and says it holds an expression rather
     // than pretending to a value a knob could write.

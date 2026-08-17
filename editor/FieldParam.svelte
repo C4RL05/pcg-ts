@@ -26,7 +26,7 @@
    * right-hand edge. Type-checks clean; visibly wrong.
    *
    * Reparenting is the fix that leaves `.panel` alone: dropping the blur
-   * would change every panel in the sandbox to repair one overlay.
+   * would change every panel in the editor to repair one overlay.
    */
   function toBody(node: HTMLElement) {
     document.body.appendChild(node);
@@ -235,16 +235,16 @@
     flex: 1;
     padding: 2px 0;
     background: #101010;
-    color: var(--sb-ink-dim);
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) var(--sb-sans);
+    color: var(--ed-ink-dim);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) var(--ed-sans);
     cursor: pointer;
   }
   .modes button.active {
-    background: var(--sb-raised);
-    color: var(--sb-action);
-    border-color: var(--sb-edge);
+    background: var(--ed-raised);
+    color: var(--ed-action);
+    border-color: var(--ed-edge);
   }
   .vec {
     display: flex;
@@ -255,11 +255,11 @@
     min-width: 0;
     box-sizing: border-box;
     padding: 3px 6px;
-    background: var(--sb-well);
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-mono);
+    background: var(--ed-well);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-mono);
   }
   textarea {
     width: 100%;
@@ -267,10 +267,10 @@
     resize: vertical;
     padding: 6px;
     background: #0a0e14;
-    color: var(--sb-action);
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
+    color: var(--ed-action);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) / 1.5 var(--ed-mono);
   }
   .apply-row {
     margin-top: 4px;
@@ -281,27 +281,27 @@
      two must not read as equals. */
   .diagram {
     margin-right: 4px;
-    padding: var(--sb-btn-pad);
+    padding: var(--ed-btn-pad);
     background: #101010;
-    color: var(--sb-ink-dim);
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) var(--sb-sans);
+    color: var(--ed-ink-dim);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) var(--ed-sans);
     cursor: pointer;
   }
   .diagram:disabled {
-    color: var(--sb-ink-ghost);
+    color: var(--ed-ink-ghost);
     cursor: default;
   }
   /* The commit control: solid white, so the one button that CHANGES the
      graph is the brightest thing in the row. */
   .apply {
-    padding: var(--sb-btn-pad);
+    padding: var(--ed-btn-pad);
     background: #ffffff;
     color: #000000;
     border: 1px solid #ffffff;
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) var(--sb-sans);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) var(--ed-sans);
     cursor: pointer;
   }
   .reads {
@@ -314,7 +314,7 @@
     font: 10px/1.5 ui-monospace, monospace;
   }
   /* Modal.svelte's surface, repeated for the one thing it cannot host.
-     Kept to its look on purpose — the sandbox has ONE modal appearance,
+     Kept to its look on purpose — the editor has ONE modal appearance,
      and a second one a few pixels off would read as a bug. The WIDTH is
      the one deliberate departure: Modal wraps a textarea and 680px is
      right for prose, while a diagram of the corpus's largest expression
@@ -341,10 +341,10 @@
     flex-direction: column;
     padding: 12px 14px;
     background: #000000;
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius-lg);
-    color: var(--sb-ink);
-    font: 13px var(--sb-sans);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius-lg);
+    color: var(--ed-ink);
+    font: 13px var(--ed-sans);
   }
   .ft-head {
     display: flex;
@@ -354,12 +354,12 @@
     margin-bottom: 8px;
   }
   .ft-head button {
-    padding: var(--sb-btn-pad);
-    background: var(--sb-raised);
-    color: var(--sb-action);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-sans);
+    padding: var(--ed-btn-pad);
+    background: var(--ed-raised);
+    color: var(--ed-action);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-sans);
     cursor: pointer;
   }
   .ft-head button:hover {
@@ -374,17 +374,17 @@
     overflow: auto;
     padding: 6px;
     background: #0a0a0a;
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius);
   }
   .error {
     margin-top: 4px;
     padding: 5px 7px;
-    background: var(--sb-alert-bg);
-    border: 1px solid var(--sb-edge-err);
-    border-radius: var(--sb-radius);
+    background: var(--ed-alert-bg);
+    border: 1px solid var(--ed-edge-err);
+    border-radius: var(--ed-radius);
     color: #ffffff;
-    font: 10px/1.5 var(--sb-mono);
+    font: 10px/1.5 var(--ed-mono);
     white-space: pre-wrap;
     word-break: break-word;
   }

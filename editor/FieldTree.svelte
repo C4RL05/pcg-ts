@@ -115,30 +115,30 @@
      and a second box style would say it was something else. */
   .body {
     fill: #0e0e0e;
-    stroke: var(--sb-edge);
+    stroke: var(--ed-edge);
     stroke-width: var(--hairline, 1);
   }
   .sep {
-    stroke: var(--sb-rule);
+    stroke: var(--ed-rule);
     stroke-width: 1;
   }
   .title {
-    fill: var(--sb-ink-hi);
-    font: 600 11px var(--sb-sans);
+    fill: var(--ed-ink-hi);
+    font: 600 11px var(--ed-sans);
   }
   .rkey {
-    fill: var(--sb-ink-dim);
-    font: 9px var(--sb-mono);
+    fill: var(--ed-ink-dim);
+    font: 9px var(--ed-mono);
   }
   .rval {
-    fill: var(--sb-ink-mid);
-    font: 9px var(--sb-mono);
+    fill: var(--ed-ink-mid);
+    font: 9px var(--ed-mono);
     text-anchor: end;
   }
   /* Every pin here carries a VALUE — a field expression has no other kind
      — so the value hue is the only one this view can spend. */
   .pin {
-    fill: var(--sb-k-value);
+    fill: var(--ed-k-value);
     stroke: #000000;
     stroke-width: 1;
   }
@@ -149,12 +149,12 @@
   }
   .wire {
     fill: none;
-    stroke: var(--sb-k-value);
+    stroke: var(--ed-k-value);
     stroke-width: 1.6;
     opacity: 0.55;
   }
   .note {
-    fill: var(--sb-ink-dim);
-    font: 11px var(--sb-mono);
+    fill: var(--ed-ink-dim);
+    font: 11px var(--ed-mono);
   }
 </style>

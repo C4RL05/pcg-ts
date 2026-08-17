@@ -3,7 +3,7 @@
  * carries its own value becomes a knob, and turning it rewrites the value
  * inside the spec.
  *
- * Lives in `tests/` rather than beside the sandbox because the browser
+ * Lives in `tests/` rather than beside the editor because the browser
  * pages are outside vitest's `src/**` include, and because this crosses
  * three modules: the grammar's rewrite helpers, the editor controller that
  * enumerates and writes, and the panel builder that turns the result into
@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Field } from "pcg-ts";
-import { EditorController } from "../sandbox/controller.js";
+import { EditorController } from "../editor/controller.js";
 import {
   buildKnobPanel,
   knobTargets,

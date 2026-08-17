@@ -4,7 +4,7 @@
  *
  * The schema used to be enforced only at the SERIALIZATION boundary —
  * `serializeGraph` / `deserializeGraph` — which meant a graph built,
- * patched and cooked entirely in memory (a host, the sandbox, a test, an
+ * patched and cooked entirely in memory (a host, the editor, a test, an
  * agent driving the API) never met the check at all. A value the JSON
  * reader would refuse cooked happily, and the damage surfaced at some
  * node downstream, or in a renderer, or never. These tests pin the check

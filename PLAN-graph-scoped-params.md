@@ -48,7 +48,7 @@ DERIVED value: it wants
 `{"fn":"mul","args":[{"fn":"param","name":"trussHalfWidth"},1.4142135623730951]}`.
 `also` writes one value verbatim to N addresses (`mirrorsFor` at
 `shared/graphUi.ts:426-454` performs no transformation, and
-`sandbox/Overview.svelte:144-157` commits `c.value` unchanged), so it can
+`editor/Overview.svelte:144-157` commits `c.value` unchanged), so it can
 never express a relation. **A name can appear inside an expression; a
 mirror can only be assigned.** That is the whole argument for binding a
 name rather than broadening `also`.
@@ -290,7 +290,7 @@ Two adjacent cases, decided the other way:
 ## 4. Addressing — one segment, with a sigil
 
 `describeGraphParams` publishes two shapes today, `"<node>.<param>"` and
-`"<node>.<param>.<fieldParam>"`, plus the sandbox's bare `"seed"`, which is
+`"<node>.<param>.<fieldParam>"`, plus the editor's bare `"seed"`, which is
 safe only because "knob keys always contain a dot"
 (`shared/graphUi.ts:186-188`).
 
@@ -340,7 +340,7 @@ export type DescribedGraphParam = DescribedNodeParam | DescribedGraphScopedParam
 `key`, `schema`, `value`, `holdsField` and `exposed` stay on the base. The
 union breaks every consumer that reads `.node` under `tsc --noEmit`, and
 **that break is the feature**: there are exactly two such consumers
-(`sandbox/controller.ts:462` and `src/cli/commands.ts:305`) and each has to
+(`editor/controller.ts:462` and `src/cli/commands.ts:305`) and each has to
 decide what it prints for a knob with no node.
 
 `readers` is free — the scan of §2 already computes it — and it is what
@@ -361,8 +361,8 @@ Ordering: graph-scoped params come first, in declaration order, before any
 node. They are graph-level, like `seed`, and a reader scanning
 `--params` wants the shared knobs at the top.
 
-**The sandbox write is the simplest of the three.** `KnobTarget` gains the
-same union, and `writeKnob` (`sandbox/controller.ts:560`) gains a branch
+**The editor write is the simplest of the three.** `KnobTarget` gains the
+same union, and `writeKnob` (`editor/controller.ts:560`) gains a branch
 above the existing two:
 
 ```ts
@@ -442,7 +442,7 @@ strings.
 A worthwhile follow-on, not in scope: `buildKnobPanel` could report an
 `also` row whose every address is field-capable and currently equal, since
 that row is a graph-scoped param waiting to be written. `also` has no test
-coverage today (`tests/sandboxKnobs.test.ts` never mentions it), which
+coverage today (`tests/editorKnobs.test.ts` never mentions it), which
 should be fixed by whichever change touches it.
 
 ## 7. The GPU half — inherited, not new
@@ -487,7 +487,7 @@ error already names the count and the fix.
 6. **CLI** — `src/cli/commands.ts`: `graphParamRow` (305-335) narrowing on
    `scope`, and `validateCommand`'s header (377-389) gaining a graph-param
    line beside the existing seed line. `--json` carries the union.
-7. **Sandbox** — `sandbox/controller.ts`: `knobs()` (462), `writeKnob`
+7. **Editor** — `editor/controller.ts`: `knobs()` (462), `writeKnob`
    (560), and nothing else; `applyKnobPatch` (498) and `setSeed` (397) are
    untouched. `shared/graphUi.ts`: `KnobTarget` (112), `Knob` (125), the
    default section title for graph-level knobs, `PanelControlSpec.param`'s
@@ -526,7 +526,7 @@ error already names the count and the fix.
 - **It does not change when an unbound `param` fails.** An unbound
   reference in a top-level graph can never be bound and so always throws at
   evaluate, which means refusing it at deserialize would be strictly better
-  — and is still not done, because the sandbox deserializes a graph in
+  — and is still not done, because the editor deserializes a graph in
   order to EDIT it, and a graph mid-edit would become unopenable. That
   improvement is separable and wants its own decision.
 - **It does not let a graph param hold an expression** (§1).
@@ -562,7 +562,7 @@ fatal on its own:
    instances; a whole-graph wrapper has exactly one.
 4. **Everything that names a node gains an indirection** — outputs, the
    node inspector, `describeGraphParams`' addresses, a World's terminals —
-   and the sandbox would have to open the body to edit anything, which is
+   and the editor would have to open the body to edit anything, which is
    what the `also` workaround was avoiding.
 
 **Bind at cook time; bind at evaluate time.** §2, both with their reasons;
@@ -629,7 +629,7 @@ graph's.
 - GPU: an expression reading a graph-scoped param compiles to a uniform
   slot, two values share one kernel, and a fused run behaves as it does for
   an inline param.
-- The sandbox: a `$` knob renders from the derived schema with no panel
+- The editor: a `$` knob renders from the derived schema with no panel
   file, a panel row addressing `$name` writes through one call, and a share
   link replays it.
 

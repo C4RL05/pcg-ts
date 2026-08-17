@@ -85,10 +85,10 @@
     flex-direction: column;
     padding: 12px 14px;
     background: #000000;
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius-lg);
-    color: var(--sb-ink);
-    font: 13px var(--sb-sans);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius-lg);
+    color: var(--ed-ink);
+    font: 13px var(--ed-sans);
   }
   .head {
     display: flex;
@@ -102,12 +102,12 @@
     gap: 6px;
   }
   button {
-    padding: var(--sb-btn-pad);
-    background: var(--sb-raised);
-    color: var(--sb-action);
-    border: 1px solid var(--sb-edge);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-body) var(--sb-sans);
+    padding: var(--ed-btn-pad);
+    background: var(--ed-raised);
+    color: var(--ed-action);
+    border: 1px solid var(--ed-edge);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-body) var(--ed-sans);
     cursor: pointer;
   }
   /* The button that commits the paste, solid white against the outlined
@@ -126,10 +126,10 @@
     resize: vertical;
     padding: 8px;
     background: #0a0a0a;
-    color: var(--sb-ink);
-    border: 1px solid var(--sb-rule);
-    border-radius: var(--sb-radius);
-    font: var(--sb-t-meta) / 1.5 var(--sb-mono);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-rule);
+    border-radius: var(--ed-radius);
+    font: var(--ed-t-meta) / 1.5 var(--ed-mono);
     white-space: pre;
   }
   .error {
@@ -137,9 +137,9 @@
     max-height: 120px;
     overflow-y: auto;
     padding: 6px 8px;
-    background: var(--sb-alert-bg);
-    border: 1px solid var(--sb-edge-err);
-    border-radius: var(--sb-radius);
+    background: var(--ed-alert-bg);
+    border: 1px solid var(--ed-edge-err);
+    border-radius: var(--ed-radius);
     color: #ffffff;
     font: 11px/1.5 ui-monospace, monospace;
     white-space: pre-wrap;

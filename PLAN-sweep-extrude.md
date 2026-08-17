@@ -26,7 +26,7 @@ topology a swept surface needs (`src/data/geometry.ts:17-25`),
 `createTriangleMesh` already stamps `primtype = "poly"`
 (`geometry.ts:111-146`), `toBufferGeometry` already exports `poly`
 primitives to three and already fan-triangulates n-gons
-(`src/three/convert.ts:357-387`), and the sandbox already draws one
+(`src/three/convert.ts:357-387`), and the editor already draws one
 geometry's `poly` and `polyline` primitives side by side in a single
 item (`shared/draw.ts:157-170`). **A node that returns a
 `createTriangleMesh` result is visible with no change to `src/three`
@@ -282,7 +282,7 @@ not one on resampled path points.
 `trussChords`, `trussBraces`, `trussCorners`, `wrapMerged`. Three of them
 sit *downstream of* a `pathSegments`, so with sweeps they would delete
 the very surface just built. **This is not a blocker**, because
-`sandbox/main.ts:222-232` iterates every item of an output
+`editor/main.ts:222-232` iterates every item of an output
 collection and calls `drawItem` per item — a `forEach` emitting 16 mesh
 items renders fine. The three merges get deleted and each output becomes
 a multi-item collection. `PLAN.md:144-147` already carries "a

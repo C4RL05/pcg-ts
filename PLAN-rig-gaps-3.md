@@ -96,7 +96,7 @@ without saying what to do instead** — captured in gap 8.
    attribute names and even non-field `vec3`s are all structurally out of reach
    — this is a whole half of the format, not one integer.
    *What the author writes today:* the number N times, plus an `also` row in a
-   panel file that only the sandbox reads, and which the plan doc itself admits
+   panel file that only the editor reads, and which the plan doc itself admits
    drifts when the graph is edited through the node inspector.
    *The mechanism:* the subgraph/`forEach` exposed-param form already does this
    correctly — `params: [{name, targets: [{node, param}]}]`, resolved by
@@ -278,7 +278,7 @@ without saying what to do instead** — captured in gap 8.
    *What the author writes today:* counts the occurrences by eye, in JSON.
    *The mechanism:* `paramScan` already walks to each reference; report both
    numbers ("9 slots, 18 readings"). Small, but this listing is the library
-   function the sandbox and the CLI now share precisely so that one derivation
+   function the editor and the CLI now share precisely so that one derivation
    answers everyone — and it currently under-reports the thing it exists to
    demonstrate.
 

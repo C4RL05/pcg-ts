@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>pcg-ts — 01 sandbox</title>
+  <title>pcg-ts — editor</title>
   <style>
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
     /* The editor is a full-bleed overlay now, so there is nothing
@@ -33,85 +33,85 @@
      *   marks — blue sits under even the 3.0 large-text floor. Only the
      *   top three are spent here, and the bottom three are left unspent:
      *   an unspent hue is not a failure, spending one on nothing is.
-     *   · `--sb-select` GREEN — which node am I editing. The first hue,
+     *   · `--ed-select` GREEN — which node am I editing. The first hue,
      *     and still the one a glance across the canvas needs most.
-     *   · `--sb-k-instances` CYAN — the terminal a graph is built to
+     *   · `--ed-k-instances` CYAN — the terminal a graph is built to
      *     reach. One dot on one node type in a whole graph.
-     *   · `--sb-k-value` YELLOW — a constant entering the graph. Same
+     *   · `--ed-k-value` YELLOW — a constant entering the graph. Same
      *     rarity: one dot, one node type.
      *
      * WHAT STAYS MONO, and why each is not a hue:
      *   · state (error / warn / ok) — BORDER BRIGHTNESS, loudest for an
      *     error, plus the monospace face the error styles already used.
-     *   · `--sb-k-geometry` — the substrate. Every input pin in the
+     *   · `--ed-k-geometry` — the substrate. Every input pin in the
      *     shipped library is geometry and every edge in the graph corpus
      *     is geometry->geometry (445 of 445, measured across `graphs/`),
      *     so a hue here would tint the canvas rather than mark anything.
-     *   · `--sb-k-any` — a WILDCARD, not a kind. It matches whatever it
+     *   · `--ed-k-any` — a WILDCARD, not a kind. It matches whatever it
      *     meets at `connect` time, so giving it a hue would assert a kind
      *     it does not have. Grey is the honest answer.
      *   · a field vs a constant — white against grey.
      *
      * `shared/Controls.svelte` is deliberately NOT converted:
      * four other demos render it, and it inherits enough from these that
-     * the sandbox reads as one surface anyway.
+     * the editor reads as one surface anyway.
      */
     :root {
       /* surfaces */
-      --sb-panel: rgba(0, 0, 0, 0.92);      /* over the live render */
-      --sb-solid: rgba(0, 0, 0, 0.97);      /* over the render AND itself */
-      --sb-well: #0c0c0c;                   /* inside an input */
-      --sb-raised: #1a1a1a;                 /* a button at rest */
-      --sb-raised-hi: #2e2e2e;              /* a button under the pointer */
+      --ed-panel: rgba(0, 0, 0, 0.92);      /* over the live render */
+      --ed-solid: rgba(0, 0, 0, 0.97);      /* over the render AND itself */
+      --ed-well: #0c0c0c;                   /* inside an input */
+      --ed-raised: #1a1a1a;                 /* a button at rest */
+      --ed-raised-hi: #2e2e2e;              /* a button under the pointer */
 
       /* lines. Two tiers: one between PANELS, a softer one between rows. */
-      --sb-rule: #2b2b2b;
-      --sb-rule-soft: #1c1c1c;
-      --sb-edge: #3f3f3f;                   /* the border of a control */
+      --ed-rule: #2b2b2b;
+      --ed-rule-soft: #1c1c1c;
+      --ed-edge: #3f3f3f;                   /* the border of a control */
 
       /* ink, brightest to faintest */
-      --sb-ink-hi: #ffffff;
-      --sb-ink: #e8e8e8;
-      --sb-ink-mid: #b6b6b6;
-      --sb-ink-dim: #909090;
-      --sb-ink-faint: #6e6e6e;
-      --sb-ink-ghost: #4f4f4f;
-      --sb-action: #ffffff;                 /* text on a button */
-      --sb-figure: #ffffff;                 /* a number worth reading */
-      --sb-danger: #ffffff;                 /* loud by weight, not by hue */
+      --ed-ink-hi: #ffffff;
+      --ed-ink: #e8e8e8;
+      --ed-ink-mid: #b6b6b6;
+      --ed-ink-dim: #909090;
+      --ed-ink-faint: #6e6e6e;
+      --ed-ink-ghost: #4f4f4f;
+      --ed-action: #ffffff;                 /* text on a button */
+      --ed-figure: #ffffff;                 /* a number worth reading */
+      --ed-danger: #ffffff;                 /* loud by weight, not by hue */
 
       /* state, told apart by how bright the border is */
-      --sb-alert-bg: #121212;
-      --sb-edge-err: #ffffff;
-      --sb-edge-warn: #8f8f8f;
-      --sb-edge-ok: #5a5a5a;
+      --ed-alert-bg: #121212;
+      --ed-edge-err: #ffffff;
+      --ed-edge-warn: #8f8f8f;
+      --ed-edge-ok: #5a5a5a;
 
       /* Pin kinds, and the cables that carry them. The two RARE kinds
          take a hue; the substrate and the wildcard stay grey. See the
          note above for which is which and why. */
-      --sb-k-instances: #00ffff;            /* 16.8:1 on black */
-      --sb-k-value: #ffff00;                /* 19.6:1 on black */
-      --sb-k-geometry: #c4c4c4;             /* the substrate — mono */
-      --sb-k-any: #6a6a6a;                  /* a wildcard — mono */
-      --sb-select: #00ff00;                 /* the node you are editing */
+      --ed-k-instances: #00ffff;            /* 16.8:1 on black */
+      --ed-k-value: #ffff00;                /* 19.6:1 on black */
+      --ed-k-geometry: #c4c4c4;             /* the substrate — mono */
+      --ed-k-any: #6a6a6a;                  /* a wildcard — mono */
+      --ed-select: #00ff00;                 /* the node you are editing */
 
       /* tab bars — the sidebar's and the knob panel's, kept identical */
-      --sb-tab: #101010;
-      --sb-tab-on: #262626;
-      --sb-tab-on-edge: #4a4a4a;
+      --ed-tab: #101010;
+      --ed-tab-on: #262626;
+      --ed-tab-on-edge: #4a4a4a;
 
       /* native widget tint (sliders, checkboxes) and the focus ring */
-      --sb-accent: #ffffff;
-      --sb-focus: #ffffff;
-      --sb-grid-bg: #0a0a0a;
+      --ed-accent: #ffffff;
+      --ed-focus: #ffffff;
+      --ed-grid-bg: #0a0a0a;
 
       /* type. Three sizes, and no fourth: 11 names things, 12 is prose and
          controls, 14 titles a panel. */
-      --sb-mono: ui-monospace, monospace;
-      --sb-sans: system-ui, sans-serif;
-      --sb-t-meta: 11px;
-      --sb-t-body: 12px;
-      --sb-t-title: 14px;
+      --ed-mono: ui-monospace, monospace;
+      --ed-sans: system-ui, sans-serif;
+      --ed-t-meta: 11px;
+      --ed-t-body: 12px;
+      --ed-t-title: 14px;
 
       /**
        * geometry — TWO radii, and no third.
@@ -120,14 +120,20 @@
        * and none of them meaning anything by being different. One radius
        * for things you click or type into, one for floating surfaces.
        */
-      --sb-radius: 4px;                     /* buttons, inputs, tabs */
-      --sb-radius-lg: 8px;                  /* panels, menus, the modal */
-      --sb-btn-pad: 3px 10px;
+      --ed-radius: 4px;                     /* buttons, inputs, tabs */
+      --ed-radius-lg: 8px;                  /* panels, menus, the modal */
+      --ed-btn-pad: 3px 10px;
     }
   </style>
+  <script type="module" crossorigin src="../assets/editor-7PUzmPIN.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/mobile-BNVzpA-x.js">
+  <link rel="modulepreload" crossorigin href="../assets/OrbitControls-BRJuR8Z9.js">
+  <link rel="modulepreload" crossorigin href="../assets/scene-1yzHrewc.js">
+  <link rel="modulepreload" crossorigin href="../assets/debug-CSycFCoi.js">
+  <link rel="modulepreload" crossorigin href="../assets/preload-helper-HclGiUj8.js">
+  <link rel="stylesheet" crossorigin href="../assets/editor-dryah0J_.css">
 </head>
 <body>
   <div id="editor"></div>
-  <script type="module" src="./main.ts"></script>
 </body>
 </html>

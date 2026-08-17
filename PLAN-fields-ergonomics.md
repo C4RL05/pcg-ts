@@ -418,13 +418,13 @@ cook; a zero ray direction MISSES that point and is counted by
 
 ### D. Visibility and reuse
 
-**D1 — render the field tree as a node diagram in the sandbox,
+**D1 — render the field tree as a node diagram in the editor,
 read-only.** Costed. Today a field param is a raw JSON `<textarea rows=7>`
-in `sandbox/FieldParam.svelte:131`, and on the canvas it collapses to one
-row reading `ƒ mul` (`sandbox/model.ts:82-92`). `1154bd7` added knobs over
+in `editor/FieldParam.svelte:131`, and on the canvas it collapses to one
+row reading `ƒ mul` (`editor/model.ts:82-92`). `1154bd7` added knobs over
 inline `param` values, not a viewer.
 
-`sandbox/autoLayout.ts:478` is **hard-wired** to `NodeView`/`EdgeView`
+`editor/autoLayout.ts:478` is **hard-wired** to `NodeView`/`EdgeView`
 (`nodeHeight` at :509, `slot.node.inputs/outputs` at :520-525, fixed
 `NODE_W` at :575). But a spec tree is a DAG, so the cheap path is a
 spec→`{nodes, edges}` adapter minting synthetic ids rather than a second
@@ -448,7 +448,7 @@ sub-registry is still closed.
 lines that **nothing else on this list can remove**. Graph-scoped params
 share a value across nodes; A3 shares a subexpression within one
 expression; only D3 shares an expression across nodes. Still expensive
-(two authoring surfaces, an inlining pass, sandbox work) and still gated
+(two authoring surfaces, an inlining pass, editor work) and still gated
 on decision §7.4.
 
 ### E. Framing
@@ -470,7 +470,7 @@ understanding the model, not about line count.
 | --- | --- | --- | --- |
 | ~~E1~~ | docs framing — lead with `Field<T>`, not the JSON | — | **SHIPPED** `a3d3b94` |
 | ~~C1~~ | state the capability rule | — | **SHIPPED** `a3d3b94` |
-| ~~D1~~ | sandbox read-only field-tree view | — | **SHIPPED** `5bb3301` |
+| ~~D1~~ | editor read-only field-tree view | — | **SHIPPED** `5bb3301` |
 | ~~C2~~ | flip the default over the candidate params | — | **SHIPPED** — 23 done, 4 refused by rule |
 | ~~B2~~ | text syntax — parse + print, tree stays the format | — | **SHIPPED** |
 | A3 | subexpression binding | medium | **MOVED** to `PLAN.md` Backlog |
@@ -497,7 +497,7 @@ the reason it was picked: the only one that makes an expression legible
 without changing the format, and it cannot be wrong, because a read-only
 view has no correctness stake. It cost the library one export —
 `specChildEntries`, the labelled form of the walk `specChildren` already
-did — rather than the sandbox duplicating the grammar's five child
+did — rather than the editor duplicating the grammar's five child
 positions, which is what the plan's own D1 note had left open.
 
 Worth recording, because it argues for another entry on this list: the
@@ -528,9 +528,9 @@ number computed over the wrong set. Six of the eight worst A3 cases are in
 two most complex graphs. Demand tracks complexity, the corpus is expected
 to gain more complex examples, and the backlog entry says so.
 
-The obvious FOLLOW-ON, deliberately not done here: the sandbox still
+The obvious FOLLOW-ON, deliberately not done here: the editor still
 shows a JSON textarea. `printFieldSpec` is what it should show, beside
-the D1 diagram — that is a `sandbox/` change with no library risk, and it
+the D1 diagram — that is a `editor/` change with no library risk, and it
 is where B2's value actually reaches a reader.
 
 ### Verification per unit
@@ -588,7 +588,7 @@ and D3 qualify; E1 and C1 do not.
    rather than a preference: **every write path in this library already
    edits the tree.** `withInlineParamValue(spec: FieldSpec, …): FieldSpec`
    is tree-in tree-out, and its callers are `src/runtime/world.ts`,
-   `src/runtime/patches.ts`, `src/worker/host.ts` and the sandbox's knobs;
+   `src/runtime/patches.ts`, `src/worker/host.ts` and the editor's knobs;
    `applyParamPatches` is the same shape, as is everything the
    agent-ergonomics pillar rests on. So storing the string as the authored
    form would advertise a guarantee the library breaks on first contact —
@@ -600,7 +600,7 @@ and D3 qualify; E1 and C1 do not.
    WHAT IT COSTS is the author's specific spelling — redundant parens,
    `sub(1, p)` printed back as `1 - p` — which is what every formatter
    costs and what authors accept from them. The original worry, that "the
-   first sandbox save silently destroys what someone wrote", was really
+   first editor save silently destroys what someone wrote", was really
    about a save that hands back raw JSON; with a canonical printer it
    becomes "reformats what you wrote", and JSON is never shown again.
 

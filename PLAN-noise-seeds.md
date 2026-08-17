@@ -206,7 +206,7 @@ multiply:
   "value": 0 } ] }
 ```
 
-Those six are addresses `describeGraphParams` reports and the sandbox
+Those six are addresses `describeGraphParams` reports and the editor
 puts on a panel. A design that made `variant` a bare integer would delete
 six working knobs, so:
 

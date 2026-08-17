@@ -95,7 +95,7 @@ The browser pages. One vite app rooted at the repository root
 a parent — these are three different kinds of thing and the old single
 `examples/` directory hid that:
 
-- `sandbox/` — a TOOL, not a demo: it opens any graph in `graphs/` and
+- `editor/` — a TOOL, not a demo: it opens any graph in `graphs/` and
   edits it live. It carried a `01-` prefix once, which is exactly what
   made it read as the first demo
 - `demos/` — `infinite-world`, `galaxy`, `gpu-world`. Unnumbered on
@@ -103,7 +103,7 @@ a parent — these are three different kinds of thing and the old single
   shows needs a host — a streamed world, a device-resident renderer
 - `graphs/` — the graph corpus: test fixtures, documentation source and
   teaching material at once. `graphs/panels/` carries the optional
-  presentation spec the sandbox reads for a graph
+  presentation spec the editor reads for a graph
 - `preview/` — the page `scripts/preview.mjs` drives. It shares its
   directory with that script's output, which is why `.gitignore` re-admits
   its two source files by name
@@ -115,7 +115,7 @@ a parent — these are three different kinds of thing and the old single
 - `npm run build` — build the library (subpath exports: `.`, `./three`)
 - `npm run check` — `tsc --noEmit`; needs a current `dist/` first, because
   the browser pages import `pcg-ts` by package name
-- `npm run examples` — vite dev server for the sandbox and the demos
+- `npm run examples` — vite dev server for the editor and the demos
 - `npm run preview -- <graph.json>` — render any serialized graph from
   fixed camera poses (hero / ground / top) into `preview/`, with a JSON
   sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a

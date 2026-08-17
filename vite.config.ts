@@ -5,7 +5,7 @@ import { defineConfig } from "vite";
 const here = (path: string): string => fileURLToPath(new URL(path, import.meta.url));
 
 // The repository root is the vite project root, because the pages it serves
-// no longer share a parent: the sandbox is a tool (`sandbox/`), the demos are
+// no longer share a parent: the editor is a tool (`editor/`), the demos are
 // hosts for things that need one (`demos/*/`), and the preview page is a
 // render target for `scripts/preview.mjs` (`preview/`). Source is imported
 // directly (no build step) via aliases so every page exercises the current
@@ -31,7 +31,7 @@ export default defineConfig({
     // path is inside the root, `emptyOutDir` defaults to true there: a bare
     // `vite build` would delete the published build. Naming the Pages output
     // here means the destructive default is never reachable.
-    // NOT "docs/demos": this holds the sandbox, the three demos and their
+    // NOT "docs/demos": this holds the editor, the three demos and their
     // shared index, so naming it after one of the three was wrong twice
     // over. It also cannot be named after any SOURCE directory — vite
     // roots at the repository root, so the output mirrors the repo, and
@@ -40,7 +40,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: here("index.html"),
-        sandbox: here("sandbox/index.html"),
+        editor: here("editor/index.html"),
         "infinite-world": here("demos/infinite-world/index.html"),
         galaxy: here("demos/galaxy/index.html"),
         "gpu-world": here("demos/gpu-world/index.html"),

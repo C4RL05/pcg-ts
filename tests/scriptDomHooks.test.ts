@@ -2,7 +2,7 @@
  * Cross-check between the CSS class hooks `scripts/*.mjs` queries in the
  * browser pages and the classes those pages actually render.
  *
- * WHY THIS EXISTS. `scripts/capture-demos.mjs` drives the sandbox and the
+ * WHY THIS EXISTS. `scripts/capture-demos.mjs` drives the editor and the
  * three hosted demos through their own markup -- `.toolbar .status` to read
  * the cook state, `.toolbar .path.cook select` to switch cook paths,
  * `.toolbar button.view` to cycle the view -- and none of it is typechecked
@@ -17,7 +17,7 @@
  * WHAT THIS CHECKS. Every class token named in a selector literal passed to
  * `.querySelector`, `.querySelectorAll`, `.waitForSelector` or puppeteer's
  * `.$` inside scripts/**\/*.mjs must appear as a class SOMEWHERE in the
- * Svelte/TS/HTML sources under sandbox/, demos/ and shared/ -- as a
+ * Svelte/TS/HTML sources under editor/, demos/ and shared/ -- as a
  * class="..." / class:name attribute, or set programmatically via
  * `.className` or `.classList.add/toggle(...)`. (`preview/` is excluded:
  * only preview/index.html and preview/main.ts are tracked, the rest of
@@ -32,7 +32,7 @@
  *     the wrong element reads as fine here. That gap is not hypothetical:
  *     writing this file is what turned up `.panel .stat` in
  *     capture-demos.mjs, which had been matching NOTHING since `.panel`
- *     went to the sandbox's docked panels and `.stat` to the toolbar's
+ *     went to the editor's docked panels and `.stat` to the toolbar's
  *     status line -- two elements that never nest. Both classes existed,
  *     so a check of this shape passed it. The selector is now
  *     `.status .stat` and the script throws when a scrape comes back
@@ -62,7 +62,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPTS_DIR = join(ROOT, "scripts");
-const SOURCE_DIRS = ["sandbox", "demos", "shared"].map((d) => join(ROOT, d));
+const SOURCE_DIRS = ["editor", "demos", "shared"].map((d) => join(ROOT, d));
 
 function walk(dir: string, exts: readonly string[]): string[] {
   const out: string[] = [];
@@ -143,7 +143,7 @@ function knownClasses(files: readonly string[]): Set<string> {
 
 const known = knownClasses(sourceFiles);
 
-describe("scripts' DOM hooks still exist in sandbox/demos/shared", () => {
+describe("scripts' DOM hooks still exist in editor/demos/shared", () => {
   it("found selector hooks in scripts/ to check", () => {
     // An empty list would make every `it` below vacuous -- the same guard
     // tests/scriptsSyntax.test.ts keeps on its own file count.
@@ -167,7 +167,7 @@ describe("scripts' DOM hooks still exist in sandbox/demos/shared", () => {
         throw new Error(
           [
             `no class="${hook.cls}" (or class:${hook.cls}, or a classList call naming it) found`,
-            "under sandbox/, demos/ or shared/, but this selector queries it:",
+            "under editor/, demos/ or shared/, but this selector queries it:",
             `  ${displayName(hook.file)}: "${hook.selector}"`,
             "",
             "Either the markup renamed or removed the hook and the script needs updating,",
