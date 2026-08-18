@@ -179,19 +179,35 @@ const DEMOS = [
     // recooks in full, because a node holds one memo slot.
     settle: async () => {
       const line = () => document.querySelector(".toolbar .status")?.textContent ?? "";
+      /**
+       * The COOK state, not the whole line. `fps` ticks every 500 ms — the
+       * same volatility the pixel-stability check excludes the overlay for —
+       * so "the text differs" is satisfied long before a cook lands, and a
+       * wait keyed to it returns on an fps tick instead. Each step then runs
+       * ahead of the cook it was waiting for, and the shot is whatever cook
+       * happens to be showing when `ready` next passes. This produced a
+       * `0 / 6 cooked / cached` figure with no dispatches at all, under a
+       * caption about what the device dispatched.
+       */
+      const cook = () => {
+        const t = line();
+        return [/cook [\d.]+ ms/, /\d+ \/ \d+ cooked \/ cached/, /\d+ disp/, /hash [0-9a-f]{8}/]
+          .map((re) => (t.match(re) ?? [""])[0])
+          .join("|");
+      };
       const changedFrom = async (before) => {
         for (let i = 0; i < 1800; i++) {
-          const t = line();
-          if (t !== before && /hash [0-9a-f]{8}/.test(t)) return t;
+          const c = cook();
+          if (c !== before && /hash [0-9a-f]{8}/.test(c)) return c;
           await new Promise((r) => setTimeout(r, 100));
         }
         throw new Error("the status line never settled after a cook");
       };
-      let before = line();
+      let before = cook();
       setSelectByValue(".toolbar .path.cook select", "gpu-fused");
       await changedFrom(before);
       for (const step of [1, -1]) {
-        before = line();
+        before = cook();
         const seed = document.querySelector('.toolbar input[type="number"]');
         seed.value = String(Number(seed.value) + step);
         seed.dispatchEvent(new Event("change", { bubbles: true }));
@@ -204,12 +220,19 @@ const DEMOS = [
     // a hash alone would also match the CPU cook it replaced. The toast
     // clause is the one above: here it would show the CPU hash from the
     // opening cook beside the fused hash on the status line.
+    //
+    // A NONZERO dispatch count, not merely the counter's presence. A cook
+    // that was entirely a cache hit still prints `0 disp`, and this figure
+    // exists to show the device doing the work — so the one state it must
+    // never photograph is the one `/\d+ disp/` used to accept. The settle
+    // above lands on a cold cook and the page stays there, so requiring it
+    // costs nothing and fails loudly if that ever stops being true.
     ready: () => {
       const status = document.querySelector(".toolbar .status");
       const text = status ? status.textContent || "" : "";
       return (
         /hash [0-9a-f]{8}/.test(text) &&
-        /\d+ disp/.test(text) &&
+        /[1-9]\d* disp/.test(text) &&
         !document.querySelector(".toast")
       );
     },
