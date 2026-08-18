@@ -113,19 +113,56 @@
 
   /* ---------- hero ---------- */
   header { border-bottom: 1px solid var(--line); }
-  .hero { position: relative; }
-  .hero canvas { display: block; width: 100%; height: 340px; }
-  .hero-overlay {
+  /* The hero is sized by its CONTENT, with the field stretched behind it,
+     rather than the field being a fixed 340px band and the title centred
+     over it absolutely. The lockup keeps the artwork's aspect ratio, so its
+     height is a function of the viewport width — a fixed band would crop it
+     or leave a gap at every width but one. */
+  .hero { position: relative; min-height: 260px; }
+  .hero canvas {
     position: absolute; inset: 0;
-    display: flex; flex-direction: column; justify-content: center;
-    pointer-events: none;
+    display: block; width: 100%; height: 100%;
   }
+  .hero-overlay { position: relative; padding: 40px 0 30px; }
   .hero-overlay .wrap { width: 100%; }
   .hero-title {
     margin: 0;
     line-height: 0;
     color: var(--ink);
   }
+  /* Out of sight, kept in the accessibility tree. The lockup is a canvas
+     and a field of glyph outlines, so without this the page's only <h1>
+     would contain no text at all. */
+  .hero-title .vh {
+    position: absolute; width: 1px; height: 1px;
+    margin: -1px; padding: 0; border: 0;
+    clip-path: inset(50%); overflow: hidden; white-space: nowrap;
+  }
+  /* ---------- the animated lockup ---------- */
+
+  /* Two surfaces stacked in one box, so they cannot drift apart: a canvas
+     for the wordmark, which is sliced and channel-split every frame — that
+     is blitting rather than clipping — and an SVG for the split-flap board,
+     where flipping a character is one href write against an outline that is
+     already parsed, which is what lets the board run with no font anywhere.
+     Driven by docs/logo/logo.js; the static wordmark beside it is what a
+     browser that cannot run the module keeps. */
+  .lockup {
+    display: block;
+    position: relative;
+    width: min(100%, 1055px);
+    aspect-ratio: 1055 / 245;
+  }
+  .lockup > canvas, .lockup > svg {
+    position: absolute; inset: 0;
+    display: block; width: 100%; height: 100%;
+  }
+  /* The board's three states. Greyscale like the rest of the page: the
+     primaries are spent on the field's marks behind it, never here. */
+  .lockup .cell { fill: var(--ink-hi); }
+  .lockup .cell.roll { fill: var(--muted); opacity: 0.68; }
+  .lockup .cell.corrupt { fill: var(--muted); }
+  .lockup .cell.blank { visibility: hidden; }
   /* The wordmark ships white on transparent, which is invisible on the
      light scheme, so it is INLINED rather than linked: `fill:
      currentColor` lets it take --ink and stay legible in both. An <img>
@@ -139,6 +176,13 @@
     max-width: 100%;
     fill: currentColor;
   }
+  /* AFTER both of the rules above, deliberately. `hidden` is a UA rule at
+     the lowest specificity there is, and each of them sets `display` from a
+     class selector — which outranks it outright. This one only TIES with
+     `.hero-title .wordmark`, so it has to come later to win, and a swap
+     that reordered the block would put the fallback back on screen
+     underneath the lockup. */
+  .hero-title [hidden] { display: none; }
   .hero-sub {
     font-size: clamp(15px, 2.2vw, 18px);
     color: var(--muted);
@@ -170,6 +214,20 @@
   .hero-bar .manual-link:hover, .hero-bar .manual-link:focus-visible {
     background: color-mix(in srgb, var(--accent) 22%, transparent);
     border-color: var(--accent);
+  }
+  /* Beside the CTA and quieter than it: --g is spent on ONE hero button,
+     and two competing greens would leave neither of them the thing to
+     click. The same shape, in greyscale. */
+  .hero-bar .editor-link {
+    border: 1px solid var(--line-hi);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--ink);
+    pointer-events: auto;
+  }
+  .hero-bar .editor-link:hover, .hero-bar .editor-link:focus-visible {
+    border-color: var(--ink);
+    background: var(--card);
   }
   .seed-ctl { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
   .seed-ctl label { color: var(--muted); }
@@ -369,7 +427,7 @@
     display: flex; flex-wrap: wrap; gap: 8px 28px;
   }
   @media (max-width: 560px) {
-    .hero canvas { height: 280px; }
+    .hero { min-height: 200px; }
     .roadmap li { grid-template-columns: 1fr; gap: 6px; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -380,7 +438,7 @@
     <canvas id="field" aria-hidden="true"></canvas>
     <div class="hero-overlay">
       <div class="wrap">
-        <h1 class="hero-title"><svg class="wordmark" viewBox="0 0 1055 128" role="img" aria-label="pcg-ts" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></h1>
+        <h1 class="hero-title"><span class="vh">pcg-ts</span><span class="lockup" data-logo hidden aria-hidden="true"></span><svg class="wordmark" data-logo-static viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></h1>
         <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
       </div>
     </div>
@@ -388,6 +446,7 @@
   <div class="wrap hero-bar">
     <span class="install">npm install pcg-ts</span>
     <a href="./manual.html" class="manual-link">Read the manual →</a>
+    <a href="./pages/editor/" class="editor-link">Open the editor →</a>
     <span class="seed-ctl">
       <label for="seed">seed</label>
       <input id="seed" type="number" value="42" step="1" />
@@ -821,6 +880,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
   draw();
 })();
 </script>
+<script type="module" src="./logo/logo.js"></script>
 <script type="module">
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 // Mermaid ships a light theme by default, which would drop a white slab
