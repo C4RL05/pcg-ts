@@ -10,8 +10,8 @@
 Real-time procedural content generation for TypeScript — deterministic
 by construction, WebGPU accelerated. Runs in the browser and Node, with
 optional three.js interop (`pcg-ts/three`), optional WebGPU field
-evaluation (`pcg-ts/gpu`) and a shipped primitive vocabulary
-(`pcg-ts/primitives`). Built
+evaluation (`pcg-ts/gpu`), off-thread cooking (`pcg-ts/worker`) and a
+shipped primitive vocabulary (`pcg-ts/primitives`). Built
 to be driven by AI agents as well as humans: every node type carries
 machine-readable metadata, graphs serialize to a stable JSON format, and
 errors name the offending node, pin, or param. Agent-facing entry points:
@@ -29,12 +29,23 @@ and reading `pcg cook --stats`). All of them ship inside the npm package.
 **One-page overview:** <https://c4rl05.github.io/pcg-ts/> — what it is,
 architecture and pipeline diagrams, and the roadmap.
 
+**User manual:** <https://c4rl05.github.io/pcg-ts/manual.html> — this
+file's ground at book length, worked example by worked example, through
+the mental model, the JSON format, the field grammar, errors as an API,
+and a full agent loop.
+
+**The editor, live:** <https://c4rl05.github.io/pcg-ts/pages/editor/> —
+every graph in `graphs/` opened in the browser and edited on the spot;
+`?graph=<name>` opens one directly. What it is and what it binds to is
+[The editor](#the-editor) below.
+
 <img alt="The pcg-ts editor open on the suspended-rig graph, shaded by surface normals so the swept tubes read as vivid magenta, cyan and green ribbons filling the frame. A toolbar across the top carries the graph picker, seed 3, a shade selector reading normals and a cook selector reading cpu; the status line beside it reads 60 fps, cook 47.3 ms, 56 of 83 cooked and cached, 11 out, 56,900 points and 899 instances, drawn as 21 meshes, 2 instance batches, lines and 2 point clouds. Dozens of connected nodes float over the render as a full-bleed overlay. On the left a curated knobs panel offers tabs for spine, truss, components, cables, swags and skins, with sliders for samples, wander and variant. On the right the inspector shows a selected transformPoints node named trussMove5, its registry prose, and its field-capable translate parameter holding an expression written as TEXT: param("trussHalfWidth") * 1.4142135623730951 * lerp(...) * attribute("curveNormal", 3), with a note that trussHalfWidth is supplied by an exposed param on an enclosing subgraph." src="./docs/manual-assets/pcg-ts-node-editor.jpg" width="100%">
 
-*The editor on `graphs/examples-rig.json`, shaded by normals. The graph is a
+*[The editor](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
+on `graphs/examples-rig.json`, shaded by normals. The graph is a
 full-bleed overlay over its own cook, the left column is a per-graph knobs
 panel, and the inspector on the right is showing a field expression as TEXT —
-the same tree the JSON holds, printed.*
+the same tree the JSON holds, printed. The link opens that graph.*
 
 Three foundations, carried through the whole library:
 
@@ -222,7 +233,11 @@ pins, per-param schemas (type, default, range, enum values, field
 capability, description), and an optional grouping `category` — the
 standard library is fully categorized (source, sampler, point op,
 filter, attribute, value, spawn, io, composite), so palettes and
-generated docs group without heuristics. Graphs round-trip through a
+generated docs group without heuristics. Field capability is declared
+per param (`acceptsField`) and never per type — 44 params across 25 of
+the 46 node types carry it, and a sibling param of the same type may
+well refuse the expression, so the schema is the only authority worth
+reading. Graphs round-trip through a
 stable, versioned
 JSON format, and field-valued params are expressed as declarative JSON
 specs (`fieldFromJson` / `fieldToJson`):
@@ -257,6 +272,37 @@ slot, and `graph.setGraphParam(name, value)` re-keys exactly the nodes
 that read it while every other node keeps its cache. It is the home for
 an authored quantity — a cable radius, a truss half-width — that would
 otherwise be a dozen independent literals kept equal by hand.
+
+Substitution into an expression reaches only what an expression can
+reach, which is a number: every field-capable param in the registry is
+`f32`, `vec3` or `vec4`. A declaration that also lists `targets` —
+`{ node, param }` pairs — reaches the other half of the format, because
+its value is WRITTEN into those slots outright rather than substituted, so
+an `i32` count, a `bool`, an `enum` or a `string` can be driven from one
+place too. The schema is then derived from the targets' registered
+schemas by the same resolver a subgraph's exposed params use, so a
+declaration can never claim a type or a field capability the params it
+drives do not have. Either way it holds a literal and never an
+expression: a value that can compute is a node.
+
+**A saved noise and the seed box.** A serialized field expression bakes
+its numbers, so a noise carrying a literal `opts.seed` is deaf to the
+graph seed — moving the seed box re-rolls every scatter and jitter while
+the shape stays exactly where it was. Besides an integer, `opts.seed`
+takes one tagged form, `{ "from": "node", "variant": 5 }`, which derives
+the seed as `hashCombine(the cooking node's own seed, variant)` — the
+same number `randomField` hashes — so the seed box moves the surface and
+not merely the points on it. `variant` picks WHICH draw off that node,
+so two noises on one node with different variants are two independent
+fields. It admits an integer or an inline `param` and no other
+expression, and is capped at 2²⁴: every field column is f32, so a seed
+read through one would arrive already rounded to 24 bits, and a
+one-ULP disagreement in a seed is not a rounding error but
+`hashCombine` avalanching to an unrelated noise. The whole derivation is
+u32, which is why it is bit-exact on CPU and GPU rather than budgeted
+the way a noise interior is. Adopting the form on an existing graph
+re-rolls that noise; `graphs/basics-reseed-a-noise.json` is the worked
+case.
 
 **Field params serialize whichever way you authored them.** A field
 built from the combinator API — `mul(position(), 0.1)`,
@@ -293,13 +339,9 @@ at fault and lists what would be valid. See
 [llms.txt](./llms.txt) for the compact agent guide,
 [docs/authoring.md](./docs/authoring.md) for the format spec and field
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node
-reference (generated from the registry). The `editor/` tool is
-this section as an app: an interactive node editor built entirely on
-`listNodeTypes()` (palette grouped by category), the live graph's
-validation, and `serializeGraph`/`deserializeGraph` — and it edits the
-live graph through the mutation API rather than rebuilding from JSON,
-so deleting or rewiring one branch leaves every untouched branch's
-caches warm.
+reference (generated from the registry). [The editor](#the-editor) is
+this section as an app, and it runs in the browser:
+<https://c4rl05.github.io/pcg-ts/pages/editor/>.
 
 ### The primitive library
 
@@ -326,9 +368,13 @@ A graph references one by name:
 Each carries its own agent-facing description, the exposed params with
 derived schemas, and — where it matters — a statement of whether two
 instances of it differ by default, which is the counter-intuitive part:
-scattering varies per instance automatically, noise does not and cannot
-be re-rolled by any seed, so noise-driven primitives expose a `variant`
-that moves where the field is sampled. The generated reference is
+scattering varies per instance automatically, noise does not, and a seed
+cannot make it. A noise seed is fixed when the field is BUILT — it takes
+an integer or the tagged `{ "from": "node", "variant": N }` form and
+nothing else, so it picks a whole draw and can never vary per element —
+which is why noise-driven primitives expose a `variant` that walks the
+sample position to an unrelated part of the same infinite field instead.
+The generated reference is
 [docs/primitives.md](./docs/primitives.md) (machine-readable:
 [docs/primitives.json](./docs/primitives.json)), and `pcg run
 fill/scatter-even --param minDistance=3` cooks one from the command line
@@ -383,6 +429,53 @@ filter. The full contract is in docs/authoring.md —
 [Networks](./docs/authoring.md#networks-the-primitive-domain-is-the-edge-domain)
 for per-edge values and for how a partitioned cook owns an edge instead of
 filtering one.
+
+## The editor
+
+`editor/` is a tool, not a demo: it opens any graph in `graphs/` and
+edits it live. It is hosted, so there is nothing to install —
+<https://c4rl05.github.io/pcg-ts/pages/editor/> — and `?graph=<name>`
+opens one of the corpus graphs directly:
+[`examples-rig`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
+(the screenshot at the top),
+[`examples-gpu-fields`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields)
+(the fusable chain [GPU cooking](#gpu-cooking-webgpu) measures), or
+[`basics-scatter-in-bounds`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-scatter-in-bounds)
+(the smallest one there is — scatter points in a box).
+
+Nothing in it is hand-maintained, which is what makes it the JSON
+authoring chapter as an app: the palette groups by `listNodeTypes()`'
+categories and is summoned at the pointer with **Tab**, the inspector
+renders every param from its schema — including whether that param
+accepts a field — and the prose beside a node comes from the registry,
+so a node added to the library shows up in the editor with no editor
+change. Graphs load
+and save through `deserializeGraph`/`serializeGraph`, but editing goes
+through the graph's own mutation API rather than a rebuild from JSON, so
+deleting or rewiring one branch leaves every untouched branch's caches
+warm.
+
+The graph is a full-bleed overlay over its own cooked render. **Space**
+cycles the three views — scene, scene + graph, graph only — and
+shift-space walks back; **F** re-frames the scene, **Ctrl/Cmd+0** puts
+the graph canvas back to 100%, and **Delete** removes the selected node.
+The toolbar carries the graph picker, the seed box, export and import,
+a `shade` selector (lit / normals, a redraw rather than a recook), fit /
+100% / a deterministic auto-layout, and a `cook` selector switching
+**cpu**, **gpu · per-node** and **gpu · fused** under an unchanged
+graph. The status line reports fps, cook ms, cooked/cached, outputs,
+points, instances, what was drawn and an output hash — plus the
+`CookStats.gpu` counters on the device paths, which is what makes the
+GPU chapter's claims checkable rather than quotable. A graph with a
+`graphs/panels/<name>.json` file also gets a curated knobs panel down
+the left, whose `copy link` produces a shareable
+`?graph=<name>&p=<patch>` URL.
+
+A field-capable param carries a constant/field toggle, and in field mode
+the expression is TEXT — printed by `printFieldSpec`, read back by
+`parseFieldText`, both public — or, on demand, a read-only
+boxes-and-wires diagram of the same tree. No JSON is shown: the spec
+tree is still the format, it is simply not the notation a human edits.
 
 ## Hierarchical streaming
 
@@ -535,6 +628,15 @@ the renderer without a CPU round trip — not just a CPU one. See
 `graphs/examples-forest.json` and
 `graphs/basics-props-along-a-path.json`.
 
+Which asset ids a graph will ask for is answerable before it cooks:
+`pcg assets <graph.json>` reads every `spawnInstances` node's params
+and the authored string tables that feed them, and reports the spawner
+count and the distinct ids across every branch rather than the one a
+seed happened to reach. A set that depends on values the walk cannot see
+is reported OPEN rather than guessed, which is the signal that the list
+is a lower bound. It is what an author checks a host's asset map
+against, and it costs no cook.
+
 **Per-instance colour, and why you have to ask for it.** Splitting into
 more asset ids is not the only variation channel. Point `spawnInstances`'
 `colorAttr` at an f32 point attribute with `tupleSize >= 3` and
@@ -651,9 +753,10 @@ whole point to the other branch. The memo salt keeps caches honest
 across the setting; it cannot keep output stable, which is the thing at
 risk. So the wider eligible set is a per-evaluator choice you make.
 
-Six nodes resolve their field params on the device — `setAttribute`,
+Ten nodes resolve their field params on the device — `setAttribute`,
 `transformPoints`, `jitterPoints`, `orientAlongVector`,
-`surfaceSample`, `volumeSample` — subgraph nodes forward the resolver
+`surfaceSample`, `volumeSample`, `pathSegments`, `pathPointAt`,
+`sweepProfile` and `extrudePolygon` — subgraph nodes forward the resolver
 to their inner cooks, `captureAsync` is the graph-free entry point,
 and `WorldOptions.gpu` / `UpdateOptions.gpu` (update wins) thread a
 resolver into every cell cook. Element count is never a limit: a
@@ -829,14 +932,15 @@ its cache hits across the toggle. Fused runs use the same salt inside
 the run key above. Pipelines are cached on the evaluator instance and
 persist across cooks.
 
-See it live: the editor's `cook` selector switches between the same
-three paths — CPU, GPU per-node (fusion switched off), and one fused
-device-resident run — under a graph that does not change, and its
-status line carries the wall time, the output hash and the full
+See it live: [the editor](#the-editor)'s `cook` selector switches
+between the same three paths — CPU, GPU per-node (fusion switched off),
+and one fused device-resident run — under a graph that does not change,
+and its status line carries the wall time, the output hash and the full
 `CookStats.gpu` counter set for whichever is selected. Open it on
-[`examples-gpu-fields`](./graphs/examples-gpu-fields.json),
-a five-node fusable chain, and watch two numbers: the time moves, and
-the hash holds across the two device paths but not across the CPU.
+[`examples-gpu-fields`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields)
+([source](./graphs/examples-gpu-fields.json)), a five-node fusable
+chain, and watch two numbers: the time moves, and the hash holds across
+the two device paths but not across the CPU.
 
 ## Device-resident instancing
 
@@ -1195,17 +1299,19 @@ What the caller must respect (the mutation contracts):
 ## Examples
 
 `demos/` holds three vite pages, each one something a serialized graph
-cannot be on its own: an infinite streaming world, an infinite
-deterministic spiral galaxy with click-to-visit star systems, and a
-streamed world drawing from device-resident instance transforms.
-`editor/` beside them is a tool rather than a demo — a registry-driven
-node-graph editor that opens any graph in `graphs/`, edits it live,
-compares the CPU, per-node GPU and fused device-resident cook paths on
-it, and links to the result.
+cannot be on its own: an infinite streaming world
+([live](https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/)), an
+infinite deterministic spiral galaxy with click-to-visit star systems
+([live](https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/)), and a
+streamed world drawing from device-resident instance transforms
+([live](https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/)).
+[`editor/`](#the-editor) beside them is a tool rather than a demo, and
+has its own chapter above.
 
-A recipe that is only one cook of one graph is not a demo here; it is a
-file in `graphs/`, cooked by `pcg cook`, rendered by `npm run
-preview`, and editable in the editor:
+A recipe that is only one cook of one graph is not a demo here; it is
+one of the 56 files in `graphs/`, cooked by `pcg cook`, rendered by
+`npm run preview`, and editable in the editor. All of it runs locally
+from one vite server:
 
 ```sh
 npm run examples
@@ -1215,10 +1321,11 @@ npm run examples
 
 ```sh
 npm test          # vitest: unit + integration + determinism suites
-npm run build     # tsup: dist/ with subpath exports ".", "./three", "./gpu"
-npm run check     # tsc --noEmit
-npm run examples  # vite dev server for editor/ and demos/
-npm run docs:nodes  # regenerate docs/nodes.{md,json} from the registry
+npm run build     # tsup: dist/ with every subpath export package.json names
+npm run check     # tsc --noEmit, then svelte-check over the browser pages
+npm run examples  # vite dev server for editor/, demos/ and graphs/
+npm run docs      # regenerate docs/{nodes,primitives,graphs}.{md,json}
+                  # and the site pages from the registry; CI fails if stale
 ```
 
 ## License
