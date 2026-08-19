@@ -1079,6 +1079,36 @@ export interface WriteCurveFrameParams {
   tangentName: string;
   normalName: string;
   binormalName: string;
+  curvatureName: string;
+}
+
+/**
+ * Where along an OPEN path the TANGENT at vertex `k` was actually
+ * measured, in arc length from the path's start.
+ *
+ * At almost every vertex that is the vertex itself: the tangent is the
+ * central difference of its two neighbours, which is centred on it. The
+ * exception is the two ends of an OPEN path, where there is no neighbour
+ * on one side and writePolylineTangents falls back to the adjacent
+ * segment's chord direction. A chord is the curve's MEAN direction over
+ * that segment, so it belongs to the segment's midpoint — half a step in
+ * from the end.
+ *
+ * Only curvature needs this, because only curvature divides by the
+ * distance between two tangents. Getting it wrong is not a small error:
+ * an endpoint's difference spans half a segment, so dividing it by a
+ * whole one reports half the curvature the curve has.
+ *
+ * OPEN only. A closed path has a true central difference at every vertex
+ * — including the seam, which wraps — so its divisor is just the two
+ * segments meeting there, and no station subtraction could express that:
+ * at the seam the next vertex's station is BEHIND the previous one's.
+ */
+function openTangentStation(table: PolylineArcTable, k: number): number {
+  const last = table.points.length - 1;
+  if (k === 0) return table.cum[0] + table.segLen[0] / 2;
+  if (k === last) return table.cum[last] - table.segLen[last - 1] / 2;
+  return table.cum[k];
 }
 
 /**
@@ -1119,7 +1149,7 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
   type: "writeCurveFrame",
   category: "attribute",
   description:
-    "Writes a full orthonormal frame — `tangent`, `curveNormal` and `curveBinormal` (f32 tuple 3) — at the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived. The tangent is the same central difference writeTangents writes, from the same shared code, so the three columns are guaranteed mutually perpendicular rather than nearly so. WHY IT EXISTS: orientAlongVector fixes the roll around a direction with an `up` hint, and a CONSTANT up cannot follow a curve that turns over — as the tangent passes through the up vector the roll flips a half turn, and everything placed along the curve (a radial spike, a chain link, a bracket) snaps round with it. The normal here is carried ALONG the curve instead of recomputed from a world axis: it starts perpendicular to the first tangent and is transported point to point by double reflection, which is the rotation that moves it as little as each step allows. Feed it back in as orientAlongVector's `up` — field-capable for exactly this — and the roll varies smoothly however the curve turns; combine `curveNormal` and `curveBinormal` with cos and sin of an angle to aim anything radially around the path. THE FRAME IS NOT LOCAL: a point's normal depends on every point before it along its path, so this must run BEFORE anything that splits a path across cook cells or partitions it — the same curve arriving as two pieces gets two unrelated frames. A CLOSED path does not come back seamless: transport around a loop returns rotated by a residual angle (the holonomy of that curve), so the frame either side of the seam differs, and no local rule can fix it. That is a property of closed curves rather than a defect, and it is left visible instead of smeared out. Degenerate points follow writeTangents: a point whose neighbours all coincide gets a zero tangent and is skipped by the transport, a point in several polylines takes the last one in primitive order, and unreferenced points get [0, 0, 0] on all three.",
+    "Writes a full orthonormal frame — `tangent`, `curveNormal` and `curveBinormal` (f32 tuple 3) — at the points of every polyline primitive, keeping the points, their attributes and the topology exactly as they arrived. The tangent is the same central difference writeTangents writes, from the same shared code, so the three columns are guaranteed mutually perpendicular rather than nearly so. WHY IT EXISTS: orientAlongVector fixes the roll around a direction with an `up` hint, and a CONSTANT up cannot follow a curve that turns over — as the tangent passes through the up vector the roll flips a half turn, and everything placed along the curve (a radial spike, a chain link, a bracket) snaps round with it. The normal here is carried ALONG the curve instead of recomputed from a world axis: it starts perpendicular to the first tangent and is transported point to point by double reflection, which is the rotation that moves it as little as each step allows. Feed it back in as orientAlongVector's `up` — field-capable for exactly this — and the roll varies smoothly however the curve turns; combine `curveNormal` and `curveBinormal` with cos and sin of an angle to aim anything radially around the path. THE FRAME IS NOT LOCAL: a point's normal depends on every point before it along its path, so this must run BEFORE anything that splits a path across cook cells or partitions it — the same curve arriving as two pieces gets two unrelated frames. A CLOSED path does not come back seamless: transport around a loop returns rotated by a residual angle (the holonomy of that curve), so the frame either side of the seam differs, and no local rule can fix it. That is a property of closed curves rather than a defect, and it is left visible instead of smeared out. Degenerate points follow writeTangents: a point whose neighbours all coincide gets a zero tangent and is skipped by the transport, a point in several polylines takes the last one in primitive order, and unreferenced points get [0, 0, 0] on all three. AN OPT-IN FOURTH COLUMN, `curvatureName`, reports the CURVATURE VECTOR dT/ds beside the frame — how hard the curve turns, which the frame's three axes describe the orientation of but never the amount of. It is here rather than in a node of its own because it is the same central difference of the same tangents over the same arc tables, and computing it twice is how two nodes drift apart; it is opt-in because it is a different quantity from a frame, and a graph that wants only the roll should not pay for it. Local corner radius is `1 / length(attribute(\"curvature\"))`, and a signed turn is that vector dotted with whichever axis you mean by 'right'.",
   inputs: [{ name: "in", kind: "geometry" }],
   outputs: [{ name: "out", kind: "geometry" }],
   params: {
@@ -1141,6 +1171,12 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
       description:
         "Attribute for the binormal, tangent cross normal — the third axis of the frame. Written here rather than left to the consumer because recomputing it downstream from two f32 columns is where a frame stops being exactly orthonormal.",
     },
+    curvatureName: {
+      type: "string",
+      default: "",
+      description:
+        "OPT-IN REPORT: name of an f32 tuple-3 point attribute receiving the CURVATURE VECTOR dT/ds — the rate the unit tangent turns per unit of arc length, pointing toward the centre of curvature. Empty (the default) writes none and the output is byte-identical to a cook without it. A VECTOR rather than a scalar because in 3D the scalar is the incomplete answer: the magnitude is |dT/ds| = 1/R (`length(attribute(\"curvature\"))`, and the local radius is its reciprocal), while the SIGN of a turn only exists relative to some reference axis, which no curve carries on its own — take it against whichever axis you actually mean with `dot`, most often a level right vector built from the tangent and world up. Computed from the SAME neighbours the tangent's own central difference used, so the two columns describe one discrete curve rather than two slightly different ones, and a closed path wraps exactly as the tangent does. The divisor is the arc length between the two tangents being differenced — the two segments meeting at the point, and at an open path's END a HALF segment, because the tangent there is that segment's chord direction and so belongs to its midpoint rather than to its far end. Zero where it cannot be measured: at a point whose own tangent or either neighbour's is zero (a degenerate point), at an unreferenced point, and at every point of a closed loop of two distinct points, whose two neighbours are the same point. Zero on a straight too — but that is the measurement rather than the absence of one. SAMPLE THE PATH FOR THE CURVATURE YOU WANT TO READ, because more samples is not better here: this is a SECOND difference of f32 positions, so halving the step halves the signal while leaving the position quantization where it was, and past a point the noise wins. Measured against an analytic parabola, the error falls to about half a percent and then climbs back — 1.4% at 100 samples, 0.5% at 200-500, 2.9% at 1000, 12% at 2000. The useful rule is to keep the sample step somewhere near a hundredth of the smallest radius you care about and no finer; resampling a curve to a step far below that makes its curvature worse, not sharper. NOTE THAT normalize(curvature) IS THE FRENET NORMAL, which is NOT what `normalName` writes — the Frenet normal is undefined on a straight and flips a half turn through an inflection, which is exactly why the frame here is transported instead. Same reporting-slot rule as the three axis names: a column of a different shape under this name is refused rather than deleted and re-added, and it may not repeat one of the axis names.",
+    },
   },
   execute({ inputs, params }) {
     // Params before geometry: a bad name reported as "no polyline
@@ -1154,6 +1190,7 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
       tangentName: "tangent",
       normalName: "curveNormal",
       binormalName: "curveBinormal",
+      curvatureName: "curvature",
     };
     for (const [param, name] of names) {
       if (name === "") {
@@ -1176,11 +1213,32 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
         }
       }
     }
+    // The curvature is opt-in, so "" is OFF rather than a missing name —
+    // which is the one rule it does not share with the three axes. Every
+    // other rule it does: it may not be "P", and it may not sit on top of
+    // an axis.
+    const curvatureName = params.curvatureName;
+    if (curvatureName === "P") {
+      throw new Error(
+        'writeCurveFrame: param "curvatureName" cannot be "P" — that would overwrite the positions the curvature is computed from; use "curvature" or another name, or leave it empty to write none',
+      );
+    }
+    for (const [param, name] of names) {
+      if (curvatureName !== "" && curvatureName === name) {
+        throw new Error(
+          `writeCurveFrame: params "curvatureName" and "${param}" are both "${curvatureName}"; the curvature is a fourth column beside the frame's three axes and not one of them, so it needs a name of its own`,
+        );
+      }
+    }
+    const slots =
+      curvatureName === ""
+        ? names
+        : [...names, ["curvatureName", curvatureName] as const];
     const src = requireGeometry(inputs, "in", "writeCurveFrame");
     // Each name is a reporting slot of this node's own shape, so a
     // differently shaped column under one is refused rather than deleted
     // and re-added — see writeTangents for why that distinction matters.
-    for (const [param, name] of names) {
+    for (const [param, name] of slots) {
       requireReportSlot({
         attrs: src.attrs.point,
         nodeType: "writeCurveFrame",
@@ -1199,6 +1257,14 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
     const tangent = geo.attrs.point.replace(params.tangentName, "f32", 3, [0, 0, 0]);
     const normal = geo.attrs.point.replace(params.normalName, "f32", 3, [0, 0, 0]);
     const binormal = geo.attrs.point.replace(params.binormalName, "f32", 3, [0, 0, 0]);
+    // Allocated here with the rest rather than after the transport, so
+    // every column this node writes exists before any of them is written
+    // into and no later `replace` can move one out from under a `.data`
+    // reference already taken.
+    const curvature =
+      curvatureName === ""
+        ? null
+        : geo.attrs.point.replace(curvatureName, "f32", 3, [0, 0, 0]);
     writePolylineTangents(tables, P.data, P.tupleSize, tangent.data);
 
     const td = tangent.data;
@@ -1306,6 +1372,60 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
         bd[p * 3 + 1] = tz * nx - tx * nz;
         bd[p * 3 + 2] = tx * ny - ty * nx;
         prev = p;
+      }
+    }
+
+    // Curvature, as a second pass over the same tables. Separate from the
+    // transport because it shares nothing with it: dT/ds needs the
+    // tangents and the arc length and no carried state at all, so a point
+    // it cannot measure costs the ones after it nothing, where a point the
+    // transport cannot measure has to be stepped over.
+    if (curvature) {
+      const kd = curvature.data;
+      for (const table of tables) {
+        const pts = table.points;
+        const nv = pts.length;
+        const m = table.closed ? nv - 1 : nv;
+        for (let k = 0; k < m; k++) {
+          const p = pts[k];
+          // The SAME neighbours writePolylineTangents differenced to get
+          // the tangent, so the two columns describe one discrete curve
+          // rather than two slightly different ones.
+          const kPrev = table.closed ? (k + m - 1) % m : k > 0 ? k - 1 : 0;
+          const kNext = table.closed ? (k + 1) % m : k + 1 < nv ? k + 1 : nv - 1;
+          // A closed loop of two distinct points: both neighbours are the
+          // same point, so there is no difference to take.
+          if (kPrev === kNext) continue;
+          // Arc length BETWEEN THE TWO TANGENTS being differenced —
+          // `station` below, not the vertices' own spacing. The two agree
+          // everywhere except at an open path's two ends, and using the
+          // vertex spacing there reports a fraction of the real curvature
+          // at FOUR points of every open path: measured against an
+          // analytic parabola, half at each end and three quarters at
+          // each of their neighbours.
+          const ds = table.closed
+            ? table.segLen[(k + m - 1) % m] + table.segLen[k]
+            : openTangentStation(table, kNext) - openTangentStation(table, kPrev);
+          if (!(ds > 0)) continue;
+          const a = pts[kPrev] * 3;
+          const b = pts[kNext] * 3;
+          const c = p * 3;
+          // A zero tangent is a missing measurement, not a direction:
+          // differencing against one reports a turn the curve never took.
+          if (td[c] === 0 && td[c + 1] === 0 && td[c + 2] === 0) continue;
+          if (td[a] === 0 && td[a + 1] === 0 && td[a + 2] === 0) continue;
+          if (td[b] === 0 && td[b + 1] === 0 && td[b + 2] === 0) continue;
+          // Read from the STORED f32 tangents rather than re-measured at
+          // f64. Measured, that changes nothing: the tangents come from
+          // f32 positions, whose quantization enters the angle as
+          // eps*|P|/h against the column's flat eps — larger by roughly
+          // the sample count. Re-deriving in f64 would buy a factor of
+          // (1 + 1/N) and cost a second copy of the tangent rule.
+          const inv = 1 / ds;
+          kd[c] = (td[b] - td[a]) * inv;
+          kd[c + 1] = (td[b + 1] - td[a + 1]) * inv;
+          kd[c + 2] = (td[b + 2] - td[a + 2]) * inv;
+        }
       }
     }
     return { out: [makeGeometryItem(geo)] };

@@ -1826,6 +1826,255 @@ describe("writeCurveFrame", () => {
       for (let k = 0; k < 3; k++) expect(v[k]).toBeCloseTo(n[k], 5);
     }
   });
+
+  describe("curvature", () => {
+    /** A regular n-gon on the circle of radius r in the XY plane. */
+    function circle(r: number, n: number, closed = true): Geometry {
+      const pos: number[] = [];
+      const count = closed ? n : n + 1;
+      for (let i = 0; i < count; i++) {
+        const a = (i / n) * Math.PI * 2;
+        pos.push(Math.cos(a) * r, Math.sin(a) * r, 0);
+      }
+      return createPolyline(pos, closed ? { closed: true } : {});
+    }
+
+    /**
+     * What a regular n-gon's central-difference curvature ACTUALLY is,
+     * which is not quite 1/r. Its tangents are exact (by symmetry the
+     * chord from k-1 to k+1 is parallel to the circle's tangent at k), so
+     * the whole discrepancy is the chord divisor: |dT| = 2 sin(2*pi/n)
+     * over ds = 4 r sin(pi/n), which is cos(pi/n) / r. Asserting against
+     * this rather than 1/r is what makes the test measure the node instead
+     * of measuring how finely the circle was sampled.
+     */
+    const gonCurvature = (r: number, n: number): number => Math.cos(Math.PI / n) / r;
+
+    const mag = (v: number[]): number => Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+
+    /**
+     * Five places, not more. The curvature is differenced from the
+     * tangents as STORED, which are f32, so a value near 0.5 carries
+     * about 1e-7 of rounding no arithmetic here can undo — and matching
+     * the stored tangents bit for bit is the property worth having, since
+     * a frame perpendicular to a tangent nobody else holds is a skew.
+     */
+    const F32_PLACES = 5;
+
+    it("is off by default, and adds nothing to the output when it is", async () => {
+      const geo = await frame({}, circle(2, 32));
+      expect(geo.attrs.point.get("curvature")).toBeUndefined();
+      // The whole point of an opt-in report: the columns a graph already
+      // depended on are bit for bit what they were.
+      const off = await frame({}, circle(2, 32));
+      const on = await frame({ curvatureName: "curvature" }, circle(2, 32));
+      for (const name of ["tangent", "curveNormal", "curveBinormal"]) {
+        expect(Array.from(on.attrs.point.require(name).data)).toEqual(
+          Array.from(off.attrs.point.require(name).data),
+        );
+      }
+    });
+
+    it("reports 1 / radius on a circle, and points at its centre", async () => {
+      const n = 64;
+      const r = 2;
+      const geo = await frame({ curvatureName: "k" }, circle(r, n));
+      const expected = gonCurvature(r, n);
+      // Sanity on the test's own arithmetic: the n-gon really is within a
+      // fifth of a percent of the circle, so a bug that broke the scale
+      // could not hide behind the discretization.
+      expect(expected).toBeCloseTo(1 / r, 2);
+      for (let i = 0; i < geo.pointCount; i++) {
+        const k = at(geo, "k", i);
+        expect(mag(k)).toBeCloseTo(expected, F32_PLACES);
+        // Toward the centre: the unit curvature is the inward radial.
+        const p = at(geo, "P", i);
+        const inward = [-p[0] / r, -p[1] / r, -p[2] / r];
+        for (let c = 0; c < 3; c++) expect(k[c] / mag(k)).toBeCloseTo(inward[c], 5);
+      }
+    });
+
+    it("scales as 1 / radius rather than by some other power of it", async () => {
+      const n = 64;
+      const small = await frame({ curvatureName: "k" }, circle(1, n));
+      const big = await frame({ curvatureName: "k" }, circle(4, n));
+      expect(mag(at(small, "k", 0)) / mag(at(big, "k", 0))).toBeCloseTo(4, 5);
+    });
+
+    it("is exactly zero along a straight, in both directions of a diagonal", async () => {
+      const pos: number[] = [];
+      for (let i = 0; i < 8; i++) pos.push(i * 1.5, i * -0.5, i * 0.25);
+      const geo = await frame({ curvatureName: "k" }, createPolyline(pos));
+      for (let i = 0; i < geo.pointCount; i++) expect(at(geo, "k", i)).toEqual([0, 0, 0]);
+    });
+
+    it("measures an open path's endpoints on half a segment, not a whole one", async () => {
+      // The endpoint tangent is a chord direction, which belongs to the
+      // segment's MIDPOINT. Dividing by the whole segment would report
+      // half the curvature; this pins that it does not.
+      const n = 64;
+      const r = 2;
+      const arc = await frame({ curvatureName: "k" }, circle(r, n, false));
+      const ends = [0, arc.pointCount - 1];
+      for (const i of ends) {
+        // A one-sided estimator, so not the interior's exact value — but
+        // the RIGHT quantity: within a percent of 1/r, nowhere near 1/2r.
+        expect(mag(at(arc, "k", i))).toBeCloseTo(1 / r, 2);
+      }
+      // And the interior is still the exact n-gon value.
+      expect(mag(at(arc, "k", 8))).toBeCloseTo(gonCurvature(r, n), F32_PLACES);
+    });
+
+    it("wraps a closed path instead of seaming it", async () => {
+      // Every point of a circle is the same point as far as curvature is
+      // concerned; a seam at index 0 would show up here and nowhere else.
+      const n = 48;
+      const geo = await frame({ curvatureName: "k" }, circle(3, n));
+      const first = mag(at(geo, "k", 0));
+      for (let i = 1; i < geo.pointCount; i++) {
+        expect(mag(at(geo, "k", i))).toBeCloseTo(first, F32_PLACES);
+      }
+    });
+
+    it("gives unreferenced and degenerate points a zero curvature", async () => {
+      const geo = createPointCloud(5);
+      const P = geo.attrs.point.require("P");
+      P.setTuple(0, [0, 0, 0]);
+      P.setTuple(1, [1, 0, 0]);
+      P.setTuple(2, [1, 0, 0]); // sits on top of its neighbour
+      P.setTuple(3, [2, 1, 0]);
+      P.setTuple(4, [9, 9, 9]); // in no polyline
+      setPolylineTopology(geo, [0, 1, 2, 3], [0], [4]);
+      const out = await frame({ curvatureName: "k" }, geo);
+      expect(at(out, "k", 4)).toEqual([0, 0, 0]);
+      // Point 2's own tangent survives (its neighbours differ), but point
+      // 1's neighbours 0 and 2 give it a real tangent too — what must not
+      // happen is a NaN or an Infinity anywhere in the column.
+      for (let i = 0; i < out.pointCount; i++) {
+        for (const c of at(out, "k", i)) expect(Number.isFinite(c)).toBe(true);
+      }
+    });
+
+    it("agrees with the tangents in the column beside it", async () => {
+      // The curvature is a difference OF those tangents, so it must be
+      // perpendicular to the tangent at every point of a plane curve —
+      // the check that would fail if it were differenced against some
+      // other tangent rule.
+      const geo = await frame({ curvatureName: "k" }, circle(2.5, 40));
+      for (let i = 0; i < geo.pointCount; i++) {
+        expect(dot(at(geo, "k", i), at(geo, "tangent", i))).toBeCloseTo(0, 6);
+      }
+    });
+
+    it("refuses a name that would destroy something", async () => {
+      const empty = { in: [makeGeometryItem(createPointCloud(0))] };
+      expect(await rejection(runNode(writeCurveFrame, { curvatureName: "P" }, empty))).toContain(
+        "cannot be \"P\"",
+      );
+      const dup = await rejection(
+        runNode(writeCurveFrame, { curvatureName: "curveNormal" }, empty),
+      );
+      expect(dup).toContain("a name of its own");
+      const src = withAttr(createPolyline([0, 0, 0, 1, 0, 0, 2, 1, 0]), "k", [1, 2, 3]);
+      const msg = await rejection(
+        runNode(writeCurveFrame, { curvatureName: "k" }, { in: [makeGeometryItem(src)] }),
+      );
+      expect(msg).toContain("writeCurveFrame");
+      expect(msg).toContain("\"k\"");
+    });
+
+    it("matches an analytic curvature that VARIES along the curve", async () => {
+      // Every other case here is a circle, where one wrong constant could
+      // hide. A parabola y = x^2/2 has kappa = 1 / (1 + x^2)^(3/2), which
+      // falls by a factor of 30 across this span, so a scale error, a
+      // divisor error or a boundary error all show up as a shape error.
+      // Sampled EVENLY BY ARC LENGTH at the density the docs recommend —
+      // see the note there on why finer is worse, not better.
+      const N = 201;
+      const arc = (x: number): number => (x * Math.sqrt(1 + x * x) + Math.asinh(x)) / 2;
+      const invArc = (t: number): number => {
+        let lo = -10;
+        let hi = 10;
+        for (let it = 0; it < 100; it++) {
+          const mid = (lo + hi) / 2;
+          if (arc(mid) < t) lo = mid;
+          else hi = mid;
+        }
+        return (lo + hi) / 2;
+      };
+      const pos: number[] = [];
+      for (let i = 0; i < N; i++) {
+        const x = invArc(arc(-3) + (i / (N - 1)) * (arc(3) - arc(-3)));
+        pos.push(x, (x * x) / 2, 0);
+      }
+      const geo = await frame({ curvatureName: "k" }, createPolyline(pos));
+      const exact = (x: number): number => 1 / Math.pow(1 + x * x, 1.5);
+      for (let i = 0; i < geo.pointCount; i++) {
+        const x = at(geo, "P", i)[0];
+        // 2% of the LOCAL value, so the tail where kappa is 1/30 of the
+        // peak is held to the same relative standard as the apex — an
+        // absolute tolerance would let the tail be arbitrarily wrong.
+        expect(Math.abs(mag(at(geo, "k", i)) - exact(x))).toBeLessThan(0.02 * exact(x));
+      }
+      // The ENDS specifically, which is where the divisor rule differs and
+      // where a whole-segment divisor would report half the truth.
+      for (const i of [0, geo.pointCount - 1]) {
+        expect(mag(at(geo, "k", i))).toBeGreaterThan(0.9 * exact(-3));
+      }
+    });
+
+    it("integrates to one full turn around a closed loop, however it is sampled", async () => {
+      // The intended pipeline — build a loop, resample it evenly, frame it
+      // — and the invariant that survives it. Resampling does NOT smooth a
+      // polygon: 240 samples on a 24-gon puts ten samples along each flat
+      // edge, where the curvature is nearly zero, and the whole turn at the
+      // corners. So the pointwise value is all over the place BY DESIGN,
+      // and what must hold is the integral: a closed planar loop turns
+      // through exactly 2*pi, so the sum of kappa * ds is 2*pi no matter
+      // how the samples fall. That is the assertion the divisor rule has to
+      // pass — a ds wrong by a factor anywhere would show up here as a
+      // total that is wrong by that factor.
+      const r = 40;
+      const n = 24;
+      const samples = 240;
+      const pos: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const a2 = (i / n) * Math.PI * 2;
+        pos.push(Math.cos(a2) * r, 0, Math.sin(a2) * r);
+      }
+      const even = firstGeo(
+        (
+          await runNode(
+            pathResample,
+            { mode: "count", count: samples },
+            { in: [makeGeometryItem(createPolyline(pos, { closed: true }))] },
+          )
+        ).out,
+      );
+      // pathResample already emits a `tangent` of this exact shape, so this
+      // also pins that writeCurveFrame RESETS that column rather than
+      // refusing it as a clash.
+      const geo = await frame({ curvatureName: "k" }, even);
+      expect(geo.pointCount).toBe(samples);
+      // Step computed here rather than read back, so the test does not
+      // check the node against itself: the loop is the 24-gon's perimeter.
+      const step = (n * 2 * r * Math.sin(Math.PI / n)) / samples;
+      let turn = 0;
+      for (let i = 0; i < geo.pointCount; i++) turn += mag(at(geo, "k", i)) * step;
+      // Within a percent. The shortfall that remains is the estimator's,
+      // not the divisor's: across a corner the chord |dT| is 2 sin(dtheta)
+      // where the turn is 2 dtheta, which under-reports a 15 degree corner
+      // by 0.3%.
+      expect(turn).toBeGreaterThan(2 * Math.PI * 0.99);
+      expect(turn).toBeLessThan(2 * Math.PI * 1.01);
+    });
+
+    it("is deterministic across fresh runs", async () => {
+      const src = circle(2, 33);
+      const run = async () => snapshotGeometry(await frame({ curvatureName: "k" }, src));
+      expect(await run()).toEqual(await run());
+    });
+  });
 });
 
 describe("writeTangents", () => {
