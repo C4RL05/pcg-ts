@@ -1,0 +1,210 @@
+{
+  "formatVersion": 1,
+  "seed": 1055,
+  "meta": {
+    "title": "fill a box with points, then carve it",
+    "description": "`volumeSample` is the library's only source that fills a volume with a REGULAR GRID \u2014 `pointScatterInBounds` fills a box too and `pointGrid` reaches into y, but neither puts one point in each cell of a requested size: each axis of the box is divided into max(1, floor(extent / cellSize)) whole cells and a point is placed at each cell centre, then jittered inside its own cell. `cellSize` is a REQUEST, not the cell you get \u2014 28 units of extent at 1.4 gives exactly 20 cells because it divides evenly, while an extent that does not divide gives a LARGER cell (extent 20 at cellSize 12 is one 20-wide cell), and every axis has at least one cell however small the box. Bounds come from a connected geometry's P extents when one is wired and from `boundsMin`/`boundsMax` when none is, as here. JITTER IS A FIELD, and it is evaluated on the UN-JITTERED centres: 0 below y = 1, rising to 1 by y = 11, so one node emits an exact lattice at the floor and a fully random cloud at the ceiling with the dissolve in between. That gradient is the whole reason the param is field-capable \u2014 the alternative is two `volumeSample` nodes and a merge, which cannot interpolate between them. THE CARVE is `filterByDensity` in 'threshold' mode, which `basics-filter-by-density` describes but does not show, and its `threshold` is a field too: it rises from 0.32 at the floor to 0.86 at the ceiling, so the solid erodes upward and what survives tapers instead of ending in a flat lid. TWO THINGS THIS GRAPH LEARNED THE HARD WAY. A `normalized` fBm does NOT actually span [0, 1] \u2014 normalization maps its NOMINAL range, and the three octaves of summed gradient noise here only reach about the middle two fifths of it in practice \u2014 measured on this cook, 0.325 to 0.740. A threshold swept across the full [0, 1] against a raw normalized fBm therefore keeps everything at one end and nothing at the other, and the fix is the `clamp(remap(noise, 0.35, 0.68, 0, 1), 0, 1)` here, which stretches the range the noise really occupies onto the range the threshold really uses. And Perlin noise is identically ZERO on integer lattice coordinates, so a lattice of cell centres sampled at an integer frequency gives a dead attribute and a filter that keeps everything or nothing; `frequency: 0.055` keeps the samples off the lattice, `cellSize: 1` at `frequency: 1` would not. WHY THIS ONE SPAWNS. A dense 3D point cloud is unreadable as points \u2014 unlit dots on a regular lattice read as moir\u00e9 rays rather than as a shape, and the structure this graph is about disappears into them. Instances are shaded geometry, so the ordered floor reads as packing and the dissolved ceiling as debris, and `scale` \u2014 ignored for a bare cloud \u2014 becomes the channel carrying `density` per box.",
+    "tags": [
+      "basics",
+      "source",
+      "sampler",
+      "fields",
+      "filter",
+      "density",
+      "instancing"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "volume",
+      "type": "volumeSample",
+      "params": {
+        "boundsMin": [
+          -14,
+          0,
+          -14
+        ],
+        "boundsMax": [
+          14,
+          14,
+          14
+        ],
+        "cellSize": 1.4,
+        "jitter": {
+          "fn": "clamp",
+          "args": [
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "component",
+                  "args": [
+                    {
+                      "fn": "position"
+                    }
+                  ],
+                  "index": 1
+                },
+                1,
+                11,
+                0,
+                1
+              ]
+            },
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": "density",
+      "type": "setAttribute",
+      "params": {
+        "name": "density",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 1,
+        "value": {
+          "fn": "clamp",
+          "args": [
+            {
+              "fn": "remap",
+              "args": [
+                {
+                  "fn": "fbm",
+                  "base": "perlinNoise",
+                  "opts": {
+                    "seed": {
+                      "from": "node",
+                      "variant": 0
+                    },
+                    "frequency": 0.055,
+                    "octaves": 3,
+                    "normalized": true,
+                    "position": {
+                      "fn": "position"
+                    }
+                  }
+                },
+                0.35,
+                0.68,
+                0,
+                1
+              ]
+            },
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": "carve",
+      "type": "filterByDensity",
+      "params": {
+        "mode": "threshold",
+        "threshold": {
+          "fn": "remap",
+          "args": [
+            {
+              "fn": "component",
+              "args": [
+                {
+                  "fn": "position"
+                }
+              ],
+              "index": 1
+            },
+            0,
+            14,
+            0.32,
+            0.86
+          ]
+        }
+      }
+    },
+    {
+      "id": "size",
+      "type": "setAttribute",
+      "params": {
+        "name": "scale",
+        "domain": "point",
+        "type": "f32",
+        "tupleSize": 3,
+        "value": {
+          "fn": "mul",
+          "args": [
+            0.85,
+            {
+              "fn": "add",
+              "args": [
+                0.35,
+                {
+                  "fn": "attribute",
+                  "name": "density"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "blocks",
+      "type": "spawnInstances",
+      "params": {
+        "assetId": "box"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": [
+        "volume",
+        "out"
+      ],
+      "to": [
+        "density",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "density",
+        "out"
+      ],
+      "to": [
+        "carve",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "carve",
+        "out"
+      ],
+      "to": [
+        "size",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "size",
+        "out"
+      ],
+      "to": [
+        "blocks",
+        "in"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "blocks",
+      "pin": "instances",
+      "name": "instances"
+    }
+  ]
+}

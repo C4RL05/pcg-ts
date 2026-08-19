@@ -1086,8 +1086,9 @@ as exactly; adopting it on the CPU too is what stops the two paths from
 silently disagreeing over a whole quadrant. A zero or infinite base
 still behaves for a non-zero exponent: `pow(0, 2)` is 0 and `pow(0, -1)`
 is Infinity. For a signed power write `mul(normalize(x), pow(abs(x), y))`
-— `normalize` on a scalar yields the sign. `pow` also carries the widest
-elementwise GPU budget in the parity table, so prefer `mul` for a square,
+— `normalize` on a scalar yields the sign. `pow` also carries the widest GPU
+budget of the parity table's algebraic fns — wider than every one of
+them, and narrower only than the trig family — so prefer `mul` for a square,
 `sqrt` for a root and `ramp` for a falloff rather than spending it.
 
 ### Structure

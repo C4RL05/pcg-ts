@@ -145,6 +145,52 @@
         ]
       }
     },
+    "basics-connect-by-reach.json": {
+      "outputs": {
+        "network": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 220,
+              "vertex": 1344,
+              "primitive": 672,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "seed:u32",
+                "reach:f32",
+                "color:f32x3",
+                "degree:u32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "edgeLength:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -24.4795,
+                0,
+                -24.0268
+              ],
+              "max": [
+                24.8576,
+                0,
+                24.9566
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-copy-to-points.json": {
       "outputs": {
         "instances": [
@@ -441,6 +487,46 @@
                 23,
                 3.4529,
                 23
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-field-shaping.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 5766,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -22,
+                0,
+                -16
+              ],
+              "max": [
+                22,
+                6,
+                16
               ]
             }
           }
@@ -1130,6 +1216,48 @@
                 24.9813,
                 0,
                 24.9546
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-neighborhood-varying-radius.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 1200,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "seed:u32",
+                "reach:f32",
+                "nbrCount:u32",
+                "color:f32x3"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -29.9019,
+                0,
+                -29.9642
+              ],
+              "max": [
+                29.8531,
+                21.25,
+                29.9654
               ]
             }
           }
@@ -2410,6 +2538,63 @@
                 31.0919
               ]
             }
+          }
+        ]
+      }
+    },
+    "basics-volume-scatter.json": {
+      "outputs": {
+        "instances": [
+          {
+            "kind": "instances",
+            "tags": [],
+            "residency": "cpu",
+            "instances": 1275,
+            "batches": [
+              {
+                "assetId": "box",
+                "count": 1275,
+                "translation": {
+                  "min": [
+                    -13.8413,
+                    0.7,
+                    -13.4645
+                  ],
+                  "max": [
+                    13.5487,
+                    11.8437,
+                    13.8203
+                  ],
+                  "mean": [
+                    0.5783,
+                    3.9203,
+                    3.3122
+                  ]
+                },
+                "scale": {
+                  "min": [
+                    0.5937,
+                    0.5937,
+                    0.5937
+                  ],
+                  "max": [
+                    1.1475,
+                    1.1475,
+                    1.1475
+                  ],
+                  "mean": [
+                    0.8788,
+                    0.8788,
+                    0.8788
+                  ]
+                },
+                "rotation": {
+                  "min": 0,
+                  "max": 0,
+                  "mean": 0
+                }
+              }
+            ]
           }
         ]
       }

@@ -876,7 +876,7 @@ of it:
   rather than accumulated in f64 as its neighbours are; `sqrt` ≤ 1, and
   there the DEVICE is the inaccurate side (IEEE mandates a correctly
   rounded square root; measured hardware lowers it to a reciprocal square
-  root plus refinement); `pow` ≤ 8, the widest elementwise budget;
+  root plus refinement); `pow` ≤ 8, the widest of the algebraic fns;
   ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
   atan/atan2 ≤ 80, asin/acos ≤ 512 (an absolute-error class per the
   WGSL spec); noise families ≤ 6–24 depending on base and mode.
@@ -1309,7 +1309,7 @@ streamed world drawing from device-resident instance transforms
 has its own chapter above.
 
 A recipe that is only one cook of one graph is not a demo here; it is
-one of the 56 files in `graphs/`, cooked by `pcg cook`, rendered by
+one of the 60 files in `graphs/`, cooked by `pcg cook`, rendered by
 `npm run preview`, and editable in the editor. All of it runs locally
 from one vite server:
 

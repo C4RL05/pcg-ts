@@ -116,7 +116,10 @@ export function sqrt(a: FieldLike): Field {
  *
  * Inside the shared domain it is still only approximate: the device's
  * expansion differs from `Math.pow` on ~64% of samples, so `pow` carries
- * the grammar's widest elementwise budget.
+ * the widest budget of the grammar's ALGEBRAIC fns — 8, against bit-exact
+ * for add/sub/mul and 1 for `sqrt`. Only the trigonometric family is
+ * wider (sin/cos 12, tan 40, atan/atan2 96, acos 512, asin 640), which
+ * is a different error class and not a budget this one competes with.
  */
 export function pow(a: FieldLike, b: FieldLike): Field {
   return elementwise("pow", [a, b], (v) => {

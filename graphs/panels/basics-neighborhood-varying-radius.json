@@ -1,0 +1,37 @@
+{
+  "_comment": "Panel spec \u2014 presentation only; the graph cooks identically without it. See shared/graphUi.ts.",
+  "sections": [
+    {
+      "title": "cloud",
+      "controls": [
+        {
+          "param": "cloud.count",
+          "label": "points",
+          "min": 100,
+          "max": 4000,
+          "step": 50
+        },
+        {
+          "param": "cloud.seed",
+          "label": "seed"
+        }
+      ]
+    },
+    {
+      "title": "survey",
+      "controls": [
+        {
+          "param": "survey.maxCount",
+          "label": "max counted",
+          "min": 0,
+          "max": 128,
+          "step": 1
+        },
+        {
+          "param": "survey.includeSelf",
+          "label": "count self"
+        }
+      ]
+    }
+  ]
+}
