@@ -35,6 +35,58 @@ existed, so the discipline is to let the consumer specify the mechanism
 rather than guess at it. Each entry carries the analysis, because
 re-deriving it is the expensive part.
 
+### Two arc lengths, one parameter: `pathPointAt` on a resampled path, 2026-08-19
+
+Found while building `tests/trackDressing.test.ts`, and it cost most of a
+debugging session because both wrong answers look right.
+
+**The shape of it.** `pathResample` writes `curveU` measured on the INPUT
+polyline's arc length, and reports `lengthAttr` for the same curve. But
+the geometry it emits is the polyline through the SAMPLES, which is
+shorter — a resample cuts corners, and the doc for `lengthAttr` already
+says so. `pathPointAt` then offers two modes and neither one closes the
+gap:
+
+- `distance` measures along the resampled polyline, so a step computed as
+  `lapLength / frames` is a fraction of a percent too long. On a 400-frame
+  closed lap the error accumulates and the slide lands two frames ahead by
+  the far side. Measured: a corner model that found 15 corners reported 24.
+- `fraction` measures 0..1 of the resampled polyline, and `curveU` is
+  0..1 of the input's. Same disagreement, differently spelled, and it
+  cannot be fixed by scaling because the two parameterizations differ
+  NON-uniformly — they agree on straights and diverge wherever the curve
+  bends, which is exactly where a corner rule reads them.
+
+**Why it is not just a docs problem.** Both modes are individually
+correct and documented. What is missing is a way to say "the sample one
+step further along", which is an INDEX operation and has no spelling at
+all. The workaround that shipped is a STATION RING: give every frame a
+position on a circle whose circumference is the lap, and a neighbour
+becomes a nearest-point transfer, exact by construction and wrapping at
+the seam for free. It works, it is cheap, and it is a strange thing to
+have to invent — laying a scalar out as geometry so that "nearest" can
+answer a question about ordering.
+
+**What a fix would look like, and why it is not scheduled.** The honest
+one is for `pathResample` to publish the parameterization it emits — a
+`sampleU` alongside `curveU`, or an opt-in `resampledLengthAttr` — so a
+caller can convert. Cheap, and it only helps a caller who already knows
+the trap exists. The better one is a neighbour-along-a-path operation,
+which is the same missing primitive `pathScan` closed for accumulation:
+`pathScan` gave the grammar a way to see BEHIND itself along a curve, and
+nothing gives it a way to see one step ahead. That is a node, not a doc
+fix, and it should wait for a second caller — the station-ring workaround
+is fine, and a node designed against one use is a node designed against
+its author's imagination.
+
+**The related limit, already known and confirmed by this build:** there is
+no in-cook global reduction. `attributeReduce` writes the detail domain
+and a point-domain field cannot read it, so nothing that normalises
+against a total — a share, a mix, a budget — can close inside one cook.
+The track-dressing calibration lives in a host loop for exactly this
+reason, and that is the right place for it; recording it here because it
+came up as a question three separate times while building.
+
 ### Field-expression reuse: A3 and D3, 2026-08-17
 
 From `PLAN-fields-ergonomics.md`, which is otherwise closed — E1, C1, D1,
