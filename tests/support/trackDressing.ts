@@ -52,6 +52,7 @@ import {
   ne,
   normalize,
   position,
+  pow,
   randomField,
   select,
   sign,
@@ -89,15 +90,18 @@ import {
   BUCKET_EDGES,
   CORNER_RADIUS_W,
   LANDMARK_STRETCHES,
+  NO_COMMITTED_STRETCHES,
   PROFILES,
   RULE_ARCHETYPES,
+  encodeCommittedStretches,
   type Preset,
 } from "./trackKit.js";
 
 /**
  * What a placement needs off the frame it lands on: its position, frame
  * and severity in four packed columns, plus `uref` — the lap fraction,
- * the lap's length in half-widths, and the half-width itself.
+ * the lap's length in half-widths, the half-width itself, and the
+ * balance pass's committed-lean table.
  */
 const LOOKUP_NAMES = ["pack0", "pack1", "pack2", "pack3", "uref"] as const;
 
@@ -254,6 +258,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   nodes: {
     splineIn: NodeHandle<{ items: unknown[] }>;
     halfWidth: NodeHandle<SetAttributeParams>;
+    leanCode: NodeHandle<SetAttributeParams>;
     anchors: Record<string, NodeHandle<PointLineParams>>;
     anchorKind: Record<string, NodeHandle<SetAttributeParams>>;
   };
@@ -395,6 +400,18 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     "stepUN",
   );
   g.connect(scaleN, "out", stepUN, "in");
+  // The balance pass's whole table, as one addressable number. See
+  // `encodeCommittedStretches` for why it is packed rather than spelled
+  // out, and `leanCodeN.value` is the address a host turns.
+  const leanCodeN = g.add(
+    setAttribute,
+    {
+      name: "leanCode",
+      value: balance ? encodeCommittedStretches(committed) : NO_COMMITTED_STRETCHES,
+    },
+    "leanCodeN",
+  );
+  g.connect(stepUN, "out", leanCodeN, "in");
 
   // Station in W, the coordinate every distance ALONG the lap is in.
   const stationN = g.add(
@@ -484,7 +501,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     },
     "upB",
   );
-  chain(g, [stepUN, stationN, rightN, upN, kSignN, radN, bucketN, cornerN, bankN, rightB, upB]);
+  chain(g, [leanCodeN, stationN, rightN, upN, kSignN, radN, bucketN, cornerN, bankN, rightB, upB]);
 
   // ---------------------------------------------------------------- //
   // 1. Intensity and its cumulative distribution, one per profile.
@@ -585,8 +602,13 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     setAttribute,
     {
       name: "uref",
-      tupleSize: 3,
-      value: vec(attribute("curveU"), attribute("lapW"), attribute("halfWidth")),
+      tupleSize: 4,
+      value: vec(
+        attribute("curveU"),
+        attribute("lapW"),
+        attribute("halfWidth"),
+        attribute("leanCode"),
+      ),
     },
     "uref",
   );
@@ -764,7 +786,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     variants,
     polygonScale,
     spriteShare: preset.spriteShare,
-    committed: balance ? committed : {},
     memberOffset: true,
   });
 
@@ -815,8 +836,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
         outsideShift,
         variants,
         polygonScale,
-        committed: balance ? committed : {},
-      }),
+        }),
     );
   }
 
@@ -855,8 +875,8 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     // The seam comes free. On a ring the last placement and the first are
     // neighbours, and the chord under-reads the arc by g^2/(24 R^2) —
     // four parts in ten thousand at the gap sizes this fires on.
-    const gapU = component(attribute("uref", 3), 0);
-    const gapR = div(component(attribute("uref", 3), 1), Math.PI * 2);
+    const gapU = component(attribute("uref", 4), 0);
+    const gapR = div(component(attribute("uref", 4), 1), Math.PI * 2);
     const stationSpace = g.add(
       setAttribute,
       {
@@ -932,7 +952,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       // chose, and leaving it out puts objects in a committed stretch that
       // the commitment does not cover. Flipping one costs nothing —
       // coverage is measured along the lap, not across it.
-      committed: balance ? committed : {},
       memberOffset: false,
     });
     const withFills = g.add(mergePoints, {}, "withFills");
@@ -971,9 +990,9 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       name: "scale",
       tupleSize: 3,
       value: vec(
-        mul(attribute("footprintW"), component(attribute("uref", 3), 2)),
-        mul(attribute("tallnessW"), component(attribute("uref", 3), 2)),
-        mul(attribute("footprintW"), component(attribute("uref", 3), 2)),
+        mul(attribute("footprintW"), component(attribute("uref", 4), 2)),
+        mul(attribute("tallnessW"), component(attribute("uref", 4), 2)),
+        mul(attribute("footprintW"), component(attribute("uref", 4), 2)),
       ),
     },
     "scaled",
@@ -1016,6 +1035,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     nodes: {
       splineIn: spineSource as NodeHandle<{ items: unknown[] }>,
       halfWidth: halfWidthN,
+      leanCode: leanCodeN,
       anchors: anchorByProfile,
       anchorKind: kindByProfile,
     },
@@ -1062,8 +1082,6 @@ function placeFromPack(
     variants: Readonly<Record<string, number>>;
     polygonScale: number;
     spriteShare: number;
-    /** Tenths committed to a hard lean. Empty leaves every side as drawn. */
-    committed: Readonly<Record<number, number>>;
     memberOffset: boolean;
     /** How this archetype picks its art variant. */
     variantFrom?: "random" | "severity" | "index";
@@ -1075,8 +1093,8 @@ function placeFromPack(
 ): NodeHandle {
   const { preset, id } = o;
   // The three scales, read off the placement rather than closed over.
-  const lapU = component(attribute("uref", 3), 0);
-  const HW = component(attribute("uref", 3), 2);
+  const lapU = component(attribute("uref", 4), 0);
+  const HW = component(attribute("uref", 4), 2);
   const base = unpack3("pack0", 4);
   const rightB = unpack3("pack1", 4);
   const upB = unpack3("pack2", 4);
@@ -1140,13 +1158,17 @@ function placeFromPack(
   // Two placements out of 450, which is exactly the size of bug that
   // survives a metric and dies to an exact assertion.
   const ownU = o.memberOffset
-    ? mod(add(add(lapU, div(mul(attribute("member"), 0.55), component(attribute("uref", 3), 1))), 1), 1)
+    ? mod(add(add(lapU, div(mul(attribute("member"), 0.55), component(attribute("uref", 4), 1))), 1), 1)
     : lapU;
   const tenth = floor(mul(ownU, 10));
-  let lean: FieldLike = 0;
-  for (const [k, dir] of Object.entries(o.committed)) {
-    lean = select(eq(tenth, Number(k)), dir, lean);
-  }
+  // Unpacked from the code the frames carry: digit `tenth`, base 3,
+  // shifted so 0/1/2 reads as left/neutral/right. Ten literals used to sit
+  // here in a `select` chain, which meant the one pass a host could not
+  // re-aim was the one that decides where the lap leans.
+  const lean = sub(
+    mod(floor(div(component(attribute("uref", 4), 3), pow(3, tenth))), 3),
+    1,
+  );
   // Rule-placed is its own flag. It used to be inferred from
   // `variantFrom`, which a landmark also sets — so landmarks were treated
   // as legibility furniture and silently exempted from the lean they
@@ -1515,7 +1537,6 @@ function ruleFurniture(
     variants: o.variants,
     polygonScale: o.polygonScale,
     spriteShare: o.preset.spriteShare,
-    committed: {},
     memberOffset: false,
     sideFromCorner: true,
     rulePlaced: true,
@@ -1597,7 +1618,7 @@ function cullSightline(
   // line.
   // In half-widths throughout, then converted once — the placements carry
   // their own scale, so nothing here needs to have been told it.
-  const hw = component(attribute("uref", 3), 2);
+  const hw = component(attribute("uref", 4), 2);
   const radiusW = fmax(div(attribute("footprintW"), 2), 0);
   const cappedW = select(gt(radiusW, 2), 2, radiusW);
   // Plus the sampling's own error bound, so the cull is conservative
@@ -1651,7 +1672,6 @@ function landmarkPass(
     outsideShift: number;
     variants: Readonly<Record<string, number>>;
     polygonScale: number;
-    committed: Readonly<Record<number, number>>;
   },
 ): NodeHandle {
   const line = g.add(pointLine, { count: LANDMARK_STRETCHES, includeEnd: false }, "landmarkLine");
@@ -1696,8 +1716,8 @@ function landmarkPass(
     spriteShare: o.preset.spriteShare,
     // A landmark leans with its stretch. It is decoration rather than
     // language — nothing about which side it sits on tells a driver
-    // anything — so the two exemptions from mirroring do not cover it.
-    committed: o.committed,
+    // anything — so the two exemptions from mirroring do not cover it,
+    // and it reads the same committed-lean table everything else does.
     memberOffset: false,
     variantFrom: "index",
   });

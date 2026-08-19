@@ -31,7 +31,13 @@ import {
   noCorrections,
   score,
 } from "./support/trackCalibrate.js";
-import { PRESETS, type Preset } from "./support/trackKit.js";
+import {
+  NO_COMMITTED_STRETCHES,
+  PRESETS,
+  type Preset,
+  decodeCommittedStretches,
+  encodeCommittedStretches,
+} from "./support/trackKit.js";
 
 const HALF_WIDTH = 1755;
 const CONTROL_POINTS = 800;
@@ -526,7 +532,7 @@ bands ${JSON.stringify(report.bandShare)}`);
     const pos: number[] = [];
     for (let i = 0; i < N; i++) {
       const a = (i / N) * Math.PI * 2;
-      const r = 41 * HALF_WIDTH * (1 + 0.2 * Math.sin(4 * a) + 0.1 * Math.sin(9 * a + 0.4));
+      const r = 41 * HALF_WIDTH * (1 + 0.15 * Math.sin(4 * a) + 0.06 * Math.sin(9 * a + 0.4));
       pos.push(Math.cos(a) * r, 3 * HALF_WIDTH * Math.sin(3 * a + 1.1), Math.sin(a) * r);
     }
     const spline = createPointCloud(N);
@@ -564,6 +570,38 @@ bands ${JSON.stringify(report.bandShare)}`);
         );
       }
     };
+
+    // The balance pass, re-aimed on the new track like everything else.
+    // Its table is ONE number — see encodeCommittedStretches — and it is
+    // chosen from a dry cook of THIS lap, because which stretches can
+    // carry a lean is a fact about the track and not about the graph.
+    aim(calibrate(preset, lapW, noCorrections()));
+    graph.setParam(built.nodes.leanCode, "value", NO_COMMITTED_STRETCHES);
+    const dryOut = await cook(graph);
+    const dryFrames = firstGeo(dryOut.outputs.frames);
+    // A FAIR different track, not a stress case. The metrics are the
+    // technique's measurements of real circuits, so a lap far outside what
+    // it measured cannot pass them and would not be telling us anything
+    // about the graph — a lap 36% corner, which the first attempt here
+    // was, cannot carry a one-sided stretch at all and fails metric 10 by
+    // construction. This one sits inside the baseline: a quarter to a
+    // third in a bend, half of it tighter than 25W.
+    const cornerShare =
+      col(dryFrames, "isCorner").reduce((a, b) => a + b, 0) / dryFrames.pointCount;
+    expect(cornerShare).toBeGreaterThan(0.22);
+    expect(cornerShare).toBeLessThan(0.34);
+    const dry = readPlacements(firstGeo(dryOut.outputs.placements));
+    const newCommitted = chooseCommittedStretches(dry, lapW);
+    expect(Object.keys(newCommitted).length).toBe(4);
+    graph.setParam(
+      built.nodes.leanCode,
+      "value",
+      encodeCommittedStretches(newCommitted),
+    );
+    // And it round-trips, so a shipped graph can be read as well as set.
+    expect(decodeCommittedStretches(encodeCommittedStretches(newCommitted))).toEqual(
+      newCommitted,
+    );
 
     let c = noCorrections();
     let best: Report | null = null;
@@ -606,9 +644,11 @@ bands ${JSON.stringify(report.bandShare)}`);
     for (const id of [14, 15, 16]) {
       expect(best!.metrics.find((m) => m.id === id)!.pass, `metric ${id} on a new track`).toBe(true);
     }
-    // And the composition metrics land too, which is the calibration
-    // working against a lap length nobody compiled in.
-    expect(best!.passed).toBeGreaterThanOrEqual(15);
+    // And ALL seventeen, on a track the graph was not built for. Nothing
+    // was rebuilt to get here: one spline injected, four counts, three
+    // weight lists and one packed lean table.
+    expect(failures.map((f) => `${f.id} ${f.name}`)).toEqual([]);
+    expect(best!.passed).toBe(17);
   });
 
   it("reproduces exactly from its seed, and differs when the seed does", async () => {

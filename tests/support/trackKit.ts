@@ -254,3 +254,44 @@ export function bandOf(lateralW: number, heightW: number): string {
   if (t < 13) return "far";
   return "distant";
 }
+
+/**
+ * The committed-lean table, packed into ONE number.
+ *
+ * WHY A CODE AND NOT TEN KNOBS. The lean has to be decided per PLACEMENT,
+ * because a cluster member is offset along the lap from its anchor and
+ * can land in the next stretch. A per-placement decision means the table
+ * has to be readable inside a field expression, and the grammar has no
+ * array indexing — so the ten entries are packed base 3 and unpacked with
+ * the arithmetic the grammar does have. The alternative, an inline
+ * `param` per stretch, multiplies by the seven places `placeFromPack` is
+ * called from: seventy addresses to set one table.
+ *
+ * Digits are 0, 1, 2 for left, neutral, right, least-significant first.
+ * The largest code is 3^10 - 1 = 59048, and the decode divides by 3^k and
+ * floors. That is exact in f32 with room to spare: the smallest fraction
+ * the floor has to resolve is 3^-k, the rounding error at that magnitude
+ * is 3^(10-k) * 2^-24, and their ratio is 3^10 / 2^-24 either way round —
+ * a margin of about 280.
+ */
+export function encodeCommittedStretches(committed: Readonly<Record<number, number>>): number {
+  let code = 0;
+  for (let tenth = 0; tenth < LANDMARK_STRETCHES; tenth++) {
+    const dir = committed[tenth] ?? 0;
+    code += (dir > 0 ? 2 : dir < 0 ? 0 : 1) * 3 ** tenth;
+  }
+  return code;
+}
+
+/** The inverse, for reading a shipped graph's table back. */
+export function decodeCommittedStretches(code: number): Record<number, number> {
+  const out: Record<number, number> = {};
+  for (let tenth = 0; tenth < LANDMARK_STRETCHES; tenth++) {
+    const digit = Math.floor(code / 3 ** tenth) % 3;
+    if (digit !== 1) out[tenth] = digit === 2 ? 1 : -1;
+  }
+  return out;
+}
+
+/** The code that commits nothing: every stretch neutral. */
+export const NO_COMMITTED_STRETCHES = encodeCommittedStretches({});
