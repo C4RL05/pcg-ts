@@ -20,11 +20,41 @@ import {
   ARCHETYPES,
   AUXILIARY_FAMILIES,
   type Preset,
+  SIGHTLINE,
   bandOf,
+  clampNum,
+  lapMod,
+  tenthOf,
 } from "./trackKit.js";
 
 /** The archetypes a pass puts where a rule says, never where a draw does. */
 const RULE_PLACED = new Set(["corner-marker", "braking-reference"]);
+
+/**
+ * Can the balance pass move this? Only if the corner it sits in has not
+ * already decided — an object inside a bend is pinned by what side means
+ * there, and rule-placed furniture is pinned by what it means at all.
+ * Exported because the graph enforces it and the tests assert it, and two
+ * spellings of one predicate is one too many.
+ */
+export function isMovable(p: Placement): boolean {
+  return Math.abs(p.radiusW) >= 12 && !RULE_PLACED.has(p.archetype);
+}
+
+/** Coefficient of variation: how much a set varies against its own mean. */
+function cv(xs: readonly number[]): number {
+  if (xs.length === 0) return 0;
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  if (mean <= 0) return 0;
+  return Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length) / mean;
+}
+
+/** The middle value, without disturbing the caller's array. */
+function median(xs: readonly number[]): number {
+  if (xs.length === 0) return 0;
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
 
 /** What the closed loop carries from one iteration to the next. */
 export interface Corrections {
@@ -38,7 +68,6 @@ export interface Plan {
   readonly countByProfile: Record<string, number>;
   readonly weightByArchetype: Record<string, number>;
   readonly outsideShift: number;
-  readonly totalCount: number;
   /** Art variants per archetype: how many families it needs modelling. */
   readonly variantsByArchetype: Record<string, number>;
   /** Multiplier on every kit polygon count, to hit the budget per W. */
@@ -248,14 +277,10 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // scaled so the total lands mid-range in the accepted family count —
   // minus what the marker, braking and landmark passes contribute, which
   // is budget they spend whether or not anyone counts it.
-  const totalRate2 = Math.max(
-    1e-9,
-    ARCHETYPES.reduce((t, a) => t + rate[a.id], 0),
-  );
   const variantsByArchetype: Record<string, number> = {};
   const capNeeded: Record<string, number> = {};
   for (const a of ARCHETYPES) {
-    const share = rate[a.id] / totalRate2;
+    const share = rate[a.id] / rateSum;
     capNeeded[a.id] = rate[a.id] > 0 ? Math.max(1, Math.ceil(share / preset.largestFamilyCap)) : 0;
   }
   const budget = Math.max(
@@ -272,7 +297,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
     // A family with fewer than three instances in a lap reads as a one-off
     // rather than as a repeating element, so the variant count is capped
     // by how many instances there are to go round.
-    const instances = (rate[a.id] / totalRate2) * targetTotal;
+    const instances = (rate[a.id] / rateSum) * targetTotal;
     variantsByArchetype[a.id] = Math.max(
       capNeeded[a.id],
       Math.min(Math.round(capNeeded[a.id] * grow), Math.max(1, Math.floor(instances / 3))),
@@ -285,7 +310,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // Scaled to the TARGET rather than to the floor the metric accepts:
   // overshooting a budget passes the check and spends polygons the budget
   // said were not there.
-  const meanPolys = ARCHETYPES.reduce((t, a) => t + rate[a.id] * a.polygons, 0) / totalRate2;
+  const meanPolys = ARCHETYPES.reduce((t, a) => t + rate[a.id] * a.polygons, 0) / rateSum;
   const perW = targetTotal / Math.max(1e-9, lapW);
   const polygonScale =
     meanPolys > 0 && perW > 0 ? preset.polysPerW / (meanPolys * perW) : 1;
@@ -296,7 +321,6 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
     // between its archetypes, and an anchor is not a placement.
     weightByArchetype: anchorWeight,
     outsideShift: c.outsideShift,
-    totalCount: targetTotal,
     variantsByArchetype,
     polygonScale,
   };
@@ -334,14 +358,14 @@ export function chooseCommittedStretches(
   const total = new Array<number>(10).fill(0);
   for (const p of placements) {
     if (p.lateralW === 0) continue;
-    const t = Math.min(9, Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / 10)));
+    const t = tenthOf(p.stationW, lapW);
     total[t]++;
     // Movable is the placement's own property, not the tenth's: anything
     // inside a bend is pinned by the corner, and rule-placed furniture is
     // pinned by what it means. Named rather than inferred from `cornerK`,
     // which is zero both for a placement that has no corner and for one
     // whose corner probe happened to read zero.
-    if (Math.abs(p.radiusW) >= 12 && !RULE_PLACED.has(p.archetype)) movable[t]++;
+    if (isMovable(p)) movable[t]++;
   }
   const order = movable
     .map((n, tenth) => ({ share: total[tenth] > 0 ? n / total[tenth] : 0, tenth }))
@@ -384,11 +408,9 @@ export interface Metric {
 export interface Report {
   readonly metrics: readonly Metric[];
   readonly passed: number;
-  readonly failed: number;
   readonly perW: number;
   readonly bandShare: Record<string, number>;
   readonly outsideShare: number;
-  readonly densityCv: number;
 }
 
 /**
@@ -451,7 +473,7 @@ export function score(
 
   // 5 and 6. Coverage: how much of the lap is within 2W of something, and
   // the longest stretch of it that is not.
-  const stations = placements.map((p) => ((p.stationW % lapW) + lapW) % lapW).sort((a, b) => a - b);
+  const stations = placements.map((p) => lapMod(p.stationW, lapW)).sort((a, b) => a - b);
   const STEP = 0.25;
   let covered = 0;
   let samples = 0;
@@ -476,15 +498,10 @@ export function score(
   const TENTHS = 10;
   const buckets = new Array<number>(TENTHS).fill(0);
   for (const p of placements) {
-    const idx = Math.min(TENTHS - 1, Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / TENTHS)));
-    buckets[idx]++;
+    buckets[tenthOf(p.stationW, lapW)]++;
   }
-  const mean = buckets.reduce((a, b) => a + b, 0) / TENTHS;
-  const cv =
-    mean > 0
-      ? Math.sqrt(buckets.reduce((a, b) => a + (b - mean) ** 2, 0) / TENTHS) / mean
-      : 0;
-  add(7, "density CV per tenth of lap", cv, cv >= 0.12 && cv <= 0.75, "0.12-0.75");
+  const densityCv = cv(buckets);
+  add(7, "density CV per tenth of lap", densityCv, densityCv >= 0.12 && densityCv <= 0.75, "0.12-0.75");
 
   // 8. Outside-of-corner share, over the placements that sit IN a bend.
   // Overhead and under-deck work is excluded: something on the centreline
@@ -515,7 +532,7 @@ export function score(
   const byKind = new Map<string, number[]>();
   for (const p of placements) {
     if (!byKind.has(p.archetype)) byKind.set(p.archetype, []);
-    byKind.get(p.archetype)!.push(((p.stationW % lapW) + lapW) % lapW);
+    byKind.get(p.archetype)!.push(lapMod(p.stationW, lapW));
   }
   const cvs: number[] = [];
   for (const [, ss] of byKind) {
@@ -524,11 +541,9 @@ export function score(
     const gaps: number[] = [];
     for (let i = 1; i < ss.length; i++) gaps.push(ss[i] - ss[i - 1]);
     gaps.push(lapW - ss[ss.length - 1] + ss[0]);
-    const m = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-    if (m <= 0) continue;
-    cvs.push(Math.sqrt(gaps.reduce((a, b) => a + (b - m) ** 2, 0) / gaps.length) / m);
+    cvs.push(cv(gaps));
   }
-  const medianCv = cvs.length > 0 ? cvs.sort((a, b) => a - b)[Math.floor(cvs.length / 2)] : 0;
+  const medianCv = median(cvs);
   add(13, "median gap CV per archetype", medianCv, medianCv >= 0.4, ">= 0.4 (not metronomic)");
 
   // 10. One-sided stretches, at least two each way. This is what the
@@ -540,7 +555,7 @@ export function score(
   for (let t = 0; t < TENTHS_B; t++) {
     const inTenth = placements.filter(
       (p) =>
-        Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / TENTHS_B)) === t &&
+        tenthOf(p.stationW, lapW) === t &&
         p.lateralW !== 0,
     );
     if (inTenth.length < 5) continue;
@@ -580,27 +595,23 @@ export function score(
   // 17. A unique landmark in every tenth of the lap. Unique means its
   // family appears in that tenth and nowhere else, which is the property
   // that makes a stretch identifiable rather than merely occupied.
-  const tenthOf = (p: Placement): number =>
-    Math.min(9, Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / 10)));
   const tenthsOfFamily = new Map<string, Set<number>>();
   for (const p of placements) {
     if (!tenthsOfFamily.has(p.family)) tenthsOfFamily.set(p.family, new Set());
-    tenthsOfFamily.get(p.family)!.add(tenthOf(p));
+    tenthsOfFamily.get(p.family)!.add(tenthOf(p.stationW, lapW));
   }
   const landmarked = new Set<number>();
   for (const p of placements) {
-    if (tenthsOfFamily.get(p.family)!.size === 1) landmarked.add(tenthOf(p));
+    if (tenthsOfFamily.get(p.family)!.size === 1) landmarked.add(tenthOf(p.stationW, lapW));
   }
   add(17, "tenths with a unique landmark", landmarked.size, landmarked.size === 10, "10 of 10");
 
   return {
     metrics,
     passed: metrics.filter((m) => m.pass).length,
-    failed: metrics.filter((m) => !m.pass).length,
     perW,
     bandShare,
     outsideShare,
-    densityCv: cv,
   };
 }
 
@@ -621,20 +632,20 @@ export function countBlocking(
   placements: readonly Placement[],
   positions: Float64Array,
   framePositions: Float64Array,
-  frameCount: number,
   halfWidth: number,
   lapW: number,
 ): number {
+  const frameCount = framePositions.length / 3;
   const stepW = lapW / frameCount;
-  const ahead = Math.max(1, Math.round(12 / stepW));
+  const ahead = Math.max(1, Math.round(SIGHTLINE.lookAheadW / stepW));
   let blocking = 0;
   for (let i = 0; i < placements.length; i++) {
     const p = placements[i];
-    if (p.zone <= 2 || p.zone >= 6) continue;
-    if (p.footprintW <= 2) continue;
-    if (p.heightW + p.tallnessW <= 0.3) continue;
-    if (p.heightW >= 3) continue;
-    const radius = Math.min(p.footprintW / 2, 2) * halfWidth;
+    if (p.zone < SIGHTLINE.zones[0] || p.zone > SIGHTLINE.zones[1]) continue;
+    if (p.footprintW <= SIGHTLINE.minFootprintW) continue;
+    if (p.heightW + p.tallnessW <= SIGHTLINE.eyeHeightW) continue;
+    if (p.heightW >= SIGHTLINE.maxHeightW) continue;
+    const radius = Math.min(p.footprintW / 2, SIGHTLINE.maxRadiusW) * halfWidth;
     const px = positions[i * 3];
     const py = positions[i * 3 + 1];
     const pz = positions[i * 3 + 2];
@@ -642,15 +653,23 @@ export function countBlocking(
     for (let f = 0; f < frameCount && !hit; f++) {
       const a = f * 3;
       const b = ((f + ahead) % frameCount) * 3;
-      if (
-        segmentDistance(
-          px, py, pz,
-          framePositions[a], framePositions[a + 1], framePositions[a + 2],
-          framePositions[b], framePositions[b + 1], framePositions[b + 2],
-        ) < radius
-      ) {
-        hit = true;
-      }
+      const ax = framePositions[a];
+      const ay = framePositions[a + 1];
+      const az = framePositions[a + 2];
+      const bx = framePositions[b];
+      const by = framePositions[b + 1];
+      const bz = framePositions[b + 2];
+      // Reject on a bound before measuring: nothing within `radius` of the
+      // segment can be further than radius + the segment's own length from
+      // its near end, and that test is three multiplies against a sqrt and
+      // a projection. Most placements are nowhere near most chords.
+      const dx = px - ax;
+      const dy = py - ay;
+      const dz = pz - az;
+      const segSq = (bx - ax) ** 2 + (by - ay) ** 2 + (bz - az) ** 2;
+      const reach = radius + Math.sqrt(segSq);
+      if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
+      if (segmentDistance(px, py, pz, ax, ay, az, bx, by, bz) < radius) hit = true;
     }
     if (hit) blocking++;
   }
@@ -738,6 +757,3 @@ export function correct(preset: Preset, report: Report, c: Corrections): Correct
   return next;
 }
 
-function clampNum(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}

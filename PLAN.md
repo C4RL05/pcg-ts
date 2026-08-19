@@ -87,6 +87,61 @@ The track-dressing calibration lives in a host loop for exactly this
 reason, and that is the right place for it; recording it here because it
 came up as a question three separate times while building.
 
+### Lookup by a scalar key, and the three embeddings that stand in for it, 2026-08-19
+
+Surfaced by a cleanup review of the track-dressing build. Recorded rather
+than built, because the shape wants a second consumer outside that one
+graph before it is designed — but the "wait for a second caller" note on
+the entry above is already answered here, and by three callers rather than
+one.
+
+**What the graph does three times.** `transferAttribute mapping:"nearest"`
+is the only thing in the library that can answer "which element of A
+corresponds to element of B", so the track graph makes a scalar into a
+POSITION and lets a 3-D nearest-point search answer a 1-D question:
+
+- CDF lanes: each profile's frames re-embedded at `(cdf, laneIndex * 10, 0)`,
+  so one transfer serves three inverse-transform draws without them
+  bleeding into each other.
+- the lap ring: every frame at `(cos(2*pi*u), sin(2*pi*u)) * R`, so
+  "one frame further on" and "four half-widths back from here" are
+  nearest-point queries that wrap correctly at the seam.
+- the station ring, again at a different radius, so a gap between two
+  placements measures along the lap instead of through space.
+
+**What it costs.** Each embedding destroys `P`, so nothing spatial can
+follow one without restoring it. Each pays a full 3-D uniform grid build
+over data that is 1-D by construction. And the separations — `LANE = 10`,
+`RING_R = 1000` — are correctness constants defended by a comment: a CDF
+gap above the lane pitch, or a ring whose chord error exceeds the frame
+spacing, silently returns a neighbour that is merely close rather than
+right. Nothing checks either.
+
+**The shape a fix would take.** A `keyAttr` (and a `period` for the cyclic
+case) on `transferAttribute`, or a `sampleByKey` node: match a
+destination's scalar to the source element with the nearest scalar, in one
+sort or one hash rather than a spatial index. It subsumes all three uses
+and it is honest about what is being asked.
+
+**The related narrowing, same review.** `transferAttribute` moves exactly
+ONE attribute per node, which is why the same graph hand-packs `pack0..3`
+as four tuple-4 columns and carries an `unpack3` helper: purely to amortise
+lookups. The packing is an undocumented layout shared across roughly
+fifteen call sites, and heterogeneous types cannot join it at all — the
+`archetype` string never can. Widening `name` to accept a list would delete
+that layer outright and is a much smaller change than the key lookup.
+
+**Two smaller ones, same origin.** `pathScan` publishes `totalAttr` on the
+primitive domain but not the normalised scan, so the CDF its own docs name
+as the reason it exists costs a promote and a divide — and the promote is
+`mode:"average"`, which is correct only because each point belongs to one
+polyline. A `normalize` option would remove both nodes and the hazard.
+And the field grammar has no indexed lookup into a small constant table,
+which is why the same graph packs ten ternary digits into one f32
+(`encodeCommittedStretches`) to make a ten-entry table readable inside an
+expression; the alternative, an inline `param` per entry, multiplies by the
+seven call sites that read it.
+
 ### Field-expression reuse: A3 and D3, 2026-08-17
 
 From `PLAN-fields-ergonomics.md`, which is otherwise closed — E1, C1, D1,

@@ -93,6 +93,8 @@ import {
   NO_COMMITTED_STRETCHES,
   PROFILES,
   RULE_ARCHETYPES,
+  SIGHTLINE,
+  clampNum,
   encodeCommittedStretches,
   type Preset,
 } from "./trackKit.js";
@@ -246,7 +248,6 @@ function rangeByArchetype(pick: (id: string) => readonly [number, number]): Fiel
  */
 export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   graph: Graph;
-  outputs: { placements: string; frames: string };
   /**
    * The handles a host needs to RE-AIM this graph without rebuilding it:
    * the spline it reads, the per-profile anchor counts and kit mixes that
@@ -637,8 +638,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     g.connect(uref, "out", lane, "in");
     laneNodes.push(lane);
   });
-  const lanes = g.add(mergePoints, {}, "lanes");
-  for (const l of laneNodes) g.connect(l, "out", lanes, "in");
+  const lanes = mergeAll(g, laneNodes, "lanes");
 
   // The anchors. One cloud per profile, each with an EXACT count, so the
   // kit's mix is a property of the graph rather than of a random draw.
@@ -696,17 +696,10 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     kindByProfile[p] = kind;
     archetypesByProfile[p] = members.map((a) => a.id);
   });
-  const anchors = g.add(mergePoints, {}, "anchors");
-  for (const a of anchorNodes) g.connect(a, "out", anchors, "in");
+  const anchors = mergeAll(g, anchorNodes, "anchors");
 
   // The lookup itself. Five transfers: four packs and the lap fraction.
-  let cursor: NodeHandle = anchors;
-  for (const name of LOOKUP_NAMES) {
-    const t = g.add(transferAttribute, { name, mapping: "nearest" }, `xfer_${name}`);
-    g.connect(cursor, "out", t, "in");
-    g.connect(lanes, "out", t, "source");
-    cursor = t;
-  }
+  const cursor = transferChain(g, anchors, lanes, LOOKUP_NAMES, "xfer");
 
   // ---------------------------------------------------------------- //
   // 3. Clustering: a geometric group size, realised by duplication.
@@ -785,7 +778,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     outsideShift,
     variants,
     polygonScale,
-    spriteShare: preset.spriteShare,
     memberOffset: true,
   });
 
@@ -840,13 +832,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     );
   }
 
-  let merged: NodeHandle;
-  if (parts.length === 1) {
-    merged = parts[0];
-  } else {
-    merged = g.add(mergePoints, {}, "allPlacements");
-    for (const p of parts) g.connect(p, "out", merged, "in");
-  }
+  let merged = mergeAll(g, parts, "allPlacements");
 
   // ---------------------------------------------------------------- //
   // 6. Coverage fill, then the sightline cull.
@@ -875,17 +861,16 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     // The seam comes free. On a ring the last placement and the first are
     // neighbours, and the chord under-reads the arc by g^2/(24 R^2) —
     // four parts in ten thousand at the gap sizes this fires on.
-    const gapU = component(attribute("uref", 4), 0);
-    const gapR = div(component(attribute("uref", 4), 1), Math.PI * 2);
+    // The same ring, scaled so its circumference IS the lap in half-widths
+    // — which is what makes a segment length a station difference.
     const stationSpace = g.add(
       setAttribute,
       {
         name: "P",
         tupleSize: 3,
-        value: vec(
-          mul(cos(mul(gapU, Math.PI * 2)), gapR),
-          mul(sin(mul(gapU, Math.PI * 2)), gapR),
-          0,
+        value: ringPos(
+          component(attribute("uref", 4), 0),
+          div(component(attribute("uref", 4), 1), Math.PI * 2),
         ),
       },
       "stationSpace",
@@ -945,7 +930,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       outsideShift,
       variants,
       polygonScale,
-      spriteShare: preset.spriteShare,
       // Fills lean with their stretch too. The technique runs balance
       // AFTER the fills for exactly this reason: a fill lands wherever the
       // lap happened to be thin, which is a side the density pass never
@@ -954,10 +938,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       // coverage is measured along the lap, not across it.
       memberOffset: false,
     });
-    const withFills = g.add(mergePoints, {}, "withFills");
-    g.connect(merged, "out", withFills, "in");
-    g.connect(fills, "out", withFills, "in");
-    merged = withFills;
+    merged = mergeAll(g, [merged, fills], "withFills");
   }
 
   if (sightline) {
@@ -1031,7 +1012,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
 
   return {
     graph: g,
-    outputs: { placements: "placements", frames: "frames" },
     nodes: {
       splineIn: spineSource as NodeHandle<{ items: unknown[] }>,
       halfWidth: halfWidthN,
@@ -1048,6 +1028,39 @@ function chain(g: Graph, nodes: readonly NodeHandle[]): void {
   for (let i = 1; i < nodes.length; i++) g.connect(nodes[i - 1], "out", nodes[i], "in");
 }
 
+/** Concatenate several clouds, or pass a lone one straight through. */
+function mergeAll(g: Graph, nodes: readonly NodeHandle[], id: string): NodeHandle {
+  if (nodes.length === 1) return nodes[0];
+  const merged = g.add(mergePoints, {}, id);
+  for (const n of nodes) g.connect(n, "out", merged, "in");
+  return merged;
+}
+
+/**
+ * Pull `names` off the nearest point of `source`, one transfer each.
+ *
+ * `transferAttribute` moves exactly one attribute per node, so every
+ * lookup in this file is a chain of them against one source. Written once
+ * here rather than at each site, so the sites differ only in what they
+ * look up and where from.
+ */
+function transferChain(
+  g: Graph,
+  dest: NodeHandle,
+  source: NodeHandle,
+  names: readonly string[],
+  id: string,
+): NodeHandle {
+  let cursor = dest;
+  for (const name of names) {
+    const t = g.add(transferAttribute, { name, mapping: "nearest" }, `${id}_${name}`);
+    g.connect(cursor, "out", t, "in");
+    g.connect(source, "out", t, "source");
+    cursor = t;
+  }
+  return cursor;
+}
+
 /**
  * Real-valued shares as whole counts, which is what `setAttribute`'s
  * weighted string table takes: a weight stands for the repeated table
@@ -1061,9 +1074,13 @@ function wholeWeights(rates: readonly number[]): number[] {
   return rates.map((r) => (r > 0 ? Math.max(1, Math.round((r / top) * 1000)) : 0));
 }
 
+/** Every archetype by id. Built once; `arch` is called from inside loops
+ * over the whole kit, so a scan here is a scan per scan. */
+const BY_ID = new Map(ALL_ARCHETYPES.map((a) => [a.id, a]));
+
 /** The archetype record for an id, which the kit guarantees exists. */
 function arch(id: string) {
-  const a = ALL_ARCHETYPES.find((x) => x.id === id);
+  const a = BY_ID.get(id);
   if (!a) throw new Error(`trackDressing: unknown archetype ${JSON.stringify(id)}`);
   return a;
 }
@@ -1081,7 +1098,6 @@ function placeFromPack(
     outsideShift: number;
     variants: Readonly<Record<string, number>>;
     polygonScale: number;
-    spriteShare: number;
     memberOffset: boolean;
     /** How this archetype picks its art variant. */
     variantFrom?: "random" | "severity" | "index";
@@ -1125,7 +1141,7 @@ function placeFromPack(
     (x) =>
       ruled.has(x)
         ? arch(x).outsideBias
-        : Math.min(0.92, Math.max(0.25, arch(x).outsideBias + o.outsideShift)),
+        : clampNum(arch(x).outsideBias + o.outsideShift, 0.25, 0.92),
     0.5,
   );
   const inBendPick = select(lt(randomField(`${id}-side`), bias), outside, mul(-1, outside));
@@ -1177,6 +1193,17 @@ function placeFromPack(
   const movable = o.rulePlaced ? 0 : gt(radiusW, CORNER_RADIUS_W);
   const leaned = select(mul(movable, ne(lean, 0)), lean, side);
 
+  /** One `lerp` between an archetype range's two ends, as a node. */
+  const fromRange = (attr: string, range: Field, tag: string, nodeId: string): NodeHandle =>
+    g.add(
+      setAttribute,
+      {
+        name: attr,
+        value: lerp(component(range, 0), component(range, 1), randomField(`${id}-${tag}`)),
+      },
+      `${id}${nodeId}`,
+    );
+
   const latN = g.add(
     setAttribute,
     {
@@ -1188,37 +1215,16 @@ function placeFromPack(
     },
     `${id}Lat`,
   );
-  const hN = g.add(
-    setAttribute,
-    {
-      name: "heightW",
-      value: lerp(component(hgt, 0), component(hgt, 1), randomField(`${id}-h`)),
-    },
-    `${id}Height`,
-  );
-  const fpN = g.add(
-    setAttribute,
-    {
-      name: "footprintW",
-      value: lerp(component(fp, 0), component(fp, 1), randomField(`${id}-fp`)),
-    },
-    `${id}Foot`,
-  );
-  const tallN = g.add(
-    setAttribute,
-    {
-      name: "tallnessW",
-      value: lerp(component(tall, 0), component(tall, 1), randomField(`${id}-tall`)),
-    },
-    `${id}Tall`,
-  );
+  const hN = fromRange("heightW", hgt, "h", "Height");
+  const fpN = fromRange("footprintW", fp, "fp", "Foot");
+  const tallN = fromRange("tallnessW", tall, "tall", "Tall");
   // A sprite is a camera-facing quad and costs one polygon; a preset that
   // asks for none rebuilds every sprite archetype AS GEOMETRY at 22, which
   // is a change of kit rather than of ratio — the same silhouettes, built
   // rather than drawn. The scale on top is the polygon budget: a hardware
   // decision, applied to the kit's counts, never to the placement count,
   // which is a composition decision.
-  const spriteLive = (x: string): boolean => o.spriteShare > 0 && arch(x).kind === "sprite";
+  const spriteLive = (x: string): boolean => preset.spriteShare > 0 && arch(x).kind === "sprite";
   const polyN = g.add(
     setAttribute,
     {
@@ -1264,11 +1270,9 @@ function placeFromPack(
     { name: "variant", type: "i32", value: variantValue },
     `${id}Variant`,
   );
-  const zoneCases: Record<string, FieldLike> = {};
-  for (const a of ALL_ARCHETYPES) zoneCases[a.id] = Number(a.zone.slice(1));
   const zoneN = g.add(
     setAttribute,
-    { name: "zone", type: "i32", value: byAttribute("archetype", zoneCases, 0) },
+    { name: "zone", type: "i32", value: byArchetype((x) => Number(arch(x).zone.slice(1)), 0) },
     `${id}Zone`,
   );
   const stationN = g.add(
@@ -1344,9 +1348,9 @@ function placeFromPack(
  * scalar coordinate a geometry so that "nearest" can answer questions
  * about it.
  */
-function ringPos(lapFraction: FieldLike): Field {
+function ringPos(lapFraction: FieldLike, radius: FieldLike = RING_R): Field {
   const a = mul(lapFraction, Math.PI * 2);
-  return vec(mul(cos(a), RING_R), mul(sin(a), RING_R), 0);
+  return vec(mul(cos(a), radius), mul(sin(a), radius), 0);
 }
 
 /**
@@ -1390,14 +1394,7 @@ function lookupAtStation(
     `${id}At`,
   );
   g.connect(dest, "out", at, "in");
-  let cursor: NodeHandle = at;
-  for (const name of names) {
-    const t = g.add(transferAttribute, { name, mapping: "nearest" }, `${id}_${name}`);
-    g.connect(cursor, "out", t, "in");
-    g.connect(ring, "out", t, "source");
-    cursor = t;
-  }
-  return cursor;
+  return transferChain(g, at, ring, names, id);
 }
 
 /**
@@ -1536,7 +1533,6 @@ function ruleFurniture(
     outsideShift: o.outsideShift,
     variants: o.variants,
     polygonScale: o.polygonScale,
-    spriteShare: o.preset.spriteShare,
     memberOffset: false,
     sideFromCorner: true,
     rulePlaced: true,
@@ -1619,8 +1615,7 @@ function cullSightline(
   // In half-widths throughout, then converted once — the placements carry
   // their own scale, so nothing here needs to have been told it.
   const hw = component(attribute("uref", 4), 2);
-  const radiusW = fmax(div(attribute("footprintW"), 2), 0);
-  const cappedW = select(gt(radiusW, 2), 2, radiusW);
+  const cappedW = clamp(div(attribute("footprintW"), 2), 0, SIGHTLINE.maxRadiusW);
   // Plus the sampling's own error bound, so the cull is conservative
   // rather than optimistic. See CHORD_SAMPLES.
   const capped = mul(add(cappedW, CHORD_SLACK_W), hw);
@@ -1713,7 +1708,6 @@ function landmarkPass(
     outsideShift: o.outsideShift,
     variants: o.variants,
     polygonScale: o.polygonScale,
-    spriteShare: o.preset.spriteShare,
     // A landmark leans with its stretch. It is decoration rather than
     // language — nothing about which side it sits on tells a driver
     // anything — so the two exemptions from mirroring do not cover it,

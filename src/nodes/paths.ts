@@ -60,6 +60,7 @@ import {
   locateOnArcLength,
   orientQuat,
   polylineArcTables,
+  polylineWalks,
   readComp,
   requireGeometry,
   requireReportSlot,
@@ -1124,7 +1125,10 @@ export const pathScan = standardNode<PathScanParams>({
     }
 
     const geo = cloneGeometry(src);
-    const tables = polylineArcTables(geo, "pathScan");
+    // `polylineWalks`, not `polylineArcTables`: a scan reads no distance,
+    // and the full table allocates four Float64Arrays per path and takes a
+    // square root per segment to produce numbers this node never touches.
+    const walks = polylineWalks(geo, "pathScan");
     const sd = geo.attrs.point.require(name).data;
     const zero = new Array<number>(ts).fill(0);
     const out = geo.attrs.point.replace(outName, "f32", ts, zero).data;
@@ -1133,25 +1137,37 @@ export const pathScan = standardNode<PathScanParams>({
     // Accumulate in f64 whatever the source type, so a long f32 sum does
     // not lose its tail — the same reason attributeReduce does.
     const acc = new Float64Array(4);
-    for (const table of tables) {
-      const pts = table.points;
+    // The mode is decided once for the node, so it picks the loop rather
+    // than being re-tested per component of per point.
+    for (const walk of walks) {
+      const pts = walk.points;
       // A closed path repeats its first point as its last vertex; that
       // repeat is the closure, not a value to add a second time.
-      const m = table.closed ? pts.length - 1 : pts.length;
+      const m = walk.closed ? pts.length - 1 : pts.length;
       acc.fill(0);
-      for (let k = 0; k < m; k++) {
-        const o = pts[k] * ts;
-        for (let c = 0; c < ts; c++) {
-          const v = sd[o + c];
-          if (exclusive) out[o + c] = acc[c];
-          // NaN contributes nothing rather than propagating. `v !== v` is
-          // the NaN test that does not depend on argument coercion.
-          if (v === v) acc[c] += v;
-          if (!exclusive) out[o + c] = acc[c];
+      if (exclusive) {
+        for (let k = 0; k < m; k++) {
+          const o = pts[k] * ts;
+          for (let c = 0; c < ts; c++) {
+            const v = sd[o + c];
+            out[o + c] = acc[c];
+            // NaN contributes nothing rather than propagating. `v !== v`
+            // is the NaN test that does not depend on argument coercion.
+            if (v === v) acc[c] += v;
+          }
+        }
+      } else {
+        for (let k = 0; k < m; k++) {
+          const o = pts[k] * ts;
+          for (let c = 0; c < ts; c++) {
+            const v = sd[o + c];
+            if (v === v) acc[c] += v;
+            out[o + c] = acc[c];
+          }
         }
       }
       if (totals) {
-        const t = table.prim * ts;
+        const t = walk.prim * ts;
         for (let c = 0; c < ts; c++) totals.data[t + c] = acc[c];
       }
     }
@@ -1253,11 +1269,16 @@ export interface WriteCurveFrameParams {
  * segments meeting there, and no station subtraction could express that:
  * at the seam the next vertex's station is BEHIND the previous one's.
  */
-function openTangentStation(table: PolylineArcTable, k: number): number {
-  const last = table.points.length - 1;
-  if (k === 0) return table.cum[0] + table.segLen[0] / 2;
-  if (k === last) return table.cum[last] - table.segLen[last - 1] / 2;
-  return table.cum[k];
+function openTangentStation(
+  cum: Float64Array,
+  segLen: Float64Array,
+  vertexCount: number,
+  k: number,
+): number {
+  const last = vertexCount - 1;
+  if (k === 0) return cum[0] + segLen[0] / 2;
+  if (k === last) return cum[last] - segLen[last - 1] / 2;
+  return cum[k];
 }
 
 /**
@@ -1372,10 +1393,11 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
         'writeCurveFrame: param "curvatureName" cannot be "P" — that would overwrite the positions the curvature is computed from; use "curvature" or another name, or leave it empty to write none',
       );
     }
-    for (const [param, name] of names) {
-      if (curvatureName !== "" && curvatureName === name) {
+    if (curvatureName !== "") {
+      const clash = names.find(([, name]) => name === curvatureName);
+      if (clash) {
         throw new Error(
-          `writeCurveFrame: params "curvatureName" and "${param}" are both "${curvatureName}"; the curvature is a fourth column beside the frame's three axes and not one of them, so it needs a name of its own`,
+          `writeCurveFrame: params "curvatureName" and "${clash[0]}" are both "${curvatureName}"; the curvature is a fourth column beside the frame's three axes and not one of them, so it needs a name of its own`,
         );
       }
     }
@@ -1534,14 +1556,17 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
       for (const table of tables) {
         const pts = table.points;
         const nv = pts.length;
-        const m = table.closed ? nv - 1 : nv;
+        const closed = table.closed;
+        const segLen = table.segLen;
+        const cum = table.cum;
+        const m = closed ? nv - 1 : nv;
         for (let k = 0; k < m; k++) {
           const p = pts[k];
           // The SAME neighbours writePolylineTangents differenced to get
           // the tangent, so the two columns describe one discrete curve
           // rather than two slightly different ones.
-          const kPrev = table.closed ? (k + m - 1) % m : k > 0 ? k - 1 : 0;
-          const kNext = table.closed ? (k + 1) % m : k + 1 < nv ? k + 1 : nv - 1;
+          const kPrev = closed ? (k + m - 1) % m : k > 0 ? k - 1 : 0;
+          const kNext = closed ? (k + 1) % m : k + 1 < nv ? k + 1 : nv - 1;
           // A closed loop of two distinct points: both neighbours are the
           // same point, so there is no difference to take.
           if (kPrev === kNext) continue;
@@ -1552,9 +1577,10 @@ export const writeCurveFrame = standardNode<WriteCurveFrameParams>({
           // at FOUR points of every open path: measured against an
           // analytic parabola, half at each end and three quarters at
           // each of their neighbours.
-          const ds = table.closed
-            ? table.segLen[(k + m - 1) % m] + table.segLen[k]
-            : openTangentStation(table, kNext) - openTangentStation(table, kPrev);
+          const ds = closed
+            ? segLen[(k + m - 1) % m] + segLen[k]
+            : openTangentStation(cum, segLen, nv, kNext) -
+              openTangentStation(cum, segLen, nv, kPrev);
           if (!(ds > 0)) continue;
           const a = pts[kPrev] * 3;
           const b = pts[kNext] * 3;

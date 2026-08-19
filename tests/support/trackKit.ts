@@ -124,7 +124,6 @@ export const CORNER_RADIUS_W = 12;
 
 /** One era's weighting over the kit, and the targets it is scored on. */
 export interface Preset {
-  readonly id: string;
   /** Target placements per W of lap. */
   readonly density: number;
   readonly densityAccept: readonly [number, number];
@@ -171,7 +170,6 @@ export interface Preset {
  */
 export const PRESETS: Readonly<Record<string, Preset>> = {
   sparse: {
-    id: "sparse",
     spriteShare: 0.25,
     spriteAccept: [0.15, 0.35],
     polysPerW: 13.8,
@@ -195,7 +193,6 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 0.9, bush: 0.9 },
   },
   lush: {
-    id: "lush",
     spriteShare: 0.28,
     spriteAccept: [0.18, 0.38],
     polysPerW: 18.9,
@@ -219,7 +216,6 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 1.15, bush: 1.1 },
   },
   dense: {
-    id: "dense",
     spriteShare: 0.0,
     spriteAccept: [0, 0.05],
     polysPerW: 18.8,
@@ -243,6 +239,46 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 0.7, bush: 0.75, billboard: 0.85, dome: 0.85, "wall-panel": 0.85 },
   },
 };
+
+/**
+ * The sightline rule's thresholds, in half-widths.
+ *
+ * Here rather than beside either implementation, because there are TWO —
+ * the graph culls against a sampled chord and the metric scores against
+ * the exact segment, deliberately different algorithms so that one
+ * checks the other. Different algorithms, same rule: retyping the numbers
+ * in both is how a test starts failing for a reason that has nothing to
+ * do with the code under test.
+ */
+export const SIGHTLINE = {
+  /** How far ahead the centreline must stay visible. */
+  lookAheadW: 12,
+  /** The cockpit eye height the test is taken from. */
+  eyeHeightW: 0.3,
+  /** An obstruction radius is the half-footprint capped at this. */
+  maxRadiusW: 2,
+  /** Anything narrower than this is not an obstruction. */
+  minFootprintW: 2,
+  /** Anything anchored above this clears the driver's head. */
+  maxHeightW: 3,
+  /** Zones the test applies to, inclusive: near, mid and far. */
+  zones: [3, 5] as const,
+} as const;
+
+/** Clamp a scalar. The field grammar has `clamp`; host arithmetic did not. */
+export function clampNum(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/** A station wrapped into [0, lapW), which is what a lap that closes needs. */
+export function lapMod(station: number, lapW: number): number {
+  return ((station % lapW) + lapW) % lapW;
+}
+
+/** Which tenth of the lap a station falls in, clamped into 0..9. */
+export function tenthOf(station: number, lapW: number): number {
+  return Math.min(9, Math.floor(lapMod(station, lapW) / (lapW / 10)));
+}
 
 /** Which lateral band a |t| in W falls in. The zone model, as a function. */
 export function bandOf(lateralW: number, heightW: number): string {

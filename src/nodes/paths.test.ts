@@ -1852,7 +1852,7 @@ describe("writeCurveFrame", () => {
      */
     const gonCurvature = (r: number, n: number): number => Math.cos(Math.PI / n) / r;
 
-    const mag = (v: number[]): number => Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    const mag = (v: number[]): number => Math.sqrt(dot(v, v));
 
     /**
      * Five places, not more. The curvature is differenced from the

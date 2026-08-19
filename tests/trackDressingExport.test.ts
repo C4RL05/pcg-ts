@@ -21,13 +21,19 @@
  * loop, so a picture and the numbers beside it can never come from
  * different runs.
  */
-import { describe, it, expect } from "vitest";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { cook, serializeGraph } from "../src/index.js";
 import { firstGeo } from "../src/nodes/nodes.testsupport.js";
 import { buildTrackDressingGraph } from "./support/trackDressing.js";
-import { calibrate, chooseCommittedStretches, correct, countBlocking, noCorrections, score } from "./support/trackCalibrate.js";
+import {
+  calibrate,
+  chooseCommittedStretches,
+  correct,
+  noCorrections,
+} from "./support/trackCalibrate.js";
+import { TRACK, better, col, scoreCook } from "./support/trackRead.js";
 import { PRESETS } from "./support/trackKit.js";
 
 const OUT = process.env.TRACK_OUT ?? "";
@@ -35,121 +41,96 @@ const OUT = process.env.TRACK_OUT ?? "";
 describe("export", () => {
   it("serializes", async () => {
     const preset = PRESETS.lush;
-    const base = {
-      preset, halfWidth: 1755, controlPoints: 800, frames: 400,
-      lapRadius: 62 * 1755, relief: 6 * 1755, seed: 21,
-    };
+    const base = { ...TRACK, preset, seed: 21 };
     const probe = buildTrackDressingGraph({
-      ...base, countByProfile: { flat: 1, built: 1, clustered: 1 }, weightByArchetype: {}, legibility: false, coverage: false, sightline: false, landmarks: false, balance: false,
+      ...base,
+      countByProfile: { flat: 1, built: 1, clustered: 1 },
+      weightByArchetype: {},
+      legibility: false,
+      coverage: false,
+      sightline: false,
+      landmarks: false,
+      balance: false,
     });
     const frames = firstGeo((await cook(probe.graph)).outputs.frames);
     const lapLength = frames.attrs.primitive.require("lapLen").get(0) as number;
-    const lapW = lapLength / 1755;
+    const lapW = lapLength / TRACK.halfWidth;
+
     let corrections = noCorrections();
     let plan = calibrate(preset, lapW, corrections);
-    const full = (committed: Record<number, number>) =>
+    const build = (committed: Record<number, number>) =>
       buildTrackDressingGraph({
-        ...base, countByProfile: plan.countByProfile, weightByArchetype: plan.weightByArchetype,
-        variantsByArchetype: plan.variantsByArchetype, polygonScale: plan.polygonScale,
-        committedStretches: committed, spawn: true,
+        ...base,
+        countByProfile: plan.countByProfile,
+        weightByArchetype: plan.weightByArchetype,
+        variantsByArchetype: plan.variantsByArchetype,
+        polygonScale: plan.polygonScale,
+        committedStretches: committed,
+        spawn: true,
       });
-    const dry = full({});
-    const dryGeo = firstGeo((await cook(dry.graph)).outputs.placements);
-    const ps: { stationW: number; lateralW: number; radiusW: number; archetype: string }[] = [];
-    const st = dryGeo.attrs.point.require("stationW");
-    const la = dryGeo.attrs.point.require("lateralW");
-    const p1 = dryGeo.attrs.point.require("pack1");
-    const ar = dryGeo.attrs.point.require("archetype");
-    for (let i = 0; i < dryGeo.pointCount; i++) {
-      ps.push({
-        stationW: Number(st.get(i)), lateralW: Number(la.get(i)),
-        radiusW: p1.data[i * 4 + 3], archetype: ar.getString(i, 0),
-      });
-    }
-    const committed = chooseCommittedStretches(ps as never, lapW);
+
+    // Which stretches can carry a lean is a fact about the dressed lap, so
+    // it takes a cook with the balance pass switched off.
+    const dry = await run({});
+    const committed = chooseCommittedStretches(dry.placements, lapW);
+
     // THE CLOSED LOOP, which is the pipeline's actual output: generate,
     // measure, correct, regenerate, keep the best. A single uncorrected
     // pass scores 16 of 17 — the outside-of-bend share runs hot until the
     // loop has seen it once — so exporting one would put a picture on the
     // page that no run of the technique produces.
-    const readReport = async (committed: Record<number, number>) => {
-      const geo = firstGeo((await cook(full(committed).graph)).outputs.placements);
-      const get = (n: string) => geo.attrs.point.require(n);
-      const kk = geo.attrs.point.get("cornerK");
-      const pl = [];
-      for (let i = 0; i < geo.pointCount; i++) {
-        pl.push({
-          archetype: get("archetype").getString(i, 0),
-          stationW: Number(get("stationW").get(i)),
-          lateralW: Number(get("lateralW").get(i)),
-          heightW: Number(get("heightW").get(i)),
-          footprintW: Number(get("footprintW").get(i)),
-          tallnessW: Number(get("tallnessW").get(i)),
-          radiusW: get("pack1").data[i * 4 + 3],
-          kSigned: get("pack2").data[i * 4 + 3],
-          zone: Number(get("zone").get(i)),
-          cornerK: kk ? Number(kk.get(i)) : 0,
-          variant: Number(get("variant").get(i)),
-          polygons: Number(get("polygons").get(i)),
-          isSprite: Number(get("isSprite").get(i)),
-          family: `${get("archetype").getString(i, 0)}#${Number(get("variant").get(i))}`,
-        });
-      }
-      const fP = new Float64Array(frames.pointCount * 3);
-      for (let i = 0; i < fP.length; i++) fP[i] = frames.attrs.point.require("P").data[i];
-      const oP = new Float64Array(geo.pointCount * 3);
-      for (let i = 0; i < oP.length; i++) oP[i] = geo.attrs.point.require("P").data[i];
-      const fcx = frames.attrs.point.require("isCorner");
-      let entries = 0;
-      for (let i = 0; i < frames.pointCount; i++) {
-        if (Number(fcx.get(i)) >= 0.5 && Number(fcx.get((i + frames.pointCount - 1) % frames.pointCount)) < 0.5) entries++;
-      }
-      const blocking = countBlocking(pl, oP, fP, frames.pointCount, 1755, lapW);
-      const markers = pl.filter((x) => x.archetype === "corner-marker").length;
-      return { geo, pl, report: score(pl, preset, lapW, entries, markers, blocking) };
-    };
-    let run = await readReport(committed);
-    let bestRun = run;
+    let current = await run(committed);
+    let best = current;
     for (let iter = 0; iter < 2; iter++) {
       // Corrected from the LATEST iteration, not from the best one: the
       // loop is a controller and it has to see where it just was.
-      corrections = correct(preset, run.report, corrections);
+      corrections = correct(preset, current.report, corrections);
       plan = calibrate(preset, lapW, corrections);
-      run = await readReport(committed);
-      const better =
-        run.report.passed > bestRun.report.passed ||
-        (run.report.passed === bestRun.report.passed &&
-          Math.abs(run.report.perW - preset.density) < Math.abs(bestRun.report.perW - preset.density));
-      if (better) bestRun = run;
+      current = await run(committed);
+      if (better(current.report, best.report, preset)) best = current;
     }
-    console.log("XXscore", bestRun.report.passed, "of", bestRun.report.metrics.length, JSON.stringify(bestRun.report.metrics.filter((m) => !m.pass).map((m) => `${m.id} ${m.name}=${m.value.toFixed(3)} ${m.target}`)));
-    const g = full(committed).graph;
-    const json = serializeGraph(g);
-    console.log("XXnodes", json.nodes.length, "lapW", lapW.toFixed(1));
-    if (OUT) {
-      mkdirSync(dirname(OUT), { recursive: true });
-      writeFileSync(OUT, JSON.stringify(json, null, 2), "utf8");
-      console.log("XXwrote", OUT);
+    expect(best.report.passed).toBe(17);
+
+    async function run(committedStretches: Record<number, number>) {
+      const graph = build(committedStretches).graph;
+      const out = await cook(graph);
+      return { ...scoreCook(out, preset, lapW), graph, out };
     }
-    // Placement data for the composition plot, from the winning iteration.
-    const outGeo = bestRun.geo;
-    const rows = bestRun.pl.map((r) => ({
-      s: +r.stationW.toFixed(2), t: +r.lateralW.toFixed(3), h: +r.heightW.toFixed(2),
-      f: +r.footprintW.toFixed(2), z: r.zone, v: r.variant, a: r.archetype,
-      r: +r.radiusW.toFixed(1),
-    }));
-    const fs = frames.attrs.point.require("stationW");
-    const fc = frames.attrs.point.require("isCorner");
-    const frameRows: unknown[] = [];
-    for (let i = 0; i < frames.pointCount; i++) {
-      frameRows.push([+Number(fs.get(i)).toFixed(2), Number(fc.get(i)) >= 0.5 ? 1 : 0]);
-    }
-    if (OUT) {
-      writeFileSync(OUT.replace(".json", "-report.json"), JSON.stringify(bestRun.report.metrics), "utf8");
-      writeFileSync(OUT.replace(".json", "-data.json"),
-        JSON.stringify({ lapW, committed, placements: rows, frames: frameRows }), "utf8");
-      console.log("XXdata", OUT.replace(".json", "-data.json"), rows.length, outGeo.pointCount);
-    }
+
+    // The graph that produced the winning iteration, not a fresh build of
+    // the last plan — serializing one while reporting the other's metrics
+    // is how a page ends up describing a run nobody made.
+    const json = serializeGraph(best.graph);
     expect(json.nodes.length).toBeGreaterThan(50);
+
+    if (!OUT) return;
+    mkdirSync(dirname(OUT), { recursive: true });
+    writeFileSync(OUT, JSON.stringify(json, null, 2), "utf8");
+    writeFileSync(
+      OUT.replace(".json", "-report.json"),
+      JSON.stringify(best.report.metrics),
+      "utf8",
+    );
+    const stationW = col(best.frames, "stationW");
+    const isCorner = col(best.frames, "isCorner");
+    writeFileSync(
+      OUT.replace(".json", "-data.json"),
+      JSON.stringify({
+        lapW,
+        committed,
+        placements: best.placements.map((p) => ({
+          s: +p.stationW.toFixed(2),
+          t: +p.lateralW.toFixed(3),
+          h: +p.heightW.toFixed(2),
+          f: +p.footprintW.toFixed(2),
+          z: p.zone,
+          v: p.variant,
+          a: p.archetype,
+          r: +p.radiusW.toFixed(1),
+        })),
+        frames: Array.from(stationW, (s, i) => [+s.toFixed(2), isCorner[i] >= 0.5 ? 1 : 0]),
+      }),
+      "utf8",
+    );
   });
 });

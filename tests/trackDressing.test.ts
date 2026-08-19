@@ -14,11 +14,9 @@
  * its own totals. See the header of `support/trackCalibrate.ts`.
  */
 import { describe, expect, it } from "vitest";
-import { cook } from "../src/graph/index.js";
-import type { Geometry } from "../src/data/index.js";
+import { type Geometry, createPointCloud } from "../src/data/index.js";
+import { cook, makeGeometryItem } from "../src/graph/index.js";
 import { firstGeo } from "../src/nodes/nodes.testsupport.js";
-import { createPointCloud } from "../src/data/index.js";
-import { makeGeometryItem } from "../src/graph/index.js";
 import { buildTrackDressingGraph } from "./support/trackDressing.js";
 import {
   type Corrections,
@@ -27,127 +25,37 @@ import {
   calibrate,
   chooseCommittedStretches,
   correct,
-  countBlocking,
+  isMovable,
   noCorrections,
-  score,
 } from "./support/trackCalibrate.js";
+import {
+  TRACK,
+  better,
+  col,
+  countCornerEntries,
+  readPlacements,
+  scoreCook,
+} from "./support/trackRead.js";
 import {
   NO_COMMITTED_STRETCHES,
   PRESETS,
   type Preset,
   decodeCommittedStretches,
   encodeCommittedStretches,
+  tenthOf,
 } from "./support/trackKit.js";
 
-const HALF_WIDTH = 1755;
-const CONTROL_POINTS = 800;
-const FRAMES = 400;
-const LAP_RADIUS = 62 * HALF_WIDTH;
-const RELIEF = 6 * HALF_WIDTH;
+const { halfWidth: HALF_WIDTH, controlPoints: CONTROL_POINTS, frames: FRAMES } = TRACK;
+const { lapRadius: LAP_RADIUS, relief: RELIEF } = TRACK;
 
-/** The same column read, for the helpers that take a Float64Array. */
-const colOf = (g: Geometry, n: string): Float64Array => col(g, n);
-
-/** Read a numeric point column as plain numbers, without its slack. */
-function col(g: Geometry, name: string): Float64Array {
-  const a = g.attrs.point.require(name);
-  const out = new Float64Array(g.pointCount * a.tupleSize);
-  for (let i = 0; i < out.length; i++) out[i] = a.data[i];
-  return out;
-}
-
-/**
- * Read a string point column. `get` on a string attribute returns the
- * STRING-TABLE INDEX; `getString` is the one that resolves it, and reading
- * the wrong one silently yields a column of plausible small integers.
- */
-function strCol(g: Geometry, name: string): string[] {
-  const a = g.attrs.point.require(name);
-  const out: string[] = [];
-  for (let i = 0; i < g.pointCount; i++) out.push(a.getString(i, 0));
-  return out;
-}
-
-/** The cooked placements, as the metrics see them. */
-function readPlacements(g: Geometry): Placement[] {
-  const archetype = strCol(g, "archetype");
-  const stationW = col(g, "stationW");
-  const lateralW = col(g, "lateralW");
-  const heightW = col(g, "heightW");
-  const footprintW = col(g, "footprintW");
-  const tallnessW = col(g, "tallnessW");
-  const zone = col(g, "zone");
-  const pack1 = col(g, "pack1");
-  const pack2 = col(g, "pack2");
-  const variant = col(g, "variant");
-  const polygons = col(g, "polygons");
-  const isSprite = col(g, "isSprite");
-  // Rule-placed furniture carries the turn direction of the corner it
-  // announces; a density placement has no corner and carries 0.
-  const cornerK = g.attrs.point.get("cornerK") ? col(g, "cornerK") : new Float64Array(g.pointCount);
-  const out: Placement[] = [];
-  for (let i = 0; i < g.pointCount; i++) {
-    out.push({
-      archetype: archetype[i],
-      stationW: stationW[i],
-      lateralW: lateralW[i],
-      heightW: heightW[i],
-      footprintW: footprintW[i],
-      tallnessW: tallnessW[i],
-      radiusW: pack1[i * 4 + 3],
-      kSigned: pack2[i * 4 + 3],
-      zone: zone[i],
-      cornerK: cornerK[i],
-      variant: variant[i],
-      polygons: polygons[i],
-      isSprite: isSprite[i],
-      // The asset slot: one model per family, and a family is an archetype
-      // plus a variant. Composed here rather than in the graph because the
-      // field grammar has no string concatenation, and a numeric variant
-      // beside the archetype name carries the same information.
-      family: `${archetype[i]}#${variant[i]}`,
-    });
-  }
-  return out;
-}
-
-/**
- * How many corner ENTRIES the frames hold, counted the graph's way —
- * including sampling the severity two half-widths INTO the corner rather
- * than at the entry, where the radius has only just crossed the
- * threshold. An independent re-derivation of what the graph decides, so
- * it has to make the same choice or it is measuring something else.
- */
-function countCornerEntries(frames: Geometry, lapW: number): { entries: number; tight: number } {
-  const isCorner = col(frames, "isCorner");
-  const radiusW = col(frames, "radiusW");
-  const n = frames.pointCount;
-  const probe = Math.round(2 / (lapW / n));
-  let entries = 0;
-  let tight = 0;
-  for (let i = 0; i < n; i++) {
-    const prev = isCorner[(i + n - 1) % n];
-    if (isCorner[i] >= 0.5 && prev < 0.5) {
-      entries++;
-      if (radiusW[(i + probe) % n] < 8) tight++;
-    }
-  }
-  return { entries, tight };
-}
-
-/**
- * Is `a` a better iteration than `b`?
- *
- * More metrics passed wins; a tie goes to whichever landed closer to the
- * target density. Keeping the BEST rather than the LAST is the point: the
- * corrections are measured on samples small enough to be noisy — only a
- * few dozen placements sit inside bends on a lap — so a later iteration is
- * usually, but not always, an improvement.
- */
-function better(a: Report, b: Report, preset: Preset): boolean {
-  if (a.passed !== b.passed) return a.passed > b.passed;
-  return Math.abs(a.perW - preset.density) < Math.abs(b.perW - preset.density);
-}
+/** The build options every suite shares; only the aiming differs. */
+const BASE = {
+  halfWidth: HALF_WIDTH,
+  controlPoints: CONTROL_POINTS,
+  frames: FRAMES,
+  lapRadius: LAP_RADIUS,
+  relief: RELIEF,
+} as const;
 
 /** Cook one iteration of the pipeline and score what came out. */
 async function runOnce(
@@ -167,12 +75,8 @@ async function runOnce(
   const lapW = lapLength / HALF_WIDTH;
   const plan = calibrate(preset, lapW, c);
   const { graph } = buildTrackDressingGraph({
+    ...BASE,
     preset,
-    halfWidth: HALF_WIDTH,
-    controlPoints: CONTROL_POINTS,
-    frames: FRAMES,
-    lapRadius: LAP_RADIUS,
-    relief: RELIEF,
     countByProfile: plan.countByProfile,
     weightByArchetype: plan.weightByArchetype,
     outsideShift: plan.outsideShift,
@@ -182,38 +86,37 @@ async function runOnce(
     seed,
     ...passes,
   });
-  const out = await cook(graph);
-  const placementGeo = firstGeo(out.outputs.placements);
-  const frames = firstGeo(out.outputs.frames);
-  const placements = readPlacements(placementGeo);
-  const corners = countCornerEntries(frames, lapW);
-  const markers = placements.filter((p) => p.archetype === "corner-marker").length;
-  const blocking = countBlocking(
-    placements,
-    col(placementGeo, "P"),
-    col(frames, "P"),
-    frames.pointCount,
-    HALF_WIDTH,
-    lapW,
-  );
-  const report = score(placements, preset, lapW, corners.entries, markers, blocking);
-  return { report, placements, frames, lapW };
+  return { ...scoreCook(await cook(graph), preset, lapW), lapW };
 }
 
 /**
  * Measure the generated lap, and pick the stretches the balance pass will
  * commit — neither of which anything downstream can know before a cook.
+ *
+ * Memoised on the preset, which is the only thing it varies with: every
+ * other input is a module constant and both seeds inside are literals. It
+ * runs two full build-and-cook pairs and the suite asks for it a dozen
+ * times across three presets, so without the memo a quarter of the run is
+ * spent recomputing answers it already had.
  */
-async function measureLap(
+const lapCache = new Map<Preset, Promise<{ lapLength: number; committed: Record<number, number> }>>();
+
+function measureLap(
+  preset: Preset,
+): Promise<{ lapLength: number; committed: Record<number, number> }> {
+  const hit = lapCache.get(preset);
+  if (hit) return hit;
+  const run = measureLapUncached(preset);
+  lapCache.set(preset, run);
+  return run;
+}
+
+async function measureLapUncached(
   preset: Preset,
 ): Promise<{ lapLength: number; committed: Record<number, number> }> {
   const { graph } = buildTrackDressingGraph({
+    ...BASE,
     preset,
-    halfWidth: HALF_WIDTH,
-    controlPoints: CONTROL_POINTS,
-    frames: FRAMES,
-    lapRadius: LAP_RADIUS,
-    relief: RELIEF,
     countByProfile: { flat: 1, built: 1, clustered: 1 },
     weightByArchetype: {},
     seed: 1,
@@ -429,13 +332,6 @@ bands ${JSON.stringify(report.bandShare)}`);
     // threshold here would be asserting a property of the lap.
     const preset = PRESETS.lush;
     const { lapLength, committed } = await measureLap(preset);
-    const tenthOf = (p: Placement, lapW: number) =>
-      Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / 10));
-    const movable = (p: Placement) =>
-      Math.abs(p.radiusW) >= 12 &&
-      p.archetype !== "corner-marker" &&
-      p.archetype !== "braking-reference";
-
     // The graph bins in f32 through a field and this bins in f64, so a
     // placement landing exactly on a tenth boundary can be binned either
     // side by the last bits. That is a tie, not a defect, and asserting
@@ -456,9 +352,9 @@ bands ${JSON.stringify(report.bandShare)}`);
       // either side by the last bits — which is a tie, not a defect, and
       // asserting through it would be asserting about rounding.
       const inTenth = on.placements.filter(
-        (p) => tenthOf(p, on.lapW) === Number(tenth) && p.lateralW !== 0 && !nearEdge(p, on.lapW),
+        (p) => tenthOf(p.stationW, on.lapW) === Number(tenth) && p.lateralW !== 0 && !nearEdge(p, on.lapW),
       );
-      const free = inTenth.filter(movable);
+      const free = inTenth.filter(isMovable);
       expect(free.length, `stretch ${tenth} has movable placements`).toBeGreaterThan(3);
       // Every one of them, on the committed side. No tolerance: this is
       // what the pass does, and a placement it missed is a bug.
@@ -477,9 +373,9 @@ bands ${JSON.stringify(report.bandShare)}`);
     for (const [tenth, dir] of Object.entries(committed)) {
       wrongBefore += off.placements.filter(
         (p) =>
-          tenthOf(p, off.lapW) === Number(tenth) &&
+          tenthOf(p.stationW, off.lapW) === Number(tenth) &&
           p.lateralW !== 0 &&
-          movable(p) &&
+          isMovable(p) &&
           !nearEdge(p, off.lapW) &&
           Math.sign(p.lateralW) !== Number(dir),
       ).length;
@@ -489,9 +385,10 @@ bands ${JSON.stringify(report.bandShare)}`);
     // Nothing OUTSIDE a committed stretch was touched by the pass.
     const keyOf = (p: Placement) => `${p.archetype}|${p.stationW.toFixed(3)}`;
     const offSide = new Map(off.placements.map((p) => [keyOf(p), p.lateralW]));
+    const committedTenths = new Set(Object.keys(committed).map(Number));
     let movedOutside = 0;
     for (const p of on.placements) {
-      if (Object.keys(committed).includes(String(tenthOf(p, on.lapW)))) continue;
+      if (committedTenths.has(tenthOf(p.stationW, on.lapW))) continue;
       if (nearEdge(p, on.lapW)) continue;
       const was = offSide.get(keyOf(p));
       if (was !== undefined && Math.sign(was) !== Math.sign(p.lateralW)) movedOutside++;
@@ -511,12 +408,8 @@ bands ${JSON.stringify(report.bandShare)}`);
     // and the half-width is one addressable knob, so both are DATA.
     const preset = PRESETS.lush;
     const built = buildTrackDressingGraph({
+      ...BASE,
       preset,
-      halfWidth: HALF_WIDTH,
-      controlPoints: CONTROL_POINTS,
-      frames: FRAMES,
-      lapRadius: LAP_RADIUS,
-      relief: RELIEF,
       // Deliberately wrong for the track it is about to be given: if any
       // of this leaked into the geometry the metrics below would say so.
       countByProfile: { flat: 1, built: 1, clustered: 1 },
@@ -553,20 +446,20 @@ bands ${JSON.stringify(report.bandShare)}`);
     // 213 nodes, four integer counts and three weight lists.
     const aim = (plan: ReturnType<typeof calibrate>) => {
       for (const profile of ["flat", "built", "clustered"] as const) {
+        const ids = built.archetypesByProfile[profile];
         graph.setParam(
           built.nodes.anchors[profile],
           "count",
           Math.max(1, Math.round(plan.countByProfile[profile] ?? 1)),
         );
+        // Quantised against the profile's own largest rate, which is a
+        // property of the list rather than of each entry — hoisted out of
+        // the map over that same list.
+        const top = Math.max(1e-9, ...ids.map((x) => plan.weightByArchetype[x] ?? 0));
         graph.setParam(
           built.nodes.anchorKind[profile],
           "weights",
-          built.archetypesByProfile[profile].map((id) =>
-            Math.max(1, Math.round(((plan.weightByArchetype[id] ?? 0) / Math.max(
-              1e-9,
-              Math.max(...built.archetypesByProfile[profile].map((x) => plan.weightByArchetype[x] ?? 0)),
-            )) * 1000)),
-          ),
+          ids.map((id) => Math.max(1, Math.round(((plan.weightByArchetype[id] ?? 0) / top) * 1000))),
         );
       }
     };
@@ -607,25 +500,7 @@ bands ${JSON.stringify(report.bandShare)}`);
     let best: Report | null = null;
     for (let iter = 0; iter < 3; iter++) {
       aim(calibrate(preset, lapW, c));
-      const out = await cook(graph);
-      const placements = readPlacements(firstGeo(out.outputs.placements));
-      const frames = firstGeo(out.outputs.frames);
-      const corners = countCornerEntries(frames, lapW);
-      const report = score(
-        placements,
-        preset,
-        lapW,
-        corners.entries,
-        placements.filter((p) => p.archetype === "corner-marker").length,
-        countBlocking(
-          placements,
-          colOf(firstGeo(out.outputs.placements), "P"),
-          colOf(frames, "P"),
-          frames.pointCount,
-          HALF_WIDTH,
-          lapW,
-        ),
-      );
+      const { report } = scoreCook(await cook(graph), preset, lapW);
       if (best === null || better(report, best, preset)) best = report;
       c = correct(preset, report, c);
     }

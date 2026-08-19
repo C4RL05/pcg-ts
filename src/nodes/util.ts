@@ -956,6 +956,68 @@ export interface PolylineArcTable {
 }
 
 /**
+ * The refusal a path node gives when it finds no path.
+ *
+ * Shared by {@link polylineWalks} and everything layered on it, because it
+ * is the single most likely thing to go wrong upstream of a path node and
+ * the message is what tells an author which node ate the topology. An
+ * error this specific is worth exactly one copy.
+ */
+function noPolylines(geo: Geometry, nodeType: string): Error {
+  const what =
+      geo.primitiveCount === 0
+        ? `the input is a plain point cloud (${geo.pointCount} points, 0 primitives)`
+        : `the input has ${geo.primitiveCount} primitives but no usable polyline among them (a polyline needs primtype "polyline" and at least 2 vertices)`;
+  return new Error(
+      `${nodeType}: input has no polyline primitives — ${what}. Build a path in-graph with pointsToPath (or createPolyline in TypeScript). If one WAS built upstream, a node between it and ${nodeType} dropped the topology: any node that can REMOVE points rebuilds the point domain from the survivors and the primitives go with it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and mergePoints does the same when it concatenates clouds. Category is not the rule: projectToPlane is categorised "filter" but preserves topology, and filterByAttribute drops it even when its predicate keeps every point. The primitive filters, filterPrimitivesByBounds and filterPrimitivesByAttribute, are never the culprit for a DROPPED topology — they filter the PRIMITIVE domain and preserve the topology of everything they keep — but either can empty that domain by rejecting every primitive, so if one is upstream, check its bounds/vertex/mode or its attribute/comparison/value before you move anything. Fix by moving pointsToPath after those nodes, so the path is built over the points that survive.`,
+  );
+}
+
+/** One polyline's vertex walk, without any of its measurements. */
+export interface PolylineWalk {
+  /** Index of this primitive in the source geometry. */
+  readonly prim: number;
+  /** Point index of each vertex along the path, in walk order. */
+  readonly points: Uint32Array;
+  /** Whether the last vertex references the first vertex's point. */
+  readonly closed: boolean;
+}
+
+/**
+ * Which points each polyline visits, in order — the part of
+ * {@link polylineArcTables} that does not measure anything.
+ *
+ * Split out because arc length is not free: the full table allocates four
+ * Float64Arrays per polyline and takes a square root per segment, and a
+ * node that only walks the topology pays all of it for nothing. `pathScan`
+ * is exactly that node — it accumulates one add per component and reads no
+ * distance at all — so on a long path the measuring it did not ask for
+ * dominated the work it did.
+ *
+ * The primtype filter, the two-vertex minimum and the refusal message all
+ * live here, so the two entry points cannot disagree about what counts as
+ * a polyline.
+ */
+export function polylineWalks(geo: Geometry, nodeType: string): PolylineWalk[] {
+  const v2p = geo.vertexToPoint;
+  const starts = geo.primVertexStart;
+  const counts = geo.primVertexCount;
+  const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
+  const walks: PolylineWalk[] = [];
+  for (let p = 0; p < geo.primitiveCount; p++) {
+    const nv = counts[p];
+    if (nv < 2) continue;
+    if (primType && primType.getString(p) !== "polyline") continue;
+    const v0 = starts[p];
+    const points = new Uint32Array(nv);
+    for (let k = 0; k < nv; k++) points[k] = v2p[v0 + k];
+    walks.push({ prim: p, points, closed: v2p[v0] === v2p[v0 + nv - 1] });
+  }
+  if (walks.length === 0) throw noPolylines(geo, nodeType);
+  return walks;
+}
+
+/**
  * Build one {@link PolylineArcTable} per polyline primitive, in primitive
  * index order. Primitives with fewer than 2 vertices are skipped, and so
  * are primitives whose `primtype` is not `"polyline"` (a geometry with no
@@ -971,19 +1033,11 @@ export function polylineArcTables(geo: Geometry, nodeType: string): PolylineArcT
   }
   const pd = P.data;
   const ps = P.tupleSize;
-  const v2p = geo.vertexToPoint;
-  const starts = geo.primVertexStart;
-  const counts = geo.primVertexCount;
-  const primType = geo.attrs.primitive.get(PRIMTYPE_ATTR);
   const tables: PolylineArcTable[] = [];
-  for (let p = 0; p < geo.primitiveCount; p++) {
-    const nv = counts[p];
-    if (nv < 2) continue;
-    if (primType && primType.getString(p) !== "polyline") continue;
-    const v0 = starts[p];
+  for (const walk of polylineWalks(geo, nodeType)) {
+    const { prim: p, points, closed } = walk;
+    const nv = points.length;
     const nSeg = nv - 1;
-    const points = new Uint32Array(nv);
-    for (let k = 0; k < nv; k++) points[k] = v2p[v0 + k];
     const segStart = new Float64Array(nSeg * 3);
     const segDir = new Float64Array(nSeg * 3);
     const segLen = new Float64Array(nSeg);
@@ -1007,22 +1061,13 @@ export function polylineArcTables(geo: Geometry, nodeType: string): PolylineArcT
     tables.push({
       prim: p,
       points,
+      closed,
       segStart,
       segDir,
       segLen,
       cum,
       length: cum[nSeg],
-      closed: points[0] === points[nv - 1],
     });
-  }
-  if (tables.length === 0) {
-    const what =
-      geo.primitiveCount === 0
-        ? `the input is a plain point cloud (${geo.pointCount} points, 0 primitives)`
-        : `the input has ${geo.primitiveCount} primitives but no usable polyline among them (a polyline needs primtype "polyline" and at least 2 vertices)`;
-    throw new Error(
-      `${nodeType}: input has no polyline primitives — ${what}. Build a path in-graph with pointsToPath (or createPolyline in TypeScript). If one WAS built upstream, a node between it and ${nodeType} dropped the topology: any node that can REMOVE points rebuilds the point domain from the survivors and the primitives go with it — filterByDensity, filterByBounds, filterByAttribute, filterByExpression, selfPrune, partitionByAttribute — and mergePoints does the same when it concatenates clouds. Category is not the rule: projectToPlane is categorised "filter" but preserves topology, and filterByAttribute drops it even when its predicate keeps every point. The primitive filters, filterPrimitivesByBounds and filterPrimitivesByAttribute, are never the culprit for a DROPPED topology — they filter the PRIMITIVE domain and preserve the topology of everything they keep — but either can empty that domain by rejecting every primitive, so if one is upstream, check its bounds/vertex/mode or its attribute/comparison/value before you move anything. Fix by moving pointsToPath after those nodes, so the path is built over the points that survive.`,
-    );
   }
   return tables;
 }
