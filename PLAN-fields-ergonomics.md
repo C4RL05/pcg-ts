@@ -114,7 +114,9 @@ struck below.
 site — a nine-nested-object hand-rolled perpendicular in
 `graphs/examples-riverbank.json` — and now reads as one call.
 
-Still absent: `fract mod smoothstep exp log sign distance`.
+Still absent: nothing — `fract mod smoothstep exp log sign distance` all
+shipped 2026-08-19, taking the grammar to 57 fns. See PLAN.md for what
+the outcome said about this section's reasoning.
 
 **Measured demand for those, in the corpus: zero.**
 

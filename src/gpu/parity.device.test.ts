@@ -456,6 +456,198 @@ describe.skipIf(testDevice === null)(deviceSuiteName("device parity"), () => {
     expect(over, "families exceeding a budget at some element count").toEqual([]);
   }, DEVICE_MEASUREMENT_TIMEOUT_MS);
 
+  it("the seven math additions agree at the edges their parity domains guard away", () => {
+    // Every measured parity row deliberately avoids its own pathological
+    // inputs: `log`'s argument is guarded strictly positive, `mod`'s divisor
+    // is a non-zero constant, `smoothstep`'s edges never coincide. Those
+    // guards are right — a NaN lane makes |cpu - gpu| NaN, which is not `>`
+    // any budget and would slip through silently — but they leave the
+    // catalog's "on both paths" claims resting on reasoning rather than on
+    // measurement. This probe measures them.
+    const geo = makeParityGeometry(64);
+    const P = geo.attrs.point.require("P");
+    const ROWS: readonly number[] = [
+      0, -0, NaN, Infinity, -Infinity, -1, 9, -9, 2, 1.5, -0.25, 1e-40,
+    ];
+    ROWS.forEach((x, i) => {
+      P.data[i * 3] = x;
+    });
+
+    const PXP = { fn: "component", args: [{ fn: "position" }], index: 0 } as const;
+    const probes: Record<string, FieldSpecArg> = {
+      // "A zero divisor is NaN on both paths, because floor(x / 0) is
+      // infinite and 0 * Infinity is NaN."
+      modZero: { fn: "mod", args: [PXP, 0] },
+      // "The sign follows the DIVISOR" — with y < 0 every result is <= 0.
+      modNegative: { fn: "mod", args: [PXP, -8] },
+      // "A NaN gets 0 and a negative zero gets +0."
+      signEdges: { fn: "sign", args: [PXP] },
+      // "A non-finite input has no fractional part."
+      fractEdges: { fn: "fract", args: [PXP] },
+      // "edge0 == edge1 gives the step the curve is approaching."
+      smoothstepDegenerate: { fn: "smoothstep", args: [2, 2, PXP] },
+      smoothstepStepTwin: { fn: "step", args: [2, PXP] },
+      // Coincident INFINITE edges. A graph file cannot carry an infinity, so
+      // these are computed: the guard tests the edges rather than their
+      // difference precisely so this case still answers a step.
+      smoothstepInfEdges: {
+        fn: "smoothstep",
+        args: [{ fn: "div", args: [1, 0] }, { fn: "div", args: [1, 0] }, PXP],
+      },
+      smoothstepNegInfEdges: {
+        fn: "smoothstep",
+        args: [{ fn: "div", args: [-1, 0] }, { fn: "div", args: [-1, 0] }, PXP],
+      },
+      // A NaN edge with a live span: the guard does NOT fire (NaN equals
+      // nothing), so this reaches the clamp, which is where the two paths
+      // part company. Measured rather than reasoned about.
+      smoothstepNaNEdge: { fn: "smoothstep", args: [{ fn: "div", args: [0, 0] }, 1, PXP] },
+      // "log(0) is -Infinity and a negative input is NaN, on both paths."
+      logEdges: { fn: "log", args: [PXP] },
+      // "Overflows to Infinity ... underflows to 0 ... on both paths."
+      expEdges: { fn: "exp", args: [{ fn: "mul", args: [PXP, 200] }] },
+    };
+
+    const kernels = Object.fromEntries(
+      Object.entries(probes).map(([name, spec]) => [name, compileFieldSpec(spec, PARITY_LAYOUT)]),
+    );
+    const results = runDeviceTasks(
+      Object.entries(kernels).map(([name, kernel]) => dispatchTask(name, kernel, geo, 64, 1)),
+    );
+    const gpuCols: Record<string, Column> = {};
+    for (const result of results) {
+      expect(result.errors, result.name).toEqual([]);
+      gpuCols[result.name] = decodeRun(kernels[result.name], result.runs![0]);
+    }
+    const cpuCols = Object.fromEntries(
+      Object.entries(probes).map(([name, spec]) => [
+        name,
+        evaluateField(fieldFromJson(spec as FieldSpec), { geo, domain: "point", seed: 1 }),
+      ]),
+    );
+
+    // Semantic agreement, not raw bits: a device NaN is 0x7fffffff where
+    // JS mints 0x7fc00000, and both are NaN. Signed zeros are compared by
+    // Object.is, since +0 vs -0 is exactly one of the claims under test.
+    //
+    // TWO ROWS ARE EXCLUDED FROM THE EQUALITY, both by contract rather than
+    // by convenience, and this probe was written before either was obvious:
+    //
+    //  - THE SUBNORMAL ROW. The device flushes a subnormal INPUT to zero on
+    //    load, exactly as it flushes a subnormal result (the contract the
+    //    `subnormalMul` probe below measures and the README documents). So
+    //    `sign(1e-40)` is 1 on the CPU and 0 on the device, `fract` gives
+    //    the input back against 0, and `log` gives -92.1 against -Infinity.
+    //    None of that is these fns' doing — it is what f32 denormal
+    //    flushing means — but it is the one place the "bit-exact" rows are
+    //    NOT bit-exact, so it is asserted as the documented divergence
+    //    rather than quietly dropped.
+    //
+    //  - ORDINARY FINITE INPUTS TO `exp` AND `log`. Those two carry measured
+    //    budgets precisely because the device's transcendentals are not the
+    //    host's; demanding equality at log(1.5) would be demanding that the
+    //    budget be zero. They are held to agreement only where the answer is
+    //    exact by definition — a zero, an infinity or a NaN.
+    const SUBNORMAL_ROW = 11;
+    const EXACT_FNS = [
+      "modZero", "modNegative", "signEdges", "fractEdges", "smoothstepDegenerate",
+      "smoothstepInfEdges", "smoothstepNegInfEdges",
+    ];
+    // Measured below rather than required to agree — see the note there.
+    const KNOWN_DIVERGENT = ["smoothstepNaNEdge"];
+    const lines: string[] = [];
+    const divergent: string[] = [];
+    for (const name of Object.keys(probes)) {
+      for (let i = 0; i < ROWS.length; i++) {
+        if (i === SUBNORMAL_ROW) continue;
+        const c = cpuCols[name].data[i];
+        const g = gpuCols[name].data[i];
+        // A budgeted fn is pinned only at the values that have no interior.
+        if (KNOWN_DIVERGENT.includes(name)) continue;
+        if (!EXACT_FNS.includes(name) && Number.isFinite(c) && c !== 0) continue;
+        const agree = Number.isNaN(c) ? Number.isNaN(g) : Object.is(c, g);
+        if (!agree) divergent.push(`${name} row ${i} (x=${ROWS[i]}): cpu=${c} gpu=${g}`);
+      }
+      lines.push(
+        `${name}: cpu ${ROWS.map((_, i) => cpuCols[name].data[i]).join(", ")}`,
+      );
+      if (KNOWN_DIVERGENT.includes(name)) {
+        lines.push(
+          `${name}: gpu ${ROWS.map((_, i) => gpuCols[name].data[i]).join(", ")}`,
+        );
+      }
+    }
+
+    // The subnormal row, asserted as the contract it is: the device reads a
+    // denormal input as zero, so these are the answers zero produces.
+    expect(
+      [
+        gpuCols.signEdges.data[SUBNORMAL_ROW],
+        gpuCols.fractEdges.data[SUBNORMAL_ROW],
+        gpuCols.logEdges.data[SUBNORMAL_ROW],
+      ],
+      "denormal input flushes to zero on the device",
+    ).toEqual([0, 0, -Infinity]);
+    expect(
+      [
+        cpuCols.signEdges.data[SUBNORMAL_ROW],
+        Number.isFinite(cpuCols.logEdges.data[SUBNORMAL_ROW]),
+      ],
+      "the CPU keeps the denormal, which is why the two disagree there",
+    ).toEqual([1, true]);
+
+    // A NaN EDGE WITH A LIVE SPAN is the one input where smoothstep's two
+    // paths part company, and it is measured here rather than reasoned
+    // about. The guard does not fire (a NaN equals nothing, including
+    // itself), so the value reaches the clamp: the CPU's
+    // `Math.min(Math.max(NaN, 0), 1)` propagates the NaN, while WGSL's
+    // `clamp` is free to return the non-NaN operand and this adapter
+    // returns 0 on every lane. That is the same contract the minNaN/maxNaN
+    // probe below records, inherited through the clamp this fn expands to —
+    // which is why the parity row's `exact: true` is scoped to a domain
+    // without NaN edges, and why the catalog says so in as many words.
+    expect(
+      Array.from(cpuCols.smoothstepNaNEdge.data.slice(0, ROWS.length)).every(Number.isNaN),
+      "CPU propagates a NaN edge",
+    ).toBe(true);
+    expect(
+      Array.from(gpuCols.smoothstepNaNEdge.data.slice(0, ROWS.length)).every((v) => v === 0),
+      "the device's clamp swallows it",
+    ).toBe(true);
+
+    // The specific catalog claims, asserted on the CPU column so a failure
+    // names the promise rather than only the disagreement.
+    const mz = cpuCols.modZero.data;
+    for (let i = 0; i < ROWS.length; i++) {
+      expect(Number.isNaN(mz[i]), `mod by zero, row ${i}`).toBe(true);
+    }
+    const mn = cpuCols.modNegative.data;
+    expect([mn[5], mn[6], mn[7]], "mod with a negative divisor follows it down").toEqual([-1, -7, -1]);
+    const sg = cpuCols.signEdges.data;
+    expect(Object.is(sg[0], 0), "sign(+0) is +0").toBe(true);
+    expect(Object.is(sg[1], 0), "sign(-0) is +0, where Math.sign gives -0").toBe(true);
+    expect(Object.is(sg[2], 0), "sign(NaN) is 0, where Math.sign gives NaN").toBe(true);
+    expect([sg[3], sg[4]], "sign of the infinities").toEqual([1, -1]);
+    const fr = cpuCols.fractEdges.data;
+    expect(Number.isNaN(fr[3]) && Number.isNaN(fr[4]), "fract of a non-finite input").toBe(true);
+    expect(fr[10], "fract(-0.25) is non-negative").toBe(0.75);
+    for (let i = 0; i < ROWS.length; i++) {
+      expect(
+        cpuCols.smoothstepDegenerate.data[i],
+        `smoothstep with coincident edges is step, row ${i}`,
+      ).toBe(cpuCols.smoothstepStepTwin.data[i]);
+    }
+    expect(cpuCols.logEdges.data[0], "log(0)").toBe(-Infinity);
+    expect(Number.isNaN(cpuCols.logEdges.data[5]), "log of a negative").toBe(true);
+    expect(cpuCols.expEdges.data[3], "exp overflows to Infinity").toBe(Infinity);
+    expect(cpuCols.expEdges.data[4], "exp underflows to zero").toBe(0);
+
+    console.log(`[math edge probes ${testDevice!.label}]\n${lines.join("\n")}`);
+    // The point of the probe: every one of those claims holds on the DEVICE
+    // too, at inputs no measured budget covers.
+    expect(divergent, "CPU and GPU must agree at these edges").toEqual([]);
+  }, DEVICE_MEASUREMENT_TIMEOUT_MS);
+
   it("audit residual probes: NaN min/max, normalize extremes, lattice overflow, subnormals", () => {
     // Deliberately-pathological inputs from the phase-19 audit's residual
     // list. Divergence here is documented GIGO contract, not a defect:

@@ -142,10 +142,13 @@ describe("parity budget shape", () => {
       [
         "composite",
         "fbm perlin",
+        "distance",
+        "exp",
         "fbm simplex",
         "fbm value",
         "fbm worley",
         "length/normalize",
+        "log",
         "perlinNoise normalized",
         "perlinNoise raw",
         "pow",

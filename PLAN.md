@@ -118,27 +118,48 @@ a `value` pin kind that NO node consumes — a wire type with a producer
 and no destination (`src/graph/node.ts`, `valueConstant`). A vestige
 pointing at exactly the model D3 would complete.
 
-### The seven remaining math primitives, 2026-08-17
+### ~~The seven remaining math primitives~~ — SHIPPED 2026-08-19
 
-`fract mod smoothstep exp log sign distance`. `3b58a31` added `cross`,
-`pow`, `sqrt` and `step`; these are what the original list had left.
+`fract mod smoothstep exp log sign distance` are in the grammar, which
+goes 50 -> 57 fns. Kept here rather than deleted because the entry's own
+reasoning is what the outcome tested, and it was half right.
 
-Measured demand in the corpus is zero — no `fract` idiom
-(`sub(x, floor(x))`), no `distance` idiom (`length(sub(a, b))`), and all
-20 surviving `floor` uses are genuine integer binning. Read that with the
-same caution as the entry above: a corpus of single-concept demos is the
-wrong place to look for demand on a math primitive, and the one that DID
-get demanded got demanded by a real graph — `cross` shipped because
-`examples-riverbank` open-coded it nine nested objects deep, and now reads
-as one call.
+**The trigger was a caller, exactly as the entry demanded — but not the
+one it predicted.** It said "build one when a graph wants it", and no
+graph did: measured corpus demand was still zero the morning this
+shipped. What arrived instead was a person asking for all seven at once,
+which is a legitimate caller and a different kind of one. The `mod`
+semantics the entry reserved for such a caller was duly put to them, and
+answered FLOORED — sign follows the divisor, `mod(-1, 8)` is 7 — for
+coordinate wrapping, since a truncated remainder mirrors every tile in
+the negative quadrants and so breaks precisely where an unbounded
+generator lives. That answer is now permanent and `graphs/basics-tiling-a-field.json`
+is built to make it visible rather than merely stated.
 
-So the trigger is a SITE, not a count: build one when a graph wants it.
-Each costs a CPU implementation, a WGSL lowering, parse/emit, a parity
-test and a real device probe — `3b58a31` overturned three of four
-assumptions about parity by measurement — plus permanent catalog surface.
-`mod` additionally forces a semantic choice (truncated against floored
-remainder) that then has to be documented forever, so it wants a caller
-that says which one it means.
+**The cost estimate was right about the shape and wrong about the size.**
+Each fn did cost a CPU implementation, a lowering, parse/emit, a parity
+row and a device probe. What the entry did not anticipate is that FOUR OF
+THE SEVEN CAME OUT BIT-EXACT — `fract`, `mod`, `sign` and `smoothstep` —
+because each was DESIGNED for exactness rather than measured for a
+budget: `sign` is a pair of comparisons, `fract` is two exact ops, and
+`mod` and `smoothstep` round each intermediate to f32 individually so the
+CPU runs the device's expansion step for step, which is the trade `cross`
+made. Only `exp` and `log` are genuinely transcendental (budgets 8 and 2)
+and `distance` carries 1 ULP against `length`'s 4. Three new budgeted
+rows, not seven — so "permanent catalog surface" was the real cost and
+the parity work was less than billed.
+
+**One assumption was refuted outright.** The entry treats a synonym as
+disqualifying, per the `and`/`or` refusal below. `sign` IS a synonym —
+`normalize` on a scalar already returned -1/0/1 — and it shipped anyway,
+on the `step` precedent: it renames something nobody would guess the
+spelling of. The `and`/`or` line therefore is not "no synonyms" but "no
+synonym for an operation whose existing spelling is already the obvious
+one", which is a narrower rule than this entry assumed it was applying.
+
+What is still absent, and now deliberately: `exp2`/`log2` (`pow(2, x)` is
+the first, nothing has asked for the second), a truncated remainder to sit
+beside the floored one, and `trunc` itself.
 
 ### The graph written blind, 2026-08-17
 

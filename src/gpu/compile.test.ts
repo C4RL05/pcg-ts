@@ -299,6 +299,16 @@ describe("grammar coverage", () => {
     simplexNoise: { fn: "simplexNoise" },
     worleyNoise: { fn: "worleyNoise" },
     fbm: { fn: "fbm", base: "perlinNoise" },
+    fract: { fn: "fract", args: [1.5] },
+    // A NEGATIVE dividend: the whole point of a floored mod is what it does
+    // on this side of zero, so the minimal case has to be on that side.
+    mod: { fn: "mod", args: [-1, 8] },
+    sign: { fn: "sign", args: [-2] },
+    exp: { fn: "exp", args: [1] },
+    // Strictly positive: zero is -Infinity and negatives are NaN, on both.
+    log: { fn: "log", args: [2] },
+    smoothstep: { fn: "smoothstep", args: [0, 1, 0.25] },
+    distance: { fn: "distance", args: [[1, 2, 3], [4, 5, 6]] },
   };
 
   it("has a minimal compile case for every grammar fn", () => {

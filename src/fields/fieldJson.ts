@@ -91,10 +91,13 @@ import {
   cos,
   cross,
   div,
+  distance,
   dot,
   eq,
+  exp,
   evaluateField,
   floor,
+  fract,
   fraction,
   ge,
   gt,
@@ -104,10 +107,12 @@ import {
   length,
   lerp,
   lt,
+  log,
   makeField,
   max,
   min,
   mul,
+  mod,
   ne,
   nodeSeed,
   normalize,
@@ -118,7 +123,9 @@ import {
   remap,
   select,
   sin,
+  sign,
   sqrt,
+  smoothstep,
   step,
   sub,
   tan,
@@ -1102,6 +1109,75 @@ registerFixed(
   (f) => abs(f[0]),
 );
 registerFixed(
+  "fract",
+  "uniform",
+  [arg("x", "Value whose fractional part is taken.")],
+  "Elementwise fractional part, `x - floor(x)`, and NON-NEGATIVE for every finite input: " +
+    "`fract(-0.25)` is 0.75, not -0.25. That is exactly `mod(x, 1)`, which is what makes it the " +
+    "tiling primitive — a coordinate pushed through it repeats across the origin with no seam, " +
+    "where a truncated fractional part mirrors the tile at zero. THE RANGE IS [0, 1] CLOSED: " +
+    "`fract(-1e-8)` is exactly 1, because the true answer has no f32 representation and rounds up " +
+    "to it, so anything using this as a table index needs the top to be legal or a clamp. Exact on " +
+    "both paths — not because the subtraction always is, but because both round it identically, the " +
+    "device running the same two operations in the same order. The one exception every fn shares: " +
+    "a SUBNORMAL input is flushed to zero on the device and kept on the CPU.",
+  (f) => fract(f[0]),
+  [{ min: 0, max: 1 }],
+);
+registerFixed(
+  "sign",
+  "uniform",
+  [arg("x", "Value whose sign is taken.")],
+  "Elementwise sign as -1, 0 or +1, EXACT on both paths because the definition is a pair of " +
+    "comparisons — `(x > 0) - (x < 0)` — rather than a builtin whose edge cases are loose. Two " +
+    "answers therefore differ from a host language on purpose: a NaN gets 0 (it is neither " +
+    "greater nor less than zero) and a negative zero gets +0. Exactness stops at the same place " +
+    "every fn's does: a SUBNORMAL input is flushed to zero on the device, so `sign(1e-40)` is 1 " +
+    "on the CPU and 0 on the GPU. It is what `normalize` already does to a scalar, and exists for " +
+    "the reason `step` does — to buy the NAME, since nobody reaches for a vector normalizer to " +
+    "ask which side of zero a number is on.",
+  (f) => sign(f[0]),
+  [{ min: -1, max: 1 }],
+);
+registerFixed(
+  "mod",
+  "uniform",
+  [
+    arg("x", "Dividend — the value being wrapped."),
+    arg("y", "Divisor, and the size of the tile. ZERO IS NaN."),
+  ],
+  "Elementwise FLOORED modulo, `x - y * floor(x / y)` — the remainder whose sign follows the " +
+    "DIVISOR, not the dividend, so `mod(-1, 8)` is 7 and not -1. That choice is deliberate and " +
+    "permanent, and it is made for the dominant use: wrapping a coordinate into a tile. A " +
+    "truncated remainder mirrors the tile either side of the origin, so a pattern built on one " +
+    "breaks along x = 0 and z = 0 — a seam that shows up only once a world crosses zero, which " +
+    "is exactly where an unbounded generator lives. A zero divisor is NaN on both paths, because " +
+    `\`floor(x / 0)\` is infinite and \`0 * Infinity\` is NaN. ${BROADCAST}`,
+  (f) => mod(f[0], f[1]),
+);
+registerFixed(
+  "exp",
+  "uniform",
+  [arg("x", "Exponent applied to e.")],
+  "Elementwise e raised to x. Transcendental on both sides, so it carries a measured GPU budget " +
+    "rather than an exactness claim. It overflows to Infinity above about 88.7 and underflows to " +
+    "0 below about -103.9 on both paths, because that range belongs to f32 and not to either " +
+    "implementation. `exp(mul(-1, d))` is the decay a falloff usually wants; for another base, " +
+    "`pow` is already there, which is why no `exp2` is.",
+  (f) => exp(f[0]),
+);
+registerFixed(
+  "log",
+  "uniform",
+  [arg("x", "Value whose natural logarithm is taken. ZERO IS -Infinity, NEGATIVES ARE NaN.")],
+  "Elementwise NATURAL logarithm — base e, not 10 and not 2. `log(0)` is -Infinity and a " +
+    "negative input is NaN, on both paths. For another base, divide by a constant: " +
+    "`div(log(x), log(b))`. Transcendental on both sides and so budgeted rather than exact. Its " +
+    "usual job is compressing a range that spans orders of magnitude into one a colour or a " +
+    "height can show.",
+  (f) => log(f[0]),
+);
+registerFixed(
   "floor",
   "uniform",
   [arg("x", "Value to round down.")],
@@ -1136,10 +1212,34 @@ registerFixed(
     "`pow` as exactly, and adopting it is what stops the two paths from silently disagreeing " +
     "across a whole quadrant. Zero and infinite bases still behave for a NON-zero exponent: " +
     "`pow(0, 2)` is 0 and `pow(0, -1)` is Infinity. For a signed power write " +
-    "`mul(normalize(x), pow(abs(x), y))` — `normalize` on a scalar yields the sign. It also " +
-    "carries the grammar's WIDEST elementwise GPU budget, so prefer `mul` for a square, `sqrt` " +
+    "`mul(sign(x), pow(abs(x), y))`. It also " +
+    "carries the widest GPU budget of the grammar's ALGEBRAIC fns — only the trigonometric " +
+    "family is wider — so prefer `mul` for a square, `sqrt` " +
     `for a root and \`ramp\` for a falloff rather than spending it. ${BROADCAST}`,
   (f) => pow(f[0], f[1]),
+);
+registerFixed(
+  "smoothstep",
+  "uniform",
+  [
+    arg("edge0", "Where the curve leaves 0."),
+    arg("edge1", "Where the curve reaches 1."),
+    arg("x", "Value being shaped."),
+  ],
+  "Elementwise smooth Hermite interpolation: 0 at or below `edge0`, 1 at or above `edge1`, and " +
+    "`t * t * (3 - 2t)` over the clamped `t` between them, so the curve leaves both ends FLAT — " +
+    "which is the whole difference from `lerp`, and the reason a mask built on it has no visible " +
+    "crease where it starts. The expansion is emitted rather than the WGSL builtin, whose result " +
+    "is undefined when `edge0 >= edge1`. COINCIDENT EDGES are guarded rather than divided by: " +
+    "`edge0 == edge1` gives the step the curve is approaching, 1 where `x >= edge0` and 0 below, " +
+    "which mirrors what `remap` does with a degenerate input range and holds for INFINITE edges too " +
+    "(the guard tests the edges, not their difference, since `Infinity - Infinity` is NaN). One " +
+    "input disagrees between the paths and is documented rather than fixed: a NaN edge with a live " +
+    "span reaches the clamp, where the CPU propagates the NaN and the measured device answers 0 — " +
+    "the contract `min` and `max` already carry, inherited through the expansion. Reach for `ramp` " +
+    `instead when the knees belong anywhere but the ends. ${BROADCAST}`,
+  (f) => smoothstep(f[0], f[1], f[2]),
+  [{ min: 0, max: 1 }],
 );
 registerFixed(
   "clamp",
@@ -1289,6 +1389,17 @@ registerFixed(
   (f) => cross(f[0], f[1]),
 );
 registerFixed(
+  "distance",
+  "uniform",
+  [arg("a", "First tuple."), arg("b", "Second tuple.")],
+  "Euclidean distance between two element tuples, returned as a SCALAR — exactly " +
+    "`length(sub(a, b))`, which a test pins rather than merely intending. The difference is " +
+    "rounded to f32 before it is squared, because that is what `sub` stores and what the device " +
+    "subtracts, so the fused spelling and the composed one cannot drift apart. On scalar inputs " +
+    `it is the absolute difference. ${BROADCAST}`,
+  (f) => distance(f[0], f[1]),
+);
+registerFixed(
   "length",
   "uniform",
   [arg("v", "Tuple whose magnitude is taken.")],
@@ -1302,7 +1413,8 @@ registerFixed(
   "uniform",
   [arg("v", "Tuple to scale to unit length.")],
   "Scales each element's tuple to unit length, keeping its direction and its width. A zero tuple " +
-    "stays zero rather than producing NaN. On a scalar input it yields the sign: -1, 0 or 1.",
+    "stays zero rather than producing NaN. On a scalar input it yields the sign: -1, 0 or 1, " +
+    "though `sign` is the name to reach for when that is what you meant.",
   (f) => normalize(f[0]),
 );
 registerFixed(

@@ -301,16 +301,25 @@ describe("domain-constant folding, differentially", () => {
     step: { fn: "step", args: [2, { fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
     length: { fn: "length", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }] },
     normalize: { fn: "normalize", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }] },
+    // `distance` needs two real tuples for the same reason `cross` does.
+    distance: { fn: "distance", args: [{ fn: "vec", args: [{ fn: "nodeSeed" }, 5, 6] }, { fn: "vec", args: [1, 2, 3] }] },
+    // `exp` and `log` take the scaled seed: the raw one overflows `exp` to
+    // Infinity, which the fold declines, and both want a positive input.
+    exp: { fn: "exp", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
+    log: { fn: "log", args: [{ fn: "div", args: [{ fn: "nodeSeed" }, 1e9] }] },
+    // A zero divisor is NaN, so the seed divides a constant rather than the
+    // other way round, and the dividend is negative to exercise the floor.
+    mod: { fn: "mod", args: [-1, { fn: "div", args: [{ fn: "nodeSeed" }, 1e8] }] },
   };
   // `sqrt` rides the unary loop: the seed scaled by 2^-32 is positive, so
   // the case is a real root rather than the NaN a negative input gives.
-  for (const fn of ["abs", "floor", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "normalize"]) {
+  for (const fn of ["abs", "floor", "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "normalize", "fract", "sign"]) {
     UNIFORM_CASES[fn] ??= { fn, args: [{ fn: "mul", args: [{ fn: "nodeSeed" }, 2.3283064365386963e-10] }] };
   }
   for (const fn of ["add", "sub", "mul", "div", "min", "max", "atan2", "lt", "le", "gt", "ge", "eq", "ne"]) {
     UNIFORM_CASES[fn] ??= { fn, args: [{ fn: "nodeSeed" }, 7] };
   }
-  for (const fn of ["clamp", "lerp", "select"]) {
+  for (const fn of ["clamp", "lerp", "select", "smoothstep"]) {
     UNIFORM_CASES[fn] ??= { fn, args: [{ fn: "nodeSeed" }, 7, 9] };
   }
   UNIFORM_CASES.remap ??= { fn: "remap", args: [{ fn: "nodeSeed" }, 0, 1e9, -1, 1] };

@@ -432,7 +432,7 @@ console.<span class="n">log</span>(result.stats);</code></pre></div>
 
     <h3>2.2 · Fields: values that resolve late</h3>
     <p>A <code>Field&lt;T&gt;</code> is a deferred computation. It is not a number; it is a description of how to produce one column of numbers once it knows a geometry, a domain and a seed. Field-capable node parameters accept <code>T | Field&lt;T&gt;</code>, so the same slot takes <code>0.5</code> or a four-octave noise expression, and the node does not care which.</p>
-    <p>Fields compose before any geometry exists. Inputs (<code>position()</code>, <code>attribute(name)</code>, <code>index()</code>, <code>fraction()</code>, <code>randomField(key)</code>), arithmetic and comparison combinators, the full trig set, <code>clamp</code>/<code>lerp</code>/<code>remap</code>/<code>select</code>/<code>ramp</code>, vector operations, and five noise families all return fields.</p>
+    <p>Fields compose before any geometry exists. Inputs (<code>position()</code>, <code>attribute(name)</code>, <code>index()</code>, <code>fraction()</code>, <code>randomField(key)</code>), arithmetic and comparison combinators, the full trig set, <code>clamp</code>/<code>lerp</code>/<code>remap</code>/<code>smoothstep</code>/<code>select</code>/<code>ramp</code>, vector operations, and five noise families all return fields.</p>
 
     <div class="codeblock"><pre><code><span class="k">import</span> { createPointCloud, capture, attribute, clamp, add, mul, worleyNoise } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
 
@@ -830,7 +830,7 @@ console.<span class="n">log</span>(result.stats.gpu);
     <p>The CPU is the bit-exact reference and existing goldens never move. The GPU is a documented approximation of it, and the shape of the difference is this:</p>
     <ul>
       <li><strong>Integer work is bit-exact.</strong> Hash and random streams, noise lattice hashing, <code>index</code>, integer attribute reads, boolean-to-float reads, and pure hash-compare-select trees all produce byte-identical results on both paths.</li>
-      <li><strong>Float work matches within measured budgets.</strong> The CPU computes in f64 and stores f32; WGSL computes in f32 throughout. Addition, subtraction, multiplication, <code>clamp</code>, <code>min</code>/<code>max</code>, <code>floor</code>, and comparisons are bit-exact anyway. Division, <code>lerp</code>, <code>remap</code> and <code>dot</code> stay within one range-ULP; <code>ramp</code> and vector length within two; sine and cosine within eight; the inverse trigonometric functions are the loosest, as the WGSL specification permits. Noise families sit between six and twenty-four depending on base and mode. The full table lives in <a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a> and <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a>.</li>
+      <li><strong>Float work matches within measured budgets.</strong> The CPU computes in f64 and stores f32; WGSL computes in f32 throughout. Addition, subtraction, multiplication, <code>clamp</code>, <code>min</code>/<code>max</code>, <code>floor</code>, <code>fract</code>, <code>mod</code>, <code>sign</code>, <code>smoothstep</code> and comparisons are bit-exact anyway. Division, <code>lerp</code>, <code>remap</code>, <code>dot</code> and <code>distance</code> stay within one range-ULP; <code>ramp</code> and <code>log</code> within two; vector length within four; <code>pow</code> and <code>exp</code> within eight, which is the widest of the algebraic functions; sine and cosine within twelve; the inverse trigonometric functions are the loosest, as the WGSL specification permits. Noise families sit between six and twenty-four depending on base and mode. The full table lives in <a href="https://github.com/C4RL05/pcg-ts/blob/main/llms.txt">llms.txt</a> and <a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a>.</li>
       <li><strong>On one device, repeated runs are byte-identical.</strong> The variability is between the CPU and the GPU, and between different adapters — not between two runs on the same machine.</li>
       <li><strong>Branchy operations can flip.</strong> Comparisons, <code>select</code>, <code>ramp</code> segment boundaries and worley cell walks may take the other branch at knife-edge inputs whose operands differ within tolerance. A point right on a filter threshold may survive on one path and not the other.</li>
       <li><strong>Every budget was measured on one adapter.</strong> Another adapter exceeding one is a finding worth reporting, not expected noise.</li>
@@ -961,13 +961,15 @@ g.<span class="n">output</span>(n, <span class="s">"out"</span>, <span class="s"
     <p>Note the generated id: a code-built node is named <code>&lt;type&gt;_&lt;n&gt;</code>, whereas a node loaded from JSON keeps the id you gave it. Both appear verbatim in error messages and in <code>describe()</code>, so meaningful ids in your documents pay for themselves the first time something fails.</p>
 
     <h3>listFieldFns()</h3>
-    <p>Returns the complete field-expression vocabulary as a sorted array of 50 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
-    <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"attributeIs"</span>, 
- <span class="s">"byAttribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>, <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"cross"</span>, <span class="s">"div"</span>, <span class="s">"dot"</span>, 
- <span class="s">"eq"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>, <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, 
- <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>, <span class="s">"mul"</span>, <span class="s">"ne"</span>, <span class="s">"nodeSeed"</span>, <span class="s">"normalize"</span>, <span class="s">"param"</span>, <span class="s">"perlinNoise"</span>, 
- <span class="s">"position"</span>, <span class="s">"pow"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, 
- <span class="s">"sqrt"</span>, <span class="s">"step"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>, <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
+    <p>Returns the complete field-expression vocabulary as a sorted array of 57 names. This is the closed set — an <code>fn</code> not in this list is not a field function, and emitting one produces the error in chapter 11.</p>
+    <div class="codeblock"><pre><code>[<span class="s">"abs"</span>, <span class="s">"acos"</span>, <span class="s">"add"</span>, <span class="s">"asin"</span>, <span class="s">"atan"</span>, <span class="s">"atan2"</span>, <span class="s">"attribute"</span>, <span class="s">"attributeIs"</span>,
+ <span class="s">"byAttribute"</span>, <span class="s">"clamp"</span>, <span class="s">"component"</span>, <span class="s">"constant"</span>, <span class="s">"cos"</span>, <span class="s">"cross"</span>, <span class="s">"distance"</span>,
+ <span class="s">"div"</span>, <span class="s">"dot"</span>, <span class="s">"eq"</span>, <span class="s">"exp"</span>, <span class="s">"fbm"</span>, <span class="s">"floor"</span>, <span class="s">"fract"</span>, <span class="s">"fraction"</span>, <span class="s">"ge"</span>,
+ <span class="s">"gt"</span>, <span class="s">"index"</span>, <span class="s">"le"</span>, <span class="s">"length"</span>, <span class="s">"lerp"</span>, <span class="s">"log"</span>, <span class="s">"lt"</span>, <span class="s">"max"</span>, <span class="s">"min"</span>,
+ <span class="s">"mod"</span>, <span class="s">"mul"</span>, <span class="s">"ne"</span>, <span class="s">"nodeSeed"</span>, <span class="s">"normalize"</span>, <span class="s">"param"</span>, <span class="s">"perlinNoise"</span>,
+ <span class="s">"position"</span>, <span class="s">"pow"</span>, <span class="s">"ramp"</span>, <span class="s">"randomField"</span>, <span class="s">"remap"</span>, <span class="s">"select"</span>, <span class="s">"sign"</span>,
+ <span class="s">"simplexNoise"</span>, <span class="s">"sin"</span>, <span class="s">"smoothstep"</span>, <span class="s">"sqrt"</span>, <span class="s">"step"</span>, <span class="s">"sub"</span>, <span class="s">"tan"</span>,
+ <span class="s">"valueNoise"</span>, <span class="s">"vec"</span>, <span class="s">"worleyNoise"</span>]</code></pre></div>
 
     <h3>listSubgraphs()</h3>
     <p>The third registry, and the one an agent gains most from: the <strong>named primitives</strong>. A primitive is a registered subgraph — a tested recipe with exposed params — that a graph references by name rather than rebuilding out of node types. 37 named primitives ship with the library, and <code>listSubgraphs()</code> returns them as <code>{ name, subgraph, hash, meta }</code>: the canonical payload, its content hash, and a <code>meta</code> block whose <code>title</code> and <code>description</code> say what the recipe is for and how its knobs behave.</p>
@@ -990,7 +992,7 @@ pcg nodes                      <span class="c"># -> "46 node types, by category"
 pcg nodes pointGrid
 
 <span class="c"># the field vocabulary, and one fn's allowed keys</span>
-pcg fields                     <span class="c"># -> "50 field fns"</span>
+pcg fields                     <span class="c"># -> "57 field fns"</span>
 pcg fields randomField         <span class="c"># -> usage: { fn: "randomField", key?: 0 | "salt" }</span>
 
 <span class="c"># every command takes --json and prints the machine-readable report instead</span>
@@ -1007,7 +1009,7 @@ pcg nodes pointGrid --json</code></pre></div>
       <tbody>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.md">docs/nodes.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/nodes.json">docs/nodes.json</a></td><td>Every node type: pins, params, defaults, ranges. The JSON is a plain top-level array of the same 46 entries in the same shape <code>listNodeTypes()</code> returns.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.md">docs/primitives.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/primitives.json">docs/primitives.json</a></td><td>Every named primitive: its pins, its exposed params with their derived schemas, its content hash, and a <code>pcg run</code> line to cook it standalone.</td></tr>
-        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">docs/graphs.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.json">docs/graphs.json</a></td><td>The example corpus: 60 graphs under <code>graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
+        <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.md">docs/graphs.md</a></td><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/graphs.json">docs/graphs.json</a></td><td>The example corpus: 63 graphs under <code>graphs/</code>, indexed by what each one teaches, with its tags, seed, node types and referenced primitives.</td></tr>
       </tbody>
     </table>
     </div>
@@ -1193,9 +1195,9 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
     <table>
       <thead><tr><th>Args</th><th>Functions</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td>2</td><td><code>add sub mul div min max lt le gt ge eq ne dot atan2</code></td><td>Comparisons emit 1 or 0, and <code>ne</code> is the exact complement of <code>eq</code>. <code>dot</code> reduces tuples to a scalar. <code>atan2</code> takes <code>[y, x]</code>, radians.</td></tr>
-        <tr><td>1</td><td><code>abs floor length normalize sin cos tan asin acos atan</code></td><td>Trigonometry in radians, elementwise.</td></tr>
-        <tr><td>3</td><td><code>clamp</code> (x, lo, hi) · <code>lerp</code> (a, b, t) · <code>select</code> (cond, a, b)</td><td></td></tr>
+        <tr><td>2</td><td><code>add sub mul div min max lt le gt ge eq ne dot distance cross mod pow step atan2</code></td><td>Comparisons emit 1 or 0, and <code>ne</code> is the exact complement of <code>eq</code>. <code>dot</code> and <code>distance</code> reduce tuples to a scalar, <code>distance</code> being exactly <code>length(sub(a, b))</code>. <code>cross</code> is width 3 on both arguments and is the one fn that does not broadcast a scalar. <code>mod</code> is <em>floored</em> — <code>x - y*floor(x/y)</code>, so the sign follows the divisor and <code>mod(-1, 8)</code> is 7, which is what makes it safe for wrapping a coordinate across the origin. <code>pow</code> needs a base above 0: every negative base is NaN, following the <code>exp2(b · log2(a))</code> identity the device implements. <code>step</code> takes <code>[edge, x]</code> and equals <code>ge(x, edge)</code>. <code>atan2</code> takes <code>[y, x]</code>, radians.</td></tr>
+        <tr><td>1</td><td><code>abs floor fract sign sqrt exp log length normalize sin cos tan asin acos atan</code></td><td>Trigonometry in radians, elementwise. <code>fract</code> is <code>x - floor(x)</code> and therefore never negative — <code>fract(-0.25)</code> is 0.75. <code>sign</code> is <code>(x &gt; 0) - (x &lt; 0)</code>, so NaN gives 0 and -0 gives +0, unlike the host language's. <code>log</code> is the natural logarithm; another base is <code>div(log(x), log(b))</code>, and <code>pow(2, x)</code> is the missing <code>exp2</code>.</td></tr>
+        <tr><td>3</td><td><code>clamp</code> (x, lo, hi) · <code>lerp</code> (a, b, t) · <code>select</code> (cond, a, b) · <code>smoothstep</code> (edge0, edge1, x)</td><td><code>smoothstep</code> is flat at both ends — 0 at or below <code>edge0</code>, 1 at or above <code>edge1</code>, <code>t*t*(3-2t)</code> between. Use <code>ramp</code> instead when the knees belong anywhere but the ends.</td></tr>
         <tr><td>5</td><td><code>remap</code> (x, inMin, inMax, outMin, outMax)</td><td>Unclamped — wrap in <code>clamp</code> if you need the bound.</td></tr>
       </tbody>
     </table>
@@ -1228,7 +1230,7 @@ graph.<span class="n">setParam</span>(inputHandle, <span class="s">"items"</span
 
     <h3>What an agent can emit — and what it cannot</h3>
     <p>This is the boundary that matters most, because it is asymmetric and easy to get wrong in the safe-looking direction.</p>
-    <p><strong>You can emit any field the grammar describes.</strong> Those 50 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
+    <p><strong>You can emit any field the grammar describes.</strong> Those 57 functions, nested arbitrarily, are a complete generation target. Fields built from JSON via <code>fieldFromJson</code> carry their spec: <code>getFieldSpec(field)</code> returns it, <code>fieldToJson(field)</code> gives the JSON back, and the round trip is exact — <code>fieldToJson(fieldFromJson(spec))</code> deep-equals <code>spec</code>, verified.</p>
     <p><strong>You cannot emit a code-authored field, and you cannot serialize one.</strong> A field composed with the code combinators — <code>clamp(add(0.2, mul(worleyNoise(...), 0.9)), 0, 1)</code> — cooks perfectly well but has no spec. <code>getFieldSpec</code> returns <code>undefined</code> for it, and <code>serializeGraph</code> on a graph containing one cannot represent that parameter. There is no specification for arbitrary code-authored fields, and there will not be one, because there is nothing finite to specify.</p>
     <p>Two consequences follow directly, and both are practical rather than theoretical:</p>
     <ul>
@@ -1285,10 +1287,11 @@ GraphValidationError: unknown output <span class="s">"pts"</span>; declared outp
 
     <div class="code-label">Field grammar — the fn list and the exact arity</div>
     <div class="codeblock"><pre><code>FieldJsonError: $: unknown field fn <span class="s">"perlin"</span>; valid fns: abs, acos, add, asin,
-atan, atan2, attribute, attributeIs, clamp, component, constant, cos, div,
-dot, eq, fbm, floor, fraction, ge, gt, index, le, length, lerp, lt, max,
-min, mul, ne, nodeSeed, normalize, param, perlinNoise, position, ramp,
-randomField, remap, select, simplexNoise, sin, sub, tan, valueNoise, vec,
+atan, atan2, attribute, attributeIs, byAttribute, clamp, component, constant,
+cos, cross, distance, div, dot, eq, exp, fbm, floor, fract, fraction, ge, gt,
+index, le, length, lerp, log, lt, max, min, mod, mul, ne, nodeSeed, normalize,
+param, perlinNoise, position, pow, ramp, randomField, remap, select, sign,
+simplexNoise, sin, smoothstep, sqrt, step, sub, tan, valueNoise, vec,
 worleyNoise
 
 FieldJsonError: $: fn <span class="s">"clamp"</span> expects exactly 3 args, got 2</code></pre></div>
@@ -1494,7 +1497,7 @@ cmp a.json b.json</code></pre></div>
     <p>Look up what you are about to type rather than recalling it. From a shell that is two commands, and the answers are the same registries chapter 8 describes:</p>
     <div class="codeblock"><pre><code>pcg nodes pointScatterInBounds   <span class="c"># pins, and every param with its range</span>
 pcg fields fbm                   <span class="c"># the field fn's allowed keys and usage line</span></code></pre></div>
-    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/graphs.md</code> indexes 60 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
+    <p>Before either, though, ask whether the thing already exists. <code>docs/primitives.md</code> opens with a one-line summary of each named primitive and <code>docs/graphs.md</code> indexes 63 corpus graphs by what each one teaches — and copying the shape of a graph near your goal beats composing one from schemas. A primitive that fits collapses this whole step into one <code>ref</code> node.</p>
 
     <h3>2 · Emit</h3>
     <p>Write the document to a file. Use the chapter 9 example verbatim — four nodes, three connections, two outputs — saved as <code>g.json</code>. From here on the file on disk is the artifact; every command below reads it and none of them modifies it.</p>

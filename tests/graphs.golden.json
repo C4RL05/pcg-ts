@@ -329,6 +329,46 @@
         ]
       }
     },
+    "basics-curve-shaping.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 6348,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -28,
+                0,
+                -9
+              ],
+              "max": [
+                28,
+                6.2866,
+                9
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-even-spacing.json": {
       "outputs": {
         "points": [
@@ -2089,6 +2129,46 @@
         ]
       }
     },
+    "basics-signed-distance.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 12321,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "seed:u32",
+                "color:f32x3"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -24.75,
+                -4.9733,
+                -24.75
+              ],
+              "max": [
+                24.75,
+                4.9888,
+                24.75
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-spawn-by-species.json": {
       "outputs": {
         "instances": [
@@ -2452,6 +2532,46 @@
                 20.0165,
                 0.856,
                 3.0322
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-tiling-a-field.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 14641,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "seed:u32",
+                "color:f32x3"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -24,
+                0,
+                -24
+              ],
+              "max": [
+                24,
+                5.5,
+                24
               ]
             }
           }

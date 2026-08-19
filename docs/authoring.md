@@ -388,7 +388,7 @@ Field-capable params (marked "Field" in [nodes.md](./nodes.md), or
 of a constant: `{ "fn": <name>, ... }`. Wherever a spec takes arguments
 (`args` entries, noise `position`), a finite number or number array is
 also accepted and wraps into `constant`. Specs nest arbitrarily (up to
-256 levels). `listFieldFns()` returns all 50 names at runtime.
+256 levels). `listFieldFns()` returns all 57 names at runtime.
 
 ### Which params accept one
 
@@ -1061,12 +1061,12 @@ store as f32.
 
 | Arity | fns |
 | --- | --- |
-| 1 | `abs`, `floor`, `sqrt` (negative input is NaN), `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero), and trig `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (radians, elementwise) |
-| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `cross` (see below — the one fn that does NOT broadcast), `pow` (see below — a narrowed domain), `step` (args `[edge, x]`, exactly `ge(x, edge)`), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq`, `ne` emitting 1/0 (`ne` is the exact complement of `eq`) |
-| 3 | `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b — cond non-zero picks a) |
+| 1 | `abs`, `floor`, `fract` (see below — never negative), `sign` (see below), `sqrt` (negative input is NaN), `exp` (see below), `log` (see below — natural), `length` (tuple → scalar Euclidean length), `normalize` (zero tuples stay zero), and trig `sin`, `cos`, `tan`, `asin`, `acos`, `atan` (radians, elementwise) |
+| 2 | `add`, `sub`, `mul`, `div`, `min`, `max`, `dot` (tuple → scalar), `distance` (tuple → scalar; see below), `cross` (see below — the one fn that does NOT broadcast), `mod` (see below — floored, not truncated), `pow` (see below — a narrowed domain), `step` (args `[edge, x]`, exactly `ge(x, edge)`), `atan2` (args `[y, x]`, radians), and comparisons `lt`, `le`, `gt`, `ge`, `eq`, `ne` emitting 1/0 (`ne` is the exact complement of `eq`) |
+| 3 | `clamp` (x, lo, hi), `lerp` (a, b, t), `select` (cond, a, b — cond non-zero picks a), `smoothstep` (edge0, edge1, x — see below) |
 | 5 | `remap` (x, inMin, inMax, outMin, outMax — linear, unclamped; degenerate input range yields outMin) |
 
-Two of those carry rules the table cannot hold.
+Several of those carry rules the table cannot hold.
 
 **`cross` is the only width-specific fn in the grammar.** Both arguments
 must be tuple size 3, and the scalar broadcast rule is suppressed: a
@@ -1085,11 +1085,60 @@ identity `exp2(b * log2(a))`, which measured hardware implements `pow`
 as exactly; adopting it on the CPU too is what stops the two paths from
 silently disagreeing over a whole quadrant. A zero or infinite base
 still behaves for a non-zero exponent: `pow(0, 2)` is 0 and `pow(0, -1)`
-is Infinity. For a signed power write `mul(normalize(x), pow(abs(x), y))`
-— `normalize` on a scalar yields the sign. `pow` also carries the widest GPU
-budget of the parity table's algebraic fns — wider than every one of
-them, and narrower only than the trig family — so prefer `mul` for a square,
-`sqrt` for a root and `ramp` for a falloff rather than spending it.
+is Infinity. For a signed power write `mul(sign(x), pow(abs(x), y))` —
+`normalize` on a scalar yields the sign too, but `sign` is the name to
+reach for. `pow` also carries the widest GPU budget of the parity
+table's algebraic fns: `exp` ties it at 8, which is no coincidence,
+since measured hardware lowers `pow` to `exp2` of a product and the two
+are the same machinery, and only the trig family is wider than either.
+So prefer `mul` for a square, `sqrt` for a root, `smoothstep` for a knee
+at each end and `ramp` for a falloff whose knees fall anywhere else,
+rather than spending it.
+
+**`mod` is FLOORED, not truncated**, and that is a permanent documented
+choice rather than an implementation detail. It computes
+`x - y * floor(x / y)`, so the sign of the result follows the DIVISOR:
+`mod(-1, 8)` is 7, where JS `%` and WGSL `%` both give -1. The reason is
+what the fn is for — wrapping a coordinate into a tile. A truncated
+remainder mirrors the tile across the origin, which puts a visible break
+along x = 0 and z = 0, the two lines a world is most likely to be built
+around. A zero divisor is NaN on both paths. `fract(x)` is exactly
+`mod(x, 1)` and inherits all of it: `x - floor(x)`, so it is
+NON-NEGATIVE for every finite input and `fract(-0.25)` is 0.75 rather
+than -0.25; a non-finite input gives NaN.
+
+**`sign` is `(x > 0) - (x < 0)`**, three values and nothing else, and it
+deliberately differs from the host language on two inputs: NaN gives 0
+rather than NaN, and -0 gives +0 rather than -0. It is what `normalize`
+already does to a scalar, so it buys the NAME rather than the arithmetic
+— the same reason `step` exists next to `ge`. Like `step` it lowers to a
+pair of comparisons on the device, which is why both are bit-exact.
+
+**`smoothstep(edge0, edge1, x)` leaves FLAT at both ends** — 0 at or
+below `edge0`, 1 at or above `edge1`, and `t*t*(3-2t)` over the clamped
+`t` between them. Reach for it where the knee belongs at each end of a
+range, and for `ramp` where the knees belong anywhere else: a ramp's
+stops put the corners where you say, this puts them at the edges and
+smooths the join. The expansion is emitted rather than WGSL's
+`smoothstep()` builtin, whose result the specification leaves undefined
+for `edge0 >= edge1`; a ZERO SPAN is guarded the way `remap`'s
+degenerate input range is, giving the step the curve approaches — 1
+where `x >= edge0`, 0 below it.
+
+**`exp` and `log` are e^x and its natural inverse.** `exp` overflows to
+Infinity above roughly 88.7 and underflows to 0 below roughly -103.9,
+which is f32's range rather than this implementation's limit. There is
+no `exp2`: `pow(2, x)` is that fn. `log(0)` is -Infinity and a negative
+input is NaN, and another base is `div(log(x), log(b))`.
+
+**`distance(a, b)` is `length(sub(a, b))`**, a tuple pair reduced to one
+scalar exactly as `dot` is, broadcasting the same way, and the absolute
+difference on scalars. It is not merely equivalent by algebra: the CPU
+rounds the difference to f32 before squaring precisely so that the
+single fn and the composed spelling cannot drift apart on either path.
+It also measures *tighter* than `length`/`normalize` do, because that
+row of the parity table compounds two fns in one spec where this one is
+a single square root.
 
 ### Structure
 
@@ -3253,7 +3302,11 @@ The CPU is the bit-exact reference: goldens are CPU-produced and never
 move. On the GPU, u32 hash/random streams (`randomField`, noise
 lattice hashing), `index`, integer attribute roots, bool→f32 reads,
 hash+compare+select trees, and f32 add/sub/mul, clamp/min/max, floor,
-select/compares are bit-exact ports. `randomField`'s is point-domain:
+fract, select/compares, step, sign, mod and smoothstep are bit-exact
+ports — the last four by construction rather than by luck: `step` and
+`sign` lower to comparisons, which have no interior to round, and `mod`
+and `smoothstep` have their CPU interiors rounded to f32 op by op to
+match the device's expansion, the same trade `cross` makes. `randomField`'s is point-domain:
 the kernel requires `P`, so a primitive-domain `randomField` declines to
 the CPU and keys on primitive identity there. One device is run-to-run
 byte-identical. Everything else matches within measured per-op-family
@@ -3277,6 +3330,7 @@ re-measured at more than one count on every test run.
 |---|---|---|---|
 | arith add/sub/mul | 0 | bit-exact | — |
 | clamp/min/max, floor, select/compare, step | 0 | bit-exact | — |
+| fract, mod, sign, smoothstep | 0 | bit-exact | — |
 | div | 0.76 → 0.75 | 1 | 2.0e-8 |
 | lerp | 0.50 → 0.50 | 1 | 7.3e-8 |
 | remap | 0.00 → 0.00 | 1 | 6.0e-8 |
@@ -3285,8 +3339,11 @@ re-measured at more than one count on every test run.
 | dot | 0.70 → 0.67 | 1 | 7.4e-8 |
 | cross | 0 | bit-exact | — |
 | length/normalize (their internal square root) | 1.50 → 2.00 | 4 | 2.0e-7 |
+| distance (one square root over an f32-rounded difference) | 0.52 → 0.51 | 1 | 1.9e-7 |
 | sqrt | 0.71 → 0.71 | 1 | 3.6e-8 |
 | pow, base ≥ 0.5, exponent over [−3, 3] | 4.31 → 5.05 | 8 | 2.9e-6 |
+| exp over [−8, 8] | 3.44 → 4.12 | 8 | 3.8e-5 |
+| log over [0.5, 8.5] | 0.93 → 0.93 | 2 | 5.5e-8 |
 | sin/cos over [−8, 8] | 6.50 → 7.13 | 12 | 3.2e-7 |
 | tan over [−1.45, 1.45] | 19.48 → 22.34 | 40 | 6.5e-7 |
 | asin over [0, 0.9] | 503.99 → 506.98 | 640 | 3.9e-5 |
@@ -3300,6 +3357,31 @@ re-measured at more than one count on every test run.
 | worley f2−f1 normalized / exact f2−f1 | 9.42 → 10.64 / 9.28 → 10.38 | 16 / 16 | 9.0e-8 / 2.3e-7 |
 | fbm value / perlin / simplex / worley | 4.32 → 6.12 / 4.84 → 5.90 / 19.02 → 31.67 / 4.81 → 5.10 | 10 / 10 / 64 / 8 | 7.8e-8 / 5.1e-8 / 4.6e-7 / 4.7e-8 |
 | composite (ramp∘perlin × (random+attr)) | 8.78 → 17.05 | 32 | 7.4e-8 |
+
+The three newest rows — `exp`, `log` and `distance` — read their arrows
+as 10k → 131k, because 131 072 is the in-suite sweep's ceiling and what
+CI re-measures on every run. All three were ALSO anchored at 1 000 000
+on a widened run, and none of them moved: `exp` 4.12, `log` 0.93,
+`distance` 0.50. So `exp` climbs 1.20× over the first two decades (4.13
+at 65k) and then saturates, which makes its budget of 8 headroom over a
+bound rather than over the largest sample so far. Their measured means
+are 3.06e-5, 4.38e-8 and 1.53e-7 against the budgets tabulated.
+
+Read the four-figure rows above with their own provenance in mind: they
+are historical anchors from a sweep at 10k/65k/262k/1M that the harness
+no longer runs, since `PARITY_SWEEP_COUNTS` is now `[10_000, 131_072]`.
+
+**`log` is the clearest argument in this table for range-ULP being the
+metric.** Its raw max-ULP is 4843 while its rangeUlp stays under 1,
+because `log` crosses zero at x = 1: an absolute error of 4.4e-8 sitting
+beside an output of 1e-11 is thousands of ULP *of that output*, and a
+thousandth of one ULP of the family's range. Budgeting the raw figure
+would demand 6000 here and would still say nothing about the answers
+anyone reads. `distance` shows the mirror image — it measures *better*
+than `length`/`normalize` (budget 4) because that row compounds two fns
+in one spec, where this one is a single square root over a difference
+the CPU also rounds to f32, which is exactly what makes `distance(a, b)`
+and `length(sub(a, b))` the same number on both paths.
 
 The last column is the second budget each family carries: the **mean**
 absolute divergence over lanes. Unlike the max it is stable under

@@ -39,7 +39,7 @@ function elementwise(
     return { data: out, tupleSize: ts };
   });
   // `kind` IS the grammar fn name for every elementwise combinator — one
-  // derivation covers all 28. "names 28 constructors, each a registered fn"
+  // derivation covers all 34. "names 28 constructors, each a registered fn"
   // in spec.test.ts pins that correspondence so it cannot drift.
   return attachArgsSpec(field, kind, fields);
 }
@@ -82,6 +82,70 @@ export function abs(a: FieldLike): Field {
 /** Elementwise floor. */
 export function floor(a: FieldLike): Field {
   return elementwise("floor", [a], (v) => Math.floor(v[0]));
+}
+
+/**
+ * Elementwise sign as -1, 0 or +1 — EXACT rather than budgeted, which is
+ * what choosing the definition rather than inheriting one buys.
+ *
+ * It is `(x > 0) - (x < 0)` on both paths, so the two inputs host languages
+ * argue about fall out of the comparisons instead of being legislated: a
+ * NaN is neither greater nor less than zero and gets 0, where `Math.sign`
+ * gives NaN, and a negative zero is not less than zero and gets +0, where
+ * `Math.sign` gives -0. Both departures are deliberate, and they are the
+ * trade `step` already makes by lowering to a comparison — a rule both
+ * paths execute exactly beats a rule one of them approximates. WGSL's
+ * `sign()` builtin is not emitted for that reason: its NaN result is not
+ * specified tightly enough to lean on.
+ */
+export function sign(a: FieldLike): Field {
+  return elementwise("sign", [a], (v) => (v[0] > 0 ? 1 : 0) - (v[0] < 0 ? 1 : 0));
+}
+
+/**
+ * Elementwise fractional part, `x - floor(x)`, and NON-NEGATIVE for every
+ * finite input: `fract(-0.25)` is 0.75, not -0.25.
+ *
+ * That is the definition a tiling wants, because it is exactly `mod(x, 1)`
+ * — a coordinate pushed through it repeats across the origin with no seam,
+ * where a truncated fractional part mirrors the tile at zero.
+ *
+ * THE RANGE IS [0, 1] CLOSED, not half-open, and the difference is f32
+ * rather than pedantry: `fract(-1e-8)` is exactly 1, because the true
+ * answer 1 - 1e-8 has no f32 representation and rounds up to it. Anything
+ * indexing a table by `fract` needs the top of the range to be a legal
+ * index, or a clamp. The subtraction is therefore NOT always exact — what
+ * makes this carry no budget is that both paths round it identically, the
+ * device lowering being the same two operations in the same order.
+ *
+ * A non-finite input has no fractional part: `floor(Infinity)` is
+ * `Infinity`, and the difference is NaN.
+ */
+export function fract(a: FieldLike): Field {
+  return elementwise("fract", [a], (v) => v[0] - Math.floor(v[0]));
+}
+
+/**
+ * Elementwise FLOORED modulo, `x - y * floor(x / y)` — the remainder whose
+ * sign follows the DIVISOR rather than the dividend. `mod(-1, 8)` is 7.
+ *
+ * This is the choice the library documents forever, and it is made for the
+ * dominant use: wrapping a coordinate into a tile. A truncated remainder
+ * (JS `%`, and WGSL's `%` on floats) answers -1 there, so the tile either
+ * side of the origin comes out mirrored and any pattern built on it breaks
+ * along x = 0 and z = 0 — a seam that appears only once a world crosses
+ * zero, which is precisely where an unbounded generator lives.
+ *
+ * The operations are rounded to f32 INDIVIDUALLY, matching the device's
+ * expansion step for step rather than accumulating in f64 and rounding
+ * once, which is the reasoning `cross` uses and for the same payoff. A zero
+ * divisor gives NaN on both paths and for the same reason: `floor(x / 0)`
+ * is infinite, and `0 * Infinity` is NaN.
+ */
+export function mod(a: FieldLike, b: FieldLike): Field {
+  return elementwise("mod", [a, b], (v) =>
+    Math.fround(v[0] - Math.fround(v[1] * Math.floor(Math.fround(v[0] / v[1])))),
+  );
 }
 
 /**
@@ -143,6 +207,29 @@ export function pow(a: FieldLike, b: FieldLike): Field {
  */
 export function step(edge: FieldLike, x: FieldLike): Field {
   return elementwise("step", [edge, x], (v) => (v[1] >= v[0] ? 1 : 0));
+}
+
+/**
+ * Elementwise e^x — one of the two fns here that are transcendental on both
+ * sides, and so carry a MEASURED budget rather than a construction that
+ * makes them exact.
+ *
+ * It overflows to Infinity above about 88.7 and underflows to 0 below about
+ * -103.9, on both paths, because that range belongs to f32 and not to the
+ * implementation. For another base, `pow(b, x)` already exists; there is no
+ * `exp2` in the grammar because that is what it would be a synonym for.
+ */
+export function exp(a: FieldLike): Field {
+  return elementwise("exp", [a], (v) => Math.exp(v[0]));
+}
+
+/**
+ * Elementwise NATURAL logarithm. `log(0)` is -Infinity and `log(x)` for
+ * x < 0 is NaN, on both paths. For another base, divide by a constant:
+ * `div(log(x), log(b))`. See {@link exp} for the shared budget note.
+ */
+export function log(a: FieldLike): Field {
+  return elementwise("log", [a], (v) => Math.log(v[0]));
 }
 
 // -- trigonometry ----------------------------------------------------------
@@ -230,6 +317,48 @@ export function clamp(x: FieldLike, lo: FieldLike, hi: FieldLike): Field {
 /** Elementwise linear interpolation a + (b - a) * t. */
 export function lerp(a: FieldLike, b: FieldLike, t: FieldLike): Field {
   return elementwise("lerp", [a, b, t], (v) => v[0] + (v[1] - v[0]) * v[2]);
+}
+
+/**
+ * Elementwise smooth Hermite interpolation between two edges: 0 at or below
+ * `edge0`, 1 at or above `edge1`, and `t * t * (3 - 2t)` over the clamped
+ * `t` between them, so the curve leaves both ends flat.
+ *
+ * The EXPANSION is emitted rather than WGSL's `smoothstep()` builtin, for
+ * the reason `step` and `lerp` are written out too: the builtin's result is
+ * not defined when `edge0 >= edge1`, and two paths disagreeing across a
+ * whole region is worse than one small budget everywhere.
+ *
+ * COINCIDENT EDGES ARE GUARDED rather than left to the arithmetic,
+ * mirroring `remap`, whose degenerate input range yields `outMin` instead
+ * of a division by zero. `edge0 == edge1` gives the step the curve is
+ * approaching — 1 where `x >= edge0`, 0 below — which is what the limit
+ * says it should be, and both paths were measured agreeing on it,
+ * INFINITE edges included. The guard tests the edges rather than their
+ * difference for exactly that reason: `Infinity - Infinity` is NaN, so a
+ * span test would let coincident infinite edges through to the division.
+ *
+ * ONE INPUT DISAGREES, and it is documented rather than fixed: a NaN edge
+ * with a live span reaches the `clamp`, where the CPU propagates the NaN
+ * and WGSL's `clamp` may return the non-NaN operand — the measured device
+ * answers 0 on every lane. That is the same contract `min` and `max`
+ * already carry for a NaN operand, inherited here through the expansion,
+ * and it is why this fn's parity row is exact over a domain that has no
+ * NaN edges in it.
+ *
+ * `ramp` is still the shape to reach for when the knees belong anywhere but
+ * the ends; this buys the name and the flat ends, nothing more.
+ */
+export function smoothstep(edge0: FieldLike, edge1: FieldLike, x: FieldLike): Field {
+  return elementwise("smoothstep", [edge0, edge1, x], (v) => {
+    // The guard tests the EDGES, not their difference: `Infinity - Infinity`
+    // is NaN, so a span test would let coincident infinite edges fall through
+    // to the division and answer NaN instead of the step this promises.
+    if (v[0] === v[1]) return v[2] >= v[0] ? 1 : 0;
+    const span = Math.fround(v[1] - v[0]);
+    const t = Math.min(Math.max(Math.fround(Math.fround(v[2] - v[0]) / span), 0), 1);
+    return Math.fround(Math.fround(t * t) * Math.fround(3 - Math.fround(2 * t)));
+  });
 }
 
 /**
@@ -397,6 +526,40 @@ export function length(a: FieldLike): Field<1> {
     return { data: out, tupleSize: 1 };
   });
   return attachArgsSpec(field, "length", [fa]);
+}
+
+/**
+ * Euclidean distance between two element tuples — exactly
+ * `length(sub(a, b))`, and a test pins the equivalence.
+ *
+ * "Exactly" is a decision rather than an accident: the difference is
+ * rounded to f32 BEFORE it is squared, because that is what `sub` stores
+ * into its own column and what the device subtracts, so the fused spelling
+ * and the composed one cannot drift apart. Accumulating the difference in
+ * f64 instead would have been marginally more accurate and would have made
+ * this fn a third answer nobody asked for.
+ */
+export function distance(a: FieldLike, b: FieldLike): Field<1> {
+  const fa = resolveField(a);
+  const fb = resolveField(b);
+  broadcastTupleSize("distance", [fa.tupleSize, fb.tupleSize]); // static check
+  const field = makeField<1>(`distance(${keyRef(fa.key)},${keyRef(fb.key)})`, 1, (ctx) => {
+    const ca = evaluateField(fa, ctx);
+    const cb = evaluateField(fb, ctx);
+    const ts = broadcastTupleSize("distance", [ca.tupleSize, cb.tupleSize]) ?? 1;
+    const n = elementCount(ctx);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      for (let k = 0; k < ts; k++) {
+        const d = Math.fround(readAt(ca, i, k) - readAt(cb, i, k));
+        sum += d * d;
+      }
+      out[i] = Math.sqrt(sum);
+    }
+    return { data: out, tupleSize: 1 };
+  });
+  return attachArgsSpec(field, "distance", [fa, fb]);
 }
 
 /** Normalize each element tuple to unit length (zero tuples stay zero). */

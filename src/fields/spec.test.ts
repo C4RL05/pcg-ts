@@ -27,18 +27,23 @@ import {
   component,
   cos,
   cross,
+  distance,
   div,
   dot,
   eq,
+  exp,
   floor,
+  fract,
   ge,
   gt,
   le,
   length,
   lerp,
+  log,
   lt,
   max,
   min,
+  mod,
   mul,
   ne,
   normalize,
@@ -46,7 +51,9 @@ import {
   ramp,
   remap,
   select,
+  sign,
   sin,
+  smoothstep,
   sqrt,
   step,
   sub,
@@ -284,7 +291,7 @@ const CASES: Case[] = [
   { name: "randomField negative key", make: () => randomField(-3) },
   { name: "randomField string key", make: () => randomField("species") },
 
-  // -- elementwise (28) -----------------------------------------------
+  // -- elementwise (34) -----------------------------------------------
   ...spread("add", BINARY, (a) => add(a[0], a[1])),
   ...spread("sub", BINARY, (a) => sub(a[0], a[1])),
   ...spread("mul", BINARY, (a) => mul(a[0], a[1])),
@@ -301,6 +308,12 @@ const CASES: Case[] = [
   // `step` sits with the predicates because that is what it is: `ge` with
   // its arguments reversed, threshold first.
   ...spread("step", BINARY, (a) => step(a[0], a[1])),
+  ...spread("fract", UNARY, (a) => fract(a[0])),
+  ...spread("sign", UNARY, (a) => sign(a[0])),
+  ...spread("exp", UNARY, (a) => exp(a[0])),
+  ...spread("log", UNARY, (a) => log(a[0])),
+  ...spread("mod", BINARY, (a) => mod(a[0], a[1])),
+  ...spread("smoothstep", TERNARY, (a) => smoothstep(a[0], a[1], a[2])),
   ...spread("abs", UNARY, (a) => abs(a[0])),
   ...spread("floor", UNARY, (a) => floor(a[0])),
   // Half of UNARY / BINARY is negative, so these two spend most of the
@@ -325,6 +338,7 @@ const CASES: Case[] = [
   ...spread("dot", BINARY, (a) => dot(a[0], a[1])),
   ...spread("cross", CROSS, (a) => cross(a[0], a[1])),
   ...spread("length", UNARY, (a) => length(a[0])),
+  ...spread("distance", BINARY, (a) => distance(a[0], a[1])),
   ...spread("normalize", UNARY, (a) => normalize(a[0])),
   { name: "vec of one", make: () => vec(S()) },
   { name: "vec of scalars", make: () => vec(DEN(), RND(), IDX()) },
@@ -541,13 +555,19 @@ describe("elementwise kind ↔ grammar fn", () => {
     ["eq", () => eq(1, 2)],
     ["ne", () => ne(1, 2)],
     ["step", () => step(1, 2)],
+    ["fract", () => fract(1.5)],
+    ["sign", () => sign(-2)],
+    ["exp", () => exp(1)],
+    ["log", () => log(2)],
+    ["mod", () => mod(-1, 8)],
+    ["smoothstep", () => smoothstep(0, 1, 0.25)],
   ];
 
-  it("names 28 constructors, each a registered fn", () => {
-    // `cross` is deliberately absent: like `dot` it is bespoke rather than
-    // built on `elementwise`, so it has no `kind` string for this
-    // correspondence to pin.
-    expect(ELEMENTWISE.length).toBe(28);
+  it("names 34 constructors, each a registered fn", () => {
+    // `cross`, `dot`, `length` and `distance` are deliberately absent:
+    // each is bespoke rather than built on `elementwise`, so none has a
+    // `kind` string for this correspondence to pin.
+    expect(ELEMENTWISE.length).toBe(34);
     const registered = new Set(listFieldFns());
     for (const [name, make] of ELEMENTWISE) {
       expect(getFieldSpec(make())?.fn, `${name}: derived fn`).toBe(name);

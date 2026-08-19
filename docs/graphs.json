@@ -145,6 +145,33 @@
     ]
   },
   {
+    "file": "basics-curve-shaping.json",
+    "path": "graphs/basics-curve-shaping.json",
+    "title": "a mask, a decay and a compression",
+    "description": "THREE CURVES, THREE DIFFERENT JOBS — not three ways of doing one, which is what makes this the companion to `basics-field-shaping` rather than a repeat of it. Each panel reads the same input, the distance from its own centre, and each answers a question the other two answer badly. LEFT, `smoothstep(2, 8, d)` inverted: a MASK with stated ends. It is flat at 1 out to d = 2, flat at 0 beyond d = 8, and smooth in between — and the flatness at BOTH ends is the whole point, because that is what a linear falloff cannot give you. A `lerp` mask creases visibly where it starts and stops; this one does not, which is why it is the shape to reach for when a region has to fade out without announcing its own boundary. The expansion is emitted rather than the WGSL builtin, whose result is undefined when the edges cross, and a zero span is guarded into the step the curve approaches instead of a division by zero. `ramp` remains the choice when the knees belong anywhere other than the ends; `smoothstep` is the two-edge case worth a name. MIDDLE, `6 * exp(-0.45 * d)`: DECAY, and the one curve here that never reaches zero. Every 1.54 units it halves — that is `log(2) / 0.45`, which is the number to reason with rather than the exponent — so across this panel it is small everywhere and zero nowhere, and a threshold rather than the curve is what ends it. Push it far enough and f32 does end it: `exp` underflows to exactly 0 below about -103.9, which is the format's floor and not the curve's. This is the honest shape for anything physical that falls off: light, heat, density away from a source. RIGHT, `2.4 * log(1 + d)`: COMPRESSION, and the only one that rises. It grows without bound and ever more slowly, which is what turns a quantity spanning orders of magnitude into one a height or a colour can show. The `1 +` is insurance rather than a fix for something this cook hits: `log(0)` is -Infinity, and no grid point here lands exactly on the centre — the nearest sits 0.283 away — so the offset is what makes the panel safe to re-spacing rather than what rescues it now. For a base other than e, divide — `div(log(x), log(2))` — since the grammar carries the natural logarithm only. `exp` AND `log` ARE BUDGETED rather than exact on the GPU — with `distance`, which carries 1 ULP, they are the three of the seven additions that are: the device has its own transcendentals and the CPU has the host's, and they are simply not the same function. `smoothstep` is bit-exact, which was not a given for a five-operation interior — it holds only because the CPU rounds each of those operations to f32 in the order the kernel does. `distance` supplies the input to all three, and is exactly `length(sub(a, b))` by construction.",
+    "tags": [
+      "basics",
+      "fields",
+      "remap",
+      "composition"
+    ],
+    "seed": 1057,
+    "nodeCount": 7,
+    "nodeTypes": [
+      "mergePoints",
+      "pointGrid",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "chart",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-even-spacing.json",
     "path": "graphs/basics-even-spacing.json",
     "title": "enforce a minimum distance between points",
@@ -234,7 +261,7 @@
     "file": "basics-field-shaping.json",
     "path": "graphs/basics-field-shaping.json",
     "title": "shape one falloff six ways",
-    "description": "SIX SHAPING FUNCTIONS ON ONE INPUT. Every panel is the same grid and the same scalar `t` — 1 at the panel's centre, falling to 0 at its rim, written `1 - clamp(length(P - centre) / 6, 0, 1)` — lifted by `6 * f(t)` and differing only in `f`. The six sit in two rows of three, named by coordinate rather than by which one faces you, since that depends on where the camera is: at z = -10, in increasing x, `t` itself (a cone, the control), `sqrt(t)` (a dome, steep at the rim) and `t * t` (a rounded spire); at z = +10, `pow(t, 3)` (a sharper spire), `ramp(t)` through four stops (the S-curve, flat at both ends) and `step(0.5, t)` (a flat-topped mesa — a hard cut, not a curve, and the only panel here that leaves the plane it started on). Read across and the choice of `f` is the whole difference between a cone and a mesa, which is what makes a falloff an authored decision rather than whatever the arithmetic happened to give. THREE RULES ARE VISIBLE HERE RATHER THAN STATED. `step` takes its EDGE FIRST — `step(edge, x)` is exactly `ge(x, edge)` with the operands swapped, and it exists to buy the name a shader author reaches for; getting the order backwards gives the complement, silently. `pow` HAS A NARROWER DOMAIN than a host-language power: every negative base is NaN, as are `pow(0, 0)` and `pow(x, 0)` for a zero, negative, infinite or NaN `x`, because the measured device implements it as `exp2(b * log2(a))` exactly and the CPU adopts that domain rather than letting the two paths disagree over a whole quadrant. The `clamp` inside `t` is therefore LOAD-BEARING — and in TWO panels rather than one, because `sqrt` answers a negative on exactly the same rule. Strip the clamp and this graph fails at the `sqrt` panel before it ever reaches `pow`: `transformPoints: param \"translate\" resolved to NaN at element 0`, 254 of that panel's 961 points non-finite. Nor is it decorative in the other four. Only `ramp` and `step` clamp by construction; `t` and `t * t` just keep going, the cone dipping 2.5 units BELOW its own plane at a corner and the square lifting a raised rim. The corners are the whole of it either way — a 12-unit panel around a radius-6 disc leaves nothing else outside. And `pow` carries the widest GPU parity budget of the grammar's ALGEBRAIC fns — 8 ULP, against bit-exact for `mul` and 1 for `sqrt`, with only the trigonometric family wider — which is why the square is spelled `t * t` rather than `pow(t, 2)`: `mul` for a square, `sqrt` for a root, `ramp` for a falloff, and `pow` only when the exponent is genuinely arbitrary. `ramp` is also the shape to reach for when a smooth step is wanted — the grammar has no `smoothstep`, and a ramp says where its knees are instead of hiding them in a cubic. ONE MORE THING THIS FILE SHOWS BY BEING LONG: the `t` subexpression is written out six times, because nothing yet lets one expression bind a name to a subexpression it uses more than once. That is the A3 entry in PLAN.md, and this graph is now its second worked case.",
+    "description": "SIX SHAPING FUNCTIONS ON ONE INPUT. Every panel is the same grid and the same scalar `t` — 1 at the panel's centre, falling to 0 at its rim, written `1 - clamp(length(P - centre) / 6, 0, 1)` — lifted by `6 * f(t)` and differing only in `f`. The six sit in two rows of three, named by coordinate rather than by which one faces you, since that depends on where the camera is: at z = -10, in increasing x, `t` itself (a cone, the control), `sqrt(t)` (a dome, steep at the rim) and `t * t` (a rounded spire); at z = +10, `pow(t, 3)` (a sharper spire), `ramp(t)` through four stops (the S-curve, flat at both ends) and `step(0.5, t)` (a flat-topped mesa — a hard cut, not a curve, and the only panel here that leaves the plane it started on). Read across and the choice of `f` is the whole difference between a cone and a mesa, which is what makes a falloff an authored decision rather than whatever the arithmetic happened to give. THREE RULES ARE VISIBLE HERE RATHER THAN STATED. `step` takes its EDGE FIRST — `step(edge, x)` is exactly `ge(x, edge)` with the operands swapped, and it exists to buy the name a shader author reaches for; getting the order backwards gives the complement, silently. `pow` HAS A NARROWER DOMAIN than a host-language power: every negative base is NaN, as are `pow(0, 0)` and `pow(x, 0)` for a zero, negative, infinite or NaN `x`, because the measured device implements it as `exp2(b * log2(a))` exactly and the CPU adopts that domain rather than letting the two paths disagree over a whole quadrant. The `clamp` inside `t` is therefore LOAD-BEARING — and in TWO panels rather than one, because `sqrt` answers a negative on exactly the same rule. Strip the clamp and this graph fails at the `sqrt` panel before it ever reaches `pow`: `transformPoints: param \"translate\" resolved to NaN at element 0`, 254 of that panel's 961 points non-finite. Nor is it decorative in the other four. Only `ramp` and `step` clamp by construction; `t` and `t * t` just keep going, the cone dipping 2.5 units BELOW its own plane at a corner and the square lifting a raised rim. The corners are the whole of it either way — a 12-unit panel around a radius-6 disc leaves nothing else outside. And `pow` carries the widest GPU parity budget of the grammar's ALGEBRAIC fns — 8 ULP, against bit-exact for `mul` and 1 for `sqrt`, with only the trigonometric family wider — which is why the square is spelled `t * t` rather than `pow(t, 2)`: `mul` for a square, `sqrt` for a root, `ramp` for a falloff, and `pow` only when the exponent is genuinely arbitrary. `ramp` and `smoothstep` divide the smooth-edge job between them: `smoothstep` when the knees belong at the two ends, which is the common case and now has its own fn, and `ramp` when they belong anywhere else, because a ramp says where they are instead of hiding them in a cubic. `basics-curve-shaping` puts `smoothstep` beside `exp` and `log` for that comparison. ONE MORE THING THIS FILE SHOWS BY BEING LONG: the `t` subexpression is written out SEVEN times across six panels — the square panel spells it twice, once per factor of `t * t` — because nothing yet lets one expression bind a name to a subexpression it uses more than once. That is the A3 entry in PLAN.md, and this graph is now its second worked case.",
     "tags": [
       "basics",
       "fields",
@@ -1058,6 +1085,33 @@
     ]
   },
   {
+    "file": "basics-signed-distance.json",
+    "path": "graphs/basics-signed-distance.json",
+    "title": "a signed distance field, and which side of it",
+    "description": "A SIGNED DISTANCE FIELD, which is what `distance` and `sign` are for together. `distance(P, centre) - 12` is negative inside a circle of radius 12, zero on it and positive outside — one number that carries both HOW FAR and WHICH SIDE, and splitting those two questions apart is the whole idiom. `sign` answers the second, `abs` the first, and the height here multiplies them: `sign(sd) * 5 * exp(-0.30 * |sd|)` raises a rim outside the circle and sinks a trench inside it, both decaying away from the boundary. The result is a crater, and the ring where it crosses zero is the shape the field was defined by. `sign` IS EXACT ON BOTH PATHS, and that is a design decision rather than a measurement that happened to come out clean: it is defined as `(x > 0) - (x < 0)`, a pair of comparisons with no interior to round, so the device and the CPU cannot disagree. Two answers depart from a host language on purpose — a NaN gets 0 rather than NaN, and a negative zero gets +0 — because a rule both paths execute exactly beats a rule one of them approximates. Neither input occurs in this cook, which is the ordinary case: the departures matter where a field feeds `sign` something degenerate, not on a clean grid. It is what `normalize` already does to a scalar; it exists to buy the NAME, on the precedent `step` set, since nobody reaches for a vector normalizer to ask which side of a line they are on. The exact-zero case is REACHABLE but unreached here, and the arithmetic says why: a grid point lands on the circle only where its integer offsets satisfy j^2 + k^2 = 711.11, which none do. The nearest sits 0.0075 off it, so the deepest trench and the highest rim come out at 4.989 rather than the nominal 5 — which is the cooked bounds, and a neat demonstration that a sampled field only ever shows you the samples. `distance` IS EXACTLY `length(sub(a, b))`, pinned by a test rather than merely intended — the difference is rounded to f32 before it is squared, because that is what `sub` stores and what the device subtracts, so the fused spelling cannot drift from the composed one. It is the fn `basics-field-shaping` open-codes seven times over, and its measured GPU budget is 1 ULP against `length`'s 4, because that family compounds two fns in one measurement where this is a single square root over a subtraction. THE COLOUR IS THE SIGN, not the height, which is why the two regions read as different materials rather than as one surface with a fold in it: a ramp with stops at -1, 0 and +1 can take only three values, because `sign` only ever produces three. In this cook it takes TWO — no point lands on the circle, so the middle stop is never selected, and it sits there for the boundary case rather than for anything visible.",
+    "tags": [
+      "basics",
+      "fields",
+      "distance-falloff",
+      "composition"
+    ],
+    "seed": 1058,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pointGrid",
+      "setAttribute",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "sides",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-spawn-by-species.json",
     "path": "graphs/basics-spawn-by-species.json",
     "title": "spawn a different asset per point",
@@ -1193,6 +1247,33 @@
       {
         "name": "path",
         "node": "curve",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-tiling-a-field.json",
+    "path": "graphs/basics-tiling-a-field.json",
+    "title": "tile a field across the origin",
+    "description": "TILING IS `fract` AND `mod`, and this graph is built so the choice inside them is visible rather than asserted. Every bump is the same expression of a TILE-LOCAL coordinate — `fract(x / 8)` and `fract(z / 8)`, each in [0, 1] — closed at the top, because `fract(-1e-8)` rounds up to exactly 1 in f32 — and the checker under them is the TILE INDEX, `mod(floor(x / 8) + floor(z / 8), 2)`. The field is unbounded in principle and periodic in fact, which is the whole trick: nothing here stores a tile, and a point 4000 units away costs exactly what a point at the origin costs. The size is one inline `param`, and counting where it lands is instructive: FOUR logical uses — two `fract` divisions and two `floor` divisions — but TEN occurrences in the file, because `bump` reads its argument twice and the colour ramp repeats the whole tile index once per channel. One knob moves all ten coherently; spelling them as ten literals means ten edits to retile, and nine chances to leave one behind. That gap between four ideas and ten occurrences is the A3 entry in PLAN.md seen from another angle — nothing yet lets an expression bind a name to a subexpression it uses more than once, so the inline `param` is standing in for the `let` the grammar does not have. LOOK AT THE ORIGIN. Both fns in this library are FLOORED — `fract` is non-negative for every finite input and `mod`'s sign follows the DIVISOR — so `fract(-0.125)` is 0.875 and `mod(-1, 2)` is 1. The tiling therefore crosses x = 0 and z = 0 with no seam at all, and that is the entire reason the choice was made that way. A truncated remainder — JS `%`, and WGSL's `%` on floats — answers -0.125 and -1 instead, which mirrors every tile in the negative quadrants: the bumps invert into pits and the checker takes a third value the ramp was never given a stop for. It is a defect that cannot be seen in a demo built around the origin's positive corner, and it appears the moment a world grows in the other direction, which is precisely what an unbounded generator does. THE `floor` PAIR IS NOT THE SAME OPERATION as the `fract` pair, though they read alike: `fract` gives the position WITHIN a tile and `floor` gives WHICH tile, and together they are the standard decomposition of a coordinate. `fract(t)` is exactly `mod(t, 1)` — the library pins that equivalence in a test rather than just claiming it — so the two lines here are one idea used twice, once for a continuous value and once for an integer bin. Both are BIT-EXACT on the GPU, which is not a given for `mod`: it is four operations, and the CPU rounds each to f32 individually so it runs the device's expansion step for step rather than accumulating in f64 and rounding once. The bump is `t * (1 - t)` on each axis, a parabola that is zero at both tile edges and so leaves no ridge where tiles meet — a falloff that did not vanish at the boundary would show the grid as a lattice of cracks.",
+    "tags": [
+      "basics",
+      "fields",
+      "grid",
+      "composition"
+    ],
+    "seed": 1056,
+    "nodeCount": 3,
+    "nodeTypes": [
+      "pointGrid",
+      "setAttribute",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "checker",
         "pin": "out"
       }
     ]

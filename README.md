@@ -130,7 +130,8 @@ Inputs (`position()`, `attribute(name)`, `attributeIs(name, value)`,
 `byAttribute(name, cases, default)`, `index()`, `fraction()`,
 `nodeSeed()`, `randomField(key)`),
 combinators (arithmetic, comparisons, trig from `sin` through `atan2`,
-`clamp`/`lerp`/`remap`, `select`, `ramp`, vector ops), and noise
+`exp`/`log`, `fract`/`mod`/`sign`, `clamp`/`lerp`/`remap`/`smoothstep`,
+`select`, `ramp`, vector ops including `distance`), and noise
 (`valueNoise`, `perlinNoise`, `simplexNoise`, `worleyNoise`, `fbm`) all
 return fields, so expressions compose before any geometry exists:
 
@@ -871,15 +872,29 @@ of it:
   clamp/min/max/floor/select/compares are bit-exact; div, lerp, remap,
   and dot ≤ 1 — note `fraction` is a DIVISION (`index / (count - 1)`) and
   lands in that class, so it is the one input that does not inherit
-  `index`'s exactness; `step` and `cross` are bit-exact, `cross` because
-  its CPU products are rounded to f32 individually to match the device
-  rather than accumulated in f64 as its neighbours are; `sqrt` ≤ 1, and
-  there the DEVICE is the inaccurate side (IEEE mandates a correctly
+  `index`'s exactness; `step`, `sign`, `fract`, `mod`, `smoothstep` and
+  `cross` are bit-exact — `step` and `sign` because they lower to
+  comparisons, which have no interior to round, and `cross`, `mod` and
+  `smoothstep` because their CPU interiors are rounded to f32 op by op
+  to match the device rather than accumulated in f64 as their neighbours
+  are; `sqrt` ≤ 1, and there the DEVICE is the inaccurate side (IEEE
+  mandates a correctly
   rounded square root; measured hardware lowers it to a reciprocal square
-  root plus refinement); `pow` ≤ 8, the widest of the algebraic fns;
-  ramp, length/normalize ≤ 2; sin/cos ≤ 8, tan ≤ 24,
-  atan/atan2 ≤ 80, asin/acos ≤ 512 (an absolute-error class per the
-  WGSL spec); noise families ≤ 6–24 depending on base and mode.
+  root plus refinement); `distance` ≤ 1, tighter than length/normalize
+  because it is one square root over a difference rather than two fns
+  composed in one spec; `pow` ≤ 8, the widest of the algebraic fns —
+  `exp` ties it rather than beating it, and not by accident: measured
+  hardware lowers `pow` to `exp2` of a product, so the two are the same
+  machinery; `log` ≤ 2, whose RAW max-ULP is 4843 and is the clearest
+  demonstration of why the metric here is range-ULP — `log` crosses
+  zero at x = 1, and an absolute error of 4.4e-8 beside an output of
+  1e-11 is thousands of ULP *of that output* while being a thousandth
+  of one ULP of the family's range; ramp ≤ 2, length/normalize ≤ 4;
+  sin/cos ≤ 12, tan ≤ 40, atan/atan2 ≤ 96, acos ≤ 512 and asin ≤ 640
+  (an absolute-error class per the WGSL spec); noise families ≤ 6–24
+  depending on base and mode. Those five were listed here at 2/8/24/80/512
+  until 2026-08-19 — the budgets the parity table carried before it was
+  re-swept — and the numbers above are the table's.
 - On a single device, results are run-to-run **byte-identical**.
 - Per-instance colour is **bit-exact**, and for a structural reason
   rather than a measured one: colour is a *gather*, not arithmetic —

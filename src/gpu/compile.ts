@@ -202,6 +202,11 @@ function oneLit(size: number): string {
   return size === 1 ? "1f" : `vec${size}<f32>(1f)`;
 }
 
+/** Any other scalar literal, splatted to the working width. */
+function scalarLit(size: number, text: string): string {
+  return size === 1 ? text : `vec${size}<f32>(${text})`;
+}
+
 // ---------------------------------------------------------------------------
 // attribute access
 
@@ -620,6 +625,27 @@ registerElementwise("min", 2, (a) => `min(${a[0]}, ${a[1]})`);
 registerElementwise("max", 2, (a) => `max(${a[0]}, ${a[1]})`);
 registerElementwise("abs", 1, (a) => `abs(${a[0]})`);
 registerElementwise("floor", 1, (a) => `floor(${a[0]})`);
+// fract and mod are emitted as their EXPANSIONS rather than as WGSL's
+// `fract()` and `%`. fract() is specified as exactly `x - floor(x)` so the
+// builtin would do, but writing it out costs nothing and keeps the CPU
+// spelling and the device spelling the same text. `%` is the more important
+// one: it is TRUNCATED on floats, where this grammar's mod is FLOORED, so
+// emitting it would answer -1 to `mod(-1, 8)` on the device and 7 on the
+// CPU — a disagreement over every negative coordinate, which is half of any
+// world that crosses its own origin.
+registerElementwise("fract", 1, (a) => `${a[0]} - floor(${a[0]})`);
+registerElementwise("mod", 2, (a) => `${a[0]} - ${a[1]} * floor(${a[0]} / ${a[1]})`);
+// sign lowers to the same pair of comparisons the CPU runs, not to WGSL's
+// sign() builtin, for the reason `step` lowers to `ge`'s: the builtin's
+// answer for a NaN is not specified tightly enough to lean on, and a rule
+// both paths execute exactly beats a rule one of them approximates.
+registerElementwise(
+  "sign",
+  1,
+  (a, size) =>
+    `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} > ${zeroLit(size)}) - ` +
+    `select(${zeroLit(size)}, ${oneLit(size)}, ${a[0]} < ${zeroLit(size)})`,
+);
 registerElementwise("sin", 1, (a) => `sin(${a[0]})`);
 registerElementwise("cos", 1, (a) => `cos(${a[0]})`);
 registerElementwise("tan", 1, (a) => `tan(${a[0]})`);
@@ -635,6 +661,10 @@ registerElementwise("atan2", 2, (a) => `atan2(${a[0]}, ${a[1]})`);
 // lowering's DOMAIN, so the two agree on where the answer is NaN.
 registerElementwise("sqrt", 1, (a) => `sqrt(${a[0]})`);
 registerElementwise("pow", 2, (a) => `pow(${a[0]}, ${a[1]})`);
+// The two transcendentals that are genuinely the device's own: both carry a
+// measured budget rather than a construction that makes them exact.
+registerElementwise("exp", 1, (a) => `exp(${a[0]})`);
+registerElementwise("log", 1, (a) => `log(${a[0]})`);
 registerElementwise("clamp", 3, (a) => `clamp(${a[0]}, ${a[1]}, ${a[2]})`);
 // CPU lerp is a + (b - a) * t; WGSL mix() is specified as a*(1-t)+b*t,
 // which rounds differently — emit the CPU formula.
@@ -701,6 +731,49 @@ HANDLERS.set("cross", (spec, path, ctx) => {
     }
   }
   return ctx.emit(`cross(${a.ref}, ${b.ref})`, 3);
+});
+
+// smoothstep is expanded rather than emitting WGSL's smoothstep(), whose
+// result is undefined for edge0 >= edge1, and its zero span is GUARDED the
+// way remap's degenerate input range is: the edges coinciding gives the step
+// the curve approaches instead of a division by zero. Op order matches the
+// CPU's exactly — (t*t) * (3 - 2*t) — because the CPU rounds each of those
+// to f32 individually.
+HANDLERS.set("smoothstep", (spec, path, ctx) => {
+  const args = specArgs(spec);
+  const vals = args.map((a, i) => compileArg(a, `${path}.args[${i}]`, ctx));
+  const size = broadcastSizes("smoothstep", path, vals.map((v) => v.size));
+  const [e0, e1, x] = vals.map((v) => splat(v, size));
+  const zero = zeroLit(size);
+  const one = oneLit(size);
+  // Guarded on the EDGES rather than on their difference, matching the CPU:
+  // coincident INFINITE edges subtract to NaN, and a span test would let them
+  // through to the division.
+  const same = ctx.emit(`select(${zero}, ${one}, ${e0} == ${e1})`, size);
+  const span = ctx.emit(`${e1} - ${e0}`, size);
+  const safe = ctx.emit(`select(${span.ref}, ${one}, ${same.ref} != ${zero})`, size);
+  const t = ctx.emit(`clamp((${x} - ${e0}) / ${safe.ref}, ${zero}, ${one})`, size);
+  const curve = ctx.emit(
+    `(${t.ref} * ${t.ref}) * (${scalarLit(size, "3f")} - ${scalarLit(size, "2f")} * ${t.ref})`,
+    size,
+  );
+  return ctx.emit(
+    `select(${curve.ref}, select(${zero}, ${one}, ${x} >= ${e0}), ${same.ref} != ${zero})`,
+    size,
+  );
+});
+
+// distance is length's lowering applied to the difference, which is what
+// makes it exactly `length(sub(a, b))` on this path as well as on the CPU.
+HANDLERS.set("distance", (spec, path, ctx) => {
+  const args = specArgs(spec);
+  const a = compileArg(args[0], `${path}.args[0]`, ctx);
+  const b = compileArg(args[1], `${path}.args[1]`, ctx);
+  const size = broadcastSizes("distance", path, [a.size, b.size]);
+  const d = ctx.emit(`${splat(a, size)} - ${splat(b, size)}`, size);
+  if (size === 1) return ctx.emit(`abs(${d.ref})`, 1);
+  const sum = ctx.emit(`dot(${d.ref}, ${d.ref})`, 1);
+  return ctx.emit(`sqrt(${sum.ref})`, 1);
 });
 
 HANDLERS.set("length", (spec, path, ctx) => {

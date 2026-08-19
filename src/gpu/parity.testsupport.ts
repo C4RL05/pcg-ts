@@ -15,7 +15,6 @@
  * would re-register the device suite inside the CPU one.
  */
 import {
-  type Field,
   abs,
   acos,
   add,
@@ -27,15 +26,20 @@ import {
   component,
   cos,
   cross,
+  distance,
   div,
   dot,
+  exp,
   floor,
+  fract,
   fraction,
   ge,
   length,
   lerp,
+  log,
   max,
   min,
+  mod,
   mul,
   normalize,
   position,
@@ -44,11 +48,14 @@ import {
   randomField,
   remap,
   select,
+  sign,
   sin,
+  smoothstep,
   sqrt,
   step,
   sub,
   tan,
+  type Field,
   vec,
 } from "../fields/index.js";
 import { fbm, perlinNoise, simplexNoise, valueNoise, worleyNoise } from "../noise/index.js";
@@ -79,6 +86,16 @@ export const PARITY_LAYOUT: FieldKernelLayout = {
 
 /** One minimal compilable spec per grammar fn (keys = `listFieldFns()`). */
 export const MINIMAL_SPECS: Record<string, FieldSpecArg> = {
+  fract: { fn: "fract", args: [{ fn: "attribute", name: "density" }] },
+  // Dividend on the NEGATIVE side, because a floored modulo only differs
+  // from a truncated one there.
+  mod: { fn: "mod", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }, 8] },
+  sign: { fn: "sign", args: [{ fn: "component", args: [{ fn: "position" }], index: 0 }] },
+  exp: { fn: "exp", args: [{ fn: "attribute", name: "density" }] },
+  // Guarded strictly positive: 0 is -Infinity and negatives are NaN.
+  log: { fn: "log", args: [{ fn: "add", args: [{ fn: "abs", args: [{ fn: "attribute", name: "density" }] }, 0.5] }] },
+  smoothstep: { fn: "smoothstep", args: [-4, 4, { fn: "component", args: [{ fn: "position" }], index: 0 }] },
+  distance: { fn: "distance", args: [{ fn: "position" }, [0.25, -1.5, 2]] },
   constant: { fn: "constant", value: 1 },
   attribute: { fn: "attribute", name: "density" },
   // Parity here is EXACT rather than budgeted, on both sides: the CPU
@@ -495,7 +512,12 @@ const P = { fn: "position" } as const;
 const PX = { fn: "component", args: [P], index: 0 } as const;
 const PY = { fn: "component", args: [P], index: 1 } as const;
 
-// Every `rangeUlp a/b/c/d` below is the sweep at 10k/65k/262k/1M.
+// PROVENANCE. Rows carrying four figures (`rangeUlp a/b/c/d`) are historical
+// anchors from a sweep at 10k/65k/262k/1M that the harness no longer runs:
+// PARITY_SWEEP_COUNTS is [10_000, 131_072] and PARITY_COUNT is 65_536, so
+// what CI re-measures every run is two counts plus the fixed one. Rows added
+// since say which counts they were measured at rather than inheriting a
+// header that describes a wider sweep than the one that produced them.
 export const PARITY_CASES: ParityCase[] = [
   // rangeUlp 0 and maxUlp 0 at every count — double rounding is
   // innocuous for + - ×.
@@ -557,6 +579,78 @@ export const PARITY_CASES: ParityCase[] = [
   // Falsifiable, and checked: reversing the CPU comparison to
   // `v[0] >= v[1]` turns this row red on 99.99% of lanes.
   { name: "step", spec: { fn: "step", args: [PY, PX] }, exact: true, budget: 0, meanAbs: 0 },
+  // The four rows that follow are exact BY CONSTRUCTION rather than by a
+  // budget, with ONE contract-level exception they share with every other
+  // row in this table: a SUBNORMAL INPUT is flushed to zero on the device
+  // and kept on the CPU, so `sign(1e-40)` is 1 here and 0 there. That is
+  // f32 denormal flushing rather than anything these fns do, it is the
+  // same contract `subnormalMul` measures, and the edge probe in
+  // parity.device.test.ts asserts it explicitly so the exactness claims
+  // above cannot be read as covering it.
+  //
+  // rangeUlp 0 and maxUlp 0 at every count: `x - floor(x)` on both sides, two operations that are each exact in
+  // f32. WGSL's `fract()` is specified as the same expansion, so emitting
+  // the builtin would very likely measure the same — writing it out is what
+  // makes "the same" a property of the text rather than of this adapter.
+  // Falsifiable, and checked: emitting `floor` in place of the subtraction
+  // reddens this row.
+  { name: "fract", spec: { fn: "fract", args: [PX] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and maxUlp 0 at every count, and the exactness is EARNED
+  // rather than inherited: the CPU rounds each of the four operations to
+  // f32 individually (`Math.fround` around the divide, the multiply and the
+  // subtraction) so that it runs the device's expansion step for step. The
+  // f64-accumulate-then-round-once path that every other `elementwise` fn
+  // takes would NOT be exact here — that is the same trade `cross` makes.
+  // The dividend spans both signs, so the floored-vs-truncated difference
+  // is inside the measured domain rather than beside it. Falsifiable, and checked: emitting WGSL's `%` reddens this
+  // row, and only the negative half of the cloud can be what does it,
+  // since the two definitions agree above zero.
+  { name: "mod", spec: { fn: "mod", args: [PX, 8] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and maxUlp 0 at every count. Exact for `step`'s reason: the
+  // lowering is a pair of comparisons, and a comparison has no interior to
+  // round. The coordinate read here spans both signs, so a reversed
+  // comparison cannot hide in a cloud that is all one sign — falsifiable,
+  // and checked: swapping the two comparisons reddens this row.
+  { name: "sign", spec: { fn: "sign", args: [PX] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 0 and maxUlp 0 at every count, which was NOT a given: this is
+  // a five-operation interior, and it is exact only because the CPU rounds
+  // each of them to f32 in the same order the kernel does. The edges are
+  // -4 and 4 against a coordinate spanning [-8, 8], so a large share of the
+  // lanes land in the curve rather than on a clamped end — an all-clamped
+  // domain would score exact while measuring nothing but `clamp`.
+  // Falsifiable, and checked: emitting WGSL's `smoothstep()` builtin over
+  // the same clamped t reddens this row, which is the measurement behind
+  // the decision to expand it rather than call it.
+  { name: "smoothstep", spec: { fn: "smoothstep", args: [-4, 4, PX] }, exact: true, budget: 0, meanAbs: 0 },
+  // rangeUlp 3.44 -> 4.12 over 10k -> 131k, 4.13 at 65k, and 4.12 again at
+  // 1M on a widened anchor run: it GROWS 1.20x over the first two decades
+  // and then SATURATES, so 4.12 is the bound rather than the largest sample
+  // so far. One of the two genuinely transcendental additions: the device
+  // has its own exp and the CPU has `Math.exp`, and they are simply not the
+  // same function. budget 8 = 1.94x, matching `pow`, whose device lowering
+  // is exp2 of a product and so is the same machinery.
+  // meanAbs 3.8e-5 = 1.24x of the measured 3.06e-5 at 1M.
+  { name: "exp", spec: { fn: "exp", args: [PX] }, budget: 8, meanAbs: 3.8e-5, countSensitive: true },
+  // rangeUlp 0.93/0.93 over 10k -> 131k and 0.93 again at 1M — dead flat to
+  // three significant figures across two further decades. budget 2 = 2.15x;
+  // meanAbs 5.5e-8 = 1.25x of 4.38e-8.
+  // THE RAW maxUlp IS 4843 AND THAT IS NOT A DEFECT, it is the clearest
+  // demonstration in the table of why `rangeUlp` is the metric. `log`
+  // crosses zero at x = 1, and an absolute error of 4.4e-8 beside an output
+  // of 1e-11 is thousands of ULP OF THAT OUTPUT while being a thousandth of
+  // one ULP of the family's range. Budgeting the raw figure would demand
+  // 6000 here and would still say nothing about the answers anyone reads.
+  { name: "log", spec: { fn: "log", args: [{ fn: "add", args: [{ fn: "abs", args: [PX] }, 0.5] }] }, budget: 2, meanAbs: 5.5e-8, countSensitive: true },
+  // rangeUlp 0.52/0.51 — saturated, and 0.5 is the floor rather than a
+  // coincidence: maxUlp is 1, so the worst lane is a single f32 ULP and the
+  // result is correctly rounded everywhere else. It measures BETTER than
+  // `length/normalize` (budget 4) because that family compounds two fns in
+  // one spec; this one is the same sqrt over a subtraction the CPU also
+  // rounds to f32, which is what makes `distance(a, b)` and
+  // `length(sub(a, b))` the same number on both paths.
+  // budget 1 = 1.92x the sweep max (0.52/0.50 over 10k -> 131k, 0.50 at 1M);
+  // meanAbs 1.9e-7 = 1.24x of 1.53e-7.
+  { name: "distance", spec: { fn: "distance", args: [P, { fn: "vec", args: [0.25, -1.5, 2] }] }, budget: 1, meanAbs: 1.9e-7, countSensitive: true },
   // rangeUlp 6.50/6.50/7.13/7.13 over inputs in [-8, 8].
   // budget 12 = 1.68x the sweep max; meanAbs 3.2e-7 = 1.28x of 2.51e-7.
   { name: "sin/cos", spec: EXTENDED_SPECS.trigChain, budget: 12, meanAbs: 3.2e-7, countSensitive: true },
@@ -780,6 +874,13 @@ export const DERIVED_FIELDS: Record<string, () => Field> = {
     ]),
   "select/compare": () => select(ge(density(), 0.25), position(), vec(1, 2, 3)),
   step: () => step(py(), px()),
+  fract: () => fract(px()),
+  mod: () => mod(px(), 8),
+  sign: () => sign(px()),
+  smoothstep: () => smoothstep(-4, 4, px()),
+  exp: () => exp(px()),
+  log: () => log(add(abs(px()), 0.5)),
+  distance: () => distance(position(), vec(0.25, -1.5, 2)),
   sqrt: () => sqrt(abs(px())),
   pow: () => pow(add(abs(px()), 0.5), mul(py(), 0.375)),
   cross: () => cross(position(), attribute("normal", 3)),

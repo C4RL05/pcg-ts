@@ -12,25 +12,32 @@ import {
   cos,
   cross,
   div,
+  distance,
   dot,
   eq,
+  exp,
   floor,
+  fract,
   ge,
   gt,
   le,
   length,
   lerp,
   lt,
+  log,
   max,
   min,
   mul,
+  mod,
   ne,
   normalize,
   pow,
   ramp,
+  smoothstep,
   remap,
   select,
   sin,
+  sign,
   sqrt,
   step,
   sub,
@@ -477,5 +484,170 @@ describe("ramp", () => {
       ]),
     ).toThrow(/ascending/);
     expect(() => evaluateField(ramp(position(), [[0, 1]]), ctx)).toThrow(/scalar/);
+  });
+});
+
+describe("fract", () => {
+  // Either side of zero and two exact integers, because the whole reason
+  // this fn exists is what it does on the negative side.
+  const ctx = cloudCtx([2.75, 0, 0, -0.25, 0, 0, -3, 0, 0, 5, 0, 0, Infinity, 0, 0]);
+  const x = component(position(), 0);
+
+  it("is NON-NEGATIVE below zero, which is what makes it tile", () => {
+    // -0.25 gives 0.75, NOT -0.25. A truncated fractional part would give
+    // the latter and mirror the tile across the origin.
+    expect(asArray(ctx, fract(x)).slice(0, 4)).toEqual([0.75, 0.75, 0, 0]);
+  });
+
+  it("is exactly mod(x, 1)", () => {
+    // The registry says so; if the two ever disagree one of them is wrong.
+    expect(asArray(ctx, fract(x))).toEqual(asArray(ctx, mod(x, 1)));
+  });
+
+  it("has no fractional part for a non-finite input", () => {
+    expect(asArray(ctx, fract(x)).at(-1)).toBeNaN();
+  });
+});
+
+describe("mod", () => {
+  const ctx = cloudCtx([-1, 0, 0, 9, 0, 0, -9, 0, 0, 8, 0, 0, 0, 0, 0]);
+  const x = component(position(), 0);
+
+  it("is FLOORED: the sign follows the divisor, not the dividend", () => {
+    // mod(-1, 8) is 7 and not -1 — the decision this fn documents forever.
+    expect(asArray(ctx, mod(x, 8))).toEqual([7, 1, 7, 0, 0]);
+  });
+
+  it("follows a NEGATIVE divisor down instead", () => {
+    // The mirror of the clause above: with y < 0 every result is <= 0.
+    expect(asArray(ctx, mod(x, -8))).toEqual([-1, -7, -1, 0, 0]);
+  });
+
+  it("differs from a truncated remainder exactly where it should", () => {
+    // Pinned as a DIFFERENCE, so a lowering that quietly emitted WGSL's
+    // `%` would redden this rather than passing on the positive half.
+    const floored = asArray(ctx, mod(x, 8));
+    const truncated = [-1, 9, -9, 8, 0].map((v) => v % 8);
+    expect(floored).not.toEqual(truncated);
+    expect(floored.slice(1, 2)).toEqual(truncated.slice(1, 2)); // agree above zero
+  });
+
+  it("is NaN for a zero divisor", () => {
+    expect(asArray(ctx, mod(x, 0)).every(Number.isNaN)).toBe(true);
+  });
+});
+
+describe("sign", () => {
+  const ctx = cloudCtx([-2, 0, 0, 0, 0, 0, 3, 0, 0, NaN, 0, 0, -0, 0, 0]);
+  const x = component(position(), 0);
+
+  it("is -1, 0 or +1", () => {
+    expect(asArray(ctx, sign(x)).slice(0, 3)).toEqual([-1, 0, 1]);
+  });
+
+  it("answers 0 for a NaN, where Math.sign answers NaN", () => {
+    // Deliberate: the definition is a pair of comparisons, and a NaN is
+    // neither greater nor less than zero. Both paths execute that exactly.
+    expect(asArray(ctx, sign(x)).at(3)).toBe(0);
+    expect(Number.isNaN(Math.sign(NaN))).toBe(true);
+  });
+
+  it("answers +0 for a negative zero, where Math.sign answers -0", () => {
+    expect(Object.is(asArray(ctx, sign(x)).at(4), 0)).toBe(true);
+    expect(Object.is(Math.sign(-0), -0)).toBe(true);
+  });
+
+  it("agrees with normalize on a scalar, which is the fn it renames", () => {
+    // Except on the two inputs above, where normalize inherits the host's
+    // answers and this one does not.
+    expect(asArray(ctx, sign(x)).slice(0, 3)).toEqual(asArray(ctx, normalize(x)).slice(0, 3));
+  });
+});
+
+describe("exp and log", () => {
+  const ctx = cloudCtx([0, 0, 0, 1, 0, 0, -1, 0, 0]);
+  const x = component(position(), 0);
+
+  it("exp(0) is 1 and exp(1) is e, rounded to f32", () => {
+    expect(asArray(ctx, exp(x)).slice(0, 2)).toEqual([1, Math.fround(Math.E)]);
+  });
+
+  it("log is NATURAL: log(1) is 0, and log(e) is 1 as closely as f32 allows", () => {
+    // NOT exactly 1: `e` is stored as f32 first, and the natural log of the
+    // nearest f32 to e is 0.9999999403953552. Asserting 1 here would be
+    // asserting that the column is f64, which no column in this library is.
+    const out = asArray(cloudCtx([1, 0, 0, Math.E, 0, 0]), log(component(position(), 0)));
+    expect(out[0]).toBe(0);
+    expect(out[1]).toBe(Math.fround(Math.log(Math.fround(Math.E))));
+    expect(out[1]).toBeCloseTo(1, 6);
+  });
+
+  it("log(0) is -Infinity and a negative input is NaN", () => {
+    const out = asArray(cloudCtx([0, 0, 0, -1, 0, 0]), log(component(position(), 0)));
+    expect(out[0]).toBe(-Infinity);
+    expect(out[1]).toBeNaN();
+  });
+
+  it("round-trips through each other within f32", () => {
+    const out = asArray(ctx, log(exp(x)));
+    expect(out[0]).toBeCloseTo(0, 5);
+    expect(out[1]).toBeCloseTo(1, 5);
+    expect(out[2]).toBeCloseTo(-1, 5);
+  });
+});
+
+describe("smoothstep", () => {
+  const ctx = cloudCtx([-1, 0, 0, 0, 0, 0, 0.25, 0, 0, 0.5, 0, 0, 1, 0, 0, 2, 0, 0]);
+  const x = component(position(), 0);
+
+  it("is flat outside the edges and 0.5 in the middle", () => {
+    expect(asArray(ctx, smoothstep(0, 1, x))).toEqual([0, 0, 0.15625, 0.5, 1, 1]);
+  });
+
+  it("leaves both ends FLAT, which is the whole difference from lerp", () => {
+    // The first step away from each edge is much smaller than a straight
+    // line's would be: that is the property a mask is bought for.
+    const out = asArray(cloudCtx([0, 0, 0, 0.05, 0, 0, 0.5, 0, 0]), smoothstep(0, 1, component(position(), 0)));
+    expect(out[1]).toBeLessThan(0.05 / 2);
+  });
+
+  it("degenerates to a step when the edges coincide, rather than dividing by zero", () => {
+    // Guarded on both paths, mirroring what remap does with a zero input
+    // span — the limit the curve is approaching, not a NaN.
+    expect(asArray(ctx, smoothstep(0.5, 0.5, x))).toEqual(asArray(ctx, step(0.5, x)));
+  });
+
+  it("runs backwards when edge0 is above edge1", () => {
+    expect(asArray(ctx, smoothstep(1, 0, x))).toEqual([1, 1, 0.84375, 0.5, 0, 0]);
+  });
+});
+
+describe("distance", () => {
+  const ctx = cloudCtx([3, 4, 0, -1, -1, -1, 0, 0, 0]);
+
+  it("is the Euclidean distance between two tuples", () => {
+    expect(asArray(ctx, distance(position(), vec(0, 0, 0)))).toEqual([5, Math.fround(Math.sqrt(3)), 0]);
+  });
+
+  it("is EXACTLY length(sub(a, b)), not merely close to it", () => {
+    // The fused spelling rounds the difference to f32 before squaring for
+    // this reason: it is what `sub` stores and what the device subtracts,
+    // so the two spellings cannot drift apart.
+    for (const other of [vec(0, 0, 0), vec(-2.5, 7.25, 0.125), position(), vec(1e-7, 1e7, 3)]) {
+      expect(asArray(ctx, distance(position(), other))).toEqual(
+        asArray(ctx, length(sub(position(), other))),
+      );
+    }
+  });
+
+  it("is the absolute difference on scalars", () => {
+    const x = component(position(), 0);
+    expect(asArray(ctx, distance(x, 1))).toEqual([2, 2, 1]);
+  });
+
+  it("is symmetric", () => {
+    const a = position();
+    const b = vec(1.5, -2.25, 8);
+    expect(asArray(ctx, distance(a, b))).toEqual(asArray(ctx, distance(b, a)));
   });
 });

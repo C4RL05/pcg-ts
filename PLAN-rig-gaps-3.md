@@ -332,9 +332,21 @@ the refutation is the expensive part.
   another name, so two identical subtrees evaluate once. What is left is
   verbosity, and the pillar "anonymous attributes carry intermediate results"
   already names the escape hatch. A wish, not a gap.
-- **No `mod` and no `round` in the 46 field fns.** `x - N * floor(x / N)`
-  appears seven times in the rig and `floor(x + 0.5)` once. Both are exact at
-  the magnitudes involved. Typing, not mechanism.
+- **~~No `mod` and no `round` in the 46 field fns.~~ `mod` SHIPPED 2026-08-19**
+  (the grammar is 57 fns now; `round` did not and is still `floor(x + 0.5)`,
+  once). `x - N * floor(x / N)` appears seven times in the rig and this entry
+  called that "typing, not mechanism" — which was the wrong reading, and worth
+  keeping for why. PLAN.md's fields entry demanded "a SITE, not a count" before
+  building `mod`, and then measured demand by grepping the corpus for a
+  DIFFERENT idiom and found zero. These seven sites were the site, recorded in
+  this file the whole time and never joined up to that question. The lesson is
+  about where demand is looked for, not about the fn: a gap list that dismisses
+  its own findings as ergonomics, and a plan that measures demand in one
+  vocabulary, can each be right and still miss the same signal.
+  NOT YET ADOPTED: the rig still spells it by hand. `mod` is bit-exact on both
+  paths and rounds each intermediate exactly where four separate nodes would,
+  so the swap ought to leave the 63-graph golden byte-identical — which is the
+  check that would make adoption a mechanical change rather than a risk.
 - **Duplicated attribute NAMES** — `"curveNormal"` 14 times, `"anchorId"` 4,
   `"radialAngle"` 5 — cannot be collapsed by any param (a graph param holds only
   numbers), which looks like a silent-rename hazard. It is not silent: renaming
