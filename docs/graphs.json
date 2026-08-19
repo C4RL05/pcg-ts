@@ -431,6 +431,34 @@
     ]
   },
   {
+    "file": "basics-flatten-and-remember.json",
+    "path": "graphs/basics-flatten-and-remember.json",
+    "title": "flatten a cloud onto a plane and keep the height it lost",
+    "description": "`projectToPlane` drops every point orthogonally onto the plane through `origin` with normal `normal`, and with `keepOffset` it writes each point's SIGNED pre-projection distance into a `planeOffset` attribute before moving it. That pairing is the whole idiom: the geometry becomes a plan view, and the third dimension survives as data rather than being thrown away. Here a relief grid flattens to y = 0 and the height it had drives its colour, so the map still says where the hills were. The ramp is fitted to the relief that actually arrives (about ±1.8 units) rather than to the amplitude the transform asks for: a normalized fBm spans only the middle stretch of its nominal range, so a ramp cut to the nominal number leaves its ends unreachable and the map reads washed out. Signed, so the sign is the side — points below the plane come back negative, and a rule that wants only the high ground reads `planeOffset > 0` rather than needing a second node to tell it which way is up.\n\nThe params are field-capable and that changes what the node is. As plain vectors they describe ONE plane and the normal must be non-zero. As FIELDS they are read per point, so each point falls onto the plane IT was given: a per-point `origin` with a constant normal is an OFFSET along that normal, which is how a stepped or terraced flattening is written; a per-point normal — `attribute(\"N\")` — puts every point onto its own surface plane instead of onto one shared one. One safety worth knowing before relying on it: where a per-point normal resolves to zero there is no plane to project onto, so that point is left exactly where it stands rather than being collapsed to the origin.",
+    "tags": [
+      "basics",
+      "project",
+      "plane",
+      "attributes"
+    ],
+    "seed": 1062,
+    "nodeCount": 4,
+    "nodeTypes": [
+      "pointGrid",
+      "projectToPlane",
+      "setAttribute",
+      "transformPoints"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "tint",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-foreach-per-group.json",
     "path": "graphs/basics-foreach-per-group.json",
     "title": "treat each group on its own",
@@ -1050,6 +1078,41 @@
     ]
   },
   {
+    "file": "basics-report-to-the-host.json",
+    "path": "graphs/basics-report-to-the-host.json",
+    "title": "what a graph hands back that is not geometry",
+    "description": "A cook returns items, and only some of them are shapes. This graph returns three kinds at once and the difference between them is the lesson.\n\n`attributeReduce` collapses a whole domain into ONE value on the DETAIL domain: the sum of the weights, their maximum, and a plain count of the points. Three reductions of one attribute need three distinct `outName`s — left empty the name is reused, which is what promoting would have produced and is fine for one. Mode 'count' reads no attribute at all, so `name` is left empty there rather than pointing at a column it will ignore. THE CONSTRAINT WORTH KNOWING: a point-domain field cannot read the detail domain. That is deliberate, not an oversight — a field resolves each element from that element alone, and a total is a property of every element at once, so a graph cannot feed its own totals back into its own points. Anything that needs to (calibrate a count against a budget, normalize by a maximum) runs as a loop in the HOST, between cooks, reading these reports and setting params for the next one.\n\n`removeAttribute` is the other half. `weight` here is scratch — it exists to be reduced — and every idiom that carries a value between nodes leaves its column on the output forever unless something takes it off. This is the only node that can, and the ORDER is the point: the reductions read the column, so they must run before the removal. It is `strict` by default, so a typo in the name is an error naming the columns that do exist rather than a silent no-op leaving exactly the debris it was meant to clear.\n\n`valueConstant` is the third kind: a plain number, riding back beside the geometry. Here it is the weight budget the graph was authored against, for a host to compare the reduced `weightSum` against — and as it stands this cook comes out OVER it, which is the interesting case: the comparison is a signal a host loop acts on by changing a param and cooking again, not an assertion the graph makes about itself — a number the graph declares rather than derives, which is why it is a constant and not another reduction. Worth knowing before reaching for it: EVERY input pin in this library is geometry-kind, so a value item has nowhere to go inside a graph. Its only destination is an output.",
+    "tags": [
+      "basics",
+      "attributes",
+      "reduce",
+      "detail",
+      "values"
+    ],
+    "seed": 1060,
+    "nodeCount": 7,
+    "nodeTypes": [
+      "attributeReduce",
+      "pointGrid",
+      "removeAttribute",
+      "setAttribute",
+      "valueConstant"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "points",
+        "node": "clean",
+        "pin": "out"
+      },
+      {
+        "name": "weightBudget",
+        "node": "budget",
+        "pin": "out"
+      }
+    ]
+  },
+  {
     "file": "basics-reseed-a-noise.json",
     "path": "graphs/basics-reseed-a-noise.json",
     "title": "make a saved noise re-roll with the graph seed",
@@ -1366,6 +1429,34 @@
       {
         "name": "points",
         "node": "place",
+        "pin": "out"
+      }
+    ]
+  },
+  {
+    "file": "basics-two-kinds-of-bounds.json",
+    "path": "graphs/basics-two-kinds-of-bounds.json",
+    "title": "two things called bounds, and they are not the same thing",
+    "description": "The word does double duty in this library and confusing the two costs an afternoon, so here they are in one graph.\n\n`filterPrimitivesByBounds` is a WORLD box that SELECTS. It keeps or drops whole primitives by testing their vertices against [boundsMin, boundsMax], and it is one of only two filters here that PRESERVE TOPOLOGY — the survivors keep their vertices, their vertex and primitive attributes, and the points they share, so a network filtered this way is still a network rather than a cloud that used to be one. Three params decide what 'in the box' means and they are read together. `vertex: \"first\"` tests exactly ONE vertex per primitive, which is what makes it an OWNERSHIP rule: every primitive has exactly one first vertex, so abutting boxes claim it exactly once between them and a partitioned cook can tile the world with no edge counted twice. `boundary: \"halfOpen\"` is the other half of that — min inclusive, max exclusive — so an edge lying exactly on a shared face belongs to one box, not both. A consequence worth seeing before it surprises you: only the FIRST vertex is tested, so an edge that starts inside and ends well outside survives WHOLE, and the filtered network overhangs its own box — about forty percent of the points left here sit outside [-12, 12]. That is the ownership rule working, not leaking: the box owns edges, not space. And `unreferencedPoints: \"drop\"`, used here, discards the points no surviving edge touches; the default 'keep' leaves the point domain completely untouched instead, same points in the same order, which is what anything holding a point index needs.\n\n`setBounds` is a per-point LOCAL extent that DESCRIBES. It writes `boundsMin` and `boundsMax` on every point as that point's own axis-aligned size, in world units, and nothing filters on it — spawners and downstream nodes read it to know how much room the thing at that point takes up. Constants here for legibility, but the param is field-capable and that is where it earns its place: an extent derived from the point's own `scale`, or chosen by a species attribute, gives every instance the box it actually occupies instead of one box for the whole cloud. Note also what it does NOT check — min against max is not validated, the two corners are written independently, and a point whose corners cross is a point with an inside-out box.\n\nSo: one bounds is a question asked of the world, the other is an answer a point carries about itself. They share a name and a shape and nothing else.",
+    "tags": [
+      "basics",
+      "bounds",
+      "filter",
+      "topology"
+    ],
+    "seed": 1061,
+    "nodeCount": 4,
+    "nodeTypes": [
+      "connectPoints",
+      "filterPrimitivesByBounds",
+      "pointScatterInBounds",
+      "setBounds"
+    ],
+    "primitives": [],
+    "outputs": [
+      {
+        "name": "network",
+        "node": "extent",
         "pin": "out"
       }
     ]

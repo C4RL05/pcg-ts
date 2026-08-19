@@ -37,7 +37,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { type DataCollection, cook, deserializeGraph } from "../src/index.js";
+import { type DataCollection, cook, deserializeGraph, listNodeTypes } from "../src/index.js";
 import {
   GRAPHS_TIME_LIMIT_MS,
   type GraphsGolden,
@@ -52,6 +52,20 @@ import { describeExample, loadGraphs } from "../src/docs/graphIndex.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const GOLDEN_PATH = fileURLToPath(new URL("./graphs.golden.json", import.meta.url));
+
+/**
+ * Node types allowed to appear in no corpus graph, each with the property
+ * of the NODE that makes a corpus graph impossible. Nothing else earns a
+ * place here — a type that is merely awkward to demonstrate is a graph
+ * waiting to be written, not an exemption.
+ */
+const COVERAGE_EXEMPT = new Map<string, string>([
+  [
+    "dataInput",
+    "its items are injected at runtime and carry nothing through serialization, " +
+      "so a corpus graph using it would cook to nothing — the test above forbids it here outright",
+  ],
+]);
 
 /**
  * Timeout for the two tests that cook a graph MORE THAN ONCE.
@@ -205,6 +219,65 @@ describe("example corpus", () => {
           "serialization — use `meshPrimitive` for geometry a saved graph can cook:",
           ...offenders.map((p) => `  ${p}`),
         ].join("\n"),
+      );
+    }
+  });
+
+  it("every registered node type appears in at least one corpus graph", () => {
+    // The corpus is documentation as much as it is a fixture: a node type
+    // no graph demonstrates is a node type whose reason to exist can only
+    // be read off a param table. `pathScan` sat in exactly that state for a
+    // release — its own doc says it is the operation a field cannot
+    // express, which is precisely the part a signature cannot show — so
+    // this is the check that stops the gap reopening quietly.
+    //
+    // Coverage is DIRECT USE ONLY. `describeExample` does not look inside a
+    // primitive referenced by name, so a type reachable only through some
+    // `ref` does not count, and that is the intent: the point is a graph a
+    // reader can open and see the node in.
+    const used = new Set(corpus.flatMap((entry) => describeExample(entry).nodeTypes));
+    const registered = listNodeTypes().map((info) => info.type);
+
+    const missing = registered.filter((type) => !used.has(type) && !COVERAGE_EXEMPT.has(type));
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          `${missing.length} registered node type(s) appear in no corpus graph:`,
+          "",
+          ...missing.map((type) => `  ${type}`),
+          "",
+          "Add a graph under graphs/ that uses the node for something worth",
+          "teaching — not a graph that merely mentions it — then run:",
+          "",
+          "  npm run build && npm run graphs:golden && npm run docs",
+          "",
+          "If the type genuinely CANNOT appear in a serialized corpus graph, add",
+          "it to COVERAGE_EXEMPT with the property of the node that makes it",
+          "impossible. 'nobody got round to it' is not that property.",
+        ].join("\n"),
+      );
+    }
+
+    // An exemption is a claim, and a claim that has stopped being true is
+    // worse than no claim: it would hide a type that later lost its excuse.
+    const stale = [...COVERAGE_EXEMPT.keys()].filter((type) => used.has(type));
+    if (stale.length > 0) {
+      throw new Error(
+        [
+          "these types are exempt from corpus coverage but a graph now uses one:",
+          "",
+          ...stale.map((type) => `  ${type} — exempt because ${COVERAGE_EXEMPT.get(type)}`),
+          "",
+          "Either the exemption's reason no longer holds and the entry should go,",
+          "or the graph is doing something the exemption says cannot work.",
+        ].join("\n"),
+      );
+    }
+
+    const unknown = [...COVERAGE_EXEMPT.keys()].filter((type) => !registered.includes(type));
+    if (unknown.length > 0) {
+      throw new Error(
+        `COVERAGE_EXEMPT names ${unknown.join(", ")}, which no longer exists in the registry — drop the entry.`,
       );
     }
   });

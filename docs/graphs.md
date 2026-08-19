@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-64 examples, alphabetical by file:
+67 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -21,6 +21,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-filter-by-density.json](#basics-filter-by-densityjson) — thin a cloud by the density attribute
 - [basics-filter-by-expression.json](#basics-filter-by-expressionjson) — keep points with a predicate expression
 - [basics-filter-primitives-by-attribute.json](#basics-filter-primitives-by-attributejson) — keep whole primitives by an attribute comparison
+- [basics-flatten-and-remember.json](#basics-flatten-and-rememberjson) — flatten a cloud onto a plane and keep the height it lost
 - [basics-foreach-per-group.json](#basics-foreach-per-groupjson) — treat each group on its own
 - [basics-gather-on-path.json](#basics-gather-on-pathjson) — gather evenly spaced points into clumps along a curve
 - [basics-inline-field-params.json](#basics-inline-field-paramsjson) — put a field's shaping numbers on knobs without a wrapper
@@ -43,6 +44,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-promote-attribute.json](#basics-promote-attributejson) — move an attribute between domains
 - [basics-props-along-a-path.json](#basics-props-along-a-pathjson) — space props evenly along a curve
 - [basics-radial-on-curve.json](#basics-radial-on-curvejson) — aim things radially around a curve
+- [basics-report-to-the-host.json](#basics-report-to-the-hostjson) — what a graph hands back that is not geometry
 - [basics-reseed-a-noise.json](#basics-reseed-a-noisejson) — make a saved noise re-roll with the graph seed
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
@@ -55,6 +57,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-tiling-a-field.json](#basics-tiling-a-fieldjson) — tile a field across the origin
 - [basics-transfer-attribute.json](#basics-transfer-attributejson) — read a value off a surface below each point
 - [basics-transform-points.json](#basics-transform-pointsjson) — move, turn and size a whole cloud
+- [basics-two-kinds-of-bounds.json](#basics-two-kinds-of-boundsjson) — two things called bounds, and they are not the same thing
 - [basics-volume-scatter.json](#basics-volume-scatterjson) — fill a box with points, then carve it
 - [examples-forest.json](#examples-forestjson) — plant a hillside, thinned by slope and treeline
 - [examples-gpu-fields.json](#examples-gpu-fieldsjson) — a fusable chain, on the CPU or the device
@@ -344,6 +347,26 @@ Cook it: `pcg cook graphs/basics-filter-by-expression.json --stats`
 **Outputs:** `network` (from `short`.`out`)
 
 Cook it: `pcg cook graphs/basics-filter-primitives-by-attribute.json --stats`
+
+## basics-flatten-and-remember.json
+
+**flatten a cloud onto a plane and keep the height it lost**
+
+`projectToPlane` drops every point orthogonally onto the plane through `origin` with normal `normal`, and with `keepOffset` it writes each point's SIGNED pre-projection distance into a `planeOffset` attribute before moving it. That pairing is the whole idiom: the geometry becomes a plan view, and the third dimension survives as data rather than being thrown away. Here a relief grid flattens to y = 0 and the height it had drives its colour, so the map still says where the hills were. The ramp is fitted to the relief that actually arrives (about ±1.8 units) rather than to the amplitude the transform asks for: a normalized fBm spans only the middle stretch of its nominal range, so a ramp cut to the nominal number leaves its ends unreachable and the map reads washed out. Signed, so the sign is the side — points below the plane come back negative, and a rule that wants only the high ground reads `planeOffset > 0` rather than needing a second node to tell it which way is up.
+
+The params are field-capable and that changes what the node is. As plain vectors they describe ONE plane and the normal must be non-zero. As FIELDS they are read per point, so each point falls onto the plane IT was given: a per-point `origin` with a constant normal is an OFFSET along that normal, which is how a stepped or terraced flattening is written; a per-point normal — `attribute("N")` — puts every point onto its own surface plane instead of onto one shared one. One safety worth knowing before relying on it: where a per-point normal resolves to zero there is no plane to project onto, so that point is left exactly where it stands rather than being collapsed to the origin.
+
+**Tags:** `basics`, `project`, `plane`, `attributes`
+
+**Seed:** 1062
+
+**Node types:** `pointGrid`, `projectToPlane`, `setAttribute`, `transformPoints`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `tint`.`out`)
+
+Cook it: `pcg cook graphs/basics-flatten-and-remember.json --stats`
 
 ## basics-foreach-per-group.json
 
@@ -741,6 +764,30 @@ Cook it: `pcg cook graphs/basics-props-along-a-path.json --stats`
 
 Cook it: `pcg cook graphs/basics-radial-on-curve.json --stats`
 
+## basics-report-to-the-host.json
+
+**what a graph hands back that is not geometry**
+
+A cook returns items, and only some of them are shapes. This graph returns three kinds at once and the difference between them is the lesson.
+
+`attributeReduce` collapses a whole domain into ONE value on the DETAIL domain: the sum of the weights, their maximum, and a plain count of the points. Three reductions of one attribute need three distinct `outName`s — left empty the name is reused, which is what promoting would have produced and is fine for one. Mode 'count' reads no attribute at all, so `name` is left empty there rather than pointing at a column it will ignore. THE CONSTRAINT WORTH KNOWING: a point-domain field cannot read the detail domain. That is deliberate, not an oversight — a field resolves each element from that element alone, and a total is a property of every element at once, so a graph cannot feed its own totals back into its own points. Anything that needs to (calibrate a count against a budget, normalize by a maximum) runs as a loop in the HOST, between cooks, reading these reports and setting params for the next one.
+
+`removeAttribute` is the other half. `weight` here is scratch — it exists to be reduced — and every idiom that carries a value between nodes leaves its column on the output forever unless something takes it off. This is the only node that can, and the ORDER is the point: the reductions read the column, so they must run before the removal. It is `strict` by default, so a typo in the name is an error naming the columns that do exist rather than a silent no-op leaving exactly the debris it was meant to clear.
+
+`valueConstant` is the third kind: a plain number, riding back beside the geometry. Here it is the weight budget the graph was authored against, for a host to compare the reduced `weightSum` against — and as it stands this cook comes out OVER it, which is the interesting case: the comparison is a signal a host loop acts on by changing a param and cooking again, not an assertion the graph makes about itself — a number the graph declares rather than derives, which is why it is a constant and not another reduction. Worth knowing before reaching for it: EVERY input pin in this library is geometry-kind, so a value item has nowhere to go inside a graph. Its only destination is an output.
+
+**Tags:** `basics`, `attributes`, `reduce`, `detail`, `values`
+
+**Seed:** 1060
+
+**Node types:** `attributeReduce`, `pointGrid`, `removeAttribute`, `setAttribute`, `valueConstant`
+
+**Primitives:** *(none)*
+
+**Outputs:** `points` (from `clean`.`out`), `weightBudget` (from `budget`.`out`)
+
+Cook it: `pcg cook graphs/basics-report-to-the-host.json --stats`
+
 ## basics-reseed-a-noise.json
 
 **make a saved noise re-roll with the graph seed**
@@ -956,6 +1003,30 @@ Cook it: `pcg cook graphs/basics-transfer-attribute.json --stats`
 **Outputs:** `points` (from `place`.`out`)
 
 Cook it: `pcg cook graphs/basics-transform-points.json --stats`
+
+## basics-two-kinds-of-bounds.json
+
+**two things called bounds, and they are not the same thing**
+
+The word does double duty in this library and confusing the two costs an afternoon, so here they are in one graph.
+
+`filterPrimitivesByBounds` is a WORLD box that SELECTS. It keeps or drops whole primitives by testing their vertices against [boundsMin, boundsMax], and it is one of only two filters here that PRESERVE TOPOLOGY — the survivors keep their vertices, their vertex and primitive attributes, and the points they share, so a network filtered this way is still a network rather than a cloud that used to be one. Three params decide what 'in the box' means and they are read together. `vertex: "first"` tests exactly ONE vertex per primitive, which is what makes it an OWNERSHIP rule: every primitive has exactly one first vertex, so abutting boxes claim it exactly once between them and a partitioned cook can tile the world with no edge counted twice. `boundary: "halfOpen"` is the other half of that — min inclusive, max exclusive — so an edge lying exactly on a shared face belongs to one box, not both. A consequence worth seeing before it surprises you: only the FIRST vertex is tested, so an edge that starts inside and ends well outside survives WHOLE, and the filtered network overhangs its own box — about forty percent of the points left here sit outside [-12, 12]. That is the ownership rule working, not leaking: the box owns edges, not space. And `unreferencedPoints: "drop"`, used here, discards the points no surviving edge touches; the default 'keep' leaves the point domain completely untouched instead, same points in the same order, which is what anything holding a point index needs.
+
+`setBounds` is a per-point LOCAL extent that DESCRIBES. It writes `boundsMin` and `boundsMax` on every point as that point's own axis-aligned size, in world units, and nothing filters on it — spawners and downstream nodes read it to know how much room the thing at that point takes up. Constants here for legibility, but the param is field-capable and that is where it earns its place: an extent derived from the point's own `scale`, or chosen by a species attribute, gives every instance the box it actually occupies instead of one box for the whole cloud. Note also what it does NOT check — min against max is not validated, the two corners are written independently, and a point whose corners cross is a point with an inside-out box.
+
+So: one bounds is a question asked of the world, the other is an answer a point carries about itself. They share a name and a shape and nothing else.
+
+**Tags:** `basics`, `bounds`, `filter`, `topology`
+
+**Seed:** 1061
+
+**Node types:** `connectPoints`, `filterPrimitivesByBounds`, `pointScatterInBounds`, `setBounds`
+
+**Primitives:** *(none)*
+
+**Outputs:** `network` (from `extent`.`out`)
+
+Cook it: `pcg cook graphs/basics-two-kinds-of-bounds.json --stats`
 
 ## basics-volume-scatter.json
 

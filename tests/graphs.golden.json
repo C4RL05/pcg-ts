@@ -826,6 +826,47 @@
         ]
       }
     },
+    "basics-flatten-and-remember.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 2601,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "seed:u32",
+                "planeOffset:f32",
+                "color:f32x3"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -10,
+                0,
+                -10
+              ],
+              "max": [
+                10,
+                0,
+                10
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-foreach-per-group.json": {
       "outputs": {
         "groups": [
@@ -2097,6 +2138,58 @@
         ]
       }
     },
+    "basics-report-to-the-host.json": {
+      "outputs": {
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 1681,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32"
+              ],
+              "detail": [
+                "weightSum:f32",
+                "weightMax:f32",
+                "pointCount:u32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -10,
+                0,
+                -10
+              ],
+              "max": [
+                10,
+                0,
+                10
+              ]
+            }
+          }
+        ],
+        "weightBudget": [
+          {
+            "kind": "value",
+            "tags": [],
+            "value": 500
+          }
+        ]
+      }
+    },
     "basics-reseed-a-noise.json": {
       "outputs": {
         "points": [
@@ -2744,6 +2837,51 @@
                 8.1838,
                 5,
                 31.0919
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "basics-two-kinds-of-bounds.json": {
+      "outputs": {
+        "network": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 131,
+              "vertex": 1224,
+              "primitive": 612,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "degree:u32"
+              ],
+              "primitive": [
+                "primtype:string",
+                "edgeLength:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -16.2555,
+                0,
+                -16.2744
+              ],
+              "max": [
+                16.0834,
+                0,
+                16.8581
               ]
             }
           }
