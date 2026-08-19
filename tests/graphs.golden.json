@@ -369,6 +369,94 @@
         ]
       }
     },
+    "basics-density-along-a-path.json": {
+      "outputs": {
+        "path": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 480,
+              "vertex": 481,
+              "primitive": 1,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "tangent:f32x3",
+                "curveU:f32",
+                "cdfRaw:f32",
+                "cdfTotal:f32",
+                "onCurve:f32x3"
+              ],
+              "primitive": [
+                "primtype:string",
+                "lapLength:f32",
+                "cdfTotal:f32"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -30,
+                0,
+                -10
+              ],
+              "max": [
+                30,
+                0,
+                10
+              ]
+            }
+          }
+        ],
+        "points": [
+          {
+            "kind": "geometry",
+            "tags": [],
+            "counts": {
+              "point": 90,
+              "vertex": 0,
+              "primitive": 0,
+              "detail": 1
+            },
+            "attrs": {
+              "point": [
+                "P:f32x3",
+                "rot:f32x4",
+                "scale:f32x3",
+                "density:f32",
+                "boundsMin:f32x3",
+                "boundsMax:f32x3",
+                "color:f32x4",
+                "seed:u32",
+                "cdfDist:f32",
+                "onCurve:f32x3"
+              ]
+            },
+            "bounds": {
+              "min": [
+                -25.7168,
+                0,
+                -10
+              ],
+              "max": [
+                30,
+                0,
+                9.9635
+              ]
+            }
+          }
+        ]
+      }
+    },
     "basics-even-spacing.json": {
       "outputs": {
         "points": [

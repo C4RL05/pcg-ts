@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-63 examples, alphabetical by file:
+64 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -12,6 +12,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-connect-by-reach.json](#basics-connect-by-reachjson) — connect a cloud by each point's own reach
 - [basics-copy-to-points.json](#basics-copy-to-pointsjson) — give every copy the attributes of the point it landed on
 - [basics-curve-shaping.json](#basics-curve-shapingjson) — a mask, a decay and a compression
+- [basics-density-along-a-path.json](#basics-density-along-a-pathjson) — place an exact number of points along a path, bunched where a density says
 - [basics-even-spacing.json](#basics-even-spacingjson) — enforce a minimum distance between points
 - [basics-extrude-polygon.json](#basics-extrude-polygonjson) — turn a footprint into massing
 - [basics-field-params.json](#basics-field-paramsjson) — read a field's shaping numbers from a knob
@@ -177,6 +178,28 @@ THREE CURVES, THREE DIFFERENT JOBS — not three ways of doing one, which is wha
 **Outputs:** `points` (from `chart`.`out`)
 
 Cook it: `pcg cook graphs/basics-curve-shaping.json --stats`
+
+## basics-density-along-a-path.json
+
+**place an exact number of points along a path, bunched where a density says**
+
+Scattering in proportion to a density usually means rejection sampling: draw a candidate, keep it with probability density, and accept whatever count comes out. The count is then binomial — ask for ninety and get eighty-one this cook and ninety-six the next — which is fine for grass and useless for anything an author counts. `pathScan` buys the other trade: it writes the RUNNING TOTAL of a point attribute along each polyline in the path's own walk order, and a running total of a density is a cumulative distribution. Sample the inverse of that at ninety places and you get ninety points, every one of them placed in proportion to the density, with no draw to be unlucky in. This is the operation a field structurally cannot express at any length: a field resolves each element from that element alone, so 'how much density lies BEHIND me along this curve' has no formulation in the grammar — which is why it is a node.
+
+The pieces, in the order they appear. `density` is any expression of `curveU`, here one hump per lap, and it is FLOORED at 0.02 rather than allowed to reach zero: across a dead stretch the distribution is flat, the inverse is ambiguous, and the nearest-point lookup below picks arbitrarily within it. `mode: "exclusive"` starts the first sample at zero — that is the mode that makes the first bucket reachable, since an inclusive scan gives the first sample its own whole value and nothing can land below it. `totalAttr` reports each path's whole total to the PRIMITIVE domain, `promoteAttribute` brings it back to the points, and dividing gives a cdf in [0, 1). Both ends matter and neither is more correct: exclusive is exact at the start, inclusive at the end.
+
+The lookup is the part with no primitive behind it. Finding the sample whose cdf bucket contains a given u is a scalar-keyed search, and the library has no node for one, so the cdf is laid out AS GEOMETRY: each sample is re-embedded at (cdf, 0, 0) — `onCurve` saves its real position first — and `sampleNearestPoint` answers the question with a spatial query. Read the approximation honestly: nearest-in-cdf is not the containing bucket, it is the nearer of the two bucket edges, so a point can sit up to half a bucket off — a tenth of a percent of the lap at the 480 samples used here, and invisible. THE SAMPLE COUNT IS NOT FREE, though, and the rule is worth carrying: a sample's cdf bucket is as wide as its share of the total, so the widest one must stay NARROWER than the anchor spacing 1 / count, or two anchors fall in one bucket and land two points on the same spot. This graph at 240 samples did exactly that — peak bucket 0.0128 against a spacing of 0.0111, four coincident pairs out of ninety — and a graph teaching an exact count has no business emitting a doubled point. Halving the bucket fixed it. Denser density humps need more samples, and the check is arithmetic, not taste. The anchors themselves come from `pointLine` between [0,0,0] and [1,0,0] with `includeEnd` false, which is a stratified sample of the half-open range and needs no random number at all: point i sits at exactly i / count. A golden-ratio or uniform-random u substitutes here unchanged — the machinery downstream does not care where u came from.
+
+**Tags:** `basics`, `path`, `density`, `sampling`, `scan`
+
+**Seed:** 1059
+
+**Node types:** `pathResample`, `pathScan`, `pointLine`, `pointsToPath`, `promoteAttribute`, `sampleNearestPoint`, `setAttribute`, `subgraph`
+
+**Primitives:** `shape/ring`
+
+**Outputs:** `points` (from `land`.`out`), `path` (from `keepP`.`out`)
+
+Cook it: `pcg cook graphs/basics-density-along-a-path.json --stats`
 
 ## basics-even-spacing.json
 

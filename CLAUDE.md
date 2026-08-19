@@ -87,7 +87,12 @@ Not public API:
   `docs/`. A build entry only so `scripts/` has a built path to import;
   deliberately absent from `package.json` `exports`
 - `tests/` — cross-module integration and determinism suites (unit tests are
-  co-located as `src/**/*.test.ts`)
+  co-located as `src/**/*.test.ts`). `tests/support/` holds the cross-module
+  scenario builders and comparators those suites share, under plain names:
+  nothing here is a `tsup.config.ts` entry, so the directory already carries
+  what the `*.testsupport.ts` suffix carries inside `src/` (see Conventions).
+  Imports run one way — `tests/` may import a `src/**/*.testsupport.ts`,
+  never the reverse
 - `scripts/` — doc/catalog generators, demo capture, preview, dist smoke
 
 The browser pages. One vite app rooted at the repository root
@@ -142,9 +147,14 @@ a parent — these are three different kinds of thing and the old single
   builders and shared helpers that only tests may import. `*.test.ts` is
   the test itself; `*.testsupport.ts` is what tests import. Nothing
   reachable from a `tsup.config.ts` entry may import one, so a fixture can
-  never reach `dist/`. Some device suites bundle a `.testsupport.ts` by
-  PATH through esbuild rather than importing it, so renaming one means
-  grepping for the bare filename too, not just the import specifier.
+  never reach `dist/`. The suffix is that guard, which makes it meaningful
+  only INSIDE `src/`: every build entry lives there, so location alone
+  cannot tell a fixture from production code and the name has to. It is not
+  a second spelling of `tests/support/`, which needs no guard — neither is
+  wrong, and they are not interchangeable. Some device suites bundle a
+  `.testsupport.ts` by PATH through esbuild rather than importing it, so
+  renaming one means grepping for the bare filename too, not just the
+  import specifier.
 
 ## Unattended build protocol
 
