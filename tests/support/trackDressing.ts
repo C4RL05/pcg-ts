@@ -58,6 +58,8 @@ import {
   component,
 } from "../../src/fields/index.js";
 import { Graph, type NodeHandle } from "../../src/graph/index.js";
+// The spawner terminal lives in src/spawn, not the node library.
+import { spawnInstances } from "../../src/spawn/index.js";
 import {
   copyToPoints,
   filterByExpression,
@@ -161,6 +163,13 @@ export interface TrackDressingOpts {
   /** Turn the landmark and balance passes on or off. */
   readonly landmarks?: boolean;
   readonly balance?: boolean;
+  /**
+   * Add a `spawnInstances` terminal, so the lap can be LOOKED AT rather
+   * than only measured. Off by default: it is a rendering concern, the
+   * metrics read the placement columns and not the batches, and a
+   * terminal nothing consumes is cost with no reader.
+   */
+  readonly spawn?: boolean;
   readonly seed: number;
   /** Turn the legibility, coverage and sightline passes on or off. */
   readonly legibility?: boolean;
@@ -220,6 +229,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   const committed = opts.committedStretches ?? {};
   const landmarks = opts.landmarks ?? true;
   const balance = opts.balance ?? true;
+  const spawn = opts.spawn ?? false;
   const legibility = opts.legibility ?? true;
   const coverage = opts.coverage ?? true;
   const sightline = opts.sightline ?? true;
@@ -590,7 +600,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   );
   const memberAtOrigin = g.add(
     setAttribute,
-    { name: "P", tupleSize: 3, value: [0, 0, 0] },
+    { name: "P", tupleSize: 3, value: vec(0, 0, 0) },
     "memberAtOrigin",
   );
   g.connect(memberLine, "out", memberIdx, "in");
@@ -801,6 +811,34 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
 
   g.output(scaled, "out", "placements");
   g.output(pack3, "out", "frames");
+
+  if (spawn) {
+    // Every archetype onto the nearest placeholder shape the preview
+    // knows. This is the technique's "bind art to the template" step in
+    // its cheapest possible form: the kit says what each family IS and
+    // how big, and one asset per family is what art would model. A box at
+    // the right footprint and tallness is enough to read the COMPOSITION,
+    // which is the thing this generates — the assets are not the output.
+    const asset = g.add(
+      setAttribute,
+      {
+        name: "asset",
+        type: "string",
+        values: [...ASSET_TABLE],
+        value: byAttribute(
+          "archetype",
+          Object.fromEntries(ALL_ARCHETYPES.map((a) => [a.id, ASSET_TABLE.indexOf(assetFor(a.id))])),
+          0,
+        ),
+      },
+      "assetName",
+    );
+    g.connect(scaled, "out", asset, "in");
+    const batches = g.add(spawnInstances, { assetAttr: "asset" }, "spawned");
+    g.connect(asset, "out", batches, "in");
+    g.output(batches, "instances", "instances");
+  }
+
   return { graph: g, outputs: { placements: "placements", frames: "frames" } };
 }
 
@@ -1352,7 +1390,7 @@ function cullSightline(
   );
   const qOrigin = g.add(
     setAttribute,
-    { name: "P", tupleSize: 3, value: [0, 0, 0] },
+    { name: "P", tupleSize: 3, value: vec(0, 0, 0) },
     "chordQAtOrigin",
   );
   chain(g, [qLine, qAttr, qOrigin]);
@@ -1488,4 +1526,63 @@ function landmarkPass(
     memberOffset: false,
     variantFrom: "index",
   });
+}
+
+/** The placeholder shapes the preview page knows, in table order. */
+const ASSET_TABLE = [
+  "box",
+  "cone",
+  "sphere",
+  "pine",
+  "bush",
+  "boulder",
+  "house",
+  "hall",
+  "post",
+  "lamp",
+  "panel",
+  "tube",
+] as const;
+
+/** Which placeholder stands in for an archetype, for looking at it. */
+function assetFor(id: string): (typeof ASSET_TABLE)[number] {
+  switch (id) {
+    case "terrain-shell":
+    case "ground-detail":
+      return "boulder";
+    case "bush":
+      return "bush";
+    case "tree-group":
+    case "tree":
+      return "pine";
+    case "set-piece":
+    case "tower":
+      return "house";
+    case "wall-panel":
+      return "hall";
+    case "overhead-sign":
+    case "banner":
+    case "billboard":
+      return "panel";
+    case "chevron-board":
+    case "corner-marker":
+    case "braking-reference":
+      return "post";
+    case "pipe-run":
+    case "enclosure-shell":
+      return "tube";
+    case "lamp-arm":
+      return "lamp";
+    case "camera-post":
+      return "post";
+    case "dome":
+      return "sphere";
+    case "skyline":
+    case "landmark":
+      return "house";
+    case "verge-rail":
+      return "box";
+    default:
+      return "box";
+  }
 }
