@@ -23,7 +23,9 @@ import {
   type Placement,
   type Report,
   calibrate,
+  chooseCommittedStretches,
   correct,
+  countBlocking,
   noCorrections,
   score,
 } from "./support/trackCalibrate.js";
@@ -62,6 +64,7 @@ function readPlacements(g: Geometry): Placement[] {
   const lateralW = col(g, "lateralW");
   const heightW = col(g, "heightW");
   const footprintW = col(g, "footprintW");
+  const tallnessW = col(g, "tallnessW");
   const zone = col(g, "zone");
   const pack1 = col(g, "pack1");
   const pack2 = col(g, "pack2");
@@ -79,6 +82,7 @@ function readPlacements(g: Geometry): Placement[] {
       lateralW: lateralW[i],
       heightW: heightW[i],
       footprintW: footprintW[i],
+      tallnessW: tallnessW[i],
       radiusW: pack1[i * 4 + 3],
       kSigned: pack2[i * 4 + 3],
       zone: zone[i],
@@ -147,6 +151,7 @@ async function runOnce(
     landmarks?: boolean;
     balance?: boolean;
   } = {},
+  committed: Readonly<Record<number, number>> = {},
 ): Promise<{ report: Report; placements: Placement[]; frames: Geometry; lapW: number }> {
   const lapW = lapLength / HALF_WIDTH;
   const plan = calibrate(preset, lapW, c);
@@ -162,7 +167,7 @@ async function runOnce(
     outsideShift: plan.outsideShift,
     variantsByArchetype: plan.variantsByArchetype,
     polygonScale: plan.polygonScale,
-    committedStretches: plan.committedStretches,
+    committedStretches: committed,
     lapLength,
     seed,
     ...passes,
@@ -173,19 +178,25 @@ async function runOnce(
   const placements = readPlacements(placementGeo);
   const corners = countCornerEntries(frames, lapW);
   const markers = placements.filter((p) => p.archetype === "corner-marker").length;
-  const report = score(
+  const blocking = countBlocking(
     placements,
-    preset,
+    col(placementGeo, "P"),
+    col(frames, "P"),
+    frames.pointCount,
+    HALF_WIDTH,
     lapW,
-    passes.legibility === false ? 0 : corners.entries,
-    markers,
-    0,
   );
+  const report = score(placements, preset, lapW, corners.entries, markers, blocking);
   return { report, placements, frames, lapW };
 }
 
-/** Measure the generated lap, which nothing downstream can know first. */
-async function measureLap(preset: Preset): Promise<number> {
+/**
+ * Measure the generated lap, and pick the stretches the balance pass will
+ * commit — neither of which anything downstream can know before a cook.
+ */
+async function measureLap(
+  preset: Preset,
+): Promise<{ lapLength: number; committed: Record<number, number> }> {
   const { graph } = buildTrackDressingGraph({
     preset,
     halfWidth: HALF_WIDTH,
@@ -205,18 +216,24 @@ async function measureLap(preset: Preset): Promise<number> {
   });
   const out = await cook(graph);
   const frames = firstGeo(out.outputs.frames);
-  return frames.attrs.primitive.require("lapLen").get(0) as number;
+  const lapLength = frames.attrs.primitive.require("lapLen").get(0) as number;
+  // The stretches the balance pass will commit are chosen from a cook with
+  // the pass switched OFF: it needs to know where the movable placements
+  // are, and only a dressed lap knows that.
+  const dry = await runOnce(preset, lapLength, noCorrections(), 21, { balance: false });
+  const committed = chooseCommittedStretches(dry.placements, dry.lapW);
+  return { lapLength, committed };
 }
 
 describe("spline to environment art", () => {
   it("frames the lap in track coordinates, with a corner model on it", async () => {
     const preset = PRESETS.lush;
-    const lapLength = await measureLap(preset);
+    const { lapLength, committed } = await measureLap(preset);
     const { frames, lapW } = await runOnce(preset, lapLength, noCorrections(), 7, {
       legibility: false,
       coverage: false,
       sightline: false,
-    });
+    }, committed);
     // A lap the technique's own statistics apply to: a few hundred W long,
     // sampled near one W per frame.
     expect(lapW).toBeGreaterThan(300);
@@ -264,12 +281,12 @@ describe("spline to environment art", () => {
 
   it("places what the calibration asked for, in proportion to the density", async () => {
     const preset = PRESETS.lush;
-    const lapLength = await measureLap(preset);
+    const { lapLength, committed } = await measureLap(preset);
     const { placements } = await runOnce(preset, lapLength, noCorrections(), 7, {
       legibility: false,
       coverage: false,
       sightline: false,
-    });
+    }, committed);
     // Every archetype in the kit that the calibration kept is represented,
     // and nothing outside the kit appears.
     const kinds = new Set(placements.map((p) => p.archetype));
@@ -284,8 +301,8 @@ describe("spline to environment art", () => {
 
   it("keeps the corridor clear, which is the one inviolable rule", async () => {
     const preset = PRESETS.lush;
-    const lapLength = await measureLap(preset);
-    const { placements } = await runOnce(preset, lapLength, noCorrections(), 11);
+    const { lapLength, committed } = await measureLap(preset);
+    const { placements } = await runOnce(preset, lapLength, noCorrections(), 11, {}, committed);
     const intruding = placements.filter(
       (p) => Math.abs(p.lateralW) < 1 && p.heightW >= 0 && p.heightW < 1.2,
     );
@@ -294,8 +311,8 @@ describe("spline to environment art", () => {
 
   it("announces every corner, which is the pass a graph was least likely to reach", async () => {
     const preset = PRESETS.lush;
-    const lapLength = await measureLap(preset);
-    const { placements, frames, lapW } = await runOnce(preset, lapLength, noCorrections(), 13);
+    const { lapLength, committed } = await measureLap(preset);
+    const { placements, frames, lapW } = await runOnce(preset, lapLength, noCorrections(), 13, {}, committed);
     const { entries, tight } = countCornerEntries(frames, lapW);
     const markers = placements.filter((p) => p.archetype === "corner-marker");
     // One marker per corner entry. A corner entry is a NEIGHBOUR
@@ -320,12 +337,12 @@ describe("spline to environment art", () => {
 
   it("closes the loop: measure, correct, regenerate, and keep the best", async () => {
     const preset = PRESETS.lush;
-    const lapLength = await measureLap(preset);
+    const { lapLength, committed } = await measureLap(preset);
     let c = noCorrections();
     let best: Report | null = null;
     const history: number[] = [];
     for (let iter = 0; iter < 3; iter++) {
-      const { report } = await runOnce(preset, lapLength, c, 21);
+      const { report } = await runOnce(preset, lapLength, c, 21, {}, committed);
       history.push(report.passed);
       if (best === null || better(report, best, preset)) best = report;
       c = correct(preset, report, c);
@@ -353,12 +370,79 @@ bands ${JSON.stringify(report.bandShare)}`);
     expect(failures.map((f) => `${f.id} ${f.name}`)).toEqual([]);
   });
 
+  it("FAILS when a pass is switched off, which is what makes the passes mean anything", async () => {
+    // The check on the check. A suite of seventeen rules that passes is
+    // worth nothing until it has been shown to fail: an exemption that
+    // quietly matched everything, a count taken from the thing it was
+    // meant to verify, a metric wired to a constant — all of those pass.
+    // So each pass is switched off in turn and the metric that owns it
+    // has to notice. Metric 16 is the one this was written for: it was
+    // scored against a hardcoded zero and proved nothing at all.
+    const preset = PRESETS.lush;
+    const { lapLength, committed } = await measureLap(preset);
+    // Metric 10 is deliberately NOT in this list, and finding out why was
+    // the point of writing the test. It passes with the balance pass
+    // switched off: the slow side drift the density pass already applies
+    // produces two one-sided stretches each way on this lap by itself. So
+    // metric 10 does not OWN the balance pass, the pass is a guarantee
+    // rather than the only source, and claiming otherwise would have been
+    // a green assertion about nothing. The pass is verified directly in
+    // the test below instead.
+    const cases: { off: Record<string, boolean>; metric: number }[] = [
+      { off: { landmarks: false }, metric: 17 },
+      { off: { legibility: false }, metric: 15 },
+      { off: { sightline: false }, metric: 16 },
+    ];
+    for (const { off, metric } of cases) {
+      const { report } = await runOnce(preset, lapLength, noCorrections(), 21, off, committed);
+      const m = report.metrics.find((x) => x.id === metric);
+      expect(m, `metric ${metric} is scored`).toBeDefined();
+      expect(
+        m!.pass,
+        `metric ${metric} (${m!.name}) still passed with ${JSON.stringify(off)}: ` +
+          `it is not measuring the pass it names, value ${m!.value}`,
+      ).toBe(false);
+    }
+  });
+
+  it("commits the stretches the balance pass was told to, and only those", async () => {
+    // Verified directly rather than through metric 10, which the lap
+    // satisfies on its own. What the pass must do is make the tenths it
+    // was GIVEN lean the way it was told, and leave everything else alone.
+    const preset = PRESETS.lush;
+    const { lapLength, committed } = await measureLap(preset);
+    const lean = (ps: Placement[], lapW: number, tenth: number): number => {
+      const inTenth = ps.filter(
+        (p) =>
+          Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / 10)) === tenth &&
+          p.lateralW !== 0,
+      );
+      return inTenth.length === 0 ? 0.5 : inTenth.filter((p) => p.lateralW > 0).length / inTenth.length;
+    };
+    const on = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
+    const off = await runOnce(preset, lapLength, noCorrections(), 21, { balance: false }, committed);
+    let committedLeaning = 0;
+    for (const [tenth, dir] of Object.entries(committed)) {
+      const share = lean(on.placements, on.lapW, Number(tenth));
+      if (Number(dir) > 0 ? share >= 0.78 : share <= 0.22) committedLeaning++;
+    }
+    expect(committedLeaning).toBe(Object.keys(committed).length);
+    // And the same tenths do NOT all lean that way without the pass, which
+    // is what says the pass rather than the lap produced it.
+    let withoutPass = 0;
+    for (const [tenth, dir] of Object.entries(committed)) {
+      const share = lean(off.placements, off.lapW, Number(tenth));
+      if (Number(dir) > 0 ? share >= 0.78 : share <= 0.22) withoutPass++;
+    }
+    expect(withoutPass).toBeLessThan(Object.keys(committed).length);
+  });
+
   it("reproduces exactly from its seed, and differs when the seed does", async () => {
     const preset = PRESETS.sparse;
-    const lapLength = await measureLap(preset);
-    const a = await runOnce(preset, lapLength, noCorrections(), 5);
-    const b = await runOnce(preset, lapLength, noCorrections(), 5);
-    const c = await runOnce(preset, lapLength, noCorrections(), 6);
+    const { lapLength, committed } = await measureLap(preset);
+    const a = await runOnce(preset, lapLength, noCorrections(), 5, {}, committed);
+    const b = await runOnce(preset, lapLength, noCorrections(), 5, {}, committed);
+    const c = await runOnce(preset, lapLength, noCorrections(), 6, {}, committed);
     expect(a.placements).toEqual(b.placements);
     expect(a.placements).not.toEqual(c.placements);
     expect(a.placements.length).toBeGreaterThan(50);
@@ -371,11 +455,11 @@ bands ${JSON.stringify(report.bandShare)}`);
     const reports: Record<string, Report> = {};
     for (const id of ["sparse", "lush", "dense"]) {
       const preset = PRESETS[id];
-      const lapLength = await measureLap(preset);
+      const { lapLength, committed } = await measureLap(preset);
       let c = noCorrections();
       let best: Report | null = null;
       for (let iter = 0; iter < 3; iter++) {
-        const { report } = await runOnce(preset, lapLength, c, 3);
+        const { report } = await runOnce(preset, lapLength, c, 3, {}, committed);
         if (best === null || better(report, best, preset)) best = report;
         c = correct(preset, report, c);
       }

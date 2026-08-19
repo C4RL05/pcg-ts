@@ -23,6 +23,9 @@ import {
   bandOf,
 } from "./trackKit.js";
 
+/** The archetypes a pass puts where a rule says, never where a draw does. */
+const RULE_PLACED = new Set(["corner-marker", "braking-reference"]);
+
 /** What the closed loop carries from one iteration to the next. */
 export interface Corrections {
   densityScale: number;
@@ -40,8 +43,6 @@ export interface Plan {
   readonly variantsByArchetype: Record<string, number>;
   /** Multiplier on every kit polygon count, to hit the budget per W. */
   readonly polygonScale: number;
-  /** Which tenths of the lap are committed to a hard lean, and which way. */
-  readonly committedStretches: Readonly<Record<number, number>>;
 }
 
 export function noCorrections(): Corrections {
@@ -125,23 +126,56 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   const scale = sumRate > 0 ? targetTotal / sumRate : 0;
   for (const a of ARCHETYPES) rate[a.id] *= scale;
 
+  // The band an archetype mostly lands in. Both steps below redistribute
+  // rate WITHIN one of these groups rather than across the kit, and that
+  // is the whole point of computing it: the band mix was just fitted, and
+  // a redistribution that crosses bands undoes the fit. Leaving that to
+  // the closed loop to repair does not work — measured, the overhead band
+  // came out at 11% against a 21% target and stayed there.
+  const dominant: Record<string, string> = {};
+  for (const a of ARCHETYPES) {
+    let bestBand = bands[0];
+    let bestF = -1;
+    for (const b of bands) {
+      const f = frac[a.id][b] ?? 0;
+      if (f > bestF) {
+        bestF = f;
+        bestBand = b;
+      }
+    }
+    dominant[a.id] = bestBand;
+  }
+  const groupOf = (b: string) => ARCHETYPES.filter((a) => dominant[a.id] === b);
+
   // (e2) PRUNING. An archetype expected to place fewer than `minInstances`
   // is removed and its rate redistributed. A kit holding a single instance
   // of an asset reads as a mistake rather than as variety, and the eras
-  // this models really do have small kits.
+  // this models really do have small kits. The rate goes to the pruned
+  // archetype's own band, so the band keeps its mass and only its internal
+  // mix changes.
   const expected = (id: string): number =>
     (rate[id] / Math.max(1e-9, ARCHETYPES.reduce((t, x) => t + rate[x.id], 0))) * targetTotal;
-  let pruned = 0;
-  for (const a of ARCHETYPES) {
-    if (rate[a.id] > 0 && expected(a.id) < preset.minInstances) {
-      pruned += rate[a.id];
-      rate[a.id] = 0;
+  for (const b of bands) {
+    const group = groupOf(b);
+    let freed = 0;
+    for (const a of group) {
+      if (rate[a.id] > 0 && expected(a.id) < preset.minInstances) {
+        freed += rate[a.id];
+        rate[a.id] = 0;
+      }
     }
-  }
-  if (pruned > 0) {
-    const survivors = ARCHETYPES.filter((a) => rate[a.id] > 0);
+    if (freed <= 0) continue;
+    const survivors = group.filter((a) => rate[a.id] > 0);
     const surviving = survivors.reduce((t, a) => t + rate[a.id], 0);
-    for (const a of survivors) rate[a.id] += (rate[a.id] / surviving) * pruned;
+    if (surviving > 0) {
+      for (const a of survivors) rate[a.id] += (rate[a.id] / surviving) * freed;
+    } else {
+      // A band whose every archetype was pruned has nowhere to put the
+      // rate but back where it came from: un-prune the largest of them
+      // rather than move the mass to another band.
+      const biggest = group.reduce((x, y) => (y.rate > x.rate ? y : x), group[0]);
+      if (biggest) rate[biggest.id] = freed;
+    }
   }
 
   // (b) SPRITE SHARE, traded INSIDE each band. Scaling sprites globally
@@ -156,45 +190,58 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
       ARCHETYPES.filter((a) => a.kind === "sprite").reduce((t, a) => t + rate[a.id], 0) /
       Math.max(1e-9, totalRate);
     if (spriteNow > 1e-9) {
+      const want = preset.spriteShare / spriteNow;
       for (const b of bands) {
-        const inBand = ARCHETYPES.filter((a) => (frac[a.id][b] ?? 0) > 0.5);
-        const sprites = inBand.filter((a) => a.kind === "sprite");
-        const meshes = inBand.filter((a) => a.kind === "mesh");
+        const group = groupOf(b);
+        const sprites = group.filter((a) => a.kind === "sprite" && rate[a.id] > 0);
+        const meshes = group.filter((a) => a.kind === "mesh" && rate[a.id] > 0);
         if (sprites.length === 0 || meshes.length === 0) continue;
-        const mass = inBand.reduce((t, a) => t + rate[a.id], 0);
-        if (mass <= 0) continue;
+        const mass = group.reduce((t, a) => t + rate[a.id], 0);
         const sMass = sprites.reduce((t, a) => t + rate[a.id], 0);
-        const want = Math.min(
-          0.9,
-          Math.max(0.02, (preset.spriteShare / spriteNow) * (sMass / mass)),
-        );
-        const sScale = sMass > 0 ? (want * mass) / sMass : 1;
-        const mMass = mass - sMass;
-        const mScale = mMass > 0 ? ((1 - want) * mass) / mMass : 1;
+        if (mass <= 0 || sMass <= 0) continue;
+        // The sprite share of THIS band, moved toward the global target by
+        // the same factor everywhere, and capped so a band can neither
+        // lose its meshes nor be taken over by its sprites.
+        const target = Math.min(0.85, Math.max(0.05, (sMass / mass) * want));
+        const sScale = (target * mass) / sMass;
+        const mScale = ((1 - target) * mass) / (mass - sMass);
         for (const a of sprites) rate[a.id] *= sScale;
         for (const a of meshes) rate[a.id] *= mScale;
       }
-      // The band trade preserves each band's mass but not the total, so
-      // the density scale is reapplied over the top of it.
-      const after = ARCHETYPES.reduce((t, a) => t + rate[a.id], 0);
-      if (after > 0) for (const a of ARCHETYPES) rate[a.id] *= targetTotal / after;
+      // No global rescale afterwards, deliberately: every band kept its
+      // own mass, so the total is unchanged and the band mix with it. A
+      // rescale here would be a no-op at best and a fit-breaker at worst.
     }
   }
 
+  // (f) CLUSTERING, and the correction it forces on everything above.
+  //
+  // A rate is a share of PLACEMENTS, but what the density pass draws is
+  // ANCHORS, and each anchor becomes a cluster of its own archetype's mean
+  // size. So an archetype that always stands alone gets one placement per
+  // anchor and one that groups in threes gets three, and drawing anchors
+  // in proportion to the rates delivers a mix skewed by the cluster
+  // column. Dividing by the archetype's OWN mean — not by the kit's
+  // average, which only fixes the total — is what makes the delivered mix
+  // the fitted one.
+  //
+  // Measured, before the division: the overhead band, whose archetypes all
+  // stand alone or nearly so, came out at 11.5% against a 21.1% target,
+  // while the far band, which is where the sprite clusters live, ran over.
+  // The band fit was correct and the draw was not delivering it.
+  const clusterOf = (a: (typeof ARCHETYPES)[number]): number =>
+    Math.max(1, a.cluster * (preset.clusterMean / 1.6));
+  const anchorWeight: Record<string, number> = {};
+  for (const a of ARCHETYPES) anchorWeight[a.id] = rate[a.id] / clusterOf(a);
+  const rateSum = Math.max(1e-9, ARCHETYPES.reduce((t, a) => t + rate[a.id], 0));
+  const scaleToTotal = targetTotal / rateSum;
   const countByProfile: Record<string, number> = {};
   for (const a of ARCHETYPES) {
-    countByProfile[a.profile] = (countByProfile[a.profile] ?? 0) + rate[a.id];
+    countByProfile[a.profile] =
+      (countByProfile[a.profile] ?? 0) + anchorWeight[a.id] * scaleToTotal;
   }
-  // The clustering pass MULTIPLIES what the density pass anchors, so the
-  // anchor count has to be divided by the mean cluster size or the lap
-  // comes out `clusterMean` times too busy.
-  const meanCluster =
-    ARCHETYPES.reduce(
-      (t, a) => t + rate[a.id] * Math.max(1, a.cluster * (preset.clusterMean / 1.6)),
-      0,
-    ) / Math.max(1e-9, ARCHETYPES.reduce((t, a) => t + rate[a.id], 0));
   for (const k of Object.keys(countByProfile)) {
-    countByProfile[k] = Math.max(1, Math.round(countByProfile[k] / meanCluster));
+    countByProfile[k] = Math.max(1, Math.round(countByProfile[k]));
   }
 
   // (e) VARIETY. Enough variants that no family can exceed the cap, then
@@ -245,32 +292,64 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
 
   return {
     countByProfile,
-    weightByArchetype: rate,
+    // ANCHOR weights, not rates: this is what splits a profile's anchors
+    // between its archetypes, and an anchor is not a placement.
+    weightByArchetype: anchorWeight,
     outsideShift: c.outsideShift,
     totalCount: targetTotal,
     variantsByArchetype,
     polygonScale,
-    committedStretches: COMMITTED_STRETCHES,
   };
 }
 
 /**
  * Which tenths of the lap are committed to a hard lean, and which way.
  *
- * Two each way, which is what the balance metric asks for. Fixed rather
- * than chosen from the lap: the point of the pass is that some stretches
- * deliberately lean, and nothing about a stretch makes it a better or
- * worse candidate than another. What the pass must NOT do is mirror
- * anything inside a bend or any legibility furniture — which side of a
- * corner an object sits on carries meaning — and the graph enforces that
- * rather than this table.
+ * CHOSEN FROM A COOK, by how many MOVABLE placements each tenth holds.
+ * The pass must never mirror anything inside a bend — which side of a
+ * corner an object sits on carries meaning — nor any rule-placed
+ * furniture, so a tenth full of either cannot carry a lean at all:
+ * everything in it is already pinned. Committing one anyway is how the
+ * pass ends up moving a stretch and reaching nothing.
+ *
+ * Measured twice, which is why it takes a cook. With a FIXED table the
+ * four committed tenths all moved the right way and none arrived, landing
+ * at 0.78 / 0.72 / 0.32 / 0.31 against thresholds of 0.78 and 0.22.
+ * Choosing the straightest tenths by FRAME curvature got three of four —
+ * better, and still not it, because the clustered profile concentrates
+ * placements on bends, so a tenth with little corner in it can still be
+ * full of objects that sit in what corner it has. Counting the movable
+ * placements themselves is the technique's own instruction and the only
+ * one of the three that measures the thing the pass is limited by.
+ *
+ * Two each way, which is what the balance metric asks for, alternating
+ * down the ranking so the pair that can lean hardest is split between the
+ * directions rather than stacked on one.
  */
-export const COMMITTED_STRETCHES: Readonly<Record<number, number>> = {
-  1: 1,
-  4: 1,
-  6: -1,
-  9: -1,
-};
+export function chooseCommittedStretches(
+  placements: readonly Placement[],
+  lapW: number,
+): Record<number, number> {
+  const movable = new Array<number>(10).fill(0);
+  const total = new Array<number>(10).fill(0);
+  for (const p of placements) {
+    if (p.lateralW === 0) continue;
+    const t = Math.min(9, Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / 10)));
+    total[t]++;
+    // Movable is the placement's own property, not the tenth's: anything
+    // inside a bend is pinned by the corner, and rule-placed furniture is
+    // pinned by what it means. Named rather than inferred from `cornerK`,
+    // which is zero both for a placement that has no corner and for one
+    // whose corner probe happened to read zero.
+    if (Math.abs(p.radiusW) >= 12 && !RULE_PLACED.has(p.archetype)) movable[t]++;
+  }
+  const order = movable
+    .map((n, tenth) => ({ share: total[tenth] > 0 ? n / total[tenth] : 0, tenth }))
+    .sort((a, b) => b.share - a.share || a.tenth - b.tenth);
+  const out: Record<number, number> = {};
+  for (let i = 0; i < 4 && i < order.length; i++) out[order[i].tenth] = i % 2 === 0 ? 1 : -1;
+  return out;
+}
 
 
 /** One placement, as the metrics see it. */
@@ -280,6 +359,7 @@ export interface Placement {
   readonly lateralW: number;
   readonly heightW: number;
   readonly footprintW: number;
+  readonly tallnessW: number;
   readonly radiusW: number;
   readonly kSigned: number;
   readonly zone: number;
@@ -522,6 +602,80 @@ export function score(
     outsideShare,
     densityCv: cv,
   };
+}
+
+/**
+ * How many placements stand in the driver's view.
+ *
+ * Scored by a DIFFERENT test than the one that culls: the graph measures
+ * the distance to a sampled chord, and this measures the exact distance to
+ * the chord SEGMENT. The two agreeing is the check — a metric computed by
+ * the same approximation as the pass it scores would report that the pass
+ * did what it did, which is not a measurement.
+ *
+ * The exemptions have to match the pass exactly, and they are stated here
+ * rather than shared so that a change to one shows up as a disagreement
+ * instead of moving both at once.
+ */
+export function countBlocking(
+  placements: readonly Placement[],
+  positions: Float64Array,
+  framePositions: Float64Array,
+  frameCount: number,
+  halfWidth: number,
+  lapW: number,
+): number {
+  const stepW = lapW / frameCount;
+  const ahead = Math.max(1, Math.round(12 / stepW));
+  let blocking = 0;
+  for (let i = 0; i < placements.length; i++) {
+    const p = placements[i];
+    if (p.zone <= 2 || p.zone >= 6) continue;
+    if (p.footprintW <= 2) continue;
+    if (p.heightW + p.tallnessW <= 0.3) continue;
+    if (p.heightW >= 3) continue;
+    const radius = Math.min(p.footprintW / 2, 2) * halfWidth;
+    const px = positions[i * 3];
+    const py = positions[i * 3 + 1];
+    const pz = positions[i * 3 + 2];
+    let hit = false;
+    for (let f = 0; f < frameCount && !hit; f++) {
+      const a = f * 3;
+      const b = ((f + ahead) % frameCount) * 3;
+      if (
+        segmentDistance(
+          px, py, pz,
+          framePositions[a], framePositions[a + 1], framePositions[a + 2],
+          framePositions[b], framePositions[b + 1], framePositions[b + 2],
+        ) < radius
+      ) {
+        hit = true;
+      }
+    }
+    if (hit) blocking++;
+  }
+  return blocking;
+}
+
+/** Exact distance from a point to a segment, in 3D. */
+function segmentDistance(
+  px: number, py: number, pz: number,
+  ax: number, ay: number, az: number,
+  bx: number, by: number, bz: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dz = bz - az;
+  const len = dx * dx + dy * dy + dz * dz;
+  let t = 0;
+  if (len > 0) {
+    t = ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / len;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+  }
+  const qx = ax + dx * t - px;
+  const qy = ay + dy * t - py;
+  const qz = az + dz * t - pz;
+  return Math.sqrt(qx * qx + qy * qy + qz * qz);
 }
 
 /** Distance from `s` to the nearest station, around a lap that closes. */

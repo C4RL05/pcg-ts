@@ -114,8 +114,22 @@ const EYE_H_W = 0.3;
 /** How far ahead the centreline must stay visible, in W. */
 const LOOK_AHEAD_W = 12;
 
-/** How many points sample each look-ahead chord. */
-const CHORD_SAMPLES = 8;
+/**
+ * How many points sample each look-ahead chord.
+ *
+ * The cull measures the distance to these samples rather than to the
+ * chord itself, which OVERSTATES it by up to half the sample spacing —
+ * so a sampled cull passes objects a chord test would catch. Twenty-five
+ * puts the spacing at half a half-width, and the test below adds the
+ * remaining half of that to the obstruction radius, which turns the
+ * approximation from optimistic into conservative. That matters because
+ * the metric is scored by a separate exact point-to-SEGMENT test, and a
+ * cull that leaves work behind is a cull that fails its own metric.
+ */
+const CHORD_SAMPLES = 25;
+
+/** Half the chord sample spacing, in W: the sampling's own error bound. */
+const CHORD_SLACK_W = LOOK_AHEAD_W / (CHORD_SAMPLES - 1) / 2;
 
 /** What the graph needs to know before it can be built. */
 export interface TrackDressingOpts {
@@ -1372,7 +1386,10 @@ function cullSightline(
   // what a driver sees, not a four-and-a-half-wide pillar on the racing
   // line.
   const radius = mul(fmax(div(attribute("footprintW"), 2), 0), W);
-  const capped = select(gt(radius, 2 * W), 2 * W, radius);
+  const cappedRaw = select(gt(radius, 2 * W), 2 * W, radius);
+  // Plus the sampling's own error bound, so the cull is conservative
+  // rather than optimistic. See CHORD_SAMPLES.
+  const capped = add(cappedRaw, CHORD_SLACK_W * W);
   const blocks = mul(
     mul(lt(attribute("chordDist"), capped), gt(attribute("footprintW"), 2)),
     mul(
