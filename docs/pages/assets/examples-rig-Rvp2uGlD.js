@@ -3,7 +3,7 @@ var e=`{\r
   "seed": 3,\r
   "meta": {\r
     "title": "a suspended rig, built from curves",\r
-    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the editor reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Seven values this graph repeats are declared once at the top, under \`params\`. Six are numbers read by name from the expressions that need them: \`trussHalfWidth\` was TWENTY literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2, eighteen of them here and two inside the cable body, which is why \`pcg validate --params\` counts nineteen readings on this graph rather than twenty: the eighteen plus the one wrapper slot that carries the value in — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. Four more say it about smaller things. \`braceRadius\` gangs the diagonal braces to the station frames, and it retired the last \`also\` row in the whole corpus: no fact about this graph's structure lives in a presentation file any more. \`stretchMin\` and \`stretchMax\` are the two ends of ONE draw that the component sizes write once per axis — \`lerp(0.55, 1.6, randomField(\\"stretch\\"))\`, four times over, for the rod, the bar and the panel's two faces — where how far a component may stretch is a single decision and eight literals were spelling it. \`bundles\` is the fringe's 7, read twice inside one expression: \`floor(u × 7)\` bins each strand and the \`/ 7\` puts the bin back in [0, 1), so the two have to agree, and until the number had a name nothing said so. The seventh travels the other way. \`tubeSides\` is an \`i32\`, and no expression can ever carry one — a field resolves per element and only f32, vec3 and vec4 read one — so it declares \`targets\` and is WRITTEN into the \`sides\` slot of all six skins — five \`sweepProfile\` nodes and, through its wrapper, the sixth inside the cable body — rather than substituted into a field, which is how one name reaches the half of the format that counts, enums, booleans and attribute names live in. It is one decision because it is a BUDGET and not a dimension: cost is linear in it, six skins pay it at once, and nothing about a 0.03-radius brace wants a different roundness from the 0.055-radius chord standing next to it. The gauge params say the opposite about the very same nodes — \`cableRadius\` and \`braceRadius\` gang radii precisely because a radius legitimately differs from member to member — which is why \`sides\` is the only one of the six non-field literals every sweep repeats that earns a name. The other five stay written out, and that is a measurement rather than an oversight: \`profile\` means \\"a rope is round\\" at three sites and \\"the stock is round tube\\" at the other three, \`caps\` turns on whether a tube's ends are visible at all (the station frames are closed rings and have no ends, the braces bury theirs inside the chords), \`frame\` is invisible on a circular section — as are the field-capable \`up\` and \`roll\` written out beside it — and \`joint\` with its \`miterLimit\` is one pair rather than two decisions, neither of which moves: \`miter\` is simply the right answer at the two places this rig actually bends and indistinguishable from \`perpendicular\` everywhere else, and the limit is never reached, because the sharpest bend anywhere a sweep sees is the braces' zigzag at 100°, a stretch of 1.56 against a limit of 4, with the frame ring's square corner next at 1.41 and every resampled curve under 1.02. A shared name asserts that several slots must move together, and asserting that falsely is worse than the repetition. The sixth reading is inside the cable \`forEach\` body and gets there through a \`sides\` param on the wrapper, sitting next to \`halfWidth\` and working by the opposite mechanism: \`halfWidth\` declares NO targets and is read by the body's own expression, \`sides\` names one and is written into it. A body is bound by its wrapper either way and by nothing else, so ganging five of six would have left the cables at 8 while everything else moved. The three \`writeCurveFrame\` nodes repeat their three attribute names and KEEP them, now that a \`string\` param could reach them: \`curveNormal\` is named fourteen times here and only three of those are the writes — the other eleven are \`attribute(\\"curveNormal\\")\` inside expressions, where no param can follow — and \`sweepProfile\`'s own \`curveFrame\` mode reads that attribute by that name in the library itself. The name is a shared vocabulary rather than this graph's to rename, so a knob over the three writers would only break the eleven readers. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe do not regroup at all any more, and that is the other half of the contrast: each strand is made a path BEFORE it is copied, and \`copyToPoints\` carries it across with \`topology: \\"keep\\"\` — the source's one polyline re-emitted per anchor, shifted onto that anchor's block of points. What that retires is not a node but a round trip. The copy no longer has to label its output with \`targetIndexAttr\` so that a rebuild can group on the label, and the fringe's swept surface stops carrying a dead \`anchorId\` on all 17,100 of its points; the path is built once over the strand itself — 35 points for a chain, 17 for a fringe strand — instead of over the 245 and the 1700 the copies make of them. The label was itself the second version of this problem: before \`targetIndexAttr\` the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the strand's point count written out a second time, in another node, with nothing holding the two together, so editing the strand welded every chain into one path and said nothing. A strand that is already a path cannot fall out of step with itself, which is the version that has no number in it at all. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so the gating is TWO \`filterPrimitivesByAttribute\` nodes cutting 456 chords to 360 and then to 62 while they are still polylines — the first drops every chord shorter than 4 units, the second keeps the roughly one in six the pick chose — and gating the segment cloud afterwards, which is what this graph used to do, meant building 7.35 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. The kinds themselves are a WEIGHTING rather than a table with rows repeated to spell one: \`values: [\\"rod\\", \\"bar\\", \\"panel\\", \\"clamp\\"]\` with \`weights: [4, 2, 1, 2]\` and a \`select\` fraction, where nine rows used to carry the mix and a \`mul(randomField, 9)\` restated the table's own length beside them — append a fifth kind to that and the selector never reaches it, silently. The two spellings are byte-identical, because a whole-count weighting IS the repeated table. Three more numbers this graph used to restate are now read from the node that already knew them. \`partScatter\` jitters by half a STEP of the sampling above it: \`partDense\` publishes its step on the primitive domain, one \`promoteAttribute\` carries it onto the points before the cluster cut drops the topology, and the panel's scatter knob is that multiple rather than a distance — where the frozen 0.0189 it replaces was half a step of a 900-sample resample of a NOMINALLY 34-unit spine whose true arc length is 34.213, and so 0.05 of a step at the density knob's bottom and 1.10 of one at its top, invisible at one end and crossing its neighbours at the other. The carrier line states its SPACING instead of its far end, which is what stops the wraps knob from redrawing the cables it is not adding: the \`15\` in \`end\` was \`count - 1\`, and a \`forEach\` item key is content-derived, so 16 → 17 re-spaced the line and re-seeded every body — 1 of the 16 cables came back unchanged, against 16 of 16 now. \`chainAlternate\` reads the per-path \`linkIndex\` that \`pathSegments\` writes, not the global point index it used to: the two agree only while every chain has an even number of segments, and at \`chainStrand.count\` 36 the chains disagreed with each other — two distinct first-link orientations with nothing to report it, one at both 35 and 36 now. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: all eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. The six outside the cable body each carry their \`variant\` as an inline \`param\` of their own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The last two are the cable wobble, inside the \`forEach\` body, and they were held back as the deliberate exception — the body's seed varies per item, so its wobble was said to re-roll already. That was true of the sample WINDOW and false of the FIELD. Freeze the four per-carrier picks and cook: on the old literal seed the sixteen cables come back as ONE geometry, on the node seed as sixteen. A body node's seed is hashed with the item's own key, so \`{ \\"from\\": \\"node\\" }\` there means per-cable, and what it replaced was a fourth pick — \`wofs\`, transferred onto the wrap and multiplied by 1000 — whose whole job was to walk one frozen field far enough sideways that no two cables sampled the same place. That pick and its transfer are gone with it: the body is eight nodes where it was ten. Variants 0 and 1 keep the wobble's two components apart, the one riding the curve normal and the one riding the binormal, which a single literal seed had collapsed into the same number twice.",\r
+    "description": "A box truss follows a spline pushed around by two noises: four chords with zigzag bracing and square frames every few bays. Components are scattered over it in noise clusters and aimed radially, chains hang it from the ceiling, cables wrap along it, and two more kinds hang off it — a fringe gathered into bundles, and swags strung between anchors. The cables are a \`forEach\`: one body cooked once per cable, each seeded on its own carrier, where this used to need one hand-built branch per cable and so could not be a saved graph at all. The wander is a plain \`transformPoints\`: the three numbers shaping it — how far it drifts up, how far sideways, and how fast — are \`param\` spec nodes carrying their own values inside its \`translate\` expression, and the editor reads each as a knob. It used to be a one-node subgraph, because a param could only be DECLARED on a wrapper, and the wrapper existed for nothing else. \`wanderScale\` is named twice in that one expression and is still one knob writing both — the case that made a wrapper look unavoidable. Everything that was drawn as a tube is a real surface now: \`sweepProfile\` skins the chords, the braces, the frames, the cables, the fringe and the swags, every one of which used to end at \`pathSegments\` with a unit cylinder landing on each segment — half the drawn triangles, because rings are shared between segments and no interior caps grow, and nine \`extend\` settings gone with them, because a continuous skin leaves no wedge at a bend to fill. The chains do NOT sweep, and that is the line between the two nodes: \`pathSegments\` still has a job of its own, one oriented asset per segment, and a chain of separate links is exactly that job — what it lost is the borrowed one, faking a tube. Four chords reach ONE sweep rather than four, because a sweep reads a geometry and a geometry holds as many polylines as you like: each strut arrives from \`pathResample\` already a polyline, \`transformPoints\` moves it without touching that topology, and \`mergePrimitives\` unions the four KEEPING it, so the sweep gets four paths in one geometry and the chord radius stays a single knob rather than one knob mirrored into four. Seven values this graph repeats are declared once at the top, under \`params\`. Six are numbers read by name from the expressions that need them: \`trussHalfWidth\` was TWENTY literals in four different float spellings of 0.425 — the chords at ± it, the braces and the component mounts at it × √2, eighteen of them here and two inside the cable body, which is why \`pcg validate --params\` counts nineteen readings on this graph rather than twenty: the eighteen plus the one wrapper slot that carries the value in — and \`cableRadius\` was three nodes that only the panel's \`also\` knew were one gauge of rope. A node-scoped param cannot say either of those, because the thing being said is that several nodes share one value. Four more say it about smaller things. \`braceRadius\` gangs the diagonal braces to the station frames, and it retired the last \`also\` row in the whole corpus: no fact about this graph's structure lives in a presentation file any more. \`stretchMin\` and \`stretchMax\` are the two ends of ONE draw that the component sizes write once per axis — \`lerp(0.55, 1.6, randomField(\\"stretch\\"))\`, four times over, for the rod, the bar and the panel's two faces — where how far a component may stretch is a single decision and eight literals were spelling it. \`bundles\` is the fringe's 7, read twice inside one expression: \`floor(u × 7)\` bins each strand and the \`/ 7\` puts the bin back in [0, 1), so the two have to agree, and until the number had a name nothing said so. The seventh travels the other way. ELEVEN WRAPS ARE ONE CALL NOW. Every place this graph wrapped a value into a range spelled it \`x - N * floor(x / N)\`, four nodes deep, eleven times over; they are \`mod(x, N)\` since the grammar grew one. The graph is 133 lines shorter and cooks the SAME BYTES — checked, not assumed, because \`mod\` rounds each of its four operations to f32 exactly where the four separate nodes did, and a corpus-wide digest of every cooked column moved on none of the 63 graphs. Those eleven sites were also the demand signal: \`PLAN-rig-gaps-3.md\` recorded them and filed them under ergonomics, while the fields plan was measuring demand for \`mod\` by grepping for a different idiom and finding none. \`tubeSides\` is an \`i32\`, and no expression can ever carry one — a field resolves per element and only f32, vec3 and vec4 read one — so it declares \`targets\` and is WRITTEN into the \`sides\` slot of all six skins — five \`sweepProfile\` nodes and, through its wrapper, the sixth inside the cable body — rather than substituted into a field, which is how one name reaches the half of the format that counts, enums, booleans and attribute names live in. It is one decision because it is a BUDGET and not a dimension: cost is linear in it, six skins pay it at once, and nothing about a 0.03-radius brace wants a different roundness from the 0.055-radius chord standing next to it. The gauge params say the opposite about the very same nodes — \`cableRadius\` and \`braceRadius\` gang radii precisely because a radius legitimately differs from member to member — which is why \`sides\` is the only one of the six non-field literals every sweep repeats that earns a name. The other five stay written out, and that is a measurement rather than an oversight: \`profile\` means \\"a rope is round\\" at three sites and \\"the stock is round tube\\" at the other three, \`caps\` turns on whether a tube's ends are visible at all (the station frames are closed rings and have no ends, the braces bury theirs inside the chords), \`frame\` is invisible on a circular section — as are the field-capable \`up\` and \`roll\` written out beside it — and \`joint\` with its \`miterLimit\` is one pair rather than two decisions, neither of which moves: \`miter\` is simply the right answer at the two places this rig actually bends and indistinguishable from \`perpendicular\` everywhere else, and the limit is never reached, because the sharpest bend anywhere a sweep sees is the braces' zigzag at 100°, a stretch of 1.56 against a limit of 4, with the frame ring's square corner next at 1.41 and every resampled curve under 1.02. A shared name asserts that several slots must move together, and asserting that falsely is worse than the repetition. The sixth reading is inside the cable \`forEach\` body and gets there through a \`sides\` param on the wrapper, sitting next to \`halfWidth\` and working by the opposite mechanism: \`halfWidth\` declares NO targets and is read by the body's own expression, \`sides\` names one and is written into it. A body is bound by its wrapper either way and by nothing else, so ganging five of six would have left the cables at 8 while everything else moved. The three \`writeCurveFrame\` nodes repeat their three attribute names and KEEP them, now that a \`string\` param could reach them: \`curveNormal\` is named fourteen times here and only three of those are the writes — the other eleven are \`attribute(\\"curveNormal\\")\` inside expressions, where no param can follow — and \`sweepProfile\`'s own \`curveFrame\` mode reads that attribute by that name in the library itself. The name is a shared vocabulary rather than this graph's to rename, so a knob over the three writers would only break the eleven readers. It used to tag every strut with a \`strutId\`, merge the POINTS, and rebuild the same four paths with \`pointsToPath\` — ten nodes spent throwing topology away and putting it back, because the topology-preserving union did not exist yet when this graph was written. The frames still regroup, and that contrast is the useful one: their rings connect the four chords ACROSS each station, topology that never existed anywhere upstream, so \`pointsToPath\` over \`stationId\` BUILDS something rather than restoring it — and the filter feeding it drops three points in four, which no union could have preserved. The chains and the fringe do not regroup at all any more, and that is the other half of the contrast: each strand is made a path BEFORE it is copied, and \`copyToPoints\` carries it across with \`topology: \\"keep\\"\` — the source's one polyline re-emitted per anchor, shifted onto that anchor's block of points. What that retires is not a node but a round trip. The copy no longer has to label its output with \`targetIndexAttr\` so that a rebuild can group on the label, and the fringe's swept surface stops carrying a dead \`anchorId\` on all 17,100 of its points; the path is built once over the strand itself — 35 points for a chain, 17 for a fringe strand — instead of over the 245 and the 1700 the copies make of them. The label was itself the second version of this problem: before \`targetIndexAttr\` the id was recovered arithmetically — \`floor(index / 35)\` for the chains and \`floor(index / 17)\` for the fringe — where the 35 and the 17 were the strand's point count written out a second time, in another node, with nothing holding the two together, so editing the strand welded every chain into one path and said nothing. A strand that is already a path cannot fall out of step with itself, which is the version that has no number in it at all. The swags are gated BEFORE the sweep now, which is where a gate has to sit once the thing downstream of it is a surface: \`connectPoints\` writes \`edgeLength\` on the primitive domain and the pick lands there too, so the gating is TWO \`filterPrimitivesByAttribute\` nodes cutting 456 chords to 360 and then to 62 while they are still polylines — the first drops every chord shorter than 4 units, the second keeps the roughly one in six the pick chose — and gating the segment cloud afterwards, which is what this graph used to do, meant building 7.35 times the geometry that survives. The components are proportioned by KIND rather than by one draw wearing four hats: one \`byAttribute\` reads the string \`part\` and hands back that kind's whole vec3, so a rod lengthens along the radius it points down, a bar along the chord it lies on, a panel widens on both of its faces while staying slab-thin, and a clamp is a squat collar rather than a cube. It was three nested \`lerp\`s over three \`attributeIs\` calls, written out once per AXIS — and \`clamp\` was in none of them, so it fell through all three to the uniform base scale and stayed there, because a fall-through nobody writes is a fall-through nobody can find. Its \`default\` is the same sentence made explicit: any part kind this expression does not name keeps the base scale, unstretched, and now says so. The kinds themselves are a WEIGHTING rather than a table with rows repeated to spell one: \`values: [\\"rod\\", \\"bar\\", \\"panel\\", \\"clamp\\"]\` with \`weights: [4, 2, 1, 2]\` and a \`select\` fraction, where nine rows used to carry the mix and a \`mul(randomField, 9)\` restated the table's own length beside them — append a fifth kind to that and the selector never reaches it, silently. The two spellings are byte-identical, because a whole-count weighting IS the repeated table. Three more numbers this graph used to restate are now read from the node that already knew them. \`partScatter\` jitters by half a STEP of the sampling above it: \`partDense\` publishes its step on the primitive domain, one \`promoteAttribute\` carries it onto the points before the cluster cut drops the topology, and the panel's scatter knob is that multiple rather than a distance — where the frozen 0.0189 it replaces was half a step of a 900-sample resample of a NOMINALLY 34-unit spine whose true arc length is 34.213, and so 0.05 of a step at the density knob's bottom and 1.10 of one at its top, invisible at one end and crossing its neighbours at the other. The carrier line states its SPACING instead of its far end, which is what stops the wraps knob from redrawing the cables it is not adding: the \`15\` in \`end\` was \`count - 1\`, and a \`forEach\` item key is content-derived, so 16 → 17 re-spaced the line and re-seeded every body — 1 of the 16 cables came back unchanged, against 16 of 16 now. \`chainAlternate\` reads the per-path \`linkIndex\` that \`pathSegments\` writes, not the global point index it used to: the two agree only while every chain has an even number of segments, and at \`chainStrand.count\` 36 the chains disagreed with each other — two distinct first-link orientations with nothing to report it, one at both 35 and 36 now. Eight declared outputs, one per part, plus the bare spine, so a viewer can tell them apart. The seed box re-rolls what is keyed on a node seed — where the components land, which chords get hung, how far each cable drops, and the four scalars that make each wrap its own — and the noises with it: all eight fbm fields take their seed from the node, \`{ \\"from\\": \\"node\\", \\"variant\\": … }\` rather than a literal, so the spine takes a different wander and the clusters a different shape instead of the same frozen field being walked over by points that moved. The six outside the cable body each carry their \`variant\` as an inline \`param\` of their own, so ONE noise can be re-rolled while the rest hold still — a node has a single seed, and the variant is what picks which draw off it. That is also what keeps the pairs apart: the spine's two wanders sit on one node and the fringe's two curls on another, so within each pair variant 0 and variant 1 are what make them independent draws, where a literal seed used to do it. The last two are the cable wobble, inside the \`forEach\` body, and they were held back as the deliberate exception — the body's seed varies per item, so its wobble was said to re-roll already. That was true of the sample WINDOW and false of the FIELD. Freeze the four per-carrier picks and cook: on the old literal seed the sixteen cables come back as ONE geometry, on the node seed as sixteen. A body node's seed is hashed with the item's own key, so \`{ \\"from\\": \\"node\\" }\` there means per-cable, and what it replaced was a fourth pick — \`wofs\`, transferred onto the wrap and multiplied by 1000 — whose whole job was to walk one frozen field far enough sideways that no two cables sampled the same place. That pick and its transfer are gone with it: the body is eight nodes where it was ten. Variants 0 and 1 keep the wobble's two components apart, the one riding the curve normal and the one riding the binormal, which a single literal seed had collapsed into the same number twice.",\r
     "tags": [\r
       "examples",\r
       "curves",\r
@@ -566,36 +566,14 @@ var e=`{\r
                           "value": -0.7071067811865475\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -638,36 +616,14 @@ var e=`{\r
                           "value": 0.7071067811865476\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -731,36 +687,14 @@ var e=`{\r
                           "value": -0.7071067811865476\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -803,36 +737,14 @@ var e=`{\r
                           "value": -0.7071067811865475\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -896,36 +808,14 @@ var e=`{\r
                           "value": 0.7071067811865475\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -968,36 +858,14 @@ var e=`{\r
                           "value": -0.7071067811865477\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -1061,36 +929,14 @@ var e=`{\r
                           "value": 0.7071067811865477\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -1133,36 +979,14 @@ var e=`{\r
                           "value": 0.7071067811865474\r
                         },\r
                         {\r
-                          "fn": "sub",\r
+                          "fn": "mod",\r
                           "args": [\r
                             {\r
                               "fn": "index"\r
                             },\r
                             {\r
-                              "fn": "mul",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                },\r
-                                {\r
-                                  "fn": "floor",\r
-                                  "args": [\r
-                                    {\r
-                                      "fn": "div",\r
-                                      "args": [\r
-                                        {\r
-                                          "fn": "index"\r
-                                        },\r
-                                        {\r
-                                          "fn": "constant",\r
-                                          "value": 2\r
-                                        }\r
-                                      ]\r
-                                    }\r
-                                  ]\r
-                                }\r
-                              ]\r
+                              "fn": "constant",\r
+                              "value": 2\r
                             }\r
                           ]\r
                         }\r
@@ -1227,7 +1051,7 @@ var e=`{\r
         "type": "f32",\r
         "tupleSize": 1,\r
         "value": {\r
-          "fn": "sub",\r
+          "fn": "mod",\r
           "args": [\r
             {\r
               "fn": "attribute",\r
@@ -1235,32 +1059,8 @@ var e=`{\r
               "tupleSize": 1\r
             },\r
             {\r
-              "fn": "mul",\r
-              "args": [\r
-                {\r
-                  "fn": "constant",\r
-                  "value": 4\r
-                },\r
-                {\r
-                  "fn": "floor",\r
-                  "args": [\r
-                    {\r
-                      "fn": "div",\r
-                      "args": [\r
-                        {\r
-                          "fn": "attribute",\r
-                          "name": "stationId",\r
-                          "tupleSize": 1\r
-                        },\r
-                        {\r
-                          "fn": "constant",\r
-                          "value": 4\r
-                        }\r
-                      ]\r
-                    }\r
-                  ]\r
-                }\r
-              ]\r
+              "fn": "constant",\r
+              "value": 4\r
             }\r
           ]\r
         },\r
@@ -1741,18 +1541,121 @@ var e=`{\r
             {\r
               "fn": "mul",\r
               "args": [\r
-                { "fn": "param", "name": "partScale", "value": 1 },\r
-                { "fn": "lerp", "args": [0.55, 1.45, { "fn": "randomField", "key": "size" }] }\r
+                {\r
+                  "fn": "param",\r
+                  "name": "partScale",\r
+                  "value": 1\r
+                },\r
+                {\r
+                  "fn": "lerp",\r
+                  "args": [\r
+                    0.55,\r
+                    1.45,\r
+                    {\r
+                      "fn": "randomField",\r
+                      "key": "size"\r
+                    }\r
+                  ]\r
+                }\r
               ]\r
             },\r
             {\r
               "fn": "byAttribute",\r
               "name": "part",\r
               "cases": {\r
-                "rod": { "fn": "vec", "args": [1, { "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }, 1] },\r
-                "bar": { "fn": "vec", "args": [1, 1, { "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }] },\r
-                "panel": { "fn": "vec", "args": [{ "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }, 0.7, { "fn": "lerp", "args": [{ "fn": "param", "name": "stretchMin" }, { "fn": "param", "name": "stretchMax" }, { "fn": "randomField", "key": "stretch" }] }] },\r
-                "clamp": [1.25, 0.5, 1.25]\r
+                "rod": {\r
+                  "fn": "vec",\r
+                  "args": [\r
+                    1,\r
+                    {\r
+                      "fn": "lerp",\r
+                      "args": [\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMin"\r
+                        },\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMax"\r
+                        },\r
+                        {\r
+                          "fn": "randomField",\r
+                          "key": "stretch"\r
+                        }\r
+                      ]\r
+                    },\r
+                    1\r
+                  ]\r
+                },\r
+                "bar": {\r
+                  "fn": "vec",\r
+                  "args": [\r
+                    1,\r
+                    1,\r
+                    {\r
+                      "fn": "lerp",\r
+                      "args": [\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMin"\r
+                        },\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMax"\r
+                        },\r
+                        {\r
+                          "fn": "randomField",\r
+                          "key": "stretch"\r
+                        }\r
+                      ]\r
+                    }\r
+                  ]\r
+                },\r
+                "panel": {\r
+                  "fn": "vec",\r
+                  "args": [\r
+                    {\r
+                      "fn": "lerp",\r
+                      "args": [\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMin"\r
+                        },\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMax"\r
+                        },\r
+                        {\r
+                          "fn": "randomField",\r
+                          "key": "stretch"\r
+                        }\r
+                      ]\r
+                    },\r
+                    0.7,\r
+                    {\r
+                      "fn": "lerp",\r
+                      "args": [\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMin"\r
+                        },\r
+                        {\r
+                          "fn": "param",\r
+                          "name": "stretchMax"\r
+                        },\r
+                        {\r
+                          "fn": "randomField",\r
+                          "key": "stretch"\r
+                        }\r
+                      ]\r
+                    }\r
+                  ]\r
+                },\r
+                "clamp": [\r
+                  1.25,\r
+                  0.5,\r
+                  1.25\r
+                ]\r
               },\r
               "default": 1\r
             }\r
@@ -1981,7 +1884,10 @@ var e=`{\r
                                     {\r
                                       "fn": "mul",\r
                                       "args": [\r
-                                        { "fn": "param", "name": "halfWidth" },\r
+                                        {\r
+                                          "fn": "param",\r
+                                          "name": "halfWidth"\r
+                                        },\r
                                         1.4142135623730951\r
                                       ]\r
                                     },\r
@@ -2138,7 +2044,10 @@ var e=`{\r
                                     {\r
                                       "fn": "mul",\r
                                       "args": [\r
-                                        { "fn": "param", "name": "halfWidth" },\r
+                                        {\r
+                                          "fn": "param",\r
+                                          "name": "halfWidth"\r
+                                        },\r
                                         1.4142135623730951\r
                                       ]\r
                                     },\r
@@ -2655,7 +2564,7 @@ var e=`{\r
                   "value": 1\r
                 },\r
                 {\r
-                  "fn": "sub",\r
+                  "fn": "mod",\r
                   "args": [\r
                     {\r
                       "fn": "attribute",\r
@@ -2663,32 +2572,8 @@ var e=`{\r
                       "tupleSize": 1\r
                     },\r
                     {\r
-                      "fn": "mul",\r
-                      "args": [\r
-                        {\r
-                          "fn": "constant",\r
-                          "value": 2\r
-                        },\r
-                        {\r
-                          "fn": "floor",\r
-                          "args": [\r
-                            {\r
-                              "fn": "div",\r
-                              "args": [\r
-                                {\r
-                                  "fn": "attribute",\r
-                                  "name": "linkIndex",\r
-                                  "tupleSize": 1\r
-                                },\r
-                                {\r
-                                  "fn": "constant",\r
-                                  "value": 2\r
-                                }\r
-                              ]\r
-                            }\r
-                          ]\r
-                        }\r
-                      ]\r
+                      "fn": "constant",\r
+                      "value": 2\r
                     }\r
                   ]\r
                 }\r
@@ -2699,7 +2584,7 @@ var e=`{\r
               "value": 0\r
             },\r
             {\r
-              "fn": "sub",\r
+              "fn": "mod",\r
               "args": [\r
                 {\r
                   "fn": "attribute",\r
@@ -2707,32 +2592,8 @@ var e=`{\r
                   "tupleSize": 1\r
                 },\r
                 {\r
-                  "fn": "mul",\r
-                  "args": [\r
-                    {\r
-                      "fn": "constant",\r
-                      "value": 2\r
-                    },\r
-                    {\r
-                      "fn": "floor",\r
-                      "args": [\r
-                        {\r
-                          "fn": "div",\r
-                          "args": [\r
-                            {\r
-                              "fn": "attribute",\r
-                              "name": "linkIndex",\r
-                              "tupleSize": 1\r
-                            },\r
-                            {\r
-                              "fn": "constant",\r
-                              "value": 2\r
-                            }\r
-                          ]\r
-                        }\r
-                      ]\r
-                    }\r
-                  ]\r
+                  "fn": "constant",\r
+                  "value": 2\r
                 }\r
               ]\r
             }\r
@@ -2981,7 +2842,9 @@ var e=`{\r
                     "octaves": 2,\r
                     "lacunarity": 2,\r
                     "gain": 0.5,\r
-                    "position": { "fn": "position" }\r
+                    "position": {\r
+                      "fn": "position"\r
+                    }\r
                   }\r
                 }\r
               ]\r
@@ -3038,7 +2901,9 @@ var e=`{\r
                     "octaves": 2,\r
                     "lacunarity": 2,\r
                     "gain": 0.5,\r
-                    "position": { "fn": "position" }\r
+                    "position": {\r
+                      "fn": "position"\r
+                    }\r
                   }\r
                 }\r
               ]\r
@@ -3180,7 +3045,9 @@ var e=`{\r
                                 "octaves": 1,\r
                                 "lacunarity": 2,\r
                                 "gain": 0.5,\r
-                                "position": { "fn": "position" }\r
+                                "position": {\r
+                                  "fn": "position"\r
+                                }\r
                               }\r
                             }\r
                           ]\r

@@ -3,7 +3,7 @@
   "seed": 1054,
   "meta": {
     "title": "shape one falloff six ways",
-    "description": "SIX SHAPING FUNCTIONS ON ONE INPUT. Every panel is the same grid and the same scalar `t` \u2014 1 at the panel's centre, falling to 0 at its rim, written `1 - clamp(length(P - centre) / 6, 0, 1)` \u2014 lifted by `6 * f(t)` and differing only in `f`. The six sit in two rows of three, named by coordinate rather than by which one faces you, since that depends on where the camera is: at z = -10, in increasing x, `t` itself (a cone, the control), `sqrt(t)` (a dome, steep at the rim) and `t * t` (a rounded spire); at z = +10, `pow(t, 3)` (a sharper spire), `ramp(t)` through four stops (the S-curve, flat at both ends) and `step(0.5, t)` (a flat-topped mesa \u2014 a hard cut, not a curve, and the only panel here that leaves the plane it started on). Read across and the choice of `f` is the whole difference between a cone and a mesa, which is what makes a falloff an authored decision rather than whatever the arithmetic happened to give. THREE RULES ARE VISIBLE HERE RATHER THAN STATED. `step` takes its EDGE FIRST \u2014 `step(edge, x)` is exactly `ge(x, edge)` with the operands swapped, and it exists to buy the name a shader author reaches for; getting the order backwards gives the complement, silently. `pow` HAS A NARROWER DOMAIN than a host-language power: every negative base is NaN, as are `pow(0, 0)` and `pow(x, 0)` for a zero, negative, infinite or NaN `x`, because the measured device implements it as `exp2(b * log2(a))` exactly and the CPU adopts that domain rather than letting the two paths disagree over a whole quadrant. The `clamp` inside `t` is therefore LOAD-BEARING \u2014 and in TWO panels rather than one, because `sqrt` answers a negative on exactly the same rule. Strip the clamp and this graph fails at the `sqrt` panel before it ever reaches `pow`: `transformPoints: param \"translate\" resolved to NaN at element 0`, 254 of that panel's 961 points non-finite. Nor is it decorative in the other four. Only `ramp` and `step` clamp by construction; `t` and `t * t` just keep going, the cone dipping 2.5 units BELOW its own plane at a corner and the square lifting a raised rim. The corners are the whole of it either way \u2014 a 12-unit panel around a radius-6 disc leaves nothing else outside. And `pow` carries the widest GPU parity budget of the grammar's ALGEBRAIC fns \u2014 8 ULP, against bit-exact for `mul` and 1 for `sqrt`, with only the trigonometric family wider \u2014 which is why the square is spelled `t * t` rather than `pow(t, 2)`: `mul` for a square, `sqrt` for a root, `ramp` for a falloff, and `pow` only when the exponent is genuinely arbitrary. `ramp` and `smoothstep` divide the smooth-edge job between them: `smoothstep` when the knees belong at the two ends, which is the common case and now has its own fn, and `ramp` when they belong anywhere else, because a ramp says where they are instead of hiding them in a cubic. `basics-curve-shaping` puts `smoothstep` beside `exp` and `log` for that comparison. ONE MORE THING THIS FILE SHOWS BY BEING LONG: the `t` subexpression is written out SEVEN times across six panels \u2014 the square panel spells it twice, once per factor of `t * t` \u2014 because nothing yet lets one expression bind a name to a subexpression it uses more than once. That is the A3 entry in PLAN.md, and this graph is now its second worked case.",
+    "description": "SIX SHAPING FUNCTIONS ON ONE INPUT. Every panel is the same grid and the same scalar `t` — 1 at the panel's centre, falling to 0 at its rim, written `1 - clamp(distance(P, centre) / 6, 0, 1)` — lifted by `6 * f(t)` and differing only in `f`. The six sit in two rows of three, named by coordinate rather than by which one faces you, since that depends on where the camera is: at z = -10, in increasing x, `t` itself (a cone, the control), `sqrt(t)` (a dome, steep at the rim) and `t * t` (a rounded spire); at z = +10, `pow(t, 3)` (a sharper spire), `ramp(t)` through four stops (the S-curve, flat at both ends) and `step(0.5, t)` (a flat-topped mesa — a hard cut, not a curve, and the only panel here that leaves the plane it started on). Read across and the choice of `f` is the whole difference between a cone and a mesa, which is what makes a falloff an authored decision rather than whatever the arithmetic happened to give. THREE RULES ARE VISIBLE HERE RATHER THAN STATED. `step` takes its EDGE FIRST — `step(edge, x)` is exactly `ge(x, edge)` with the operands swapped, and it exists to buy the name a shader author reaches for; getting the order backwards gives the complement, silently. `pow` HAS A NARROWER DOMAIN than a host-language power: every negative base is NaN, as are `pow(0, 0)` and `pow(x, 0)` for a zero, negative, infinite or NaN `x`, because the measured device implements it as `exp2(b * log2(a))` exactly and the CPU adopts that domain rather than letting the two paths disagree over a whole quadrant. The `clamp` inside `t` is therefore LOAD-BEARING — and in TWO panels rather than one, because `sqrt` answers a negative on exactly the same rule. Strip the clamp and this graph fails at the `sqrt` panel before it ever reaches `pow`: `transformPoints: param \"translate\" resolved to NaN at element 0`, 254 of that panel's 961 points non-finite. Nor is it decorative in the other four. Only `ramp` and `step` clamp by construction; `t` and `t * t` just keep going, the cone dipping 2.5 units BELOW its own plane at a corner and the square lifting a raised rim. The corners are the whole of it either way — a 12-unit panel around a radius-6 disc leaves nothing else outside. And `pow` carries the widest GPU parity budget of the grammar's ALGEBRAIC fns — 8 ULP, against bit-exact for `mul` and 1 for `sqrt`, with only the trigonometric family wider — which is why the square is spelled `t * t` rather than `pow(t, 2)`: `mul` for a square, `sqrt` for a root, `ramp` for a falloff, and `pow` only when the exponent is genuinely arbitrary. `ramp` and `smoothstep` divide the smooth-edge job between them: `smoothstep` when the knees belong at the two ends, which is the common case and now has its own fn, and `ramp` when they belong anywhere else, because a ramp says where they are instead of hiding them in a cubic. `basics-curve-shaping` puts `smoothstep` beside `exp` and `log` for that comparison. ONE MORE THING THIS FILE SHOWS BY BEING LONG: the `t` subexpression is written out SEVEN times across six panels — the square panel spells it twice, once per factor of `t * t` — because nothing yet lets one expression bind a name to a subexpression it uses more than once. Each of those seven used to be `length(sub(P, centre))` and is now `distance`, which is the same number by construction and thirty-five fewer lines of file; the repetition it does NOT fix is the point of this paragraph. That is the A3 entry in PLAN.md, and this graph is now its second worked case.",
     "tags": [
       "basics",
       "fields",
@@ -53,22 +53,17 @@
                           "fn": "div",
                           "args": [
                             {
-                              "fn": "length",
+                              "fn": "distance",
                               "args": [
                                 {
-                                  "fn": "sub",
+                                  "fn": "position"
+                                },
+                                {
+                                  "fn": "vec",
                                   "args": [
-                                    {
-                                      "fn": "position"
-                                    },
-                                    {
-                                      "fn": "vec",
-                                      "args": [
-                                        -16,
-                                        0,
-                                        -10
-                                      ]
-                                    }
+                                    -16,
+                                    0,
+                                    -10
                                   ]
                                 }
                               ]
@@ -133,22 +128,17 @@
                               "fn": "div",
                               "args": [
                                 {
-                                  "fn": "length",
+                                  "fn": "distance",
                                   "args": [
                                     {
-                                      "fn": "sub",
+                                      "fn": "position"
+                                    },
+                                    {
+                                      "fn": "vec",
                                       "args": [
-                                        {
-                                          "fn": "position"
-                                        },
-                                        {
-                                          "fn": "vec",
-                                          "args": [
-                                            0,
-                                            0,
-                                            -10
-                                          ]
-                                        }
+                                        0,
+                                        0,
+                                        -10
                                       ]
                                     }
                                   ]
@@ -215,22 +205,17 @@
                               "fn": "div",
                               "args": [
                                 {
-                                  "fn": "length",
+                                  "fn": "distance",
                                   "args": [
                                     {
-                                      "fn": "sub",
+                                      "fn": "position"
+                                    },
+                                    {
+                                      "fn": "vec",
                                       "args": [
-                                        {
-                                          "fn": "position"
-                                        },
-                                        {
-                                          "fn": "vec",
-                                          "args": [
-                                            16,
-                                            0,
-                                            -10
-                                          ]
-                                        }
+                                        16,
+                                        0,
+                                        -10
                                       ]
                                     }
                                   ]
@@ -255,22 +240,17 @@
                               "fn": "div",
                               "args": [
                                 {
-                                  "fn": "length",
+                                  "fn": "distance",
                                   "args": [
                                     {
-                                      "fn": "sub",
+                                      "fn": "position"
+                                    },
+                                    {
+                                      "fn": "vec",
                                       "args": [
-                                        {
-                                          "fn": "position"
-                                        },
-                                        {
-                                          "fn": "vec",
-                                          "args": [
-                                            16,
-                                            0,
-                                            -10
-                                          ]
-                                        }
+                                        16,
+                                        0,
+                                        -10
                                       ]
                                     }
                                   ]
@@ -337,22 +317,17 @@
                               "fn": "div",
                               "args": [
                                 {
-                                  "fn": "length",
+                                  "fn": "distance",
                                   "args": [
                                     {
-                                      "fn": "sub",
+                                      "fn": "position"
+                                    },
+                                    {
+                                      "fn": "vec",
                                       "args": [
-                                        {
-                                          "fn": "position"
-                                        },
-                                        {
-                                          "fn": "vec",
-                                          "args": [
-                                            -16,
-                                            0,
-                                            10
-                                          ]
-                                        }
+                                        -16,
+                                        0,
+                                        10
                                       ]
                                     }
                                   ]
@@ -420,22 +395,17 @@
                               "fn": "div",
                               "args": [
                                 {
-                                  "fn": "length",
+                                  "fn": "distance",
                                   "args": [
                                     {
-                                      "fn": "sub",
+                                      "fn": "position"
+                                    },
+                                    {
+                                      "fn": "vec",
                                       "args": [
-                                        {
-                                          "fn": "position"
-                                        },
-                                        {
-                                          "fn": "vec",
-                                          "args": [
-                                            0,
-                                            0,
-                                            10
-                                          ]
-                                        }
+                                        0,
+                                        0,
+                                        10
                                       ]
                                     }
                                   ]
@@ -521,22 +491,17 @@
                               "fn": "div",
                               "args": [
                                 {
-                                  "fn": "length",
+                                  "fn": "distance",
                                   "args": [
                                     {
-                                      "fn": "sub",
+                                      "fn": "position"
+                                    },
+                                    {
+                                      "fn": "vec",
                                       "args": [
-                                        {
-                                          "fn": "position"
-                                        },
-                                        {
-                                          "fn": "vec",
-                                          "args": [
-                                            16,
-                                            0,
-                                            10
-                                          ]
-                                        }
+                                        16,
+                                        0,
+                                        10
                                       ]
                                     }
                                   ]

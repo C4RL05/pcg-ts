@@ -1182,8 +1182,10 @@ registerFixed(
   "uniform",
   [arg("x", "Value to round down.")],
   "Elementwise floor: the largest integer at or below the value, so it rounds toward -Infinity " +
-    "and `floor(-0.5)` is -1, not 0. `sub(x, floor(x))` is the fractional part, which is how a " +
-    "value is wrapped into [0, 1).",
+    "and `floor(-0.5)` is -1, not 0. Its usual companion is binning — `floor(x / N)` is which tile " +
+    "a coordinate falls in, where `mod(x, N)` is where inside that tile it sits. For the fractional " +
+    "part reach for `fract`, which is what `sub(x, floor(x))` spelled before the grammar had a name " +
+    "for it.",
   (f) => floor(f[0]),
 );
 registerFixed(
