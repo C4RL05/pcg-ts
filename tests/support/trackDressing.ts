@@ -27,6 +27,7 @@ import {
   type Field,
   type FieldLike,
   add,
+  atan2,
   attribute,
   byAttribute,
   clamp,
@@ -37,6 +38,8 @@ import {
   eq,
   exp,
   floor,
+  fract,
+  fraction,
   gt,
   index,
   length as vlength,
@@ -58,6 +61,7 @@ import {
   component,
 } from "../../src/fields/index.js";
 import { Graph, type NodeHandle } from "../../src/graph/index.js";
+import { dataInput } from "../../src/runtime/index.js";
 // The spawner terminal lives in src/spawn, not the node library.
 import { spawnInstances } from "../../src/spawn/index.js";
 import {
@@ -68,10 +72,12 @@ import {
   pathResample,
   pathScan,
   pathSegments,
+  type PointLineParams,
   pointLine,
   pointsToPath,
   promoteAttribute,
   sampleNearestPoint,
+  type SetAttributeParams,
   setAttribute,
   transferAttribute,
   writeCurveFrame,
@@ -88,8 +94,31 @@ import {
   type Preset,
 } from "./trackKit.js";
 
+/**
+ * What a placement needs off the frame it lands on: its position, frame
+ * and severity in four packed columns, plus `uref` — the lap fraction,
+ * the lap's length in half-widths, and the half-width itself.
+ */
+const LOOKUP_NAMES = ["pack0", "pack1", "pack2", "pack3", "uref"] as const;
+
 /** How far apart the lanes of CDF space sit. Any value above 1 works. */
 const LANE = 10;
+
+/**
+ * Radius of the lap ring, in the arbitrary units of a lookup space that
+ * nothing renders. Only its ratio to the frame spacing matters, and one
+ * turn of a thousand units across a few hundred frames leaves every
+ * neighbour unambiguous.
+ */
+const RING_R = 1000;
+
+/**
+ * The golden-ratio conjugate. Stepping by it modulo one visits the unit
+ * interval about as evenly as a sequence can without knowing in advance
+ * how many steps it will take — which is exactly the property the anchor
+ * counts need, since they are a knob a host turns after the fact.
+ */
+const GOLDEN = 0.6180339887498949;
 
 /** The largest cluster the duplication pass can produce. */
 const MAX_CLUSTER = 6;
@@ -150,8 +179,6 @@ export interface TrackDressingOpts {
   readonly countByProfile: Readonly<Record<string, number>>;
   /** Relative weight of each archetype within its profile. From calibration. */
   readonly weightByArchetype: Readonly<Record<string, number>>;
-  /** Lap length in world units, measured by a previous cook. */
-  readonly lapLength: number;
   /** Additive shift on every archetype's outside-of-bend bias. */
   readonly outsideShift?: number;
   /** Art variants per archetype. One family per variant. */
@@ -160,6 +187,12 @@ export interface TrackDressingOpts {
   readonly polygonScale?: number;
   /** Tenths of the lap committed to a hard lean, and which way. */
   readonly committedStretches?: Readonly<Record<number, number>>;
+  /**
+   * Take the centreline from a `dataInput` the host fills instead of
+   * generating one. The node is `splineIn`; give it a point cloud of
+   * control points in lap order and everything else follows from it.
+   */
+  readonly splineFromHost?: boolean;
   /** Turn the landmark and balance passes on or off. */
   readonly landmarks?: boolean;
   readonly balance?: boolean;
@@ -210,6 +243,22 @@ function rangeByArchetype(pick: (id: string) => readonly [number, number]): Fiel
 export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   graph: Graph;
   outputs: { placements: string; frames: string };
+  /**
+   * The handles a host needs to RE-AIM this graph without rebuilding it:
+   * the spline it reads, the per-profile anchor counts and kit mixes that
+   * calibration produces, and the one place the track's scale is written.
+   * Returned rather than looked up by id because a handle is what
+   * `Graph.setParam` takes, and the alternative is spelling node ids in
+   * two files and finding out at run time when they disagree.
+   */
+  nodes: {
+    splineIn: NodeHandle<{ items: unknown[] }>;
+    halfWidth: NodeHandle<SetAttributeParams>;
+    anchors: Record<string, NodeHandle<PointLineParams>>;
+    anchorKind: Record<string, NodeHandle<SetAttributeParams>>;
+  };
+  /** Which archetypes each profile's weight list is indexed by, in order. */
+  archetypesByProfile: Record<string, string[]>;
 } {
   const {
     preset,
@@ -220,7 +269,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     relief,
     countByProfile,
     weightByArchetype,
-    lapLength,
     seed,
   } = opts;
   const outsideShift = opts.outsideShift ?? 0;
@@ -242,6 +290,12 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   // A closed loop built from INTEGER harmonics of the lap angle, so it
   // closes exactly. A noise would not: it would leave a seam at the start
   // line, which is the failure this technique warns about twice.
+  // WHERE THE CENTRELINE COMES FROM. `dataInput` when the host has a
+  // spline of its own — the technique's actual input, an ordered array of
+  // points round a closed lap — and a generated loop otherwise, so the
+  // graph is runnable on its own. Only these first nodes differ; every
+  // rule downstream reads the resampled path and knows nothing about
+  // which one it came from.
   const spine = g.add(pointLine, { count: controlPoints, includeEnd: false }, "spine");
   const angle = mul(div(index(), controlPoints), Math.PI * 2);
   // The harmonics are chosen for the CORNER STATISTICS they produce, not
@@ -275,13 +329,22 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     },
     "spineShape",
   );
+  g.connect(spine, "out", spineShape, "in");
+  const spineSource: NodeHandle = opts.splineFromHost
+    ? g.add(dataInput, { items: [] }, "splineIn")
+    : spineShape;
   const spinePath = g.add(pointsToPath, { closed: true }, "spinePath");
   // 'count' rather than 'spacing': a closed path resampled by spacing
   // closes on a REMAINDER segment, and a remainder at the start line is
   // exactly the seam the periodic envelope exists to avoid.
+  //
+  // Both REPORTS are asked for, and they are what makes this graph a tool
+  // rather than a rendering: `lengthAttr` is how long the lap actually is
+  // and `stepAttr` is how far apart the frames landed. Everything below
+  // that used to need a build-time constant reads them instead.
   const centre = g.add(
     pathResample,
-    { mode: "count", count: FRAMES, lengthAttr: "lapLen" },
+    { mode: "count", count: FRAMES, lengthAttr: "lapLen", stepAttr: "stepLen" },
     "centre",
   );
   const frames = g.add(writeCurveFrame, { curvatureName: "curvature" }, "frames");
@@ -290,16 +353,53 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     { name: "lapLen", from: "primitive", to: "point", mode: "average" },
     "lapLenPt",
   );
-  g.connect(spine, "out", spineShape, "in");
-  g.connect(spineShape, "out", spinePath, "in");
+  const stepLenPt = g.add(
+    promoteAttribute,
+    { name: "stepLen", from: "primitive", to: "point", mode: "average" },
+    "stepLenPt",
+  );
+  g.connect(spineSource, "out", spinePath, "in");
   g.connect(spinePath, "out", centre, "in");
   g.connect(centre, "out", frames, "in");
   g.connect(frames, "out", lapLenPt, "in");
+  g.connect(lapLenPt, "out", stepLenPt, "in");
+
+  // THE ONE PLACE THE TRACK'S SCALE IS WRITTEN DOWN.
+  //
+  // The half-width is the unit every rule in the kit is stated in, and it
+  // is the only number here that is not derivable from the spline. As a
+  // node param it is a single addressable knob — `halfWidthN.value` — so
+  // a shipped graph can be re-scaled without being rebuilt. It used to be
+  // a build-time constant multiplied into forty-one field expressions,
+  // which meant a graph could only ever dress the track it was compiled
+  // for.
+  const halfWidthN = g.add(
+    setAttribute,
+    { name: "halfWidth", value: W },
+    "halfWidthN",
+  );
+  g.connect(stepLenPt, "out", halfWidthN, "in");
+  const HW = attribute("halfWidth");
+  // Lap length and frame spacing in half-widths, and the frame step as a
+  // FRACTION of the lap — the three derived scales the passes below read
+  // instead of closing over a number from the build.
+  const scaleN = g.add(
+    setAttribute,
+    { name: "lapW", value: div(attribute("lapLen"), HW) },
+    "lapWN",
+  );
+  g.connect(halfWidthN, "out", scaleN, "in");
+  const stepUN = g.add(
+    setAttribute,
+    { name: "stepU", value: div(attribute("stepLen"), attribute("lapLen")) },
+    "stepUN",
+  );
+  g.connect(scaleN, "out", stepUN, "in");
 
   // Station in W, the coordinate every distance ALONG the lap is in.
   const stationN = g.add(
     setAttribute,
-    { name: "stationW", value: div(mul(attribute("curveU"), attribute("lapLen")), W) },
+    { name: "stationW", value: div(mul(attribute("curveU"), attribute("lapLen")), HW) },
     "stationN",
   );
   // The LEVEL frame, before banking: right = forward x worldUp.
@@ -328,7 +428,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   );
   const radN = g.add(
     setAttribute,
-    { name: "radiusW", value: div(1, mul(fmax(vlength(attribute("curvature", 3)), 1e-9), W)) },
+    { name: "radiusW", value: div(1, mul(fmax(vlength(attribute("curvature", 3)), 1e-9), HW)) },
     "radN",
   );
   const R = attribute("radiusW");
@@ -354,7 +454,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       name: "bankRad",
       value: mul(
         mul(sign(attribute("kSigned")), -(preset.bankMaxDeg * Math.PI) / 180),
-        tanh(mul(vlength(attribute("curvature", 3)), preset.referenceRadiusW * W)),
+        tanh(mul(vlength(attribute("curvature", 3)), mul(preset.referenceRadiusW, HW))),
       ),
     },
     "bankN",
@@ -384,7 +484,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     },
     "upB",
   );
-  chain(g, [lapLenPt, stationN, rightN, upN, kSignN, radN, bucketN, cornerN, bankN, rightB, upB]);
+  chain(g, [stepUN, stationN, rightN, upN, kSignN, radN, bucketN, cornerN, bankN, rightB, upB]);
 
   // ---------------------------------------------------------------- //
   // 1. Intensity and its cumulative distribution, one per profile.
@@ -476,7 +576,21 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     { name: "pack3", tupleSize: 4, value: vec(attribute("tangent", 3), attribute("bucket")) },
     "pack3",
   );
-  chain(g, [cdfNorm, pack0, pack1, pack2, pack3]);
+  // WHERE A PLACEMENT GETS ITS SCALE FROM. Every lookup already transfers
+  // the lap fraction; carrying the lap's length and the half-width in the
+  // same column makes them travel for free, and it is why nothing
+  // downstream has to be handed a number from the build. Replaces a bare
+  // `curveU` transfer, so it costs no extra node anywhere.
+  const uref = g.add(
+    setAttribute,
+    {
+      name: "uref",
+      tupleSize: 3,
+      value: vec(attribute("curveU"), attribute("lapW"), attribute("halfWidth")),
+    },
+    "uref",
+  );
+  chain(g, [cdfNorm, pack0, pack1, pack2, pack3, uref]);
 
   // ---------------------------------------------------------------- //
   // 2. Inverse-transform sampling, in lanes.
@@ -498,7 +612,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       },
       `lane_${p}`,
     );
-    g.connect(pack3, "out", lane, "in");
+    g.connect(uref, "out", lane, "in");
     laneNodes.push(lane);
   });
   const lanes = g.add(mergePoints, {}, "lanes");
@@ -507,17 +621,26 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   // The anchors. One cloud per profile, each with an EXACT count, so the
   // kit's mix is a property of the graph rather than of a random draw.
   const anchorNodes: NodeHandle[] = [];
+  const anchorByProfile: Record<string, NodeHandle<PointLineParams>> = {};
+  const kindByProfile: Record<string, NodeHandle<SetAttributeParams>> = {};
+  const archetypesByProfile: Record<string, string[]> = {};
   PROFILES.forEach((p, i) => {
     const n = Math.max(1, Math.round(countByProfile[p] ?? 0));
     const members = ARCHETYPES.filter((a) => a.profile === p);
     const line = g.add(pointLine, { count: n, includeEnd: false }, `anchors_${p}`);
-    // A stratified sample of CDF space, PERMUTED by a stride coprime with
-    // the count. Stratification keeps the count exact and the spacing
-    // even; the permutation is what stops the archetype assignment below
-    // — which reads the same index — from correlating with position, so
-    // the first archetype does not occupy the first stretch of the lap.
-    const stride = coprimeStride(n);
-    const uAnchor = div(add(mod(mul(index(), stride), n), 0.5), n);
+    // A GOLDEN-RATIO sequence through CDF space: equidistributed for any
+    // count, and it needs to know none.
+    //
+    // It used to be a stratified sample permuted by a stride coprime with
+    // the count — better discrepancy, and it baked the count into the
+    // expression twice. That made `count` a knob that could be turned but
+    // not honoured: raising it past what the graph was built with sent
+    // `mod(index * stride, nOld)` wrapping and the archetype selector past
+    // 1, so the anchors clumped and the last archetype in each list took
+    // everything. Measured on a retarget: density CV 1.81 against a 0.75
+    // ceiling and a sprite share of zero. A sequence that needs no count
+    // is what makes the count a real knob.
+    const uAnchor = fract(mul(index(), GOLDEN));
     const place = g.add(
       setAttribute,
       { name: "P", tupleSize: 3, value: vec(uAnchor, i * LANE, 0) },
@@ -537,20 +660,26 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
         // denominator here. Only the ratio matters, and a thousandth of
         // the largest rate is finer than any of them are known to.
         weights: wholeWeights(members.map((a) => weightByArchetype[a.id] ?? a.rate)),
-        select: div(add(index(), 0.5), n),
+        // `fraction()`, not index/count: it spans the domain whatever the
+        // domain turns out to be, so the kit mix survives a change of
+        // count. Exact blocks still, because it is monotone in the index.
+        select: fraction(),
       },
       `anchorKind_${p}`,
     );
     g.connect(line, "out", place, "in");
     g.connect(place, "out", kind, "in");
     anchorNodes.push(kind);
+    anchorByProfile[p] = line;
+    kindByProfile[p] = kind;
+    archetypesByProfile[p] = members.map((a) => a.id);
   });
   const anchors = g.add(mergePoints, {}, "anchors");
   for (const a of anchorNodes) g.connect(a, "out", anchors, "in");
 
   // The lookup itself. Five transfers: four packs and the lap fraction.
   let cursor: NodeHandle = anchors;
-  for (const name of ["pack0", "pack1", "pack2", "pack3", "curveU"]) {
+  for (const name of LOOKUP_NAMES) {
     const t = g.add(transferAttribute, { name, mapping: "nearest" }, `xfer_${name}`);
     g.connect(cursor, "out", t, "in");
     g.connect(lanes, "out", t, "source");
@@ -609,7 +738,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   const copies = g.add(
     copyToPoints,
     {
-      targetNames: ["pack0", "pack1", "pack2", "pack3", "curveU", "archetype", "clusterSize"],
+      targetNames: [...LOOKUP_NAMES, "archetype", "clusterSize"],
     },
     "copies",
   );
@@ -630,15 +759,12 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
 
   const placed = placeFromPack(g, keep, {
     id: "density",
-    W,
     preset,
     outsideShift,
-    lapW: lapLength / W,
     variants,
     polygonScale,
     spriteShare: preset.spriteShare,
     committed: balance ? committed : {},
-    lapU: attribute("curveU", 1),
     memberOffset: true,
   });
 
@@ -648,17 +774,14 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
 
   // Stations, laid out on a ring, are what the rule-placed passes look up
   // against. Built once and shared: it is the frames, re-embedded.
-  const lapW = lapLength / W;
-  const ring = stationRing(g, pack3, lapW);
+  const ring = stationRing(g, uref);
 
   const parts: NodeHandle[] = [placed];
   if (legibility) {
-    const entries = cornerEntries(g, pack3, ring, FRAMES, lapW);
+    const entries = cornerEntries(g, uref, ring);
     parts.push(
       ruleFurniture(g, entries, ring, {
         id: "marker",
-        W,
-        lapW,
         preset,
         outsideShift,
         variants,
@@ -673,8 +796,6 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       parts.push(
         ruleFurniture(g, entries, ring, {
           id: `brake${i}`,
-          W,
-          lapW,
           preset,
           outsideShift,
           variants,
@@ -690,12 +811,11 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   if (landmarks) {
     parts.push(
       landmarkPass(g, ring, {
-        W,
-        lapW,
         preset,
         outsideShift,
         variants,
         polygonScale,
+        committed: balance ? committed : {},
       }),
     );
   }
@@ -719,19 +839,62 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   // predicate on a placement, so a fill it would reject is rejected
   // whether it arrives before or after.
   if (coverage) {
+    // THE GAP IS ALONG THE LAP, not through space.
+    //
+    // The placements are re-embedded on a ring scaled so that arc length
+    // IS station in half-widths, then pathed in station order. The
+    // distance between two consecutive samples is then their station
+    // difference and nothing else — where measuring it in world space
+    // conflates a real longitudinal gap with two neighbours that merely
+    // sit far apart across the track. That was not a theoretical
+    // complaint: leaning one placement sideways in the balance pass
+    // changed which gaps looked wide, so the coverage pass answered
+    // differently depending on a decision that has nothing to do with
+    // coverage.
+    //
+    // The seam comes free. On a ring the last placement and the first are
+    // neighbours, and the chord under-reads the arc by g^2/(24 R^2) —
+    // four parts in ten thousand at the gap sizes this fires on.
+    const gapU = component(attribute("uref", 3), 0);
+    const gapR = div(component(attribute("uref", 3), 1), Math.PI * 2);
+    const stationSpace = g.add(
+      setAttribute,
+      {
+        name: "P",
+        tupleSize: 3,
+        value: vec(
+          mul(cos(mul(gapU, Math.PI * 2)), gapR),
+          mul(sin(mul(gapU, Math.PI * 2)), gapR),
+          0,
+        ),
+      },
+      "stationSpace",
+    );
+    g.connect(merged, "out", stationSpace, "in");
     const ordered = g.add(
       pointsToPath,
       { closed: true, orderAttr: "stationW" },
       "byStation",
     );
-    g.connect(merged, "out", ordered, "in");
+    g.connect(stationSpace, "out", ordered, "in");
+    // pathSegments drops point attributes and carries PRIMITIVE ones, so
+    // the scale is promoted onto the path before the segments are taken.
+    // Without it the gap threshold would be the last build-time constant
+    // in the graph, and one is as disqualifying as forty-one.
+    const orderedScale = g.add(
+      promoteAttribute,
+      { name: "uref", from: "point", to: "primitive", mode: "average" },
+      "gapScale",
+    );
+    g.connect(ordered, "out", orderedScale, "in");
     const segs = g.add(pathSegments, { axis: "+y", radius: 1 }, "gaps");
-    g.connect(ordered, "out", segs, "in");
+    g.connect(orderedScale, "out", segs, "in");
     // pathSegments puts the segment's LENGTH on the chosen axis of
-    // `scale`, which is the gap between two consecutive placements.
+    // `scale` — here, in half-widths along the lap, because that is what
+    // the ring was scaled to.
     const wide = g.add(
       filterByExpression,
-      { predicate: gt(component(attribute("scale", 3), 1), preset.maxFillGapW * W) },
+      { predicate: gt(component(attribute("scale", 3), 1), preset.maxFillGapW) },
       "wideGaps",
     );
     g.connect(segs, "out", wide, "in");
@@ -741,27 +904,35 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       "fillKind",
     );
     g.connect(wide, "out", named, "in");
-    // A gap midpoint is a chord between two placements, so it is near the
-    // track rather than on it: the frame is looked up from the world
-    // position, which is what the frames cloud is indexed by.
-    let fillCursor: NodeHandle = named;
-    for (const name of ["pack0", "pack1", "pack2", "pack3", "curveU"]) {
-      const t = g.add(transferAttribute, { name, mapping: "nearest" }, `fillXfer_${name}`);
-      g.connect(fillCursor, "out", t, "in");
-      g.connect(pack3, "out", t, "source");
-      fillCursor = t;
-    }
+    // The midpoint sits on the station ring, so its angle IS the lap
+    // fraction it fills — read back with atan2 and wrapped, then looked
+    // up on the frame ring like every other rule-placed thing.
+    const midU = g.add(
+      setAttribute,
+      {
+        name: "fillU",
+        value: wrapU(
+          div(atan2(component(position(), 1), component(position(), 0)), Math.PI * 2),
+        ),
+      },
+      "fillU",
+    );
+    g.connect(named, "out", midU, "in");
+    const fillCursor = lookupAtStation(g, midU, ring, attribute("fillU"), "fillLook", LOOKUP_NAMES);
     const fills = placeFromPack(g, fillCursor, {
       id: "fill",
-      W,
       preset,
       outsideShift,
-      lapW: lapLength / W,
       variants,
       polygonScale,
       spriteShare: preset.spriteShare,
-      committed: {},
-      lapU: attribute("curveU", 1),
+      // Fills lean with their stretch too. The technique runs balance
+      // AFTER the fills for exactly this reason: a fill lands wherever the
+      // lap happened to be thin, which is a side the density pass never
+      // chose, and leaving it out puts objects in a committed stretch that
+      // the commitment does not cover. Flipping one costs nothing —
+      // coverage is measured along the lap, not across it.
+      committed: balance ? committed : {},
       memberOffset: false,
     });
     const withFills = g.add(mergePoints, {}, "withFills");
@@ -771,7 +942,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   }
 
   if (sightline) {
-    merged = cullSightline(g, merged, pack3, ring, W, lapW);
+    merged = cullSightline(g, merged, uref, ring);
   }
 
   // Spawn-ready transforms, and the reporting columns the metrics read.
@@ -800,9 +971,9 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       name: "scale",
       tupleSize: 3,
       value: vec(
-        mul(attribute("footprintW"), W),
-        mul(attribute("tallnessW"), W),
-        mul(attribute("footprintW"), W),
+        mul(attribute("footprintW"), component(attribute("uref", 3), 2)),
+        mul(attribute("tallnessW"), component(attribute("uref", 3), 2)),
+        mul(attribute("footprintW"), component(attribute("uref", 3), 2)),
       ),
     },
     "scaled",
@@ -810,7 +981,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   g.connect(oriented, "out", scaled, "in");
 
   g.output(scaled, "out", "placements");
-  g.output(pack3, "out", "frames");
+  g.output(uref, "out", "frames");
 
   if (spawn) {
     // Every archetype onto the nearest placeholder shape the preview
@@ -839,7 +1010,17 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     g.output(batches, "instances", "instances");
   }
 
-  return { graph: g, outputs: { placements: "placements", frames: "frames" } };
+  return {
+    graph: g,
+    outputs: { placements: "placements", frames: "frames" },
+    nodes: {
+      splineIn: spineSource as NodeHandle<{ items: unknown[] }>,
+      halfWidth: halfWidthN,
+      anchors: anchorByProfile,
+      anchorKind: kindByProfile,
+    },
+    archetypesByProfile,
+  };
 }
 
 /** Wire a straight run of single-input single-output nodes. */
@@ -868,20 +1049,6 @@ function arch(id: string) {
 }
 
 /**
- * A stride coprime with `n`, for permuting a stratified sample. Walking
- * up from a seventh of n finds one within a few steps for every n, and
- * the result is a pure function of n, so the permutation is part of the
- * graph rather than of the run.
- */
-function coprimeStride(n: number): number {
-  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-  for (let s = Math.max(1, Math.floor(n / 7)); s < n + 7; s++) {
-    if (gcd(s, n) === 1) return s;
-  }
-  return 1;
-}
-
-/**
  * Resolve track coordinates into the world through the banked frame, and
  * write every column a placement carries.
  */
@@ -890,24 +1057,26 @@ function placeFromPack(
   input: NodeHandle,
   o: {
     id: string;
-    W: number;
     preset: Preset;
     outsideShift: number;
-    lapW: number;
     variants: Readonly<Record<string, number>>;
     polygonScale: number;
     spriteShare: number;
     /** Tenths committed to a hard lean. Empty leaves every side as drawn. */
     committed: Readonly<Record<number, number>>;
-    lapU: FieldLike;
     memberOffset: boolean;
     /** How this archetype picks its art variant. */
     variantFrom?: "random" | "severity" | "index";
     /** Read the side from `cornerK` rather than from the local frame. */
     sideFromCorner?: boolean;
+    /** Placed by a rule, so never mirrored by the balance pass. */
+    rulePlaced?: boolean;
   },
 ): NodeHandle {
-  const { W, preset, id } = o;
+  const { preset, id } = o;
+  // The three scales, read off the placement rather than closed over.
+  const lapU = component(attribute("uref", 3), 0);
+  const HW = component(attribute("uref", 3), 2);
   const base = unpack3("pack0", 4);
   const rightB = unpack3("pack1", 4);
   const upB = unpack3("pack2", 4);
@@ -942,7 +1111,7 @@ function placeFromPack(
     0.5,
   );
   const inBendPick = select(lt(randomField(`${id}-side`), bias), outside, mul(-1, outside));
-  const drift = mul(0.45, sin(add(mul(o.lapU, Math.PI * 4), 0.9)));
+  const drift = mul(0.45, sin(add(mul(lapU, Math.PI * 4), 0.9)));
   const straightPick = select(gt(add(randomField(`${id}-drift`), drift), 0.5), 1, -1);
   const side = o.sideFromCorner
     // `select` rather than `-sign`: sign(0) is 0, and a side of ZERO is
@@ -964,12 +1133,26 @@ function placeFromPack(
   // mirrored, and both matter: anything INSIDE a bend, because which side
   // of a corner an object sits on carries meaning, and rule-placed
   // furniture, because that meaning is the whole reason it exists.
-  const tenth = floor(mul(div(stationW, o.lapW), 10));
+  // Binned by where the object ENDS UP, not by where its anchor sat. A
+  // cluster member is offset along the lap from the anchor it was copied
+  // from, so near a tenth boundary the two disagree — and the placement
+  // then lands in one stretch while being leaned by the rules of another.
+  // Two placements out of 450, which is exactly the size of bug that
+  // survives a metric and dies to an exact assertion.
+  const ownU = o.memberOffset
+    ? mod(add(add(lapU, div(mul(attribute("member"), 0.55), component(attribute("uref", 3), 1))), 1), 1)
+    : lapU;
+  const tenth = floor(mul(ownU, 10));
   let lean: FieldLike = 0;
   for (const [k, dir] of Object.entries(o.committed)) {
     lean = select(eq(tenth, Number(k)), dir, lean);
   }
-  const movable = o.variantFrom ? 0 : gt(radiusW, CORNER_RADIUS_W);
+  // Rule-placed is its own flag. It used to be inferred from
+  // `variantFrom`, which a landmark also sets — so landmarks were treated
+  // as legibility furniture and silently exempted from the lean they
+  // should take. Two different questions, and one of them was answering
+  // the other.
+  const movable = o.rulePlaced ? 0 : gt(radiusW, CORNER_RADIUS_W);
   const leaned = select(mul(movable, ne(lean, 0)), lean, side);
 
   const latN = g.add(
@@ -1103,9 +1286,11 @@ function placeFromPack(
       value: add(
         add(
           base,
-          o.memberOffset ? mul(tangent, mul(attribute("member"), 0.55 * W)) : mul(tangent, 0),
+          o.memberOffset
+            ? mul(tangent, mul(mul(attribute("member"), 0.55), HW))
+            : mul(tangent, 0),
         ),
-        add(mul(rightB, mul(attribute("lateralW"), W)), mul(upB, mul(attribute("heightW"), W))),
+        add(mul(rightB, mul(attribute("lateralW"), HW)), mul(upB, mul(attribute("heightW"), HW))),
       ),
     },
     `${id}Pos`,
@@ -1115,37 +1300,50 @@ function placeFromPack(
 }
 
 /**
- * A station, embedded on a RING whose circumference is the lap.
+ * A position on the lap, embedded on a RING.
  *
  * Every "look up the frame at station s" in the passes below is a
  * nearest-point transfer, and a nearest-point transfer needs the thing it
- * searches to be a position. Laying stations out on a LINE would work
- * everywhere except across the start line, where station 0 and station
- * lapW are the same place and the furthest apart on the line — so a
- * marker for a corner that spans the seam would look up a frame half a
- * lap away. On a ring of radius lapW / 2pi the arc length between two
- * stations IS their station difference, the seam is not a special case,
- * and the chord-versus-arc error over the half-frame that resolution
- * actually needs is five parts in a million.
+ * searches to be a position. Laying positions out on a LINE would work
+ * everywhere except across the start line, where 0 and 1 are the same
+ * place and the furthest apart on the line — so a marker for a corner
+ * that spans the seam would look up a frame half a lap away. On a ring
+ * the seam is not a special case at all.
+ *
+ * Parameterised by LAP FRACTION rather than by station, and the radius is
+ * an arbitrary constant of the lookup space rather than anything about
+ * the track. That is what keeps the lap's length out of it: a cloud that
+ * knows only "seven tenths of the way round" can be placed on this ring,
+ * where one placed by station would have to be told how long the lap is
+ * first. The frames convert once, from what they already carry; nothing
+ * else has to.
  *
  * This is the same move the density pass makes with its CDF lanes: give a
  * scalar coordinate a geometry so that "nearest" can answer questions
  * about it.
  */
-function ringPos(station: FieldLike, lapW: number): Field {
-  const r = lapW / (Math.PI * 2);
-  const a = mul(station, (Math.PI * 2) / lapW);
-  return vec(mul(cos(a), r), mul(sin(a), r), 0);
+function ringPos(lapFraction: FieldLike): Field {
+  const a = mul(lapFraction, Math.PI * 2);
+  return vec(mul(cos(a), RING_R), mul(sin(a), RING_R), 0);
+}
+
+/**
+ * Wrap a lap FRACTION into [0, 1). Distances along the lap arrive in
+ * half-widths and are converted by the caller, which is the only place
+ * that needs to know how long the lap is.
+ */
+function wrapU(u: FieldLike): Field<1> {
+  return mod(add(u, 1), 1) as Field<1>;
 }
 
 /**
  * The frames laid out on the station ring, which is what every station
  * lookup in the passes below transfers FROM.
  */
-function stationRing(g: Graph, packed: NodeHandle, lapW: number): NodeHandle {
+function stationRing(g: Graph, packed: NodeHandle): NodeHandle {
   const ring = g.add(
     setAttribute,
-    { name: "P", tupleSize: 3, value: ringPos(attribute("stationW"), lapW) },
+    { name: "P", tupleSize: 3, value: ringPos(attribute("curveU")) },
     "stationRing",
   );
   g.connect(packed, "out", ring, "in");
@@ -1153,21 +1351,20 @@ function stationRing(g: Graph, packed: NodeHandle, lapW: number): NodeHandle {
 }
 
 /**
- * Move `dest` onto the station ring at `station` and pull `names` off the
+ * Move `dest` onto the lap ring at `lapFraction` and pull `names` off the
  * frame that lands nearest. Returns the last transfer.
  */
 function lookupAtStation(
   g: Graph,
   dest: NodeHandle,
   ring: NodeHandle,
-  station: FieldLike,
-  lapW: number,
+  lapFraction: FieldLike,
   id: string,
   names: readonly string[],
 ): NodeHandle {
   const at = g.add(
     setAttribute,
-    { name: "P", tupleSize: 3, value: ringPos(station, lapW) },
+    { name: "P", tupleSize: 3, value: ringPos(lapFraction) },
     `${id}At`,
   );
   g.connect(dest, "out", at, "in");
@@ -1179,11 +1376,6 @@ function lookupAtStation(
     cursor = t;
   }
   return cursor;
-}
-
-/** Wrap a station into [0, lapW), which is what a lap that closes needs. */
-function wrapStation(station: FieldLike, lapW: number): Field<1> {
-  return mod(add(station, lapW), lapW) as Field<1>;
 }
 
 /**
@@ -1205,14 +1397,7 @@ function wrapStation(station: FieldLike, lapW: number): Field<1> {
  * reports the loosest radius the corner ever has — read there, "tighter
  * than 8W" was never true and the braking references never appeared.
  */
-function cornerEntries(
-  g: Graph,
-  packed: NodeHandle,
-  ring: NodeHandle,
-  frameCount: number,
-  lapW: number,
-): NodeHandle {
-  const stepW = lapW / frameCount;
+function cornerEntries(g: Graph, packed: NodeHandle, ring: NodeHandle): NodeHandle {
   const here = g.add(
     setAttribute,
     { name: "isCornerHere", value: attribute("isCorner") },
@@ -1222,18 +1407,14 @@ function cornerEntries(
   // The frame one step on. Exactly one step: the ring is parameterised in
   // stations, so the step is the frame spacing by construction rather than
   // a distance that has to agree with an arc length measured elsewhere.
-  const ahead = lookupAtStation(
-    g,
-    here,
-    ring,
-    add(attribute("stationW"), stepW),
-    lapW,
-    "flagAhead",
-    ["isCorner"],
-  );
+  // Exactly one frame on, in the parameterisation the frames were placed
+  // in: `stepU` is the resampler's own step divided by its own length, so
+  // no count and no arc length from the build enters it.
+  const oneOn = wrapU(add(attribute("curveU"), attribute("stepU")));
+  const ahead = lookupAtStation(g, here, ring, oneOn, "flagAhead", ["isCorner"]);
   const entryStation = g.add(
     setAttribute,
-    { name: "entryStation", value: wrapStation(add(attribute("stationW"), stepW), lapW) },
+    { name: "entryU", value: oneOn },
     "entryStation",
   );
   g.connect(ahead, "out", entryStation, "in");
@@ -1250,8 +1431,7 @@ function cornerEntries(
     g,
     only,
     ring,
-    wrapStation(add(attribute("entryStation"), SEVERITY_PROBE_W), lapW),
-    lapW,
+    wrapU(add(attribute("entryU"), div(SEVERITY_PROBE_W, attribute("lapW")))),
     "bendProbe",
     ["pack1", "pack2"],
   );
@@ -1283,8 +1463,6 @@ function ruleFurniture(
   ring: NodeHandle,
   o: {
     id: string;
-    W: number;
-    lapW: number;
     preset: Preset;
     backW: number;
     archetype: string;
@@ -1295,7 +1473,7 @@ function ruleFurniture(
     variantFrom?: "random" | "severity" | "index";
   },
 ): NodeHandle {
-  const { id, W, lapW } = o;
+  const { id } = o;
   const gated =
     o.gate === null
       ? null
@@ -1315,10 +1493,10 @@ function ruleFurniture(
     `${id}Kind`,
   );
   g.connect(cursor, "out", named, "in");
-  const target = wrapStation(sub(attribute("entryStation"), o.backW), lapW);
+  const target = wrapU(sub(attribute("entryU"), div(o.backW, attribute("lapW"))));
   const stationN = g.add(
     setAttribute,
-    { name: "furnitureStation", value: target },
+    { name: "furnitureU", value: target },
     `${id}FurnitureStation`,
   );
   g.connect(named, "out", stationN, "in");
@@ -1326,24 +1504,21 @@ function ruleFurniture(
     g,
     stationN,
     ring,
-    attribute("furnitureStation"),
-    lapW,
+    attribute("furnitureU"),
     `${id}Look`,
-    ["pack0", "pack1", "pack2", "pack3", "curveU"],
+    LOOKUP_NAMES,
   );
   return placeFromPack(g, looked, {
     id,
-    W,
     preset: o.preset,
     outsideShift: o.outsideShift,
-    lapW,
     variants: o.variants,
     polygonScale: o.polygonScale,
     spriteShare: o.preset.spriteShare,
     committed: {},
-    lapU: attribute("curveU", 1),
     memberOffset: false,
     sideFromCorner: true,
+    rulePlaced: true,
     variantFrom: o.variantFrom ?? "random",
   });
 }
@@ -1364,8 +1539,6 @@ function cullSightline(
   placements: NodeHandle,
   packed: NodeHandle,
   ring: NodeHandle,
-  W: number,
-  lapW: number,
 ): NodeHandle {
   const from = g.add(
     setAttribute,
@@ -1377,8 +1550,7 @@ function cullSightline(
     g,
     from,
     ring,
-    wrapStation(add(attribute("stationW"), LOOK_AHEAD_W), lapW),
-    lapW,
+    wrapU(add(attribute("curveU"), div(LOOK_AHEAD_W, attribute("lapW")))),
     "chordTo",
     ["pack0"],
   );
@@ -1423,11 +1595,14 @@ function cullSightline(
   // terrain shell nine half-widths across is a backdrop whose near edge is
   // what a driver sees, not a four-and-a-half-wide pillar on the racing
   // line.
-  const radius = mul(fmax(div(attribute("footprintW"), 2), 0), W);
-  const cappedRaw = select(gt(radius, 2 * W), 2 * W, radius);
+  // In half-widths throughout, then converted once — the placements carry
+  // their own scale, so nothing here needs to have been told it.
+  const hw = component(attribute("uref", 3), 2);
+  const radiusW = fmax(div(attribute("footprintW"), 2), 0);
+  const cappedW = select(gt(radiusW, 2), 2, radiusW);
   // Plus the sampling's own error bound, so the cull is conservative
   // rather than optimistic. See CHORD_SAMPLES.
-  const capped = add(cappedRaw, CHORD_SLACK_W * W);
+  const capped = mul(add(cappedW, CHORD_SLACK_W), hw);
   const blocks = mul(
     mul(lt(attribute("chordDist"), capped), gt(attribute("footprintW"), 2)),
     mul(
@@ -1472,12 +1647,11 @@ function landmarkPass(
   g: Graph,
   ring: NodeHandle,
   o: {
-    W: number;
-    lapW: number;
     preset: Preset;
     outsideShift: number;
     variants: Readonly<Record<string, number>>;
     polygonScale: number;
+    committed: Readonly<Record<number, number>>;
   },
 ): NodeHandle {
   const line = g.add(pointLine, { count: LANDMARK_STRETCHES, includeEnd: false }, "landmarkLine");
@@ -1489,13 +1663,15 @@ function landmarkPass(
   g.connect(line, "out", named, "in");
   // Somewhere in its own tenth, but not at the same place in each: an
   // even spacing would read as a row of ten rather than as ten landmarks.
+  // In lap FRACTION, which is the one coordinate a fresh point cloud can
+  // state without being told anything about the track it is going onto.
   const station = g.add(
     setAttribute,
     {
-      name: "landmarkStation",
-      value: mul(
-        div(add(index(), add(0.2, mul(randomField("landmark-place"), 0.6))), LANDMARK_STRETCHES),
-        o.lapW,
+      name: "landmarkU",
+      value: div(
+        add(index(), add(0.2, mul(randomField("landmark-place"), 0.6))),
+        LANDMARK_STRETCHES,
       ),
     },
     "landmarkStationN",
@@ -1505,24 +1681,23 @@ function landmarkPass(
     g,
     station,
     ring,
-    attribute("landmarkStation"),
-    o.lapW,
+    attribute("landmarkU"),
     "landmarkLook",
-    ["pack0", "pack1", "pack2", "pack3", "curveU"],
+    LOOKUP_NAMES,
   );
   // `cornerK` is what `sideFromCorner` reads, and a landmark has no corner
   // — it takes the side its own frame suggests, through the ordinary path.
   return placeFromPack(g, looked, {
     id: "landmark",
-    W: o.W,
     preset: o.preset,
     outsideShift: o.outsideShift,
-    lapW: o.lapW,
     variants: o.variants,
     polygonScale: o.polygonScale,
     spriteShare: o.preset.spriteShare,
-    committed: {},
-    lapU: attribute("curveU", 1),
+    // A landmark leans with its stretch. It is decoration rather than
+    // language — nothing about which side it sits on tells a driver
+    // anything — so the two exemptions from mirroring do not cover it.
+    committed: o.committed,
     memberOffset: false,
     variantFrom: "index",
   });

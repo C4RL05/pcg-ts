@@ -40,8 +40,7 @@ describe("export", () => {
       lapRadius: 62 * 1755, relief: 6 * 1755, seed: 21,
     };
     const probe = buildTrackDressingGraph({
-      ...base, countByProfile: { flat: 1, built: 1, clustered: 1 }, weightByArchetype: {},
-      lapLength: 1, legibility: false, coverage: false, sightline: false, landmarks: false, balance: false,
+      ...base, countByProfile: { flat: 1, built: 1, clustered: 1 }, weightByArchetype: {}, legibility: false, coverage: false, sightline: false, landmarks: false, balance: false,
     });
     const frames = firstGeo((await cook(probe.graph)).outputs.frames);
     const lapLength = frames.attrs.primitive.require("lapLen").get(0) as number;
@@ -52,7 +51,7 @@ describe("export", () => {
       buildTrackDressingGraph({
         ...base, countByProfile: plan.countByProfile, weightByArchetype: plan.weightByArchetype,
         variantsByArchetype: plan.variantsByArchetype, polygonScale: plan.polygonScale,
-        committedStretches: committed, lapLength, spawn: true,
+        committedStretches: committed, spawn: true,
       });
     const dry = full({});
     const dryGeo = firstGeo((await cook(dry.graph)).outputs.placements);
