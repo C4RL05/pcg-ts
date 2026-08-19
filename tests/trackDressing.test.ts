@@ -65,6 +65,9 @@ function readPlacements(g: Geometry): Placement[] {
   const zone = col(g, "zone");
   const pack1 = col(g, "pack1");
   const pack2 = col(g, "pack2");
+  const variant = col(g, "variant");
+  const polygons = col(g, "polygons");
+  const isSprite = col(g, "isSprite");
   // Rule-placed furniture carries the turn direction of the corner it
   // announces; a density placement has no corner and carries 0.
   const cornerK = g.attrs.point.get("cornerK") ? col(g, "cornerK") : new Float64Array(g.pointCount);
@@ -80,6 +83,14 @@ function readPlacements(g: Geometry): Placement[] {
       kSigned: pack2[i * 4 + 3],
       zone: zone[i],
       cornerK: cornerK[i],
+      variant: variant[i],
+      polygons: polygons[i],
+      isSprite: isSprite[i],
+      // The asset slot: one model per family, and a family is an archetype
+      // plus a variant. Composed here rather than in the graph because the
+      // field grammar has no string concatenation, and a numeric variant
+      // beside the archetype name carries the same information.
+      family: `${archetype[i]}#${variant[i]}`,
     });
   }
   return out;
@@ -109,13 +120,33 @@ function countCornerEntries(frames: Geometry, lapW: number): { entries: number; 
   return { entries, tight };
 }
 
+/**
+ * Is `a` a better iteration than `b`?
+ *
+ * More metrics passed wins; a tie goes to whichever landed closer to the
+ * target density. Keeping the BEST rather than the LAST is the point: the
+ * corrections are measured on samples small enough to be noisy — only a
+ * few dozen placements sit inside bends on a lap — so a later iteration is
+ * usually, but not always, an improvement.
+ */
+function better(a: Report, b: Report, preset: Preset): boolean {
+  if (a.passed !== b.passed) return a.passed > b.passed;
+  return Math.abs(a.perW - preset.density) < Math.abs(b.perW - preset.density);
+}
+
 /** Cook one iteration of the pipeline and score what came out. */
 async function runOnce(
   preset: Preset,
   lapLength: number,
   c: Corrections,
   seed: number,
-  passes: { legibility?: boolean; coverage?: boolean; sightline?: boolean } = {},
+  passes: {
+    legibility?: boolean;
+    coverage?: boolean;
+    sightline?: boolean;
+    landmarks?: boolean;
+    balance?: boolean;
+  } = {},
 ): Promise<{ report: Report; placements: Placement[]; frames: Geometry; lapW: number }> {
   const lapW = lapLength / HALF_WIDTH;
   const plan = calibrate(preset, lapW, c);
@@ -129,6 +160,9 @@ async function runOnce(
     countByProfile: plan.countByProfile,
     weightByArchetype: plan.weightByArchetype,
     outsideShift: plan.outsideShift,
+    variantsByArchetype: plan.variantsByArchetype,
+    polygonScale: plan.polygonScale,
+    committedStretches: plan.committedStretches,
     lapLength,
     seed,
     ...passes,
@@ -166,6 +200,8 @@ async function measureLap(preset: Preset): Promise<number> {
     legibility: false,
     coverage: false,
     sightline: false,
+    landmarks: false,
+    balance: false,
   });
   const out = await cook(graph);
   const frames = firstGeo(out.outputs.frames);
@@ -291,7 +327,7 @@ describe("spline to environment art", () => {
     for (let iter = 0; iter < 3; iter++) {
       const { report } = await runOnce(preset, lapLength, c, 21);
       history.push(report.passed);
-      if (best === null || report.passed > best.passed) best = report;
+      if (best === null || better(report, best, preset)) best = report;
       c = correct(preset, report, c);
     }
     expect(best).not.toBeNull();
@@ -299,7 +335,8 @@ describe("spline to environment art", () => {
     // Report the whole card, so a failure names the metric rather than
     // just the count.
     const failures = report.metrics.filter((m) => !m.pass);
-    const card = report.metrics
+    const card = [...report.metrics]
+      .sort((x, y) => x.id - y.id)
       .map((m) => `${m.pass ? "PASS" : "FAIL"} ${m.id} ${m.name} = ${m.value.toFixed(3)} (${m.target})`)
       .join("\n");
     // A failure names the metric and prints the whole card, because
@@ -307,6 +344,9 @@ describe("spline to environment art", () => {
     if (failures.length > 0) console.log(`
 ${card}
 bands ${JSON.stringify(report.bandShare)}`);
+    // All seventeen, scored. A run that quietly scored twelve of them
+    // would pass every assertion below it.
+    expect(report.metrics.length).toBe(17);
     expect(report.passed).toBe(report.metrics.length);
     // The loop must not make things worse over its own iterations.
     expect(Math.max(...history)).toBeGreaterThanOrEqual(history[0]);
@@ -336,7 +376,7 @@ bands ${JSON.stringify(report.bandShare)}`);
       let best: Report | null = null;
       for (let iter = 0; iter < 3; iter++) {
         const { report } = await runOnce(preset, lapLength, c, 3);
-        if (best === null || report.passed > best.passed) best = report;
+        if (best === null || better(report, best, preset)) best = report;
         c = correct(preset, report, c);
       }
       reports[id] = best!;

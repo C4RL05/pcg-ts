@@ -46,6 +46,7 @@ import {
   max as fmax,
   mod,
   mul,
+  ne,
   normalize,
   position,
   randomField,
@@ -79,6 +80,7 @@ import {
   ARCHETYPES,
   BUCKET_EDGES,
   CORNER_RADIUS_W,
+  LANDMARK_STRETCHES,
   PROFILES,
   RULE_ARCHETYPES,
   type Preset,
@@ -136,6 +138,15 @@ export interface TrackDressingOpts {
   readonly lapLength: number;
   /** Additive shift on every archetype's outside-of-bend bias. */
   readonly outsideShift?: number;
+  /** Art variants per archetype. One family per variant. */
+  readonly variantsByArchetype?: Readonly<Record<string, number>>;
+  /** Multiplier on every kit polygon count, to hit the budget per W. */
+  readonly polygonScale?: number;
+  /** Tenths of the lap committed to a hard lean, and which way. */
+  readonly committedStretches?: Readonly<Record<number, number>>;
+  /** Turn the landmark and balance passes on or off. */
+  readonly landmarks?: boolean;
+  readonly balance?: boolean;
   readonly seed: number;
   /** Turn the legibility, coverage and sightline passes on or off. */
   readonly legibility?: boolean;
@@ -190,6 +201,11 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     seed,
   } = opts;
   const outsideShift = opts.outsideShift ?? 0;
+  const variants = opts.variantsByArchetype ?? {};
+  const polygonScale = opts.polygonScale ?? 1;
+  const committed = opts.committedStretches ?? {};
+  const landmarks = opts.landmarks ?? true;
+  const balance = opts.balance ?? true;
   const legibility = opts.legibility ?? true;
   const coverage = opts.coverage ?? true;
   const sightline = opts.sightline ?? true;
@@ -593,6 +609,11 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     W,
     preset,
     outsideShift,
+    lapW: lapLength / W,
+    variants,
+    polygonScale,
+    spriteShare: preset.spriteShare,
+    committed: balance ? committed : {},
     lapU: attribute("curveU", 1),
     memberOffset: true,
   });
@@ -616,9 +637,12 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
         lapW,
         preset,
         outsideShift,
+        variants,
+        polygonScale,
         backW: MARKER_BACK_W,
         archetype: "corner-marker",
         gate: null,
+        variantFrom: "severity",
       }),
     );
     BRAKE_OFFSETS_W.forEach((off, i) => {
@@ -629,12 +653,27 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
           lapW,
           preset,
           outsideShift,
+          variants,
+          polygonScale,
           backW: off,
           archetype: "braking-reference",
           gate: BRAKE_RADIUS_W,
         }),
       );
     });
+  }
+
+  if (landmarks) {
+    parts.push(
+      landmarkPass(g, ring, {
+        W,
+        lapW,
+        preset,
+        outsideShift,
+        variants,
+        polygonScale,
+      }),
+    );
   }
 
   let merged: NodeHandle;
@@ -693,6 +732,11 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       W,
       preset,
       outsideShift,
+      lapW: lapLength / W,
+      variants,
+      polygonScale,
+      spriteShare: preset.spriteShare,
+      committed: {},
       lapU: attribute("curveU", 1),
       memberOffset: false,
     });
@@ -797,8 +841,16 @@ function placeFromPack(
     W: number;
     preset: Preset;
     outsideShift: number;
+    lapW: number;
+    variants: Readonly<Record<string, number>>;
+    polygonScale: number;
+    spriteShare: number;
+    /** Tenths committed to a hard lean. Empty leaves every side as drawn. */
+    committed: Readonly<Record<number, number>>;
     lapU: FieldLike;
     memberOffset: boolean;
+    /** How this archetype picks its art variant. */
+    variantFrom?: "random" | "severity" | "index";
     /** Read the side from `cornerK` rather than from the local frame. */
     sideFromCorner?: boolean;
   },
@@ -854,12 +906,26 @@ function placeFromPack(
   const tall = rangeByArchetype((x) => arch(x).tallnessW);
   const push = byArchetype((x) => preset.lateralPush[x] ?? 1, 1);
 
+  // THE BALANCE PASS. Two stretches of the lap commit to a hard lean each
+  // way, so the dressing has somewhere it deliberately favours a side
+  // rather than being evenly grey everywhere. Two things are never
+  // mirrored, and both matter: anything INSIDE a bend, because which side
+  // of a corner an object sits on carries meaning, and rule-placed
+  // furniture, because that meaning is the whole reason it exists.
+  const tenth = floor(mul(div(stationW, o.lapW), 10));
+  let lean: FieldLike = 0;
+  for (const [k, dir] of Object.entries(o.committed)) {
+    lean = select(eq(tenth, Number(k)), dir, lean);
+  }
+  const movable = o.variantFrom ? 0 : gt(radiusW, CORNER_RADIUS_W);
+  const leaned = select(mul(movable, ne(lean, 0)), lean, side);
+
   const latN = g.add(
     setAttribute,
     {
       name: "lateralW",
       value: mul(
-        mul(side, push),
+        mul(leaned, push),
         lerp(component(lat, 0), component(lat, 1), randomField(`${id}-lat`)),
       ),
     },
@@ -889,10 +955,57 @@ function placeFromPack(
     },
     `${id}Tall`,
   );
+  // A sprite is a camera-facing quad and costs one polygon; a preset that
+  // asks for none rebuilds every sprite archetype AS GEOMETRY at 22, which
+  // is a change of kit rather than of ratio — the same silhouettes, built
+  // rather than drawn. The scale on top is the polygon budget: a hardware
+  // decision, applied to the kit's counts, never to the placement count,
+  // which is a composition decision.
+  const spriteLive = (x: string): boolean => o.spriteShare > 0 && arch(x).kind === "sprite";
   const polyN = g.add(
     setAttribute,
-    { name: "polygons", type: "i32", value: byArchetype((x) => arch(x).polygons, 1) },
+    {
+      name: "polygons",
+      type: "i32",
+      value: byArchetype(
+        (x) =>
+          Math.max(
+            1,
+            Math.round((spriteLive(x) ? arch(x).polygons : Math.max(arch(x).polygons, arch(x).kind === "sprite" ? 22 : 0)) * o.polygonScale),
+          ),
+        1,
+      ),
+    },
     `${id}Poly`,
+  );
+  const spriteN = g.add(
+    setAttribute,
+    { name: "isSprite", type: "i32", value: byArchetype((x) => (spriteLive(x) ? 1 : 0), 0) },
+    `${id}Sprite`,
+  );
+  // The art variant, which is what a FAMILY is: one asset per family, and
+  // a family is an archetype plus a variant. Corner markers key theirs to
+  // the corner's SEVERITY, so the same object always means the same kind
+  // of corner and a player learns the language in one lap; landmarks take
+  // one each, because a landmark sharing a family with another landmark
+  // is not a landmark.
+  const severity = select(
+    lt(attribute("cornerR"), BUCKET_EDGES.tight),
+    2,
+    select(lt(attribute("cornerR"), BUCKET_EDGES.medium), 1, 0),
+  );
+  const variantValue =
+    o.variantFrom === "severity"
+      ? severity
+      : o.variantFrom === "index"
+        ? index()
+        : floor(
+            mul(randomField(`${id}-variant`), byArchetype((x) => Math.max(1, o.variants[x] ?? 1), 1)),
+          );
+  const variantN = g.add(
+    setAttribute,
+    { name: "variant", type: "i32", value: variantValue },
+    `${id}Variant`,
   );
   const zoneCases: Record<string, FieldLike> = {};
   for (const a of ALL_ARCHETYPES) zoneCases[a.id] = Number(a.zone.slice(1));
@@ -945,7 +1058,7 @@ function placeFromPack(
     },
     `${id}Pos`,
   );
-  chain(g, [input, latN, hN, fpN, tallN, polyN, zoneN, stationN, yawN, posN]);
+  chain(g, [input, latN, hN, fpN, tallN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
   return posN;
 }
 
@@ -1125,6 +1238,9 @@ function ruleFurniture(
     archetype: string;
     gate: number | null;
     outsideShift: number;
+    variants: Readonly<Record<string, number>>;
+    polygonScale: number;
+    variantFrom?: "random" | "severity" | "index";
   },
 ): NodeHandle {
   const { id, W, lapW } = o;
@@ -1168,9 +1284,15 @@ function ruleFurniture(
     W,
     preset: o.preset,
     outsideShift: o.outsideShift,
+    lapW,
+    variants: o.variants,
+    polygonScale: o.polygonScale,
+    spriteShare: o.preset.spriteShare,
+    committed: {},
     lapU: attribute("curveU", 1),
     memberOffset: false,
     sideFromCorner: true,
+    variantFrom: o.variantFrom ?? "random",
   });
 }
 
@@ -1279,4 +1401,74 @@ function cullSightline(
   const kept = g.add(filterByExpression, { predicate: sub(1, blocks) }, "sightlineCull");
   g.connect(near, "out", kept, "in");
   return kept;
+}
+
+/**
+ * One landmark in every tenth of the lap, each under a family of its own.
+ *
+ * The technique adds one only where a stretch has nothing unique in it;
+ * this adds one everywhere, which is a superset and reaches the same rule
+ * — every tenth of the lap has something in it that is nowhere else. What
+ * makes it read as a landmark is that it is BIGGER than its neighbours,
+ * not that it is a shape nothing else uses, which is why it is an ordinary
+ * Z5 silhouette at an inflated size rather than a special asset.
+ */
+function landmarkPass(
+  g: Graph,
+  ring: NodeHandle,
+  o: {
+    W: number;
+    lapW: number;
+    preset: Preset;
+    outsideShift: number;
+    variants: Readonly<Record<string, number>>;
+    polygonScale: number;
+  },
+): NodeHandle {
+  const line = g.add(pointLine, { count: LANDMARK_STRETCHES, includeEnd: false }, "landmarkLine");
+  const named = g.add(
+    setAttribute,
+    { name: "archetype", type: "string", stringValue: "landmark" },
+    "landmarkKind",
+  );
+  g.connect(line, "out", named, "in");
+  // Somewhere in its own tenth, but not at the same place in each: an
+  // even spacing would read as a row of ten rather than as ten landmarks.
+  const station = g.add(
+    setAttribute,
+    {
+      name: "landmarkStation",
+      value: mul(
+        div(add(index(), add(0.2, mul(randomField("landmark-place"), 0.6))), LANDMARK_STRETCHES),
+        o.lapW,
+      ),
+    },
+    "landmarkStationN",
+  );
+  g.connect(named, "out", station, "in");
+  const looked = lookupAtStation(
+    g,
+    station,
+    ring,
+    attribute("landmarkStation"),
+    o.lapW,
+    "landmarkLook",
+    ["pack0", "pack1", "pack2", "pack3", "curveU"],
+  );
+  // `cornerK` is what `sideFromCorner` reads, and a landmark has no corner
+  // — it takes the side its own frame suggests, through the ordinary path.
+  return placeFromPack(g, looked, {
+    id: "landmark",
+    W: o.W,
+    preset: o.preset,
+    outsideShift: o.outsideShift,
+    lapW: o.lapW,
+    variants: o.variants,
+    polygonScale: o.polygonScale,
+    spriteShare: o.preset.spriteShare,
+    committed: {},
+    lapU: attribute("curveU", 1),
+    memberOffset: false,
+    variantFrom: "index",
+  });
 }

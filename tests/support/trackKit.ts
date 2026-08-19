@@ -25,6 +25,8 @@ export interface Archetype {
   /** Which lateral/height band this belongs to: Z2..Z8 of the zone model. */
   readonly zone: string;
   readonly profile: AffinityProfile;
+  /** Camera-facing quad or real geometry. A preset may convert them. */
+  readonly kind: "sprite" | "mesh";
   /** Signed lateral offset from the centreline, in W, as [min, max] of |t|. */
   readonly lateralW: readonly [number, number];
   /** Height above the local track surface, in W. */
@@ -53,32 +55,49 @@ export interface Archetype {
  * that grows a branch per archetype.
  */
 export const ARCHETYPES: readonly Archetype[] = [
-  { id: "terrain-shell", zone: "Z4", profile: "flat", lateralW: [2.3, 3.8], heightW: [0.6, 2.3], footprintW: [8, 9.5], tallnessW: [4, 6], polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
-  { id: "ground-detail", zone: "Z3", profile: "flat", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
-  { id: "bush", zone: "Z5", profile: "clustered", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
-  { id: "tree-group", zone: "Z5", profile: "clustered", lateralW: [5.0, 8.0], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
-  { id: "tree", zone: "Z5", profile: "clustered", lateralW: [5.0, 7.0], heightW: [2.0, 2.6], footprintW: [1.0, 1.3], tallnessW: [2.1, 2.7], polygons: 30, rate: 5, cluster: 2.4, outsideBias: 0.75 },
-  { id: "set-piece", zone: "Z3", profile: "built", lateralW: [1.6, 2.4], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
-  { id: "wall-panel", zone: "Z4", profile: "built", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], tallnessW: [5, 8], polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
-  { id: "overhead-sign", zone: "Z7", profile: "flat", lateralW: [0.0, 0.5], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
-  { id: "chevron-board", zone: "Z3", profile: "clustered", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
-  { id: "tower", zone: "Z4", profile: "built", lateralW: [2.6, 3.6], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
-  { id: "pipe-run", zone: "Z3", profile: "built", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
-  { id: "billboard", zone: "Z5", profile: "flat", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], tallnessW: [6, 7.5], polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
-  { id: "lamp-arm", zone: "Z7", profile: "built", lateralW: [0.6, 0.9], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
-  { id: "camera-post", zone: "Z2", profile: "clustered", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
-  { id: "dome", zone: "Z5", profile: "built", lateralW: [5.6, 7.4], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
-  { id: "skyline", zone: "Z6", profile: "built", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
-  { id: "banner", zone: "Z7", profile: "flat", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
-  { id: "enclosure-shell", zone: "Z7", profile: "flat", lateralW: [0, 0.6], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
-  { id: "verge-rail", zone: "Z2", profile: "flat", lateralW: [1.05, 1.45], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], tallnessW: [0.6, 1.2], polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
+  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [2.3, 3.8], heightW: [0.6, 2.3], footprintW: [8, 9.5], tallnessW: [4, 6], polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
+  { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
+  { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
+  { id: "tree-group", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [5.0, 8.0], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
+  { id: "tree", zone: "Z5", profile: "clustered", kind: "mesh", lateralW: [5.0, 7.0], heightW: [2.0, 2.6], footprintW: [1.0, 1.3], tallnessW: [2.1, 2.7], polygons: 30, rate: 5, cluster: 2.4, outsideBias: 0.75 },
+  { id: "set-piece", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.6, 2.4], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
+  { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], tallnessW: [5, 8], polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
+  { id: "overhead-sign", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0.0, 0.5], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
+  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
+  { id: "tower", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 3.6], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
+  { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
+  { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], tallnessW: [6, 7.5], polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
+  { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
+  { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
+  { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
+  { id: "skyline", zone: "Z6", profile: "built", kind: "mesh", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
+  { id: "banner", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
+  { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
+  { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], tallnessW: [0.6, 1.2], polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
 ];
 
 /** Placed by RULE rather than by density: no rate, no cumulative draw. */
 export const RULE_ARCHETYPES: readonly Archetype[] = [
-  { id: "corner-marker", zone: "Z3", profile: "flat", lateralW: [1.6, 2.2], heightW: [1.0, 1.6], footprintW: [1.2, 1.8], tallnessW: [1.8, 2.4], polygons: 18, rate: 0, cluster: 1, outsideBias: 1 },
-  { id: "braking-reference", zone: "Z3", profile: "flat", lateralW: [1.6, 2.4], heightW: [0.8, 1.2], footprintW: [0.6, 1.0], tallnessW: [1.4, 2.0], polygons: 10, rate: 0, cluster: 1, outsideBias: 1 },
+  { id: "corner-marker", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.6, 2.2], heightW: [1.0, 1.6], footprintW: [1.2, 1.8], tallnessW: [1.8, 2.4], polygons: 18, rate: 0, cluster: 1, outsideBias: 1 },
+  { id: "braking-reference", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.8, 1.2], footprintW: [0.6, 1.0], tallnessW: [1.4, 2.0], polygons: 10, rate: 0, cluster: 1, outsideBias: 1 },
+  // One per tenth of the lap, each under a family of its own. A landmark
+  // reads as one because it is BIGGER than its neighbours, not because it
+  // is odd — hence a Z5 silhouette at 1.5x the footprint and 1.6x the
+  // tallness of the mass around it, rather than a shape nothing else has.
+  { id: "landmark", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.5, 9.0], heightW: [2.0, 4.0], footprintW: [7.5, 12], tallnessW: [5, 8], polygons: 48, rate: 0, cluster: 1, outsideBias: 0.6 },
 ];
+
+/** How many tenths of the lap the landmark pass covers. */
+export const LANDMARK_STRETCHES = 10;
+
+/**
+ * How many families the passes OUTSIDE the density draw contribute, which
+ * the variety budget has to subtract before it distributes what is left.
+ * Three corner-marker severities, one braking reference, and one family
+ * per landmark — a landmark that shared a family with another landmark
+ * would not be a landmark.
+ */
+export const AUXILIARY_FAMILIES = 3 + 1 + LANDMARK_STRETCHES;
 
 /** Every archetype the graph can emit, density-placed and rule-placed. */
 export const ALL_ARCHETYPES: readonly Archetype[] = [...ARCHETYPES, ...RULE_ARCHETYPES];
@@ -109,6 +128,18 @@ export interface Preset {
   /** Target placements per W of lap. */
   readonly density: number;
   readonly densityAccept: readonly [number, number];
+  /** Share of placements that are camera-facing quads. 0 converts them. */
+  readonly spriteShare: number;
+  readonly spriteAccept: readonly [number, number];
+  /** Polygon budget per W of lap; the kit's counts are scaled to hit it. */
+  readonly polysPerW: number;
+  readonly polysAccept: number;
+  /** Distinct art variants per lap, auxiliary families included. */
+  readonly familiesAccept: readonly [number, number];
+  /** No one family may exceed this share of placements. */
+  readonly largestFamilyCap: number;
+  /** An archetype expected to place fewer than this is pruned. */
+  readonly minInstances: number;
   /** Target share of placements per lateral band, keyed by band name. */
   readonly bands: Readonly<Record<string, number>>;
   /** Mean geometric cluster size across the kit. */
@@ -141,6 +172,13 @@ export interface Preset {
 export const PRESETS: Readonly<Record<string, Preset>> = {
   sparse: {
     id: "sparse",
+    spriteShare: 0.25,
+    spriteAccept: [0.15, 0.35],
+    polysPerW: 13.8,
+    polysAccept: 11,
+    familiesAccept: [12, 38],
+    largestFamilyCap: 0.28,
+    minInstances: 5,
     density: 0.59,
     densityAccept: [0.45, 0.8],
     bands: { over: 0.231, verge: 0.054, near: 0.234, mid: 0.318, far: 0.159, distant: 0.004 },
@@ -158,6 +196,13 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
   },
   lush: {
     id: "lush",
+    spriteShare: 0.28,
+    spriteAccept: [0.18, 0.38],
+    polysPerW: 18.9,
+    polysAccept: 15,
+    familiesAccept: [24, 44],
+    largestFamilyCap: 0.22,
+    minInstances: 4,
     density: 0.89,
     densityAccept: [0.7, 1.1],
     bands: { over: 0.211, verge: 0.06, near: 0.152, mid: 0.308, far: 0.26, distant: 0.01 },
@@ -175,6 +220,13 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
   },
   dense: {
     id: "dense",
+    spriteShare: 0.0,
+    spriteAccept: [0, 0.05],
+    polysPerW: 18.8,
+    polysAccept: 15,
+    familiesAccept: [60, 160],
+    largestFamilyCap: 0.15,
+    minInstances: 3,
     density: 0.97,
     densityAccept: [0.8, 1.25],
     bands: { over: 0.154, verge: 0.079, near: 0.292, mid: 0.345, far: 0.125, distant: 0.005 },

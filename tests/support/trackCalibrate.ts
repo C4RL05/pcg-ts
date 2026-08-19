@@ -16,7 +16,12 @@
  * three regenerations and keeps the BEST — not the last, because the
  * corrections are measured on samples small enough to be noisy.
  */
-import { ARCHETYPES, type Preset, bandOf } from "./trackKit.js";
+import {
+  ARCHETYPES,
+  AUXILIARY_FAMILIES,
+  type Preset,
+  bandOf,
+} from "./trackKit.js";
 
 /** What the closed loop carries from one iteration to the next. */
 export interface Corrections {
@@ -31,6 +36,12 @@ export interface Plan {
   readonly weightByArchetype: Record<string, number>;
   readonly outsideShift: number;
   readonly totalCount: number;
+  /** Art variants per archetype: how many families it needs modelling. */
+  readonly variantsByArchetype: Record<string, number>;
+  /** Multiplier on every kit polygon count, to hit the budget per W. */
+  readonly polygonScale: number;
+  /** Which tenths of the lap are committed to a hard lean, and which way. */
+  readonly committedStretches: Readonly<Record<number, number>>;
 }
 
 export function noCorrections(): Corrections {
@@ -114,27 +125,153 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   const scale = sumRate > 0 ? targetTotal / sumRate : 0;
   for (const a of ARCHETYPES) rate[a.id] *= scale;
 
+  // (e2) PRUNING. An archetype expected to place fewer than `minInstances`
+  // is removed and its rate redistributed. A kit holding a single instance
+  // of an asset reads as a mistake rather than as variety, and the eras
+  // this models really do have small kits.
+  const expected = (id: string): number =>
+    (rate[id] / Math.max(1e-9, ARCHETYPES.reduce((t, x) => t + rate[x.id], 0))) * targetTotal;
+  let pruned = 0;
+  for (const a of ARCHETYPES) {
+    if (rate[a.id] > 0 && expected(a.id) < preset.minInstances) {
+      pruned += rate[a.id];
+      rate[a.id] = 0;
+    }
+  }
+  if (pruned > 0) {
+    const survivors = ARCHETYPES.filter((a) => rate[a.id] > 0);
+    const surviving = survivors.reduce((t, a) => t + rate[a.id], 0);
+    for (const a of survivors) rate[a.id] += (rate[a.id] / surviving) * pruned;
+  }
+
+  // (b) SPRITE SHARE, traded INSIDE each band. Scaling sprites globally
+  // would break the band mix that was just fitted, so the trade happens
+  // band by band: sprites up and meshes down within a band, preserving
+  // that band's total mass. A preset asking for no sprites at all converts
+  // them to meshes instead, which is a change of KIT rather than of ratio,
+  // and the graph reads `kind` for it.
+  if (preset.spriteShare > 0) {
+    const totalRate = ARCHETYPES.reduce((t, a) => t + rate[a.id], 0);
+    const spriteNow =
+      ARCHETYPES.filter((a) => a.kind === "sprite").reduce((t, a) => t + rate[a.id], 0) /
+      Math.max(1e-9, totalRate);
+    if (spriteNow > 1e-9) {
+      for (const b of bands) {
+        const inBand = ARCHETYPES.filter((a) => (frac[a.id][b] ?? 0) > 0.5);
+        const sprites = inBand.filter((a) => a.kind === "sprite");
+        const meshes = inBand.filter((a) => a.kind === "mesh");
+        if (sprites.length === 0 || meshes.length === 0) continue;
+        const mass = inBand.reduce((t, a) => t + rate[a.id], 0);
+        if (mass <= 0) continue;
+        const sMass = sprites.reduce((t, a) => t + rate[a.id], 0);
+        const want = Math.min(
+          0.9,
+          Math.max(0.02, (preset.spriteShare / spriteNow) * (sMass / mass)),
+        );
+        const sScale = sMass > 0 ? (want * mass) / sMass : 1;
+        const mMass = mass - sMass;
+        const mScale = mMass > 0 ? ((1 - want) * mass) / mMass : 1;
+        for (const a of sprites) rate[a.id] *= sScale;
+        for (const a of meshes) rate[a.id] *= mScale;
+      }
+      // The band trade preserves each band's mass but not the total, so
+      // the density scale is reapplied over the top of it.
+      const after = ARCHETYPES.reduce((t, a) => t + rate[a.id], 0);
+      if (after > 0) for (const a of ARCHETYPES) rate[a.id] *= targetTotal / after;
+    }
+  }
+
   const countByProfile: Record<string, number> = {};
   for (const a of ARCHETYPES) {
     countByProfile[a.profile] = (countByProfile[a.profile] ?? 0) + rate[a.id];
   }
-  // The clustering pass multiplies what the density pass anchors, so the
+  // The clustering pass MULTIPLIES what the density pass anchors, so the
   // anchor count has to be divided by the mean cluster size or the lap
   // comes out `clusterMean` times too busy.
   const meanCluster =
-    ARCHETYPES.reduce((s, a) => s + rate[a.id] * Math.max(1, a.cluster * (preset.clusterMean / 1.6)), 0) /
-    Math.max(1e-9, ARCHETYPES.reduce((s, a) => s + rate[a.id], 0));
+    ARCHETYPES.reduce(
+      (t, a) => t + rate[a.id] * Math.max(1, a.cluster * (preset.clusterMean / 1.6)),
+      0,
+    ) / Math.max(1e-9, ARCHETYPES.reduce((t, a) => t + rate[a.id], 0));
   for (const k of Object.keys(countByProfile)) {
     countByProfile[k] = Math.max(1, Math.round(countByProfile[k] / meanCluster));
   }
+
+  // (e) VARIETY. Enough variants that no family can exceed the cap, then
+  // scaled so the total lands mid-range in the accepted family count —
+  // minus what the marker, braking and landmark passes contribute, which
+  // is budget they spend whether or not anyone counts it.
+  const totalRate2 = Math.max(
+    1e-9,
+    ARCHETYPES.reduce((t, a) => t + rate[a.id], 0),
+  );
+  const variantsByArchetype: Record<string, number> = {};
+  const capNeeded: Record<string, number> = {};
+  for (const a of ARCHETYPES) {
+    const share = rate[a.id] / totalRate2;
+    capNeeded[a.id] = rate[a.id] > 0 ? Math.max(1, Math.ceil(share / preset.largestFamilyCap)) : 0;
+  }
+  const budget = Math.max(
+    ARCHETYPES.filter((a) => rate[a.id] > 0).length,
+    Math.round((preset.familiesAccept[0] + preset.familiesAccept[1]) / 2) - AUXILIARY_FAMILIES,
+  );
+  const capSum = ARCHETYPES.reduce((t, a) => t + capNeeded[a.id], 0);
+  const grow = capSum > 0 ? budget / capSum : 1;
+  for (const a of ARCHETYPES) {
+    if (rate[a.id] <= 0) {
+      variantsByArchetype[a.id] = 0;
+      continue;
+    }
+    // A family with fewer than three instances in a lap reads as a one-off
+    // rather than as a repeating element, so the variant count is capped
+    // by how many instances there are to go round.
+    const instances = (rate[a.id] / totalRate2) * targetTotal;
+    variantsByArchetype[a.id] = Math.max(
+      capNeeded[a.id],
+      Math.min(Math.round(capNeeded[a.id] * grow), Math.max(1, Math.floor(instances / 3))),
+    );
+  }
+
+  // The polygon budget is a HARDWARE decision and the placement count is a
+  // composition decision; they must not be confused, so the kit's per-object
+  // counts are scaled at the end rather than the placements being thinned.
+  // Scaled to the TARGET rather than to the floor the metric accepts:
+  // overshooting a budget passes the check and spends polygons the budget
+  // said were not there.
+  const meanPolys = ARCHETYPES.reduce((t, a) => t + rate[a.id] * a.polygons, 0) / totalRate2;
+  const perW = targetTotal / Math.max(1e-9, lapW);
+  const polygonScale =
+    meanPolys > 0 && perW > 0 ? preset.polysPerW / (meanPolys * perW) : 1;
 
   return {
     countByProfile,
     weightByArchetype: rate,
     outsideShift: c.outsideShift,
     totalCount: targetTotal,
+    variantsByArchetype,
+    polygonScale,
+    committedStretches: COMMITTED_STRETCHES,
   };
 }
+
+/**
+ * Which tenths of the lap are committed to a hard lean, and which way.
+ *
+ * Two each way, which is what the balance metric asks for. Fixed rather
+ * than chosen from the lap: the point of the pass is that some stretches
+ * deliberately lean, and nothing about a stretch makes it a better or
+ * worse candidate than another. What the pass must NOT do is mirror
+ * anything inside a bend or any legibility furniture — which side of a
+ * corner an object sits on carries meaning — and the graph enforces that
+ * rather than this table.
+ */
+export const COMMITTED_STRETCHES: Readonly<Record<number, number>> = {
+  1: 1,
+  4: 1,
+  6: -1,
+  9: -1,
+};
+
 
 /** One placement, as the metrics see it. */
 export interface Placement {
@@ -147,6 +284,11 @@ export interface Placement {
   readonly kSigned: number;
   readonly zone: number;
   readonly cornerK: number;
+  readonly variant: number;
+  readonly polygons: number;
+  readonly isSprite: number;
+  /** Archetype plus variant: the asset slot, one model per family. */
+  readonly family: string;
 }
 
 /** One scored metric. */
@@ -170,15 +312,14 @@ export interface Report {
 }
 
 /**
- * Score a lap on the metrics this implementation is answerable for.
+ * Score a lap on all seventeen of the technique's metrics.
  *
- * Six of the technique's seventeen are NOT here and are not silently
- * dropped: 2 (polygon budget) and 3 (sprite share) need the kit-scaling
- * pass, 11 and 12 need per-archetype art VARIANTS which this kit does not
- * model, and 17 needs the landmark pass. Metric 9 IS scored, and it is
- * the one that measures a pass this implementation leaves out — see the
- * test, which asserts what it actually achieves rather than what the
- * balance pass would.
+ * Thirteen state what the source material does and four state what the
+ * ruleset asks for beyond it. Three carry a deliberate tolerance, for
+ * reasons of MEASUREMENT rather than taste, and each says so where it is
+ * computed: metric 4 puts six constraints on one sample, metric 8 is
+ * computed over the few dozen placements that sit inside bends, and metric
+ * 13 excludes metronomic placement rather than pinning a distribution.
  */
 export function score(
   placements: readonly Placement[],
@@ -196,6 +337,20 @@ export function score(
 
   add(1, "placements per W", perW, perW >= preset.densityAccept[0] && perW <= preset.densityAccept[1],
     `${preset.densityAccept[0]}-${preset.densityAccept[1]}`);
+
+  // 2. Polygon budget. A FLOOR, not a window: the budget says what the
+  // hardware can afford, and spending less than it is leaving detail on
+  // the table rather than breaking a rule.
+  const polysPerW = placements.reduce((t, p) => t + p.polygons, 0) / Math.max(1e-9, lapW);
+  add(2, "polygons per W", polysPerW, polysPerW >= preset.polysAccept, `>= ${preset.polysAccept}`);
+
+  // 3. Sprite share. Zero is a real target and not a missing one: a preset
+  // asking for no camera-facing quads has had the sprite archetypes
+  // rebuilt as geometry, so this measures a change of kit.
+  const spriteShare = n > 0 ? placements.filter((p) => p.isSprite > 0).length / n : 0;
+  add(3, "sprite share", spriteShare,
+    spriteShare >= preset.spriteAccept[0] && spriteShare <= preset.spriteAccept[1],
+    `${preset.spriteAccept[0]}-${preset.spriteAccept[1]}`);
 
   // 4. Band mix. Judged against target +- max(quarter of target, 3 points)
   // plus a sampling allowance, because six constraints on one sample of a
@@ -260,9 +415,13 @@ export function score(
   const outside = inBend.filter((p) => Math.sign(p.lateralW) === -Math.sign(p.kSigned)).length;
   const outsideShare = inBend.length > 0 ? outside / inBend.length : 0;
   const bin = 1.64 * Math.sqrt(0.25 / Math.max(1, inBend.length));
+  // The sample size is part of the target, not a footnote: this is
+  // computed over the few dozen placements that sit inside bends, so the
+  // window is widened by a 90% binomial interval and a reader has to be
+  // able to see how wide that made it.
   add(8, "outside-of-corner share", outsideShare,
     outsideShare >= preset.outsideAccept[0] - bin && outsideShare <= preset.outsideAccept[1] + bin,
-    `${preset.outsideAccept[0]}-${preset.outsideAccept[1]}`);
+    `${preset.outsideAccept[0]}-${preset.outsideAccept[1]} +-${bin.toFixed(2)} over ${inBend.length}`);
 
   // 9. Left/right balance.
   const right = placements.filter((p) => p.lateralW > 0).length;
@@ -292,6 +451,38 @@ export function score(
   const medianCv = cvs.length > 0 ? cvs.sort((a, b) => a - b)[Math.floor(cvs.length / 2)] : 0;
   add(13, "median gap CV per archetype", medianCv, medianCv >= 0.4, ">= 0.4 (not metronomic)");
 
+  // 10. One-sided stretches, at least two each way. This is what the
+  // balance pass is FOR — a lap that is 50/50 everywhere is evenly grey,
+  // and the metric that would pass is metric 9 alone.
+  const TENTHS_B = 10;
+  let leanRight = 0;
+  let leanLeft = 0;
+  for (let t = 0; t < TENTHS_B; t++) {
+    const inTenth = placements.filter(
+      (p) =>
+        Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / TENTHS_B)) === t &&
+        p.lateralW !== 0,
+    );
+    if (inTenth.length < 5) continue;
+    const share = inTenth.filter((p) => p.lateralW > 0).length / inTenth.length;
+    if (share >= 0.78) leanRight++;
+    else if (share <= 0.22) leanLeft++;
+  }
+  add(10, "one-sided stretches each way", Math.min(leanRight, leanLeft),
+    leanRight >= 2 && leanLeft >= 2, ">= 2 each");
+
+  // 11 and 12. Variety. A family is the ASSET SLOT — one model per family
+  // — so the count is how many things art has to build, and the cap is
+  // what stops one of them carrying the whole lap.
+  const families = new Map<string, number>();
+  for (const p of placements) families.set(p.family, (families.get(p.family) ?? 0) + 1);
+  add(11, "distinct families", families.size,
+    families.size >= preset.familiesAccept[0] && families.size <= preset.familiesAccept[1],
+    `${preset.familiesAccept[0]}-${preset.familiesAccept[1]}`);
+  const largest = Math.max(0, ...families.values()) / Math.max(1, n);
+  add(12, "largest family share", largest, largest <= preset.largestFamilyCap,
+    `<= ${preset.largestFamilyCap}`);
+
   // 14. The corridor is inviolable: nothing anchored over the track at
   // driving height, ever.
   const intruding = placements.filter(
@@ -305,6 +496,22 @@ export function score(
 
   // 16. Look-ahead clear.
   add(16, "placements blocking the look-ahead", blockingCount, blockingCount === 0, "0");
+
+  // 17. A unique landmark in every tenth of the lap. Unique means its
+  // family appears in that tenth and nowhere else, which is the property
+  // that makes a stretch identifiable rather than merely occupied.
+  const tenthOf = (p: Placement): number =>
+    Math.min(9, Math.floor((((p.stationW % lapW) + lapW) % lapW) / (lapW / 10)));
+  const tenthsOfFamily = new Map<string, Set<number>>();
+  for (const p of placements) {
+    if (!tenthsOfFamily.has(p.family)) tenthsOfFamily.set(p.family, new Set());
+    tenthsOfFamily.get(p.family)!.add(tenthOf(p));
+  }
+  const landmarked = new Set<number>();
+  for (const p of placements) {
+    if (tenthsOfFamily.get(p.family)!.size === 1) landmarked.add(tenthOf(p));
+  }
+  add(17, "tenths with a unique landmark", landmarked.size, landmarked.size === 10, "10 of 10");
 
   return {
     metrics,
