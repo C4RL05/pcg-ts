@@ -990,6 +990,51 @@
     }
   },
   {
+    "type": "pathScan",
+    "description": "Writes the RUNNING TOTAL of a numeric point attribute along every polyline, in the path's own walk order — a prefix sum, the accumulating counterpart to attributeReduce's collapse. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching writeTangents. NaN CONTRIBUTES ZERO rather than poisoning everything downstream of it, which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason this exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "name": {
+        "type": "string",
+        "default": "density",
+        "description": "Numeric POINT attribute to accumulate (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples accumulate componentwise, each component its own independent running total."
+      },
+      "outName": {
+        "type": "string",
+        "default": "scan",
+        "description": "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten, so every element after the first would accumulate partial sums instead of its input. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset."
+      },
+      "mode": {
+        "type": "enum",
+        "default": "inclusive",
+        "description": "Whether a point's own value is part of its own total. 'inclusive' ends the last point of a path on the path's whole total; 'exclusive' starts the first point at zero, which is the one that makes a CDF whose first bucket is reachable. Neither is more correct — pick by which end you need exact.",
+        "enum": [
+          "inclusive",
+          "exclusive"
+        ]
+      },
+      "totalAttr": {
+        "type": "string",
+        "default": "",
+        "description": "OPT-IN REPORT: name of an f32 PRIMITIVE attribute receiving each path's WHOLE total, the number both modes are heading for. Empty (the default) writes none and the output is byte-identical to a cook without it. On the PRIMITIVE domain because a total is a fact about a PATH, exactly as pathResample's `lengthAttr` is; promote it (promoteAttribute, primitive to point) for a field to read it per sample, which is what normalizing a scan into a 0..1 CDF needs. Reported in 'exclusive' mode too, where it is otherwise unrecoverable from the column because no point holds it. May not name the same attribute as `outName` — a different domain, but one name, which is a coincidence worth refusing rather than explaining downstream."
+      }
+    }
+  },
+  {
     "type": "pathSegments",
     "description": "Emits ONE POINT PER SEGMENT of every polyline primitive, placed and oriented so that spawning a unit-sized asset on it draws the path as solid geometry. This is the DISCRETE way to draw a curve: one asset per segment, which is what a chain of separate links, a row of sleepers or a string of beads is. For a continuous skin use sweepProfile instead — it emits a real triangle mesh, shares rings between segments, and needs no `extend` because it leaves no gap to fill. Each output point sits at its segment's MIDPOINT, with `rot` turning the chosen local `axis` onto the segment direction and `scale` holding the segment's length on that axis and `radius` on the other two — so a unit cylinder (height 1, radius 1) lands exactly on the segment. Also writes the unit `tangent` (f32 tuple 3, the segment direction), `curveU` (f32, the midpoint's normalized position along that path) and `seed`; the input's POINT attributes are not carried, its PRIMITIVE attributes are. An opt-in `segmentIndexAttr` adds the segment's 0-based index WITHIN ITS OWN PATH, which is otherwise unrecoverable here — a point attribute written upstream does not survive this node, and `curveU` is a fraction that needs the count back to become an index. It is empty by default and the output is byte-identical to a cook without it. The default axis is '+y', deliberately unlike orientAlongVector's '+z': the assets this feeds are cylinders and capsules, which are built along Y in three.js, whereas orientAlongVector points props at a heading. Roll around the segment is fixed by an up hint of [0, 1, 0] with the same deterministic fallbacks orientAlongVector uses ([0, 0, 1], then [1, 0, 0]) — a tube is rotationally symmetric so the roll is arbitrary, but it is never random; when it MATTERS (alternating chain links), re-orient downstream with orientAlongVector reading the `tangent` this node wrote. Segments of zero length are SKIPPED rather than emitted as degenerate instances, so the output can hold fewer points than the input had segments. THE OUTPUT IS A PLAIN CLOUD, not a path: the points are segment midpoints, not the curve, and no polyline topology is built over them — resampling or re-pathing this output describes the midpoints, not the original curve, so branch off the path itself for that. Closed paths need nothing special: their closing segment is a segment like any other.",
     "category": "sampler",

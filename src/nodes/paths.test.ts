@@ -18,6 +18,7 @@ import {
   partitionByAttribute,
   pathPointAt,
   pathResample,
+  pathScan,
   pathSegments,
   pointScatterInBounds,
   pointsToPath,
@@ -25,6 +26,7 @@ import {
   serializeGraph,
   setAttribute,
   splineSample,
+  transferAttribute,
   writeCurveFrame,
   writeTangents,
 } from "./index.js";
@@ -2476,5 +2478,195 @@ describe("a road's width reaches the lamps standing on it", () => {
     expect([primWidth.get(0), primWidth.get(1)]).toEqual([2, 7]);
     // `primtype` is a type tag, not a value: it stays off the points.
     expect(lamps.attrs.point.has(PRIMTYPE_ATTR)).toBe(false);
+  });
+});
+
+describe("pathScan", () => {
+  async function scan(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(pathScan, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  /** An open path of `n` points at (i, 0, 0) carrying `name` per point. */
+  function pathWith(name: string, values: readonly number[]): Geometry {
+    const pos: number[] = [];
+    for (let i = 0; i < values.length; i++) pos.push(i, 0, 0);
+    return withAttr(createPolyline(pos), name, values);
+  }
+
+  /**
+   * A point column as plain numbers. Sliced to pointCount * tupleSize on
+   * purpose: `data` is the backing store and carries spare CAPACITY past
+   * the live elements, so reading it whole compares against slack.
+   */
+  const col = (geo: Geometry, name: string): number[] => {
+    const a = geo.attrs.point.require(name);
+    return Array.from(a.data.slice(0, geo.pointCount * a.tupleSize));
+  };
+
+  it("accumulates along the path, inclusive of the point's own value", async () => {
+    const geo = await scan({ name: "w", outName: "s" }, pathWith("w", [1, 2, 3, 4]));
+    expect(col(geo, "s")).toEqual([1, 3, 6, 10]);
+  });
+
+  it("starts at zero in exclusive mode, which is inclusive shifted by one", async () => {
+    const geo = await scan(
+      { name: "w", outName: "s", mode: "exclusive" },
+      pathWith("w", [1, 2, 3, 4]),
+    );
+    expect(col(geo, "s")).toEqual([0, 1, 3, 6]);
+  });
+
+  it("reports each path's whole total on the primitive domain", async () => {
+    // Two paths in one geometry, so this also pins that the accumulator
+    // RESETS between them rather than running on from the first.
+    const geo = withAttr(twoPaths(), "w", [1, 2, 10, 20]);
+    const out = await scan({ name: "w", outName: "s", totalAttr: "tot" }, geo);
+    expect(col(out, "s")).toEqual([1, 3, 10, 30]);
+    const tot = out.attrs.primitive.require("tot");
+    expect([tot.get(0), tot.get(1)]).toEqual([3, 30]);
+  });
+
+  it("reports the total in exclusive mode too, where no point holds it", async () => {
+    const out = await scan(
+      { name: "w", outName: "s", mode: "exclusive", totalAttr: "tot" },
+      pathWith("w", [1, 2, 3, 4]),
+    );
+    expect(col(out, "s")).toEqual([0, 1, 3, 6]);
+    expect(out.attrs.primitive.require("tot").get(0)).toBe(10);
+  });
+
+  it("does not count a closed path's repeated seam vertex twice", async () => {
+    // createPolyline closed appends a vertex referencing point 0. Counting
+    // it would make the total 1 too many and put the seam value on the
+    // wrong point.
+    const geo = createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true });
+    const withW = withAttr(geo, "w", [1, 2, 3, 4]);
+    const out = await scan({ name: "w", outName: "s", totalAttr: "tot" }, withW);
+    expect(out.pointCount).toBe(4);
+    expect(col(out, "s")).toEqual([1, 3, 6, 10]);
+    expect(out.attrs.primitive.require("tot").get(0)).toBe(10);
+  });
+
+  it("accumulates a tuple componentwise, each component its own total", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 3; i++) pos.push(i, 0, 0);
+    const geo = createPolyline(pos);
+    const w = geo.attrs.point.add("w", "f32", 2, [0, 0]);
+    w.setTuple(0, [1, 10]);
+    w.setTuple(1, [2, 20]);
+    w.setTuple(2, [3, 30]);
+    const out = await scan({ name: "w", outName: "s", totalAttr: "tot" }, geo);
+    expect(col(out, "s")).toEqual([1, 10, 3, 30, 6, 60]);
+    const tot = out.attrs.primitive.require("tot");
+    expect(tot.getTuple(0)).toEqual([6, 60]);
+  });
+
+  it("lets a NaN contribute zero rather than poisoning the whole tail", async () => {
+    // The difference that matters against a plain running sum: one bad
+    // element would otherwise make every element after it NaN, which is
+    // most of the column rather than one entry of it.
+    const geo = await scan({ name: "w", outName: "s" }, pathWith("w", [1, NaN, 3, 4]));
+    expect(col(geo, "s")).toEqual([1, 1, 4, 8]);
+  });
+
+  it("leaves points in no polyline at zero and keeps the path a path", async () => {
+    const geo = createPointCloud(4);
+    const P = geo.attrs.point.require("P");
+    P.setTuple(0, [0, 0, 0]);
+    P.setTuple(1, [1, 0, 0]);
+    P.setTuple(2, [2, 0, 0]);
+    P.setTuple(3, [9, 9, 9]); // in no polyline
+    setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+    withAttr(geo, "w", [5, 5, 5, 5]);
+    const out = await scan({ name: "w", outName: "s" }, geo);
+    expect(col(out, "s")).toEqual([5, 10, 15, 0]);
+    expect(topologyOf(out)).toEqual(topologyOf(geo));
+  });
+
+  it("refuses the names that would quietly produce nonsense", async () => {
+    const src = pathWith("w", [1, 2, 3]);
+    const inputs = { in: [makeGeometryItem(src)] };
+    expect(
+      await rejection(runNode(pathScan, { name: "w", outName: "w" }, inputs)),
+    ).toContain("cannot be written over its own source");
+    expect(await rejection(runNode(pathScan, { name: "w", outName: "P" }, inputs))).toContain(
+      'cannot be "P"',
+    );
+    expect(
+      await rejection(
+        runNode(pathScan, { name: "w", outName: "s", totalAttr: "s" }, inputs),
+      ),
+    ).toContain("one name");
+    expect(await rejection(runNode(pathScan, { name: "nope", outName: "s" }, inputs))).toContain(
+      "not found",
+    );
+    // A same-shape column is reset, a differently shaped one is refused.
+    const clash = withAttr(pathWith("w", [1, 2, 3]), "s", [0, 0, 0]);
+    const three = clash.attrs.point.add("s3", "f32", 3, [0, 0, 0]);
+    expect(three.tupleSize).toBe(3);
+    expect(
+      await rejection(
+        runNode(pathScan, { name: "w", outName: "s3" }, { in: [makeGeometryItem(clash)] }),
+      ),
+    ).toContain("pathScan");
+  });
+
+  it("is deterministic across fresh runs", async () => {
+    const src = pathWith("w", [1, 2, 3, 4, 5]);
+    const run = async () => snapshotGeometry(await scan({ name: "w", outName: "s" }, src));
+    expect(await run()).toEqual(await run());
+  });
+
+  it("places EXACTLY N points in proportion to a density, which is what it is for", async () => {
+    // The payoff, and the whole reason this node exists: inverse-transform
+    // sampling. Rejection sampling against the same density would give a
+    // BINOMIAL count around N; this gives N, every time, which is what
+    // makes a band mix land on its target rather than near it.
+    const M = 200;
+    const N = 64;
+    // Density 1 over the first half of the path and 3 over the second, so
+    // three quarters of the mass sits beyond the midpoint.
+    const w: number[] = [];
+    for (let i = 0; i < M; i++) w.push(i < M / 2 ? 1 : 3);
+    const scanned = await scan(
+      { name: "w", outName: "cdf", mode: "exclusive", totalAttr: "tot" },
+      pathWith("w", w),
+    );
+    const cdf = col(scanned, "cdf");
+    const total = scanned.attrs.primitive.require("tot").get(0);
+    expect(total).toBe(400);
+
+    // The frames, re-embedded at their own CDF value, carrying the station
+    // they came from — this is the lookup table the idiom transfers from.
+    const source = createPointCloud(M);
+    const sp = source.attrs.point.require("P");
+    const station = source.attrs.point.add("station", "f32", 1, 0);
+    for (let i = 0; i < M; i++) {
+      sp.setTuple(i, [cdf[i], 0, 0]);
+      station.set(i, i);
+    }
+    // N targets spread evenly through CDF space.
+    const target = createPointCloud(N);
+    const tp = target.attrs.point.require("P");
+    for (let i = 0; i < N; i++) tp.setTuple(i, [((i + 0.5) / N) * total, 0, 0]);
+
+    const placed = firstGeo(
+      (
+        await runNode(
+          transferAttribute,
+          { name: "station", mapping: "nearest" },
+          { in: [makeGeometryItem(target)], source: [makeGeometryItem(source)] },
+        )
+      ).out,
+    );
+    // EXACTLY N, not approximately N.
+    expect(placed.pointCount).toBe(N);
+    const stations = col(placed, "station");
+    const late = stations.filter((s) => s >= M / 2).length;
+    // Three quarters of the mass, so three quarters of the placements —
+    // within one placement, which is all the frame resolution allows.
+    expect(Math.abs(late - N * 0.75)).toBeLessThanOrEqual(1);
+    // And they are spread through the dense half rather than piled up.
+    expect(new Set(stations).size).toBe(N);
   });
 });

@@ -1010,6 +1010,155 @@ export const pathPointAt = standardNode<PathPointAtParams>({
   },
 });
 
+/** Params of {@link pathScan}. */
+export interface PathScanParams {
+  name: string;
+  outName: string;
+  mode: string;
+  totalAttr: string;
+}
+
+/** A running total along a path, in walk order. */
+export const pathScan = standardNode<PathScanParams>({
+  type: "pathScan",
+  category: "attribute",
+  description:
+    "Writes the RUNNING TOTAL of a numeric point attribute along every polyline, in the path's own walk order — a prefix sum, the accumulating counterpart to attributeReduce's collapse. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching writeTangents. NaN CONTRIBUTES ZERO rather than poisoning everything downstream of it, which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason this exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    name: {
+      type: "string",
+      default: "density",
+      description:
+        "Numeric POINT attribute to accumulate (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples accumulate componentwise, each component its own independent running total.",
+    },
+    outName: {
+      type: "string",
+      default: "scan",
+      description:
+        "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten, so every element after the first would accumulate partial sums instead of its input. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset.",
+    },
+    mode: {
+      type: "enum",
+      default: "inclusive",
+      enum: ["inclusive", "exclusive"],
+      description:
+        "Whether a point's own value is part of its own total. 'inclusive' ends the last point of a path on the path's whole total; 'exclusive' starts the first point at zero, which is the one that makes a CDF whose first bucket is reachable. Neither is more correct — pick by which end you need exact.",
+    },
+    totalAttr: {
+      type: "string",
+      default: "",
+      description:
+        "OPT-IN REPORT: name of an f32 PRIMITIVE attribute receiving each path's WHOLE total, the number both modes are heading for. Empty (the default) writes none and the output is byte-identical to a cook without it. On the PRIMITIVE domain because a total is a fact about a PATH, exactly as pathResample's `lengthAttr` is; promote it (promoteAttribute, primitive to point) for a field to read it per sample, which is what normalizing a scan into a 0..1 CDF needs. Reported in 'exclusive' mode too, where it is otherwise unrecoverable from the column because no point holds it. May not name the same attribute as `outName` — a different domain, but one name, which is a coincidence worth refusing rather than explaining downstream.",
+    },
+  },
+  execute({ inputs, params }) {
+    // Params before geometry: a bad name reported as "no polyline
+    // primitives" sends the author to debug the wrong thing entirely.
+    const { name, outName, totalAttr } = params;
+    if (name === "") {
+      throw new Error(
+        'pathScan: param "name" must be a non-empty attribute name; it is the point attribute to accumulate',
+      );
+    }
+    if (outName === "") {
+      throw new Error(
+        'pathScan: param "outName" must be a non-empty attribute name; the default is "scan"',
+      );
+    }
+    if (outName === "P") {
+      throw new Error(
+        'pathScan: param "outName" cannot be "P" — that would overwrite the positions the path is walked along; use "scan" or another name',
+      );
+    }
+    if (outName === name) {
+      throw new Error(
+        `pathScan: params "name" and "outName" are both "${name}"; a scan cannot be written over its own source, because every element after the first would accumulate the totals this node had already written rather than the values it was given`,
+      );
+    }
+    if (totalAttr !== "" && totalAttr === outName) {
+      throw new Error(
+        `pathScan: params "outName" and "totalAttr" are both "${totalAttr}"; they are different domains but one name, which is a coincidence worth refusing rather than explaining downstream`,
+      );
+    }
+    const src = requireGeometry(inputs, "in", "pathScan");
+    const attr = src.attrs.point.get(name);
+    if (!attr) {
+      throw new Error(
+        `pathScan: point attribute "${name}" not found; available: ${src.attrs.point.names().join(", ") || "(none)"}`,
+      );
+    }
+    if (attr.type === "string") {
+      throw new Error(
+        `pathScan: attribute "${name}" is a string attribute and cannot be accumulated; scan a numeric attribute (f32/i32/u32/bool)`,
+      );
+    }
+    if (attr.tupleSize > 4) {
+      throw new Error(
+        `pathScan: attribute "${name}" has tupleSize ${attr.tupleSize}; scanning supports tuple sizes 1 to 4`,
+      );
+    }
+    const ts = attr.tupleSize;
+    requireReportSlot({
+      attrs: src.attrs.point,
+      nodeType: "pathScan",
+      param: "outName",
+      name: outName,
+      type: "f32",
+      tupleSize: ts,
+      domain: "point",
+      suggestion: "scan",
+    });
+    if (totalAttr !== "") {
+      requireReportSlot({
+        attrs: src.attrs.primitive,
+        nodeType: "pathScan",
+        param: "totalAttr",
+        name: totalAttr,
+        type: "f32",
+        tupleSize: ts,
+        domain: "primitive",
+        suggestion: "scanTotal",
+      });
+    }
+
+    const geo = cloneGeometry(src);
+    const tables = polylineArcTables(geo, "pathScan");
+    const sd = geo.attrs.point.require(name).data;
+    const zero = new Array<number>(ts).fill(0);
+    const out = geo.attrs.point.replace(outName, "f32", ts, zero).data;
+    const totals = totalAttr === "" ? null : geo.attrs.primitive.replace(totalAttr, "f32", ts, zero);
+    const exclusive = params.mode === "exclusive";
+    // Accumulate in f64 whatever the source type, so a long f32 sum does
+    // not lose its tail — the same reason attributeReduce does.
+    const acc = new Float64Array(4);
+    for (const table of tables) {
+      const pts = table.points;
+      // A closed path repeats its first point as its last vertex; that
+      // repeat is the closure, not a value to add a second time.
+      const m = table.closed ? pts.length - 1 : pts.length;
+      acc.fill(0);
+      for (let k = 0; k < m; k++) {
+        const o = pts[k] * ts;
+        for (let c = 0; c < ts; c++) {
+          const v = sd[o + c];
+          if (exclusive) out[o + c] = acc[c];
+          // NaN contributes nothing rather than propagating. `v !== v` is
+          // the NaN test that does not depend on argument coercion.
+          if (v === v) acc[c] += v;
+          if (!exclusive) out[o + c] = acc[c];
+        }
+      }
+      if (totals) {
+        const t = table.prim * ts;
+        for (let c = 0; c < ts; c++) totals.data[t + c] = acc[c];
+      }
+    }
+    return { out: [makeGeometryItem(geo)] };
+  },
+});
+
 /** Params of {@link writeTangents}. */
 export interface WriteTangentsParams {
   name: string;

@@ -41,7 +41,7 @@ const ROOT_SURFACE = [
   "mul", "ne", "nextRev", "nodeSeed", "noiseOutputRange", "normalize",
   "orientAlongVector", "paramNamesOf", "paramSchemaError", "paramValueError", "parseFieldText",
   "partitionByAttribute",
-  "pathPointAt", "pathResample", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
+  "pathPointAt", "pathResample", "pathScan", "pathSegments", "perlinNoise", "pointGrid", "pointLine", "pointNeighborhood",
   "pointScatterInBounds", "pointScatterInWorld", "pointsToPath", "position", "pow",
   "primitiveTypeCounts", "printFieldSpec", "projectToPlane", "promote", "promoteAttribute", "ramp",
   "randomField", "registerSubgraph", "remap", "removeAttribute", "resolveExposedParam",
