@@ -74,8 +74,17 @@ const GRAPH_DIR = join(FRAMES_DIR, "graphs");
 const SCENE = { width: 240, height: 160, dpr: 3 };
 const GRAPH = { width: 720, height: 480, dpr: 2 };
 
-/** Everything that is chrome rather than the picture. Injected on every navigation. */
-const HIDE = ".toolbar, .panel, .toast, .inspector, .overview { display: none !important; }";
+/**
+ * Everything that is chrome rather than the picture. Injected on every
+ * navigation.
+ *
+ * `.drawer-tab` is on the list because of the frame size below: the node
+ * canvas is shot at 720x480, which is inside the cramped-screen
+ * breakpoint (see shared/mobile.ts), and there the param column becomes a
+ * drawer with a tab hanging off the canvas edge.
+ */
+const HIDE =
+  ".toolbar, .panel, .toast, .inspector, .overview, .drawer-tab { display: none !important; }";
 
 const args = process.argv.slice(2);
 const only = args.find((a) => a.startsWith("--only="))?.slice("--only=".length);

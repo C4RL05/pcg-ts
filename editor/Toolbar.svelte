@@ -278,8 +278,8 @@
        The graph picker, the seed, export/import and `cook` are in neither
        group, because they belong to neither layer: they are the graph you
        loaded and how it cooks. -->
-  <div class="grp">
-    <label class="graph">
+  <div class="grp on-bar">
+    <label class="graph on-bar">
       graph
       <select value={preset} onchange={(e) => onPreset(e.currentTarget.value)}>
         <option value="">starter graph</option>
@@ -312,7 +312,7 @@
        far the whole thing is pushed back behind the graph. `shade` is
        here rather than beside `cook` because it changes nothing about the
        cook — it is a redraw of the same result, judged by eye. -->
-  <div class="grp" title="the render">
+  <div class="grp on-bar" title="the render">
     <!-- TWO TOGGLES, not one cycler, and each one leads the group for the
          layer it switches. The view is two independent layers, so the bar
          shows two switches and each says whether its own layer is up — a
@@ -331,7 +331,7 @@
          sits in is not part of any of those selectors, so the two toggles
          living in different groups costs the tooling nothing. -->
     <button
-      class="view scene"
+      class="view scene on-bar"
       class:on={sceneOn}
       aria-pressed={sceneOn}
       aria-label="scene"
@@ -416,11 +416,11 @@
        on it. Both zooms and the relayout move BOXES, never the camera —
        which is the whole reason `fit` is here and `frame` is in the group
        above, two groups apart instead of two buttons apart. -->
-  <div class="grp" title="the node canvas">
+  <div class="grp on-bar" title="the node canvas">
     <!-- The other half of the pair — see the scene toggle above for the
          invariant these two keep and for why their classes are hooks. -->
     <button
-      class="view graph"
+      class="view graph on-bar"
       class:on={graphOn}
       aria-pressed={graphOn}
       aria-label="graph"
@@ -767,22 +767,60 @@
   .chevron {
     display: none;
   }
-  @media (max-width: 700px) {
+  @media (max-width: 700px), (max-height: 500px) {
     /* keep in sync with NARROW_MEDIA_QUERY in shared/mobile.ts */
     .toolbar {
-      /* Seed, buttons, and status wrap to fit a phone width. */
-      flex-wrap: wrap;
+      gap: 6px 10px;
+      /* Clear of a notch, and tighter than the desktop bar: at 360px the
+         padding is competing with the graph picker for width. */
+      padding: max(8px, env(safe-area-inset-top)) 10px 8px;
     }
-    /* Collapsed, the bar shows only the title — clipping the wrapped rows
-       at the dock's 44px would leave a sliver of the second row visible.
-       display: none keeps the elements in the DOM, so the capture
-       tooling's readiness probe (`.toolbar .status` textContent) still
-       reads; captures also never run at narrow widths. */
-    .toolbar.collapsed label,
-    .toolbar.collapsed button,
-    .toolbar.collapsed .grp,
-    .toolbar.collapsed .status {
+    /**
+     * THE BAR IS ONE ROW, and `on-bar` in the markup says which controls
+     * earn a place on it: which graph you are looking at, and which of
+     * the two layers is up. Everything else — seed, import and export,
+     * the camera, shade, exposure, fit, layout, the cook path and the
+     * status line — is one tap away on the title, and none of it is
+     * something you reach for before deciding what to look at.
+     *
+     * Wrapping instead, which is what this used to do, spent 181px of an
+     * 844px phone on six rows of controls and left the node canvas 241px.
+     * `display: none` rather than `{#if}` throughout, so the capture
+     * tooling's readiness probe still reads `.toolbar .status`.
+     */
+    .toolbar.collapsed {
+      flex-wrap: nowrap;
+    }
+    .toolbar.collapsed > :not(.title):not(.on-bar),
+    .toolbar.collapsed .grp > :not(.on-bar) {
       display: none;
+    }
+    /* The picker takes the slack and truncates, rather than pushing the
+       layer toggles off the end of a 360px bar. */
+    .toolbar.collapsed .graph {
+      flex: 1 1 auto;
+      min-width: 0;
+      /* The word "graph" goes with the wordmark, and for the same reason:
+         50px of a 360px bar spent naming a control that is the only
+         dropdown on it. `font-size: 0` because the label is a bare text
+         node beside its select — there is no element to hide — and the
+         select is immune, its `font` shorthand setting a size of its own. */
+      font-size: 0;
+    }
+    .toolbar.collapsed .graph select {
+      width: 100%;
+      min-width: 0;
+      /* Free to use whatever the flex line grants it; the desktop cap is
+         there to stop one long title dominating a wide bar, which is not
+         a risk when the bar is 360px and this is the only thing on it. */
+      max-width: none;
+    }
+    /* Expanded, the rest arrives as wrapped rows — and stops at half the
+       screen, scrolling rather than pushing the canvas off the bottom. */
+    .toolbar:not(.collapsed) {
+      max-height: 50dvh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
     /* The groups' hairlines would otherwise stack into a row of stray
        rules once the bar wraps onto four lines of two controls each. */
@@ -790,17 +828,42 @@
       padding-left: 0;
       border-left: none;
     }
+    /* The wordmark is the first thing to go: it is a quarter of a 360px
+       bar and it is not a control. The word stays, because the chevron
+       needs something to hang off and the pair is the way back to the
+       controls the bar just dropped. */
+    .mark {
+      display: none;
+    }
     .title {
       cursor: pointer;
+      gap: 6px;
+      flex: 0 0 auto;
     }
     .chevron {
       display: inline-block;
-      margin-left: 6px;
+      margin-left: 2px;
       color: var(--ed-ink-dim);
       transition: transform 0.2s;
     }
     .chevron.flip {
       transform: rotate(180deg);
+    }
+    /* The readout takes its own row and wraps inside it. `flex: 1 0 auto`
+       above gives it max-content width and no shrink, which on a 360px bar
+       means the last two counters are simply off the edge. */
+    .status {
+      flex: 1 1 100%;
+      justify-content: flex-start;
+    }
+    /* Touch targets. A 24px-high button is a miss on a phone, and these
+       sit shoulder to shoulder. */
+    button {
+      padding: 8px 10px;
+    }
+    select,
+    input {
+      min-height: 32px;
     }
   }
 </style>

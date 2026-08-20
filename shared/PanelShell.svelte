@@ -114,7 +114,7 @@
   .chevron {
     display: none;
   }
-  @media (max-width: 700px) {
+  @media (max-width: 700px), (max-height: 500px) {
     /* keep in sync with NARROW_MEDIA_QUERY in shared/mobile.ts */
     .panel {
       top: auto;

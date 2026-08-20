@@ -747,7 +747,17 @@
     graphOn={view.graph}
     onToggleLayer={toggleLayer}
     {host}
-    onToggle={() => (collapsed = !collapsed)}
+    onToggle={() => {
+      collapsed = !collapsed;
+      /* Refit, because on a phone this is a resize: the bar's other rows
+         are ~170px of a 740px screen, and the canvas grows and shrinks
+         from the top, so a graph framed against one of the two states
+         hangs off the bottom in the other. Narrow screens only — at
+         desktop widths nothing here changes size, and refitting a view
+         someone panned deliberately would be a bug rather than a
+         courtesy. */
+      if (view.graph && narrowScreen().matches) frameGraph();
+    }}
   />
   {#if status && status.errors.length > 0}
     <div class="cook-errors">
@@ -1000,30 +1010,24 @@
   .drawer-tab {
     display: none;
   }
-  @media (max-width: 700px) {
+  @media (max-width: 700px), (max-height: 500px) {
     /* keep in sync with NARROW_MEDIA_QUERY in shared/mobile.ts */
-    .editor {
-      left: 0;
-      right: 0;
-      bottom: 0;
-      border-radius: 12px 12px 0 0;
-      height: 50vh;
-      height: 50dvh; /* dvh where supported; vh fallback above */
-      min-height: 0;
-      transition: height 0.25s ease;
-    }
-    /* Collapse clips to the toolbar's first row via height + overflow,
-       never {#if}: the capture tooling's readiness probe scrapes
-       `.toolbar .status` and needs it rendered either way. */
-    .editor.collapsed {
-      height: 44px;
-      overflow: hidden;
-    }
-    /* Scene view: the sheet is only the bar, so it stops reserving half
-       the screen for a graph that is not being drawn. */
-    .editor.bare {
-      height: auto;
-    }
+    /**
+     * THE OVERLAY STAYS A FRAME, not a docked card.
+     *
+     * This block used to set `height: 50dvh` and `bottom: 0` against the
+     * `inset: 0` above, which cannot dock anything: with `top` set and a
+     * height given, `bottom` is what gets dropped. So the "sheet" was a
+     * strip along the TOP all along — and the toolbar's six wrapped rows
+     * took 181px of it, which is what left the node canvas as a 241px
+     * band with a whole empty screen underneath.
+     *
+     * Left as a frame, the toolbar is a bar and the canvas gets every
+     * pixel below it, with the scene showing through both exactly as it
+     * does at desktop widths. The collapse is the TOOLBAR's business now
+     * (see Toolbar.svelte), which is where it always belonged: it is the
+     * bar deciding what it can carry, not the overlay changing shape.
+     */
     .drawer-tab {
       display: block;
       position: absolute;
@@ -1031,7 +1035,7 @@
       transform: translateY(-50%);
       /* Above the drawers (z-index 15) so a second tap can close them. */
       z-index: 16;
-      padding: 10px 6px;
+      padding: 14px 8px;
       background: rgba(26, 26, 26, 0.94);
       color: var(--ed-action);
       border: 1px solid var(--ed-edge);
@@ -1043,12 +1047,6 @@
       border-right: none;
       border-radius: var(--ed-radius) 0 0 var(--ed-radius);
     }
-    /* The collapsed overlay is a title bar only; the tabs would otherwise
-       poke into it, because .body still has a few clipped pixels and the
-       tabs anchor to its vertical center. */
-    .editor.collapsed .drawer-tab {
-      display: none;
-    }
     /**
      * A phone has no room for two cards floating beside a canvas, so the
      * panels stop floating and become one full-width drawer that the
@@ -1057,7 +1055,10 @@
      */
     .panel {
       left: 8px;
-      right: 8px;
+      /* Clear of the tab, which is the drawer's close control and sits
+         above it in the stack: at `right: 8px` the panel slid under the
+         tab and lost its last chip to it. */
+      right: 40px;
       width: auto;
       z-index: 15;
       max-height: calc(50% - 16px);
@@ -1065,13 +1066,15 @@
       /* Hidden when closed so the off-screen panel can't take focus or
          intercept hit-testing. */
       visibility: hidden;
+      /* The drawer scrolls; the canvas behind it must not scroll with it. */
+      overscroll-behavior: contain;
       transition:
         transform 0.2s ease,
         visibility 0.2s;
     }
     .panel.node {
       top: auto;
-      bottom: 8px;
+      bottom: calc(8px + env(safe-area-inset-bottom));
     }
     .panel.open {
       transform: none;
