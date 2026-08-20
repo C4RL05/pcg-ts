@@ -89,10 +89,11 @@
     "examples:pages": "vite build --base=./ --emptyOutDir",
     "capture": "node scripts/capture-demos.mjs",
     "preview": "node scripts/preview.mjs",
-    "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:graphs && npm run docs:site",
+    "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:graphs && npm run docs:gallery && npm run docs:site",
     "docs:nodes": "node scripts/gen-node-reference.mjs",
     "docs:primitives": "node scripts/gen-primitives.mjs",
     "docs:graphs": "node scripts/gen-graphs.mjs",
+    "docs:gallery": "node scripts/gen-gallery.mjs",
     "docs:site": "node scripts/gen-site.mjs",
     "graphs:golden": "node scripts/gen-graphs-golden.mjs",
     "prepublishOnly": "npm run check && npm test && npm run build && node scripts/smoke-dist.mjs"

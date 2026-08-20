@@ -623,7 +623,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <p class="eyebrow">Examples</p>
     <h2>Three demos and an editor, live in your browser</h2>
     <p>Each one needs a host to exist: streaming worlds, a device-resident renderer, and the editor the single-cook recipes moved into. Click to run. Also browsable from the <a href="https://c4rl05.github.io/pcg-ts/pages/">demo index</a>.</p>
-    <p>Behind them sits a corpus of 67 graphs that are data rather than pages: <code>pcg cook graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Most are single-concept; eight are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones.</p>
+    <p>Behind them sits a corpus of 67 graphs that are data rather than pages: <code>pcg cook graphs/&lt;name&gt;.json</code>. None of them uses <code>dataInput</code>, because its items do not survive serialization and an example an agent cannot run teaches nothing. Most are single-concept; eight are one settlement pipeline — ground and wall, district centres, lots, buildings, roads, plus three edit variants — where each stage is the previous file plus nodes and nothing removed, and the earlier stages cook bit-identically inside the later ones. Every one of them is in the <a href="./gallery.html">corpus gallery</a>, cooked in the editor and shot from the frame it draws into.</p>
     <img class="lead-shot" src="./manual-assets/pcg-ts-node-editor.jpg" width="1727" height="1080"
          loading="lazy" decoding="async" alt="The pcg-ts editor open on the suspended-rig graph, shaded by surface normals so the swept tubes read as vivid magenta, cyan and green ribbons filling the frame. A toolbar across the top carries the graph picker, seed 3, a shade selector reading normals and a cook selector reading cpu; the status line beside it reads 60 fps, cook 47.3 ms, 56 of 83 cooked and cached, 11 out, 56,900 points and 899 instances, drawn as 21 meshes, 2 instance batches, lines and 2 point clouds. Dozens of connected nodes float over the render as a full-bleed overlay. On the left a curated knobs panel offers tabs for spine, truss, components, cables, swags and skins, with sliders for samples, wander and variant. On the right the inspector shows a selected transformPoints node named trussMove5, its registry prose, and its field-capable translate parameter holding an expression written as TEXT: param("trussHalfWidth") * 1.4142135623730951 * lerp(...) * attribute("curveNormal", 3), with a note that trussHalfWidth is supplied by an exposed param on an enclosing subgraph.">
     <div class="examples">
@@ -776,6 +776,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <span>pcg-ts <!--pcg:version-->v0.16.0<!--/pcg:version--></span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
+    <a href="./gallery.html">corpus gallery</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>
   </div>

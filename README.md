@@ -39,6 +39,12 @@ every graph in `graphs/` opened in the browser and edited on the spot;
 `?graph=<name>` opens one directly. What it is and what it binds to is
 [The editor](#the-editor) below.
 
+**The corpus, in pictures:** <https://c4rl05.github.io/pcg-ts/gallery.html>
+— every graph in `graphs/` cooked in the editor, with the node graph
+behind each frame and a click through to it live. The same index in
+prose, with what each file teaches, is
+[docs/graphs.md](./docs/graphs.md).
+
 <img alt="The pcg-ts editor open on the suspended-rig graph, shaded by surface normals so the swept tubes read as vivid magenta, cyan and green ribbons filling the frame. A toolbar across the top carries the graph picker, seed 3, a shade selector reading normals and a cook selector reading cpu; the status line beside it reads 60 fps, cook 47.3 ms, 56 of 83 cooked and cached, 11 out, 56,900 points and 899 instances, drawn as 21 meshes, 2 instance batches, lines and 2 point clouds. Dozens of connected nodes float over the render as a full-bleed overlay. On the left a curated knobs panel offers tabs for spine, truss, components, cables, swags and skins, with sliders for samples, wander and variant. On the right the inspector shows a selected transformPoints node named trussMove5, its registry prose, and its field-capable translate parameter holding an expression written as TEXT: param("trussHalfWidth") * 1.4142135623730951 * lerp(...) * attribute("curveNormal", 3), with a note that trussHalfWidth is supplied by an exposed param on an enclosing subgraph." src="./docs/manual-assets/pcg-ts-node-editor.jpg" width="100%">
 
 *[The editor](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
