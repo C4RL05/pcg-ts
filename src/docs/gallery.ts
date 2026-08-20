@@ -3,10 +3,10 @@
  * `graphs/`.
  *
  * The corpus was public as PROSE long before it was public as pictures —
- * `docs/graphs.md` names all of them and shows none. The only place the
- * whole set could be seen at once was a sheet built outside this
- * repository, which is the wrong side of the line for the thing the README
- * calls documentation and teaching material.
+ * `docs/graphs.md` names all of them and shows none, which is the wrong
+ * shape for the thing the README calls documentation and teaching
+ * material: the one question a reader has about a corpus graph is what it
+ * looks like.
  *
  * What makes this generated rather than hand-authored: the page states a
  * count, groups by family and names every file, so a graph added to the
@@ -16,9 +16,9 @@
  * "generated files are stale" gate covers it with no new workflow config.
  *
  * The FRAMES are committed artifacts, not generated here: capturing them
- * drives a real browser, so it is a separate, deliberate step (see the
- * script's `--scenes` / `--graphs` flags). This module only asks which
- * ones exist. A graph with no frame still gets a card, marked — a gallery
+ * drives a real browser through the editor, so it is a separate,
+ * deliberate step (`npm run capture:gallery`). This module only asks
+ * which ones exist. A graph with no frame still gets a card, marked — a gallery
  * that quietly omits what it could not photograph is worse than one that
  * admits the gap.
  *

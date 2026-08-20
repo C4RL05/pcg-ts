@@ -88,6 +88,7 @@
     "examples": "vite",
     "examples:pages": "vite build --base=./ --emptyOutDir",
     "capture": "node scripts/capture-demos.mjs",
+    "capture:gallery": "node scripts/capture-gallery.mjs",
     "preview": "node scripts/preview.mjs",
     "docs": "npm run docs:nodes && npm run docs:primitives && npm run docs:graphs && npm run docs:gallery && npm run docs:site",
     "docs:nodes": "node scripts/gen-node-reference.mjs",

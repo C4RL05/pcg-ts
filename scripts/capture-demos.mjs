@@ -83,16 +83,16 @@
  *     dimensions. Change one and you must change the HTML that declares it.
  */
 
-import { createServer } from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync, statSync } from "node:fs";
-import { extname, join, resolve, dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "vite";
 import {
+  buildCaptureSite,
   encodeJpeg,
   frameCounterScript,
   launchCaptureBrowser,
+  serveDir,
   waitForStableFrame,
 } from "./lib/capture.mjs";
 
@@ -433,45 +433,6 @@ function pageInstrumentation() {
   // they are declared. A label is presentation and will move again.
 }
 
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".wasm": "application/wasm",
-  ".map": "application/json",
-};
-
-/** Minimal static server for the built demos. */
-function serve(dir) {
-  return new Promise((ok) => {
-    const server = createServer(async (req, res) => {
-      const url = new URL(req.url, "http://localhost");
-      let file = join(dir, decodeURIComponent(url.pathname));
-      if (!file.startsWith(dir)) {
-        res.writeHead(403).end();
-        return;
-      }
-      if (!existsSync(file) || statSync(file).isDirectory()) file = join(file, "index.html");
-      try {
-        const body = await readFile(file);
-        res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-        res.end(body);
-      } catch {
-        res.writeHead(404, { "content-type": "text/plain" }).end("not found");
-      }
-    });
-    server.listen(0, "127.0.0.1", () => ok({ server, port: server.address().port }));
-  });
-}
-
 /**
  * Poll a predicate inside the page. The predicate is shipped as source and
  * rebuilt there, so it can read the DOM directly; it receives the demo's stats
@@ -648,12 +609,7 @@ async function main() {
 
   if (!noBuild) {
     log("building demos (vite, production)…");
-    await build({
-      configFile: join(ROOT, "vite.config.ts"),
-      base: "./",
-      logLevel: "warn",
-      build: { outDir: OUT_DIR, emptyOutDir: true },
-    });
+    await buildCaptureSite({ root: ROOT, outDir: OUT_DIR });
   } else if (!existsSync(OUT_DIR)) {
     throw new Error(`--no-build but ${OUT_DIR} does not exist; run once without it`);
   }
@@ -661,7 +617,7 @@ async function main() {
   await mkdir(MANUAL_DIR, { recursive: true });
   await mkdir(THUMB_DIR, { recursive: true });
 
-  const { server, port } = await serve(OUT_DIR);
+  const { server, port } = await serveDir(OUT_DIR);
   const origin = `http://127.0.0.1:${port}`;
   log(`serving ${OUT_DIR} at ${origin}`);
 

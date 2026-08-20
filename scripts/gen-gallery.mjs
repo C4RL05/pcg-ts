@@ -18,8 +18,9 @@
  * catches a corpus change that the page has not caught up with. Capturing a
  * frame drives a real browser through the editor and cannot run in that
  * chain at all, so the frames are committed artifacts and re-ingesting them
- * is an explicit flag. Either directory of PNGs named `<graph>.png` will
- * do; what produces them is outside this repository's concern.
+ * is an explicit flag. `scripts/capture-gallery.mjs` is what produces
+ * them and calls this script when it is done, but the seam is a plain
+ * directory of PNGs named `<graph>.png` — any source of those will do.
  *
  * Ingest converts to WebP at the size the page displays (720x480, cover) —
  * roughly a fifth of the PNG bytes at a quality where the dark scenes do
@@ -81,6 +82,13 @@ for (const [name, exported] of [
     );
     process.exit(1);
   }
+}
+
+/** A name list that stays one line: the first few, then how many more. */
+function summarize(names, keep = 6) {
+  return names.length <= keep
+    ? names.join(", ")
+    : `${names.slice(0, keep).join(", ")} and ${names.length - keep} more`;
 }
 
 const flag = (name) => {
@@ -153,7 +161,10 @@ async function ingest(dir, kind) {
   await browser.close();
   console.log(`gen-gallery: ingested ${written.length} ${kind} frames from ${dir}`);
   if (absent.length > 0) {
-    console.log(`gen-gallery: no ${kind} frame for ${absent.length}: ${absent.join(", ")}`);
+    // Named, but not all sixty of them: a partial re-ingest is a normal
+    // thing to do, and a wall of names for the graphs you deliberately
+    // did not re-capture buries the line you actually wanted to read.
+    console.log(`gen-gallery: ${absent.length} ${kind} frames not in ${dir}: ${summarize(absent)}`);
   }
 }
 
@@ -183,7 +194,7 @@ const orphans = [...new Set([...frames.scenes, ...frames.graphs])].filter(
 if (orphans.length > 0) {
   if (scenesFrom === null && graphsFrom === null) {
     console.log(`gen-gallery: ${orphans.length} frames for graphs no longer in the corpus:`);
-    console.log(`  ${orphans.join(", ")}`);
+    console.log(`  ${summarize(orphans)}`);
     console.log("  Re-run with --scenes=<dir> or --graphs=<dir> to clear them.");
   } else {
     for (const name of orphans) {
@@ -213,5 +224,5 @@ console.log(
   `gen-gallery: wrote docs/gallery.html (${entries.length} graphs, ${frames.scenes.length} scene + ${frames.graphs.length} graph frames)`,
 );
 if (without.length > 0) {
-  console.log(`gen-gallery: ${without.length} graphs have no scene frame: ${without.join(", ")}`);
+  console.log(`gen-gallery: ${without.length} graphs have no scene frame: ${summarize(without)}`);
 }

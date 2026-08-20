@@ -126,8 +126,14 @@ a parent — these are three different kinds of thing and the old single
   sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a
   repo script rather than a `pcg` subcommand
 - `npm run capture` — regenerate the committed demo screenshots
+- `npm run capture:gallery` — reshoot the corpus gallery's frames: every
+  graph opened in the editor, shot as its cooked scene and as its node
+  graph, then encoded and folded into `docs/gallery.html`. Opens a real
+  browser and takes minutes; `--only=<substr>` reshoots a subset. The
+  page itself needs none of this — it regenerates from the committed
+  frames as text, which is why it is not in the `docs` chain
 - `npm run docs` — regenerate the catalogs under `docs/` (nodes,
-  primitives, examples, site). CI fails if these are stale
+  primitives, examples, gallery, site). CI fails if these are stale
 - `npm run graphs:golden` — regenerate the graph corpus' golden file
 
 ## Conventions

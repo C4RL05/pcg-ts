@@ -1,6 +1,7 @@
 /**
  * Shared browser-capture machinery for `npm run capture` (the nine demo
- * screenshots) and `npm run preview` (an arbitrary graph).
+ * screenshots), `npm run capture:gallery` (a frame per corpus graph) and
+ * `npm run preview` (an arbitrary graph).
  *
  * Everything here was learned the hard way by `scripts/capture-demos.mjs`
  * and is extracted so the second consumer inherits it rather than
@@ -13,6 +14,10 @@
  * open, how to tell that page's cook is done, and what to clip.
  */
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import { existsSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { extname, join } from "node:path";
 import puppeteer from "puppeteer";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -238,4 +243,71 @@ export async function encodeJpeg(
     );
   }
   return { buffer: Buffer.from(result.jpeg, "base64"), ...result };
+}
+
+/* ------------------------------------------------------------------ *
+ * Serving the built pages
+ * ------------------------------------------------------------------ */
+
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".wasm": "application/wasm",
+  ".map": "application/json",
+};
+
+/**
+ * Minimal static server for a built site. Binds to a free port on the
+ * loopback interface and refuses to serve outside `dir` — it exists to be
+ * photographed by a browser on this machine, and nothing more.
+ */
+export function serveDir(dir) {
+  return new Promise((ok) => {
+    const server = createServer(async (req, res) => {
+      const url = new URL(req.url, "http://localhost");
+      let file = join(dir, decodeURIComponent(url.pathname));
+      if (!file.startsWith(dir)) {
+        res.writeHead(403).end();
+        return;
+      }
+      if (!existsSync(file) || statSync(file).isDirectory()) file = join(file, "index.html");
+      try {
+        const body = await readFile(file);
+        res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+        res.end(body);
+      } catch {
+        res.writeHead(404, { "content-type": "text/plain" }).end("not found");
+      }
+    });
+    server.listen(0, "127.0.0.1", () => ok({ server, port: server.address().port }));
+  });
+}
+
+/**
+ * Build the browser pages into `outDir`, the way both capture scripts
+ * need them: one production build of the vite app at the repository root,
+ * with relative asset URLs so it serves from any path.
+ *
+ * `vite` is imported lazily rather than at module scope because the third
+ * consumer of this file (`npm run preview`) runs a dev server instead and
+ * has no reason to pay for the bundler.
+ */
+export async function buildCaptureSite({ root, outDir }) {
+  const { build } = await import("vite");
+  await build({
+    configFile: join(root, "vite.config.ts"),
+    base: "./",
+    logLevel: "warn",
+    build: { outDir, emptyOutDir: true },
+  });
 }
