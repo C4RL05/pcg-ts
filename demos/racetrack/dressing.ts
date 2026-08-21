@@ -15,31 +15,39 @@
  * mix, the outside-of-bend share) and a cook cannot read its own totals:
  * `attributeReduce` writes the detail domain, and a detail attribute is
  * deliberately not readable from a point-domain field. So the totals are
- * a host's business, they live in `trackCalibrate.ts`, and the graph is
+ * a host's business, they live in `calibrate.ts`, and the graph is
  * rebuilt with corrected counts. That split is the technique's own: it
  * fits the kit BEFORE placing anything and corrects it AFTER measuring.
  *
  * The one structural compromise is `AffinityProfile`: the graph builds
  * one cumulative distribution per profile rather than per archetype, so
- * three scans serve nineteen archetypes. See `trackKit.ts`.
+ * three scans serve nineteen archetypes. See `kit.ts`.
  */
 import {
   type Field,
   type FieldLike,
+  type NodeHandle,
+  type PointLineParams,
+  type SetAttributeParams,
   add,
   atan2,
   attribute,
   byAttribute,
   clamp,
+  component,
+  copyToPoints,
   cos,
   cross,
+  dataInput,
   div,
   dot,
   eq,
   exp,
+  filterByExpression,
   floor,
   fract,
   fraction,
+  Graph,
   gt,
   index,
   length as vlength,
@@ -47,42 +55,33 @@ import {
   log,
   lt,
   max as fmax,
+  mergePoints,
   mod,
   mul,
   ne,
   normalize,
-  position,
-  pow,
-  randomField,
-  select,
-  sign,
-  sin,
-  sub,
-  vec,
-  component,
-} from "../../src/fields/index.js";
-import { Graph, type NodeHandle } from "../../src/graph/index.js";
-import { dataInput } from "../../src/runtime/index.js";
-// The spawner terminal lives in src/spawn, not the node library.
-import { spawnInstances } from "../../src/spawn/index.js";
-import {
-  copyToPoints,
-  filterByExpression,
-  mergePoints,
   orientAlongVector,
   pathResample,
   pathScan,
   pathSegments,
-  type PointLineParams,
   pointLine,
   pointsToPath,
+  position,
+  pow,
   promoteAttribute,
+  randomField,
   sampleNearestPoint,
-  type SetAttributeParams,
+  select,
   setAttribute,
+  sign,
+  sin,
+  spawnInstances,
+  sweepProfile,
+  sub,
   transferAttribute,
+  vec,
   writeCurveFrame,
-} from "../../src/nodes/index.js";
+} from "pcg-ts";
 import {
   AFFINITY,
   ALL_ARCHETYPES,
@@ -97,7 +96,7 @@ import {
   clampNum,
   encodeCommittedStretches,
   type Preset,
-} from "./trackKit.js";
+} from "./kit.js";
 
 /**
  * What a placement needs off the frame it lands on: its position, frame
@@ -209,6 +208,13 @@ export interface TrackDressingOpts {
    * terminal nothing consumes is cost with no reader.
    */
   readonly spawn?: boolean;
+  /**
+   * Add a `road` output: the centreline swept into a flat ribbon two
+   * half-widths across. Off by default for the same reason `spawn` is —
+   * no metric reads it — but a LAYOUT is unreadable without it. The
+   * placements are the output; the road is what says where they are.
+   */
+  readonly ribbon?: boolean;
   readonly seed: number;
   /** Turn the legibility, coverage and sightline passes on or off. */
   readonly legibility?: boolean;
@@ -284,6 +290,7 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   const landmarks = opts.landmarks ?? true;
   const balance = opts.balance ?? true;
   const spawn = opts.spawn ?? false;
+  const ribbon = opts.ribbon ?? false;
   const legibility = opts.legibility ?? true;
   const coverage = opts.coverage ?? true;
   const sightline = opts.sightline ?? true;
@@ -983,6 +990,50 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   g.output(scaled, "out", "placements");
   g.output(uref, "out", "frames");
 
+  if (ribbon) {
+    // The road surface, from the frames chain rather than from a second
+    // curve: `width` is field-capable on the input points and reads the
+    // SAME `halfWidth` attribute every placement rule is stated in, so a
+    // host that turns `halfWidthN.value` moves the ribbon and the rules
+    // together. `frame: "curveFrame"` reads the `curveNormal` that
+    // `writeCurveFrame` already wrote, which is what makes the ribbon
+    // inherit the lap's bank instead of lying flat through the corners.
+    //
+    // The colour is the corner model made visible, and it is written on
+    // the FRAMES rather than on the swept surface: the sweep copies point
+    // attributes around each ring, so one value per frame paints the
+    // whole band. Component by component rather than a `select` between
+    // two vec3s, because these are scalar ramps and a scalar `isCorner`
+    // choosing between two tuples is a broadcast this does not need.
+    const k = attribute("isCorner");
+    const roadColor = g.add(
+      setAttribute,
+      {
+        name: "color",
+        tupleSize: 3,
+        value: vec(add(0.22, mul(0.48, k)), add(0.24, mul(0.14, k)), add(0.29, mul(-0.16, k))),
+      },
+      "roadColor",
+    );
+    g.connect(uref, "out", roadColor, "in");
+    // `frame: "upHint"` with the technique's OWN banked up, not
+    // `curveFrame`. `writeCurveFrame` carries a rotation-minimizing frame
+    // along the lap, which is the right thing for a tube and the wrong
+    // thing for a road: it is free to roll, and by a third of the way
+    // round this lap its normal has drifted about twenty degrees off
+    // vertical — so a ribbon swept on it banks where the track does not
+    // and, given a long enough circuit, ends up standing on edge. `upB`
+    // is the banked up the corner model computed, which is the same
+    // vector the placements are oriented against.
+    const road = g.add(
+      sweepProfile,
+      { profile: "ribbon", width: mul(2, HW), frame: "upHint", up: attribute("upB", 3) },
+      "road",
+    );
+    g.connect(roadColor, "out", road, "in");
+    g.output(road, "out", "road");
+  }
+
   if (spawn) {
     // Every archetype onto the nearest placeholder shape the preview
     // knows. This is the technique's "bind art to the template" step in
@@ -1081,7 +1132,7 @@ const BY_ID = new Map(ALL_ARCHETYPES.map((a) => [a.id, a]));
 /** The archetype record for an id, which the kit guarantees exists. */
 function arch(id: string) {
   const a = BY_ID.get(id);
-  if (!a) throw new Error(`trackDressing: unknown archetype ${JSON.stringify(id)}`);
+  if (!a) throw new Error(`racetrack: unknown archetype ${JSON.stringify(id)}`);
   return a;
 }
 

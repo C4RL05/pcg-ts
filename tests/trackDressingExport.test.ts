@@ -24,17 +24,18 @@
 import { describe, expect, it } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { cook, serializeGraph } from "../src/index.js";
-import { firstGeo } from "../src/nodes/nodes.testsupport.js";
-import { buildTrackDressingGraph } from "./support/trackDressing.js";
+// By PACKAGE NAME rather than through `../src` — see the note in
+// `trackDressing.test.ts`.
+import { cook, serializeGraph } from "pcg-ts";
+import { buildTrackDressingGraph } from "../demos/racetrack/dressing.js";
 import {
   calibrate,
   chooseCommittedStretches,
   correct,
   noCorrections,
-} from "./support/trackCalibrate.js";
-import { TRACK, better, col, scoreCook } from "./support/trackRead.js";
-import { PRESETS } from "./support/trackKit.js";
+} from "../demos/racetrack/calibrate.js";
+import { TRACK, better, col, requireGeo, scoreCook } from "../demos/racetrack/read.js";
+import { PRESETS } from "../demos/racetrack/kit.js";
 
 const OUT = process.env.TRACK_OUT ?? "";
 
@@ -52,7 +53,7 @@ describe("export", () => {
       landmarks: false,
       balance: false,
     });
-    const frames = firstGeo((await cook(probe.graph)).outputs.frames);
+    const frames = requireGeo((await cook(probe.graph)).outputs.frames);
     const lapLength = frames.attrs.primitive.require("lapLen").get(0) as number;
     const lapW = lapLength / TRACK.halfWidth;
 

@@ -2,7 +2,7 @@
  * The vocabulary a track-dressing graph places, and the presets that
  * weight it.
  *
- * This is DATA, deliberately: the graph in `trackDressing.ts` reads every
+ * This is DATA, deliberately: the graph in `dressing.ts` reads every
  * number here through `byAttribute` field lookups keyed on an archetype
  * name, so changing the kit changes no wiring. That is the property the
  * technique this implements rests on — a "theme" is a weighting over one

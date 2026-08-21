@@ -2,7 +2,7 @@
  * Reading a cooked lap back out, and scoring it.
  *
  * The half of the driver that touches pcg-ts. It is a separate file from
- * `trackCalibrate.ts` on purpose: that one is the technique's numerics —
+ * `calibrate.ts` on purpose: that one is the technique's numerics —
  * iterative proportional fitting, the seventeen metrics, the correction
  * loop — and it imports nothing from the library, so it ports to a project
  * that has never heard of pcg-ts. Everything that knows what a `Geometry`
@@ -10,11 +10,22 @@
  * take the technique" and "you can take the technique if you also take the
  * engine".
  */
-import type { Geometry } from "../../src/data/index.js";
-import { type CookResult } from "../../src/graph/index.js";
-import { firstGeo } from "../../src/nodes/nodes.testsupport.js";
-import { type Placement, type Report, countBlocking, score } from "./trackCalibrate.js";
-import { type Preset } from "./trackKit.js";
+import { type CookResult, type DataCollection, type Geometry, firstGeometry } from "pcg-ts";
+import { type Placement, type Report, countBlocking, score } from "./calibrate.js";
+import { type Preset } from "./kit.js";
+
+/**
+ * The first geometry of a named output, or a throw.
+ *
+ * `firstGeometry` answers `undefined` for a collection that holds none,
+ * and every caller below has already required the output to be there — so
+ * the check is worth exactly one copy, here.
+ */
+export function requireGeo(collection: DataCollection | undefined): Geometry {
+  const geo = collection ? firstGeometry(collection) : undefined;
+  if (!geo) throw new Error("expected a geometry output");
+  return geo;
+}
 
 /** The track the suites dress, in world units and frame counts. */
 export const TRACK = {
@@ -143,8 +154,8 @@ export function scoreCook(
   preset: Preset,
   lapW: number,
 ): { placements: Placement[]; frames: Geometry; report: Report } {
-  const placementGeo = firstGeo(out.outputs.placements);
-  const frames = firstGeo(out.outputs.frames);
+  const placementGeo = requireGeo(out.outputs.placements);
+  const frames = requireGeo(out.outputs.frames);
   const placements = readPlacements(placementGeo);
   const corners = countCornerEntries(frames, lapW);
   const markers = placements.filter((p) => p.archetype === "corner-marker").length;

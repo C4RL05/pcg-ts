@@ -11,13 +11,17 @@
  * clustering, side bias, legibility furniture, coverage fill, sightline
  * cull) and the HOST calibrates and corrects across regenerations, because
  * every calibration quantity is a share of a total and a cook cannot read
- * its own totals. See the header of `support/trackCalibrate.ts`.
+ * its own totals. See the header of `demos/racetrack/calibrate.ts`.
  */
 import { describe, expect, it } from "vitest";
-import { type Geometry, createPointCloud } from "../src/data/index.js";
-import { cook, makeGeometryItem } from "../src/graph/index.js";
-import { firstGeo } from "../src/nodes/nodes.testsupport.js";
-import { buildTrackDressingGraph } from "./support/trackDressing.js";
+// The library by PACKAGE NAME, not through `../src`: this suite also
+// imports the demo that builds the graph, the demo imports "pcg-ts" the
+// way every page does, and two spellings of the same module are two
+// different types to tsc even when they are one file at runtime. The
+// vitest config aliases the specifier back to `src/`, so this still tests
+// the working tree rather than the last build.
+import { type Geometry, cook, createPointCloud, makeGeometryItem } from "pcg-ts";
+import { buildTrackDressingGraph } from "../demos/racetrack/dressing.js";
 import {
   type Corrections,
   type Placement,
@@ -27,15 +31,16 @@ import {
   correct,
   isMovable,
   noCorrections,
-} from "./support/trackCalibrate.js";
+} from "../demos/racetrack/calibrate.js";
 import {
   TRACK,
   better,
   col,
   countCornerEntries,
   readPlacements,
+  requireGeo,
   scoreCook,
-} from "./support/trackRead.js";
+} from "../demos/racetrack/read.js";
 import {
   NO_COMMITTED_STRETCHES,
   PRESETS,
@@ -43,7 +48,7 @@ import {
   decodeCommittedStretches,
   encodeCommittedStretches,
   tenthOf,
-} from "./support/trackKit.js";
+} from "../demos/racetrack/kit.js";
 
 const { halfWidth: HALF_WIDTH, controlPoints: CONTROL_POINTS, frames: FRAMES } = TRACK;
 const { lapRadius: LAP_RADIUS, relief: RELIEF } = TRACK;
@@ -127,7 +132,7 @@ async function measureLapUncached(
     balance: false,
   });
   const out = await cook(graph);
-  const frames = firstGeo(out.outputs.frames);
+  const frames = requireGeo(out.outputs.frames);
   const lapLength = frames.attrs.primitive.require("lapLen").get(0) as number;
   // The stretches the balance pass will commit are chosen from a cook with
   // the pass switched OFF: it needs to know where the movable placements
@@ -434,7 +439,7 @@ bands ${JSON.stringify(report.bandShare)}`);
     graph.setParam(built.nodes.splineIn, "items", [makeGeometryItem(spline)]);
 
     // Cook once to learn the lap, exactly as a host would.
-    const probe = firstGeo((await cook(graph)).outputs.frames);
+    const probe = requireGeo((await cook(graph)).outputs.frames);
     const lapLength = probe.attrs.primitive.require("lapLen").get(0) as number;
     const lapW = lapLength / HALF_WIDTH;
     expect(lapW).toBeGreaterThan(200);
@@ -471,7 +476,7 @@ bands ${JSON.stringify(report.bandShare)}`);
     aim(calibrate(preset, lapW, noCorrections()));
     graph.setParam(built.nodes.leanCode, "value", NO_COMMITTED_STRETCHES);
     const dryOut = await cook(graph);
-    const dryFrames = firstGeo(dryOut.outputs.frames);
+    const dryFrames = requireGeo(dryOut.outputs.frames);
     // A FAIR different track, not a stress case. The metrics are the
     // technique's measurements of real circuits, so a lap far outside what
     // it measured cannot pass them and would not be telling us anything
@@ -483,7 +488,7 @@ bands ${JSON.stringify(report.bandShare)}`);
       col(dryFrames, "isCorner").reduce((a, b) => a + b, 0) / dryFrames.pointCount;
     expect(cornerShare).toBeGreaterThan(0.22);
     expect(cornerShare).toBeLessThan(0.34);
-    const dry = readPlacements(firstGeo(dryOut.outputs.placements));
+    const dry = readPlacements(requireGeo(dryOut.outputs.placements));
     const newCommitted = chooseCommittedStretches(dry, lapW);
     expect(Object.keys(newCommitted).length).toBe(4);
     graph.setParam(
@@ -564,5 +569,66 @@ bands ${JSON.stringify(report.bandShare)}`);
     // And the band mixes differ in the direction the presets ask for: the
     // dense preset pulls its kit INWARD, so it puts less in the far band.
     expect(reports.dense.bandShare.far).toBeLessThan(reports.lush.bandShare.far);
+  });
+});
+
+/**
+ * The road ribbon the demo drives on.
+ *
+ * Off by default, so the metrics never see it — but the page does, and
+ * the one thing that can go wrong with it is invisible in a still: the
+ * sweep frame. `writeCurveFrame` carries a rotation-minimizing frame,
+ * which is free to roll, and a ribbon swept on it leans further and
+ * further off level the further round the lap it gets. The bank test
+ * below is what tells those two frames apart.
+ */
+describe("road ribbon", () => {
+  it("sweeps a surface two half-widths across, and never leans past the bank", async () => {
+    const preset = PRESETS.lush;
+    const built = buildTrackDressingGraph({
+      ...TRACK,
+      preset,
+      seed: 21,
+      countByProfile: { flat: 1, built: 1, clustered: 1 },
+      weightByArchetype: {},
+      legibility: false,
+      coverage: false,
+      sightline: false,
+      landmarks: false,
+      balance: false,
+      ribbon: true,
+    });
+    const road = requireGeo((await cook(built.graph)).outputs.road);
+
+    // One ring of two points per frame, stitched into triangles.
+    expect(road.pointCount).toBe(TRACK.frames * 2);
+    expect(road.primitiveCount).toBeGreaterThan(0);
+
+    const p = col(road, "P");
+    const W = TRACK.halfWidth;
+    let widest = 0;
+    let narrowest = Infinity;
+    let steepestDeg = 0;
+    for (let i = 0; i < TRACK.frames; i++) {
+      const a = i * 6;
+      const b = a + 3;
+      const dx = p[b] - p[a];
+      const dy = p[b + 1] - p[a + 1];
+      const dz = p[b + 2] - p[a + 2];
+      const across = Math.hypot(dx, dy, dz) / W;
+      widest = Math.max(widest, across);
+      narrowest = Math.min(narrowest, across);
+      // The angle the section makes with the horizontal IS the bank.
+      steepestDeg = Math.max(steepestDeg, Math.abs(Math.asin(dy / W / across) * (180 / Math.PI)));
+    }
+
+    // Two half-widths, to within the miter correction at a bend.
+    expect(narrowest).toBeGreaterThan(1.98);
+    expect(widest).toBeLessThan(2.1);
+
+    // The preset's own ceiling, plus a degree of slack for the miter. A
+    // rotation-minimizing frame fails this by a mile: it drifts about 20
+    // degrees off vertical by a third of the way round and keeps going.
+    expect(steepestDeg).toBeLessThan(preset.bankMaxDeg + 1);
   });
 });

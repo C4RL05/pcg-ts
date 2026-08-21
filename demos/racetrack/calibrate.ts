@@ -25,7 +25,7 @@ import {
   clampNum,
   lapMod,
   tenthOf,
-} from "./trackKit.js";
+} from "./kit.js";
 
 /** The archetypes a pass puts where a rule says, never where a draw does. */
 const RULE_PLACED = new Set(["corner-marker", "braking-reference"]);

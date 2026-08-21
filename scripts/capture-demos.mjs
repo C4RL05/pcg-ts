@@ -125,6 +125,7 @@ const SIZES = {
   "infinite-world": { css: [1454, 783], out: [1454, 783] },
   galaxy: { css: [1454, 783], out: [1454, 783] },
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
+  racetrack: { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -326,6 +327,20 @@ const DEMOS = [
     settleKey: "KeyW",
     // Star shaders animate on a clock: pixel-identical frames never happen.
     animated: true,
+  },
+  {
+    id: "racetrack",
+    // The lap travels forever, so the shot has to be pinned rather than
+    // waited out — and pinning it with the pause checkbox would stop it
+    // wherever this machine happened to have got to. `pauseAt` names a
+    // station, which makes the framing a pure function of the seed.
+    // Station 96 W is a corner entry: the marker board, the amber road
+    // ahead and the outside-of-bend lean are all in one frame.
+    path: "demos/racetrack/",
+    settleWait: () => !!window.pcgTrack && window.pcgTrack.ready(),
+    settle: () => window.pcgTrack.pauseAt(96),
+    ready: (s, has) =>
+      has(s["placements"]) && s["placements"] !== "0" && has(s["metrics passed"]),
   },
   {
     id: "gpu-world",
