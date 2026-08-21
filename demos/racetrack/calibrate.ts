@@ -21,12 +21,13 @@ import {
   archetypesFor,
   AUXILIARY_FAMILIES,
   CORRIDOR,
+  type Archetype,
   type Preset,
   SIGHTLINE,
   bandOf,
   clampNum,
   lapMod,
-  lateralEnvelope,
+  lateralAt,
   tenthOf,
 } from "./kit.js";
 
@@ -84,29 +85,35 @@ export function noCorrections(): Corrections {
 /**
  * The share of an archetype's draws landing in each lateral band.
  *
- * Deterministic quadrature rather than a Monte-Carlo: the lateral and
- * height envelopes are independent, so a 24x24 grid over the unit square
+ * Deterministic quadrature rather than a Monte-Carlo: the offset and the
+ * height are drawn independently, so a 24x24 grid over the unit square
  * integrates them exactly enough, and it removes a random seed from a
  * calibration that has to reproduce.
  *
- * The lateral envelope passed in must be the one the GRAPH DRAWS FROM —
- * `lateralEnvelope`, not the published `lateralW`. Where the two differ
- * this function is the fitter's whole model of where an archetype lands,
+ * IT MUST INTEGRATE THE DRAW THE GRAPH MAKES, which is why it takes an
+ * archetype and calls `lateralAt` rather than taking a pair of numbers.
+ * This function is the fitter's entire model of where an archetype lands,
  * so a disagreement here does not shift the mix slightly: it aims the
  * band fitting at a distribution nothing produces, and metric 4 fails
- * while every correction pass drives further away from the target.
+ * while every correction pass drives further away from the target. That
+ * happened, twice — once when the graph started drawing a widened
+ * envelope this still read the published one, and once upstream, where
+ * three measurement scripts normalised positions three different ways and
+ * published two band mixes from one population.
+ *
+ * The height is still integrated as a uniform over its published pair.
+ * That is the remaining approximation here: the graph draws it
+ * triangularly, and for a symmetric envelope the two agree on the
+ * midpoint and differ on how much lands at the ends.
  */
-function bandFractions(
-  lateralW: readonly [number, number],
-  heightW: readonly [number, number],
-  push: number,
-): Record<string, number> {
+function bandFractions(a: Archetype, push: number): Record<string, number> {
   const out: Record<string, number> = {};
   const N = 24;
+  const [h0, h1] = a.heightW;
   for (let i = 0; i < N; i++) {
-    const t = (lateralW[0] + (lateralW[1] - lateralW[0]) * ((i + 0.5) / N)) * push;
+    const t = lateralAt(a, (i + 0.5) / N) * push;
     for (let j = 0; j < N; j++) {
-      const h = heightW[0] + (heightW[1] - heightW[0]) * ((j + 0.5) / N);
+      const h = h0 + (h1 - h0) * ((j + 0.5) / N);
       const b = bandOf(t, h);
       out[b] = (out[b] ?? 0) + 1 / (N * N);
     }
@@ -136,7 +143,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   }
   const frac: Record<string, Record<string, number>> = {};
   for (const a of KIT) {
-    frac[a.id] = bandFractions(lateralEnvelope(a), a.heightW, preset.lateralPush[a.id] ?? 1);
+    frac[a.id] = bandFractions(a, preset.lateralPush[a.id] ?? 1);
   }
   const bands = Object.keys(preset.bands);
 
@@ -547,7 +554,26 @@ export function score(
     buckets[tenthOf(p.stationW, lapW)]++;
   }
   const densityCv = cv(buckets);
-  add(7, "density CV per tenth of lap", densityCv, densityCv >= 0.12 && densityCv <= 0.75, "0.12-0.75");
+  // COUNTING NOISE IS PART OF THE READING and the detail says so, because
+  // without it this metric cannot be interpreted. Ten bins holding n
+  // placements each carry a CV of 1/sqrt(n) from the binning alone, so a
+  // lap of 100 placements cannot read below about 0.32 however evenly it
+  // is dressed, and one of 600 cannot read above the floor by much
+  // without real structure. A reading BELOW its own floor is not a
+  // shallow envelope — it is placements spaced more evenly than chance,
+  // which means something in the pipeline is regularising them, and the
+  // usual culprit is the coverage repair filling every gap over
+  // `maxFillGapW`. No envelope depth answers that; the fill limit does.
+  const perTenth = placements.length / TENTHS;
+  const noiseFloor = perTenth > 0 ? 1 / Math.sqrt(perTenth) : 0;
+  const deliberate = Math.sqrt(Math.max(0, densityCv * densityCv - 1 / Math.max(1, perTenth)));
+  add(
+    7,
+    "density CV per tenth of lap",
+    densityCv,
+    densityCv >= 0.12 && densityCv <= 0.75,
+    `0.12-0.75 (n ${perTenth.toFixed(0)}/tenth, noise floor ${noiseFloor.toFixed(2)}, deliberate ${deliberate.toFixed(2)})`,
+  );
 
   // 8. Outside-of-corner share, over the placements that sit IN a bend.
   // Overhead and under-deck work is excluded: something on the centreline
@@ -884,8 +910,7 @@ export function correct(preset: Preset, report: Report, c: Corrections): Correct
     );
   }
   for (const a of KIT) {
-    const drawn = lateralEnvelope(a);
-    const band = bandOf((drawn[0] + drawn[1]) / 2, (a.heightW[0] + a.heightW[1]) / 2);
+    const band = bandOf(lateralAt(a, 0.5), (a.heightW[0] + a.heightW[1]) / 2);
     const target = preset.bands[band] ?? 0;
     const achieved = report.bandShare[band] ?? 0;
     if (target > 0 && achieved > 0) {

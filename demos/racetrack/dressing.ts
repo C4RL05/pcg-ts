@@ -86,11 +86,13 @@ import {
   AFFINITY,
   ALL_ARCHETYPES,
   ARCHETYPES,
+  type Archetype,
+  CORRIDOR,
+  LADDER_P,
   archetypesFor,
   BUCKET_EDGES,
   CORNER_RADIUS_W,
   extentsOf,
-  lateralEnvelope,
   LANDMARK_STRETCHES,
   NO_COMMITTED_STRETCHES,
   PROFILES,
@@ -268,6 +270,40 @@ function byArchetype(pick: (id: string) => number, fallback = 0): Field<1> {
   const cases: Record<string, FieldLike> = {};
   for (const a of ALL_ARCHETYPES) cases[a.id] = pick(a.id);
   return byAttribute("archetype", cases, fallback) as Field<1>;
+}
+
+/**
+ * Draw from a per-archetype LADDER at quantile field `u`: the measured
+ * value at each of `LADDER_P`, interpolated between the bracketing pair.
+ *
+ * Twelve `select`s over twelve `lerp`s, with one `byArchetype` chain per
+ * percentile behind them. That is more graph than a two-point envelope
+ * costs and it buys the only thing a bounded shape cannot give: the
+ * tails. See `lateralLadder` in the kit for what lives out there and why
+ * the verge band is unreachable without it.
+ *
+ * Archetypes with no ladder fall back to `fb`, and the caller discards
+ * that branch — the two draws are blended on a 0/1 flag rather than
+ * branched, because the grammar has no branch.
+ */
+function ladderByArchetype(
+  pick: (a: Archetype) => readonly number[] | undefined,
+  fb: (a: Archetype) => number,
+  u: Field<1>,
+): Field<1> {
+  const at = (k: number): Field<1> =>
+    byArchetype((x) => {
+      const ladder = pick(arch(x));
+      return ladder ? ladder[k] : fb(arch(x));
+    }, 0);
+  const pts = LADDER_P.map((_, k) => at(k));
+  let out: Field<1> = pts[LADDER_P.length - 1];
+  for (let k = LADDER_P.length - 2; k >= 0; k--) {
+    const span = LADDER_P[k + 1] - LADDER_P[k];
+    const f = div(sub(u, LADDER_P[k]), span) as Field<1>;
+    out = select(lt(u, LADDER_P[k + 1]), lerp(pts[k], pts[k + 1], f), out) as Field<1>;
+  }
+  return out;
 }
 
 /** A per-archetype pair, as one tuple-2 field. */
@@ -1321,22 +1357,42 @@ function placeFromPack(
   const negOf = byArchetype((x) => ((arch(x).offsetSizeR ?? 0) < 0 ? 1 : 0), 0);
   // `neg ? 1 - u : u`, without a branch: at neg = 0 it is u, at 1 it is 1 - u.
   const uToward = add(negOf, mul(sub(1, mul(2, negOf)), uAcross));
-  // A UNIFORM DRAW OVER THE WIDENED ENVELOPE WAS TRIED AND REVERTED, so
-  // that it is not tried again. The argument for it was good: `tri` is
-  // shaped for an interquartile range, where half the real instances fall
-  // outside and a uniform draw invents mass at both ends, and a p10–p90
-  // envelope has neither problem — only a fifth fall outside it, and
-  // pulling a range twice as wide to its midpoint concentrates it harder
-  // than the draw it replaced.
-  //
-  // Measured as an A/B at the shipped envelope depth, six seeds each,
-  // nothing else moved, it is not a win. The verge band goes 4.2% to
-  // 4.9% against a target of 7.5% — better — while the near band goes
-  // 27.6% to 23.3% against 26.6% and corridor art goes 22.9% to 20.6%
-  // against an era that measures 32.4%. One band closer, two further, and
-  // a second sampler to explain. So the triangular draw stays.
   const uLat = lerp(tri(`${id}-lat`), uToward, wOf);
-  const lat = rangeByArchetype((x) => lateralEnvelope(arch(x)));
+  const lat = rangeByArchetype((x) => arch(x).lateralW);
+  // TWO DRAWS, BLENDED ON A 0/1 FLAG, because the two kits are measured
+  // differently and one shape cannot serve both. A row with only an
+  // interquartile pair is drawn triangularly across it, for the reason
+  // `tri` gives. A row with a ladder is drawn UNIFORMLY IN `u` and the
+  // ladder carries the shape, because it is the distribution rather than
+  // a model of it.
+  //
+  // Neither triangular nor uniform over a bounded envelope reaches the
+  // verge band, and that is a fact about the source rather than about
+  // tuning: measured over this kit, a triangular draw across the
+  // quartiles puts 0.7% of placements in the verge, across p10–p90 1.7%,
+  // uniform across p10–p90 3.9%, and the ladder 7.5% against a measured
+  // 8.1%. An A/B between the two bounded shapes read as a wash here for a
+  // second reason worth remembering: the host's correction loop was
+  // absorbing most of the error, so it compared two already-corrected
+  // results. Sample a draw with the loop OFF before believing it.
+  //
+  // Separate streams from the triangular ones on purpose. No archetype
+  // uses both branches, so a row without a ladder draws exactly what it
+  // drew before the ladders arrived.
+  const uLatL = randomField(`${id}-lat-ladder`);
+  const uAcrossL = randomField(`${id}-across-ladder`);
+  const hasLatLadder = byArchetype((x) => (arch(x).lateralLadder ? 1 : 0), 0);
+  const hasAcrossLadder = byArchetype((x) => (arch(x).acrossLadder ? 1 : 0), 0);
+  const latLadder = ladderByArchetype(
+    (a) => a.lateralLadder,
+    (a) => (a.lateralW[0] + a.lateralW[1]) / 2,
+    uLatL,
+  );
+  const acrossLadder = ladderByArchetype(
+    (a) => a.acrossLadder,
+    (a) => (extentsOf(a).across[0] + extentsOf(a).across[1]) / 2,
+    uAcrossL,
+  );
   const hgt = rangeByArchetype((x) => arch(x).heightW);
   // Seating, for the three archetypes where the measurement and the
   // published envelope disagree. See `baseW` in the kit.
@@ -1399,7 +1455,10 @@ function placeFromPack(
     setAttribute,
     {
       name: "lateralW",
-      value: mul(mul(leaned, push), lerp(component(lat, 0), component(lat, 1), uLat)),
+      value: mul(
+        mul(leaned, push),
+        lerp(lerp(component(lat, 0), component(lat, 1), uLat), latLadder, hasLatLadder),
+      ),
     },
     `${id}Lat`,
   );
@@ -1414,19 +1473,45 @@ function placeFromPack(
   // 0/1 flag rather than a branch — the grammar has no branch, and the
   // two expressions are cheap enough that evaluating both costs less than
   // a select over tuples would.
+  const drawnHeight = lerp(
+    lerp(component(hgt, 0), component(hgt, 1), tri(`${id}-h`)),
+    add(
+      lerp(component(seatBase, 0), component(seatBase, 1), tri(`${id}-base`)),
+      div(attribute("tallnessW"), 2),
+    ),
+    seated,
+  );
+  // THE CORRIDOR IS DEFENDED BY HEIGHT, NOT BY OFFSET, and that is the
+  // source's own answer rather than ours. An earlier version floored the
+  // lateral envelope at the corridor's edge, which keeps anchors out of
+  // the driver's way by moving them aside; the material moves them up.
+  // `micro-detail` inside `|t|` of 1W has a median base 1.76W above the
+  // deck against 0.95W for the same archetype outboard — it rises as it
+  // comes inboard. Of the archetypes whose geometry reaches over the
+  // corridor, the ones that belong there clear the ceiling and the
+  // ground-hugging ones are merely beside it.
+  //
+  // It is not a cosmetic difference. `micro-detail` is the single largest
+  // contributor to the verge band, and a lateral floor throws away
+  // exactly the mass below 1W that puts it there. Lifting instead keeps
+  // the offset distribution measured and still gives Z-1 what it asks
+  // for: no anchor over the track at driving height, ever.
+  //
+  // Z7 and Z8 are exempt because being over or under the track is what
+  // those bands MEAN — a tunnel bore is anchored on the racing line
+  // because a bore surrounds it. The lift is by the deficit, so anything
+  // already clear of the ceiling is untouched.
+  const overTrack = mul(
+    lt(fmax(attribute("lateralW"), mul(-1, attribute("lateralW"))), CORRIDOR.halfWidthW),
+    byArchetype((x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1), 1),
+  );
+  const deficit = fmax(
+    sub(add(CORRIDOR.ceilingW, div(attribute("tallnessW"), 2)), drawnHeight),
+    0,
+  );
   const hN = g.add(
     setAttribute,
-    {
-      name: "heightW",
-      value: lerp(
-        lerp(component(hgt, 0), component(hgt, 1), tri(`${id}-h`)),
-        add(
-          lerp(component(seatBase, 0), component(seatBase, 1), tri(`${id}-base`)),
-          div(attribute("tallnessW"), 2),
-        ),
-        seated,
-      ),
-    },
+    { name: "heightW", value: add(drawnHeight, mul(overTrack, deficit)) },
     `${id}Height`,
   );
   const fpN = fromRange("footprintW", fp, "fp", "Foot");
@@ -1436,7 +1521,14 @@ function placeFromPack(
   // it too — see `uAcross` below.
   const acrossN = g.add(
     setAttribute,
-    { name: "acrossW", value: lerp(component(across, 0), component(across, 1), uAcross) },
+    {
+      name: "acrossW",
+      value: lerp(
+        lerp(component(across, 0), component(across, 1), uAcross),
+        acrossLadder,
+        hasAcrossLadder,
+      ),
+    },
     `${id}Across`,
   );
   const tallN = fromRange("tallnessW", tall, "tall", "Tall");

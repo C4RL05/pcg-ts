@@ -66,23 +66,32 @@ export interface Archetype {
   /** Signed lateral offset from the centreline, in W, as [min, max] of |t|. */
   readonly lateralW: readonly [number, number];
   /**
-   * The same offset at p10–p90 rather than at the quartiles, where it has
-   * been measured. `lateralEnvelope` draws from this when it is present.
+   * The same offset as a LADDER: the measured value at each of the
+   * thirteen percentiles in `LADDER_P`. Where this is present it is what
+   * gets drawn, by interpolating between the bracketing pair.
    *
-   * The tails are ASYMMETRIC and no ratio recovers them from the IQR:
-   * `near-detail` spans 2.3 interquartile ranges here and skews outward,
-   * `high-mass` reaches 7.38 from a p75 of 5.70. An earlier version of
-   * this file inferred the width as 1.9 IQRs about the midpoint, which is
-   * the right factor for a symmetric distribution and the wrong shape for
-   * these.
+   * IT IS NOT A MODEL OF THE DISTRIBUTION, IT IS THE DISTRIBUTION, and
+   * that is the point. Two bounded parametric shapes were tried over this
+   * kit and neither reaches the verge band, because the verge is a SEAM
+   * rather than a home: no archetype is centred on 1.0–1.5W, and of the
+   * source's 599 objects there, 216 arrive from BELOW their own p10 —
+   * inboard tails of trackside mass — and 69 from ABOVE their own p90,
+   * outboard tails of things that otherwise sit on the centreline. Any
+   * bounded per-archetype envelope cuts both tails and loses the band. A
+   * triangular draw over the quartiles measures 0.7% there, over p10–p90
+   * 1.7%, uniform over p10–p90 3.9%, and the ladder 7.5% against a
+   * measured 8.1%.
    *
-   * ACROSS HAS MEASURED PERCENTILES TOO and is deliberately not drawn
-   * from them. The corridor-art rate these envelopes are scored against
-   * was simulated upstream from the quartile widths, so widening the
-   * extent would move our number away from a target the wider extent was
-   * never part of. Only the offset was recommended for widening.
+   * THE LADDERS REPRODUCE EACH MARGINAL EXACTLY AND NOT THE JOINTS. The
+   * corridor predicate is a statement about `|t|` and `across` together,
+   * and drawing them independently scores about four points high on its
+   * horizontal half. Do not chase that with an offset on either ladder:
+   * moving a marginal to fix a joint is what put a spelling artefact in
+   * the band mix the last time it was tried.
    */
-  readonly lateralW10_90?: readonly [number, number];
+  readonly lateralLadder?: readonly number[];
+  /** The across extent's ladder, on the same percentiles. */
+  readonly acrossLadder?: readonly number[];
   /** Height above the local track surface, in W. */
   readonly heightW: readonly [number, number];
   /**
@@ -238,18 +247,18 @@ const NAMED_ARCHETYPES: readonly Archetype[] = [
  * not contain.
  */
 const GEOMETRY_ARCHETYPES: readonly Archetype[] = [
-  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.1, 3.3], lateralW10_90: [1.62, 3.75], heightW: [0.9, 2.1], baseW: [-1.05, 0.05], footprintW: [3.5, 4.9], alongW: [3.5, 4.9], acrossW: [3.2, 4.5], tallnessW: [3.3, 4.9], polygons: 22, rate: 15.9, cluster: 1.5, outsideBias: 0.59, affinity: [1.05, 0.97, 0.91, 1.04] },
-  { id: "near-mass", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 2.6], lateralW10_90: [1.45, 3.22], heightW: [0.1, 1.0], baseW: [-1.22, -0.04], footprintW: [2.5, 3.6], alongW: [2.5, 3.6], acrossW: [2.3, 3.3], tallnessW: [1.8, 3.0], polygons: 12, rate: 13.4, cluster: 1.6, outsideBias: 0.54, affinity: [1.08, 1.06, 0.93, 0.78] },
-  { id: "outer-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.8, 5.5], lateralW10_90: [3.21, 7.48], heightW: [0.8, 2.2], baseW: [-2.8, -0.79], footprintW: [5.4, 7.8], alongW: [4.3, 7.1], acrossW: [5.4, 7.8], tallnessW: [5.3, 8.5], polygons: 21, rate: 10.1, cluster: 1.5, outsideBias: 0.8, affinity: [0.89, 1.09, 1.13, 1.03] },
-  { id: "near-detail", zone: "Z3", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 3.0], lateralW10_90: [1.03, 4.19], heightW: [0.2, 1.2], baseW: [-0.53, 0.43], footprintW: [1.5, 2.4], alongW: [1.5, 2.4], acrossW: [0.9, 1.9], tallnessW: [0.9, 2.1], polygons: 4, rate: 10.0, cluster: 1.8, outsideBias: 0.65, affinity: [1.2, 1.08, 0.7, 0.71] },
-  { id: "far-mass", zone: "Z5", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [4.7, 7.3], lateralW10_90: [3.82, 8.74], heightW: [0.9, 2.8], baseW: [-0.82, 0.69], footprintW: [2.7, 4.4], alongW: [2.6, 4.0], acrossW: [2.7, 4.4], tallnessW: [3.0, 4.3], polygons: 10, rate: 7.6, cluster: 1.7, outsideBias: 0.85, affinity: [1.2, 0.98, 0.8, 0.69] },
-  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.0, 0.3], lateralW10_90: [0.01, 0.84], heightW: [0.4, 1.7], baseW: [-1.96, -0.23], footprintW: [4.1, 6.5], alongW: [3.5, 5.3], acrossW: [4.1, 6.5], tallnessW: [3.5, 6.0], polygons: 44, rate: 7.5, cluster: 1.1, outsideBias: 0.66, affinity: [1.32, 0.88, 0.7, 0.58] },
-  { id: "micro-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.2, 2.8], lateralW10_90: [0.59, 3.49], heightW: [0.7, 2.9], baseW: [0.32, 2.73], footprintW: [0.2, 0.7], alongW: [0.2, 0.6], acrossW: [0.2, 0.7], tallnessW: [0.2, 0.7], polygons: 4, rate: 6.9, cluster: 2.6, outsideBias: 0.53, affinity: [1.09, 0.94, 1.01, 0.75] },
-  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 3.0], lateralW10_90: [1.4, 3.73], heightW: [0.8, 1.4], baseW: [-0.14, 0.29], footprintW: [1.3, 2.3], alongW: [1.2, 2.1], acrossW: [1.3, 2.3], tallnessW: [1.7, 2.5], polygons: 20, rate: 5.4, cluster: 1.2, outsideBias: 0.51, affinity: [0.89, 1.22, 1.0, 1.02] },
-  { id: "overhead", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.1, 0.6], lateralW10_90: [0.01, 1.09], heightW: [1.4, 3.3], baseW: [0.0, 1.87], footprintW: [2.4, 4.0], alongW: [1.7, 3.8], acrossW: [2.4, 4.0], tallnessW: [1.7, 3.4], polygons: 7, rate: 5.0, cluster: 1.5, outsideBias: 0.57, affinity: [1.43, 0.67, 0.54, 0.81] },
-  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.8, 5.7], lateralW10_90: [1.3, 7.38], heightW: [4.5, 6.7], baseW: [0.05, 3.18], footprintW: [4.2, 8.4], alongW: [4.1, 7.9], acrossW: [4.2, 8.4], tallnessW: [4.8, 10.1], polygons: 18, rate: 4.8, cluster: 1.6, outsideBias: 0.82, affinity: [1.14, 0.74, 0.81, 1.22] },
-  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.2, 4.8], lateralW10_90: [1.51, 6.11], heightW: [3.7, 5.8], baseW: [2.78, 4.69], footprintW: [1.5, 2.9], alongW: [1.2, 2.9], acrossW: [1.5, 2.7], tallnessW: [1.2, 3.2], polygons: 4, rate: 4.4, cluster: 2.0, outsideBias: 0.81, affinity: [1.31, 0.79, 0.74, 0.71] },
-  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 5.5], lateralW10_90: [0.79, 8.09], heightW: [-4.9, -2.9], baseW: [-9.63, -6.31], footprintW: [3.9, 8.7], alongW: [3.6, 8.2], acrossW: [3.9, 8.7], tallnessW: [4.6, 10.8], polygons: 10, rate: 2.1, cluster: 1.7, outsideBias: 0.48, affinity: [1.38, 1.06, 0.46, 0.54] },
+  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.1, 3.3], lateralLadder: [0.79, 1.38, 1.7, 1.97, 2.24, 2.46, 2.69, 2.97, 3.16, 3.41, 3.76, 4.16, 6.43], heightW: [0.9, 2.1], baseW: [-1.05, 0.05], footprintW: [3.5, 4.9], alongW: [3.5, 4.9], acrossW: [3.2, 4.5], acrossLadder: [0.18, 2.18, 2.58, 2.93, 3.29, 3.59, 3.8, 4.04, 4.3, 4.65, 5.15, 5.73, 8.8], tallnessW: [3.3, 4.9], polygons: 22, rate: 15.9, cluster: 1.5, outsideBias: 0.59, affinity: [1.05, 0.97, 0.91, 1.04] },
+  { id: "near-mass", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 2.6], lateralLadder: [0.44, 1.14, 1.48, 1.7, 1.83, 2.02, 2.16, 2.33, 2.58, 2.9, 3.36, 3.69, 5.65], heightW: [0.1, 1.0], baseW: [-1.22, -0.04], footprintW: [2.5, 3.6], alongW: [2.5, 3.6], acrossW: [2.3, 3.3], acrossLadder: [0.23, 1.43, 1.77, 2.13, 2.36, 2.59, 2.78, 2.93, 3.15, 3.44, 3.83, 4.25, 7.07], tallnessW: [1.8, 3.0], polygons: 12, rate: 13.4, cluster: 1.6, outsideBias: 0.54, affinity: [1.08, 1.06, 0.93, 0.78] },
+  { id: "outer-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.8, 5.5], lateralLadder: [1.45, 2.65, 3.13, 3.53, 3.82, 4.18, 4.42, 4.8, 5.2, 5.92, 7.42, 8.93, 15.76], heightW: [0.8, 2.2], baseW: [-2.8, -0.79], footprintW: [5.4, 7.8], alongW: [4.3, 7.1], acrossW: [5.4, 7.8], acrossLadder: [1.63, 3.82, 4.43, 5.05, 5.5, 5.98, 6.46, 6.86, 7.36, 8.04, 8.57, 9.6, 20.59], tallnessW: [5.3, 8.5], polygons: 21, rate: 10.1, cluster: 1.5, outsideBias: 0.8, affinity: [0.89, 1.09, 1.13, 1.03] },
+  { id: "near-detail", zone: "Z3", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 3.0], lateralLadder: [0.03, 0.9, 1.19, 1.47, 1.69, 1.84, 2.01, 2.33, 2.76, 3.27, 4.08, 5.24, 12.8], heightW: [0.2, 1.2], baseW: [-0.53, 0.43], footprintW: [1.5, 2.4], alongW: [1.5, 2.4], acrossW: [0.9, 1.9], acrossLadder: [0.09, 0.36, 0.51, 0.81, 0.96, 1.13, 1.31, 1.47, 1.69, 1.98, 2.32, 2.63, 4.51], tallnessW: [0.9, 2.1], polygons: 4, rate: 10.0, cluster: 1.8, outsideBias: 0.65, affinity: [1.2, 1.08, 0.7, 0.71] },
+  { id: "far-mass", zone: "Z5", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [4.7, 7.3], lateralLadder: [2.28, 3.46, 3.97, 4.54, 5.11, 5.48, 6.11, 6.7, 7.24, 7.93, 9.22, 10.67, 19.85], heightW: [0.9, 2.8], baseW: [-0.82, 0.69], footprintW: [2.7, 4.4], alongW: [2.6, 4.0], acrossW: [2.7, 4.4], acrossLadder: [0.2, 1.59, 1.99, 2.47, 2.96, 3.18, 3.51, 3.86, 4.15, 4.61, 5.64, 6.38, 9.65], tallnessW: [3.0, 4.3], polygons: 10, rate: 7.6, cluster: 1.7, outsideBias: 0.85, affinity: [1.2, 0.98, 0.8, 0.69] },
+  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.0, 0.3], lateralLadder: [0.0, 0.0, 0.01, 0.02, 0.04, 0.07, 0.1, 0.14, 0.21, 0.34, 0.68, 1.23, 1.51], heightW: [0.4, 1.7], baseW: [-1.96, -0.23], footprintW: [4.1, 6.5], alongW: [3.5, 5.3], acrossW: [4.1, 6.5], acrossLadder: [2.49, 3.07, 3.44, 3.83, 4.18, 4.48, 4.84, 5.35, 6.04, 6.88, 8.14, 9.78, 20.7], tallnessW: [3.5, 6.0], polygons: 44, rate: 7.5, cluster: 1.1, outsideBias: 0.66, affinity: [1.32, 0.88, 0.7, 0.58] },
+  { id: "micro-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.2, 2.8], lateralLadder: [0.0, 0.35, 0.52, 1.17, 1.35, 1.52, 1.72, 1.89, 2.12, 2.7, 3.62, 4.5, 15.5], heightW: [0.7, 2.9], baseW: [0.32, 2.73], footprintW: [0.2, 0.7], alongW: [0.2, 0.6], acrossW: [0.2, 0.7], acrossLadder: [0.0, 0.04, 0.07, 0.18, 0.26, 0.32, 0.41, 0.51, 0.63, 0.78, 1.06, 1.55, 2.4], tallnessW: [0.2, 0.7], polygons: 4, rate: 6.9, cluster: 2.6, outsideBias: 0.53, affinity: [1.09, 0.94, 1.01, 0.75] },
+  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 3.0], lateralLadder: [0.11, 1.04, 1.27, 1.53, 1.63, 1.75, 1.91, 2.18, 2.46, 3.0, 3.51, 3.96, 6.91], heightW: [0.8, 1.4], baseW: [-0.14, 0.29], footprintW: [1.3, 2.3], alongW: [1.2, 2.1], acrossW: [1.3, 2.3], acrossLadder: [0.44, 0.84, 0.93, 1.11, 1.28, 1.48, 1.7, 1.86, 1.99, 2.26, 2.49, 2.8, 5.71], tallnessW: [1.7, 2.5], polygons: 20, rate: 5.4, cluster: 1.2, outsideBias: 0.51, affinity: [0.89, 1.22, 1.0, 1.02] },
+  { id: "overhead", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.1, 0.6], lateralLadder: [0.0, 0.0, 0.01, 0.04, 0.09, 0.16, 0.24, 0.34, 0.5, 0.67, 0.97, 1.24, 1.67], heightW: [1.4, 3.3], baseW: [0.0, 1.87], footprintW: [2.4, 4.0], alongW: [1.7, 3.8], acrossW: [2.4, 4.0], acrossLadder: [0.23, 1.65, 2.0, 2.39, 2.62, 2.87, 3.14, 3.45, 3.97, 4.36, 5.0, 6.09, 9.29], tallnessW: [1.7, 3.4], polygons: 7, rate: 5.0, cluster: 1.5, outsideBias: 0.57, affinity: [1.43, 0.67, 0.54, 0.81] },
+  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.8, 5.7], lateralLadder: [0.01, 0.21, 0.82, 1.89, 2.13, 2.92, 3.39, 3.86, 4.62, 5.47, 7.12, 7.89, 17.22], heightW: [4.5, 6.7], baseW: [0.05, 3.18], footprintW: [4.2, 8.4], alongW: [4.1, 7.9], acrossW: [4.2, 8.4], acrossLadder: [2.26, 3.24, 3.57, 4.31, 5.15, 6.24, 7.16, 8.3, 9.92, 11.73, 13.22, 13.95, 23.41], tallnessW: [4.8, 10.1], polygons: 18, rate: 4.8, cluster: 1.6, outsideBias: 0.82, affinity: [1.14, 0.74, 0.81, 1.22] },
+  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.2, 4.8], lateralLadder: [0.18, 1.06, 1.46, 1.95, 2.36, 2.76, 3.19, 3.58, 4.38, 4.94, 6.13, 7.66, 9.07], heightW: [3.7, 5.8], baseW: [2.78, 4.69], footprintW: [1.5, 2.9], alongW: [1.2, 2.9], acrossW: [1.5, 2.7], acrossLadder: [0.28, 0.7, 0.87, 1.42, 1.72, 1.87, 2.0, 2.21, 2.58, 3.0, 3.59, 4.37, 7.94], tallnessW: [1.2, 3.2], polygons: 4, rate: 4.4, cluster: 2.0, outsideBias: 0.81, affinity: [1.31, 0.79, 0.74, 0.71] },
+  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 5.5], lateralLadder: [0.1, 0.38, 0.89, 1.15, 2.03, 3.13, 3.67, 4.18, 4.76, 6.06, 8.27, 12.52, 20.0], heightW: [-4.9, -2.9], baseW: [-9.63, -6.31], footprintW: [3.9, 8.7], alongW: [3.6, 8.2], acrossW: [3.9, 8.7], acrossLadder: [1.16, 2.14, 2.51, 3.12, 4.09, 4.86, 5.42, 6.51, 7.79, 10.15, 10.91, 11.82, 12.76], tallnessW: [4.6, 10.8], polygons: 10, rate: 2.1, cluster: 1.7, outsideBias: 0.48, affinity: [1.38, 1.06, 0.46, 0.54] },
 ];
 
 /**
@@ -304,46 +313,84 @@ export const AFFINITY: Record<AffinityProfile, readonly [number, number, number,
  * separated, so an unmeasured archetype draws and tests exactly as it did.
  */
 /**
- * The lateral envelope to DRAW from, which is not always the one the kit
- * publishes.
+ * The thirteen percentiles every ladder in this kit is measured at.
  *
- * The published `|t|` is an interquartile range, and for the geometry
- * vocabulary that is too narrow to reproduce the era it describes: no
- * cluster's IQR reaches below 1.21W, so the verge band (1.0–1.5W) is
- * only reachable from tails the IQR discards, and the vocabulary
- * structurally cannot produce the 7.5% verge occupancy that was
- * measured. The published envelopes over-produce the near band by eleven
- * points as a direct consequence, and forcing the mix back with
- * per-archetype rate weights takes the excess out of exactly the band
- * whose across extents reach the corridor.
- *
- * So `|t|` is drawn at p10–p90 where those have been measured. That is
- * every row of the geometry kit; `micro-detail` at 0.59 and `near-detail`
- * at 1.03 are what reach the verge, and the quartiles put neither below
- * 1.21. Clamped at zero because `|t|` is a magnitude.
- *
- * The named kit has no measured percentiles and needs none: its bands
- * already start at 1.05W, so the verge is reachable and nothing is being
- * forced.
- *
- * WIDENING CARRIES A CLAMP, and it is a rule rather than a measurement.
- * `micro-detail` measures a p10 of 0.59W in a band that is not over the
- * track by design, so the honest envelope puts anchors inside the
- * corridor at driving height — the source material has small deck-level
- * furniture there and the technique's inviolable-corridor rule does not.
- * That rule is one of the places the ruleset chooses to be better than
- * what it reproduces, the same trade as the sightline cull, so the floor
- * of a widened envelope is the corridor's edge for every band except the
- * two that mean "over the track" (Z7) and "under it" (Z8). It costs
- * `micro-detail` the mass below 1.0W and nothing else: every other
- * measured p10 already clears the corridor.
+ * Denser at the ends than in the middle on purpose: the tails are where
+ * the interesting placements are and where a parametric shape goes wrong,
+ * so the ladder spends its resolution there. The last segment, p95 to
+ * p100, is a straight line out to a single extreme object and will
+ * over-produce the outermost band slightly. That is a known and small
+ * cost of carrying the real maximum rather than a trimmed one.
  */
-export function lateralEnvelope(a: Archetype): readonly [number, number] {
-  const wide = a.lateralW10_90;
-  if (!wide) return a.lateralW;
-  const overOrUnder = a.zone === "Z7" || a.zone === "Z8";
-  const floor = overOrUnder ? 0 : CORRIDOR.halfWidthW;
-  return [Math.max(floor, wide[0]), Math.max(floor, wide[1])];
+export const LADDER_P: readonly number[] = [
+  0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1,
+];
+
+/**
+ * Read a ladder at quantile `u`, interpolating between the bracketing
+ * percentiles. The graph does the same thing as a field expression; this
+ * is for the host, which has to model the same draw when it fits.
+ */
+export function sampleLadder(ladder: readonly number[], u: number): number {
+  const t = Math.min(1, Math.max(0, u));
+  for (let i = 1; i < LADDER_P.length; i++) {
+    if (t <= LADDER_P[i]) {
+      const span = LADDER_P[i] - LADDER_P[i - 1];
+      const f = span > 0 ? (t - LADDER_P[i - 1]) / span : 0;
+      return ladder[i - 1] + (ladder[i] - ladder[i - 1]) * f;
+    }
+  }
+  return ladder[ladder.length - 1];
+}
+
+/**
+ * A symmetric triangular quantile on [0, 1]: the value `tri` would draw
+ * at uniform `u`.
+ *
+ * The host needs this because the two kits are drawn with different
+ * SHAPES. Where a ladder exists the draw is uniform in `u` and the ladder
+ * carries the shape; where there is only an interquartile pair the draw
+ * is triangular across it, for the reason `tri` states in the graph. A
+ * fitter that models both as one thing is the same class of bug as
+ * reading a published envelope while the graph draws a different one.
+ */
+function triQuantile(u: number): number {
+  const t = Math.min(1, Math.max(0, u));
+  return t < 0.5 ? Math.sqrt(t / 2) : 1 - Math.sqrt((1 - t) / 2);
+}
+
+/**
+ * The `|t|` an archetype draws at quantile `u` — the ladder where one is
+ * measured, and a triangular draw across the published interquartile pair
+ * where there is not.
+ *
+ * THE CORRIDOR IS NOT DEFENDED HERE any more, and that is the correction
+ * that matters. An earlier version floored a widened envelope at the
+ * corridor's edge, which kept anchors out of the driver's way by moving
+ * them ASIDE. The source moves them UP: `micro-detail` inside `|t|` of 1W
+ * has a median base 1.76W above the deck against 0.95W for the same
+ * archetype outboard, and of the archetypes whose geometry reaches over
+ * the corridor the ones that belong there clear the ceiling while the
+ * ground-hugging ones are merely beside it. Genuinely low furniture over
+ * the track is 47 objects of 7,371, spread over half the circuits —
+ * present, not a technique.
+ *
+ * So the offset is drawn as measured and the HEIGHT carries the rule; see
+ * where `heightW` is set in the graph. That matters beyond tidiness:
+ * `micro-detail` is the single largest contributor to the verge band, and
+ * its mass below 1.0W is exactly what a lateral floor throws away.
+ */
+export function lateralAt(a: Archetype, u: number): number {
+  if (a.lateralLadder) return sampleLadder(a.lateralLadder, u);
+  const [lo, hi] = a.lateralW;
+  return lo + (hi - lo) * triQuantile(u);
+}
+
+/** The across extent at quantile `u`, on the same rules as `lateralAt`. */
+export function acrossAt(a: Archetype, u: number): number {
+  if (a.acrossLadder) return sampleLadder(a.acrossLadder, u);
+  const [lo, hi] = extentsOf(a).across;
+  return lo + (hi - lo) * triQuantile(u);
 }
 
 export function extentsOf(a: Archetype): {
@@ -444,6 +491,27 @@ export interface Preset {
    * their placements on them.
    */
   readonly corridorArtAccept: number;
+  /**
+   * Archetypes whose published envelopes make corridor intrusion close
+   * to certain, and which therefore dominate the score without saying
+   * anything about the dressing.
+   *
+   * Distinct from `corridorArtExclude`, which names rows upstream has
+   * recorded as DEFECTIVE — pooled families whose envelope describes no
+   * real object. These are not recorded as defective; they are simply
+   * geometrically cornered. `set-piece` is published at `|t|` 1.6–2.4W
+   * with an across extent of 1.6–3.7W, so its inboard face clears 1W only
+   * in the corner of the joint distribution where the offset is at its
+   * maximum and the extent near its minimum. Drawn independently, it
+   * intrudes on 86% of instances; `camera-post` on 90%.
+   *
+   * Recorded rather than acted on. Whether these are two more defective
+   * rows or an artefact of drawing a bounded `|t|` and a bounded across
+   * independently is a question about the source material, and the answer
+   * belongs upstream. What is certain is that they carry the sparse
+   * preset past the rate its era measures.
+   */
+  readonly corridorArtCornered?: readonly string[];
   /** Target placements per W of lap. */
   readonly density: number;
   readonly densityAccept: readonly [number, number];
@@ -551,7 +619,21 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     gapCvAccept: [1.2, 2.6],
     corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
     vocabulary: "named",
-    corridorArtAccept: 0.17,
+    // 15.5% and not 17.1%: the era's rate re-derived after a
+    // normalisation bug upstream, where three measurement scripts each
+    // divided a lateral offset by a different half-width and one anchored
+    // objects at their own origin rather than their bounds centre.
+    //
+    // THIS PRESET DOES NOT REACH IT and the metric reads 17 of 18. It
+    // draws 20-25% against 15.5%, over on five seeds of twelve, and
+    // `corridorArtCornered` names where it comes from: two archetypes
+    // whose published envelopes intrude on nine instances in ten. The
+    // number is not tuned toward the band and the band is not widened to
+    // meet it — a ceiling that moves to admit the thing it measures is
+    // not a ceiling. See the corridor-art suite, which pins the shortfall
+    // so it cannot quietly become the normal reading.
+    corridorArtAccept: 0.155,
+    corridorArtCornered: ["camera-post", "set-piece"],
     spriteShare: 0.25,
     spriteAccept: [0.15, 0.35],
     polysPerW: 13.8,
@@ -578,7 +660,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     gapCvAccept: [1.2, 2.6],
     corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
     vocabulary: "named",
-    corridorArtAccept: 0.17,
+    corridorArtAccept: 0.155,
     spriteShare: 0.28,
     spriteAccept: [0.18, 0.38],
     polysPerW: 18.9,
@@ -604,7 +686,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
   dense: {
     gapCvAccept: [1.0, 2.6],
     vocabulary: "geometry",
-    corridorArtAccept: 0.32,
+    corridorArtAccept: 0.322,
     spriteShare: 0.0,
     spriteAccept: [0, 0.05],
     polysPerW: 18.8,
@@ -617,10 +699,20 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     // Measured over all 7,371 objects of the era this preset reproduces,
     // where these used to be the EARLIER era's authored targets — the one
     // place a geometry-vocabulary preset was still fitted against a named
-    // -vocabulary number. Every entry sits inside the authored band it
-    // replaces, so this is not a loosening: it is the point in each band
-    // that the era actually occupies.
-    bands: { over: 0.164, verge: 0.075, near: 0.266, mid: 0.352, far: 0.14, distant: 0.004 },
+    // -vocabulary number.
+    //
+    // RE-DERIVED after a normalisation bug upstream. An object's position
+    // in the track frame is its lateral offset over a half-width, and
+    // there are two defensible half-widths: the section's own and the
+    // median across the lap. Three measurement scripts disagreed, and one
+    // also anchored objects at their own origin rather than the bounds
+    // centre the size contract fixes. The local half-width runs 0.50 to
+    // 1.57 times the median and a sixth of the objects sit more than a
+    // fifth off it — junctions and width changes, which is exactly where
+    // scenery crowds in — so it is not rounding. In one consistent
+    // spelling: near is 0.283 and not 0.266, far is 0.128 and not 0.140,
+    // verge is 0.081 and not 0.075.
+    bands: { over: 0.157, verge: 0.081, near: 0.283, mid: 0.346, far: 0.128, distant: 0.005 },
     clusterMean: 1.18,
     coverageFloor: 0.85,
     maxGapW: 25,
