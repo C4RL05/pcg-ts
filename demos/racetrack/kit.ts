@@ -65,6 +65,24 @@ export interface Archetype {
   readonly kind: "sprite" | "mesh";
   /** Signed lateral offset from the centreline, in W, as [min, max] of |t|. */
   readonly lateralW: readonly [number, number];
+  /**
+   * The same offset at p10–p90 rather than at the quartiles, where it has
+   * been measured. `lateralEnvelope` draws from this when it is present.
+   *
+   * The tails are ASYMMETRIC and no ratio recovers them from the IQR:
+   * `near-detail` spans 2.3 interquartile ranges here and skews outward,
+   * `high-mass` reaches 7.38 from a p75 of 5.70. An earlier version of
+   * this file inferred the width as 1.9 IQRs about the midpoint, which is
+   * the right factor for a symmetric distribution and the wrong shape for
+   * these.
+   *
+   * ACROSS HAS MEASURED PERCENTILES TOO and is deliberately not drawn
+   * from them. The corridor-art rate these envelopes are scored against
+   * was simulated upstream from the quartile widths, so widening the
+   * extent would move our number away from a target the wider extent was
+   * never part of. Only the offset was recommended for widening.
+   */
+  readonly lateralW10_90?: readonly [number, number];
   /** Height above the local track surface, in W. */
   readonly heightW: readonly [number, number];
   /**
@@ -220,18 +238,18 @@ const NAMED_ARCHETYPES: readonly Archetype[] = [
  * not contain.
  */
 const GEOMETRY_ARCHETYPES: readonly Archetype[] = [
-  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.1, 3.3], heightW: [0.9, 2.1], baseW: [-1.05, 0.05], footprintW: [3.5, 4.9], alongW: [3.5, 4.9], acrossW: [3.2, 4.5], tallnessW: [3.3, 4.9], polygons: 22, rate: 15.9, cluster: 1.5, outsideBias: 0.59, affinity: [1.05, 0.97, 0.91, 1.04] },
-  { id: "near-mass", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 2.6], heightW: [0.1, 1.0], baseW: [-1.22, -0.04], footprintW: [2.5, 3.6], alongW: [2.5, 3.6], acrossW: [2.3, 3.3], tallnessW: [1.8, 3.0], polygons: 12, rate: 13.4, cluster: 1.6, outsideBias: 0.54, affinity: [1.08, 1.06, 0.93, 0.78] },
-  { id: "outer-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.8, 5.5], heightW: [0.8, 2.2], baseW: [-2.8, -0.79], footprintW: [5.4, 7.8], alongW: [4.3, 7.1], acrossW: [5.4, 7.8], tallnessW: [5.3, 8.5], polygons: 21, rate: 10.1, cluster: 1.5, outsideBias: 0.8, affinity: [0.89, 1.09, 1.13, 1.03] },
-  { id: "near-detail", zone: "Z3", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 3.0], heightW: [0.2, 1.2], baseW: [-0.53, 0.43], footprintW: [1.5, 2.4], alongW: [1.5, 2.4], acrossW: [0.9, 1.9], tallnessW: [0.9, 2.1], polygons: 4, rate: 10.0, cluster: 1.8, outsideBias: 0.65, affinity: [1.2, 1.08, 0.7, 0.71] },
-  { id: "far-mass", zone: "Z5", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [4.7, 7.3], heightW: [0.9, 2.8], baseW: [-0.82, 0.69], footprintW: [2.7, 4.4], alongW: [2.6, 4.0], acrossW: [2.7, 4.4], tallnessW: [3.0, 4.3], polygons: 10, rate: 7.6, cluster: 1.7, outsideBias: 0.85, affinity: [1.2, 0.98, 0.8, 0.69] },
-  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.0, 0.3], heightW: [0.4, 1.7], baseW: [-1.96, -0.23], footprintW: [4.1, 6.5], alongW: [3.5, 5.3], acrossW: [4.1, 6.5], tallnessW: [3.5, 6.0], polygons: 44, rate: 7.5, cluster: 1.1, outsideBias: 0.66, affinity: [1.32, 0.88, 0.7, 0.58] },
-  { id: "micro-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.2, 2.8], heightW: [0.7, 2.9], baseW: [0.32, 2.73], footprintW: [0.2, 0.7], alongW: [0.2, 0.6], acrossW: [0.2, 0.7], tallnessW: [0.2, 0.7], polygons: 4, rate: 6.9, cluster: 2.6, outsideBias: 0.53, affinity: [1.09, 0.94, 1.01, 0.75] },
-  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 3.0], heightW: [0.8, 1.4], baseW: [-0.14, 0.29], footprintW: [1.3, 2.3], alongW: [1.2, 2.1], acrossW: [1.3, 2.3], tallnessW: [1.7, 2.5], polygons: 20, rate: 5.4, cluster: 1.2, outsideBias: 0.51, affinity: [0.89, 1.22, 1.0, 1.02] },
-  { id: "overhead", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.1, 0.6], heightW: [1.4, 3.3], baseW: [0.0, 1.87], footprintW: [2.4, 4.0], alongW: [1.7, 3.8], acrossW: [2.4, 4.0], tallnessW: [1.7, 3.4], polygons: 7, rate: 5.0, cluster: 1.5, outsideBias: 0.57, affinity: [1.43, 0.67, 0.54, 0.81] },
-  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.8, 5.7], heightW: [4.5, 6.7], baseW: [0.05, 3.18], footprintW: [4.2, 8.4], alongW: [4.1, 7.9], acrossW: [4.2, 8.4], tallnessW: [4.8, 10.1], polygons: 18, rate: 4.8, cluster: 1.6, outsideBias: 0.82, affinity: [1.14, 0.74, 0.81, 1.22] },
-  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.2, 4.8], heightW: [3.7, 5.8], baseW: [2.78, 4.69], footprintW: [1.5, 2.9], alongW: [1.2, 2.9], acrossW: [1.5, 2.7], tallnessW: [1.2, 3.2], polygons: 4, rate: 4.4, cluster: 2.0, outsideBias: 0.81, affinity: [1.31, 0.79, 0.74, 0.71] },
-  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 5.5], heightW: [-4.9, -2.9], baseW: [-9.63, -6.31], footprintW: [3.9, 8.7], alongW: [3.6, 8.2], acrossW: [3.9, 8.7], tallnessW: [4.6, 10.8], polygons: 10, rate: 2.1, cluster: 1.7, outsideBias: 0.48, affinity: [1.38, 1.06, 0.46, 0.54] },
+  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.1, 3.3], lateralW10_90: [1.62, 3.75], heightW: [0.9, 2.1], baseW: [-1.05, 0.05], footprintW: [3.5, 4.9], alongW: [3.5, 4.9], acrossW: [3.2, 4.5], tallnessW: [3.3, 4.9], polygons: 22, rate: 15.9, cluster: 1.5, outsideBias: 0.59, affinity: [1.05, 0.97, 0.91, 1.04] },
+  { id: "near-mass", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 2.6], lateralW10_90: [1.45, 3.22], heightW: [0.1, 1.0], baseW: [-1.22, -0.04], footprintW: [2.5, 3.6], alongW: [2.5, 3.6], acrossW: [2.3, 3.3], tallnessW: [1.8, 3.0], polygons: 12, rate: 13.4, cluster: 1.6, outsideBias: 0.54, affinity: [1.08, 1.06, 0.93, 0.78] },
+  { id: "outer-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.8, 5.5], lateralW10_90: [3.21, 7.48], heightW: [0.8, 2.2], baseW: [-2.8, -0.79], footprintW: [5.4, 7.8], alongW: [4.3, 7.1], acrossW: [5.4, 7.8], tallnessW: [5.3, 8.5], polygons: 21, rate: 10.1, cluster: 1.5, outsideBias: 0.8, affinity: [0.89, 1.09, 1.13, 1.03] },
+  { id: "near-detail", zone: "Z3", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 3.0], lateralW10_90: [1.03, 4.19], heightW: [0.2, 1.2], baseW: [-0.53, 0.43], footprintW: [1.5, 2.4], alongW: [1.5, 2.4], acrossW: [0.9, 1.9], tallnessW: [0.9, 2.1], polygons: 4, rate: 10.0, cluster: 1.8, outsideBias: 0.65, affinity: [1.2, 1.08, 0.7, 0.71] },
+  { id: "far-mass", zone: "Z5", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [4.7, 7.3], lateralW10_90: [3.82, 8.74], heightW: [0.9, 2.8], baseW: [-0.82, 0.69], footprintW: [2.7, 4.4], alongW: [2.6, 4.0], acrossW: [2.7, 4.4], tallnessW: [3.0, 4.3], polygons: 10, rate: 7.6, cluster: 1.7, outsideBias: 0.85, affinity: [1.2, 0.98, 0.8, 0.69] },
+  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.0, 0.3], lateralW10_90: [0.01, 0.84], heightW: [0.4, 1.7], baseW: [-1.96, -0.23], footprintW: [4.1, 6.5], alongW: [3.5, 5.3], acrossW: [4.1, 6.5], tallnessW: [3.5, 6.0], polygons: 44, rate: 7.5, cluster: 1.1, outsideBias: 0.66, affinity: [1.32, 0.88, 0.7, 0.58] },
+  { id: "micro-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.2, 2.8], lateralW10_90: [0.59, 3.49], heightW: [0.7, 2.9], baseW: [0.32, 2.73], footprintW: [0.2, 0.7], alongW: [0.2, 0.6], acrossW: [0.2, 0.7], tallnessW: [0.2, 0.7], polygons: 4, rate: 6.9, cluster: 2.6, outsideBias: 0.53, affinity: [1.09, 0.94, 1.01, 0.75] },
+  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 3.0], lateralW10_90: [1.4, 3.73], heightW: [0.8, 1.4], baseW: [-0.14, 0.29], footprintW: [1.3, 2.3], alongW: [1.2, 2.1], acrossW: [1.3, 2.3], tallnessW: [1.7, 2.5], polygons: 20, rate: 5.4, cluster: 1.2, outsideBias: 0.51, affinity: [0.89, 1.22, 1.0, 1.02] },
+  { id: "overhead", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.1, 0.6], lateralW10_90: [0.01, 1.09], heightW: [1.4, 3.3], baseW: [0.0, 1.87], footprintW: [2.4, 4.0], alongW: [1.7, 3.8], acrossW: [2.4, 4.0], tallnessW: [1.7, 3.4], polygons: 7, rate: 5.0, cluster: 1.5, outsideBias: 0.57, affinity: [1.43, 0.67, 0.54, 0.81] },
+  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.8, 5.7], lateralW10_90: [1.3, 7.38], heightW: [4.5, 6.7], baseW: [0.05, 3.18], footprintW: [4.2, 8.4], alongW: [4.1, 7.9], acrossW: [4.2, 8.4], tallnessW: [4.8, 10.1], polygons: 18, rate: 4.8, cluster: 1.6, outsideBias: 0.82, affinity: [1.14, 0.74, 0.81, 1.22] },
+  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.2, 4.8], lateralW10_90: [1.51, 6.11], heightW: [3.7, 5.8], baseW: [2.78, 4.69], footprintW: [1.5, 2.9], alongW: [1.2, 2.9], acrossW: [1.5, 2.7], tallnessW: [1.2, 3.2], polygons: 4, rate: 4.4, cluster: 2.0, outsideBias: 0.81, affinity: [1.31, 0.79, 0.74, 0.71] },
+  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 5.5], lateralW10_90: [0.79, 8.09], heightW: [-4.9, -2.9], baseW: [-9.63, -6.31], footprintW: [3.9, 8.7], alongW: [3.6, 8.2], acrossW: [3.9, 8.7], tallnessW: [4.6, 10.8], polygons: 10, rate: 2.1, cluster: 1.7, outsideBias: 0.48, affinity: [1.38, 1.06, 0.46, 0.54] },
 ];
 
 /**
@@ -289,39 +307,44 @@ export const AFFINITY: Record<AffinityProfile, readonly [number, number, number,
  * The lateral envelope to DRAW from, which is not always the one the kit
  * publishes.
  *
- * Every envelope in both kits is an interquartile range, and for `|t|` in
- * the geometry vocabulary that is too narrow to reproduce the era it
- * describes: no cluster's IQR reaches below 1.21W, so the verge band
- * (1.0–1.5W) is only reachable from tails the IQR discards, and the
- * vocabulary structurally cannot produce the 7.5% verge occupancy that
- * was measured. The published envelopes over-produce the near band by
- * eleven points as a direct consequence, and forcing the mix back with
+ * The published `|t|` is an interquartile range, and for the geometry
+ * vocabulary that is too narrow to reproduce the era it describes: no
+ * cluster's IQR reaches below 1.21W, so the verge band (1.0–1.5W) is
+ * only reachable from tails the IQR discards, and the vocabulary
+ * structurally cannot produce the 7.5% verge occupancy that was
+ * measured. The published envelopes over-produce the near band by eleven
+ * points as a direct consequence, and forcing the mix back with
  * per-archetype rate weights takes the excess out of exactly the band
  * whose across extents reach the corridor.
  *
- * So `|t|` is drawn at p10–p90 instead. Those percentiles are not
- * published, and the widening is INFERRED: for a symmetric distribution
- * p10–p90 spans about 1.9 interquartile ranges, so the IQR is stretched
- * by that factor about its own midpoint. Clamped at zero because `|t|` is
- * a magnitude.
+ * So `|t|` is drawn at p10–p90 where those have been measured. That is
+ * every row of the geometry kit; `micro-detail` at 0.59 and `near-detail`
+ * at 1.03 are what reach the verge, and the quartiles put neither below
+ * 1.21. Clamped at zero because `|t|` is a magnitude.
  *
- * The named kit is left alone: its bands already start at 1.05W, so the
- * verge is reachable and nothing is being forced.
+ * The named kit has no measured percentiles and needs none: its bands
+ * already start at 1.05W, so the verge is reachable and nothing is being
+ * forced.
+ *
+ * WIDENING CARRIES A CLAMP, and it is a rule rather than a measurement.
+ * `micro-detail` measures a p10 of 0.59W in a band that is not over the
+ * track by design, so the honest envelope puts anchors inside the
+ * corridor at driving height — the source material has small deck-level
+ * furniture there and the technique's inviolable-corridor rule does not.
+ * That rule is one of the places the ruleset chooses to be better than
+ * what it reproduces, the same trade as the sightline cull, so the floor
+ * of a widened envelope is the corridor's edge for every band except the
+ * two that mean "over the track" (Z7) and "under it" (Z8). It costs
+ * `micro-detail` the mass below 1.0W and nothing else: every other
+ * measured p10 already clears the corridor.
  */
 export function lateralEnvelope(a: Archetype): readonly [number, number] {
-  if ((a.vocabulary ?? "named") !== "geometry") return a.lateralW;
-  const [lo, hi] = a.lateralW;
-  const mid = (lo + hi) / 2;
-  const half = ((hi - lo) / 2) * P10_P90_OVER_IQR;
-  return [Math.max(0, mid - half), mid + half];
+  const wide = a.lateralW10_90;
+  if (!wide) return a.lateralW;
+  const overOrUnder = a.zone === "Z7" || a.zone === "Z8";
+  const floor = overOrUnder ? 0 : CORRIDOR.halfWidthW;
+  return [Math.max(floor, wide[0]), Math.max(floor, wide[1])];
 }
-
-/**
- * How many interquartile ranges span p10 to p90 for a symmetric
- * distribution. For a normal one the IQR is 1.349 standard deviations and
- * p10–p90 is 2.563, so the ratio is 1.90.
- */
-const P10_P90_OVER_IQR = 1.9;
 
 export function extentsOf(a: Archetype): {
   readonly along: readonly [number, number];
@@ -350,26 +373,34 @@ export interface Preset {
    * The gap-CV band for a repeating family: clumped, but not clumped into
    * uselessness.
    *
-   * Per preset because it depends on the vocabulary's own cluster sizes,
-   * and the reasoning is the spec's rather than ours. What the rule
-   * excludes is METRONOMIC placement, which sits below 0.4; the floor is
-   * put where "a sampler built from geometric clusters and exponential
-   * gaps lands" instead, because that is where the distinction actually
-   * lies. For the named kit, whose measured mean cluster sizes run 1.0 to
-   * 3.4, that sampler lands at 1.4–1.6 and the floor is 1.2. The geometry
-   * kit measurably clumps less — nine of its twelve sit between 1.1 and
-   * 1.8, and 86% of that era's clusters hold a single instance against
-   * 66% — so the same sampler lands near 1.0–1.4 and the same argument
-   * puts the floor lower.
+   * Per preset because the floor has to sit below the LOWEST gap CV
+   * MEASURED in the vocabulary it scores — any higher and the metric
+   * fails a faithful reproduction of a real archetype. The named kit's
+   * lowest puts that floor at 1.2. The geometry kit's is `enclosure` at
+   * 1.12, measured over 592 objects, so the same rule puts its floor at
+   * 1.0.
    *
-   * WHAT THIS DOES NOT EXCUSE. That era's own measured median gap CV is
-   * 2.21, ABOVE the earlier one's 2.01, which a Poisson anchor process
-   * cannot produce at those cluster sizes: `CV = sqrt(2m - 1)` caps out
-   * near 1.4. Its anchors must be over-dispersed at a scale beyond the
-   * 1.5W rule its cluster sizes were measured with. That is a real
-   * shortfall in this sampler and the band being lowered here does not
-   * close it — it stops a faithful draw failing for a reason the sampler
-   * owns rather than the kit.
+   * That is the whole argument, and it is deliberately NOT "where our
+   * sampler lands": a floor that follows the implementation cannot fail
+   * it. What the rule excludes is METRONOMIC placement, which sits below
+   * 0.4. Everything above the vocabulary's own measured minimum is a
+   * rhythm something in the source material actually has.
+   *
+   * THE FLOOR IS NOT THE TARGET, which is the mistake this band invited
+   * once already. The like-for-like target is the PER-ARCHETYPE median
+   * gap CV, 1.78 for the geometry kit over a spread of 1.12 to 2.63. It
+   * is not the 2.21 this comment used to quote: that figure is measured
+   * per source name-family over 3,014 families, and a family is a sparse
+   * subset of an archetype, so its gaps are longer and more variable.
+   * Different granularity, not a different answer.
+   *
+   * The sampler reaches it now. `CV = sqrt(2m - 1)` caps near 1.41 at the
+   * measured cluster sizes and that formula is right — it just describes
+   * a HOMOGENEOUS process, and the source material is not homogeneous.
+   * The density envelope supplies the rest; see `envelope`, which reads
+   * 1.81 against the measured 1.78 over thirty seeds. This band stays
+   * wide because it scores a distribution and not a point, but nothing
+   * in this kit is leaning on its floor any more.
    */
   readonly gapCvAccept: readonly [number, number];
   /**
@@ -386,6 +417,15 @@ export interface Preset {
    * comparing two different things, so the ones upstream has recorded as
    * defective are left out of this metric — and only this one. They are
    * still placed, still drawn, and still counted everywhere else.
+   *
+   * ONLY TWO OF THE FOUR CAN MOVE THE NUMBER. `verge-rail` is the six
+   * points above. `pipe-run`'s mean inboard face sits at exactly 1.0W,
+   * which makes it a coin flip by construction — 50% under any sampling
+   * model, against a measured 10.4%. The other two are here for one rule
+   * instead of two: `billboard`'s inboard face runs 2.6–5.45W so it never
+   * intrudes, and `enclosure-shell` is anchored at 0–0.6W so it is never
+   * side-anchored and never reaches the denominator either. Excluding
+   * them is harmless and changes nothing.
    */
   readonly corridorArtExclude?: readonly string[];
   /**
@@ -435,7 +475,65 @@ export interface Preset {
   /** Peak roll in degrees, reached asymptotically at referenceRadiusW. */
   readonly bankMaxDeg: number;
   readonly referenceRadiusW: number;
-  /** Depth of the periodic density envelope, 0..1. */
+  /**
+   * Depth of the periodic density envelope. Zero is flat and 1 is as deep
+   * as the harmonic sum goes before it would ask for a negative density;
+   * past that it is still meaningful and clips against the floor under
+   * the intensity, which is where the late preset sits and why the cost
+   * of that is spelled out below.
+   *
+   * It is also the term that carries the gap rhythm, which is not obvious
+   * from the name. A cluster process with exponential gaps and a
+   * geometric cluster size gives `CV = sqrt(2m - 1)`, which at the
+   * geometry kit's measured m of about 1.5 caps near 1.41 — short of that
+   * kit's measured per-archetype median of 1.78. The formula is right and
+   * describes a HOMOGENEOUS process; the source material is not
+   * homogeneous, and the density varying along the lap contributes gap CV
+   * of its own. Clustering gets most of the way and this depth carries
+   * the rest.
+   *
+   * MEASURED ON THE LATE PRESET, thirty seeds per point, correction loop
+   * on, everything else held: depth 1.0 gives a gap CV of 1.32 and a
+   * per-tenth density CV of 0.25; 1.4 gives 1.54 and 0.31; 1.8 gives 1.81
+   * and 0.37. Monotone in both, so here the depth is the knob and the
+   * cluster size is not.
+   *
+   * WHY THAT PRESET SITS AT 1.8. The depth is a free parameter of this
+   * sampler — nothing measures it, and upstream's own figures are in its
+   * generator's normalisation rather than in ours — while the gap CV is
+   * measured. So the depth goes where the measurement comes out: that
+   * kit's per-archetype median gap CV is 1.78 and this reads 1.81. The
+   * per-tenth density CV lands at 0.37, mid-band against the 0.25–0.6
+   * the source material measures, where at 0.7 this preset read 0.20 and
+   * was shallower than the thing it reproduces.
+   *
+   * WHAT IT COSTS is stated rather than hidden. The harmonic sum reaches
+   * a peak amplitude of 1, so any depth past 1.0 asks for a negative
+   * density somewhere and meets the floor under the intensity instead.
+   * At 1.8 that is about a ninth of the lap sitting at the floor. The
+   * two coverage metrics are the guard and they hold with room: 94% of
+   * the lap stays within 2W of a placement and the longest empty stretch
+   * runs 5.7W against a limit of 34W, because the fill pass closes
+   * anything past 12W.
+   *
+   * THE DEPTH RESONATES WITH THE TRACK, which is worth knowing before
+   * anyone nudges this. Left/right balance is clean over thirty seeds at
+   * 1.0, 1.4 and 1.8 and fails on a third to a half of them at 1.2 and
+   * 1.6 — a deterministic function of depth with seed noise on top, not
+   * noise. A deeper envelope concentrates placements into fewer arcs of
+   * the lap, and which corners those arcs land on is fixed by the track,
+   * so some depths pile onto same-handed bends faster than the balance
+   * pass can answer. Move this knob and re-measure metric 9; do not read
+   * a nearby value as equivalent.
+   *
+   * THE TWO NAMED PRESETS ARE LEFT SHALLOW, and it is a known shortfall
+   * rather than a judgement that they are fine. Over six seeds they read
+   * 0.23 and 0.22 per tenth, just under that same 0.25 floor. Deepening
+   * is not the fix for them: swept over 0.6 to 1.15 the sparse preset
+   * reads 0.23, 0.32, 0.26, 0.28, 0.28 — no monotone at all, so whatever
+   * governs its density variation is not this. Finding out what is comes
+   * before turning a knob that demonstrably does not move it.
+   */
   readonly envelope: number;
   /** Per-archetype rate multipliers: the era's taste. */
   readonly kitBias: Readonly<Record<string, number>>;
@@ -531,7 +629,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     outsideAccept: [0.55, 0.72],
     bankMaxDeg: 14.3,
     referenceRadiusW: 7,
-    envelope: 0.7,
+    envelope: 1.8,
     kitBias: { "terrain-shell": 0.8, "set-piece": 1.3, "wall-panel": 1.2, "tree-group": 0.5, bush: 0.6, tree: 0.8, "verge-rail": 1.4 },
     lateralPush: { "tree-group": 0.7, bush: 0.75, billboard: 0.85, dome: 0.85, "wall-panel": 0.85 },
   },

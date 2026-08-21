@@ -26,6 +26,7 @@ import {
   bandOf,
   clampNum,
   lapMod,
+  lateralEnvelope,
   tenthOf,
 } from "./kit.js";
 
@@ -84,9 +85,16 @@ export function noCorrections(): Corrections {
  * The share of an archetype's draws landing in each lateral band.
  *
  * Deterministic quadrature rather than a Monte-Carlo: the lateral and
- * height envelopes are uniform and independent, so a 24x24 grid over the
- * unit square integrates them exactly enough, and it removes a random
- * seed from a calibration that has to reproduce.
+ * height envelopes are independent, so a 24x24 grid over the unit square
+ * integrates them exactly enough, and it removes a random seed from a
+ * calibration that has to reproduce.
+ *
+ * The lateral envelope passed in must be the one the GRAPH DRAWS FROM —
+ * `lateralEnvelope`, not the published `lateralW`. Where the two differ
+ * this function is the fitter's whole model of where an archetype lands,
+ * so a disagreement here does not shift the mix slightly: it aims the
+ * band fitting at a distribution nothing produces, and metric 4 fails
+ * while every correction pass drives further away from the target.
  */
 function bandFractions(
   lateralW: readonly [number, number],
@@ -128,7 +136,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   }
   const frac: Record<string, Record<string, number>> = {};
   for (const a of KIT) {
-    frac[a.id] = bandFractions(a.lateralW, a.heightW, preset.lateralPush[a.id] ?? 1);
+    frac[a.id] = bandFractions(lateralEnvelope(a), a.heightW, preset.lateralPush[a.id] ?? 1);
   }
   const bands = Object.keys(preset.bands);
 
@@ -518,6 +526,21 @@ export function score(
   add(6, "longest empty stretch (W)", longest, longest <= preset.maxGapW, `<= ${preset.maxGapW}`);
 
   // 7. How much the density varies along the lap.
+  //
+  // THE BAND IS WIDER THAN THE MEASUREMENT, deliberately. The source
+  // material measures 0.25-0.6 per tenth; this accepts 0.12-0.75, because
+  // a CV over ten buckets of one lap carries real sampling noise — held
+  // at a fixed envelope depth and varied only by seed, six laps of the
+  // late preset spread over 0.13, which is a third of the measured band's
+  // own width. Scoring the measurement directly would fail laps for the
+  // seed rather than for the dressing.
+  //
+  // It is a band and not a ceiling, so BOTH ends mean something, and the
+  // floor is the one that has caught something: the late preset used to
+  // read 0.20 here, inside this band and below the measured one, which is
+  // what said its density envelope was shallower than the material it
+  // reproduces. See `envelope` in the kit for what that cost and what
+  // fixed it.
   const TENTHS = 10;
   const buckets = new Array<number>(TENTHS).fill(0);
   for (const p of placements) {
@@ -861,7 +884,8 @@ export function correct(preset: Preset, report: Report, c: Corrections): Correct
     );
   }
   for (const a of KIT) {
-    const band = bandOf((a.lateralW[0] + a.lateralW[1]) / 2, (a.heightW[0] + a.heightW[1]) / 2);
+    const drawn = lateralEnvelope(a);
+    const band = bandOf((drawn[0] + drawn[1]) / 2, (a.heightW[0] + a.heightW[1]) / 2);
     const target = preset.bands[band] ?? 0;
     const achieved = report.bandShare[band] ?? 0;
     if (target > 0 && achieved > 0) {

@@ -1321,6 +1321,20 @@ function placeFromPack(
   const negOf = byArchetype((x) => ((arch(x).offsetSizeR ?? 0) < 0 ? 1 : 0), 0);
   // `neg ? 1 - u : u`, without a branch: at neg = 0 it is u, at 1 it is 1 - u.
   const uToward = add(negOf, mul(sub(1, mul(2, negOf)), uAcross));
+  // A UNIFORM DRAW OVER THE WIDENED ENVELOPE WAS TRIED AND REVERTED, so
+  // that it is not tried again. The argument for it was good: `tri` is
+  // shaped for an interquartile range, where half the real instances fall
+  // outside and a uniform draw invents mass at both ends, and a p10–p90
+  // envelope has neither problem — only a fifth fall outside it, and
+  // pulling a range twice as wide to its midpoint concentrates it harder
+  // than the draw it replaced.
+  //
+  // Measured as an A/B at the shipped envelope depth, six seeds each,
+  // nothing else moved, it is not a win. The verge band goes 4.2% to
+  // 4.9% against a target of 7.5% — better — while the near band goes
+  // 27.6% to 23.3% against 26.6% and corridor art goes 22.9% to 20.6%
+  // against an era that measures 32.4%. One band closer, two further, and
+  // a second sampler to explain. So the triangular draw stays.
   const uLat = lerp(tri(`${id}-lat`), uToward, wOf);
   const lat = rangeByArchetype((x) => lateralEnvelope(arch(x)));
   const hgt = rangeByArchetype((x) => arch(x).heightW);
