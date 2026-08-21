@@ -621,8 +621,8 @@ overlay.addNote(
   "Every box is one placement, drawn at its measured extents along the " +
     "lap and across it and coloured by the zone it sits in. \u201cArt in " +
     "the corridor\u201d is how much of it reaches over the track at driving " +
-    "height \u2014 reported, not scored, because the source material does it " +
-    "too, on 9% to 18% of instances. The faded copy is the same lap from " +
+    "height. It is scored against a ceiling rather than zero, because the " +
+    "source material does it too. The faded copy is the same lap from " +
     "directly above; the marker is where the driven view has got to. " +
     "Space pauses; drag and scroll move the plan.",
 );
