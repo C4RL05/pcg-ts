@@ -63,7 +63,7 @@ import {
   noCorrections,
 } from "./calibrate.js";
 import { buildTrackDressingGraph } from "./dressing.js";
-import { PRESETS, type Preset } from "./kit.js";
+import { CORRIDOR, PRESETS, type Preset } from "./kit.js";
 import { TRACK, better, col, scoreCook } from "./read.js";
 
 // ------------------------------------------------------------------ //
@@ -291,12 +291,18 @@ const BOX_EDGES: readonly (readonly [number, number])[] = [
  * path with a box where the asset would be, not a second description of
  * where things are.
  */
-function buildBoxEdges(placements: Geometry): LineSegments {
+function buildBoxEdges(placements: Geometry): { lines: LineSegments; nudged: number } {
   const count = placements.pointCount;
   const p = col(placements, "P");
   const rot = col(placements, "rot");
   const scale = col(placements, "scale");
   const zone = col(placements, "zone");
+  const lateral = col(placements, "lateralW");
+  const height = col(placements, "heightW");
+  // pack1 is (rightB, radiusW): the banked lateral unit vector the graph
+  // itself placed this point along, so the box can be moved along the
+  // same axis without re-deriving a frame.
+  const pack1 = col(placements, "pack1");
 
   const positions = new Float32Array(count * BOX_EDGES.length * 2 * 3);
   const colors = new Float32Array(count * BOX_EDGES.length * 2 * 3);
@@ -306,7 +312,10 @@ function buildBoxEdges(placements: Geometry): LineSegments {
   const siz = new Vector3();
   const colour = new Color();
   const corners = BOX_CORNERS.map(() => new Vector3());
+  const right = new Vector3();
+  const axis = new Vector3();
   let at = 0;
+  let nudged = 0;
 
   for (let i = 0; i < count; i++) {
     // `P` IS THE CENTRE, and reading it as a base is a mistake the kit
@@ -316,6 +325,43 @@ function buildBoxEdges(placements: Geometry): LineSegments {
     pos.set(p[i * 3] / W, p[i * 3 + 1] / W, p[i * 3 + 2] / W);
     quat.set(rot[i * 4], rot[i * 4 + 1], rot[i * 4 + 2], rot[i * 4 + 3]);
     siz.set(scale[i * 3] / W, scale[i * 3 + 1] / W, scale[i * 3 + 2] / W);
+
+    // KEEP THE CORRIDOR CLEAR, which the anchor alone does not.
+    //
+    // `CORRIDOR` is tested against where a placement is PUT. `footprintW`
+    // is the plan size of the art that will stand there, and the two do
+    // not have to agree: a `terrain-shell` is 8..9.5 W across and is
+    // anchored 2.3..3.8 W out, so a box centred on a perfectly legal
+    // anchor still reaches over the racing line. Drawn that way the page
+    // asserts a solid block across the track that no rule in the
+    // technique believes in — and it is the picture, not the rule, that
+    // is wrong: `lateralW` reads as the offset of the thing's
+    // track-facing side (every side archetype's band starts at 1.05 W,
+    // just outside the corridor, which only makes sense that way).
+    //
+    // So a box whose near face would enter the corridor is slid outboard
+    // along its own `rightB` by exactly the shortfall — never more, and
+    // never at all above the corridor ceiling, where a gantry or a tunnel
+    // shell is supposed to span the track. How often that was needed is
+    // reported in the panel rather than hidden: it is a real gap between
+    // what the rule checks and what the kit describes.
+    if (height[i] < CORRIDOR.ceilingW) {
+      right.set(pack1[i * 4], pack1[i * 4 + 1], pack1[i * 4 + 2]);
+      // The box is oriented, so its half-extent ACROSS the track is the
+      // support of the rotated box along `right`, not half of any one
+      // side.
+      const across =
+        0.5 *
+        (Math.abs(right.dot(axis.set(1, 0, 0).applyQuaternion(quat))) * siz.x +
+          Math.abs(right.dot(axis.set(0, 1, 0).applyQuaternion(quat))) * siz.y +
+          Math.abs(right.dot(axis.set(0, 0, 1).applyQuaternion(quat))) * siz.z);
+      const shortfall = CORRIDOR.halfWidthW - (Math.abs(lateral[i]) - across);
+      if (shortfall > 0) {
+        pos.addScaledVector(right, Math.sign(lateral[i]) * shortfall);
+        nudged++;
+      }
+    }
+
     m.compose(pos, quat, siz);
     for (let c = 0; c < BOX_CORNERS.length; c++) {
       const [cx, cy, cz] = BOX_CORNERS[c];
@@ -340,7 +386,7 @@ function buildBoxEdges(placements: Geometry): LineSegments {
   geo.setAttribute("color", new BufferAttribute(colors, 3));
   const lines = new LineSegments(geo, RIDE_MAT.box);
   lines.frustumCulled = false;
-  return lines;
+  return { lines, nudged };
 }
 
 /**
@@ -594,6 +640,7 @@ window.addEventListener("keydown", (e) => {
 
 const statScore = overlay.addStat("metrics passed");
 const statPlacements = overlay.addStat("placements");
+const statNudged = overlay.addStat("nudged off the track");
 const statLap = overlay.addStat("lap");
 const statCook = overlay.addStat("cook");
 const statStation = overlay.addStat("station");
@@ -603,7 +650,9 @@ overlay.addNote(
   "Every box is one placement, at its own footprint x tallness and " +
     "coloured by the zone it sits in. The faded copy is the same lap seen " +
     "from directly above; the marker is where the driven view has got to. " +
-    "Space pauses; drag and scroll move the plan.",
+    "Space pauses; drag and scroll move the plan. \u201cNudged\u201d counts " +
+    "boxes slid clear of the track: the corridor rule tests where a " +
+    "placement is anchored, not how wide the art on it turns out to be.",
 );
 
 const tickFps = createFpsMeter(statFps);
@@ -676,7 +725,8 @@ async function regenerate(): Promise<void> {
   try {
     lap = await dressLap(PRESETS[presetName], seed);
     clear();
-    boxes = buildBoxEdges(lap.placements);
+    const built = buildBoxEdges(lap.placements);
+    boxes = built.lines;
     roadMesh = buildRoad(lap.road);
     spine = buildSpine(lap.frames);
     ride = buildRide(lap.frames, lap.lapW);
@@ -687,6 +737,7 @@ async function regenerate(): Promise<void> {
     station = 0;
     statScore(`${lap.passed} / ${lap.total}`);
     statPlacements(lap.placements.pointCount);
+    statNudged(`${built.nudged} of ${lap.placements.pointCount}`);
     statLap(`${lap.lapW.toFixed(0)} W`);
     statCook(`${lap.cookMs.toFixed(0)} ms, ${lap.cooks} cooks`);
     card.textContent = lap.card;

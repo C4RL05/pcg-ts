@@ -19,6 +19,7 @@
 import {
   ARCHETYPES,
   AUXILIARY_FAMILIES,
+  CORRIDOR,
   type Preset,
   SIGHTLINE,
   bandOf,
@@ -581,7 +582,10 @@ export function score(
   // 14. The corridor is inviolable: nothing anchored over the track at
   // driving height, ever.
   const intruding = placements.filter(
-    (p) => Math.abs(p.lateralW) < 1 && p.heightW >= 0 && p.heightW < 1.2,
+    (p) =>
+      Math.abs(p.lateralW) < CORRIDOR.halfWidthW &&
+      p.heightW >= 0 &&
+      p.heightW < CORRIDOR.ceilingW,
   ).length;
   add(14, "corridor intrusions", intruding, intruding === 0, "0");
 

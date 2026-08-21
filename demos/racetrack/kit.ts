@@ -250,6 +250,30 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
  * in both is how a test starts failing for a reason that has nothing to
  * do with the code under test.
  */
+/**
+ * The corridor: the volume over the track that nothing may be anchored
+ * in, at the height a driver occupies.
+ *
+ * Here rather than as literals inside the metric for the reason SIGHTLINE
+ * gives below — it now has two readers, the score and the demo that draws
+ * the result, and two typings of the same number is how a picture starts
+ * disagreeing with the card beside it.
+ *
+ * NOTE WHAT IT MEASURES: the ANCHOR. A placement's `footprintW` is the
+ * plan size of the art that will stand there, and nothing stops that
+ * footprint reaching over the track from an anchor that is legally
+ * outside it — `terrain-shell` is 8..9.5 W across and sits 2.3..3.8 W
+ * out, so centred on its anchor it crosses the centreline. The rule is
+ * about where a thing is PUT, not about how much room it takes once it is
+ * there.
+ */
+export const CORRIDOR = {
+  /** Half-width of the protected volume, in W. */
+  halfWidthW: 1,
+  /** Anything anchored at or above this clears the driver. */
+  ceilingW: 1.2,
+} as const;
+
 export const SIGHTLINE = {
   /** How far ahead the centreline must stay visible. */
   lookAheadW: 12,
