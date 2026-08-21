@@ -179,25 +179,25 @@ export interface Archetype {
  * that grows a branch per archetype.
  */
 const NAMED_ARCHETYPES: readonly Archetype[] = [
-  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], heightW: [0.6, 2.3], baseW: [-1.76, 0.02], footprintW: [8, 9.5], tallnessW: [4, 6], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], offsetSizeR: 0.59, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
-  { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], alongW: [5.1, 6.5], acrossW: [0.8, 2.0], offsetSizeR: 0.43, polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
-  { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], alongW: [0.7, 1.4], acrossW: [0.5, 1.7], offsetSizeR: -0.03, polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
-  { id: "tree-group", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [5.0, 8.0], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], alongW: [0.5, 1.7], acrossW: [0.7, 2.4], offsetSizeR: -0.22, polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
-  { id: "tree", zone: "Z5", profile: "clustered", kind: "mesh", lateralW: [5.0, 7.0], heightW: [2.0, 2.6], footprintW: [1.0, 1.3], tallnessW: [2.1, 2.7], alongW: [0.9, 1.6], acrossW: [0.3, 1.5], offsetSizeR: 0.13, polygons: 30, rate: 5, cluster: 2.4, outsideBias: 0.75 },
-  { id: "set-piece", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.6, 2.4], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], alongW: [3.8, 7.7], acrossW: [1.6, 3.7], offsetSizeR: 0.36, polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
-  { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], tallnessW: [5, 8], alongW: [3.0, 8.3], acrossW: [1.9, 5.3], offsetSizeR: -0.16, polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
-  { id: "overhead-sign", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0.0, 0.5], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], alongW: [0.4, 3.0], acrossW: [2.7, 5.2], offsetSizeR: -0.38, polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
-  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], baseW: [-0.55, -0.36], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], alongW: [1.3, 2.3], acrossW: [0.4, 2.3], offsetSizeR: 0.8, polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
-  { id: "tower", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 3.6], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], alongW: [1.6, 4.1], acrossW: [1.5, 3.1], offsetSizeR: 0.55, polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
-  { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], alongW: [1.9, 5.4], acrossW: [0.3, 4.1], offsetSizeR: 0.3, polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
-  { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], tallnessW: [6, 7.5], alongW: [0.6, 2.8], acrossW: [3.1, 5.2], offsetSizeR: -0.13, polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
-  { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], alongW: [0.3, 1.8], acrossW: [1.0, 2.3], offsetSizeR: -0.09, polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
-  { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], baseW: [0.3, 1.52], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], alongW: [0.7, 0.9], acrossW: [0.6, 1.1], offsetSizeR: -0.09, polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
-  { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], alongW: [3.0, 6.6], acrossW: [3.5, 6.5], offsetSizeR: 0.68, polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
+  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], lateralLadder: [0.0, 0.88, 1.53, 2.37, 2.82, 3.29, 3.85, 4.33, 4.84, 5.62, 7.05, 9.7, 17.29], heightW: [0.6, 2.3], baseW: [-1.76, 0.02], footprintW: [8, 9.5], tallnessW: [4, 6], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], acrossLadder: [0.97, 2.35, 2.78, 3.52, 4.45, 5.28, 6.21, 6.91, 7.74, 8.73, 10.56, 12.05, 19.51], offsetSizeR: 0.59, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
+  { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], lateralLadder: [0.78, 1.37, 1.48, 1.7, 1.8, 1.89, 2.07, 2.22, 2.46, 2.96, 4.22, 6.51, 9.06], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], alongW: [5.1, 6.5], acrossW: [0.8, 2.0], acrossLadder: [0.1, 0.28, 0.39, 0.7, 0.9, 1.15, 1.4, 1.6, 1.82, 2.59, 3.36, 4.51, 6.07], offsetSizeR: 0.43, polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
+  { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], lateralLadder: [1.1, 2.57, 2.98, 4.01, 4.12, 4.6, 4.78, 5.22, 6.18, 6.51, 6.96, 7.36, 9.34], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], alongW: [0.7, 1.4], acrossW: [0.5, 1.7], acrossLadder: [0.13, 0.17, 0.2, 0.3, 0.67, 1.06, 1.29, 1.53, 1.86, 1.94, 2.5, 2.72, 3.41], offsetSizeR: -0.03, polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
+  { id: "tree-group", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [5.0, 8.0], lateralLadder: [0.01, 2.1, 2.44, 3.12, 3.84, 4.59, 5.73, 6.57, 7.65, 8.76, 10.42, 10.66, 14.35], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], alongW: [0.5, 1.7], acrossW: [0.7, 2.4], acrossLadder: [0.02, 0.17, 0.21, 0.5, 0.97, 1.35, 1.6, 1.93, 2.04, 2.67, 5.16, 6.99, 16.16], offsetSizeR: -0.22, polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
+  { id: "tree", zone: "Z5", profile: "clustered", kind: "mesh", lateralW: [5.0, 7.0], lateralLadder: [0.24, 2.69, 3.51, 3.88, 4.51, 5.62, 6.11, 6.51, 7.15, 7.41, 7.72, 8.92, 9.33], heightW: [2.0, 2.6], footprintW: [1.0, 1.3], tallnessW: [2.1, 2.7], alongW: [0.9, 1.6], acrossW: [0.3, 1.5], acrossLadder: [0.06, 0.13, 0.19, 0.2, 0.25, 0.48, 0.68, 1.07, 1.36, 1.47, 1.64, 1.83, 2.0], offsetSizeR: 0.13, polygons: 30, rate: 5, cluster: 2.4, outsideBias: 0.75 },
+  { id: "set-piece", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.6, 2.4], lateralLadder: [0.0, 0.15, 0.77, 1.38, 1.56, 1.78, 2.05, 2.16, 2.37, 2.69, 3.14, 3.87, 6.8], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], alongW: [3.8, 7.7], acrossW: [1.6, 3.7], acrossLadder: [0.24, 0.72, 0.84, 1.16, 1.62, 1.85, 2.29, 2.75, 3.17, 3.96, 5.33, 6.14, 13.93], offsetSizeR: 0.36, polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
+  { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], lateralLadder: [0.0, 0.46, 1.51, 1.82, 2.03, 2.16, 2.3, 2.6, 2.89, 3.84, 6.85, 9.16, 18.86], heightW: [1.6, 2.4], footprintW: [7, 10], tallnessW: [5, 8], alongW: [3.0, 8.3], acrossW: [1.9, 5.3], acrossLadder: [0.09, 0.29, 0.42, 0.86, 1.72, 2.29, 3.2, 4.9, 5.32, 6.1, 6.86, 6.96, 10.32], offsetSizeR: -0.16, polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
+  { id: "overhead-sign", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0.0, 0.5], lateralLadder: [0.0, 0.02, 0.04, 0.07, 0.1, 0.12, 0.17, 0.27, 2.58, 3.53, 4.72, 4.84, 8.47], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], alongW: [0.4, 3.0], acrossW: [2.7, 5.2], acrossLadder: [0.47, 1.66, 1.94, 2.43, 2.72, 3.29, 3.57, 4.11, 4.57, 5.36, 5.98, 6.61, 8.69], offsetSizeR: -0.38, polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
+  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], lateralLadder: [1.22, 1.69, 1.74, 1.94, 1.95, 2.03, 2.12, 2.84, 3.34, 4.66, 5.71, 5.74, 5.76], heightW: [0.4, 0.9], baseW: [-0.55, -0.36], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], alongW: [1.3, 2.3], acrossW: [0.4, 2.3], acrossLadder: [0.31, 0.32, 0.34, 0.4, 0.42, 0.47, 0.84, 1.72, 2.03, 2.29, 2.31, 2.31, 2.32], offsetSizeR: 0.8, polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
+  { id: "tower", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 3.6], lateralLadder: [0.2, 0.48, 1.65, 2.36, 2.96, 2.98, 2.99, 3.69, 3.72, 3.73, 6.93, 8.23, 9.01], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], alongW: [1.6, 4.1], acrossW: [1.5, 3.1], acrossLadder: [0.55, 0.96, 1.06, 1.17, 1.47, 1.92, 2.2, 2.33, 2.5, 3.33, 6.87, 6.95, 7.58], offsetSizeR: 0.55, polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
+  { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], lateralLadder: [0.06, 1.33, 1.84, 2.31, 2.42, 2.56, 2.77, 2.81, 3.55, 4.18, 5.36, 7.66, 12.72], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], alongW: [1.9, 5.4], acrossW: [0.3, 4.1], acrossLadder: [0.0, 0.0, 0.0, 0.02, 0.3, 0.32, 0.6, 2.87, 3.54, 4.13, 4.87, 5.26, 7.69], offsetSizeR: 0.3, polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
+  { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], lateralLadder: [0.01, 0.02, 0.06, 0.15, 0.36, 3.17, 3.73, 4.53, 5.07, 5.3, 7.59, 7.79, 7.84], heightW: [2.4, 3.2], footprintW: [5, 7], tallnessW: [6, 7.5], alongW: [0.6, 2.8], acrossW: [3.1, 5.2], acrossLadder: [0.18, 0.78, 2.25, 2.98, 3.82, 4.32, 4.65, 4.69, 5.1, 5.48, 7.23, 7.35, 12.37], offsetSizeR: -0.13, polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
+  { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], lateralLadder: [0.28, 0.35, 0.49, 0.57, 0.77, 1.37, 1.6, 1.82, 1.96, 2.03, 2.5, 3.39, 8.05], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], alongW: [0.3, 1.8], acrossW: [1.0, 2.3], acrossLadder: [0.31, 0.39, 0.4, 0.92, 0.95, 0.96, 1.08, 1.89, 2.23, 2.29, 2.33, 2.33, 2.38], offsetSizeR: -0.09, polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
+  { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], lateralLadder: [0.01, 0.08, 0.16, 0.33, 0.72, 0.98, 1.28, 1.47, 1.6, 2.12, 2.68, 3.91, 7.24], heightW: [1.3, 1.7], baseW: [0.3, 1.52], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], alongW: [0.7, 0.9], acrossW: [0.6, 1.1], acrossLadder: [0.38, 0.44, 0.52, 0.63, 0.64, 0.71, 0.78, 0.95, 0.95, 2.01, 2.6, 2.65, 3.22], offsetSizeR: -0.09, polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
+  { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], lateralLadder: [0.56, 0.56, 0.91, 0.91, 1.92, 7.3, 7.64, 7.64, 7.92, 8.01, 8.53, 8.53, 8.53], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], alongW: [3.0, 6.6], acrossW: [3.5, 6.5], acrossLadder: [2.85, 2.85, 2.86, 2.86, 3.56, 4.91, 5.67, 5.67, 6.55, 6.65, 7.34, 7.34, 7.34], offsetSizeR: 0.68, polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
   { id: "skyline", zone: "Z6", profile: "built", kind: "mesh", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], alongW: [6, 10], acrossW: [6, 10], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
   { id: "banner", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], alongW: [0.6, 1.2], acrossW: [13.2, 13.6], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
-  { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], alongW: [0.5, 3.3], acrossW: [0.7, 5.1], offsetSizeR: 0.26, polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
-  { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], tallnessW: [0.6, 1.2], alongW: [0.3, 2.0], acrossW: [1.7, 3.7], offsetSizeR: 0.04, polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
+  { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], lateralLadder: [0.0, 0.05, 0.06, 0.23, 0.29, 0.79, 0.89, 1.18, 1.31, 1.39, 2.43, 7.31, 19.03], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], alongW: [0.5, 3.3], acrossW: [0.7, 5.1], acrossLadder: [0.46, 0.49, 0.54, 0.58, 0.61, 0.64, 0.65, 0.76, 0.78, 6.43, 12.28, 12.91, 13.09], offsetSizeR: 0.26, polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
+  { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], lateralLadder: [0.0, 0.0, 0.02, 0.09, 0.24, 0.51, 2.21, 2.71, 2.91, 3.02, 3.27, 3.39, 3.82], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], tallnessW: [0.6, 1.2], alongW: [0.3, 2.0], acrossW: [1.7, 3.7], acrossLadder: [0.01, 0.16, 1.1, 1.71, 1.87, 2.7, 2.99, 3.32, 3.49, 3.72, 4.86, 5.08, 6.66], offsetSizeR: 0.04, polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
 ];
 
 /** Placed by RULE rather than by density: no rate, no cumulative draw. */
@@ -383,38 +383,41 @@ function triQuantile(u: number): number {
 export function lateralAt(a: Archetype, u: number): number {
   if (a.lateralLadder) return sampleLadder(a.lateralLadder, u);
   const [lo, hi] = a.lateralW;
-  return lo + (hi - lo) * (0.5 + (triQuantile(u) - 0.5) * correlationNarrowing(a));
+  return lo + (hi - lo) * triQuantile(u);
 }
 
 /**
- * How much a within-family offset/size correlation NARROWS the offset
- * draw, as a factor on its spread about the midpoint.
+ * The blend weights that reproduce a stated correlation `r` WITHOUT
+ * changing the spread: `[sqrt(r), sqrt(1 - r)]` on the shared and the
+ * independent stream.
  *
- * The graph reproduces a stated correlation by blending the offset's own
- * stream with the size stream at a weight `w`, and blending two
- * independent streams of equal variance gives a result with less: the
- * spread comes out at sqrt(w^2 + (1-w)^2) of one stream's. At the largest
- * correlation in the kit that is a 28% narrowing, which is not a detail —
- * it is a third of the distance between two adjacent bands.
+ * The obvious weighting — `w` and `1 - w` chosen so the correlation comes
+ * out right — is wrong, and wrong in a way that hides. Blending two
+ * independent streams of equal variance at those weights leaves
+ * `sqrt(w^2 + (1-w)^2)` of the spread, a 28% narrowing at the largest
+ * correlation this kit carries. That is a third of the distance between
+ * two adjacent bands, and it was the third instance in this project of
+ * one quantity having two spellings — the fitter integrating a draw the
+ * graph does not make. Squared weights summing to one fixes it: the
+ * variance is held exactly and the correlation is still `r`.
  *
- * This is the third place in this project where one quantity had two
- * spellings, and all three were found the same way: a band mix that
- * would not converge no matter how the rates were fitted. A fitter that
- * models a draw the graph does not make will aim the correction loop at
- * a distribution nothing produces, and the loop will drive away from the
- * target while every individual number looks reasonable.
+ * IT IS NEARLY DEAD, and deliberately kept. Every archetype upstream has
+ * measured now carries ladders, and the ladder path draws from a single
+ * stream where no correlation applies. Two rows of the named kit are the
+ * exception — `skyline` and `banner` are ours and have no upstream
+ * measurement, so they still take the published-pair path — and any
+ * archetype a user adds with only a pair takes it too.
  *
- * It is an approximation and says so: the blend of two triangulars is a
- * convolution, not a scaled triangular. Matching its VARIANCE is what a
- * band integral is sensitive to, and matching its shape exactly would
- * mean integrating the convolution for a correction this size.
+ * A correlated LADDER draw is a Gaussian copula rather than a blend, and
+ * upstream has measured that it buys nothing here: at each archetype's
+ * measured rank correlation it moves corridor intrusion by half a point
+ * on one kit and not at all on the other, because the median |r| is only
+ * 0.20 and 0.13. Three to four points of over-intrusion is the
+ * irreducible price of holding art as marginals.
  */
-function correlationNarrowing(a: Archetype): number {
-  const r = Math.min(0.999, Math.abs(a.offsetSizeR ?? 0));
-  if (r === 0) return 1;
-  const k = r / Math.sqrt(1 - r * r);
-  const w = k / (1 + k);
-  return Math.sqrt(w * w + (1 - w) * (1 - w));
+export function correlationWeights(r: number): readonly [number, number] {
+  const clamped = Math.min(1, Math.max(0, Math.abs(r)));
+  return [Math.sqrt(clamped), Math.sqrt(1 - clamped)];
 }
 
 /** The across extent at quantile `u`, on the same rules as `lateralAt`. */
@@ -486,24 +489,27 @@ export interface Preset {
    *
    * Four rows of the named kit pool source families whose measured
    * position or size disagree with each other, so their published
-   * envelope describes no real family — a `verge-rail` mixes an overhead
-   * gantry at 0.22W with a barrier at 2.9W. Drawn, that envelope produces
-   * a chimera that intrudes on the corridor essentially always: measured,
-   * 23 of 23 instances, six points of a rate whose target is seventeen.
+   * envelope describes no real family. A `verge-rail` mixes an overhead
+   * gantry that intrudes on 96% of its instances at `|t|` 0.08–0.58W with
+   * a `zig` at 20% and 2.65–3.18W and a `zigzag` at 0%. Scoring a chimera
+   * against a rate measured from real objects is comparing two different
+   * things, so the rows upstream records as defective are left out of
+   * this metric — and only this one. They are still placed, still drawn,
+   * and still counted everywhere else.
    *
-   * Scoring a chimera against a rate measured from real objects is
-   * comparing two different things, so the ones upstream has recorded as
-   * defective are left out of this metric — and only this one. They are
-   * still placed, still drawn, and still counted everywhere else.
-   *
-   * ONLY TWO OF THE FOUR CAN MOVE THE NUMBER. `verge-rail` is the six
-   * points above. `pipe-run`'s mean inboard face sits at exactly 1.0W,
-   * which makes it a coin flip by construction — 50% under any sampling
-   * model, against a measured 10.4%. The other two are here for one rule
-   * instead of two: `billboard`'s inboard face runs 2.6–5.45W so it never
-   * intrudes, and `enclosure-shell` is anchored at 0–0.6W so it is never
-   * side-anchored and never reaches the denominator either. Excluding
-   * them is harmless and changes nothing.
+   * IT IS THE POOLING THAT JUSTIFIES THIS, NOT THE INTRUSION RATE, and
+   * the difference matters because the rate argument was wrong twice.
+   * `verge-rail` was reported as intruding on 23 of 23 instances and then
+   * as "cannot not intrude"; it measures 52%, and both earlier figures
+   * came from a draw over a bounded envelope or from arithmetic done in
+   * the wrong half-width. `camera-post` looked worse still at 90% and is
+   * NOT here, because it measures 61% and its ladder reproduces 61%
+   * exactly — cameras sit at the verge, which is what they are. Across
+   * all nineteen rows the quartile envelopes carry 16.0 points of mean
+   * absolute error against measured intrusion and the ladders 6.3, so a
+   * row that looks impossible under an envelope is usually a sampling
+   * artefact rather than a defect. Check the ladder before excluding
+   * anything.
    */
   readonly corridorArtExclude?: readonly string[];
   /**
@@ -522,27 +528,7 @@ export interface Preset {
    * their placements on them.
    */
   readonly corridorArtAccept: number;
-  /**
-   * Archetypes whose published envelopes make corridor intrusion close
-   * to certain, and which therefore dominate the score without saying
-   * anything about the dressing.
-   *
-   * Distinct from `corridorArtExclude`, which names rows upstream has
-   * recorded as DEFECTIVE — pooled families whose envelope describes no
-   * real object. These are not recorded as defective; they are simply
-   * geometrically cornered. `set-piece` is published at `|t|` 1.6–2.4W
-   * with an across extent of 1.6–3.7W, so its inboard face clears 1W only
-   * in the corner of the joint distribution where the offset is at its
-   * maximum and the extent near its minimum. Drawn independently, it
-   * intrudes on 86% of instances; `camera-post` on 90%.
-   *
-   * Recorded rather than acted on. Whether these are two more defective
-   * rows or an artefact of drawing a bounded `|t|` and a bounded across
-   * independently is a question about the source material, and the answer
-   * belongs upstream. What is certain is that they carry the sparse
-   * preset past the rate its era measures.
-   */
-  readonly corridorArtCornered?: readonly string[];
+
   /** Target placements per W of lap. */
   readonly density: number;
   readonly densityAccept: readonly [number, number];
@@ -655,16 +641,12 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     // divided a lateral offset by a different half-width and one anchored
     // objects at their own origin rather than their bounds centre.
     //
-    // THIS PRESET DOES NOT REACH IT and the metric reads 17 of 18. It
-    // draws 20-25% against 15.5%, over on five seeds of twelve, and
-    // `corridorArtCornered` names where it comes from: two archetypes
-    // whose published envelopes intrude on nine instances in ten. The
-    // number is not tuned toward the band and the band is not widened to
-    // meet it — a ceiling that moves to admit the thing it measures is
-    // not a ceiling. See the corridor-art suite, which pins the shortfall
-    // so it cannot quietly become the normal reading.
+    // This preset missed it by five points for one commit, and the two
+    // archetypes that looked responsible were neither defective nor
+    // cornered: `camera-post` measures 61% intrusion and its LADDER
+    // reproduces 61%, where the bounded envelope produced 90%. The whole
+    // shortfall was the sampler. It reads 14.4% now.
     corridorArtAccept: 0.155,
-    corridorArtCornered: ["camera-post", "set-piece"],
     spriteShare: 0.25,
     spriteAccept: [0.15, 0.35],
     polysPerW: 13.8,

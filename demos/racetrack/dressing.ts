@@ -1455,9 +1455,36 @@ function placeFromPack(
     setAttribute,
     {
       name: "lateralW",
+      // The push is INSIDE the clamp, not outside it: a preset that pulls
+      // an archetype inboard must not be able to pull a clamped piece
+      // back onto the racing line.
       value: mul(
-        mul(leaned, push),
-        lerp(lerp(component(lat, 0), component(lat, 1), uLat), latLadder, hasLatLadder),
+        leaned,
+        // SMALL ART IS LIFTED, LARGE ART IS MOVED ASIDE, and the split is
+        // the source's own: a piece narrower than one half-width and
+        // shorter than one and a half is small enough for "inside the
+        // corridor" to describe it, and those are the pieces the material
+        // puts over the track — cameras, signs, the gantries they hang
+        // from. Anything bigger whose bounds centre lands on the racing
+        // line is a wall across it, which no source circuit has and no
+        // lap should read as. See where `heightW` is set for the lift.
+        //
+        // Aside means to the corridor's edge and no further, so the piece
+        // stays in the verge band it was drawn into rather than being
+        // pushed out of the mix.
+        fmax(
+          mul(
+            push,
+            lerp(lerp(component(lat, 0), component(lat, 1), uLat), latLadder, hasLatLadder),
+          ),
+          mul(
+            mul(
+              byArchetype((x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1), 1),
+              sub(1, mul(lt(attribute("acrossW"), 1), lt(attribute("tallnessW"), 1.5))),
+            ),
+            CORRIDOR.halfWidthW,
+          ),
+        ),
       ),
     },
     `${id}Lat`,
@@ -1501,9 +1528,40 @@ function placeFromPack(
   // those bands MEAN — a tunnel bore is anchored on the racing line
   // because a bore surrounds it. The lift is by the deficit, so anything
   // already clear of the ceiling is untouched.
+  //
+  // WHAT IT COSTS, MEASURED, because it is the largest deliberate
+  // distortion in this pipeline. Between 4.4% and 10.8% of placements are
+  // anchored inside one half-width depending on the preset, and about
+  // half of those would draw below the ceiling on their own. Every one of
+  // them is lifted, and the band model reads anything above the ceiling
+  // inside 1.5W as over-track rather than verge — so the rule transfers
+  // roughly 2 to 6 points from verge to over. With the lift switched off
+  // the late preset reproduces all six bands to within half a point
+  // (over 15.7 against 15.7, verge 8.2 against 8.1); with it on, over
+  // reads 17.9 and verge 6.0.
+  //
+  // KEPT ANYWAY, and the reason is the same one that keeps the sightline
+  // cull. The source does put a little art low over the track — 47
+  // objects of 7,371, on half the circuits — so this rule is stricter
+  // than the material, exactly like the look-ahead guarantee. What it
+  // buys is that no lap ever centres a mass archetype on the racing line
+  // at deck height, which for a demo about whether a layout READS is
+  // worth more than two points of a band. The alternative is not a
+  // cheaper lift: it is large art in the driver's way, about fifteen
+  // pieces a lap.
+  //
+  // The narrower rule is a joint distribution rather than a rule at all.
+  // The source's objects inside one half-width are mostly high because
+  // they are gantries, overhead signs and the cameras mounted on them,
+  // and a marginal ladder cannot express that. Lifting is the crude
+  // stand-in for the joint, and it over-applies by roughly the half that
+  // would have drawn high anyway.
   const overTrack = mul(
-    lt(fmax(attribute("lateralW"), mul(-1, attribute("lateralW"))), CORRIDOR.halfWidthW),
-    byArchetype((x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1), 1),
+    mul(
+      lt(fmax(attribute("lateralW"), mul(-1, attribute("lateralW"))), CORRIDOR.halfWidthW),
+      byArchetype((x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1), 1),
+    ),
+    mul(lt(attribute("acrossW"), 1), lt(attribute("tallnessW"), 1.5)),
   );
   const deficit = fmax(
     sub(add(CORRIDOR.ceilingW, div(attribute("tallnessW"), 2)), drawnHeight),
@@ -1635,7 +1693,12 @@ function placeFromPack(
     },
     `${id}Pos`,
   );
-  chain(g, [input, latN, byRuleN, tallN, hN, fpN, alongN, acrossN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
+  // ORDER IS LOAD-BEARING HERE. Tallness and the across extent are drawn
+  // FIRST because two later columns read them: the height draw seats a
+  // seated archetype from its own tallness, and both the corridor rule
+  // and the offset need to know how much room the piece takes before
+  // they can decide whether it belongs on the racing line.
+  chain(g, [input, tallN, acrossN, latN, byRuleN, hN, fpN, alongN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
   return posN;
 }
 

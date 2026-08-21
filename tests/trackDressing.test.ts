@@ -521,9 +521,16 @@ bands ${JSON.stringify(report.bandShare)}`);
       newCommitted,
     );
 
+    // FIVE TURNS, where the main track needs three. The loop is a
+    // controller and this track is harder for it: more of the lap sits
+    // inside a bend, and a placement inside a bend is pinned to the side
+    // its corner means, so the balance pass has fewer placements it is
+    // allowed to move and needs more passes to lean a stretch far enough
+    // for metric 10 to read it as one-sided. Three turns leaves it at one
+    // stretch each way against a target of two.
     let c = noCorrections();
     let best: Report | null = null;
-    for (let iter = 0; iter < 3; iter++) {
+    for (let iter = 0; iter < 5; iter++) {
       aim(calibrate(preset, lapW, c));
       const { report } = scoreCook(await cook(graph), preset, lapW);
       if (best === null || better(report, best, preset)) best = report;
@@ -746,34 +753,27 @@ describe("the measured ladders", () => {
         expect(lateralAt(a, u)).toBeCloseTo(a.lateralLadder![i], 10);
       });
     }
-    // A row with no ladder is drawn triangularly across its published
-    // pair, so the host samples that shape instead: symmetric about the
-    // midpoint, and reaching the published ends only where the graph
-    // does.
-    //
-    // WHICH IS NOT AT THE ENDS FOR EVERY ROW. Where an archetype carries
-    // a within-family offset/size correlation the graph reproduces it by
-    // blending two streams, and blending two independent streams of equal
-    // variance narrows the result to sqrt(w^2 + (1-w)^2) of one. A fitter
-    // that integrates the published pair models a draw the graph does not
-    // make — which is the bug this project has now found three times, and
-    // the third time it cost the sparse preset a band it could not fit.
-    const uncorrelated = archetypesFor("named").filter((a) => !a.offsetSizeR);
-    const correlated = archetypesFor("named").filter((a) => Math.abs(a.offsetSizeR ?? 0) > 0.5);
-    expect(uncorrelated.length).toBeGreaterThan(0);
-    expect(correlated.length).toBeGreaterThan(0);
-    for (const a of archetypesFor("named")) {
-      expect(a.lateralLadder).toBeUndefined();
-      expect(lateralAt(a, 0.5)).toBeCloseTo((a.lateralW[0] + a.lateralW[1]) / 2, 10);
+    // SEVENTEEN OF THE NINETEEN NAMED ROWS CARRY LADDERS TOO now, and
+    // the two that do not are ours rather than upstream's: `skyline` and
+    // `banner` have no measurement behind them, so they still take the
+    // published-pair path. That path is drawn triangularly, which the
+    // host has to model as the same shape — the fitter integrating a
+    // uniform where the graph draws a triangular is one of the three
+    // places this project has found one quantity with two spellings.
+    const laddered = archetypesFor("named").filter((a) => a.lateralLadder);
+    const paired = archetypesFor("named").filter((a) => !a.lateralLadder);
+    expect(laddered.length).toBe(17);
+    expect(paired.map((a) => a.id).sort()).toEqual(["banner", "skyline"]);
+    for (const a of laddered) {
+      LADDER_P.forEach((u, i) => {
+        expect(lateralAt(a, u)).toBeCloseTo(a.lateralLadder![i], 10);
+      });
     }
-    for (const a of uncorrelated) {
+    for (const a of paired) {
+      const mid = (a.lateralW[0] + a.lateralW[1]) / 2;
+      expect(lateralAt(a, 0.5)).toBeCloseTo(mid, 10);
       expect(lateralAt(a, 0)).toBeCloseTo(a.lateralW[0], 10);
       expect(lateralAt(a, 1)).toBeCloseTo(a.lateralW[1], 10);
-    }
-    for (const a of correlated) {
-      const span = a.lateralW[1] - a.lateralW[0];
-      expect(lateralAt(a, 1) - lateralAt(a, 0)).toBeLessThan(span * 0.8);
-      expect(lateralAt(a, 1) - lateralAt(a, 0)).toBeGreaterThan(span * 0.6);
     }
   });
 
@@ -849,26 +849,48 @@ describe("the density envelope's depth", () => {
     // exponential gaps caps near 1.41 at these cluster sizes, and that
     // formula is correct for a process whose intensity does not vary.
     const report = await bestOf(PRESETS.dense);
+    // The floor is below the shipped seed's own reading on purpose. Over
+    // ten seeds this measures 1.75 against the source's 1.78, with a
+    // range of 1.59 to 1.99 — the sampler is on target and one lap is a
+    // sample of it. Asserting the mean would need ten cooks; asserting
+    // the shipped seed against the mean would fail for being a sample.
     const m = report.metrics.find((x) => x.id === 13);
-    expect(m!.value).toBeGreaterThan(1.6);
+    expect(m!.value).toBeGreaterThan(1.5);
   });
 
-  it("varies its density as much as the source material does, not merely as much as the band allows", async () => {
-    // Metric 7's band is deliberately wider than the measurement to
-    // absorb seed noise, so passing it is not the same as reproducing it.
-    // This asserts against the SOURCE's own 0.25-0.6 per tenth. The late
-    // preset used to read 0.20 — passing the band, below the material —
-    // and deepening its density envelope is what moved it.
+  it("varies its density the way clumping alone would, which is what the source does", async () => {
+    // THE RULE THIS USED TO ASSERT HAS BEEN WITHDRAWN. It read the
+    // source's 0.25-0.6 density CV as a target for composition along the
+    // lap, and the decomposition behind it — subtract 1/sqrt(n) counting
+    // noise, call the rest deliberate — assumed independent placements,
+    // which these are not. Clustering is the whole point of the anchor
+    // process.
+    //
+    // The instrument that replaced it: group this lap's own placements at
+    // the clustering rule's 1.5W threshold and re-place each cluster
+    // WHOLE at an arbitrary station. Clumps survive, composition does
+    // not. On the source, scattered clusters come out LUMPIER than the
+    // real laps — a measured-over-reshuffled ratio with a median of 0.82
+    // across 43 circuits — so there is no density envelope in the
+    // originals at all, and the metric measures the clustering rule
+    // rather than anything on top of it.
+    //
+    // Asserted as that ratio, against the source's own. Reading far below
+    // it means something is spacing placements more evenly than their
+    // clumping would; far above means composition the material does not
+    // have.
     const report = await bestOf(PRESETS.dense);
     const m = report.metrics.find((x) => x.id === 7);
-    expect(m!.value).toBeGreaterThanOrEqual(0.25);
-    expect(m!.value).toBeLessThanOrEqual(0.6);
+    expect(m!.pass).toBe(true);
+    const ratio = Number(/ratio ([0-9.]+)/.exec(m!.target)?.[1]);
+    expect(ratio).toBeGreaterThan(0.6);
+    expect(ratio).toBeLessThan(1.1);
   });
 });
 
 describe("corridor art", () => {
-  it("stays under the ceiling for the two presets that can", async () => {
-    for (const name of ["lush", "dense"] as const) {
+  it("stays under the ceiling for every preset", async () => {
+    for (const name of ["sparse", "lush", "dense"] as const) {
       const preset = PRESETS[name];
       const report = await bestOf(preset);
       const m = report.metrics.find((x) => x.id === 18);
@@ -880,32 +902,25 @@ describe("corridor art", () => {
     }
   });
 
-  it("PINS the sparse preset's shortfall rather than widening its ceiling", async () => {
-    // Sparse reads 17 of 18 and this is the one it misses. The era's rate
-    // was re-derived from 17.1% to 15.5% after a normalisation bug
-    // upstream, and this preset draws 20-25% against it — over on five
-    // seeds of twelve, including the one the page ships.
+  it("holds the era's rate on the sampler, not on an exclusion list", async () => {
+    // For one commit the sparse preset missed this by five points and two
+    // archetypes looked responsible: `camera-post` intruded on 90% of its
+    // instances and `set-piece` on 86%, which is the same arithmetic that
+    // had four rows excluded from this metric as defective.
     //
-    // Two archetypes carry it. `camera-post` intrudes on 90% of the
-    // instances it draws and `set-piece` on 86%, because their published
-    // offset and across envelopes overlap: the inboard face clears 1W
-    // only in the corner where the offset is at its maximum and the
-    // extent near its minimum. That is the same arithmetic that had four
-    // rows excluded from this metric as defective, and whether these two
-    // are a third and fourth case or an artefact of drawing a bounded
-    // offset and a bounded extent independently is a question about the
-    // source, not about the dressing.
-    //
-    // Pinned rather than fixed, and asserted from BOTH ends: the ceiling
-    // is not widened to admit it, and the shortfall is not allowed to
-    // grow unnoticed while everyone reads 17 of 18 and shrugs.
+    // NEITHER WAS DEFECTIVE. `camera-post` measures 61% in the source and
+    // its ladder reproduces 61% — cameras sit at the verge, which is what
+    // they are, and 90% was the bounded envelope inventing mass at both
+    // ends of an interquartile range. Across all nineteen named rows the
+    // quartile envelopes carry 16.0 points of mean absolute error against
+    // measured intrusion and the ladders 6.3. This is the assertion that
+    // stops the next impossible-looking row being excluded before its
+    // ladder has been tried.
     const preset = PRESETS.sparse;
     const report = await bestOf(preset);
-    const m = report.metrics.find((x) => x.id === 18);
-    expect(m!.pass).toBe(false);
-    expect(report.corridorArtShare).toBeGreaterThan(preset.corridorArtAccept);
-    expect(report.corridorArtShare).toBeLessThan(0.28);
-    expect(preset.corridorArtCornered).toEqual(["camera-post", "set-piece"]);
+    expect(report.metrics.find((x) => x.id === 18)!.pass).toBe(true);
+    expect(preset.corridorArtExclude).not.toContain("camera-post");
+    expect(preset.corridorArtExclude).not.toContain("set-piece");
   });
 
   it("records that the late recipe still runs cleaner than the era it reproduces", async () => {

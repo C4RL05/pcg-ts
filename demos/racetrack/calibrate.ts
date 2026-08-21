@@ -45,6 +45,51 @@ export function isMovable(p: Placement): boolean {
   return Math.abs(p.radiusW) >= 12 && !RULE_PLACED.has(p.archetype);
 }
 
+/**
+ * The density CV this lap would read if its clusters were scattered.
+ *
+ * Groups the placements into runs no more than `CLUSTER_GAP_W` apart
+ * along the lap, then re-places each run whole at a station derived from
+ * its own identity rather than from a random source — this runs inside a
+ * scored report, and a metric that changes between two reads of the same
+ * lap is not a metric. The offset is a hash of the run's first station,
+ * which is stable, arbitrary with respect to the composition being
+ * tested, and free of any RNG the caller would have to thread.
+ *
+ * See metric 7 for what the comparison means and why 1/sqrt(n) is not
+ * the reference.
+ */
+function reshuffledDensityCv(placements: readonly Placement[], lapW: number): number {
+  if (placements.length === 0 || lapW <= 0) return 0;
+  const stations = placements.map((p) => lapMod(p.stationW, lapW)).sort((a, b) => a - b);
+  const runs: number[][] = [];
+  let run: number[] = [stations[0]];
+  for (let i = 1; i < stations.length; i++) {
+    if (stations[i] - stations[i - 1] <= CLUSTER_GAP_W) run.push(stations[i]);
+    else {
+      runs.push(run);
+      run = [stations[i]];
+    }
+  }
+  runs.push(run);
+  const buckets = new Array<number>(10).fill(0);
+  for (const r of runs) {
+    // A stable, composition-blind offset: the golden ratio times the
+    // run's own head, which spreads consecutive runs across the lap
+    // without repeating and without a seed.
+    const at = lapMod((r[0] * 0.6180339887498949 + 0.5) * lapW, lapW);
+    for (const st of r) buckets[tenthOf(lapMod(at + (st - r[0]), lapW), lapW)]++;
+  }
+  return cv(buckets);
+}
+
+/**
+ * The gap that separates one cluster from the next, in W. The clustering
+ * rule's own threshold, and the scale at which the reshuffle above splits
+ * clumping from composition.
+ */
+const CLUSTER_GAP_W = 1.5;
+
 /** Coefficient of variation: how much a set varies against its own mean. */
 function cv(xs: readonly number[]): number {
   if (xs.length === 0) return 0;
@@ -554,25 +599,39 @@ export function score(
     buckets[tenthOf(p.stationW, lapW)]++;
   }
   const densityCv = cv(buckets);
-  // COUNTING NOISE IS PART OF THE READING and the detail says so, because
-  // without it this metric cannot be interpreted. Ten bins holding n
-  // placements each carry a CV of 1/sqrt(n) from the binning alone, so a
-  // lap of 100 placements cannot read below about 0.32 however evenly it
-  // is dressed, and one of 600 cannot read above the floor by much
-  // without real structure. A reading BELOW its own floor is not a
-  // shallow envelope — it is placements spaced more evenly than chance,
-  // which means something in the pipeline is regularising them, and the
-  // usual culprit is the coverage repair filling every gap over
-  // `maxFillGapW`. No envelope depth answers that; the fill limit does.
+  // WHAT THIS MEASURES IS CLUMPING, NOT COMPOSITION, and the detail line
+  // has to carry the comparison that says so or the number cannot be
+  // read at all.
+  //
+  // The reference is not 1/sqrt(n). That was the first answer and it is
+  // wrong: it assumes independent placements, and nothing here is
+  // independent — clustering is the whole point of the anchor process.
+  // The honest instrument is a RESHUFFLE. Group the lap's own placements
+  // into clusters at the same 1.5W threshold the clustering rule uses,
+  // then re-place each cluster WHOLE at a random station. Every clump
+  // survives; any composition along the lap is destroyed. Whatever CV
+  // remains is what clumping alone produces.
+  //
+  // Measured on the source material this way, randomly placed clusters
+  // are LUMPIER than the real laps — 0.50/0.54/0.56 across the three eras
+  // against a measured 0.43/0.49/0.45, with the measured-over-reshuffled
+  // ratio below 1.0 on 29 of 43 circuits. There is no density envelope in
+  // the originals to reproduce. So a lap reading below its own reshuffle
+  // has weak CLUMPING, and no envelope depth will fix that; a lap reading
+  // above it has composition the source does not have.
+  //
+  // The stated limit, because it is not scale-free: the split moves with
+  // the gap threshold, and at 0.5W the source's reshuffle falls below its
+  // measurement. From 1.0W up there is no residual to attribute, and
+  // 1.5W is the threshold the ruleset itself picked.
   const perTenth = placements.length / TENTHS;
-  const noiseFloor = perTenth > 0 ? 1 / Math.sqrt(perTenth) : 0;
-  const deliberate = Math.sqrt(Math.max(0, densityCv * densityCv - 1 / Math.max(1, perTenth)));
+  const reshuffled = reshuffledDensityCv(placements, lapW);
   add(
     7,
     "density CV per tenth of lap",
     densityCv,
     densityCv >= 0.12 && densityCv <= 0.75,
-    `0.12-0.75 (n ${perTenth.toFixed(0)}/tenth, noise floor ${noiseFloor.toFixed(2)}, deliberate ${deliberate.toFixed(2)})`,
+    `0.12-0.75 (n ${perTenth.toFixed(0)}/tenth, clumping alone ${reshuffled.toFixed(2)}, ratio ${(reshuffled > 0 ? densityCv / reshuffled : 0).toFixed(2)})`,
   );
 
   // 8. Outside-of-corner share, over the placements that sit IN a bend.
