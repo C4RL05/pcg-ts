@@ -621,7 +621,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
   <section id="examples">
     <p class="eyebrow">Chapter 4</p>
     <h2>The examples tour</h2>
-    <p class="lead">Three demos ship in <code>demos/</code> and the editor in <code>editor/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
+    <p class="lead">Four demos ship in <code>demos/</code> and the editor in <code>editor/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
     <p>Each one needs a host to exist — a streamed world, a renderer that draws from device buffers, a rig whose topology is a function of its params. The recipes that were only a graph are not demos any more: they are files in <code>graphs/</code>, opened and edited in the editor. The scatter is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, the forest is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code — the three-way GPU comparison that had its own page is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields">examples-gpu-fields</a>, since what that demo varied was never the graph, and the rig is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig">examples-rig</a> — the last one to move, because until <code>forEach</code> its cable branch needed one hand-built node pair per cable and its node count was a param.</p>
 
     <h3 id="ex-01">Editor — the registry as a user interface</h3>
@@ -715,6 +715,26 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">three: createWebGpuInstanceAdapter · WorldThreeBinding · DeviceInstanceAdapter</span>
       <span class="chip">gpu: GpuFieldEvaluator · deviceInstances · deviceTransformsBuffer</span>
       <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/">run it →</a>
+    </p>
+
+    <h3 id="ex-05">Racetrack — a graph that is scored, and a host that corrects it</h3>
+    <figure>
+      <img src="manual-assets/racetrack.jpg" width="1454" height="783" loading="lazy" decoding="async"
+           alt="The racetrack demo paused a quarter of the way round its lap. The left panel carries a preset selector reading lush, seed 21, sliders for speed 45 W per second, eye height 0.80 W and plan zoom 1.00x, and ticked checkboxes for plan overlay and pause travel. The readouts below it say 17 of 17 metrics passed, 440 placements, a lap of 495 W, a cook of 162 ms over 5 cooks, station 250 of 495 W and 60 fps. The render behind is a driver's-eye view of a road sweeping away to the right into a long amber-marked corner, its centreline drawn along it, with hundreds of small coloured wireframe boxes standing along both verges and a few larger ones arching over the track. Laid over the whole frame, in pale grey and amber, is the same lap seen from directly above — a closed loop of road with the boxes outlined beside it — and a white triangular marker sitting on that plan where the driven view is." />
+      <figcaption><b>racetrack</b> — a closed circuit dressed by rule. Every box is one placement drawn at its own <code>footprintW</code> × <code>tallnessW</code> and coloured by the lateral band it belongs to; the plan is the same cook seen from above, drawn over the driven view rather than beside it.</figcaption>
+    </figure>
+    <p>Every other page here shows a graph producing something. This one shows a graph being <em>judged</em>. The technique it implements ships with seventeen published metrics — placements per half-width, the band mix, the share that lands on the outside of a bend, the longest empty stretch, how many corners carry an entry marker, how many placements block the driver's look-ahead — and the demo scores its own output against all of them on every cook, then shows you the card.</p>
+    <p>Which is why it is a demo and not a corpus graph. Calibration is a share of a total, and a cook cannot read its own totals: <code>attributeReduce</code> writes the detail domain and a point-domain field cannot read back from it. So the loop lives in the host — fit the kit to the lap, cook, measure, correct, cook again, keep the best iteration — and a serialized graph would be one frozen winner with the interesting half missing. Five cooks land in about 165 ms, so the whole loop re-runs live when you change the preset or the seed.</p>
+    <p>The boxes are not placeholders for art that has not been made. <code>footprintW</code> and <code>tallnessW</code> are columns the placement rules themselves read — the sightline pass culls against them, the coverage pass measures gaps between them — so the box <em>is</em> the datum, and a model standing in for it would hide the thing the page exists to show. They are drawn as twelve edges each rather than with <code>wireframe: true</code>, which would add a diagonal across all six faces and turn 440 boxes into a thicket.</p>
+    <div class="note">
+      <span class="tag">The road</span>
+      <p>The surface under the camera is <code>sweepProfile</code> in <code>ribbon</code> mode, run along the same resampled centreline every placement rule is stated against, with its colour written on the frames so one value per frame paints a whole band — amber marks the corner model. Its roll comes from the banked up the corner model already computed, <em>not</em> from <code>frame: "curveFrame"</code>: that frame is rotation-minimizing and free to roll, and on a lap this long it reaches 86° off level by the far side.</p>
+    </div>
+    <p class="demo-links">
+      <span class="chip">pathResample · writeCurveFrame · pathScan · sweepProfile</span>
+      <span class="chip">transferAttribute nearest · byAttribute · filterByExpression</span>
+      <span class="chip">host loop: calibrate · score · correct · keep the best</span>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/demos/racetrack/">run it →</a>
     </p>
 
     <h3 id="ex-rig">The rig — the curve vocabulary, end to end</h3>
@@ -1653,7 +1673,7 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/README.md">README.md</a></td><td>The human API tour.</td><td>A second angle on anything in Part I.</td></tr>
         <tr><td><a href="./index.html">Project overview</a></td><td>Architecture and pipeline diagrams, roadmap.</td><td>How the modules layer, and what shipped when.</td></tr>
         <tr><td><a href="https://c4rl05.github.io/pcg-ts/pages/editor/">Graph editor</a></td><td>The authoring tool, hosted. Opens any corpus graph with <code>?graph=&lt;name&gt;</code>, edits it live, and exports the JSON your application loads. <a href="#editor">Chapter 5</a> drives it.</td><td>Building or tuning a graph without writing code.</td></tr>
-        <tr><td><a href="https://c4rl05.github.io/pcg-ts/pages/">Live demos</a></td><td>The editor and the three demos, running.</td><td>Seeing it before reading about it.</td></tr>
+        <tr><td><a href="https://c4rl05.github.io/pcg-ts/pages/">Live demos</a></td><td>The editor and the four demos, running.</td><td>Seeing it before reading about it.</td></tr>
       </tbody>
     </table>
     </div>

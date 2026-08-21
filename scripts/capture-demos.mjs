@@ -334,11 +334,11 @@ const DEMOS = [
     // waited out — and pinning it with the pause checkbox would stop it
     // wherever this machine happened to have got to. `pauseAt` names a
     // station, which makes the framing a pure function of the seed.
-    // Station 96 W is a corner entry: the marker board, the amber road
-    // ahead and the outside-of-bend lean are all in one frame.
+    // Station 250 W is mid-corner: the amber road sweeping away, its
+    // centreline on it, and the outside-of-bend lean, in one frame.
     path: "demos/racetrack/",
     settleWait: () => !!window.pcgTrack && window.pcgTrack.ready(),
-    settle: () => window.pcgTrack.pauseAt(96),
+    settle: () => window.pcgTrack.pauseAt(250),
     ready: (s, has) =>
       has(s["placements"]) && s["placements"] !== "0" && has(s["metrics passed"]),
   },
