@@ -90,6 +90,7 @@ import {
   BUCKET_EDGES,
   CORNER_RADIUS_W,
   extentsOf,
+  lateralEnvelope,
   LANDMARK_STRETCHES,
   NO_COMMITTED_STRETCHES,
   PROFILES,
@@ -1321,7 +1322,7 @@ function placeFromPack(
   // `neg ? 1 - u : u`, without a branch: at neg = 0 it is u, at 1 it is 1 - u.
   const uToward = add(negOf, mul(sub(1, mul(2, negOf)), uAcross));
   const uLat = lerp(tri(`${id}-lat`), uToward, wOf);
-  const lat = rangeByArchetype((x) => arch(x).lateralW);
+  const lat = rangeByArchetype((x) => lateralEnvelope(arch(x)));
   const hgt = rangeByArchetype((x) => arch(x).heightW);
   // Seating, for the three archetypes where the measurement and the
   // published envelope disagree. See `baseW` in the kit.

@@ -588,12 +588,13 @@ export function score(
   // clusters on a random anchor process lands at 1.4–1.6, so the floor
   // belongs where the distinction actually lies. The ceiling is there
   // because a lap can also be clumped into uselessness.
+  const [cvLo, cvHi] = preset.gapCvAccept;
   add(
     13,
     "median gap CV per family",
     medianCv,
-    medianCv >= 1.2 && medianCv <= 2.6,
-    "1.2-2.6 (clumped, not metronomic)",
+    medianCv >= cvLo && medianCv <= cvHi,
+    `${cvLo}-${cvHi} (clumped, not metronomic)`,
   );
 
   // 10. One-sided stretches, at least two each way. This is what the
@@ -656,14 +657,28 @@ export function score(
   // intrusion by about a factor of two — the under-deck kit has geometry
   // inside the corridor on most instances and in the driver's way on
   // almost none — so a plan-only test would condemn the whole of it.
+  // THE DENOMINATOR IS THE SIDE-ANCHORED PLACEMENTS, not all of them.
+  //
+  // The predicate is stated over side-anchored placements, and an
+  // over-track one can never enter the numerator — it is excluded on the
+  // first line below. Dividing by the whole population therefore deflates
+  // the share by however much of the lap is anchored over the track,
+  // which under the geometry vocabulary is nearly a third of it: a bore
+  // and a gantry are both Z7. Measured, that alone was the difference
+  // between reading 24.5% and reading the era's rate.
+  const artExcluded = new Set(preset.corridorArtExclude ?? []);
+  const sideAnchored = placements.filter(
+    (p) => Math.abs(p.lateralW) >= CORRIDOR.halfWidthW && !artExcluded.has(p.archetype),
+  ).length;
   const corridorArt = placements.filter((p) => {
+    if (artExcluded.has(p.archetype)) return false; // see `corridorArtExclude`
     if (Math.abs(p.lateralW) < CORRIDOR.halfWidthW) return false; // over-track by design
     if (Math.abs(p.lateralW) - p.acrossW / 2 >= CORRIDOR.halfWidthW) return false;
     const base = p.heightW - p.tallnessW / 2;
     const top = p.heightW + p.tallnessW / 2;
     return top > 0 && base < CORRIDOR.ceilingW;
   }).length;
-  const corridorArtShare = n > 0 ? corridorArt / n : 0;
+  const corridorArtShare = sideAnchored > 0 ? corridorArt / sideAnchored : 0;
   // Judged against a 90% binomial interval, as any proportion on a few
   // hundred placements should be — with the five points the spec states
   // as a FLOOR rather than as a description. The two agree at n around
@@ -673,7 +688,10 @@ export function score(
   // interval, which is a coin toss reported as a defect.
   const artBand = Math.max(
     0.05,
-    1.645 * Math.sqrt((preset.corridorArtAccept * (1 - preset.corridorArtAccept)) / Math.max(1, n)),
+    1.645 *
+      Math.sqrt(
+        (preset.corridorArtAccept * (1 - preset.corridorArtAccept)) / Math.max(1, sideAnchored),
+      ),
   );
   // A CEILING, not a window. The rule is "corridor clear of art", and
   // being cleaner than the source material is not a defect — reading it
