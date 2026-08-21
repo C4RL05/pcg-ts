@@ -747,14 +747,33 @@ describe("the measured ladders", () => {
       });
     }
     // A row with no ladder is drawn triangularly across its published
-    // pair, so the host samples the same shape: the median sits at the
-    // midpoint and the quartiles do not.
+    // pair, so the host samples that shape instead: symmetric about the
+    // midpoint, and reaching the published ends only where the graph
+    // does.
+    //
+    // WHICH IS NOT AT THE ENDS FOR EVERY ROW. Where an archetype carries
+    // a within-family offset/size correlation the graph reproduces it by
+    // blending two streams, and blending two independent streams of equal
+    // variance narrows the result to sqrt(w^2 + (1-w)^2) of one. A fitter
+    // that integrates the published pair models a draw the graph does not
+    // make — which is the bug this project has now found three times, and
+    // the third time it cost the sparse preset a band it could not fit.
+    const uncorrelated = archetypesFor("named").filter((a) => !a.offsetSizeR);
+    const correlated = archetypesFor("named").filter((a) => Math.abs(a.offsetSizeR ?? 0) > 0.5);
+    expect(uncorrelated.length).toBeGreaterThan(0);
+    expect(correlated.length).toBeGreaterThan(0);
     for (const a of archetypesFor("named")) {
       expect(a.lateralLadder).toBeUndefined();
-      const mid = (a.lateralW[0] + a.lateralW[1]) / 2;
-      expect(lateralAt(a, 0.5)).toBeCloseTo(mid, 10);
+      expect(lateralAt(a, 0.5)).toBeCloseTo((a.lateralW[0] + a.lateralW[1]) / 2, 10);
+    }
+    for (const a of uncorrelated) {
       expect(lateralAt(a, 0)).toBeCloseTo(a.lateralW[0], 10);
       expect(lateralAt(a, 1)).toBeCloseTo(a.lateralW[1], 10);
+    }
+    for (const a of correlated) {
+      const span = a.lateralW[1] - a.lateralW[0];
+      expect(lateralAt(a, 1) - lateralAt(a, 0)).toBeLessThan(span * 0.8);
+      expect(lateralAt(a, 1) - lateralAt(a, 0)).toBeGreaterThan(span * 0.6);
     }
   });
 

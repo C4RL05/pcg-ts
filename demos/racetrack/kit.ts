@@ -383,7 +383,38 @@ function triQuantile(u: number): number {
 export function lateralAt(a: Archetype, u: number): number {
   if (a.lateralLadder) return sampleLadder(a.lateralLadder, u);
   const [lo, hi] = a.lateralW;
-  return lo + (hi - lo) * triQuantile(u);
+  return lo + (hi - lo) * (0.5 + (triQuantile(u) - 0.5) * correlationNarrowing(a));
+}
+
+/**
+ * How much a within-family offset/size correlation NARROWS the offset
+ * draw, as a factor on its spread about the midpoint.
+ *
+ * The graph reproduces a stated correlation by blending the offset's own
+ * stream with the size stream at a weight `w`, and blending two
+ * independent streams of equal variance gives a result with less: the
+ * spread comes out at sqrt(w^2 + (1-w)^2) of one stream's. At the largest
+ * correlation in the kit that is a 28% narrowing, which is not a detail —
+ * it is a third of the distance between two adjacent bands.
+ *
+ * This is the third place in this project where one quantity had two
+ * spellings, and all three were found the same way: a band mix that
+ * would not converge no matter how the rates were fitted. A fitter that
+ * models a draw the graph does not make will aim the correction loop at
+ * a distribution nothing produces, and the loop will drive away from the
+ * target while every individual number looks reasonable.
+ *
+ * It is an approximation and says so: the blend of two triangulars is a
+ * convolution, not a scaled triangular. Matching its VARIANCE is what a
+ * band integral is sensitive to, and matching its shape exactly would
+ * mean integrating the convolution for a correction this size.
+ */
+function correlationNarrowing(a: Archetype): number {
+  const r = Math.min(0.999, Math.abs(a.offsetSizeR ?? 0));
+  if (r === 0) return 1;
+  const k = r / Math.sqrt(1 - r * r);
+  const w = k / (1 + k);
+  return Math.sqrt(w * w + (1 - w) * (1 - w));
 }
 
 /** The across extent at quantile `u`, on the same rules as `lateralAt`. */
