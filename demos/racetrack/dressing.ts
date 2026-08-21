@@ -88,6 +88,7 @@ import {
   ARCHETYPES,
   BUCKET_EDGES,
   CORNER_RADIUS_W,
+  extentsOf,
   LANDMARK_STRETCHES,
   NO_COMMITTED_STRETCHES,
   PROFILES,
@@ -1209,6 +1210,15 @@ function placeFromPack(
   const lat = rangeByArchetype((x) => arch(x).lateralW);
   const hgt = rangeByArchetype((x) => arch(x).heightW);
   const fp = rangeByArchetype((x) => arch(x).footprintW);
+  // The two horizontal extents, carried BESIDE `footprintW` rather than
+  // replacing it: the metrics are stated on the published footprint and
+  // must keep reading it, while anything that has to know how much room a
+  // placement actually takes — drawing it, testing the corridor against
+  // its geometry, seating a user's asset — needs the pair. Unmeasured
+  // archetypes fall back to the square the kit described before they were
+  // separated, so nothing moves until the measurement arrives.
+  const along = rangeByArchetype((x) => extentsOf(arch(x)).along);
+  const across = rangeByArchetype((x) => extentsOf(arch(x)).across);
   const tall = rangeByArchetype((x) => arch(x).tallnessW);
   const push = byArchetype((x) => preset.lateralPush[x] ?? 1, 1);
 
@@ -1268,6 +1278,9 @@ function placeFromPack(
   );
   const hN = fromRange("heightW", hgt, "h", "Height");
   const fpN = fromRange("footprintW", fp, "fp", "Foot");
+  // Drawn from their own streams, so adding them moved no other column.
+  const alongN = fromRange("alongW", along, "along", "Along");
+  const acrossN = fromRange("acrossW", across, "across", "Across");
   const tallN = fromRange("tallnessW", tall, "tall", "Tall");
   // A sprite is a camera-facing quad and costs one polygon; a preset that
   // asks for none rebuilds every sprite archetype AS GEOMETRY at 22, which
@@ -1372,7 +1385,7 @@ function placeFromPack(
     },
     `${id}Pos`,
   );
-  chain(g, [input, latN, hN, fpN, tallN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
+  chain(g, [input, latN, hN, fpN, alongN, acrossN, tallN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
   return posN;
 }
 

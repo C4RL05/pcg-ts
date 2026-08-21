@@ -32,6 +32,33 @@ export interface Archetype {
   /** Height above the local track surface, in W. */
   readonly heightW: readonly [number, number];
   readonly footprintW: readonly [number, number];
+  /**
+   * The two horizontal extents, measured separately: ALONG the lap and
+   * ACROSS it, as a box axis-aligned to the TRACK frame rather than to the
+   * art's own.
+   *
+   * WHY BOTH, when `footprintW` is one number. It turned out to be
+   * `max(along, across)` with the identity of the larger one discarded,
+   * and which of the two it reported varies per instance rather than per
+   * archetype. Aspect ratios in the source material run from 32:1 to 1:7,
+   * so no single scalar describes the kit: reading it as a width puts a
+   * wall panel across the racing line, reading it as a length makes a
+   * billboard face the wrong way, and both readings are correct for part
+   * of the kit and wrong for the rest.
+   *
+   * `footprintW` STAYS AUTHORITATIVE and is not re-derived from these.
+   * Every metric is stated on it, the reconciliation is approximate
+   * (seventeen archetypes of nineteen), and four archetypes are recorded
+   * as pooling source families whose real sizes disagree by thirty times —
+   * so a computed footprint would move the score for reasons that have
+   * nothing to do with the score.
+   *
+   * Absent means unmeasured: treat the archetype as square at its
+   * published footprint, which is what the kit said before the extents
+   * were separated.
+   */
+  readonly alongW?: readonly [number, number];
+  readonly acrossW?: readonly [number, number];
   readonly tallnessW: readonly [number, number];
   readonly polygons: number;
   /** Placements per 100W of lap, before preset weighting. */
@@ -55,25 +82,25 @@ export interface Archetype {
  * that grows a branch per archetype.
  */
 export const ARCHETYPES: readonly Archetype[] = [
-  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [2.3, 3.8], heightW: [0.6, 2.3], footprintW: [8, 9.5], tallnessW: [4, 6], polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
+  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [2.3, 3.8], heightW: [0.6, 2.3], footprintW: [8, 9.5], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], tallnessW: [4, 6], polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
   { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
   { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
   { id: "tree-group", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [5.0, 8.0], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
   { id: "tree", zone: "Z5", profile: "clustered", kind: "mesh", lateralW: [5.0, 7.0], heightW: [2.0, 2.6], footprintW: [1.0, 1.3], tallnessW: [2.1, 2.7], polygons: 30, rate: 5, cluster: 2.4, outsideBias: 0.75 },
   { id: "set-piece", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.6, 2.4], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
-  { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], tallnessW: [5, 8], polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
+  { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], alongW: [3.0, 8.3], acrossW: [1.9, 5.3], tallnessW: [5, 8], polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
   { id: "overhead-sign", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0.0, 0.5], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
   { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
   { id: "tower", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 3.6], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
   { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
-  { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], tallnessW: [6, 7.5], polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
+  { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], alongW: [0.6, 2.8], acrossW: [3.1, 5.2], tallnessW: [6, 7.5], polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
   { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
   { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
   { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
   { id: "skyline", zone: "Z6", profile: "built", kind: "mesh", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
   { id: "banner", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
   { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
-  { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], tallnessW: [0.6, 1.2], polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
+  { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], alongW: [0.3, 2.0], acrossW: [1.7, 3.7], tallnessW: [0.6, 1.2], polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
 ];
 
 /** Placed by RULE rather than by density: no rate, no cumulative draw. */
@@ -111,6 +138,19 @@ export const AFFINITY: Record<AffinityProfile, readonly [number, number, number,
 };
 
 /** The three profiles, in the order the graph lays them out in lanes. */
+/**
+ * An archetype's horizontal extents, along the lap and across it.
+ *
+ * The fallback is the square the kit described before the two were
+ * separated, so an unmeasured archetype draws and tests exactly as it did.
+ */
+export function extentsOf(a: Archetype): {
+  readonly along: readonly [number, number];
+  readonly across: readonly [number, number];
+} {
+  return { along: a.alongW ?? a.footprintW, across: a.acrossW ?? a.footprintW };
+}
+
 export const PROFILES: readonly AffinityProfile[] = ["flat", "built", "clustered"];
 
 /**

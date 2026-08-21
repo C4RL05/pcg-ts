@@ -4,10 +4,11 @@
  * WHAT THIS PAGE IS FOR, and it is not a finished scene: the technique in
  * `dressing.ts` decides WHERE things go, and the only honest way to look
  * at that is to draw each placement as the box the rules reason about.
- * Every placement carries its own `footprintW` and `tallnessW`, so the
- * boxes are not stand-ins for art that has not been made — they are the
- * data itself, at the size the sightline and coverage passes measured.
- * Real assets would hide the one thing this page exists to show.
+ * Every placement carries its own measured extents — along the lap,
+ * across it, and up — so the boxes are not stand-ins for art that has not
+ * been made. They are the measurement itself, at the size the source
+ * material was found to be. Real assets would hide the one thing this
+ * page exists to show.
  *
  * TWO VIEWS IN ONE FRAME. A layout is two questions. The plan answers "is
  * the lap dressed evenly, and does it lean the right way through the
@@ -39,13 +40,11 @@ import {
   LineBasicMaterial,
   LineLoop,
   LineSegments,
-  Matrix4,
   Mesh,
   MeshBasicMaterial,
   OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
-  Quaternion,
   Scene,
   Vector3,
   WebGLRenderer,
@@ -63,7 +62,7 @@ import {
   noCorrections,
 } from "./calibrate.js";
 import { buildTrackDressingGraph } from "./dressing.js";
-import { CORRIDOR, PRESETS, type Preset } from "./kit.js";
+import { PRESETS, type Preset } from "./kit.js";
 import { TRACK, better, col, scoreCook } from "./read.js";
 
 // ------------------------------------------------------------------ //
@@ -245,16 +244,16 @@ const PLAN_MAT = {
   }),
 };
 
-/** The eight corners of a unit box, and the twelve edges joining them. */
+/** The eight corners of a box as signs, and the twelve edges joining them. */
 const BOX_CORNERS: readonly (readonly [number, number, number])[] = [
-  [-0.5, -0.5, -0.5],
-  [0.5, -0.5, -0.5],
-  [0.5, -0.5, 0.5],
-  [-0.5, -0.5, 0.5],
-  [-0.5, 0.5, -0.5],
-  [0.5, 0.5, -0.5],
-  [0.5, 0.5, 0.5],
-  [-0.5, 0.5, 0.5],
+  [-1, -1, -1],
+  [1, -1, -1],
+  [1, -1, 1],
+  [-1, -1, 1],
+  [-1, 1, -1],
+  [1, 1, -1],
+  [1, 1, 1],
+  [-1, 1, 1],
 ];
 
 // Floor, then ceiling, then the four uprights joining them.
@@ -276,103 +275,73 @@ const BOX_EDGES: readonly (readonly [number, number])[] = [
 /**
  * Every placement's bounding box, as twelve edges.
  *
- * EDGES, NOT A WIREFRAME MATERIAL, and the difference is the whole
- * picture. `wireframe: true` draws the triangles a box is made of, which
- * is a diagonal across all six faces — at 440 boxes, 2,640 lines
- * describing nothing, and they are what turns the driven view into a
- * thicket. Twelve edges is what a bounding box IS.
+ * A TRACK-FRAME BOX, and that is the datum rather than a choice made
+ * here. The extents were measured as an axis-aligned box in the track's
+ * own frame — across the lap, along it, and up — so the faithful drawing
+ * is a box on those three axes, at those three extents, centred on the
+ * anchor. The placement already carries the frame: `pack1` is the banked
+ * right, `pack2` the banked up, `pack3` the tangent.
  *
- * Drawn as one `LineSegments` rather than instanced for the same kind of
- * reason: 440 boxes is 10,560 vertices, which is nothing, and instancing
- * lines costs a custom shader to save a buffer nobody is short of.
+ * IT DOES NOT USE `rot` OR `scale`. Those two describe the ART — which
+ * way a piece faces and how big a spawner should make it — and a box
+ * built from them answers a different question in a frame that turns with
+ * the yaw. Nothing here needs to know which way a wall panel faces; it
+ * needs to know how much room the panel takes up beside the track.
  *
- * `P`, `rot` and `scale` are the standard transform attributes the graph
- * already writes — the same three a spawner reads — so this is the spawn
- * path with a box where the asset would be, not a second description of
- * where things are.
+ * THE ANCHOR IS THE CENTRE on all three axes, which is measured rather
+ * than assumed: art whose lowest geometry is meant to sit above or below
+ * the deck says so through `heightW`, and four archetypes genuinely do —
+ * a camera post floats, a chevron board's base is under the surface. A
+ * box seated base-to-ground would put all four in the wrong place.
+ *
+ * EDGES, NOT A WIREFRAME MATERIAL: `wireframe: true` draws the triangles
+ * a box is made of, which is a diagonal across all six faces — at 440
+ * boxes, 2,640 lines describing nothing, and the thicket that made the
+ * first attempt unreadable. Twelve edges is what a bounding box IS.
  */
-function buildBoxEdges(placements: Geometry): { lines: LineSegments; nudged: number } {
+function buildBoxEdges(placements: Geometry): LineSegments {
   const count = placements.pointCount;
   const p = col(placements, "P");
-  const rot = col(placements, "rot");
-  const scale = col(placements, "scale");
   const zone = col(placements, "zone");
-  const lateral = col(placements, "lateralW");
-  const height = col(placements, "heightW");
-  // pack1 is (rightB, radiusW): the banked lateral unit vector the graph
-  // itself placed this point along, so the box can be moved along the
-  // same axis without re-deriving a frame.
+  const alongW = col(placements, "alongW");
+  const acrossW = col(placements, "acrossW");
+  const tallW = col(placements, "tallnessW");
   const pack1 = col(placements, "pack1");
+  const pack2 = col(placements, "pack2");
+  const pack3 = col(placements, "pack3");
 
   const positions = new Float32Array(count * BOX_EDGES.length * 2 * 3);
   const colors = new Float32Array(count * BOX_EDGES.length * 2 * 3);
-  const m = new Matrix4();
-  const pos = new Vector3();
-  const quat = new Quaternion();
-  const siz = new Vector3();
+  const centre = new Vector3();
+  const right = new Vector3();
+  const up = new Vector3();
+  const fwd = new Vector3();
   const colour = new Color();
   const corners = BOX_CORNERS.map(() => new Vector3());
-  const right = new Vector3();
-  const axis = new Vector3();
   let at = 0;
-  let nudged = 0;
 
   for (let i = 0; i < count; i++) {
-    // `P` IS THE CENTRE, and reading it as a base is a mistake the kit
-    // will confirm for you: `ground-detail` sits at a height of 0.1..0.4 W
-    // and is 0.4..0.8 tall, which is a centre at half its own height.
-    // Lifting by another half-tallness floats the whole lap.
-    pos.set(p[i * 3] / W, p[i * 3 + 1] / W, p[i * 3 + 2] / W);
-    quat.set(rot[i * 4], rot[i * 4 + 1], rot[i * 4 + 2], rot[i * 4 + 3]);
-    siz.set(scale[i * 3] / W, scale[i * 3 + 1] / W, scale[i * 3 + 2] / W);
-
-    // KEEP THE CORRIDOR CLEAR, which the anchor alone does not.
-    //
-    // `CORRIDOR` is tested against where a placement is PUT. `footprintW`
-    // is the plan size of the art that will stand there, and the two do
-    // not have to agree: a `terrain-shell` is 8..9.5 W across and is
-    // anchored 2.3..3.8 W out, so a box centred on a perfectly legal
-    // anchor still reaches over the racing line. Drawn that way the page
-    // asserts a solid block across the track that no rule in the
-    // technique believes in — and it is the picture, not the rule, that
-    // is wrong: `lateralW` reads as the offset of the thing's
-    // track-facing side (every side archetype's band starts at 1.05 W,
-    // just outside the corridor, which only makes sense that way).
-    //
-    // So a box whose near face would enter the corridor is slid outboard
-    // along its own `rightB` by exactly the shortfall — never more, and
-    // never at all above the corridor ceiling, where a gantry or a tunnel
-    // shell is supposed to span the track. How often that was needed is
-    // reported in the panel rather than hidden: it is a real gap between
-    // what the rule checks and what the kit describes.
-    if (height[i] < CORRIDOR.ceilingW) {
-      right.set(pack1[i * 4], pack1[i * 4 + 1], pack1[i * 4 + 2]);
-      // The box is oriented, so its half-extent ACROSS the track is the
-      // support of the rotated box along `right`, not half of any one
-      // side.
-      const across =
-        0.5 *
-        (Math.abs(right.dot(axis.set(1, 0, 0).applyQuaternion(quat))) * siz.x +
-          Math.abs(right.dot(axis.set(0, 1, 0).applyQuaternion(quat))) * siz.y +
-          Math.abs(right.dot(axis.set(0, 0, 1).applyQuaternion(quat))) * siz.z);
-      const shortfall = CORRIDOR.halfWidthW - (Math.abs(lateral[i]) - across);
-      if (shortfall > 0) {
-        pos.addScaledVector(right, Math.sign(lateral[i]) * shortfall);
-        nudged++;
-      }
-    }
-
-    m.compose(pos, quat, siz);
+    centre.set(p[i * 3] / W, p[i * 3 + 1] / W, p[i * 3 + 2] / W);
+    // Half-extents, so a corner is the centre plus or minus each of the
+    // three in turn. The extents are already stated in W; only `P` is in
+    // world units and needs the divide.
+    right.set(pack1[i * 4], pack1[i * 4 + 1], pack1[i * 4 + 2]).multiplyScalar(acrossW[i] / 2);
+    up.set(pack2[i * 4], pack2[i * 4 + 1], pack2[i * 4 + 2]).multiplyScalar(tallW[i] / 2);
+    fwd.set(pack3[i * 4], pack3[i * 4 + 1], pack3[i * 4 + 2]).multiplyScalar(alongW[i] / 2);
     for (let c = 0; c < BOX_CORNERS.length; c++) {
-      const [cx, cy, cz] = BOX_CORNERS[c];
-      corners[c].set(cx, cy, cz).applyMatrix4(m);
+      const [sx, sy, sz] = BOX_CORNERS[c];
+      corners[c]
+        .copy(centre)
+        .addScaledVector(right, sx)
+        .addScaledVector(up, sy)
+        .addScaledVector(fwd, sz);
     }
     colour.setHex(ZONE_COLOR[Math.round(zone[i])] ?? 0x9aa5b1);
     for (const [a, b] of BOX_EDGES) {
-      for (const end of [corners[a], corners[b]]) {
-        positions[at] = end.x;
-        positions[at + 1] = end.y;
-        positions[at + 2] = end.z;
+      for (const corner of [corners[a], corners[b]]) {
+        positions[at] = corner.x;
+        positions[at + 1] = corner.y;
+        positions[at + 2] = corner.z;
         colors[at] = colour.r;
         colors[at + 1] = colour.g;
         colors[at + 2] = colour.b;
@@ -386,7 +355,7 @@ function buildBoxEdges(placements: Geometry): { lines: LineSegments; nudged: num
   geo.setAttribute("color", new BufferAttribute(colors, 3));
   const lines = new LineSegments(geo, RIDE_MAT.box);
   lines.frustumCulled = false;
-  return { lines, nudged };
+  return lines;
 }
 
 /**
@@ -640,19 +609,18 @@ window.addEventListener("keydown", (e) => {
 
 const statScore = overlay.addStat("metrics passed");
 const statPlacements = overlay.addStat("placements");
-const statNudged = overlay.addStat("nudged off the track");
 const statLap = overlay.addStat("lap");
 const statCook = overlay.addStat("cook");
 const statStation = overlay.addStat("station");
 const statFps = overlay.addStat("fps");
 const card = overlay.addCollapsible("metric card", false);
 overlay.addNote(
-  "Every box is one placement, at its own footprint x tallness and " +
-    "coloured by the zone it sits in. The faded copy is the same lap seen " +
-    "from directly above; the marker is where the driven view has got to. " +
-    "Space pauses; drag and scroll move the plan. \u201cNudged\u201d counts " +
-    "boxes slid clear of the track: the corridor rule tests where a " +
-    "placement is anchored, not how wide the art on it turns out to be.",
+  "Every box is one placement, drawn at its measured extents along the " +
+    "lap and across it and coloured by the zone it sits in. Some overhang " +
+    "the track, and that is faithful: the source material does it too. " +
+    "The faded copy is the same lap from directly above; the marker is " +
+    "where the driven view has got to. Space pauses; drag and scroll " +
+    "move the plan.",
 );
 
 const tickFps = createFpsMeter(statFps);
@@ -725,8 +693,7 @@ async function regenerate(): Promise<void> {
   try {
     lap = await dressLap(PRESETS[presetName], seed);
     clear();
-    const built = buildBoxEdges(lap.placements);
-    boxes = built.lines;
+    boxes = buildBoxEdges(lap.placements);
     roadMesh = buildRoad(lap.road);
     spine = buildSpine(lap.frames);
     ride = buildRide(lap.frames, lap.lapW);
@@ -737,7 +704,6 @@ async function regenerate(): Promise<void> {
     station = 0;
     statScore(`${lap.passed} / ${lap.total}`);
     statPlacements(lap.placements.pointCount);
-    statNudged(`${built.nudged} of ${lap.placements.pointCount}`);
     statLap(`${lap.lapW.toFixed(0)} W`);
     statCook(`${lap.cookMs.toFixed(0)} ms, ${lap.cooks} cooks`);
     card.textContent = lap.card;
