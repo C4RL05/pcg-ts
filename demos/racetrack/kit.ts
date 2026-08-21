@@ -59,6 +59,21 @@ export interface Archetype {
    */
   readonly alongW?: readonly [number, number];
   readonly acrossW?: readonly [number, number];
+  /**
+   * How strongly this archetype's lateral offset moves WITH its across
+   * extent, as the measured Pearson correlation.
+   *
+   * The artists pushed a wide piece outboard and tucked a narrow one in,
+   * so the near face stayed clear at both sizes. Drawing offset and size
+   * from independent streams loses that and manufactures the one
+   * combination the source material never made — wide AND near — which is
+   * the largest single source of art over the track in a generated lap
+   * once real extents are in play.
+   *
+   * Absent or zero means independent, which is what the kit did before it
+   * was measured.
+   */
+  readonly offsetSizeR?: number;
   readonly tallnessW: readonly [number, number];
   readonly polygons: number;
   /** Placements per 100W of lap, before preset weighting. */
@@ -82,24 +97,24 @@ export interface Archetype {
  * that grows a branch per archetype.
  */
 export const ARCHETYPES: readonly Archetype[] = [
-  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [2.3, 3.8], heightW: [0.6, 2.3], footprintW: [8, 9.5], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], tallnessW: [4, 6], polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
-  { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
+  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], heightW: [0.6, 2.3], footprintW: [8, 9.5], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], tallnessW: [4, 6], offsetSizeR: 0.6, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
+  { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], offsetSizeR: 0.36, polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
   { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
   { id: "tree-group", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [5.0, 8.0], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
   { id: "tree", zone: "Z5", profile: "clustered", kind: "mesh", lateralW: [5.0, 7.0], heightW: [2.0, 2.6], footprintW: [1.0, 1.3], tallnessW: [2.1, 2.7], polygons: 30, rate: 5, cluster: 2.4, outsideBias: 0.75 },
   { id: "set-piece", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.6, 2.4], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
   { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], alongW: [3.0, 8.3], acrossW: [1.9, 5.3], tallnessW: [5, 8], polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
   { id: "overhead-sign", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0.0, 0.5], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
-  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
+  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], offsetSizeR: 0.8, polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
   { id: "tower", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 3.6], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
-  { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
+  { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], offsetSizeR: 0.52, polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
   { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], alongW: [0.6, 2.8], acrossW: [3.1, 5.2], tallnessW: [6, 7.5], polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
   { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
   { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
   { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
   { id: "skyline", zone: "Z6", profile: "built", kind: "mesh", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
   { id: "banner", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
-  { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
+  { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], offsetSizeR: 0.39, polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
   { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], alongW: [0.3, 2.0], acrossW: [1.7, 3.7], tallnessW: [0.6, 1.2], polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
 ];
 

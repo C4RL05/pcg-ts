@@ -1207,6 +1207,36 @@ function placeFromPack(
     ? select(gt(attribute("cornerK"), 0), -1, 1)
     : select(lt(radiusW, CORNER_RADIUS_W), inBendPick, straightPick);
 
+  // WIDE THINGS SIT FURTHER OUT, and the two draws have to know it.
+  //
+  // Measured on the source material, an archetype's lateral offset and
+  // its across extent are positively correlated — 0.80 on chevron boards,
+  // 0.60 on terrain shells — because a wide piece was pushed outboard and
+  // a narrow one tucked in, keeping the near face clear at either size.
+  // Two independent uniforms manufacture the pairing that was never made:
+  // wide and near.
+  //
+  // The mixing is a linear blend between an independent stream and the
+  // size stream. THE BLEND WEIGHT IS NOT THE CORRELATION, which is the
+  // trap here: blending two independent equal-variance streams at weight
+  // w yields a correlation of w / sqrt(w^2 + (1-w)^2), so passing r
+  // straight in overshoots — 0.6 lands at 0.83 and 0.8 at 0.97, which
+  // pushes wide pieces further out than the source material does and
+  // flatters every corridor measurement taken afterwards. Inverting it is
+  // one line of host arithmetic: k = r / sqrt(1 - r^2), w = k / (1 + k).
+  //
+  // It is still an APPROXIMATION — the spec states a correlation rather
+  // than a sampling model, and this is the simplest draw that reproduces
+  // the stated statistic. At r = 0 it is bit-identical to the independent
+  // draw it replaces.
+  const uAcross = randomField(`${id}-across`);
+  const rOf = byArchetype((x) => {
+    const r = clampNum(arch(x).offsetSizeR ?? 0, 0, 0.999);
+    if (r === 0) return 0;
+    const k = r / Math.sqrt(1 - r * r);
+    return k / (1 + k);
+  }, 0);
+  const uLat = lerp(randomField(`${id}-lat`), uAcross, rOf);
   const lat = rangeByArchetype((x) => arch(x).lateralW);
   const hgt = rangeByArchetype((x) => arch(x).heightW);
   const fp = rangeByArchetype((x) => arch(x).footprintW);
@@ -1269,10 +1299,7 @@ function placeFromPack(
     setAttribute,
     {
       name: "lateralW",
-      value: mul(
-        mul(leaned, push),
-        lerp(component(lat, 0), component(lat, 1), randomField(`${id}-lat`)),
-      ),
+      value: mul(mul(leaned, push), lerp(component(lat, 0), component(lat, 1), uLat)),
     },
     `${id}Lat`,
   );
@@ -1280,7 +1307,13 @@ function placeFromPack(
   const fpN = fromRange("footprintW", fp, "fp", "Foot");
   // Drawn from their own streams, so adding them moved no other column.
   const alongN = fromRange("alongW", along, "along", "Along");
-  const acrossN = fromRange("acrossW", across, "across", "Across");
+  // The across extent's own draw, named because the lateral offset reads
+  // it too — see `uAcross` below.
+  const acrossN = g.add(
+    setAttribute,
+    { name: "acrossW", value: lerp(component(across, 0), component(across, 1), uAcross) },
+    `${id}Across`,
+  );
   const tallN = fromRange("tallnessW", tall, "tall", "Tall");
   // A sprite is a camera-facing quad and costs one polygon; a preset that
   // asks for none rebuilds every sprite archetype AS GEOMETRY at 22, which

@@ -77,6 +77,7 @@ interface Lap {
   readonly lapW: number;
   readonly passed: number;
   readonly total: number;
+  readonly corridorArtShare: number;
   readonly card: string;
   readonly cookMs: number;
   readonly cooks: number;
@@ -164,6 +165,7 @@ async function dressLap(preset: Preset, seed: number): Promise<Lap> {
     lapW,
     passed: best.report.passed,
     total: metrics.length,
+    corridorArtShare: best.report.corridorArtShare,
     card: metrics
       .map((m) => `${m.pass ? "PASS" : "FAIL"} ${fmt(m.value)}  ${m.name}\n            ${m.target}`)
       .join("\n"),
@@ -609,6 +611,7 @@ window.addEventListener("keydown", (e) => {
 
 const statScore = overlay.addStat("metrics passed");
 const statPlacements = overlay.addStat("placements");
+const statCorridorArt = overlay.addStat("art in the corridor");
 const statLap = overlay.addStat("lap");
 const statCook = overlay.addStat("cook");
 const statStation = overlay.addStat("station");
@@ -616,11 +619,12 @@ const statFps = overlay.addStat("fps");
 const card = overlay.addCollapsible("metric card", false);
 overlay.addNote(
   "Every box is one placement, drawn at its measured extents along the " +
-    "lap and across it and coloured by the zone it sits in. Some overhang " +
-    "the track, and that is faithful: the source material does it too. " +
-    "The faded copy is the same lap from directly above; the marker is " +
-    "where the driven view has got to. Space pauses; drag and scroll " +
-    "move the plan.",
+    "lap and across it and coloured by the zone it sits in. \u201cArt in " +
+    "the corridor\u201d is how much of it reaches over the track at driving " +
+    "height \u2014 reported, not scored, because the source material does it " +
+    "too, on 9% to 18% of instances. The faded copy is the same lap from " +
+    "directly above; the marker is where the driven view has got to. " +
+    "Space pauses; drag and scroll move the plan.",
 );
 
 const tickFps = createFpsMeter(statFps);
@@ -704,6 +708,7 @@ async function regenerate(): Promise<void> {
     station = 0;
     statScore(`${lap.passed} / ${lap.total}`);
     statPlacements(lap.placements.pointCount);
+    statCorridorArt(`${(lap.corridorArtShare * 100).toFixed(1)}%`);
     statLap(`${lap.lapW.toFixed(0)} W`);
     statCook(`${lap.cookMs.toFixed(0)} ms, ${lap.cooks} cooks`);
     card.textContent = lap.card;

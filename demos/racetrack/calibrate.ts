@@ -384,6 +384,9 @@ export interface Placement {
   readonly lateralW: number;
   readonly heightW: number;
   readonly footprintW: number;
+  /** The measured extents: along the lap and across it, both in W. */
+  readonly alongW: number;
+  readonly acrossW: number;
   readonly tallnessW: number;
   readonly radiusW: number;
   readonly kSigned: number;
@@ -412,6 +415,20 @@ export interface Report {
   readonly perW: number;
   readonly bandShare: Record<string, number>;
   readonly outsideShare: number;
+  /**
+   * The share of placements whose GEOMETRY reaches into the corridor at
+   * driving height, as distinct from metric 14's count of ANCHORS that do.
+   *
+   * MEASURED, NOT SCORED, and deliberately so for now. It is the amended
+   * spec's metric 18, and its accept band is not zero — the source
+   * material puts art in the driver's slab inside one half-width on 8.9%
+   * of instances in two of the recipes and 17.5% in the third, so a target
+   * of zero would reject a faithful reproduction. Which of this kit's
+   * three presets answers to which of those recipes is not yet settled,
+   * and a metric scored against a band nobody has confirmed is worse than
+   * a number reported honestly beside the seventeen that are.
+   */
+  readonly corridorArtShare: number;
 }
 
 /**
@@ -589,6 +606,21 @@ export function score(
   ).length;
   add(14, "corridor intrusions", intruding, intruding === 0, "0");
 
+  // The same question asked of the ART rather than the anchor. Three
+  // conditions, and the middle one is the one worth stating: a placement
+  // counts only if its box OVERLAPS the slab a driver occupies, not
+  // merely if the box crosses the corridor in plan. Boxes overstate
+  // intrusion by about a factor of two — the under-deck kit has geometry
+  // inside the corridor on most instances and in the driver's way on
+  // almost none — so a plan-only test would condemn the whole of it.
+  const corridorArt = placements.filter((p) => {
+    if (Math.abs(p.lateralW) < CORRIDOR.halfWidthW) return false; // over-track by design
+    if (Math.abs(p.lateralW) - p.acrossW / 2 >= CORRIDOR.halfWidthW) return false;
+    const base = p.heightW - p.tallnessW / 2;
+    const top = p.heightW + p.tallnessW / 2;
+    return top > 0 && base < CORRIDOR.ceilingW;
+  }).length;
+
   // 15. Every corner announces itself.
   const marked = cornerEntries > 0 ? markedCorners / cornerEntries : 1;
   add(15, "corners with an entry marker", marked, marked >= 0.999, "100%");
@@ -611,6 +643,7 @@ export function score(
   add(17, "tenths with a unique landmark", landmarked.size, landmarked.size === 10, "10 of 10");
 
   return {
+    corridorArtShare: n > 0 ? corridorArt / n : 0,
     metrics,
     passed: metrics.filter((m) => m.pass).length,
     perW,
