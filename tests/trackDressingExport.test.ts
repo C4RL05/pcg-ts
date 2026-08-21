@@ -90,7 +90,7 @@ describe("export", () => {
       current = await run(committed);
       if (better(current.report, best.report, preset)) best = current;
     }
-    expect(best.report.passed).toBe(17);
+    expect(best.report.passed).toBe(18);
 
     async function run(committedStretches: Record<number, number>) {
       const graph = build(committedStretches).graph;

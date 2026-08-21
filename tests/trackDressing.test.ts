@@ -278,9 +278,9 @@ describe("spline to environment art", () => {
     if (failures.length > 0) console.log(`
 ${card}
 bands ${JSON.stringify(report.bandShare)}`);
-    // All seventeen, scored. A run that quietly scored twelve of them
+    // All eighteen, scored. A run that quietly scored twelve of them
     // would pass every assertion below it.
-    expect(report.metrics.length).toBe(17);
+    expect(report.metrics.length).toBe(18);
     expect(report.passed).toBe(report.metrics.length);
     // The loop must not make things worse over its own iterations.
     expect(Math.max(...history)).toBeGreaterThanOrEqual(history[0]);
@@ -528,7 +528,7 @@ bands ${JSON.stringify(report.bandShare)}`);
     // was rebuilt to get here: one spline injected, four counts, three
     // weight lists and one packed lean table.
     expect(failures.map((f) => `${f.id} ${f.name}`)).toEqual([]);
-    expect(best!.passed).toBe(17);
+    expect(best!.passed).toBe(18);
   });
 
   it("reproduces exactly from its seed, and differs when the seed does", async () => {
@@ -630,5 +630,53 @@ describe("road ribbon", () => {
     // rotation-minimizing frame fails this by a mile: it drifts about 20
     // degrees off vertical by a third of the way round and keeps going.
     expect(steepestDeg).toBeLessThan(preset.bankMaxDeg + 1);
+  });
+});
+
+/**
+ * The corridor-art band, per preset, and the one preset that misses it.
+ *
+ * Worth a test of its own because the miss is a FACT about the kit rather
+ * than a bug in the loop, and a fact nobody wrote down is a fact that gets
+ * rediscovered. The band is the source material's own rate for the era a
+ * preset reproduces: 17% for the two earlier recipes, 32% for the late
+ * one, both measured with the same BOX predicate a template can evaluate.
+ *
+ * `dense` is the late recipe by every signal that identifies one — no
+ * camera-facing quads, a density of 0.8–1.25 per W, and a band mix with
+ * its mass moved inward — but it dresses from the EARLIER vocabulary,
+ * which is the only one this kit carries. That vocabulary's art is
+ * narrower, so a late-recipe band mix built out of it puts less over the
+ * track than the late recipe actually did. It reads under its band, not
+ * over: too clean rather than too dirty.
+ *
+ * Pinned rather than fixed, because the fix is the other vocabulary — a
+ * second archetype table derived from geometry rather than from names —
+ * and inventing numbers to close a 7-point gap would be fitting the kit
+ * to the metric instead of to the measurement.
+ */
+describe("corridor art", () => {
+  it("lands in band for the two presets whose vocabulary matches their recipe", async () => {
+    for (const name of ["sparse", "lush"] as const) {
+      const preset = PRESETS[name];
+      const { lapLength, committed } = await measureLap(preset);
+      const { report } = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
+      const m = report.metrics.find((x) => x.id === 18);
+      expect(m, `${name} has no metric 18`).toBeDefined();
+      expect(
+        m!.pass,
+        `${name}: ${(report.corridorArtShare * 100).toFixed(1)}% against ${preset.corridorArtAccept * 100}%`,
+      ).toBe(true);
+    }
+  });
+
+  it("records the one preset dressed from the wrong era's vocabulary", async () => {
+    const { lapLength, committed } = await measureLap(PRESETS.dense);
+    const { report } = await runOnce(PRESETS.dense, lapLength, noCorrections(), 21, {}, committed);
+    // UNDER its band, and by a margin too big to be sampling noise. If
+    // this ever passes, the vocabulary gap has been closed and the
+    // assertion should become the same one the other two presets take.
+    expect(report.corridorArtShare).toBeLessThan(PRESETS.dense.corridorArtAccept - 0.05);
+    expect(report.corridorArtShare).toBeGreaterThan(0.18);
   });
 });
