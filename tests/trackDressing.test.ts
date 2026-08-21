@@ -43,6 +43,8 @@ import {
 } from "../demos/racetrack/read.js";
 import {
   NO_COMMITTED_STRETCHES,
+  RULE_ARCHETYPES,
+  archetypesFor,
   PRESETS,
   type Preset,
   decodeCommittedStretches,
@@ -705,17 +707,38 @@ describe("corridor art", () => {
     }
   });
 
-  it("records that the late recipe runs clean, because its art is the early kit", async () => {
+  it("records that the late recipe still runs cleaner than the era it reproduces", async () => {
     const report = await bestOf(PRESETS.dense);
-    // It PASSES — the metric is a ceiling and this is comfortably under
-    // it. What is pinned here is why, because it is not a success: the
-    // late recipe measured 32.4% in the source and this reads two thirds
-    // of that, since the vocabulary it dresses from is the earlier one
-    // and that art is narrower. If a second vocabulary ever lands, this
-    // number should rise toward its band rather than stay here.
+    // It PASSES, and the metric is a ceiling, so running clean is not a
+    // failure. Pinned because the gap is still worth watching: the era
+    // measured 32.4% under this same box predicate and we read about two
+    // thirds of it. The vocabulary is no longer the reason — this preset
+    // dresses from the geometry kit now — so what remains is somewhere
+    // else, and the most likely candidate is that no offset/size
+    // correlation was measured for these twelve archetypes, where the
+    // named kit carries one for nineteen.
+    //
+    // Deliberately NOT tuned toward the band. A ceiling is not a target,
+    // and closing a twelve-point gap by turning knobs would be fitting
+    // the kit to the metric rather than to the measurement.
     const m = report.metrics.find((x) => x.id === 18);
     expect(m!.pass).toBe(true);
     expect(report.corridorArtShare).toBeLessThan(PRESETS.dense.corridorArtAccept - 0.05);
-    expect(report.corridorArtShare).toBeGreaterThan(0.18);
+    expect(report.corridorArtShare).toBeGreaterThan(0.12);
+  });
+
+  it("dresses the late recipe from the geometry vocabulary, and only that one", async () => {
+    const { lapLength, committed } = await measureLap(PRESETS.dense);
+    const { placements } = await runOnce(PRESETS.dense, lapLength, noCorrections(), 21, {}, committed);
+    const named = new Set(archetypesFor("named").map((a) => a.id));
+    const ruled = new Set([...RULE_ARCHETYPES.map((a) => a.id), "landmark"]);
+    const strays = [...new Set(placements.map((p) => p.archetype))].filter(
+      (id) => named.has(id) && !ruled.has(id),
+    );
+    // The rule-placed furniture is shared by both vocabularies — it is an
+    // invention of the ruleset rather than either era's art — so only the
+    // named kit's DENSITY-placed archetypes count as strays.
+    expect(strays).toEqual([]);
+    expect(placements.some((p) => p.archetype === "mid-mass")).toBe(true);
   });
 });

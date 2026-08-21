@@ -86,6 +86,7 @@ import {
   AFFINITY,
   ALL_ARCHETYPES,
   ARCHETYPES,
+  archetypesFor,
   BUCKET_EDGES,
   CORNER_RADIUS_W,
   extentsOf,
@@ -683,7 +684,19 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
   const archetypesByProfile: Record<string, string[]> = {};
   PROFILES.forEach((p, i) => {
     const n = Math.max(1, Math.round(countByProfile[p] ?? 0));
-    const members = ARCHETYPES.filter((a) => a.profile === p);
+    // The preset's OWN vocabulary, not the union. The two kits describe
+    // different eras' art and drawing from both would dress one lap from
+    // two of them.
+    const members = archetypesFor(preset.vocabulary).filter((a) => a.profile === p);
+    // A profile a vocabulary does not use gets no cloud at all. The
+    // geometry kit has nothing on the `clustered` curve — nothing in it
+    // rises with tightness the way that curve does — and an anchor cloud
+    // with an empty archetype table is not an empty cloud, it is a
+    // `select` with nothing to select among.
+    if (members.length === 0) {
+      archetypesByProfile[p] = [];
+      return;
+    }
     const line = g.add(pointLine, { count: n, includeEnd: false }, `anchors_${p}`);
     // A HASHED UNIFORM through CDF space — deliberately random, not
     // equidistributed.
@@ -950,9 +963,17 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
       "wideGaps",
     );
     g.connect(segs, "out", wide, "in");
+    // The fill's archetype is DERIVED, not named. Hard-coding
+    // "terrain-shell" quietly injected a named-kit archetype into a lap
+    // dressed from the geometry kit — one vocabulary's art appearing in
+    // the other's era, which is the one thing the two are separated to
+    // prevent. The highest-rate archetype in the preset's own vocabulary
+    // is the background mass by construction, and for the named kit it
+    // resolves to exactly the archetype that used to be written here.
+    const fillId = [...archetypesFor(preset.vocabulary)].sort((a, b) => b.rate - a.rate)[0].id;
     const named = g.add(
       setAttribute,
-      { name: "archetype", type: "string", stringValue: "terrain-shell" },
+      { name: "archetype", type: "string", stringValue: fillId },
       "fillKind",
     );
     g.connect(wide, "out", named, "in");

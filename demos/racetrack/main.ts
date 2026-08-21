@@ -208,6 +208,7 @@ const ZONE_COLOR: Record<number, number> = {
   5: 0x76c893, // far band
   6: 0x5c7ba8, // distant silhouette
   7: 0xc77dff, // over the track
+  8: 0x6b7a8f, // under the deck
 };
 
 /**

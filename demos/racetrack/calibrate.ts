@@ -18,6 +18,7 @@
  */
 import {
   ARCHETYPES,
+  archetypesFor,
   AUXILIARY_FAMILIES,
   CORRIDOR,
   type Preset,
@@ -117,22 +118,26 @@ function bandFractions(
  * the band fitting above it.
  */
 export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
+  // The preset's own vocabulary. Everything below fits rates, weights and
+  // variety counts over exactly this list, so an archetype from the other
+  // era never gets a share of anything.
+  const KIT = archetypesFor(preset.vocabulary);
   const rate: Record<string, number> = {};
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     rate[a.id] = a.rate * (preset.kitBias[a.id] ?? 1) * (c.bandAdjust[a.id] ?? 1);
   }
   const frac: Record<string, Record<string, number>> = {};
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     frac[a.id] = bandFractions(a.lateralW, a.heightW, preset.lateralPush[a.id] ?? 1);
   }
   const bands = Object.keys(preset.bands);
 
   for (let iter = 0; iter < 24; iter++) {
-    const total = ARCHETYPES.reduce((s, a) => s + rate[a.id], 0);
+    const total = KIT.reduce((s, a) => s + rate[a.id], 0);
     if (total <= 0) break;
     const current: Record<string, number> = {};
     for (const b of bands) current[b] = 0;
-    for (const a of ARCHETYPES) {
+    for (const a of KIT) {
       for (const [b, f] of Object.entries(frac[a.id])) {
         current[b] = (current[b] ?? 0) + (rate[a.id] / total) * f;
       }
@@ -143,7 +148,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
       // keeps the step finite instead of sending every rate to infinity.
       ratio[b] = current[b] > 1e-9 ? preset.bands[b] / current[b] : 1;
     }
-    for (const a of ARCHETYPES) {
+    for (const a of KIT) {
       let w = 0;
       for (const [b, f] of Object.entries(frac[a.id])) w += f * (ratio[b] ?? 1);
       rate[a.id] *= Math.sqrt(Math.max(w, 1e-6));
@@ -151,10 +156,10 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   }
 
   // (b) Scale to the target placements per W.
-  const sumRate = ARCHETYPES.reduce((s, a) => s + rate[a.id], 0);
+  const sumRate = KIT.reduce((s, a) => s + rate[a.id], 0);
   const targetTotal = preset.density * c.densityScale * lapW;
   const scale = sumRate > 0 ? targetTotal / sumRate : 0;
-  for (const a of ARCHETYPES) rate[a.id] *= scale;
+  for (const a of KIT) rate[a.id] *= scale;
 
   // The band an archetype mostly lands in. Both steps below redistribute
   // rate WITHIN one of these groups rather than across the kit, and that
@@ -163,7 +168,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // the closed loop to repair does not work — measured, the overhead band
   // came out at 11% against a 21% target and stayed there.
   const dominant: Record<string, string> = {};
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     let bestBand = bands[0];
     let bestF = -1;
     for (const b of bands) {
@@ -175,7 +180,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
     }
     dominant[a.id] = bestBand;
   }
-  const groupOf = (b: string) => ARCHETYPES.filter((a) => dominant[a.id] === b);
+  const groupOf = (b: string) => KIT.filter((a) => dominant[a.id] === b);
 
   // (e2) PRUNING. An archetype expected to place fewer than `minInstances`
   // is removed and its rate redistributed. A kit holding a single instance
@@ -184,7 +189,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // archetype's own band, so the band keeps its mass and only its internal
   // mix changes.
   const expected = (id: string): number =>
-    (rate[id] / Math.max(1e-9, ARCHETYPES.reduce((t, x) => t + rate[x.id], 0))) * targetTotal;
+    (rate[id] / Math.max(1e-9, KIT.reduce((t, x) => t + rate[x.id], 0))) * targetTotal;
   for (const b of bands) {
     const group = groupOf(b);
     let freed = 0;
@@ -215,9 +220,9 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // them to meshes instead, which is a change of KIT rather than of ratio,
   // and the graph reads `kind` for it.
   if (preset.spriteShare > 0) {
-    const totalRate = ARCHETYPES.reduce((t, a) => t + rate[a.id], 0);
+    const totalRate = KIT.reduce((t, a) => t + rate[a.id], 0);
     const spriteNow =
-      ARCHETYPES.filter((a) => a.kind === "sprite").reduce((t, a) => t + rate[a.id], 0) /
+      KIT.filter((a) => a.kind === "sprite").reduce((t, a) => t + rate[a.id], 0) /
       Math.max(1e-9, totalRate);
     if (spriteNow > 1e-9) {
       const want = preset.spriteShare / spriteNow;
@@ -259,14 +264,14 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // stand alone or nearly so, came out at 11.5% against a 21.1% target,
   // while the far band, which is where the sprite clusters live, ran over.
   // The band fit was correct and the draw was not delivering it.
-  const clusterOf = (a: (typeof ARCHETYPES)[number]): number =>
+  const clusterOf = (a: (typeof KIT)[number]): number =>
     Math.max(1, a.cluster * (preset.clusterMean / 1.6));
   const anchorWeight: Record<string, number> = {};
-  for (const a of ARCHETYPES) anchorWeight[a.id] = rate[a.id] / clusterOf(a);
-  const rateSum = Math.max(1e-9, ARCHETYPES.reduce((t, a) => t + rate[a.id], 0));
+  for (const a of KIT) anchorWeight[a.id] = rate[a.id] / clusterOf(a);
+  const rateSum = Math.max(1e-9, KIT.reduce((t, a) => t + rate[a.id], 0));
   const scaleToTotal = targetTotal / rateSum;
   const countByProfile: Record<string, number> = {};
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     countByProfile[a.profile] =
       (countByProfile[a.profile] ?? 0) + anchorWeight[a.id] * scaleToTotal;
   }
@@ -280,17 +285,17 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // is budget they spend whether or not anyone counts it.
   const variantsByArchetype: Record<string, number> = {};
   const capNeeded: Record<string, number> = {};
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     const share = rate[a.id] / rateSum;
     capNeeded[a.id] = rate[a.id] > 0 ? Math.max(1, Math.ceil(share / preset.largestFamilyCap)) : 0;
   }
   const budget = Math.max(
-    ARCHETYPES.filter((a) => rate[a.id] > 0).length,
+    KIT.filter((a) => rate[a.id] > 0).length,
     Math.round((preset.familiesAccept[0] + preset.familiesAccept[1]) / 2) - AUXILIARY_FAMILIES,
   );
-  const capSum = ARCHETYPES.reduce((t, a) => t + capNeeded[a.id], 0);
+  const capSum = KIT.reduce((t, a) => t + capNeeded[a.id], 0);
   const grow = capSum > 0 ? budget / capSum : 1;
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     if (rate[a.id] <= 0) {
       variantsByArchetype[a.id] = 0;
       continue;
@@ -311,7 +316,7 @@ export function calibrate(preset: Preset, lapW: number, c: Corrections): Plan {
   // Scaled to the TARGET rather than to the floor the metric accepts:
   // overshooting a budget passes the check and spends polygons the budget
   // said were not there.
-  const meanPolys = ARCHETYPES.reduce((t, a) => t + rate[a.id] * a.polygons, 0) / rateSum;
+  const meanPolys = KIT.reduce((t, a) => t + rate[a.id] * a.polygons, 0) / rateSum;
   const perW = targetTotal / Math.max(1e-9, lapW);
   const polygonScale =
     meanPolys > 0 && perW > 0 ? preset.polysPerW / (meanPolys * perW) : 1;
@@ -627,6 +632,17 @@ export function score(
   // driving height, ever.
   const intruding = placements.filter(
     (p) =>
+      // Z7 IS THE OVER-TRACK BAND, and being anchored over the track is
+      // its definition rather than a breach of it. The question only
+      // arises with the geometry vocabulary: a tunnel bore's bounds
+      // centre sits ON the racing line at h 0.4–1.7, because the bore
+      // surrounds the track, where the named kit's enclosure shell is
+      // anchored at 1.4–2.6 and clears the ceiling by construction. No
+      // box test tells a bore from a wall, and the two rules that do
+      // protect a driver — the art metric and the sightline cull — read
+      // geometry rather than anchors. Z8 needs no exemption: it is under
+      // the deck, so the height test excludes it already.
+      Number(p.zone) !== 7 &&
       Math.abs(p.lateralW) < CORRIDOR.halfWidthW &&
       p.heightW >= 0 &&
       p.heightW < CORRIDOR.ceilingW,
@@ -813,6 +829,7 @@ function nearestCircular(sorted: readonly number[], s: number, lap: number): num
  * undamped correction chases that noise instead of the target.
  */
 export function correct(preset: Preset, report: Report, c: Corrections): Corrections {
+  const KIT = archetypesFor(preset.vocabulary);
   const next: Corrections = {
     densityScale: c.densityScale,
     bandAdjust: { ...c.bandAdjust },
@@ -825,7 +842,7 @@ export function correct(preset: Preset, report: Report, c: Corrections): Correct
       2.5,
     );
   }
-  for (const a of ARCHETYPES) {
+  for (const a of KIT) {
     const band = bandOf((a.lateralW[0] + a.lateralW[1]) / 2, (a.heightW[0] + a.heightW[1]) / 2);
     const target = preset.bands[band] ?? 0;
     const achieved = report.bandShare[band] ?? 0;

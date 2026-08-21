@@ -16,6 +16,15 @@
  * a constant half-width.
  */
 
+/**
+ * Which vocabulary a kit or a preset speaks.
+ *
+ * "named" is the earlier games' art, described by what the objects are.
+ * "geometry" is the late one's, described by where they sit and how much
+ * room they take, because its objects are not named after anything.
+ */
+export type Vocabulary = "named" | "geometry";
+
 /** How an archetype's rate responds to how tight the track is under it. */
 export type AffinityProfile = "flat" | "built" | "clustered";
 
@@ -24,6 +33,33 @@ export interface Archetype {
   readonly id: string;
   /** Which lateral/height band this belongs to: Z2..Z8 of the zone model. */
   readonly zone: string;
+  /**
+   * Which of the two vocabularies this archetype belongs to. Absent means
+   * "named" — the kit as it stood before the second one arrived.
+   *
+   * A preset draws from exactly one. They are not alternative spellings
+   * of the same thing: the named kit describes the earlier games' art,
+   * which was named after what it is, and the geometry kit describes the
+   * late one's, which was not. Mixing them would dress a lap from two
+   * eras at once.
+   */
+  readonly vocabulary?: Vocabulary;
+  /**
+   * The measured curvature affinity: a multiplier on the rate for
+   * straight, easy, medium and tight track.
+   *
+   * Carried as data even though the graph reads `profile` instead, and
+   * the gap between the two is a known approximation. The graph builds
+   * ONE cumulative distribution per profile — three scans serve every
+   * archetype — so an archetype gets its profile's response to curvature
+   * rather than its own. Each row here is assigned to the profile whose
+   * curve fits it best in least squares, which is exact for `enclosure`
+   * (0.02) and loosest for `high-mass` (0.18), whose U-shaped response
+   * no shared curve reproduces. Recording the measurement is what makes
+   * the approximation visible, and what a per-archetype distribution
+   * would be built from.
+   */
+  readonly affinity?: readonly [number, number, number, number];
   readonly profile: AffinityProfile;
   /** Camera-facing quad or real geometry. A preset may convert them. */
   readonly kind: "sprite" | "mesh";
@@ -115,7 +151,7 @@ export interface Archetype {
  * trade that keeps the placement pass a fixed-size graph instead of one
  * that grows a branch per archetype.
  */
-export const ARCHETYPES: readonly Archetype[] = [
+const NAMED_ARCHETYPES: readonly Archetype[] = [
   { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], heightW: [0.6, 2.3], baseW: [-1.76, 0.02], footprintW: [8, 9.5], tallnessW: [4, 6], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], offsetSizeR: 0.59, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
   { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], alongW: [5.1, 6.5], acrossW: [0.8, 2.0], offsetSizeR: 0.43, polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
   { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], alongW: [0.7, 1.4], acrossW: [0.5, 1.7], offsetSizeR: -0.03, polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
@@ -138,6 +174,61 @@ export const ARCHETYPES: readonly Archetype[] = [
 ];
 
 /** Placed by RULE rather than by density: no rate, no cumulative draw. */
+/**
+ * THE SECOND VOCABULARY, derived from geometry rather than from names.
+ *
+ * The named kit above matches 46.9% of the earlier games' placements and
+ * only 14.1% of the late one's, because that game's artists stopped
+ * naming objects after what they are: its largest families are
+ * modelling-tool primitives carrying LOD and scene suffixes, 3,014
+ * families over 7,371 objects against 306 over 7,132 for the earlier
+ * pair. No name rule recovers a vocabulary from that.
+ *
+ * What survives is the geometry. Clustering every object on measured
+ * position, both horizontal extents, height and polygon count gives these
+ * twelve, covering 100% of the objects.
+ *
+ * THE NAMES DESCRIBE WHAT WAS MEASURED — position and mass — and not what
+ * the objects are. Nothing in the data says whether `mid-mass` is a rock,
+ * a hangar or a stack of containers; that is a theme decision and stays
+ * one. Each cluster does carry a label voted by the minority of its
+ * members whose names the named rules recognise, but those are hints with
+ * a stated support (77% of the 24% of `outer-mass` that is named at all
+ * reads as terrain) and never identifications, so they are not encoded
+ * here as ids.
+ *
+ * Every column is measured. `cluster` is the one exception and it is
+ * derived: the source states a gap CV per archetype rather than a mean
+ * cluster size, and for the anchor process this graph uses the two are
+ * related by CV = sqrt(2m - 1). See `affinity` for the other
+ * approximation.
+ */
+const GEOMETRY_ARCHETYPES: readonly Archetype[] = [
+  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.1, 3.3], heightW: [0.9, 2.1], footprintW: [3.5, 4.9], alongW: [3.5, 4.9], acrossW: [3.2, 4.5], tallnessW: [3.3, 4.9], polygons: 22, rate: 15.9, cluster: 2.08, outsideBias: 0.59, affinity: [1.05, 0.97, 0.91, 1.04] },
+  { id: "near-mass", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 2.6], heightW: [0.1, 1.0], footprintW: [2.5, 3.6], alongW: [2.5, 3.6], acrossW: [2.3, 3.3], tallnessW: [1.8, 3.0], polygons: 12, rate: 13.4, cluster: 1.96, outsideBias: 0.54, affinity: [1.08, 1.06, 0.93, 0.78] },
+  { id: "outer-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.8, 5.5], heightW: [0.8, 2.2], footprintW: [5.4, 7.8], alongW: [4.3, 7.1], acrossW: [5.4, 7.8], tallnessW: [5.3, 8.5], polygons: 21, rate: 10.1, cluster: 1.96, outsideBias: 0.8, affinity: [0.89, 1.09, 1.13, 1.03] },
+  { id: "near-detail", zone: "Z3", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 3.0], heightW: [0.2, 1.2], footprintW: [1.5, 2.4], alongW: [1.5, 2.4], acrossW: [0.9, 1.9], tallnessW: [0.9, 2.1], polygons: 4, rate: 10.0, cluster: 2.58, outsideBias: 0.65, affinity: [1.2, 1.08, 0.7, 0.71] },
+  { id: "far-mass", zone: "Z5", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [4.7, 7.3], heightW: [0.9, 2.8], footprintW: [2.7, 4.4], alongW: [2.6, 4.0], acrossW: [2.7, 4.4], tallnessW: [3.0, 4.3], polygons: 10, rate: 7.6, cluster: 2.66, outsideBias: 0.85, affinity: [1.2, 0.98, 0.8, 0.69] },
+  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.0, 0.3], heightW: [0.4, 1.7], footprintW: [4.1, 6.5], alongW: [3.5, 5.3], acrossW: [4.1, 6.5], tallnessW: [3.5, 6.0], polygons: 44, rate: 7.5, cluster: 1.13, outsideBias: 0.66, affinity: [1.32, 0.88, 0.7, 0.58] },
+  { id: "micro-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.2, 2.8], heightW: [0.7, 2.9], footprintW: [0.2, 0.7], alongW: [0.2, 0.6], acrossW: [0.2, 0.7], tallnessW: [0.2, 0.7], polygons: 4, rate: 6.9, cluster: 3.96, outsideBias: 0.53, affinity: [1.09, 0.94, 1.01, 0.75] },
+  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 3.0], heightW: [0.8, 1.4], footprintW: [1.3, 2.3], alongW: [1.2, 2.1], acrossW: [1.3, 2.3], tallnessW: [1.7, 2.5], polygons: 20, rate: 5.4, cluster: 1.8, outsideBias: 0.51, affinity: [0.89, 1.22, 1.0, 1.02] },
+  { id: "overhead", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.1, 0.6], heightW: [1.4, 3.3], footprintW: [2.4, 4.0], alongW: [1.7, 3.8], acrossW: [2.4, 4.0], tallnessW: [1.7, 3.4], polygons: 7, rate: 5.0, cluster: 1.33, outsideBias: 0.57, affinity: [1.43, 0.67, 0.54, 0.81] },
+  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.8, 5.7], heightW: [4.5, 6.7], footprintW: [4.2, 8.4], alongW: [4.1, 7.9], acrossW: [4.2, 8.4], tallnessW: [4.8, 10.1], polygons: 18, rate: 4.8, cluster: 1.93, outsideBias: 0.82, affinity: [1.14, 0.74, 0.81, 1.22] },
+  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.2, 4.8], heightW: [3.7, 5.8], footprintW: [1.5, 2.9], alongW: [1.2, 2.9], acrossW: [1.5, 2.7], tallnessW: [1.2, 3.2], polygons: 4, rate: 4.4, cluster: 3.48, outsideBias: 0.81, affinity: [1.31, 0.79, 0.74, 0.71] },
+  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 5.5], heightW: [-4.9, -2.9], footprintW: [3.9, 8.7], alongW: [3.6, 8.2], acrossW: [3.9, 8.7], tallnessW: [4.6, 10.8], polygons: 10, rate: 2.1, cluster: 3.17, outsideBias: 0.48, affinity: [1.38, 1.06, 0.46, 0.54] },
+];
+
+/**
+ * Both vocabularies, in one list. A preset selects between them with
+ * `vocabulary`; nothing draws from the union.
+ */
+export const ARCHETYPES: readonly Archetype[] = [...NAMED_ARCHETYPES, ...GEOMETRY_ARCHETYPES];
+
+/** The archetypes a preset actually draws from. */
+export function archetypesFor(vocabulary: Vocabulary): readonly Archetype[] {
+  return ARCHETYPES.filter((a) => (a.vocabulary ?? "named") === vocabulary);
+}
+
 export const RULE_ARCHETYPES: readonly Archetype[] = [
   { id: "corner-marker", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.6, 2.2], heightW: [1.0, 1.6], footprintW: [1.2, 1.8], tallnessW: [1.8, 2.4], alongW: [1.2, 1.8], acrossW: [1.2, 1.8], polygons: 18, rate: 0, cluster: 1, outsideBias: 1 },
   { id: "braking-reference", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.8, 1.2], footprintW: [0.6, 1.0], tallnessW: [1.4, 2.0], alongW: [0.6, 1.0], acrossW: [0.6, 1.0], polygons: 10, rate: 0, cluster: 1, outsideBias: 1 },
@@ -199,6 +290,8 @@ export const CORNER_RADIUS_W = 12;
 
 /** One era's weighting over the kit, and the targets it is scored on. */
 export interface Preset {
+  /** Which vocabulary this preset dresses from. */
+  readonly vocabulary: Vocabulary;
   /**
    * The share of placements allowed to put their BOX in the driver's slab
    * inside one half-width — the corridor-clear-of-art band.
@@ -261,6 +354,7 @@ export interface Preset {
  */
 export const PRESETS: Readonly<Record<string, Preset>> = {
   sparse: {
+    vocabulary: "named",
     corridorArtAccept: 0.17,
     spriteShare: 0.25,
     spriteAccept: [0.15, 0.35],
@@ -285,6 +379,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 0.9, bush: 0.9 },
   },
   lush: {
+    vocabulary: "named",
     corridorArtAccept: 0.17,
     spriteShare: 0.28,
     spriteAccept: [0.18, 0.38],
@@ -309,6 +404,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 1.15, bush: 1.1 },
   },
   dense: {
+    vocabulary: "geometry",
     corridorArtAccept: 0.32,
     spriteShare: 0.0,
     spriteAccept: [0, 0.05],
