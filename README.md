@@ -26,19 +26,18 @@ parts of a noise field, `random-yaw` and `random-scale` vary whatever is
 left, and `spawnInstances` puts a pine on each. Four of those five are
 shipped [primitives](#the-primitive-library) — small graphs themselves,
 dropped in as one node. The graph floats over the thing it just made;
-the panel on the left drives it. That is the whole idea — everything
-below is detail.
+the panel on the left drives it.
 ([Open it live.](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-compose-primitives))*
 
-## Is this for me?
+## What is pcg-ts?
 
-pcg-ts is a TypeScript library, not an application. It fits if you are
-building:
+pcg-ts is a TypeScript library, not an application. It is built for
+three kinds of work:
 
 - **A world with no edges** — terrain, a city, a galaxy — streamed in
   around a camera as it moves and generated on demand, instead of
   authored once and shipped as assets.
-- **Content made of rules** — props placed by a density you paint with
+- **Content made of rules** — props placed by a density painted with
   noise, a truss rig swept along a curve, a riverbank that follows its
   river — where the rules *are* the asset, and re-running them under a
   new seed is the point rather than an accident.
@@ -52,7 +51,7 @@ cooking (`pcg-ts/worker`) and the shipped primitive vocabulary
 (`pcg-ts/primitives`) are each optional and each its own import — the
 core never reaches for a renderer or a GPU on its own.
 
-## Look before you install
+## In the browser
 
 All of this runs in a browser. Nothing to check out, nothing to build.
 
@@ -63,10 +62,10 @@ All of this runs in a browser. Nothing to check out, nothing to build.
   it and a click through to it live. The same index in prose, with what
   each file teaches, is [docs/graphs.md](./docs/graphs.md).
 - **[The editor](https://c4rl05.github.io/pcg-ts/pages/editor/)** — open
-  any of those graphs and edit it on the spot. Start with
-  [the smallest one there is](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-scatter-in-bounds)
-  (scatter points in a box), then
-  [the suspended rig](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
+  any of those graphs and edit it on the spot. The smallest is
+  [basics-scatter-in-bounds](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-scatter-in-bounds)
+  (scatter points in a box); the densest is
+  [examples-rig](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
   (83 nodes, swept curves, a knobs panel). More in
   [The editor](#the-editor).
 - **[The user manual](https://c4rl05.github.io/pcg-ts/manual.html)** —
@@ -147,8 +146,7 @@ recooks. Same seed always reproduces the same bytes.
 
 ## Three foundations
 
-Everything else in this file is built out of these three, so they are
-worth the two minutes.
+Every chapter below is built out of these three.
 
 - **The data model.** Geometry is columns, not objects. Attributes live
   on domains (point / vertex / primitive / detail — [why exactly those
@@ -196,9 +194,8 @@ states the valid alternatives or the fix. The entry points, all of which ship in
 
 ---
 
-The rest of this file is the reference: each chapter is one subsystem,
-with the code that exercises it. Read it in order or jump to what you
-need.
+The rest of this file is the reference: one chapter per subsystem, each
+with the code that exercises it.
 
 ## Fields
 
@@ -337,7 +334,7 @@ const roundTrip = serializeGraph(graph); // structurally equal JSON back
 const result = await cook(graph);
 ```
 
-Three things about the format are worth knowing up front; the rest is
+Three properties of the format carry the most weight; the rest is
 [docs/authoring.md](./docs/authoring.md).
 
 **One value, many nodes.** A top-level `params` array holds authored
@@ -449,13 +446,13 @@ road arrives already knowing that road's width — a sample inherits the
 primitive it was taken from, with no param to enable it. Stage 5 of the
 shipped example pipeline is exactly that, end to end.
 
-Two contracts are worth knowing before the first path graph. **Closure
-is structural** — a closed path is one whose last vertex references its
-first point, and there is no `closed` attribute to write or read, so
-nothing can disagree with the geometry. And **a path that passes through
-a filter stops being a path** — as does a network: every filter that can
-remove a point rebuilds the point domain from the survivors and drops
-topology with it, as do `mergePoints` and `partitionByAttribute`. Three
+Two contracts govern every path graph. **Closure is structural** — a
+closed path is one whose last vertex references its first point, and
+there is no `closed` attribute to write or read, so nothing can disagree
+with the geometry. And **a path that passes through a filter stops being
+a path** — as does a network: every filter that can remove a point
+rebuilds the point domain from the survivors and drops topology with it,
+as do `mergePoints` and `partitionByAttribute`. Three
 filters are exempt — `projectToPlane`, which removes nothing, and the two
 primitive filters, `filterPrimitivesByBounds` and
 `filterPrimitivesByAttribute`, which remove whole primitives rather than
@@ -969,7 +966,7 @@ What the caller must respect (the mutation contracts):
 ## Examples
 
 `demos/` holds the three vite pages [pictured at the
-top](#look-before-you-install), each one something a serialized graph
+top](#in-the-browser), each one something a serialized graph
 cannot be on its own: an infinite streaming world
 ([live](https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/)), an
 infinite deterministic spiral galaxy with click-to-visit star systems
