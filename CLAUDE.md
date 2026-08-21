@@ -22,7 +22,7 @@ Four foundations, each carried through the whole library:
   something else. The CPU is the reference and the GPU is a documented
   approximation: elementwise arithmetic is bit-exact, and the noise
   interiors round in f32 within published per-family tolerances (see the
-  parity table in `README.md`). "Byte-identical" is a promise about the
+  parity table in `docs/authoring.md`). "Byte-identical" is a promise about the
   same path re-run — same seed, any cook order, any budget, any
   platform — not about CPU and GPU agreeing to the last bit.
 - **Fields.** A node output can be a deferred function of evaluation
