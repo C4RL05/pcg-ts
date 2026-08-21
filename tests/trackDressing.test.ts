@@ -656,8 +656,8 @@ describe("road ribbon", () => {
  * to the metric instead of to the measurement.
  */
 describe("corridor art", () => {
-  it("lands in band for the two presets whose vocabulary matches their recipe", async () => {
-    for (const name of ["sparse", "lush"] as const) {
+  it("stays under the ceiling for every preset", async () => {
+    for (const name of ["sparse", "lush", "dense"] as const) {
       const preset = PRESETS[name];
       const { lapLength, committed } = await measureLap(preset);
       const { report } = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
@@ -670,12 +670,17 @@ describe("corridor art", () => {
     }
   });
 
-  it("records the one preset dressed from the wrong era's vocabulary", async () => {
+  it("records that the late recipe runs clean, because its art is the early kit", async () => {
     const { lapLength, committed } = await measureLap(PRESETS.dense);
     const { report } = await runOnce(PRESETS.dense, lapLength, noCorrections(), 21, {}, committed);
-    // UNDER its band, and by a margin too big to be sampling noise. If
-    // this ever passes, the vocabulary gap has been closed and the
-    // assertion should become the same one the other two presets take.
+    // It PASSES — the metric is a ceiling and this is comfortably under
+    // it. What is pinned here is why, because it is not a success: the
+    // late recipe measured 32.4% in the source and this reads two thirds
+    // of that, since the vocabulary it dresses from is the earlier one
+    // and that art is narrower. If a second vocabulary ever lands, this
+    // number should rise toward its band rather than stay here.
+    const m = report.metrics.find((x) => x.id === 18);
+    expect(m!.pass).toBe(true);
     expect(report.corridorArtShare).toBeLessThan(PRESETS.dense.corridorArtAccept - 0.05);
     expect(report.corridorArtShare).toBeGreaterThan(0.18);
   });

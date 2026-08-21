@@ -630,12 +630,17 @@ export function score(
     0.05,
     1.645 * Math.sqrt((preset.corridorArtAccept * (1 - preset.corridorArtAccept)) / Math.max(1, n)),
   );
+  // A CEILING, not a window. The rule is "corridor clear of art", and
+  // being cleaner than the source material is not a defect — reading it
+  // as a two-sided band around the era rate fails a lap for the one
+  // outcome the rule exists to encourage. The band widens the ceiling
+  // rather than surrounding the target.
   add(
     18,
     "art in the corridor",
     corridorArtShare,
-    Math.abs(corridorArtShare - preset.corridorArtAccept) <= artBand,
-    `${preset.corridorArtAccept} +-${artBand.toFixed(2)}`,
+    corridorArtShare <= preset.corridorArtAccept + artBand,
+    `<= ${preset.corridorArtAccept} +${artBand.toFixed(2)}`,
   );
 
   // 15. Every corner announces itself.
