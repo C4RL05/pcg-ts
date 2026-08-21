@@ -967,14 +967,18 @@ What the caller must respect (the mutation contracts):
 
 ## Examples
 
-`demos/` holds the three vite pages [pictured at the
-top](#in-the-browser), each one something a serialized graph
-cannot be on its own: an infinite streaming world
+`demos/` holds the four vite pages [pictured at the
+top](#in-the-browser), each one something a serialized graph cannot be on
+its own: an infinite streaming world
 ([live](https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/)), an
 infinite deterministic spiral galaxy with click-to-visit star systems
-([live](https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/)), and a
-streamed world drawing from device-resident instance transforms
-([live](https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/)).
+([live](https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/)), a streamed
+world drawing from device-resident instance transforms
+([live](https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/)), and a
+circuit dressed by rule and scored on every cook
+([live](https://c4rl05.github.io/pcg-ts/pages/demos/racetrack/)) — the one
+page where a graph is judged rather than merely drawn, which a cook cannot
+do for itself because calibration is a share of a total.
 [`editor/`](#the-editor) beside them is a tool rather than a demo, and
 has its own chapter above.
 
