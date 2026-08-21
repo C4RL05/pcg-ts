@@ -685,19 +685,31 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     const n = Math.max(1, Math.round(countByProfile[p] ?? 0));
     const members = ARCHETYPES.filter((a) => a.profile === p);
     const line = g.add(pointLine, { count: n, includeEnd: false }, `anchors_${p}`);
-    // A GOLDEN-RATIO sequence through CDF space: equidistributed for any
-    // count, and it needs to know none.
+    // A HASHED UNIFORM through CDF space — deliberately random, not
+    // equidistributed.
     //
-    // It used to be a stratified sample permuted by a stride coprime with
-    // the count — better discrepancy, and it baked the count into the
-    // expression twice. That made `count` a knob that could be turned but
-    // not honoured: raising it past what the graph was built with sent
-    // `mod(index * stride, nOld)` wrapping and the archetype selector past
-    // 1, so the anchors clumped and the last archetype in each list took
-    // everything. Measured on a retarget: density CV 1.81 against a 0.75
-    // ceiling and a sprite share of zero. A sequence that needs no count
-    // is what makes the count a real knob.
-    const uAnchor = fract(mul(index(), GOLDEN));
+    // CLUMP, DO NOT SPACE. This used to be a golden-ratio sequence, whose
+    // whole purpose is low discrepancy, and a low-discrepancy sequence is
+    // the mathematical opposite of what the source material does. Measured
+    // against the originals, every repeating family has a gap CV of
+    // 1.5–2.5 with a median around 2.0; a family placed evenly reads as
+    // wallpaper and the originals never do it. The golden sequence put us
+    // at 1.09 overall and 0.68 on the most numerous archetype in the kit
+    // — regular enough to be visible as a rhythm nothing in the source has.
+    //
+    // N independent uniforms in CDF space IS a Poisson process conditioned
+    // on N, which is the exponential-gap anchor process the ruleset names;
+    // the geometric cluster size below is the other half of it, and the
+    // two together are what reproduce the measured signature.
+    //
+    // The count lesson the golden sequence was brought in for still holds
+    // and this keeps it: before either, the draw was a stratified sample
+    // permuted by a stride coprime with the count, which baked the count
+    // into the expression twice and made it a knob that could be turned
+    // but not honoured — raising it sent `mod(index * stride, nOld)`
+    // wrapping and the last archetype in each list took everything.
+    // A hashed uniform needs to know no count at all.
+    const uAnchor = randomField("anchorU");
     const place = g.add(
       setAttribute,
       { name: "P", tupleSize: 3, value: vec(uAnchor, i * LANE, 0) },
@@ -961,6 +973,9 @@ export function buildTrackDressingGraph(opts: TrackDressingOpts): {
     const fillCursor = lookupAtStation(g, midU, ring, attribute("fillU"), "fillLook", LOOKUP_NAMES);
     const fills = placeFromPack(g, fillCursor, {
       id: "fill",
+      // Placed where a gap was, not where the density asked. It still
+      // leans with its stretch, so it is not `rulePlaced`.
+      byRule: true,
       preset,
       outsideShift,
       variants,
@@ -1184,6 +1199,18 @@ function placeFromPack(
     sideFromCorner?: boolean;
     /** Placed by a rule, so never mirrored by the balance pass. */
     rulePlaced?: boolean;
+    /**
+     * Was this placement put here by a RULE rather than drawn from the
+     * density?
+     *
+     * Separate from `rulePlaced`, which decides whether the balance pass
+     * may lean it — two different questions that happen to agree for the
+     * legibility furniture and disagree for the coverage fill. A fill
+     * leans with its stretch like anything else, so it is movable; but it
+     * is placed where a gap was, not where the density asked, so the
+     * rhythm metrics must not read it as decoration.
+     */
+    byRule?: boolean;
   },
 ): NodeHandle {
   const { preset, id } = o;
@@ -1336,6 +1363,11 @@ function placeFromPack(
     },
     `${id}Lat`,
   );
+  const byRuleN = g.add(
+    setAttribute,
+    { name: "byRule", type: "i32", value: (o.byRule ?? o.rulePlaced) ? 1 : 0 },
+    `${id}ByRule`,
+  );
   const hN = fromRange("heightW", hgt, "h", "Height");
   const fpN = fromRange("footprintW", fp, "fp", "Foot");
   // Drawn from their own streams, so adding them moved no other column.
@@ -1451,7 +1483,7 @@ function placeFromPack(
     },
     `${id}Pos`,
   );
-  chain(g, [input, latN, hN, fpN, alongN, acrossN, tallN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
+  chain(g, [input, latN, byRuleN, hN, fpN, alongN, acrossN, tallN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
   return posN;
 }
 

@@ -388,8 +388,23 @@ bands ${JSON.stringify(report.bandShare)}`);
     expect(wrongBefore, "the balance pass had work to do").toBeGreaterThan(5);
 
     // Nothing OUTSIDE a committed stretch was touched by the pass.
-    const keyOf = (p: Placement) => `${p.archetype}|${p.stationW.toFixed(3)}`;
-    const offSide = new Map(off.placements.map((p) => [keyOf(p), p.lateralW]));
+    // Archetype and station alone are NOT a unique identity. Anchors are
+    // drawn at random in CDF space, so two instances of one archetype can
+    // land within a thousandth of a half-width of each other — measured,
+    // 14 colliding keys out of 411 — and a colliding key silently pairs
+    // one placement with another's side. That reads as the balance pass
+    // moving something it never touched.
+    const keyOf = (p: Placement) =>
+      `${p.archetype}|${p.stationW.toFixed(3)}|${p.heightW.toFixed(3)}|${p.variant}`;
+    // Any key that still collides is skipped rather than guessed at.
+    const sides = new Map<string, number[]>();
+    for (const p of off.placements) {
+      if (!sides.has(keyOf(p))) sides.set(keyOf(p), []);
+      sides.get(keyOf(p))!.push(p.lateralW);
+    }
+    const offSide = new Map(
+      [...sides.entries()].filter(([, v]) => v.length === 1).map(([k, v]) => [k, v[0]]),
+    );
     const committedTenths = new Set(Object.keys(committed).map(Number));
     let movedOutside = 0;
     for (const p of on.placements) {

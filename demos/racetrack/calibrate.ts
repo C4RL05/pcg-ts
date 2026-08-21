@@ -387,6 +387,8 @@ export interface Placement {
   /** The measured extents: along the lap and across it, both in W. */
   readonly alongW: number;
   readonly acrossW: number;
+  /** 1 if a rule put this here, 0 if the density draw did. */
+  readonly byRule: number;
   readonly tallnessW: number;
   readonly radiusW: number;
   readonly kSigned: number;
@@ -547,11 +549,26 @@ export function score(
   // instances for a gap distribution to mean anything.
   const byKind = new Map<string, number[]>();
   for (const p of placements) {
+    // Rule-placed instances are not part of a family's rhythm — a
+    // coverage fill sits where a gap was, and counting it as decoration
+    // measures the fill pass rather than the draw.
+    if (p.byRule > 0) continue;
     if (!byKind.has(p.archetype)) byKind.set(p.archetype, []);
     byKind.get(p.archetype)!.push(lapMod(p.stationW, lapW));
   }
   const cvs: number[] = [];
-  for (const [, ss] of byKind) {
+  for (const [id, ss] of byKind) {
+    // RULE-PLACED FAMILIES ARE EXEMPT, and including them was measuring
+    // the wrong population. The rule is "clump, do not space", and it is
+    // about REPEATING families — decoration. A braking reference is
+    // deliberately evenly spaced, because it is a ruler and not
+    // decoration; a corner marker sits a fixed distance before each
+    // entry; a landmark is one per tenth of the lap by construction.
+    // All three are regular ON PURPOSE, and all three were dragging the
+    // median below the floor while the density-placed families sat
+    // comfortably inside the band — bush at 2.01, which is the measured
+    // median of the source material to two decimal places.
+    if (RULE_PLACED.has(id) || id === "landmark") continue;
     if (ss.length < 8) continue;
     ss.sort((a, b) => a - b);
     const gaps: number[] = [];
@@ -560,7 +577,19 @@ export function score(
     cvs.push(cv(gaps));
   }
   const medianCv = median(cvs);
-  add(13, "median gap CV per archetype", medianCv, medianCv >= 0.4, ">= 0.4 (not metronomic)");
+  // The band the spec states, rather than the loose floor this carried
+  // while the population was wrong. What the rule excludes is METRONOMIC
+  // placement, which sits below 0.4 — but a sampler built from geometric
+  // clusters on a random anchor process lands at 1.4–1.6, so the floor
+  // belongs where the distinction actually lies. The ceiling is there
+  // because a lap can also be clumped into uselessness.
+  add(
+    13,
+    "median gap CV per family",
+    medianCv,
+    medianCv >= 1.2 && medianCv <= 2.6,
+    "1.2-2.6 (clumped, not metronomic)",
+  );
 
   // 10. One-sided stretches, at least two each way. This is what the
   // balance pass is FOR — a lap that is 50/50 everywhere is evenly grey,

@@ -79,6 +79,7 @@ export function readPlacements(g: Geometry): Placement[] {
   const footprintW = col(g, "footprintW");
   const alongW = col(g, "alongW");
   const acrossW = col(g, "acrossW");
+  const byRule = col(g, "byRule");
   const tallnessW = col(g, "tallnessW");
   const zone = col(g, "zone");
   const variant = col(g, "variant");
@@ -101,6 +102,7 @@ export function readPlacements(g: Geometry): Placement[] {
       footprintW: footprintW[i],
       alongW: alongW[i],
       acrossW: acrossW[i],
+      byRule: byRule[i],
       tallnessW: tallnessW[i],
       radiusW: pack1[i * 4 + 3],
       kSigned: pack2[i * 4 + 3],
