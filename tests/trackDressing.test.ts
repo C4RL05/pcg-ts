@@ -670,12 +670,32 @@ describe("road ribbon", () => {
  * and inventing numbers to close a 7-point gap would be fitting the kit
  * to the metric instead of to the measurement.
  */
+/**
+ * The corrected best, which is what the pipeline actually emits.
+ *
+ * Scoring a single uncorrected pass would be scoring something no run of
+ * the technique produces: the loop exists because the first pass is
+ * reliably off, and the corridor share is one of the things it moves —
+ * sparse reads 24.1% uncorrected and 21.1% corrected.
+ */
+async function bestOf(preset: Preset): Promise<Report> {
+  const { lapLength, committed } = await measureLap(preset);
+  let c = noCorrections();
+  let cur = await runOnce(preset, lapLength, c, 21, {}, committed);
+  let best = cur;
+  for (let i = 0; i < 2; i++) {
+    c = correct(preset, cur.report, c);
+    cur = await runOnce(preset, lapLength, c, 21, {}, committed);
+    if (better(cur.report, best.report, preset)) best = cur;
+  }
+  return best.report;
+}
+
 describe("corridor art", () => {
   it("stays under the ceiling for every preset", async () => {
     for (const name of ["sparse", "lush", "dense"] as const) {
       const preset = PRESETS[name];
-      const { lapLength, committed } = await measureLap(preset);
-      const { report } = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
+      const report = await bestOf(preset);
       const m = report.metrics.find((x) => x.id === 18);
       expect(m, `${name} has no metric 18`).toBeDefined();
       expect(
@@ -686,8 +706,7 @@ describe("corridor art", () => {
   });
 
   it("records that the late recipe runs clean, because its art is the early kit", async () => {
-    const { lapLength, committed } = await measureLap(PRESETS.dense);
-    const { report } = await runOnce(PRESETS.dense, lapLength, noCorrections(), 21, {}, committed);
+    const report = await bestOf(PRESETS.dense);
     // It PASSES — the metric is a ceiling and this is comfortably under
     // it. What is pinned here is why, because it is not a success: the
     // late recipe measured 32.4% in the source and this reads two thirds

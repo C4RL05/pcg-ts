@@ -1302,6 +1302,10 @@ function placeFromPack(
   const uLat = lerp(tri(`${id}-lat`), uToward, wOf);
   const lat = rangeByArchetype((x) => arch(x).lateralW);
   const hgt = rangeByArchetype((x) => arch(x).heightW);
+  // Seating, for the three archetypes where the measurement and the
+  // published envelope disagree. See `baseW` in the kit.
+  const seatBase = rangeByArchetype((x) => arch(x).baseW ?? [0, 0]);
+  const seated = byArchetype((x) => (arch(x).baseW ? 1 : 0), 0);
   const fp = rangeByArchetype((x) => arch(x).footprintW);
   // The two horizontal extents, carried BESIDE `footprintW` rather than
   // replacing it: the metrics are stated on the published footprint and
@@ -1368,7 +1372,27 @@ function placeFromPack(
     { name: "byRule", type: "i32", value: (o.byRule ?? o.rulePlaced) ? 1 : 0 },
     `${id}ByRule`,
   );
-  const hN = fromRange("heightW", hgt, "h", "Height");
+  // HEIGHT IS DRAWN AFTER TALLNESS, and the order is load-bearing: a
+  // seated archetype's centre is its base plus half its own height, so
+  // the height draw has to be able to read the tallness draw. `lerp` on a
+  // 0/1 flag rather than a branch — the grammar has no branch, and the
+  // two expressions are cheap enough that evaluating both costs less than
+  // a select over tuples would.
+  const hN = g.add(
+    setAttribute,
+    {
+      name: "heightW",
+      value: lerp(
+        lerp(component(hgt, 0), component(hgt, 1), tri(`${id}-h`)),
+        add(
+          lerp(component(seatBase, 0), component(seatBase, 1), tri(`${id}-base`)),
+          div(attribute("tallnessW"), 2),
+        ),
+        seated,
+      ),
+    },
+    `${id}Height`,
+  );
   const fpN = fromRange("footprintW", fp, "fp", "Foot");
   // Drawn from their own streams, so adding them moved no other column.
   const alongN = fromRange("alongW", along, "along", "Along");
@@ -1483,7 +1507,7 @@ function placeFromPack(
     },
     `${id}Pos`,
   );
-  chain(g, [input, latN, byRuleN, hN, fpN, alongN, acrossN, tallN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
+  chain(g, [input, latN, byRuleN, tallN, hN, fpN, alongN, acrossN, polyN, spriteN, variantN, zoneN, stationN, yawN, posN]);
   return posN;
 }
 

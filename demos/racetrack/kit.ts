@@ -31,6 +31,25 @@ export interface Archetype {
   readonly lateralW: readonly [number, number];
   /** Height above the local track surface, in W. */
   readonly heightW: readonly [number, number];
+  /**
+   * Where the archetype's LOWEST geometry sits relative to the deck, as
+   * the measured interquartile range — and, where present, the thing that
+   * actually seats it.
+   *
+   * S-3 of the size contract, and the part most likely to catch art from
+   * another source. The pivot is the centre of the bounds, so the base is
+   * `heightW - tallnessW / 2` — but the published `heightW` envelopes are
+   * rounded authored ranges and do not reproduce the measurement. A
+   * camera post's h of 1.3–1.7 with a tallness of 0.3–0.6 implies a base
+   * at 1.0–1.55W, where the measurement says 0.30–1.52W: it FLOATS clear
+   * of the deck, and by more than the envelope admits. A chevron board's
+   * base is under the surface. Where the two disagree the measurement
+   * wins, and art seated base-to-ground lands wrong for every row here.
+   *
+   * Present on three archetypes. Everywhere else the `heightW` envelope
+   * is the seating, because nothing measured contradicts it.
+   */
+  readonly baseW?: readonly [number, number];
   readonly footprintW: readonly [number, number];
   /**
    * The two horizontal extents, measured separately: ALONG the lap and
@@ -97,7 +116,7 @@ export interface Archetype {
  * that grows a branch per archetype.
  */
 export const ARCHETYPES: readonly Archetype[] = [
-  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], heightW: [0.6, 2.3], footprintW: [8, 9.5], tallnessW: [4, 6], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], offsetSizeR: 0.59, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
+  { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], heightW: [0.6, 2.3], baseW: [-1.76, 0.02], footprintW: [8, 9.5], tallnessW: [4, 6], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], offsetSizeR: 0.59, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
   { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], alongW: [5.1, 6.5], acrossW: [0.8, 2.0], offsetSizeR: 0.43, polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
   { id: "bush", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [2.6, 4.6], heightW: [1.2, 1.8], footprintW: [1.0, 1.3], tallnessW: [1.4, 1.9], alongW: [0.7, 1.4], acrossW: [0.5, 1.7], offsetSizeR: -0.03, polygons: 1, rate: 9, cluster: 2.8, outsideBias: 0.75 },
   { id: "tree-group", zone: "Z5", profile: "clustered", kind: "sprite", lateralW: [5.0, 8.0], heightW: [1.6, 2.2], footprintW: [1.0, 1.4], tallnessW: [2.0, 2.5], alongW: [0.5, 1.7], acrossW: [0.7, 2.4], offsetSizeR: -0.22, polygons: 1, rate: 5, cluster: 3.4, outsideBias: 0.75 },
@@ -105,12 +124,12 @@ export const ARCHETYPES: readonly Archetype[] = [
   { id: "set-piece", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.6, 2.4], heightW: [1.0, 1.5], footprintW: [5, 7], tallnessW: [1.8, 2.6], alongW: [3.8, 7.7], acrossW: [1.6, 3.7], offsetSizeR: 0.36, polygons: 38, rate: 7, cluster: 1.4, outsideBias: 0.72 },
   { id: "wall-panel", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 4.2], heightW: [1.6, 2.4], footprintW: [7, 10], tallnessW: [5, 8], alongW: [3.0, 8.3], acrossW: [1.9, 5.3], offsetSizeR: -0.16, polygons: 28, rate: 5, cluster: 2.0, outsideBias: 0.75 },
   { id: "overhead-sign", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0.0, 0.5], heightW: [1.6, 2.0], footprintW: [3, 4], tallnessW: [1.4, 2.0], alongW: [0.4, 3.0], acrossW: [2.7, 5.2], offsetSizeR: -0.38, polygons: 28, rate: 5, cluster: 1.1, outsideBias: 0.5 },
-  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], alongW: [1.3, 2.3], acrossW: [0.4, 2.3], offsetSizeR: 0.8, polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
+  { id: "chevron-board", zone: "Z3", profile: "clustered", kind: "mesh", lateralW: [1.6, 2.4], heightW: [0.4, 0.9], baseW: [-0.55, -0.36], footprintW: [1.5, 2.5], tallnessW: [1.5, 2.5], alongW: [1.3, 2.3], acrossW: [0.4, 2.3], offsetSizeR: 0.8, polygons: 10, rate: 4, cluster: 2.2, outsideBias: 0.8 },
   { id: "tower", zone: "Z4", profile: "built", kind: "mesh", lateralW: [2.6, 3.6], heightW: [2.8, 3.5], footprintW: [1.6, 2.2], tallnessW: [1.0, 1.5], alongW: [1.6, 4.1], acrossW: [1.5, 3.1], offsetSizeR: 0.55, polygons: 30, rate: 3, cluster: 1.3, outsideBias: 0.7 },
   { id: "pipe-run", zone: "Z3", profile: "built", kind: "mesh", lateralW: [1.7, 2.5], heightW: [0.9, 1.3], footprintW: [1.6, 2.2], tallnessW: [0.4, 0.7], alongW: [1.9, 5.4], acrossW: [0.3, 4.1], offsetSizeR: 0.3, polygons: 30, rate: 4, cluster: 2.6, outsideBias: 0.66 },
   { id: "billboard", zone: "Z5", profile: "flat", kind: "mesh", lateralW: [5.2, 7.0], heightW: [2.4, 3.2], footprintW: [5, 7], tallnessW: [6, 7.5], alongW: [0.6, 2.8], acrossW: [3.1, 5.2], offsetSizeR: -0.13, polygons: 24, rate: 2, cluster: 1.2, outsideBias: 0.78 },
   { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], alongW: [0.3, 1.8], acrossW: [1.0, 2.3], offsetSizeR: -0.09, polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
-  { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], alongW: [0.7, 0.9], acrossW: [0.6, 1.1], offsetSizeR: -0.09, polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
+  { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], heightW: [1.3, 1.7], baseW: [0.3, 1.52], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], alongW: [0.7, 0.9], acrossW: [0.6, 1.1], offsetSizeR: -0.09, polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
   { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], alongW: [3.0, 6.6], acrossW: [3.5, 6.5], offsetSizeR: 0.68, polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
   { id: "skyline", zone: "Z6", profile: "built", kind: "mesh", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], alongW: [6, 10], acrossW: [6, 10], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
   { id: "banner", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], alongW: [0.6, 1.2], acrossW: [13.2, 13.6], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
@@ -166,28 +185,6 @@ export function extentsOf(a: Archetype): {
   return { along: a.alongW ?? a.footprintW, across: a.acrossW ?? a.footprintW };
 }
 
-/**
- * Where an archetype's LOWEST geometry actually sits, relative to the
- * deck, as the measured interquartile range.
- *
- * S-3 of the size contract, and the part most likely to catch art from
- * another source. The pivot is the centre of the bounds, so the base is
- * `heightW - tallnessW / 2` — but the published `h` and `tallness`
- * envelopes are rounded authored ranges and do not reproduce these:
- * a camera post's h of 1.3-1.7 with a tallness of 0.3-0.6 implies a base
- * at 1.0-1.55W, where the measurement says 0.30-1.52W. Where the two
- * disagree the measurement wins, and art seated base-to-ground lands
- * wrong for every row here.
- *
- * Reported rather than applied: seating against it moves `heightW`, which
- * the band mix is scored on, so it belongs with a pass that re-earns the
- * score rather than one that promises not to touch it.
- */
-export const MEASURED_BASE_W: Readonly<Record<string, readonly [number, number]>> = {
-  "camera-post": [0.3, 1.52],
-  "chevron-board": [-0.55, -0.36],
-  "terrain-shell": [-1.76, 0.02],
-};
 
 export const PROFILES: readonly AffinityProfile[] = ["flat", "built", "clustered"];
 
