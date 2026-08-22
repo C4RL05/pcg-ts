@@ -11,7 +11,15 @@
  * engine".
  */
 import { type CookResult, type DataCollection, type Geometry, firstGeometry } from "pcg-ts";
-import { type Placement, type Report, countBlocking, score } from "./calibrate.js";
+import {
+  type Corrections,
+  type Placement,
+  type Report,
+  correct,
+  countBlocking,
+  noCorrections,
+  score,
+} from "./calibrate.js";
 import { type Preset } from "./kit.js";
 
 /**
@@ -187,4 +195,43 @@ export function scoreCook(
 export function better(a: Report, b: Report, preset: Preset): boolean {
   if (a.passed !== b.passed) return a.passed > b.passed;
   return Math.abs(a.perW - preset.density) < Math.abs(b.perW - preset.density);
+}
+
+/**
+ * THE CLOSED LOOP, and the only copy of it.
+ *
+ * Generate, measure, correct, regenerate, keep the best. This is what the
+ * technique emits — a single uncorrected pass scores something no run of
+ * it produces, because the first pass is reliably off and the loop exists
+ * to see that and answer it.
+ *
+ * Two things about the shape are load-bearing and were both spelled five
+ * different ways before this existed. THE CORRECTION COMES FROM THE
+ * LATEST REPORT, never from the best one: a controller has to see where
+ * it just was, and one that re-derives the same correction from the same
+ * report never moves. And the result is the BEST rather than the last,
+ * because the corrections are measured on samples small enough to be
+ * noisy — only a few dozen placements sit inside bends on a lap — so a
+ * later pass is usually, but not always, an improvement.
+ *
+ * The caller supplies `run`, which is where every difference between the
+ * uses lives: building a graph and cooking it, or re-aiming one that is
+ * already built and scoring it again. What must not differ is the
+ * controller, and now it cannot.
+ */
+export async function refine<T extends { readonly report: Report }>(
+  preset: Preset,
+  passes: number,
+  run: (corrections: Corrections, pass: number) => Promise<T>,
+): Promise<{ readonly best: T; readonly history: readonly Report[] }> {
+  let corrections = noCorrections();
+  let best: T | null = null;
+  const history: Report[] = [];
+  for (let pass = 0; pass < Math.max(1, passes); pass++) {
+    const current = await run(corrections, pass);
+    history.push(current.report);
+    if (best === null || better(current.report, best.report, preset)) best = current;
+    corrections = correct(preset, current.report, corrections);
+  }
+  return { best: best as T, history };
 }

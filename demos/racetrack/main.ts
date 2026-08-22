@@ -58,12 +58,11 @@ import {
   type Plan,
   calibrate,
   chooseCommittedStretches,
-  correct,
   noCorrections,
 } from "./calibrate.js";
 import { buildTrackDressingGraph } from "./dressing.js";
-import { PRESETS, type Preset } from "./kit.js";
-import { TRACK, better, col, scoreCook } from "./read.js";
+import { PRESETS, REFINE_PASSES, type Preset } from "./kit.js";
+import { TRACK, col, refine, scoreCook } from "./read.js";
 
 // ------------------------------------------------------------------ //
 // The cook, and the closed loop around it.
@@ -123,10 +122,8 @@ async function dressLap(preset: Preset, seed: number): Promise<Lap> {
   const lapLength = probeFrames.attrs.primitive.require("lapLen").get(0) as number;
   const lapW = lapLength / TRACK.halfWidth;
 
-  let corrections: Corrections = noCorrections();
-  let plan: Plan = calibrate(preset, lapW, corrections);
-
-  const run = async (committed: Record<number, number>) => {
+  const run = async (corrections: Corrections, committed: Record<number, number>) => {
+    const plan: Plan = calibrate(preset, lapW, corrections);
     const graph = buildTrackDressingGraph({
       ...base,
       countByProfile: plan.countByProfile,
@@ -142,20 +139,10 @@ async function dressLap(preset: Preset, seed: number): Promise<Lap> {
 
   // Which stretches can carry a lean is a fact about the dressed lap, so
   // finding out takes a cook with the balance pass off.
-  const dry = await run({});
+  const dry = await run(noCorrections(), {});
   const committed = chooseCommittedStretches(dry.placements, lapW);
 
-  let current = await run(committed);
-  let best = current;
-  for (let iter = 0; iter < 2; iter++) {
-    // Corrected from the LATEST iteration, never from the best one: a
-    // controller has to see where it just was, and one that re-derives
-    // the same correction from the same report never moves.
-    corrections = correct(preset, current.report, corrections);
-    plan = calibrate(preset, lapW, corrections);
-    current = await run(committed);
-    if (better(current.report, best.report, preset)) best = current;
-  }
+  const { best } = await refine(preset, REFINE_PASSES, (c) => run(c, committed));
 
   const metrics = best.report.metrics;
   return {

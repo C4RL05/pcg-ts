@@ -34,7 +34,7 @@ import {
 } from "../demos/racetrack/calibrate.js";
 import {
   TRACK,
-  better,
+  refine,
   col,
   countCornerEntries,
   readPlacements,
@@ -49,12 +49,21 @@ import {
   LADDER_P,
   lateralAt,
   PRESETS,
+  REFINE_PASSES,
   type Preset,
   decodeCommittedStretches,
   encodeCommittedStretches,
   lapMod,
   tenthOf,
 } from "../demos/racetrack/kit.js";
+
+/**
+ * More turns than the main track needs, and the reason is measured: more
+ * of that lap sits inside a bend, a placement inside a bend is pinned to
+ * the side its corner means, and the balance pass therefore has fewer
+ * placements it may move.
+ */
+const RETARGET_PASSES = 5;
 
 const { halfWidth: HALF_WIDTH, controlPoints: CONTROL_POINTS, frames: FRAMES } = TRACK;
 const { lapRadius: LAP_RADIUS, relief: RELIEF } = TRACK;
@@ -261,17 +270,11 @@ describe("spline to environment art", () => {
   it("closes the loop: measure, correct, regenerate, and keep the best", async () => {
     const preset = PRESETS.lush;
     const { lapLength, committed } = await measureLap(preset);
-    let c = noCorrections();
-    let best: Report | null = null;
-    const history: number[] = [];
-    for (let iter = 0; iter < 3; iter++) {
-      const { report } = await runOnce(preset, lapLength, c, 21, {}, committed);
-      history.push(report.passed);
-      if (best === null || better(report, best, preset)) best = report;
-      c = correct(preset, report, c);
-    }
-    expect(best).not.toBeNull();
-    const report = best!;
+    const run = await refine(preset, REFINE_PASSES, (c) =>
+      runOnce(preset, lapLength, c, 21, {}, committed),
+    );
+    const history = run.history.map((r) => r.passed);
+    const report = run.best.report;
     // Report the whole card, so a failure names the metric rather than
     // just the count.
     const failures = report.metrics.filter((m) => !m.pass);
@@ -529,19 +532,15 @@ bands ${JSON.stringify(report.bandShare)}`);
     // allowed to move and needs more passes to lean a stretch far enough
     // for metric 10 to read it as one-sided. Three turns leaves it at one
     // stretch each way against a target of two.
-    let c = noCorrections();
-    let best: Report | null = null;
-    for (let iter = 0; iter < 5; iter++) {
+    const { best } = await refine(preset, RETARGET_PASSES, async (c) => {
       aim(calibrate(preset, lapW, c));
-      const { report } = scoreCook(await cook(graph), preset, lapW);
-      if (best === null || better(report, best, preset)) best = report;
-      c = correct(preset, report, c);
-    }
-    const failures = best!.metrics.filter((m) => !m.pass);
+      return scoreCook(await cook(graph), preset, lapW);
+    });
+    const failures = best.report.metrics.filter((m) => !m.pass);
     if (failures.length > 0) {
       console.log(
-        `\nretarget ${best!.passed}/17\n` +
-          best!.metrics
+        `\nretarget ${best.report.passed}/17\n` +
+          best.report.metrics
             .map((m) => `${m.pass ? "PASS" : "FAIL"} ${m.id} ${m.name} = ${m.value.toFixed(3)} (${m.target})`)
             .join("\n"),
       );
@@ -550,7 +549,7 @@ bands ${JSON.stringify(report.bandShare)}`);
     // graph has never seen: the corridor stays clear, every corner is
     // announced, and nothing stands in the driver's view.
     for (const id of [14, 15, 16]) {
-      expect(best!.metrics.find((m) => m.id === id)!.pass, `metric ${id} on a new track`).toBe(true);
+      expect(best.report.metrics.find((m) => m.id === id)!.pass, `metric ${id} on a new track`).toBe(true);
     }
     // ALL OF THEM EXCEPT METRIC 10, on a track the graph was not built
     // for. Nothing was rebuilt to get here: one spline injected, four
@@ -568,10 +567,10 @@ bands ${JSON.stringify(report.bandShare)}`);
     // hold on any seed: a lean each way must still EXIST. A regression
     // that stopped the balance pass working at all would read zero and
     // fail here, which is what this assertion is for.
-    const lean = best!.metrics.find((m) => m.id === 10)!;
+    const lean = best.report.metrics.find((m) => m.id === 10)!;
     expect(lean.value).toBeGreaterThanOrEqual(1);
     expect(failures.filter((f) => f.id !== 10).map((f) => `${f.id} ${f.name}`)).toEqual([]);
-    expect(best!.passed).toBeGreaterThanOrEqual(17);
+    expect(best.report.passed).toBeGreaterThanOrEqual(17);
   });
 
   it("reproduces exactly from its seed, and differs when the seed does", async () => {
@@ -593,14 +592,13 @@ bands ${JSON.stringify(report.bandShare)}`);
     for (const id of ["sparse", "lush", "dense"]) {
       const preset = PRESETS[id];
       const { lapLength, committed } = await measureLap(preset);
-      let c = noCorrections();
-      let best: Report | null = null;
-      for (let iter = 0; iter < 3; iter++) {
-        const { report } = await runOnce(preset, lapLength, c, 3, {}, committed);
-        if (best === null || better(report, best, preset)) best = report;
-        c = correct(preset, report, c);
-      }
-      reports[id] = best!;
+      // Seed 3 rather than the shipped 21: the claim is about the
+      // preset, so it has to hold on a lap nothing else in this file
+      // looks at.
+      const { best } = await refine(preset, REFINE_PASSES, (c) =>
+        runOnce(preset, lapLength, c, 3, {}, committed),
+      );
+      reports[id] = best.report;
     }
     // Each lands in its OWN density band, and they are genuinely different.
     for (const id of ["sparse", "lush", "dense"]) {
@@ -703,14 +701,9 @@ function bestOf(preset: Preset): Promise<Report> {
 
 async function bestOfUncached(preset: Preset): Promise<Report> {
   const { lapLength, committed } = await measureLap(preset);
-  let c = noCorrections();
-  let cur = await runOnce(preset, lapLength, c, 21, {}, committed);
-  let best = cur;
-  for (let i = 0; i < 2; i++) {
-    c = correct(preset, cur.report, c);
-    cur = await runOnce(preset, lapLength, c, 21, {}, committed);
-    if (better(cur.report, best.report, preset)) best = cur;
-  }
+  const { best } = await refine(preset, REFINE_PASSES, (c) =>
+    runOnce(preset, lapLength, c, 21, {}, committed),
+  );
   return best.report;
 }
 

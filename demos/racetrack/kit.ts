@@ -857,6 +857,18 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
  * there.
  */
 
+/**
+ * How many times the closed loop generates before it keeps the best.
+ *
+ * Three, and the number is a measurement rather than a taste: the first
+ * pass is reliably off, the second answers most of it, and the third is
+ * where the remainder either lands or turns out to be noise. A harder
+ * track can want more — the different-track suite runs five, because a
+ * twistier lap pins more placements inside bends and the balance pass
+ * needs longer to lean a stretch far enough to register.
+ */
+export const REFINE_PASSES = 3;
+
 export const CORRIDOR = {
   /**
    * How small a piece has to be for "inside the corridor" to describe it

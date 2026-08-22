@@ -31,11 +31,10 @@ import { buildTrackDressingGraph } from "../demos/racetrack/dressing.js";
 import {
   calibrate,
   chooseCommittedStretches,
-  correct,
   noCorrections,
 } from "../demos/racetrack/calibrate.js";
-import { TRACK, better, col, requireGeo, scoreCook } from "../demos/racetrack/read.js";
-import { PRESETS } from "../demos/racetrack/kit.js";
+import { TRACK, col, refine, requireGeo, scoreCook } from "../demos/racetrack/read.js";
+import { PRESETS, REFINE_PASSES } from "../demos/racetrack/kit.js";
 
 const OUT = process.env.TRACK_OUT ?? "";
 
@@ -80,16 +79,10 @@ describe("export", () => {
     // pass scores 16 of 17 — the outside-of-bend share runs hot until the
     // loop has seen it once — so exporting one would put a picture on the
     // page that no run of the technique produces.
-    let current = await run(committed);
-    let best = current;
-    for (let iter = 0; iter < 2; iter++) {
-      // Corrected from the LATEST iteration, not from the best one: the
-      // loop is a controller and it has to see where it just was.
-      corrections = correct(preset, current.report, corrections);
-      plan = calibrate(preset, lapW, corrections);
-      current = await run(committed);
-      if (better(current.report, best.report, preset)) best = current;
-    }
+    const { best } = await refine(preset, REFINE_PASSES, (c) => {
+      plan = calibrate(preset, lapW, c);
+      return run(committed);
+    });
     expect(best.report.passed).toBe(18);
 
     async function run(committedStretches: Record<number, number>) {
