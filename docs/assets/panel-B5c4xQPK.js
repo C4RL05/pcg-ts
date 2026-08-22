@@ -1,4 +1,4 @@
-import{$ as e,A as t,At as n,B as r,C as i,Dt as a,Gt as o,J as s,Mt as c,N as l,Nt as u,O as d,Ot as f,Q as p,Qt as m,R as h,S as g,St as _,T as v,W as y,Y as b,Z as x,_ as S,_t as C,a as w,bt as T,c as ee,ct as E,d as D,et as O,g as k,gt as A,h as j,ht as te,i as M,it as N,jt as ne,k as P,kt as re,l as F,lt as I,mt as L,nt as R,ot as z,p as ie,pt as B,q as V,rt as H,s as ae,st as U,tt as oe,ut as W,vt as G,w as K,wt as q,x as J,xt as Y,yt as X,z as se}from"./wordmark-CehV9dUg.js";var Z=!1;function ce(){if(Z)return;Z=!0;let e=document.createElement(`style`);e.textContent=`
+import{$ as e,A as t,At as n,B as r,C as i,Dt as a,Gt as o,J as s,Mt as c,N as l,Nt as u,O as d,Ot as f,Q as p,Qt as m,R as h,S as g,St as _,T as v,W as y,Y as b,Z as x,_ as S,_t as C,a as w,bt as T,c as ee,ct as E,d as D,et as O,g as k,gt as A,h as j,ht as te,i as M,it as N,jt as ne,k as P,kt as re,l as F,lt as I,mt as L,nt as R,ot as z,p as ie,pt as B,q as V,rt as H,s as ae,st as U,tt as oe,ut as W,vt as G,w as K,wt as q,x as J,xt as Y,yt as X,z as se}from"./wordmark-GnVgtg98.js";var Z=!1;function ce(){if(Z)return;Z=!0;let e=document.createElement(`style`);e.textContent=`
 .pcg-overlay {
   position: fixed; top: 12px; left: 12px; z-index: 10;
   /* Stops SHORT OF THE BOTTOM, not 12px from it: the wordmark sits in this
@@ -7,12 +7,12 @@ import{$ as e,A as t,At as n,B as r,C as i,Dt as a,Gt as o,J as s,Mt as c,N as l
      the panel's 12 at the top, and 8 of air between the two. Every page
      that builds this overlay draws that mark, so there is no case where
      this reserves space for nothing. */
+  /* The bar this panel scrolls on is not styled here: the two scrollbar
+     properties inherit, and tokens.css declares both on :root for every
+     scrolling surface at once. See it for why they are the whole
+     treatment. (No backticks in this comment, or in any other in this
+     string: the whole stylesheet is one template literal.) */
   width: 300px; max-height: calc(100vh - 45px); overflow-y: auto;
-  /* The panel scrolls on the longer pages, and the platform's default bar
-     is a bright slab down a surface that is otherwise pure black — the one
-     part of this chrome nobody had styled, invisible until the surface
-     under it stopped being blue-grey. */
-  scrollbar-width: thin; scrollbar-color: var(--ed-edge) transparent;
   padding: 14px 16px; box-sizing: border-box;
   background: var(--ed-panel);
   border: 1px solid var(--ed-rule); border-radius: var(--ed-radius-lg);
