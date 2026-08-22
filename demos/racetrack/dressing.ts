@@ -1424,7 +1424,7 @@ function placeFromPack(
   // Two placements out of 450, which is exactly the size of bug that
   // survives a metric and dies to an exact assertion.
   const ownU = o.memberOffset
-    ? mod(add(add(lapU, div(mul(attribute("member"), 0.55), component(attribute("uref", 4), 1))), 1), 1)
+    ? mod(add(add(lapU, div(mul(attribute("member"), preset.clusterSpanW), component(attribute("uref", 4), 1))), 1), 1)
     : lapU;
   const tenth = floor(mul(ownU, 10));
   // Unpacked from the code the frames carry: digit `tenth`, base 3,
@@ -1540,15 +1540,29 @@ function placeFromPack(
   // (over 15.7 against 15.7, verge 8.2 against 8.1); with it on, over
   // reads 17.9 and verge 6.0.
   //
-  // KEPT ANYWAY, and the reason is the same one that keeps the sightline
-  // cull. The source does put a little art low over the track — 47
-  // objects of 7,371, on half the circuits — so this rule is stricter
-  // than the material, exactly like the look-ahead guarantee. What it
-  // buys is that no lap ever centres a mass archetype on the racing line
-  // at deck height, which for a demo about whether a layout READS is
-  // worth more than two points of a band. The alternative is not a
-  // cheaper lift: it is large art in the driver's way, about fifteen
-  // pieces a lap.
+  // KEPT ANYWAY, and the reason turned out to be stronger than the one
+  // first written here. This used to say the source puts only a little
+  // art low over the track — 47 objects of 7,371 — and that the rule was
+  // therefore slightly stricter than the material. That figure came from
+  // testing bounding boxes against four named classes. Clipping real
+  // polygon edges to the driver's slab instead: 15.6% of the earlier
+  // eras' objects and 24.8% of the late one's have geometry inside one
+  // half-width at driving height, a median of 0.27W and 0.38W in from the
+  // CENTRELINE, with a tenth of everything reaching inside a quarter
+  // width. The source does not respect this corridor at all.
+  //
+  // So the rule is not a slightly sharpened observation, it is a
+  // DECISION — the same kind as the sightline cull, and now labelled that
+  // way at both ends. It is worth making because a demo about whether a
+  // layout reads cannot put a wall across the racing line, and because
+  // the source will not defend a driver here in the least.
+  //
+  // ONE CAVEAT ON THE SIZE SPLIT. It is measured in the late era, where
+  // 52% of small objects anchored inside one half-width clear the ceiling
+  // against 20% of larger ones. In the earlier two the same split reads
+  // 27% against 25% — no distinction at all. The late preset reproduces
+  // something by this; the named presets are having a rule applied to
+  // them rather than a measurement.
   //
   // The narrower rule is a joint distribution rather than a rule at all.
   // The source's objects inside one half-width are mostly high because
@@ -1652,7 +1666,7 @@ function placeFromPack(
     {
       name: "stationW",
       value: o.memberOffset
-        ? add(stationW, mul(attribute("member"), 0.55))
+        ? add(stationW, mul(attribute("member"), preset.clusterSpanW))
         : stationW,
     },
     `${id}Station`,
@@ -1685,7 +1699,7 @@ function placeFromPack(
         add(
           base,
           o.memberOffset
-            ? mul(tangent, mul(mul(attribute("member"), 0.55), HW))
+            ? mul(tangent, mul(mul(attribute("member"), preset.clusterSpanW), HW))
             : mul(tangent, 0),
         ),
         add(mul(rightB, mul(attribute("lateralW"), HW)), mul(upB, mul(attribute("heightW"), HW))),
@@ -1999,7 +2013,7 @@ function cullSightline(
   const blocks = mul(
     mul(lt(attribute("chordDist"), capped), gt(attribute("footprintW"), 2)),
     mul(
-      // Exempt: overhead, under-deck and skyline work has no business in
+      // Exempt: overhead and under-deck work has no business in
       // the corridor test, and anything entirely above the driver's head
       // or entirely below the eye point cannot stand in the view.
       //
@@ -2143,7 +2157,6 @@ function assetFor(id: string): (typeof ASSET_TABLE)[number] {
       return "post";
     case "dome":
       return "sphere";
-    case "skyline":
     case "landmark":
       return "house";
     case "verge-rail":

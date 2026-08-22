@@ -178,6 +178,15 @@ export interface Archetype {
  * trade that keeps the placement pass a fixed-size graph instead of one
  * that grows a branch per archetype.
  */
+// THERE IS NO DISTANT ARCHETYPE, and the absence is measured rather than
+// an omission. A `skyline` row sat here once, invented to fill the
+// outermost band; upstream searched the source material for sky, horizon,
+// backdrop, distant and mountain stems across all three games and found
+// nothing. The band is real — 0.4% to 1.0% of placements — but it is
+// terrain and water planes at a median of about 15W, not a kind of
+// object. `terrain-shell`'s own ladder reaches 17.29W at p100, which is
+// exactly where they sit, so the band fills itself from a tail that was
+// already measured.
 const NAMED_ARCHETYPES: readonly Archetype[] = [
   { id: "terrain-shell", zone: "Z4", profile: "flat", kind: "mesh", lateralW: [3.4, 4.7], lateralLadder: [0.0, 0.88, 1.53, 2.37, 2.82, 3.29, 3.85, 4.33, 4.84, 5.62, 7.05, 9.7, 17.29], heightW: [0.6, 2.3], baseW: [-1.76, 0.02], footprintW: [8, 9.5], tallnessW: [4, 6], alongW: [4.5, 9.0], acrossW: [3.8, 7.7], acrossLadder: [0.97, 2.35, 2.78, 3.52, 4.45, 5.28, 6.21, 6.91, 7.74, 8.73, 10.56, 12.05, 19.51], offsetSizeR: 0.59, polygons: 38, rate: 12, cluster: 1.8, outsideBias: 0.68 },
   { id: "ground-detail", zone: "Z3", profile: "flat", kind: "mesh", lateralW: [1.5, 2.5], lateralLadder: [0.78, 1.37, 1.48, 1.7, 1.8, 1.89, 2.07, 2.22, 2.46, 2.96, 4.22, 6.51, 9.06], heightW: [0.1, 0.4], footprintW: [4, 7], tallnessW: [0.4, 0.8], alongW: [5.1, 6.5], acrossW: [0.8, 2.0], acrossLadder: [0.1, 0.28, 0.39, 0.7, 0.9, 1.15, 1.4, 1.6, 1.82, 2.59, 3.36, 4.51, 6.07], offsetSizeR: 0.43, polygons: 18, rate: 10, cluster: 1.7, outsideBias: 0.62 },
@@ -194,7 +203,16 @@ const NAMED_ARCHETYPES: readonly Archetype[] = [
   { id: "lamp-arm", zone: "Z7", profile: "built", kind: "mesh", lateralW: [0.6, 0.9], lateralLadder: [0.28, 0.35, 0.49, 0.57, 0.77, 1.37, 1.6, 1.82, 1.96, 2.03, 2.5, 3.39, 8.05], heightW: [1.4, 1.9], footprintW: [2.0, 2.8], tallnessW: [2.6, 3.4], alongW: [0.3, 1.8], acrossW: [1.0, 2.3], acrossLadder: [0.31, 0.39, 0.4, 0.92, 0.95, 0.96, 1.08, 1.89, 2.23, 2.29, 2.33, 2.33, 2.38], offsetSizeR: -0.09, polygons: 26, rate: 3.5, cluster: 1.6, outsideBias: 0.5 },
   { id: "camera-post", zone: "Z2", profile: "clustered", kind: "mesh", lateralW: [1.05, 1.3], lateralLadder: [0.01, 0.08, 0.16, 0.33, 0.72, 0.98, 1.28, 1.47, 1.6, 2.12, 2.68, 3.91, 7.24], heightW: [1.3, 1.7], baseW: [0.3, 1.52], footprintW: [0.5, 0.9], tallnessW: [0.3, 0.6], alongW: [0.7, 0.9], acrossW: [0.6, 1.1], acrossLadder: [0.38, 0.44, 0.52, 0.63, 0.64, 0.71, 0.78, 0.95, 0.95, 2.01, 2.6, 2.65, 3.22], offsetSizeR: -0.09, polygons: 16, rate: 5.5, cluster: 1.0, outsideBias: 0.42 },
   { id: "dome", zone: "Z5", profile: "built", kind: "mesh", lateralW: [5.6, 7.4], lateralLadder: [0.56, 0.56, 0.91, 0.91, 1.92, 7.3, 7.64, 7.64, 7.92, 8.01, 8.53, 8.53, 8.53], heightW: [4.2, 5.0], footprintW: [5, 6.5], tallnessW: [3.2, 4.2], alongW: [3.0, 6.6], acrossW: [3.5, 6.5], acrossLadder: [2.85, 2.85, 2.86, 2.86, 3.56, 4.91, 5.67, 5.67, 6.55, 6.65, 7.34, 7.34, 7.34], offsetSizeR: 0.68, polygons: 32, rate: 2, cluster: 1.1, outsideBias: 0.7 },
-  { id: "skyline", zone: "Z6", profile: "built", kind: "mesh", lateralW: [13, 20], heightW: [1, 4], footprintW: [6, 10], tallnessW: [2.5, 4], alongW: [6, 10], acrossW: [6, 10], polygons: 40, rate: 0.5, cluster: 2.0, outsideBias: 0.6 },
+  // NO UPSTREAM MEASUREMENT, and the only row in either kit without one
+  // now that `skyline` is gone. It is the full-width banner that spans
+  // the track: real, but ten instances of one family in one game, below
+  // the twelve-per-game threshold the contract table publishes at. It
+  // also shares its name with a small piece of trackside furniture in the
+  // later game that has nothing else in common with it, so a published
+  // row would pool two unrelated things — the defect that makes
+  // `verge-rail` unscoreable. Kept because a banner over the track is
+  // worth having in a demo about layout and because saying where it came
+  // from costs one comment; not to be treated as measured.
   { id: "banner", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.2], heightW: [1.7, 2.1], footprintW: [10, 13], tallnessW: [4, 5.5], alongW: [0.6, 1.2], acrossW: [13.2, 13.6], polygons: 14, rate: 1.5, cluster: 1.0, outsideBias: 0.5 },
   { id: "enclosure-shell", zone: "Z7", profile: "flat", kind: "mesh", lateralW: [0, 0.6], lateralLadder: [0.0, 0.05, 0.06, 0.23, 0.29, 0.79, 0.89, 1.18, 1.31, 1.39, 2.43, 7.31, 19.03], heightW: [1.4, 2.6], footprintW: [9, 13], tallnessW: [6, 13], alongW: [0.5, 3.3], acrossW: [0.7, 5.1], acrossLadder: [0.46, 0.49, 0.54, 0.58, 0.61, 0.64, 0.65, 0.76, 0.78, 6.43, 12.28, 12.91, 13.09], offsetSizeR: 0.26, polygons: 44, rate: 3, cluster: 3.0, outsideBias: 0.5 },
   { id: "verge-rail", zone: "Z2", profile: "flat", kind: "mesh", lateralW: [1.05, 1.45], lateralLadder: [0.0, 0.0, 0.02, 0.09, 0.24, 0.51, 2.21, 2.71, 2.91, 3.02, 3.27, 3.39, 3.82], heightW: [0.2, 0.6], footprintW: [2.5, 4.5], tallnessW: [0.6, 1.2], alongW: [0.3, 2.0], acrossW: [1.7, 3.7], acrossLadder: [0.01, 0.16, 1.1, 1.71, 1.87, 2.7, 2.99, 3.32, 3.49, 3.72, 4.86, 5.08, 6.66], offsetSizeR: 0.04, polygons: 12, rate: 4, cluster: 2.4, outsideBias: 0.6 },
@@ -561,6 +579,23 @@ export interface Preset {
   readonly bankMaxDeg: number;
   readonly referenceRadiusW: number;
   /**
+   * How far apart a cluster's members sit along the lap, in W.
+   *
+   * MEASURED, and the previous single constant was two to five times too
+   * wide. Cluster spans end to end run at a median of 0.23W in the
+   * sparsest era, 0.45W in the earliest and 0.61W in the latest, against
+   * a median cluster size of two — so this is the span of a typical
+   * cluster, and members are close to coincident rather than strung out.
+   * The p90 span is 3 to 5W, which a linear offset reproduces because a
+   * p90 cluster holds nine to eleven members.
+   *
+   * It matters beyond tidiness: a cluster spread over 1.5W is barely a
+   * cluster, and the gap statistics that judge this dressing are measured
+   * at a 1.5W grouping threshold. Spread the members that far and the
+   * thing being measured stops existing.
+   */
+  readonly clusterSpanW: number;
+  /**
    * Depth of the periodic density envelope. Zero is flat and 1 is as deep
    * as the harmonic sum goes before it would ask for a negative density;
    * past that it is still meaningful and clips against the floor under
@@ -601,6 +636,23 @@ export interface Preset {
    * runs 5.7W against a limit of 34W, because the fill pass closes
    * anything past 12W.
    *
+   * WHY IT SURVIVED D-5 BEING WITHDRAWN. The rule this knob was first
+   * justified by is gone: the source has no density envelope, and the
+   * lumpiness D-5 measured is the clustering rule's, at a coarser scale.
+   * The arithmetic that keeps it is the between-cluster gap CV. Group any
+   * lap's placements at the 1.5W threshold and the gaps that survive are
+   * all longer than 1.5W, so for a Poisson anchor process the gap CV
+   * cannot exceed `1 - 1.5 / meanGap` — about 0.74 at the measured
+   * cluster rate of roughly 19 per 100W. This lap reads 0.73, which is
+   * that ceiling. The source reads 1.02 and 1.06.
+   *
+   * A Poisson process cannot produce those, so something in the material
+   * spaces its clusters more variably than chance, and an envelope on the
+   * anchor intensity is the cheapest thing that does. The knob is not
+   * reproducing a measured envelope — there is none — it stands in for
+   * whatever produces that over-dispersion, and it is set where the gap
+   * CV per archetype comes out right.
+   *
    * THE DEPTH RESONATES WITH THE TRACK, which is worth knowing before
    * anyone nudges this. Left/right balance is clean over thirty seeds at
    * 1.0, 1.4 and 1.8 and fails on a third to a half of them at 1.2 and
@@ -633,6 +685,7 @@ export interface Preset {
  */
 export const PRESETS: Readonly<Record<string, Preset>> = {
   sparse: {
+    clusterSpanW: 0.23,
     gapCvAccept: [1.2, 2.6],
     corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
     vocabulary: "named",
@@ -670,6 +723,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 0.9, bush: 0.9 },
   },
   lush: {
+    clusterSpanW: 0.45,
     gapCvAccept: [1.2, 2.6],
     corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
     vocabulary: "named",
@@ -697,6 +751,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 1.15, bush: 1.1 },
   },
   dense: {
+    clusterSpanW: 0.61,
     gapCvAccept: [1.0, 2.6],
     vocabulary: "geometry",
     corridorArtAccept: 0.322,

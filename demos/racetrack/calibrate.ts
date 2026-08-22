@@ -436,8 +436,24 @@ export function chooseCommittedStretches(
   const order = movable
     .map((n, tenth) => ({ share: total[tenth] > 0 ? n / total[tenth] : 0, tenth }))
     .sort((a, b) => b.share - a.share || a.tenth - b.tenth);
+  const picked = order.slice(0, 4).map((o) => o.tenth);
+  // SIDES ARE ASSIGNED IN STATION ORDER, NOT IN RANK ORDER, so the two
+  // stretches leaning one way are contiguous along the lap and meet the
+  // two leaning the other way at two boundaries instead of four.
+  //
+  // It used to alternate by movable-share rank, which scattered the sides
+  // arbitrarily around the ring. That matters because a cluster's members
+  // are offset along the lap from the anchor they were copied from, so a
+  // cluster sitting near a tenth boundary lands partly in the neighbour —
+  // and where the neighbour leans the other way, each stretch dilutes the
+  // other exactly where the lean is supposed to be most visible. Metric
+  // 10 asks for 78% of a stretch on one side, which two adjacent opposed
+  // stretches can spend most of their margin failing to reach.
+  picked.sort((a, b) => a - b);
   const out: Record<number, number> = {};
-  for (let i = 0; i < 4 && i < order.length; i++) out[order[i].tenth] = i % 2 === 0 ? 1 : -1;
+  picked.forEach((tenth, i) => {
+    out[tenth] = i < 2 ? 1 : -1;
+  });
   return out;
 }
 
