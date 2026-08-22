@@ -540,13 +540,21 @@
   /* A WORDMARK, so height is the only dimension set and the 8.24:1 box
      decides the rest — pinning a width would letterbox or stretch it.
      11px rather than the title's own size: it reads as the product name
-     the page belongs to, with `editor` as the louder word for which page
-     that is, so the mark sits one step down rather than competing. */
+     the page belongs to, with `editor` naming which page that is, so the
+     mark sits one step down rather than competing. The word carries that
+     on its case now rather than on its weight — see `.title`. */
   .mark {
     height: 11px;
     width: auto;
     flex: 0 0 auto;
   }
+  /* UPPERCASE AT REGULAR WEIGHT, in white. The word is a label for which
+     page of the product this is, not a heading competing with the mark
+     beside it — and caps carry that on their shape rather than by being
+     heavier than everything else on the bar. Tracked, because every other
+     uppercase run in this chrome is (the panel's section headings, the
+     gallery's eyebrows): caps set at a lowercase word's tracking close up
+     into a block. */
   .title {
     display: flex;
     align-items: center;
@@ -555,8 +563,10 @@
        and set at a sibling's distance they read as one run of letters
        rather than a product followed by which page of it you are on. */
     gap: 12px;
-    font-weight: 600;
-    color: var(--ed-ink-hi);
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #ffffff;
     white-space: nowrap;
   }
   label {
