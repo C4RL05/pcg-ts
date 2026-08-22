@@ -36,6 +36,11 @@
        in one of two schemes. `color-scheme: dark` declares that to the
        browser, leaving forced/auto dark mode nothing to invert. */
     color-scheme: dark;
+    /* The thumb, which color-scheme leaves as the platform's mid-grey:
+       a bright bar down a page whose ground is #000. The standard pair,
+       inherited, so the whole page is covered here. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-hi) transparent;
     --bg: #000000;
 
     /* Pure greyscale — R = G = B throughout. Ratios against #000000. */

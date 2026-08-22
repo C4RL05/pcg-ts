@@ -36,6 +36,14 @@
        `color-scheme: dark` still declares that intent to the browser so
        forced/auto dark mode has nothing left to invert. */
     color-scheme: dark;
+    /* `color-scheme` gets the TRACK right and leaves the thumb the
+       platform's mid-grey, which is a bright bar down a page whose
+       ground is #000. These two are the standard, cross-engine pair and
+       they inherit, so the whole page is covered here. `--line-hi`
+       because a scrollbar is an emphasised border, which is the value's
+       existing job. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-hi) transparent;
     --bg: #000000;
 
     /* Pure greyscale — every value has R = G = B, no hue anywhere. The
