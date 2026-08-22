@@ -457,6 +457,30 @@ export const BUCKET_EDGES = { easy: 40, medium: 15, tight: 7 } as const;
 /** A corner is smoothed curvature tighter than this radius, in W. */
 export const CORNER_RADIUS_W = 12;
 
+/**
+ * Is this band the one that means "over the track" or "under it"?
+ *
+ * Both readers need it and they hold the zone differently — the kit
+ * writes it as a label like `Z7`, and a placement carries the digit — so
+ * this takes either. Spelled once because it decides two rules that have
+ * to agree: which archetypes the corridor rule exempts, and which
+ * placements the side-of-corner and corridor metrics skip. Something on
+ * the centreline has no side, and a tunnel bore is anchored on the racing
+ * line because a bore surrounds it.
+ */
+export function isOverOrUnderTrack(zone: string | number): boolean {
+  const n = typeof zone === "number" ? zone : Number(zone.replace(/^Z/, ""));
+  return n === 7 || n === 8;
+}
+
+/**
+ * How many stretches the lap is divided into for the per-tenth metrics.
+ *
+ * Named here because `tenthOf` below divides by it and two scorers bucket
+ * against it, so three places have to agree on what a tenth is.
+ */
+export const TENTHS = 10;
+
 /** One era's weighting over the kit, and the targets it is scored on. */
 export interface Preset {
   /** Which vocabulary this preset dresses from. */
@@ -911,7 +935,7 @@ export function lapMod(station: number, lapW: number): number {
 
 /** Which tenth of the lap a station falls in, clamped into 0..9. */
 export function tenthOf(station: number, lapW: number): number {
-  return Math.min(9, Math.floor(lapMod(station, lapW) / (lapW / 10)));
+  return Math.min(TENTHS - 1, Math.floor(lapMod(station, lapW) / (lapW / TENTHS)));
 }
 
 /** Which lateral band a |t| in W falls in. The zone model, as a function. */

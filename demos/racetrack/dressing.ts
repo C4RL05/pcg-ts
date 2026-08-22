@@ -94,6 +94,7 @@ import {
   BUCKET_EDGES,
   CORNER_RADIUS_W,
   extentsOf,
+  isOverOrUnderTrack,
   LANDMARK_STRETCHES,
   NO_COMMITTED_STRETCHES,
   PROFILES,
@@ -1372,7 +1373,7 @@ function placeFromPack(
   // branches, which is a wall on the racing line. Both are used below,
   // one negated.
   const dressableZone = byArchetype(
-    (x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1),
+    (x) => (isOverOrUnderTrack(arch(x).zone) ? 0 : 1),
     1,
   );
   const isSmallArt = mul(

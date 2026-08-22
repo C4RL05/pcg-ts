@@ -19,13 +19,16 @@
 import {
   archetypesFor,
   AUXILIARY_FAMILIES,
+  CORNER_RADIUS_W,
   CORRIDOR,
   type Archetype,
   type Preset,
   SIGHTLINE,
   bandOf,
   clampNum,
+  isOverOrUnderTrack,
   lapMod,
+  TENTHS,
   lateralAt,
   tenthOf,
 } from "./kit.js";
@@ -41,7 +44,7 @@ const RULE_PLACED = new Set(["corner-marker", "braking-reference"]);
  * spellings of one predicate is one too many.
  */
 export function isMovable(p: Placement): boolean {
-  return Math.abs(p.radiusW) >= 12 && !RULE_PLACED.has(p.archetype);
+  return Math.abs(p.radiusW) >= CORNER_RADIUS_W && !RULE_PLACED.has(p.archetype);
 }
 
 
@@ -579,7 +582,6 @@ export function score(
   // what said its density envelope was shallower than the material it
   // reproduces. See `envelope` in the kit for what that cost and what
   // fixed it.
-  const TENTHS = 10;
   const buckets = new Array<number>(TENTHS).fill(0);
   for (const p of placements) {
     buckets[tenthOf(p.stationW, lapW)]++;
@@ -618,7 +620,10 @@ export function score(
   // Overhead and under-deck work is excluded: something on the centreline
   // has no side.
   const inBend = placements.filter(
-    (p) => Math.abs(p.radiusW) < 12 && Math.abs(p.lateralW) >= 1 && p.zone !== 7 && p.zone !== 8,
+    (p) =>
+      Math.abs(p.radiusW) < CORNER_RADIUS_W &&
+      Math.abs(p.lateralW) >= CORRIDOR.halfWidthW &&
+      !isOverOrUnderTrack(p.zone),
   );
   const outside = inBend.filter((p) => Math.sign(p.lateralW) === -Math.sign(p.kSigned)).length;
   const outsideShare = inBend.length > 0 ? outside / inBend.length : 0;
@@ -691,10 +696,9 @@ export function score(
   // 10. One-sided stretches, at least two each way. This is what the
   // balance pass is FOR — a lap that is 50/50 everywhere is evenly grey,
   // and the metric that would pass is metric 9 alone.
-  const TENTHS_B = 10;
   let leanRight = 0;
   let leanLeft = 0;
-  for (let t = 0; t < TENTHS_B; t++) {
+  for (let t = 0; t < TENTHS; t++) {
     const inTenth = placements.filter(
       (p) =>
         tenthOf(p.stationW, lapW) === t &&
@@ -734,7 +738,7 @@ export function score(
       // protect a driver — the art metric and the sightline cull — read
       // geometry rather than anchors. Z8 needs no exemption: it is under
       // the deck, so the height test excludes it already.
-      Number(p.zone) !== 7 &&
+      !isOverOrUnderTrack(p.zone) &&
       Math.abs(p.lateralW) < CORRIDOR.halfWidthW &&
       p.heightW >= 0 &&
       p.heightW < CORRIDOR.ceilingW,
