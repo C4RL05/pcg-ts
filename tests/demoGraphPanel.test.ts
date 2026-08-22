@@ -216,6 +216,43 @@ describe("the demos are wired to it", () => {
     expect(src).toContain("attachGraphPanel");
   });
 
+  /**
+   * BOTH OF THESE ARE TEXT CHECKS, and both were bugs that shipped.
+   *
+   * Neither is reachable from Node: one is browser scheduling and the
+   * other is a CSS width, and the only way either was ever going to be
+   * caught is by looking at the page on hardware and at a window size that
+   * happens to expose it. Both went out green on a box fast enough and a
+   * monitor narrow enough to hide them. A text check is a weak test, and a
+   * weak test that names the exact mistake is worth more here than the
+   * strong test that does not exist — the same trade `narrowBreakpoint`
+   * makes for the same reason.
+   */
+  it("reads the graph without waiting for an idle window", () => {
+    const panel = readFileSync(`${ROOT}shared/graph/GraphPanel.svelte`, "utf8");
+    // `requestIdleCallback` with no timeout is a request, not a promise.
+    // Every page this panel sits on runs a render loop that streams and
+    // cooks, so on a machine 8x slower than the one this was written on
+    // the card stayed BLACK for six seconds waiting for an idle window the
+    // demo never left it. There is no bound on that wait, only the speed
+    // of the box you tested on.
+    // The CALL, with its paren: the comment above the read explains why
+    // the scheduling is gone, and a check that forbade the word would fail
+    // on the explanation for the bug it exists to prevent.
+    expect(panel).not.toContain("requestIdleCallback(");
+  });
+
+  it("leaves no backdrop gap for the wheel to fall into", () => {
+    const panel = readFileSync(`${ROOT}shared/graph/GraphPanel.svelte`, "utf8");
+    // The sheet was capped at 1400px inside a full-screen backdrop, which
+    // on a 2560px monitor left 580px of bare backdrop down each side: 45%
+    // of the screen that looks like the graph view and swallows the wheel,
+    // because the wheel belongs to the SVG and the SVG stops at the cap.
+    // It reads as "zoom does not work".
+    const sheet = panel.slice(panel.indexOf("  .sheet {"));
+    expect(sheet.slice(0, sheet.indexOf("}"))).not.toMatch(/max-width|width:\s*min\(/);
+  });
+
   it("keeps the hook the capture script hides", () => {
     const panel = readFileSync(`${ROOT}shared/graph/GraphPanel.svelte`, "utf8");
     const capture = readFileSync(`${ROOT}scripts/capture-demos.mjs`, "utf8");

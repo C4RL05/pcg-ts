@@ -74,12 +74,23 @@
   }
 
   /**
-   * Laid out lazily and then kept.
+   * Read once on mount, and then kept.
    *
-   * Reading a graph means laying it out, and the racetrack's is 238 nodes
-   * — work worth doing once, off the frame that mounts the page, and not
-   * at all on a page nobody opens the panel on. `onMount` is late enough
-   * that the demo's first cook has the main thread to itself.
+   * This used to wait for `requestIdleCallback`, on the reasoning that
+   * laying out 238 nodes is work the page should not do on the frame it
+   * mounts. THAT WAS A BUG, and a nasty one: an idle callback with no
+   * timeout is a request, not a promise, and every page this panel sits on
+   * runs a render loop that streams and cooks. Throttled to a machine 8x
+   * slower than the one it was written on, the card sat BLACK for six
+   * seconds waiting for an idle window the demo never left it — and there
+   * is no bound on that, only the speed of the box you happen to test on.
+   *
+   * Reading synchronously costs 22ms median (52ms cold) once, for the
+   * biggest graph in the repository, and under a millisecond for the other
+   * five — against a first cook of 200ms that has already happened by the
+   * time this mounts. So the scheduling bought nothing it was not already
+   * getting, and cost the card six seconds of black on a slow machine:
+   * the usual shape of an optimisation nobody measured.
    */
   let pictures = $state<(GraphPicture | null)[]>([]);
 
@@ -98,14 +109,7 @@
     });
   }
 
-  onMount(() => {
-    // `requestIdleCallback` where it exists (Chrome, and every browser the
-    // capture tooling drives), a timeout where it does not (Safari).
-    const idle = (window as { requestIdleCallback?: (cb: () => void) => number })
-      .requestIdleCallback;
-    if (idle) idle(read);
-    else setTimeout(read, 0);
-  });
+  onMount(read);
 
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Escape" && open) {
@@ -274,7 +278,14 @@
   .sheet {
     display: flex;
     flex-direction: column;
-    width: min(1400px, 100%);
+    /* FULL WIDTH, no maximum. It was capped at 1400px, which on a 2560px
+       monitor left 580px of bare backdrop down each side — 45% of the
+       screen that looks like part of the graph view and swallows the
+       wheel, because the wheel belongs to the SVG and the SVG stops at the
+       cap. It read as "zoom does not work". A node graph has no reason to
+       want less canvas than it is given, so there is nothing to trade off:
+       the sheet takes the screen and the dead zone is gone with it. */
+    width: 100%;
     height: 100%;
     background: #05070a;
     border: 1px solid #2a3548;
