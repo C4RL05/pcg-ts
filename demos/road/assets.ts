@@ -216,3 +216,143 @@ export function bandOfPlacement(
   if (a < 13) return "far";
   return "distant";
 }
+
+/** The |t| span each band occupies, for choosing an asset that lands in it. */
+const BAND_T: Record<Band, readonly [number, number]> = {
+  over: [0, 1.5],
+  verge: [0, 1.5],
+  near: [1.5, 2.5],
+  mid: [2.5, 5],
+  far: [5, 13],
+  distant: [13, 1e9],
+};
+
+/** What a Z-3 repair had to do. Reported, for the usual reason. */
+export interface MixRepair {
+  readonly placements: (AssetPlacement | undefined)[];
+  /** Placements re-drawn to bring a band inside Z-3. */
+  readonly moves: number;
+  /** Bands that were outside before, with the share they held. */
+  readonly wasOutside: { band: Band; share: number; edge: number }[];
+}
+
+/**
+ * Bring a lap's band mix inside Z-3 — TO THE NEAREST EDGE, never to the
+ * centre.
+ *
+ * WHY Z-3 IS REPAIRED AT ALL, given that the exemplar misses it. Because
+ * it is not a measurement. Across the twenty-two circuits the observed
+ * range is `over` 4-40% and `near` 0-56%; a gate at the full range is
+ * vacuous and a gate at p10-p90 rejects a fifth of real circuits. Z-3 is
+ * deliberately NARROWER than the source — the same standing as Z-1's
+ * corridor, a decision to be better than what was measured — so a lap
+ * outside it reads wrong even though some original does it.
+ *
+ * AND WHY THE NEAREST EDGE. Driving every lap to the centre of each band
+ * would make generated laps markedly more uniform than the originals,
+ * which vary by a factor of five on `over`. That is the density-envelope
+ * error in different clothes: imposing at the LAP level an aggregate the
+ * population reaches through variation BETWEEN laps. Eight laps spread
+ * across a band is correct; eight laps all landing on 15% would be worse
+ * art while scoring better against the rule.
+ *
+ * So: lift a band to its floor, trim it to its ceiling, stop. Enforce the
+ * bound, preserve the spread inside it.
+ */
+export function repairBandMix(
+  placements: readonly (AssetPlacement | undefined)[],
+  assets: readonly PlaceableAsset[],
+  seed: number,
+  datum: "centre" | "base" = "centre",
+): MixRepair {
+  const out = [...placements];
+  const live = (): { i: number; band: Band }[] =>
+    out.flatMap((p, i) =>
+      p ? [{ i, band: bandOfPlacement(p.t, p.h, p.asset.size.tall, datum) }] : [],
+    );
+
+  const n = live().length;
+  if (n === 0) return { placements: out, moves: 0, wasOutside: [] };
+
+  const shares = (): Record<Band, number> => {
+    const c = Object.fromEntries(
+      (Object.keys(Z3) as Band[]).map((b) => [b, 0]),
+    ) as Record<Band, number>;
+    for (const { band } of live()) c[band]++;
+    for (const b of Object.keys(c) as Band[]) c[b] /= n;
+    return c;
+  };
+
+  const before = shares();
+  const wasOutside: MixRepair["wasOutside"] = [];
+  for (const b of Object.keys(Z3) as Band[]) {
+    const [lo, hi] = Z3[b].rule;
+    if (before[b] < lo) wasOutside.push({ band: b, share: before[b], edge: lo });
+    else if (before[b] > hi) wasOutside.push({ band: b, share: before[b], edge: hi });
+  }
+
+  let moves = 0;
+  // Bounded by the population: each pass moves exactly one placement.
+  for (let pass = 0; pass < n; pass++) {
+    const s = shares();
+    let from: Band | undefined;
+    let to: Band | undefined;
+    let over = 0;
+    let under = 0;
+    for (const b of Object.keys(Z3) as Band[]) {
+      const [lo, hi] = Z3[b].rule;
+      if (s[b] - hi > over) {
+        over = s[b] - hi;
+        from = b;
+      }
+      if (lo - s[b] > under) {
+        under = lo - s[b];
+        to = b;
+      }
+    }
+    // STOPS AT THE EDGE. Nothing over its ceiling and nothing under its
+    // floor means done, however far any band sits from its centre.
+    if (from === undefined && to === undefined) break;
+
+    // Prefer moving from an over-full band into an under-full one. With
+    // only one of the two, take from (or give to) whichever band has most
+    // room without pushing it out of its own range.
+    const pick = (want: Band | undefined, other: Band | undefined): Band | undefined => {
+      if (want) return want;
+      let best: Band | undefined;
+      let slack = 0;
+      for (const b of Object.keys(Z3) as Band[]) {
+        if (b === other) continue;
+        const [lo, hi] = Z3[b].rule;
+        const room = other === from ? hi - s[b] : s[b] - lo;
+        if (room > slack) {
+          slack = room;
+          best = b;
+        }
+      }
+      return best;
+    };
+    const src = pick(from, to);
+    const dst = pick(to, from);
+    if (!src || !dst || src === dst) break;
+
+    const donor = live().find((x) => x.band === src);
+    if (!donor) break;
+
+    // Re-place the station with an asset whose OWN measurements put it in
+    // the band that needs filling — rather than moving the existing
+    // placement's lateral, which would break the link between an asset
+    // and where its instances actually sat.
+    const [lo, hi] = BAND_T[dst];
+    const pool = assets.filter((a) => {
+      const m = a.where?.lateral.median;
+      return m !== undefined && Math.abs(m) >= lo && Math.abs(m) < hi;
+    });
+    if (pool.length === 0) break;
+    const replacement = placeAsset(pool, "straight", seed, donor.i + 0x9e37 * (pass + 1));
+    if (!replacement) break;
+    out[donor.i] = replacement;
+    moves++;
+  }
+  return { placements: out, moves, wasOutside };
+}
