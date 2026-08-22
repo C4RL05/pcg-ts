@@ -29,10 +29,12 @@ import { makeLandmarkLevel, makeRockLevel } from "../demos/infinite-world/levels
 import { buildTrackDressingGraph } from "../demos/racetrack/dressing.js";
 import { PRESETS } from "../demos/racetrack/kit.js";
 import { TRACK } from "../demos/racetrack/read.js";
+import { buildRoadsideGraph } from "../demos/roadside/graph.js";
+import { makeTrackSpline } from "../demos/roadside/spline.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
-/** Every graph the four demos put in front of the panel. */
+/** Every graph the demos put in front of the panel. */
 function demoGraphs(): { name: string; graph: Graph }[] {
   const form = deriveGalaxy(7);
   const preset = Object.values(PRESETS)[0] as never;
@@ -56,6 +58,10 @@ function demoGraphs(): { name: string; graph: Graph }[] {
         countByProfile: { flat: 1, built: 1, clustered: 1 },
         weightByArchetype: {},
       }).graph,
+    },
+    {
+      name: "roadside/road + verges",
+      graph: buildRoadsideGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 }),
     },
   ];
 }
@@ -157,7 +163,11 @@ describe("the lens", () => {
   });
 
   it("lowers the floor to fit a graph too wide for the flat one", () => {
-    const { json } = CASES[CASES.length - 1];
+    // Named, not positional. This read `CASES[CASES.length - 1]` and meant
+    // "the racetrack", which is only the last case until a demo is added
+    // after it — and then the assertion silently changes what it is about.
+    const wide = CASES.find((c) => c.name === "racetrack/lap");
+    const { json } = wide as NonNullable<typeof wide>;
     const pic = readGraph(json);
     const rows = new Map([...pic.previews].map(([id, r]) => [id, r.length]));
     const b = contentBounds(pic.nodes, rows);
@@ -206,7 +216,7 @@ describe("the param rows", () => {
 });
 
 describe("the demos are wired to it", () => {
-  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack"];
+  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack", "roadside"];
 
   it.each(DEMOS)("%s attaches the graph panel", (demo) => {
     const src = readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8");

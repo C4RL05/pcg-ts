@@ -104,6 +104,7 @@ export default defineConfig({
         galaxy: here("demos/galaxy/index.html"),
         "gpu-world": here("demos/gpu-world/index.html"),
         racetrack: here("demos/racetrack/index.html"),
+        roadside: here("demos/roadside/index.html"),
       },
     },
   },
