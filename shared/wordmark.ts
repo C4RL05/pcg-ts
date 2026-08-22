@@ -59,18 +59,37 @@ function injectStyles(): void {
 }
 
 /**
+ * Where the mark points: the landing page, whichever root this is.
+ *
+ * The two roots bite once more here, and this time no single relative
+ * path spans them. Published, a demo sits at `/pcg-ts/pages/demos/<id>/`
+ * and the landing page is three levels up at `/pcg-ts/`. On the dev
+ * server the same demo is at `/demos/<id>/` and the landing page is a
+ * hand-written file at `/docs/index.html`, which is two levels up and
+ * then down again. The published layout is the one with a marker in it —
+ * only the build puts a `pages/` segment in the path — so that is what
+ * this reads.
+ *
+ * It used to point at the demo shelf, which needed no branch because both
+ * roots happened to have one at `../../`. The shelf is gone: the landing
+ * page's own card grid was the navigation anyone actually used, and a
+ * second index nothing linked to was a page to keep in step for nothing.
+ */
+function landingPage(): string {
+  return window.location.pathname.includes("/pages/demos/") ? "../../../" : "../../docs/index.html";
+}
+
+/**
  * Put the wordmark in the bottom-left corner of the page.
  *
- * A LINK, and a relative one: `../../` is the demo shelf from
- * `demos/<id>/` under either root, which is the same trick the inline
- * geometry above exists for. It is the only navigation a demo has —
- * every one of them is otherwise a page you can arrive at and not leave.
+ * A LINK, because it is the only navigation a demo has — every one of
+ * them is otherwise a page you can arrive at and not leave.
  */
 export function attachWordmark(opts: { href?: string; label?: string } = {}): HTMLAnchorElement {
   injectStyles();
   const a = document.createElement("a");
   a.className = "pcg-wordmark";
-  a.href = opts.href ?? "../../";
+  a.href = opts.href ?? landingPage();
   a.title = opts.label ?? "pcg-ts";
   a.setAttribute("aria-label", opts.label ?? "pcg-ts");
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");

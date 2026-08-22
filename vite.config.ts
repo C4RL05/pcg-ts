@@ -31,15 +31,17 @@ export default defineConfig({
     // path is inside the root, `emptyOutDir` defaults to true there: a bare
     // `vite build` would delete the published build. Naming the Pages output
     // here means the destructive default is never reachable.
-    // NOT "docs/demos": this holds the editor, the three demos and their
-    // shared index, so naming it after one of the three was wrong twice
-    // over. It also cannot be named after any SOURCE directory — vite
+    // NOT "docs/demos": this holds the editor and the four demos, so
+    // naming it after one of the five was wrong twice over. It also cannot be named after any SOURCE directory — vite
     // roots at the repository root, so the output mirrors the repo, and
     // an outDir of `docs/demos` put the galaxy at `docs/demos/demos/galaxy`.
     outDir: "docs/pages",
     rollupOptions: {
       input: {
-        index: here("index.html"),
+        // No root entry: the demo shelf that used to live here is gone, and
+        // the landing page it was a lesser copy of is hand-written in
+        // `docs/` rather than built. So the build has one page per thing
+        // that actually needs building, and `/pages/` itself is not a page.
         editor: here("editor/index.html"),
         "infinite-world": here("demos/infinite-world/index.html"),
         galaxy: here("demos/galaxy/index.html"),
