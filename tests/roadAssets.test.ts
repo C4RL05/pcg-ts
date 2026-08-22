@@ -22,8 +22,10 @@ import {
   bandOfPlacement,
   bucketOf,
   drawQuantile,
+  mixInsideRule,
   placeAsset,
   repairBandMix,
+  repairIsMinimal,
   weightAt,
 } from "../demos/road/assets.js";
 import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
@@ -350,9 +352,66 @@ describe.skipIf(!existsSync(KIT))("placing from the kit's own `where`", () => {
       expect(twice.moves, `seed ${seed} is not yet settled`).toBe(0);
     }
 
+    // AND MINIMALITY, which idempotence does not give. A repair that
+    // jumped every out-of-range band to the CENTRE in one pass and then
+    // halted would pass the check above — a second pass makes no moves —
+    // and is exactly what "to the nearest edge" forbids. What separates
+    // them is whether any single move could be removed with every bound
+    // still holding.
+    for (let seed = 1; seed <= 8; seed++) {
+      const r = repairBandMix(lap(seed), assets, seed);
+      const { minimal, removable } = repairIsMinimal(r);
+      expect(
+        minimal,
+        `seed ${seed}: ${removable.length} of ${r.moves} moves were unnecessary`,
+      ).toBe(true);
+    }
+
     // And at least one band IS repaired, or the claim is vacuous.
     expect((Object.keys(Z3) as Band[]).filter((b) => perBand[b].repaired > 0).length)
       .toBeGreaterThan(0);
+  });
+
+  /**
+   * THE MINIMALITY CHECK, PROVED ABLE TO FAIL.
+   *
+   * An instrument that has never said no has not been shown to work, and
+   * this one is the whole gate — so it is run against a repair that
+   * deliberately keeps going after the bounds are met. Those extra moves
+   * are removable by construction, so a working check must find them.
+   */
+  it("the minimality check catches a repair that overshoots", () => {
+    const seed = 1;
+    const honest = repairBandMix(lap(seed), assets, seed);
+    expect(repairIsMinimal(honest).minimal).toBe(true);
+    expect(mixInsideRule(honest.placements)).toBe(true);
+
+    // Keep going: re-draw a few more placements into a band that is
+    // already inside its range. Every one is surplus.
+    const over = { ...honest, placements: [...honest.placements], log: [...honest.log] };
+    let added = 0;
+    for (let i = 0; i < over.placements.length && added < 6; i++) {
+      const p = over.placements[i];
+      if (!p) continue;
+      if (bandOfPlacement(p.t, p.h, p.asset.size.tall) !== "mid") continue;
+      const pool = assets.filter((a) => {
+        const m = a.where?.lateral.median;
+        return m !== undefined && Math.abs(m) >= 1.5 && Math.abs(m) < 2.5;
+      });
+      const swap = placeAsset(pool, "straight", seed, 9000 + i);
+      if (!swap) continue;
+      over.log.push({ index: i, before: p });
+      over.placements[i] = swap;
+      added++;
+    }
+    expect(added).toBeGreaterThan(0);
+    // Still inside the rule — an overshoot does not break the bounds,
+    // which is exactly why a bounds check cannot catch it.
+    expect(mixInsideRule(over.placements)).toBe(true);
+    // But no longer minimal.
+    const { minimal, removable } = repairIsMinimal(over);
+    expect(minimal, "an overshooting repair should not read as minimal").toBe(false);
+    expect(removable.length).toBeGreaterThan(0);
   });
 
   /**

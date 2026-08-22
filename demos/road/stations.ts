@@ -159,6 +159,17 @@ export interface StationStats {
   readonly gapRepairs: number;
   /** The longest gap before any repair, in W. */
   readonly worstGapBeforeW: number;
+  /**
+   * Every move, so a caller can put each one back and re-check D-4.
+   *
+   * SAME REASONING AS THE Z-3 REPAIR. This repair conserves the count
+   * too — it takes a placement from the densest run and puts it in the
+   * longest gap — so no statement about where a placement ENDS UP can
+   * characterise it. What can: whether any single move is REMOVABLE with
+   * the bound still holding. Idempotence is not enough, because a repair
+   * that overshot in one pass and then halted would pass it.
+   */
+  readonly log: { readonly removed: number; readonly added: number }[];
 }
 
 export function makeStations(lapW: number, seed: number, p: StationParams = FITTED): number[] {
@@ -250,6 +261,7 @@ export const COVERAGE = { within2W: 0.85, maxGapW: 25 } as const;
 function enforceCoverage(sorted: number[], lapW: number): StationStats {
   const out = [...sorted];
   const worstGapBeforeW = longestGap(out, lapW);
+  const log: StationStats["log"] = [];
   let gapRepairs = 0;
   const maxPasses = Math.ceil(lapW / COVERAGE.maxGapW) + 2;
   for (let pass = 0; pass < maxPasses; pass++) {
@@ -283,12 +295,36 @@ function enforceCoverage(sorted: number[], lapW: number): StationStats {
     if (donor < 0) break;
 
     const mid = (out[worst] + worstGap / 2) % lapW;
+    log.push({ removed: out[donor], added: mid });
     out.splice(donor, 1);
     out.push(mid);
     out.sort((a, b) => a - b);
     gapRepairs++;
   }
-  return { stations: out, gapRepairs, worstGapBeforeW };
+  return { stations: out, gapRepairs, worstGapBeforeW, log };
+}
+
+/**
+ * Is the coverage repair minimal — could any single move be put back with
+ * D-4 still holding?
+ *
+ * See {@link StationStats.log}. This is the same criterion the band-mix
+ * repair is held to, and for the same reason: both conserve the count, so
+ * both are characterised by the moves they make rather than by where
+ * anything lands.
+ */
+export function coverageIsMinimal(
+  stats: StationStats,
+  lapW: number,
+): { minimal: boolean; removable: number } {
+  let removable = 0;
+  for (const m of stats.log) {
+    const trial = stats.stations.filter((s) => s !== m.added);
+    trial.push(m.removed);
+    trial.sort((a, b) => a - b);
+    if (longestGap(trial, lapW) <= COVERAGE.maxGapW) removable++;
+  }
+  return { minimal: removable === 0, removable };
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   DISPERSION_WINDOWS_W,
   FITTED,
   coverage,
+  coverageIsMinimal,
   dispersionCurve,
   indexOfDispersion,
   makeStations,
@@ -279,6 +280,16 @@ describe("the station process", () => {
     // And the un-repaired process really does violate D-4, which is the
     // claim that justifies a repair pass over more fitting.
     expect(worstBefore).toBeGreaterThan(25);
+
+    // MINIMAL, by the same criterion the band-mix repair is held to: both
+    // conserve the count, so neither can be characterised by where a
+    // placement lands — only by whether any move it made was removable
+    // with the bound still holding.
+    for (const seed of SEEDS) {
+      const d = makeStationsDetailed(LAP_W, seed);
+      const { minimal, removable } = coverageIsMinimal(d, LAP_W);
+      expect(minimal, `seed ${seed}: ${removable} of ${d.gapRepairs} moves unnecessary`).toBe(true);
+    }
   });
 
   it("gives the same lap twice and a different one per seed", () => {

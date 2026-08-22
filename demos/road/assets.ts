@@ -239,6 +239,12 @@ const BAND_T: Record<Band, readonly [number, number]> = {
   distant: [13, 1e9],
 };
 
+/** One re-draw, kept so the repair can be checked for MINIMALITY. */
+export interface MixMove {
+  readonly index: number;
+  readonly before: AssetPlacement | undefined;
+}
+
 /** What a Z-3 repair had to do. Reported, for the usual reason. */
 export interface MixRepair {
   readonly placements: (AssetPlacement | undefined)[];
@@ -246,6 +252,45 @@ export interface MixRepair {
   readonly moves: number;
   /** Bands that were outside before, with the share they held. */
   readonly wasOutside: { band: Band; share: number; edge: number }[];
+  /**
+   * Every move, so a caller can put each one back and re-check the
+   * bounds.
+   *
+   * MINIMALITY IS THE CRITERION, not idempotence. A repair that jumps
+   * every out-of-range band to the CENTRE of its range in one pass and
+   * then halts IS idempotent — a second pass makes no moves — and it is
+   * exactly the behaviour "to the nearest edge" exists to forbid. What
+   * distinguishes them is whether any single move could be removed with
+   * every bound still holding: an overshoot's surplus moves are
+   * removable, and an edge-repair's are not.
+   *
+   * It is also the only checkable form, because the count is conserved:
+   * every move takes from one band and gives to another, so no band's
+   * final share is attributable to its own repair and no assertion about
+   * where things END UP can be right. Three of those were tried here
+   * before this one.
+   */
+  readonly log: MixMove[];
+}
+
+/** Are all six bands inside Z-3's rule for this set of placements? */
+export function mixInsideRule(
+  placements: readonly (AssetPlacement | undefined)[],
+  datum: "centre" | "base" = "centre",
+): boolean {
+  const live = placements.filter((p): p is AssetPlacement => p !== undefined);
+  if (live.length === 0) return true;
+  const c = Object.fromEntries((Object.keys(Z3) as Band[]).map((b) => [b, 0])) as Record<
+    Band,
+    number
+  >;
+  for (const p of live) c[bandOfPlacement(p.t, p.h, p.asset.size.tall, datum)]++;
+  for (const b of Object.keys(Z3) as Band[]) {
+    const share = c[b] / live.length;
+    const [lo, hi] = Z3[b].rule;
+    if (share < lo - 1e-9 || share > hi + 1e-9) return false;
+  }
+  return true;
 }
 
 /**
@@ -284,7 +329,7 @@ export function repairBandMix(
     );
 
   const n = live().length;
-  if (n === 0) return { placements: out, moves: 0, wasOutside: [] };
+  if (n === 0) return { placements: out, moves: 0, wasOutside: [], log: [] };
 
   const shares = (): Record<Band, number> => {
     const c = Object.fromEntries(
@@ -296,6 +341,7 @@ export function repairBandMix(
   };
 
   const before = shares();
+  const log: MixMove[] = [];
   const wasOutside: MixRepair["wasOutside"] = [];
   for (const b of Object.keys(Z3) as Band[]) {
     const [lo, hi] = Z3[b].rule;
@@ -363,8 +409,32 @@ export function repairBandMix(
     if (pool.length === 0) break;
     const replacement = placeAsset(pool, "straight", seed, donor.i + 0x9e37 * (pass + 1));
     if (!replacement) break;
+    log.push({ index: donor.i, before: out[donor.i] });
     out[donor.i] = replacement;
     moves++;
   }
-  return { placements: out, moves, wasOutside };
+  return { placements: out, moves, wasOutside, log };
+}
+
+/**
+ * Is this repair minimal — could any single move be removed with every
+ * bound still holding?
+ *
+ * O(moves) rather than exponential, deliberately: the criterion is "no
+ * SINGLE move is removable", not "no subset is". The single-move form is
+ * what separates edge-repair from centre-repair and from a repair that
+ * carries on after the bounds are met, and checking subsets would be
+ * checking a different and much stronger claim than the rule makes.
+ */
+export function repairIsMinimal(
+  repair: MixRepair,
+  datum: "centre" | "base" = "centre",
+): { minimal: boolean; removable: number[] } {
+  const removable: number[] = [];
+  for (const m of repair.log) {
+    const trial = [...repair.placements];
+    trial[m.index] = m.before;
+    if (mixInsideRule(trial, datum)) removable.push(m.index);
+  }
+  return { minimal: removable.length === 0, removable };
 }
