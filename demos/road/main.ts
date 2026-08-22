@@ -55,7 +55,8 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import { type Kit, loadKit, placeKit } from "./kit.js";
+import { type DressStats, dressLap } from "./dress.js";
+import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 
@@ -251,11 +252,29 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
       up: pose.up,
     };
   });
+  return boxMesh(boxes, 0xff9d6b, 0.85);
+}
 
+/**
+ * THE GENERATED DRESSING — the thing this page is about.
+ *
+ * Placed by the rules from the kit's own measurements, drawn with the
+ * SAME renderer as the reference so the two can be compared fairly. A
+ * different material would be a different picture, and the whole question
+ * is whether the generated one reads like the measured one.
+ */
+function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressStats } | undefined {
+  if (!kit) return undefined;
+  const d = dressLap(kit, circuit.lap, state.seed);
+  return { mesh: boxMesh(d.boxes, 0x7de2b0, 0.95), stats: d.stats };
+}
+
+/** One instanced mesh from a list of world-space boxes. */
+function boxMesh(boxes: readonly PlacedBox[], colour: number, opacity: number): InstancedMesh {
   const mesh = new InstancedMesh(
     PROP_BOX,
-    new MeshBasicMaterial({ color: 0xff9d6b, wireframe: true, transparent: true, opacity: 0.85 }),
-    boxes.length,
+    new MeshBasicMaterial({ color: colour, wireframe: true, transparent: true, opacity }),
+    Math.max(1, boxes.length),
   );
   const basis = new Matrix4();
   const local = new Matrix4();
@@ -278,7 +297,7 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
   return mesh;
 }
 
-/** The placeholder prop. See `dressVerges` in graph.ts. */
+/** The placeholder prop, and the unit box every placed box is scaled from. */
 const PROP_BOX = new BoxGeometry(1, 1, 1);
 const PROP_SIZE = new Vector3(1.6, 3.2, 1.6);
 const scratchMatrix = new Matrix4();
@@ -319,32 +338,49 @@ function buildCircuit(circuit: Circuit): void {
     map: new MeshBasicMaterial({ color: 0x2c3a48, wireframe: true }),
   });
 
-  // The dressing. Instanced boxes at each placement, because the SIZE is
-  // part of what is being judged and a point sprite has none.
-  // PLACEHOLDER GEOMETRY: the spec decides what these become.
-  const P = circuit.props.attrs.point.require("P");
-  const n = circuit.props.pointCount;
-  const props = new InstancedMesh(
-    PROP_BOX,
-    new MeshBasicMaterial({ color: 0x7de2b0, wireframe: true }),
-    n,
-  );
-  for (let i = 0; i < n; i++) {
-    // Sat ON the verge rather than centred on it: the placement is a
-    // ground position, so the box is raised by half its own height.
-    scratchPos.set(P.data[i * 3], P.data[i * 3 + 1] + PROP_SIZE.y / 2, P.data[i * 3 + 2]);
-    scratchMatrix.compose(scratchPos, scratchQuat, PROP_SIZE);
-    props.setMatrixAt(i, scratchMatrix);
+  // THE GENERATED DRESSING. Placed by the rules from the kit's own
+  // measurements, wearing that kit's box decomposition — which is what
+  // makes this a picture of the technique rather than of a placeholder.
+  //
+  // Falls back to the graph's even verge rows when no kit is available,
+  // so the page still shows something to everyone who has not got the
+  // measured data. That fallback is a PLACEHOLDER and is labelled as one
+  // in the panel, because an evenly spaced row of identical boxes is
+  // exactly what this technique exists not to produce.
+  const dressed = buildDressing(circuit);
+  if (dressed) {
+    scene.add(dressed.mesh);
+    built.push(dressed.mesh);
+    layers.push({
+      obj: dressed.mesh,
+      chase: dressed.mesh.material as Material,
+      map: new MeshBasicMaterial({ color: 0x4a9a76, wireframe: true }),
+    });
+    lastStats = dressed.stats;
+  } else {
+    const P = circuit.props.attrs.point.require("P");
+    const n = circuit.props.pointCount;
+    const props = new InstancedMesh(
+      PROP_BOX,
+      new MeshBasicMaterial({ color: 0x54806c, wireframe: true }),
+      n,
+    );
+    for (let i = 0; i < n; i++) {
+      scratchPos.set(P.data[i * 3], P.data[i * 3 + 1] + PROP_SIZE.y / 2, P.data[i * 3 + 2]);
+      scratchMatrix.compose(scratchPos, scratchQuat, PROP_SIZE);
+      props.setMatrixAt(i, scratchMatrix);
+    }
+    props.instanceMatrix.needsUpdate = true;
+    props.frustumCulled = false;
+    scene.add(props);
+    built.push(props);
+    layers.push({
+      obj: props,
+      chase: props.material,
+      map: new MeshBasicMaterial({ color: 0x3a5a4c, wireframe: true }),
+    });
+    lastStats = undefined;
   }
-  props.instanceMatrix.needsUpdate = true;
-  props.frustumCulled = false;
-  scene.add(props);
-  built.push(props);
-  layers.push({
-    obj: props,
-    chase: props.material,
-    map: new MeshBasicMaterial({ color: 0x4a9a76, wireframe: true }),
-  });
 
   const reference = buildReference(circuit);
   if (reference) {
@@ -367,6 +403,9 @@ function buildCircuit(circuit: Circuit): void {
 
 /** The reference layer, so the checkbox can reach it between cooks. */
 let referenceMesh: InstancedMesh | undefined;
+
+/** What the last dressing pass had to repair, for the readouts. */
+let lastStats: DressStats | undefined;
 
 /**
  * Frame the whole circuit in the map camera.
@@ -459,6 +498,7 @@ const statStation = overlay.addStat("station");
 const statLap = overlay.addStat("lap length");
 const statProps = overlay.addStat("dressing");
 const statReference = overlay.addStat("reference");
+const statRules = overlay.addStat("repairs");
 const statCook = overlay.addStat("cook");
 
 // The slot is claimed HERE, where the panel is built, so this page decides
@@ -482,7 +522,18 @@ async function recook(): Promise<void> {
     buildCircuit(next);
     frameMap(next, state.mapZoom);
     statLap(`${next.lap.lengthW.toFixed(1)} W (${next.lap.length.toFixed(0)} u)`);
-    statProps(`${next.props.pointCount} placements`);
+    if (lastStats) {
+      const s = lastStats;
+      statProps(`${s.placed} placements, ${s.cookMs.toFixed(0)} ms`);
+      statRules(
+        `gaps ${s.gapRepairs} · corridor ${s.corridorFixes} · ` +
+          `sightline ${s.blocked} (${s.pushedOut} out, ${s.dropped} cut) · ` +
+          `landmarks ${s.landmarkFixes} · mix ${s.mixMoves}`,
+      );
+    } else {
+      statProps(`${next.props.pointCount} placeholder rows`);
+      statRules("no kit.json — rules idle");
+    }
     statCook(`${next.cookMs.toFixed(0)} ms`);
     // Called only when the graph CHANGED — it re-serializes and re-lays
     // out, which is not free and is wasted every frame.
