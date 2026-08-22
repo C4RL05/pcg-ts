@@ -175,7 +175,16 @@ describe.skipIf(testDevice === null)(deviceSuiteName("node-derived noise seeds")
       const b = columns.get(`${family.name}|ref|${SEEDS[1]}`)!;
       expect(firstDifferingByte(a, b), `${family.name}: two graph seeds`).not.toBe(-1);
     }
-  });
+    // TWENTY-EIGHT KERNELS COMPILED AND DISPATCHED IN ONE CASE, which is
+    // the most device work any single test here does — six families at two
+    // seeds in two forms, plus the CPU control evaluated for each. It runs
+    // in about two seconds on an idle machine and past vitest's default
+    // five when the rest of the suite is competing for the same GPU, so
+    // the default made this the one test whose result depended on what
+    // else happened to be running. Raised rather than split: the case is
+    // one claim, and splitting it to fit a timeout would put the control
+    // in a different test from the thing it controls.
+  }, 30_000);
 
   it("one pipeline serves every graph seed", () => {
     // The regression a baked seed would cause, and the one an output
