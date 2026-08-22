@@ -67,7 +67,14 @@ describe("the wordmark", () => {
   });
 
   it("is drawn by every demo and by the editor", () => {
-    for (const demo of ["galaxy", "gpu-world", "infinite-world", "racetrack", "road"]) {
+    for (const demo of [
+      "galaxy",
+      "gpu-world",
+      "infinite-world",
+      "racetrack",
+      "road",
+      "simple-road",
+    ]) {
       expect(readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8")).toContain("attachWordmark()");
     }
     // The editor reads the same constant rather than carrying its own copy

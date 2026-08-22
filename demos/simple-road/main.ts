@@ -1,9 +1,21 @@
 /**
- * Roadside dressing along a spline you already have.
+ * Roadside dressing along a spline you already have — the simple one.
  *
- * `demos/simple-road` is this page with none of the placement rules — a
- * deliberate copy, not a mode of this one. Read that first; see its header
- * for why the duplication is the point.
+ * THE TWIN OF `demos/road`, and the reason there are two. `road` is where
+ * the placement rules go: the spec's corner reactions, its variety, its
+ * clearance checks, and whatever host-side loop those turn out to need.
+ * This page is the same thing with none of that — one spline, one sweep,
+ * one evenly spaced row per side — and it stays that way. It is what you
+ * read first, and what a reader ports; `road` is what the technique
+ * actually becomes.
+ *
+ * They are a DELIBERATE COPY rather than a shared module with a flag. A
+ * flag would mean the simple version is a configuration of the complex
+ * one, so reading it means reading past every branch the complex one
+ * needs — which is the thing a simple version exists to spare you. The
+ * price is that the two drift, and that is the intended direction: `diff
+ * demos/road demos/simple-road` is meant to read as what the rules added.
+ * Everything below the identity strings is byte-identical today.
  *
  * WHAT THIS PAGE IS FOR. A road is not the interesting part of a road —
  * the interesting part is everything standing beside it, and where that
@@ -75,7 +87,7 @@ interface Circuit {
 
 function requireGeo(name: string, collection: DataCollection | undefined): Geometry {
   const geo = collection ? firstGeometry(collection) : undefined;
-  if (!geo) throw new Error(`road: the graph produced no '${name}' geometry`);
+  if (!geo) throw new Error(`simple-road: the graph produced no '${name}' geometry`);
   return geo;
 }
 
@@ -316,7 +328,7 @@ function frameMap(circuit: Circuit, zoom: number): void {
 // ------------------------------------------------------------------ //
 
 const overlay = createOverlay({
-  title: "road",
+  title: "simple road",
   info:
     "A centreline this page did not make, handed to pcg-ts: it sweeps the road and dresses the verges. " +
     "The map is the whole lap from above; the chase view is the only viewpoint the result is ever " +
@@ -478,10 +490,10 @@ void recook().then(() => {
  */
 declare global {
   interface Window {
-    pcgRoad?: { seek(station: number): void; pause(on: boolean): void };
+    pcgSimpleRoad?: { seek(station: number): void; pause(on: boolean): void };
   }
 }
-window.pcgRoad = {
+window.pcgSimpleRoad = {
   seek(station: number): void {
     state.station = station;
   },
