@@ -21,6 +21,7 @@ import {
   FILL_OUTPUT,
   type KitBox,
   buildFillGraph,
+  buildShellGraph,
   calibrateKeep,
 } from "../demos/road/fill.js";
 
@@ -175,83 +176,158 @@ describe.skipIf(!existsSync(KIT))("against the measured kit", () => {
     ? (JSON.parse(readFileSync(KIT, "utf8")) as { assets: KitAsset[] })
     : { assets: [] };
 
-  it("reports the occupancy the block fill achieves", async () => {
-    const blocks = kit.assets.filter((a) => a.shape === "block" && !a.capped);
-    expect(blocks.length).toBeGreaterThan(30);
+  const bboxOf = (a: KitAsset): [number[], number[]] => {
+    const h = [a.size.across / 2, a.size.along / 2, a.size.tall / 2];
+    const c = a.centre;
+    return [
+      [c[0] - h[0], c[1] - h[1], c[2] - h[2]],
+      [c[0] + h[0], c[1] + h[1], c[2] + h[2]],
+    ];
+  };
+  /** Pitch as the longest axis over `res`, which is the kit's own rule. */
+  const pitchAt = (a: KitAsset, res: number): number =>
+    Math.max(a.size.across, a.size.along, a.size.tall) / res;
 
-    const bboxOf = (a: KitAsset): [number[], number[]] => {
-      const h = [a.size.across / 2, a.size.along / 2, a.size.tall / 2];
-      const c = a.centre;
-      return [
-        [c[0] - h[0], c[1] - h[1], c[2] - h[2]],
-        [c[0] + h[0], c[1] + h[1], c[2] + h[2]],
-      ];
-    };
-    // The kit's own voxel pitch is the longest axis over 16, so measuring
-    // at the same pitch keeps the two numbers comparable rather than
-    // merely similar.
-    const pitchOf = (a: KitAsset): number =>
-      Math.max(a.size.across, a.size.along, a.size.tall) / 16;
+  const classOf = (shape: string): KitAsset[] =>
+    kit.assets.filter((a) => a.shape === shape && !a.capped);
 
-    // ONE threshold for every asset, calibrated once. A PER-ASSET
-    // calibration would hit any target by construction, prove nothing,
-    // and — worse — flatten the spread to zero, when the spread is the
-    // part that carries the shape.
-    const sample = blocks.slice(0, 12);
-    const pooled: number[] = [];
-    for (const a of sample) {
-      const seen = await fillShare(a.boxes, bboxOf(a), pitchOf(a), -Infinity, 2.5);
-      pooled.push(...seen.grain);
+  /**
+   * THE ONLY OCCUPANCY QUESTION THAT ANSWERS ITSELF.
+   *
+   * "What share of the envelope does this fill occupy" has no answer
+   * without a pitch: measured on a lattice, an OPEN SURFACE reads
+   * area/pitch and so halves every time the lattice doubles, while a
+   * SOLID holds its value. So the ratio between two resolutions is not a
+   * detail of the measurement — it is the measurement. A ratio near 1
+   * says the fill made volume; near 2 says it made surface.
+   *
+   * This is the diagnostic upstream used to find that three quarters of
+   * the source art has no interior at all, applied to what this side
+   * generates. It needs no target and cannot drift with anyone's pitch,
+   * which is exactly why it is the thing left standing.
+   */
+  const convergence = async (
+    assets: readonly KitAsset[],
+    fill: (a: KitAsset, pitch: number) => Promise<number>,
+  ): Promise<{ lo: number[]; hi: number[]; ratio: number[] }> => {
+    const lo: number[] = [];
+    const hi: number[] = [];
+    const ratio: number[] = [];
+    for (const a of assets) {
+      const atCoarse = await fill(a, pitchAt(a, 12));
+      const atFine = await fill(a, pitchAt(a, 24));
+      lo.push(atCoarse);
+      hi.push(atFine);
+      ratio.push(atFine > 0 ? atCoarse / atFine : NaN);
     }
+    return { lo, hi, ratio: ratio.filter((r) => Number.isFinite(r)) };
+  };
 
-    // How much of each envelope the DECOMPOSITION occupies once it is on a
-    // lattice — the fill's ceiling, before any erosion.
-    const unEroded: number[] = [];
-    for (const a of blocks) {
-      const got = await fillShare(a.boxes, bboxOf(a), pitchOf(a), -Infinity, 2.5);
-      unEroded.push(got.kept / got.total);
-    }
-
-    // THE KEEP SHARE IS SOLVED, NOT SET. The erosion is linear in the
-    // share kept, so the share landing the POPULATION MEDIAN on the kit's
-    // median is one division rather than a search — and solving on the
-    // median leaves every asset's own box volume driving its own
-    // occupancy, which is where the kit's spread comes from too.
-    //
-    // Worth saying why the un-eroded number is not already the answer. A
-    // centre-sampled voxel counts whole wherever its centre lands inside a
-    // box, so a lattice at the kit's own pitch OVERSTATES the
-    // decomposition it approximates — the same rounding that produced the
-    // figures upstream withdrew, arriving here from the other direction.
-    // The boxes sum to about 21% of the envelope and the lattice reads
-    // more, so a keep share derived from box volume alone lands hot.
-    const TARGET = 0.17;
-    const keep = Math.min(1, TARGET / pct(unEroded, 0.5));
-    const threshold = calibrateKeep(pooled, keep);
-
-    const achieved: number[] = [];
-    for (const a of blocks) {
-      const got = await fillShare(a.boxes, bboxOf(a), pitchOf(a), threshold, 2.5);
-      achieved.push(got.kept / got.total);
-    }
-
+  const report = (label: string, r: { lo: number[]; hi: number[]; ratio: number[] }): void => {
     console.log(
       [
-        `block fill over ${blocks.length} uncapped block assets`,
-        `  lattice ceiling, no erosion:  median ${(100 * pct(unEroded, 0.5)).toFixed(0)}%`,
-        `  keep share solved for ${(100 * TARGET).toFixed(0)}%:  ${(100 * keep).toFixed(0)}%`,
-        `  achieved   p10 ${(100 * pct(achieved, 0.1)).toFixed(0)}%` +
-          `  median ${(100 * pct(achieved, 0.5)).toFixed(0)}%` +
-          `  p90 ${(100 * pct(achieved, 0.9)).toFixed(0)}%`,
-        `  kit        p10 8%  median 17%  p90 36%`,
+        label,
+        `  at res 12   p10 ${(100 * pct(r.lo, 0.1)).toFixed(0)}%` +
+          `  median ${(100 * pct(r.lo, 0.5)).toFixed(0)}%` +
+          `  p90 ${(100 * pct(r.lo, 0.9)).toFixed(0)}%`,
+        `  at res 24   p10 ${(100 * pct(r.hi, 0.1)).toFixed(0)}%` +
+          `  median ${(100 * pct(r.hi, 0.5)).toFixed(0)}%` +
+          `  p90 ${(100 * pct(r.hi, 0.9)).toFixed(0)}%`,
+        `  coarse/fine ratio  median ${pct(r.ratio, 0.5).toFixed(2)}` +
+          `  (1.00 = volume, 2.00 = open surface)`,
       ].join("\n"),
     );
+  };
 
-    // The band the kit publishes for this class, not a point target: the
-    // spread is the part that carries the shape, and landing the median
-    // inside p10..p90 is the claim worth gating.
-    const median = pct(achieved, 0.5);
-    expect(median).toBeGreaterThan(0.08);
-    expect(median).toBeLessThan(0.36);
-  }, 120_000);
+  it("the block fill makes VOLUME — its occupancy holds as the pitch halves", async () => {
+    const blocks = classOf("block").slice(0, 24);
+    expect(blocks.length).toBeGreaterThan(15);
+    const r = await convergence(blocks, async (a, pitch) => {
+      const got = await fillShare(a.boxes, bboxOf(a), pitch, -Infinity, 2.5);
+      return got.kept / got.total;
+    });
+    report(`block fill, ${blocks.length} uncapped block assets`, r);
+    // A solid holds its share. Some drift is expected — the boxes' faces
+    // do not land on cell boundaries — but nothing like the doubling an
+    // open surface shows.
+    expect(pct(r.ratio, 0.5)).toBeLessThan(1.35);
+  }, 300_000);
+
+  /**
+   * THE SHELL CHAIN CANNOT DO ANYTHING TO THIS KIT, and the reason is a
+   * fact about the boxes rather than about the chain.
+   *
+   * Carving a wall means finding cells with an exposed face and dropping
+   * the ones without. A box under two cells thick has NO cell without an
+   * exposed face, so the carve removes nothing and the shell comes back
+   * as the solid. Measured below: the median box of every non-panel class
+   * is one and a half cells thick on its thinnest axis at resolution 24 —
+   * which is one voxel of the resolution-16 grid the kit was decomposed
+   * on, exactly.
+   *
+   * That is the same discovery upstream made by sweeping the pitch, seen
+   * from the geometry instead of from a count: the decomposition has no
+   * interior to carve because its thin axis is pinned at the grid that
+   * produced it. So this test asserts the DIAGNOSIS rather than a shell
+   * behaviour there is no data to show.
+   */
+  it("cannot carve a shell from boxes thinner than two cells", async () => {
+    const shells = classOf("shell").slice(0, 24);
+    expect(shells.length).toBeGreaterThan(15);
+
+    const thinness: number[] = [];
+    for (const a of shells) {
+      const pitch = pitchAt(a, 24);
+      for (const b of a.boxes) {
+        thinness.push(
+          Math.min(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / pitch,
+        );
+      }
+    }
+    const underTwo = thinness.filter((t) => t < 2).length / thinness.length;
+    console.log(
+      [
+        `shell-class box thinness, ${shells.length} assets / ${thinness.length} boxes, res 24`,
+        `  thinnest axis in cells   p10 ${pct(thinness, 0.1).toFixed(2)}` +
+          `  median ${pct(thinness, 0.5).toFixed(2)}` +
+          `  p90 ${pct(thinness, 0.9).toFixed(2)}`,
+        `  under two cells: ${(100 * underTwo).toFixed(0)}%  (a carve removes nothing from these)`,
+      ].join("\n"),
+    );
+    expect(underTwo).toBeGreaterThan(0.6);
+
+    const r = await convergence(shells, async (a, pitch) => {
+      const g = buildShellGraph({
+        bbox: bboxOf(a),
+        boxes: a.boxes,
+        cellSize: pitch,
+        threshold: -Infinity,
+        frequency: 2.5,
+      });
+      const geo = firstGeometry((await cook(g)).outputs[FILL_OUTPUT] ?? []);
+      const total = Math.max(1, Math.round(bboxCells(bboxOf(a), pitch)));
+      return (geo ? geo.pointCount : 0) / total;
+    });
+    report(`one-cell shell, ${shells.length} uncapped shell assets`, r);
+    // And so it scales like the solid it is failing to hollow, not like
+    // the surface it is meant to make. When a decomposition arrives that
+    // can express a wall, this is the number that will move.
+    expect(pct(r.ratio, 0.5)).toBeLessThan(1.5);
+  }, 300_000);
+
+  /**
+   * NO BAND GATES HERE, deliberately, and this note is the reason.
+   *
+   * This suite gated the block fill's median inside the kit's published
+   * 8-36% band and the shell's inside 11-30%. Those bands were withdrawn:
+   * they were counted on a lattice at resolution 16, three quarters of
+   * the source art turns out to be open surfaces with no interior, and so
+   * the figures scale as 1/resolution and are a property of the grid
+   * rather than of the art. Re-gating on a converging target is the right
+   * thing to do and cannot happen until there is one.
+   *
+   * The gates above are what survives the withdrawal without needing it:
+   * whether each chain makes the KIND of thing it claims to.
+   */
+  it.todo("gate the achieved occupancy once a pitch-independent target exists");
 });

@@ -36,6 +36,7 @@ import {
   gt,
   lt,
   mul,
+  pointNeighborhood,
   position,
   setAttribute,
   volumeSample,
@@ -55,6 +56,8 @@ export const FILL_ATTRS = {
   inBox: "inBox",
   /** The eroding field, normalized to 0..1. */
   grain: "grain",
+  /** How many of a cell's six face neighbours are also solid. */
+  faceN: "faceN",
 } as const;
 
 /**
@@ -190,4 +193,103 @@ export function calibrateKeep(samples: readonly number[], share: number): number
   const sorted = [...samples].sort((a, b) => a - b);
   const rank = Math.min(sorted.length - 1, Math.floor((1 - share) * sorted.length));
   return sorted[rank];
+}
+
+/**
+ * Fill one asset's envelope as a SHELL — walls around a void.
+ *
+ * WHY THIS IS A DIFFERENT CHAIN AND NOT A PARAMETER. The kit separates
+ * `block` (solid in all three axes) from `shell` (built of walls around a
+ * void) because they are different things to grow, and averaging them
+ * produces neither: erode a solid and you get porous rubble, erode a
+ * shell and you get a broken wall. A block is a volume with material
+ * removed; a shell is a SURFACE with thickness.
+ *
+ * THE SURFACE IS FOUND BY COUNTING NEIGHBOURS, not by insetting the
+ * boxes. Insetting looks equivalent and is not: a decomposition's boxes
+ * abut, and the shared face between two of them is interior to the union
+ * while being a face of each box — so an inset-based shell grows a wall
+ * through the middle of the asset wherever two boxes meet. Counting a
+ * cell's solid face neighbours on the lattice asks about the UNION, which
+ * is the shape that actually exists. Six means interior; fewer means
+ * surface, seams included correctly and for free.
+ *
+ * `radius` is a little over one cell so the six face neighbours are
+ * inside it and the twelve edge neighbours (at sqrt(2) cells) are not.
+ * Widening it to catch the edges would count 18 and the test would have
+ * to change with it — the face count is the one that means "has an
+ * exposed side".
+ */
+export function buildShellGraph(opts: FillOptions): Graph {
+  const g = new Graph(opts.seed ?? 1);
+  const [lo, hi] = opts.bbox;
+
+  const cells = g.add(
+    volumeSample,
+    {
+      boundsMin: [lo[0], lo[1], lo[2]],
+      boundsMax: [hi[0], hi[1], hi[2]],
+      cellSize: opts.cellSize,
+      jitter: 0,
+    },
+    "cells",
+  );
+
+  const inBox = g.add(
+    setAttribute,
+    { name: FILL_ATTRS.inBox, tupleSize: 1, value: insideAnyBox(opts.boxes) },
+    "inBox",
+  );
+  g.connect(cells, "out", inBox, "in");
+
+  // The solid first: everything the decomposition covers. The shell is
+  // carved out of THIS rather than out of the lattice, so "how many
+  // neighbours are solid" is a question about the asset and not about the
+  // bounding box.
+  const solid = g.add(
+    filterByExpression,
+    { predicate: attribute(FILL_ATTRS.inBox) },
+    "solid",
+  );
+  g.connect(inBox, "out", solid, "in");
+
+  const counted = g.add(
+    pointNeighborhood,
+    { radius: opts.cellSize * 1.05, countAttr: FILL_ATTRS.faceN, includeSelf: false },
+    "faceN",
+  );
+  g.connect(solid, "out", counted, "in");
+
+  // A cell with all six faces buried is interior; anything less has an
+  // exposed side and is wall. ONE CELL THICK, which is what this test can
+  // give: a thicker wall means peeling again from the survivors, and
+  // there is no honest way to spell it as a parameter here without doing
+  // that work.
+  const surface = g.add(
+    filterByExpression,
+    { predicate: lt(attribute(FILL_ATTRS.faceN), 6) },
+    "surface",
+  );
+  g.connect(counted, "out", surface, "in");
+
+  const grain = g.add(
+    setAttribute,
+    { name: FILL_ATTRS.grain, tupleSize: 1, value: grainField(opts.frequency, opts.seed ?? 1) },
+    "grain",
+  );
+  g.connect(surface, "out", grain, "in");
+
+  // The same calibrated erosion the block fill uses, applied to the wall
+  // rather than to the volume: a shell whose occupancy still runs hot
+  // gets thinner, not more porous, because there is only one cell of
+  // depth left to take.
+  const kept = g.add(
+    filterByExpression,
+    { predicate: gt(attribute(FILL_ATTRS.grain), opts.threshold) },
+    "kept",
+  );
+  g.connect(grain, "out", kept, "in");
+
+  g.output(kept, "out", FILL_OUTPUT);
+  return g;
 }
