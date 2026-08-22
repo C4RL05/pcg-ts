@@ -1,5 +1,5 @@
 /**
- * `docs/pages/` is a COMMITTED BUILD, and nothing regenerates it.
+ * The browser-page build under `docs/` is COMMITTED, and nothing regenerates it.
  *
  * WHY THIS EXISTS. The editor enumerates the graph corpus with
  * `import.meta.glob` (`shared/presets.ts`), which vite resolves at BUILD
@@ -48,7 +48,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const GRAPHS = join(ROOT, "graphs");
-const ASSETS = join(ROOT, "docs", "pages", "assets");
+const ASSETS = join(ROOT, "docs", "assets");
 
 const graphNames = readdirSync(GRAPHS)
   .filter((f) => f.endsWith(".json"))
@@ -60,7 +60,7 @@ describe("the committed site build covers every graph", () => {
     expect(graphNames.length).toBeGreaterThan(20);
   });
 
-  it("docs/pages/assets exists", () => {
+  it("docs/assets exists", () => {
     // If the build directory is gone entirely, say THAT rather than
     // reporting 53 individually missing chunks.
     expect(existsSync(ASSETS)).toBe(true);
@@ -150,7 +150,7 @@ describe("the committed site build covers every graph", () => {
       if (stale.length > 0) {
         throw new Error(
           [
-            `docs/pages/assets carries an out-of-date copy of graphs/${name}.json:`,
+            `docs/assets carries an out-of-date copy of graphs/${name}.json:`,
             ...stale.map((c) => `  ${c}`),
             "",
             "The graph was edited without rebuilding the committed site, so the",
@@ -158,7 +158,7 @@ describe("the committed site build covers every graph", () => {
             "",
             "  npm run examples:pages",
             "",
-            "then commit the changed files under docs/pages/.",
+            "then commit the changed files under docs/{assets,editor,demos}/.",
           ].join("\n"),
         );
       }
@@ -173,14 +173,14 @@ describe("the committed site build covers every graph", () => {
       if (chunksFor(name).length === 0) {
         throw new Error(
           [
-            `graphs/${name}.json has no chunk in docs/pages/assets.`,
+            `graphs/${name}.json has no chunk in docs/assets.`,
             "",
             "The editor globs graphs/ at BUILD time, so the hosted page cannot see",
             "this graph until the committed site is rebuilt:",
             "",
             "  npm run examples:pages",
             "",
-            "then commit the changed files under docs/pages/.",
+            "then commit the changed files under docs/{assets,editor,demos}/.",
           ].join("\n"),
         );
       }

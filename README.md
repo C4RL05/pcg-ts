@@ -27,7 +27,7 @@ left, and `spawnInstances` puts a pine on each. Four of those five are
 shipped [primitives](#the-primitive-library) — small graphs themselves,
 dropped in as one node. The graph floats over the thing it just made;
 the panel on the left drives it.
-([Open it live.](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-compose-primitives))*
+([Open it live.](https://c4rl05.github.io/pcg-ts/editor/?graph=basics-compose-primitives))*
 
 ## What is pcg-ts?
 
@@ -61,11 +61,11 @@ All of this runs in a browser. Nothing to check out, nothing to build.
   graph in `graphs/` cooked, each frame backed by the node graph that made
   it and a click through to it live. The same index in prose, with what
   each file teaches, is [docs/graphs.md](./docs/graphs.md).
-- **[The editor](https://c4rl05.github.io/pcg-ts/pages/editor/)** — open
+- **[The editor](https://c4rl05.github.io/pcg-ts/editor/)** — open
   any of those graphs and edit it on the spot. The smallest is
-  [basics-scatter-in-bounds](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-scatter-in-bounds)
+  [basics-scatter-in-bounds](https://c4rl05.github.io/pcg-ts/editor/?graph=basics-scatter-in-bounds)
   (scatter points in a box); the densest is
-  [examples-rig](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
+  [examples-rig](https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig)
   (83 nodes, swept curves, a knobs panel). More in
   [The editor](#the-editor).
 - **[The user manual](https://c4rl05.github.io/pcg-ts/manual.html)** —
@@ -77,16 +77,16 @@ And four demos, each one something a single graph cannot be on its own:
 
 <table>
 <tr>
-<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/"><img alt="The infinite world demo, shown small: a dark plain seen from just above it, strewn with thousands of pale low-poly pebbles thinning toward the horizon, with a handful of large dark boulders standing among them as landmarks. A faint blue grid marks the streaming cells. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/infinite-world.jpg" width="100%"></a></td>
-<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/"><img alt="The galaxy demo, shown small: tens of thousands of coloured stars wrapped in loose spiral arms around a soft glowing bulge, on black. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/galaxy.jpg" width="100%"></a></td>
-<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/"><img alt="The gpu-world demo, shown small: a dense field of tall teal blades tipped with small pale seed heads, receding to the horizon on a dark ground. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/gpu-world.jpg" width="100%"></a></td>
-<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/pages/demos/racetrack/"><img alt="The racetrack demo, shown small: a road sweeping away into an amber corner, lined and arched over by hundreds of small coloured wireframe boxes, with the whole lap drawn again as a pale outline over the top as seen from above. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/racetrack.jpg" width="100%"></a></td>
+<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/"><img alt="The infinite world demo, shown small: a dark plain seen from just above it, strewn with thousands of pale low-poly pebbles thinning toward the horizon, with a handful of large dark boulders standing among them as landmarks. A faint blue grid marks the streaming cells. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/infinite-world.jpg" width="100%"></a></td>
+<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img alt="The galaxy demo, shown small: tens of thousands of coloured stars wrapped in loose spiral arms around a soft glowing bulge, on black. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/galaxy.jpg" width="100%"></a></td>
+<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img alt="The gpu-world demo, shown small: a dense field of tall teal blades tipped with small pale seed heads, receding to the horizon on a dark ground. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/gpu-world.jpg" width="100%"></a></td>
+<td width="25%"><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img alt="The racetrack demo, shown small: a road sweeping away into an amber corner, lined and arched over by hundreds of small coloured wireframe boxes, with the whole lap drawn again as a pale outline over the top as seen from above. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/racetrack.jpg" width="100%"></a></td>
 </tr>
 <tr>
-<td><b><a href="https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/">infinite world</a></b><br>A world streamed around a flying camera, coarse to fine. Drag the cell size and watch the rocks not move.</td>
-<td><b><a href="https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/">galaxy</a></b><br>An unbounded spiral galaxy that is a pure function of its seed. Click a star to visit its planets.</td>
-<td><b><a href="https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/">gpu world</a></b><br>The same streaming, with every instance matrix composed on the GPU and drawn without ever being read back.</td>
-<td><b><a href="https://c4rl05.github.io/pcg-ts/pages/demos/racetrack/">racetrack</a></b><br>A circuit dressed by rule, drawn as the bounding boxes the rules measure. The host cooks, scores it 17 ways and corrects.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">infinite world</a></b><br>A world streamed around a flying camera, coarse to fine. Drag the cell size and watch the rocks not move.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/">galaxy</a></b><br>An unbounded spiral galaxy that is a pure function of its seed. Click a star to visit its planets.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">gpu world</a></b><br>The same streaming, with every instance matrix composed on the GPU and drawn without ever being read back.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a></b><br>A circuit dressed by rule, drawn as the bounding boxes the rules measure. The host cooks, scores it 17 ways and corrects.</td>
 </tr>
 </table>
 
@@ -374,7 +374,7 @@ See [llms.txt](./llms.txt) for the compact agent guide,
 grammar, and [docs/nodes.md](./docs/nodes.md) for the full node reference
 (generated from the registry). [The editor](#the-editor) is this section
 as an app, and it runs in the browser:
-<https://c4rl05.github.io/pcg-ts/pages/editor/>.
+<https://c4rl05.github.io/pcg-ts/editor/>.
 
 ### The primitive library
 
@@ -417,7 +417,7 @@ with no graph file at all.
 
 <img alt="A cooked scene from the suspended-rig graph in the pcg-ts editor, shaded by surface normals on black. A long slender rig hangs in a shallow catenary from upper left to lower right: a spine of swept tubes reading cyan and pale blue, bristling with hundreds of short magenta and violet struts, with thin cyan cables looping in even swags beneath it and a row of dotted vertical masts rising above. A ground grid recedes behind it. The status line reports 60 fps, cook 62.2 ms, 67 of 72 cooked, 57,855 points and 899 instances, drawn as 21 meshes, 2 instance batches, lines and 2 point clouds." src="./docs/manual-assets/editor-rig.jpg" width="100%">
 
-*[`graphs/examples-rig.json`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig),
+*[`graphs/examples-rig.json`](https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig),
 shaded by normals. Every tube, strut, cable and swag here is a path: one
 spine curve, resampled and swept, with the rest built by walking it.*
 
@@ -482,13 +482,13 @@ as TEXT — the same tree the JSON holds, printed.*
 
 `editor/` is a tool, not a demo: it opens any graph in `graphs/` and
 edits it live. It is hosted, so there is nothing to install —
-<https://c4rl05.github.io/pcg-ts/pages/editor/> — and `?graph=<name>`
+<https://c4rl05.github.io/pcg-ts/editor/> — and `?graph=<name>`
 opens one of the corpus graphs directly:
-[`examples-rig`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig)
+[`examples-rig`](https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig)
 (the screenshot above),
-[`examples-gpu-fields`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields)
+[`examples-gpu-fields`](https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields)
 (the fusable chain [GPU cooking](#gpu-cooking-webgpu) measures), or
-[`basics-scatter-in-bounds`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-scatter-in-bounds)
+[`basics-scatter-in-bounds`](https://c4rl05.github.io/pcg-ts/editor/?graph=basics-scatter-in-bounds)
 (the smallest one there is — scatter points in a box).
 
 Nothing in it is hand-maintained, which is what makes it the JSON
@@ -730,7 +730,7 @@ nothing for its existence.
 graph. `1 / 2 run / fused`, `1 readbacks saved` and `suffix-fused` in the
 status line are `CookStats.gpu` — which is what makes this chapter's
 claims checkable rather than quotable. ([Open it
-live.](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields))*
+live.](https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields))*
 
 `pcg-ts/gpu` compiles the serializable field-expression grammar to WGSL
 compute kernels, runs them on a WebGPU device, and fuses chains of
@@ -807,7 +807,7 @@ out-of-domain behaviour — is in docs/authoring.md:
 See it live: [the editor](#the-editor)'s `cook` selector switches between
 CPU, GPU per-node and one fused device-resident run under a graph that
 does not change. Open it on
-[`examples-gpu-fields`](https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields)
+[`examples-gpu-fields`](https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields)
 ([source](./graphs/examples-gpu-fields.json)) and watch two numbers: the
 time moves, and the output hash holds across the two device paths but not
 across the CPU.
@@ -970,13 +970,13 @@ What the caller must respect (the mutation contracts):
 `demos/` holds the four vite pages [pictured at the
 top](#in-the-browser), each one something a serialized graph cannot be on
 its own: an infinite streaming world
-([live](https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/)), an
+([live](https://c4rl05.github.io/pcg-ts/demos/infinite-world/)), an
 infinite deterministic spiral galaxy with click-to-visit star systems
-([live](https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/)), a streamed
+([live](https://c4rl05.github.io/pcg-ts/demos/galaxy/)), a streamed
 world drawing from device-resident instance transforms
-([live](https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/)), and a
+([live](https://c4rl05.github.io/pcg-ts/demos/gpu-world/)), and a
 circuit dressed by rule and scored on every cook
-([live](https://c4rl05.github.io/pcg-ts/pages/demos/racetrack/)) — the one
+([live](https://c4rl05.github.io/pcg-ts/demos/racetrack/)) — the one
 page where a graph is judged rather than merely drawn, which a cook cannot
 do for itself because calibration is a share of a total.
 [`editor/`](#the-editor) beside them is a tool rather than a demo, and

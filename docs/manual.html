@@ -288,7 +288,7 @@
       <span class="install">npm install pcg-ts</span>
       <span>MIT · ESM · TypeScript strict</span>
       <span>zero required dependencies</span>
-      <a href="https://c4rl05.github.io/pcg-ts/pages/editor/">open the editor</a>
+      <a href="https://c4rl05.github.io/pcg-ts/editor/">open the editor</a>
       <a href="https://github.com/C4RL05/pcg-ts">source on GitHub</a>
     </div>
   </div>
@@ -622,7 +622,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="eyebrow">Chapter 4</p>
     <h2>The examples tour</h2>
     <p class="lead">Four demos ship in <code>demos/</code> and the editor in <code>editor/</code>, each a real cook of a real graph rather than a recording. Every screenshot below was captured from the running demo. Run them all locally with <code>npm run examples</code>, or click through to the hosted build.</p>
-    <p>Each one needs a host to exist — a streamed world, a renderer that draws from device buffers, a rig whose topology is a function of its params. The recipes that were only a graph are not demos any more: they are files in <code>graphs/</code>, opened and edited in the editor. The scatter is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, the forest is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code — the three-way GPU comparison that had its own page is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields">examples-gpu-fields</a>, since what that demo varied was never the graph, and the rig is <a href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig">examples-rig</a> — the last one to move, because until <code>forEach</code> its cable branch needed one hand-built node pair per cable and its node count was a param.</p>
+    <p>Each one needs a host to exist — a streamed world, a renderer that draws from device buffers, a rig whose topology is a function of its params. The recipes that were only a graph are not demos any more: they are files in <code>graphs/</code>, opened and edited in the editor. The scatter is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=basics-compose-primitives">basics-compose-primitives</a>, the fence is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=basics-props-along-a-path">basics-props-along-a-path</a>, the field playground is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=basics-attribute-from-noise">basics-attribute-from-noise</a>, the forest is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-forest">examples-forest</a> — the same recipe, now tunable, because its terrain comes from a primitive instead of host code — the three-way GPU comparison that had its own page is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields">examples-gpu-fields</a>, since what that demo varied was never the graph, and the rig is <a href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig">examples-rig</a> — the last one to move, because until <code>forEach</code> its cable branch needed one hand-built node pair per cable and its node count was a param.</p>
 
     <h3 id="ex-01">Editor — the registry as a user interface</h3>
     <figure>
@@ -659,8 +659,8 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">serializeGraph · deserializeGraph · fieldFromJson · fieldToJson</span>
       <span class="chip">mutation API: add · connect · disconnect · removeNode</span>
       <span class="chip">gpu: GpuFieldEvaluator · CookOptions.gpu · CookStats.gpu</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/editor/">run it →</a>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-gpu-fields">the fusable chain →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/editor/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-gpu-fields">the fusable chain →</a>
     </p>
 
     <h3 id="ex-02">Infinite world — hierarchical streaming</h3>
@@ -680,7 +680,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">pointNeighborhood · setAttribute · filterByDensity · spawnInstances</span>
       <span class="chip">gpu: GpuFieldEvaluator · acceptDerivedSpecs · CookStats.gpu</span>
       <span class="chip">three: WorldThreeBinding</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/demos/infinite-world/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">run it →</a>
     </p>
 
     <h3 id="ex-03">Galaxy — determinism at scale</h3>
@@ -695,7 +695,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">World · unbounded + bounded levels · per-cell seeding</span>
       <span class="chip">fields: atan2 · ramp · length · cos · clamp · gt · component · simplexNoise</span>
       <span class="chip">Pcg32 · hashCombine · transformPoints</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/demos/galaxy/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/galaxy/">run it →</a>
     </p>
 
     <h3 id="ex-04">GPU world — matrices that never reach the CPU</h3>
@@ -714,7 +714,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
     <p class="demo-links">
       <span class="chip">three: createWebGpuInstanceAdapter · WorldThreeBinding · DeviceInstanceAdapter</span>
       <span class="chip">gpu: GpuFieldEvaluator · deviceInstances · deviceTransformsBuffer</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/demos/gpu-world/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">run it →</a>
     </p>
 
     <h3 id="ex-05">Racetrack — a graph that is scored, and a host that corrects it</h3>
@@ -734,7 +734,7 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">pathResample · writeCurveFrame · pathScan · sweepProfile</span>
       <span class="chip">transferAttribute nearest · byAttribute · filterByExpression</span>
       <span class="chip">host loop: calibrate · score · correct · keep the best</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/demos/racetrack/">run it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">run it →</a>
     </p>
 
     <h3 id="ex-rig">The rig — the curve vocabulary, end to end</h3>
@@ -752,14 +752,14 @@ graph.<span class="n">output</span>(spawn, <span class="s">"instances"</span>, <
       <span class="chip">nodes: pathSegments · writeCurveFrame · pathPointAt · orientAlongVector · connectPoints</span>
       <span class="chip">primitives: place/radial-on-curve · transform/gather-on-path · write/curve-frame</span>
       <span class="chip">forEach: one body per cable, seeded on its carrier</span>
-      <a class="chip" href="https://c4rl05.github.io/pcg-ts/pages/editor/?graph=examples-rig">open it →</a>
+      <a class="chip" href="https://c4rl05.github.io/pcg-ts/editor/?graph=examples-rig">open it →</a>
     </p>
   </section>
 
   <section id="editor">
     <p class="eyebrow">Chapter 5</p>
     <h2>Using the graph editor as an authoring tool</h2>
-    <p class="lead">The editor is a <strong>tool, not a demo</strong>: it opens any graph in <code>graphs/</code> and edits it live, and what it exports is the same JSON your application loads. <a href="https://c4rl05.github.io/pcg-ts/pages/editor/">Open it hosted</a> — it takes <code>?graph=&lt;name&gt;</code> — or run it locally with <code>npm run examples</code>. It carried a <code>01-</code> prefix once, which is exactly what made it read as the first demo.</p>
+    <p class="lead">The editor is a <strong>tool, not a demo</strong>: it opens any graph in <code>graphs/</code> and edits it live, and what it exports is the same JSON your application loads. <a href="https://c4rl05.github.io/pcg-ts/editor/">Open it hosted</a> — it takes <code>?graph=&lt;name&gt;</code> — or run it locally with <code>npm run examples</code>. It carried a <code>01-</code> prefix once, which is exactly what made it read as the first demo.</p>
     <p>Everything <a href="#ex-01">chapter 4</a> says about it being built on the public API this manual documents is also the reason it is worth authoring in: there is no second implementation of anything here, so a graph that behaves in the editor behaves in your application.</p>
 
     <h3 id="editor-screen">What is on screen</h3>
@@ -1672,8 +1672,8 @@ graph.<span class="n">describe</span>().outputs;          <span class="c">// [ {
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/docs/authoring.md">docs/authoring.md</a></td><td>Graph JSON spec, the full field grammar, named subgraphs and hash pinning, recipes, transfer mappings, GPU eligibility rules.</td><td>The precise format, and worked recipes.</td></tr>
         <tr><td><a href="https://github.com/C4RL05/pcg-ts/blob/main/README.md">README.md</a></td><td>The human API tour.</td><td>A second angle on anything in Part I.</td></tr>
         <tr><td><a href="./index.html">Project overview</a></td><td>Architecture and pipeline diagrams, roadmap.</td><td>How the modules layer, and what shipped when.</td></tr>
-        <tr><td><a href="https://c4rl05.github.io/pcg-ts/pages/editor/">Graph editor</a></td><td>The authoring tool, hosted. Opens any corpus graph with <code>?graph=&lt;name&gt;</code>, edits it live, and exports the JSON your application loads. <a href="#editor">Chapter 5</a> drives it.</td><td>Building or tuning a graph without writing code.</td></tr>
-        <tr><td><a href="https://c4rl05.github.io/pcg-ts/pages/">Live demos</a></td><td>The editor and the four demos, running.</td><td>Seeing it before reading about it.</td></tr>
+        <tr><td><a href="https://c4rl05.github.io/pcg-ts/editor/">Graph editor</a></td><td>The authoring tool, hosted. Opens any corpus graph with <code>?graph=&lt;name&gt;</code>, edits it live, and exports the JSON your application loads. <a href="#editor">Chapter 5</a> drives it.</td><td>Building or tuning a graph without writing code.</td></tr>
+        <tr><td><a href="https://c4rl05.github.io/pcg-ts/#demos">Live demos</a></td><td>The editor and the four demos, running.</td><td>Seeing it before reading about it.</td></tr>
       </tbody>
     </table>
     </div>

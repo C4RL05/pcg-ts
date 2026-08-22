@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>pcg-ts — editor</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    /* The editor is a full-bleed overlay now, so there is nothing
+       floating over the scene to hide at any width. */
+
+    /* The overlay's shared vocabulary — the surfaces, ink, pin-kind hues
+       and type this page and the node boxes are drawn from — lives in
+       `shared/graph/tokens.css`, imported by `main.ts`. It moved there
+       when the demos grew a read-only view of their own graph: the boxes
+       are the same component, so the values it reads have to reach both
+       pages. See that file for why each colour is the colour it is. */
+  </style>
+  <script type="module" crossorigin src="../assets/editor-DCPeCd0-.js"></script>
+  <link rel="modulepreload" crossorigin href="../assets/wordmark-BmzKGe__.js">
+  <link rel="modulepreload" crossorigin href="../assets/three.core-B85ZZh_6.js">
+  <link rel="modulepreload" crossorigin href="../assets/OrbitControls-Bbq_6Ku1.js">
+  <link rel="modulepreload" crossorigin href="../assets/scene-QpK-6DxV.js">
+  <link rel="modulepreload" crossorigin href="../assets/debug-TtEiBVFy.js">
+  <link rel="modulepreload" crossorigin href="../assets/convert-CZKA7i8O.js">
+  <link rel="modulepreload" crossorigin href="../assets/preload-helper-HclGiUj8.js">
+  <link rel="stylesheet" crossorigin href="../assets/wordmark-CtIzpqut.css">
+  <link rel="stylesheet" crossorigin href="../assets/editor-CSHDod17.css">
+</head>
+<body>
+  <div id="editor"></div>
+</body>
+</html>
