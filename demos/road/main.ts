@@ -389,7 +389,7 @@ async function recook(): Promise<void> {
     circuit = next;
     buildCircuit(next);
     frameMap(next, state.mapZoom);
-    statLap(`${next.lap.length.toFixed(0)} u`);
+    statLap(`${next.lap.lengthW.toFixed(1)} W (${next.lap.length.toFixed(0)} u)`);
     statProps(`${next.props.pointCount} placements`);
     statCook(`${next.cookMs.toFixed(0)} ms`);
     // Called only when the graph CHANGED — it re-serializes and re-lays
@@ -444,7 +444,9 @@ function frame(): void {
   chaseCamera.up.set(here.up[0], here.up[1], here.up[2]);
   chaseCamera.lookAt(ahead.p[0], ahead.p[1] + 1.5, ahead.p[2]);
 
-  statStation(`${state.station.toFixed(0)} / ${circuit.lap.length.toFixed(0)} u`);
+  statStation(
+    `${(state.station / circuit.lap.halfWidth).toFixed(1)} / ${circuit.lap.lengthW.toFixed(1)} W`,
+  );
 
   // PASS 1 — the chase view: near, fogged, warm.
   setPass("chase");
