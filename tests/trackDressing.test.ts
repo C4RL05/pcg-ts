@@ -910,6 +910,79 @@ describe("the density envelope's depth", () => {
   });
 });
 
+describe("the index of dispersion", () => {
+  /** Variance over mean of the placement count in windows `w` wide. */
+  function dispersionAt(stations: readonly number[], lapW: number, w: number): number {
+    const bins = Math.max(2, Math.floor(lapW / w));
+    const counts = new Array<number>(bins).fill(0);
+    for (const s of stations) {
+      const u = ((s % lapW) + lapW) % lapW;
+      counts[Math.min(bins - 1, Math.floor(u / (lapW / bins)))]++;
+    }
+    const mean = counts.reduce((a, b) => a + b, 0) / bins;
+    const variance = counts.reduce((a, b) => a + (b - mean) ** 2, 0) / bins;
+    return mean > 0 ? variance / mean : 0;
+  }
+
+  it("PINS the one statistic that says the density envelope is the wrong mechanism", async () => {
+    // This is the curve that separates a hierarchy of clumps from a
+    // swell, and it is the reason to keep measuring after a number comes
+    // out right. The density envelope makes this preset's per-archetype
+    // gap CV read 1.80 against a measured 1.78 — correct to two decimal
+    // places by a mechanism the source does not use.
+    //
+    // Read at a range of window sizes, the source climbs from about 1.4
+    // at 2W to 5 or 6 by 16 to 32W and then STOPS, because clumps stop
+    // being clumps above the size of the largest one. A lap-period swell
+    // keeps climbing, because a swell puts its variance at the largest
+    // scales there are.
+    //
+    // FOUR REPLACEMENTS WERE TRIED AND NONE SHIPPED, recorded so the
+    // next attempt starts further along:
+    //
+    //  - Deleting the envelope alone flattens the curve to about 1.9 at
+    //    every window. The clustering carries the small scales and
+    //    nothing carries the middle.
+    //  - Super-clusters on a REGULAR grid make it fall away, to 0.27 at
+    //    128W: regular spacing suppresses large-scale variance rather
+    //    than adding it.
+    //  - A modulation at the super scale rather than the lap scale gives
+    //    a PEAK, not a plateau. Any wave does; that is what a wave is.
+    //  - Duplicating each anchor into a super-cluster gives the right
+    //    SHAPE — climb to 16W, then flat — and breaks something else:
+    //    an archetype is chosen per anchor, so a duplicated super holds
+    //    one archetype and inflates its per-archetype cluster size from
+    //    1.5 to near 8. The band mix and the corridor rate both moved
+    //    outside their targets. The measured super-cluster is a POOLED
+    //    object holding several archetypes, and reproducing it needs the
+    //    archetype chosen per cluster — which this graph assigns in
+    //    contiguous index blocks to keep the counts exact.
+    //
+    // So the pin is deliberately on the WRONG value. It fails if the
+    // shortfall grows and it fails if someone fixes the mechanism; the
+    // second is the point, and this comment is what they should read.
+    const preset = PRESETS.dense;
+    const { lapLength, committed } = await measureLap(preset);
+    const { placements, lapW } = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
+    const stations = placements.map((p) => p.stationW);
+
+    // Measured here, one lap, uncorrected: 1.32 / 1.53 / 1.80 / 2.36 /
+    // 3.89 / 6.29 / 11.70 at 2 / 4 / 8 / 16 / 32 / 64 / 128W. The source
+    // reads 1.36 / 1.78 / 2.97 / 4.79 / 6.52 / 5.50 / 6.25.
+    //
+    // The small end lands: the clustering rule's own work is right.
+    expect(dispersionAt(stations, lapW, 2)).toBeGreaterThan(1.1);
+    expect(dispersionAt(stations, lapW, 2)).toBeLessThan(1.8);
+    // The middle runs SHORT — 2.4 against 4.8 at 16W — because nothing
+    // in this generator clumps at the scale between a cluster and a lap.
+    expect(dispersionAt(stations, lapW, 16)).toBeLessThan(3.5);
+    // And the top runs LONG, which is the same defect from the other
+    // side: the source plateaus near 6.3 and the envelope keeps climbing
+    // because a swell puts its variance at the largest scale there is.
+    expect(dispersionAt(stations, lapW, 128)).toBeGreaterThan(9);
+  });
+});
+
 describe("corridor art", () => {
   it("stays under the ceiling for every preset", async () => {
     for (const name of ["sparse", "lush", "dense"] as const) {
