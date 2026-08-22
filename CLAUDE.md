@@ -130,7 +130,17 @@ a parent — these are three different kinds of thing and the old single
 - `npm run build` — build the library (subpath exports: `.`, `./three`)
 - `npm run check` — `tsc --noEmit`; needs a current `dist/` first, because
   the browser pages import `pcg-ts` by package name
-- `npm run examples` — vite dev server for the editor and the demos
+- `npm run examples` — vite dev server for the editor and the demos. There
+  is no page at `/`: go to `/editor/`, `/demos/<id>/`, or `/docs/index.html`
+  for the hand-written landing page
+- `npm run examples:pages` — build the browser pages into `docs/pages/`,
+  which is a COMMITTED artifact and the one thing `npm run docs` does not
+  regenerate. CI diffs `docs` after running the docs chain, so a stale
+  `docs/pages/` passes CI silently: the source can be right and the live
+  demos months behind it. Run this whenever anything under `editor/`,
+  `demos/` or `shared/` changes, and check the BUILT site rather than the
+  dev server — relative bases, hashed asset names and minified components
+  are exactly what the dev server does not exercise
 - `npm run preview -- <graph.json>` — render any serialized graph from
   fixed camera poses (hero / ground / top) into `preview/`, with a JSON
   sidecar. Opens a real browser; see `scripts/preview.mjs` for why it is a
