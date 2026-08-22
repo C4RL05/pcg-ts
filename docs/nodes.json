@@ -990,6 +990,65 @@
     }
   },
   {
+    "type": "pathRuns",
+    "description": "Writes a SEGMENTED running total of a numeric point attribute along every polyline: like pathScan, except the accumulator RESETS at points a boolean attribute flags, and on a closed path a run may cross the seam. This is what answers 'how far since the last marker' and 'how far to the next one' — the two queries a prefix sum cannot express. pathScan accumulates monotonically from the seam and never resets, so emulating a segmented scan from it means subtracting the scan value at the most recent flagged point BEHIND you, and obtaining that value is itself a backward look-up along the path, which no field can perform: a field resolves each element from that element alone. This is the missing primitive, and wrapping is a property it needs rather than the whole of what was missing. IT ACCUMULATES A VALUE, NOT A COUNT, which is the whole ergonomic difference: scan a per-segment length for distance, a per-sample cost for cost, or a constant 1 for the vertex count, and one node covers all three. RUNS ARE HALF-OPEN AND ORIENTED. Forward, a run begins at a flagged point (inclusive) and continues until the next flagged point (exclusive), accumulating in the path's walk order; backward, a run ENDS at a flagged point (inclusive) and extends back to just after the previous one, accumulating against the walk order. Both exist because they answer different questions — 'distance since the corner behind me' is the forward run and 'distance to the corner ahead' is the backward one — and neither is recoverable from the other without knowing each run's total. THE SEAM IS NOT A BOUNDARY unless something flags it. On a CLOSED path with `wrap` on, the walk starts at the first flagged point rather than at vertex zero, so the run that straddles the start/finish line is one run and not two; that is the case a lap actually has, and a backward segmented scan built on an unwrapped prefix sum gets it wrong every time. A closed path with wrap on and NO flagged point anywhere has no place for a cyclic run to begin, so the seam stands in and the result is what `wrap` off would give. On an OPEN path `wrap` does nothing. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching pathScan and writeTangents. NaN CONTRIBUTES ZERO rather than poisoning the rest of its run, and a NaN in the BOUNDARY column is not a boundary — a column that could not be measured must not silently cut every run in the path.",
+    "category": "attribute",
+    "inputs": [
+      {
+        "name": "in",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "out",
+        "kind": "geometry",
+        "multi": false
+      }
+    ],
+    "params": {
+      "name": {
+        "type": "string",
+        "default": "density",
+        "description": "Numeric POINT attribute to accumulate (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples accumulate componentwise, each component its own independent running total, and all of them reset together at a boundary. Scan a per-segment length here for distance, or an attribute set to a constant 1 for the count of points since the boundary."
+      },
+      "boundary": {
+        "type": "string",
+        "default": "boundary",
+        "description": "POINT attribute (tuple 1) whose NON-ZERO values mark where a run begins, forward, or ends, backward. Must exist. Any numeric type: a bool column is the obvious one, and an i32 marker column or an f32 written by a field works the same way, because the test is only 'is this nonzero'. NaN is NOT a boundary, deliberately: a boundary column carrying an unmeasurable value would otherwise cut every run in the path, and silently. A tuple wider than 1 is refused rather than reduced — a flag is one column, and which component would have decided is not a question this node should answer for you."
+      },
+      "outName": {
+        "type": "string",
+        "default": "run",
+        "description": "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset."
+      },
+      "mode": {
+        "type": "enum",
+        "default": "exclusive",
+        "description": "Whether a point's own value is part of its own running total. 'exclusive' (the default here, where pathScan defaults to 'inclusive') starts every run at zero on its boundary point, which is what 'distance since the marker' means — the marker itself is at distance zero. 'inclusive' ends each run's last point on the run's whole total instead. Neither is more correct; pick by which end of the run you need exact.",
+        "enum": [
+          "inclusive",
+          "exclusive"
+        ]
+      },
+      "direction": {
+        "type": "enum",
+        "default": "forward",
+        "description": "Which way the runs are oriented. 'forward' accumulates in the path's walk order, so a point reads what lies BEHIND it since the last boundary — the query a 'distance since the last corner' rule wants. 'backward' accumulates against the walk order, so a point reads what lies AHEAD of it up to the next boundary — the query a marker rule wants ('place an entry marker 3 to 6W before the corner'). The two are not each other's complement without the run's total, which is why both are built rather than one plus an instruction to reverse the path; on a CLOSED path reversing also moves which side of the seam a run starts on, so 'reverse it yourself' is a trap exactly where wrapping matters.",
+        "enum": [
+          "forward",
+          "backward"
+        ]
+      },
+      "wrap": {
+        "type": "bool",
+        "default": true,
+        "description": "Whether a run may cross a CLOSED path's seam. True (the default) starts the walk at the first flagged point instead of at vertex zero, so a run straddling the start/finish line stays one run — the case a closed lap always has and the one a prefix sum cannot answer. False treats the seam as a run boundary, which is what you want when the vertex order carries meaning of its own, such as a lap whose start line IS a marker. No effect on an open path, and no effect on a closed path with nothing flagged, where there is no cyclic starting point to rotate to."
+      }
+    }
+  },
+  {
     "type": "pathScan",
     "description": "Writes the RUNNING TOTAL of a numeric point attribute along every polyline, in the path's own walk order — a prefix sum, the accumulating counterpart to attributeReduce's collapse. This is the operation a field cannot express at any length: a field resolves each element from that element alone, so 'how much of this attribute lies BEHIND me along the curve' has no formulation in the grammar, and the quantities that need it are ordinary — distance travelled, accumulated cost, an inventory that fills as the path runs, and above all a CUMULATIVE DISTRIBUTION, which is what turns a per-sample density into placements. Order is the path's, which is why this is a path node rather than a domain-wide one: a scan without an order is not defined, and a polyline is where this library keeps one. A CLOSED path scans from its seam and does not count the repeated last vertex twice. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching writeTangents. NaN CONTRIBUTES ZERO rather than poisoning everything downstream of it, which matters more here than in attributeReduce: there one bad element spoils one statistic, here it would spoil the whole tail of a column. INVERSE-TRANSFORM SAMPLING, the reason this exists, is then three nodes — scan a per-sample density with `totalAttr` set, divide by that total for a CDF in 0..1, and transferAttribute 'nearest' from a cloud of N evenly spaced targets in CDF space back onto the frames. Each target lands on the sample whose CDF is nearest its own, which places exactly N points in proportion to the density, with no rejection and no approximate count.",
     "category": "attribute",

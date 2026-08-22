@@ -1175,6 +1175,216 @@ export const pathScan = standardNode<PathScanParams>({
   },
 });
 
+/** Params of {@link pathRuns}. */
+export interface PathRunsParams {
+  name: string;
+  boundary: string;
+  outName: string;
+  mode: string;
+  direction: string;
+  wrap: boolean;
+}
+
+/** A running total WITHIN each run of a path, reset at flagged points. */
+export const pathRuns = standardNode<PathRunsParams>({
+  type: "pathRuns",
+  category: "attribute",
+  description:
+    "Writes a SEGMENTED running total of a numeric point attribute along every polyline: like pathScan, except the accumulator RESETS at points a boolean attribute flags, and on a closed path a run may cross the seam. This is what answers 'how far since the last marker' and 'how far to the next one' — the two queries a prefix sum cannot express. pathScan accumulates monotonically from the seam and never resets, so emulating a segmented scan from it means subtracting the scan value at the most recent flagged point BEHIND you, and obtaining that value is itself a backward look-up along the path, which no field can perform: a field resolves each element from that element alone. This is the missing primitive, and wrapping is a property it needs rather than the whole of what was missing. IT ACCUMULATES A VALUE, NOT A COUNT, which is the whole ergonomic difference: scan a per-segment length for distance, a per-sample cost for cost, or a constant 1 for the vertex count, and one node covers all three. RUNS ARE HALF-OPEN AND ORIENTED. Forward, a run begins at a flagged point (inclusive) and continues until the next flagged point (exclusive), accumulating in the path's walk order; backward, a run ENDS at a flagged point (inclusive) and extends back to just after the previous one, accumulating against the walk order. Both exist because they answer different questions — 'distance since the corner behind me' is the forward run and 'distance to the corner ahead' is the backward one — and neither is recoverable from the other without knowing each run's total. THE SEAM IS NOT A BOUNDARY unless something flags it. On a CLOSED path with `wrap` on, the walk starts at the first flagged point rather than at vertex zero, so the run that straddles the start/finish line is one run and not two; that is the case a lap actually has, and a backward segmented scan built on an unwrapped prefix sum gets it wrong every time. A closed path with wrap on and NO flagged point anywhere has no place for a cyclic run to begin, so the seam stands in and the result is what `wrap` off would give. On an OPEN path `wrap` does nothing. Points in no polyline are left at zero, and a point visited by several polylines takes the last one in primitive order, both matching pathScan and writeTangents. NaN CONTRIBUTES ZERO rather than poisoning the rest of its run, and a NaN in the BOUNDARY column is not a boundary — a column that could not be measured must not silently cut every run in the path.",
+  inputs: [{ name: "in", kind: "geometry" }],
+  outputs: [{ name: "out", kind: "geometry" }],
+  params: {
+    name: {
+      type: "string",
+      default: "density",
+      description:
+        "Numeric POINT attribute to accumulate (f32/i32/u32/bool, tuple 1..4). Must exist. Tuples accumulate componentwise, each component its own independent running total, and all of them reset together at a boundary. Scan a per-segment length here for distance, or an attribute set to a constant 1 for the count of points since the boundary.",
+    },
+    boundary: {
+      type: "string",
+      default: "boundary",
+      description:
+        "POINT attribute (tuple 1) whose NON-ZERO values mark where a run begins, forward, or ends, backward. Must exist. Any numeric type: a bool column is the obvious one, and an i32 marker column or an f32 written by a field works the same way, because the test is only 'is this nonzero'. NaN is NOT a boundary, deliberately: a boundary column carrying an unmeasurable value would otherwise cut every run in the path, and silently. A tuple wider than 1 is refused rather than reduced — a flag is one column, and which component would have decided is not a question this node should answer for you.",
+    },
+    outName: {
+      type: "string",
+      default: "run",
+      description:
+        "POINT attribute receiving the running total (f32, at the source's tuple size). Must differ from `name`: scanning in place would read back values this node had already overwritten. 'P' is refused outright. Same reporting-slot rule as the rest of the library — a column of a different shape under this name is refused rather than deleted and re-added, and a same-shape one is reset.",
+    },
+    mode: {
+      type: "enum",
+      default: "exclusive",
+      enum: ["inclusive", "exclusive"],
+      description:
+        "Whether a point's own value is part of its own running total. 'exclusive' (the default here, where pathScan defaults to 'inclusive') starts every run at zero on its boundary point, which is what 'distance since the marker' means — the marker itself is at distance zero. 'inclusive' ends each run's last point on the run's whole total instead. Neither is more correct; pick by which end of the run you need exact.",
+    },
+    direction: {
+      type: "enum",
+      default: "forward",
+      enum: ["forward", "backward"],
+      description:
+        "Which way the runs are oriented. 'forward' accumulates in the path's walk order, so a point reads what lies BEHIND it since the last boundary — the query a 'distance since the last corner' rule wants. 'backward' accumulates against the walk order, so a point reads what lies AHEAD of it up to the next boundary — the query a marker rule wants ('place an entry marker 3 to 6W before the corner'). The two are not each other's complement without the run's total, which is why both are built rather than one plus an instruction to reverse the path; on a CLOSED path reversing also moves which side of the seam a run starts on, so 'reverse it yourself' is a trap exactly where wrapping matters.",
+    },
+    wrap: {
+      type: "bool",
+      default: true,
+      description:
+        "Whether a run may cross a CLOSED path's seam. True (the default) starts the walk at the first flagged point instead of at vertex zero, so a run straddling the start/finish line stays one run — the case a closed lap always has and the one a prefix sum cannot answer. False treats the seam as a run boundary, which is what you want when the vertex order carries meaning of its own, such as a lap whose start line IS a marker. No effect on an open path, and no effect on a closed path with nothing flagged, where there is no cyclic starting point to rotate to.",
+    },
+  },
+  execute({ inputs, params }) {
+    // Params before geometry: a bad name reported as "no polyline
+    // primitives" sends the author to debug the wrong thing entirely.
+    const { name, boundary, outName } = params;
+    if (name === "") {
+      throw new Error(
+        'pathRuns: param "name" must be a non-empty attribute name; it is the point attribute to accumulate',
+      );
+    }
+    if (boundary === "") {
+      throw new Error(
+        'pathRuns: param "boundary" must be a non-empty attribute name; it is the point attribute whose nonzero values delimit the runs, and a segmented scan with no boundaries is pathScan',
+      );
+    }
+    if (outName === "") {
+      throw new Error(
+        'pathRuns: param "outName" must be a non-empty attribute name; the default is "run"',
+      );
+    }
+    if (outName === "P") {
+      throw new Error(
+        'pathRuns: param "outName" cannot be "P" — that would overwrite the positions the path is walked along; use "run" or another name',
+      );
+    }
+    if (outName === name) {
+      throw new Error(
+        `pathRuns: params "name" and "outName" are both "${name}"; a scan cannot be written over its own source, because every element after the first would accumulate the totals this node had already written rather than the values it was given`,
+      );
+    }
+    if (outName === boundary) {
+      throw new Error(
+        `pathRuns: params "boundary" and "outName" are both "${outName}"; the output would overwrite the flags that decide where the runs start, and every point after the first would be read against totals rather than against its marker`,
+      );
+    }
+    const src = requireGeometry(inputs, "in", "pathRuns");
+    const attr = src.attrs.point.get(name);
+    if (!attr) {
+      throw new Error(
+        `pathRuns: point attribute "${name}" not found; available: ${src.attrs.point.names().join(", ") || "(none)"}`,
+      );
+    }
+    if (attr.type === "string") {
+      throw new Error(
+        `pathRuns: attribute "${name}" is a string attribute and cannot be accumulated; scan a numeric attribute (f32/i32/u32/bool)`,
+      );
+    }
+    if (attr.tupleSize > 4) {
+      throw new Error(
+        `pathRuns: attribute "${name}" has tupleSize ${attr.tupleSize}; scanning supports tuple sizes 1 to 4`,
+      );
+    }
+    const bnd = src.attrs.point.get(boundary);
+    if (!bnd) {
+      throw new Error(
+        `pathRuns: point attribute "${boundary}" not found; available: ${src.attrs.point.names().join(", ") || "(none)"}`,
+      );
+    }
+    if (bnd.type === "string") {
+      throw new Error(
+        `pathRuns: boundary attribute "${boundary}" is a string attribute; a boundary is tested for being nonzero, so give it a numeric column (bool/i32/u32/f32)`,
+      );
+    }
+    if (bnd.tupleSize !== 1) {
+      throw new Error(
+        `pathRuns: boundary attribute "${boundary}" has tupleSize ${bnd.tupleSize}; a boundary flag is one column, and which component would decide is not a question this node answers for you — promote or extract the component you meant first`,
+      );
+    }
+    const ts = attr.tupleSize;
+    requireReportSlot({
+      attrs: src.attrs.point,
+      nodeType: "pathRuns",
+      param: "outName",
+      name: outName,
+      type: "f32",
+      tupleSize: ts,
+      domain: "point",
+      suggestion: "run",
+    });
+
+    const geo = cloneGeometry(src);
+    // `polylineWalks`, not `polylineArcTables`: a segmented scan reads no
+    // distance of its own — where distance is wanted it arrives as the
+    // attribute being accumulated — so the arc table's four Float64Arrays
+    // and per-segment square root would all be paid for nothing.
+    const walks = polylineWalks(geo, "pathRuns");
+    const sd = geo.attrs.point.require(name).data;
+    const bd = geo.attrs.point.require(boundary).data;
+    const zero = new Array<number>(ts).fill(0);
+    const out = geo.attrs.point.replace(outName, "f32", ts, zero).data;
+    const exclusive = params.mode === "exclusive";
+    const backward = params.direction === "backward";
+    // Accumulate in f64 whatever the source type, so a long f32 sum does
+    // not lose its tail — the same reason attributeReduce and pathScan do.
+    const acc = new Float64Array(4);
+    for (const walk of walks) {
+      const pts = walk.points;
+      // A closed path repeats its first point as its last vertex; that
+      // repeat is the closure, not a point to visit a second time. It
+      // needs no separate write either, being the same point index.
+      const m = walk.closed ? pts.length - 1 : pts.length;
+      // The visit order: the walk, reversed for a backward scan, and
+      // rotated onto the first boundary when a closed path may wrap.
+      const at = (k: number): number => pts[backward ? m - 1 - k : k];
+      const flagged = (p: number): boolean => {
+        const b = bd[p];
+        // `b === b` rejects NaN, which is deliberately NOT a boundary.
+        return b === b && b !== 0;
+      };
+      let rotate = 0;
+      const cyclic = walk.closed && params.wrap;
+      if (cyclic) {
+        let found = -1;
+        for (let k = 0; k < m; k++) {
+          if (flagged(at(k))) {
+            found = k;
+            break;
+          }
+        }
+        // Nothing flagged anywhere: a cyclic run has no place to begin,
+        // so the seam stands in and this is exactly the unwrapped result.
+        rotate = found < 0 ? 0 : found;
+      }
+      acc.fill(0);
+      for (let j = 0; j < m; j++) {
+        const p = at(cyclic ? (rotate + j) % m : j);
+        // The reset happens BEFORE the point is read in either mode, so a
+        // boundary point opens its own run rather than closing the one
+        // before it. Backward, that is the same rule read the other way:
+        // the flagged point is the last of its run in walk order.
+        if (flagged(p)) acc.fill(0);
+        const o = p * ts;
+        if (exclusive) {
+          for (let c = 0; c < ts; c++) {
+            const v = sd[o + c];
+            out[o + c] = acc[c];
+            // NaN contributes nothing rather than propagating. `v !== v`
+            // is the NaN test that does not depend on argument coercion.
+            if (v === v) acc[c] += v;
+          }
+        } else {
+          for (let c = 0; c < ts; c++) {
+            const v = sd[o + c];
+            if (v === v) acc[c] += v;
+            out[o + c] = acc[c];
+          }
+        }
+      }
+    }
+    return { out: [makeGeometryItem(geo)] };
+  },
+});
+
 /** Params of {@link writeTangents}. */
 export interface WriteTangentsParams {
   name: string;

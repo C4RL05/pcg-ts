@@ -4,7 +4,7 @@ Generated from the graphs in [`graphs`](../graphs) by `node scripts/gen-graphs.m
 
 Each file teaches ONE thing and cooks from JSON alone — no runtime-injected data, so `pcg cook <file>` on a clean install reproduces exactly what the corpus test asserts.
 
-67 examples, alphabetical by file:
+68 examples, alphabetical by file:
 
 - [basics-attribute-from-noise.json](#basics-attribute-from-noisejson) — write an attribute from a noise field
 - [basics-attribute-remap.json](#basics-attribute-remapjson) — rescale an attribute to a new range
@@ -46,6 +46,7 @@ Each file teaches ONE thing and cooks from JSON alone — no runtime-injected da
 - [basics-radial-on-curve.json](#basics-radial-on-curvejson) — aim things radially around a curve
 - [basics-report-to-the-host.json](#basics-report-to-the-hostjson) — what a graph hands back that is not geometry
 - [basics-reseed-a-noise.json](#basics-reseed-a-noisejson) — make a saved noise re-roll with the graph seed
+- [basics-runs-along-a-path.json](#basics-runs-along-a-pathjson) — measure distance since the last gate, and to the next one, around a closed lap
 - [basics-scatter-in-bounds.json](#basics-scatter-in-boundsjson) — scatter points in a box
 - [basics-scatter-in-world.json](#basics-scatter-in-worldjson) — scatter points anchored to the world, not to the box
 - [basics-signed-distance.json](#basics-signed-distancejson) — a signed distance field, and which side of it
@@ -805,6 +806,32 @@ A serialized field expression bakes its numbers, so a noise that carries `opts.s
 **Outputs:** `points` (from `lift`.`out`)
 
 Cook it: `pcg cook graphs/basics-reseed-a-noise.json --stats`
+
+## basics-runs-along-a-path.json
+
+**measure distance since the last gate, and to the next one, around a closed lap**
+
+`pathScan` accumulates from a path's seam and never resets, which answers 'how much lies behind me' and nothing else. The questions a marker rule actually asks are 'how far since the last gate' and 'how far to the next one', and neither is a prefix sum: getting the first out of a scan means subtracting the scan value at the most recent gate behind you, and OBTAINING that value is a backward look-up along the path. A field cannot perform one — a field resolves each element from that element alone — and `pathScan` was the library's only order-aware node, so there was nothing to build the emulation out of. `pathRuns` is the missing primitive: a SEGMENTED scan, where the accumulator resets at points a boolean attribute flags.
+
+It accumulates a VALUE rather than counting elements, which is the whole ergonomic difference. Scan a per-segment length and you get distance; scan a constant 1 and you get the number of points; scan a cost and you get cost. Here `seg` is the lap length over the sample count — `pathResample` in `count` mode spaces its samples evenly, so one number describes every segment — brought back from the primitive domain by `promoteAttribute`, the same way `basics-density-along-a-path` recovers its scan total.
+
+The gates are picked with arithmetic on `index` — every sixtieth sample of the 240, offset by thirty — which is exact where a threshold on `curveU` would not be: `mod(index + 30, 60) < 0.5` selects four samples and cannot select a fifth by rounding, where `fract(curveU * 4)` near zero can read 0.9999 instead and drop a gate. The offset is the point of the exercise. Without it the first gate would land on sample zero, which is the seam, and the graph would demonstrate nothing: gates at the seam make wrapping a no-op. `index` names a SLOT rather than an element and anything that filters or reorders upstream renumbers it, which is safe here because it is read immediately after the resample that creates the samples.
+
+WHAT THE CLOSED LAP IS DOING HERE, because it is the case the primitive exists for. Sample zero sits thirty samples PAST the last gate, on the far side of the start/finish line from it. With `wrap` on, the walk starts at the first flagged point rather than at vertex zero, so that run stays ONE run and sample zero reads the distance back to the gate behind it — about a quarter of the way into its run rather than at its start. Turn `wrap` off and the seam cuts the run in two: sample zero reads zero, and the thirty samples after it read a distance measured from the SEAM rather than from their gate, wrong by however far back the gate is. Nothing about the column shows it — the values are all still positive and still increasing, and the ramp simply restarts at a place no gate stands. A real circuit always has a corner that straddles the line.
+
+Both directions are cooked because they are different questions rather than one question reversed. `since` reads backward-looking (what is behind me since the last gate) and `ahead` reads forward-looking (what is in front of me up to the next one); recovering either from the other needs each run's total, which no point holds. The colour ramps from `since` over a quarter-lap, so each run climbs from blue at its gate to red just before the next, and the ramp is continuous across the seam — that continuity is the whole picture. The second output is the four gate points themselves, filtered on the same flag, so the ramp can be read against where it is supposed to reset.
+
+**Tags:** `basics`, `path`, `runs`, `segmented-scan`, `closed`
+
+**Seed:** 2207
+
+**Node types:** `filterByAttribute`, `pathResample`, `pathRuns`, `pointsToPath`, `promoteAttribute`, `setAttribute`, `subgraph`
+
+**Primitives:** `shape/ring`
+
+**Outputs:** `lap` (from `tint`.`out`), `gates` (from `gates`.`out`)
+
+Cook it: `pcg cook graphs/basics-runs-along-a-path.json --stats`
 
 ## basics-scatter-in-bounds.json
 

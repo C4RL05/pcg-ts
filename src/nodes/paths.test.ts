@@ -18,6 +18,7 @@ import {
   partitionByAttribute,
   pathPointAt,
   pathResample,
+  pathRuns,
   pathScan,
   pathSegments,
   pointScatterInBounds,
@@ -2668,5 +2669,193 @@ describe("pathScan", () => {
     expect(Math.abs(late - N * 0.75)).toBeLessThanOrEqual(1);
     // And they are spread through the dense half rather than piled up.
     expect(new Set(stations).size).toBe(N);
+  });
+});
+describe("pathRuns", () => {
+  async function runs(params: Record<string, unknown>, src: Geometry): Promise<Geometry> {
+    return firstGeo((await runNode(pathRuns, params, { in: [makeGeometryItem(src)] })).out);
+  }
+
+  /** An open path of `n` points at (i, 0, 0) carrying values and flags. */
+  function flagged(values: readonly number[], marks: readonly number[]): Geometry {
+    const pos: number[] = [];
+    for (let i = 0; i < values.length; i++) pos.push(i, 0, 0);
+    return withAttr(withAttr(createPolyline(pos), "w", values), "b", marks);
+  }
+
+  const col = (geo: Geometry, name: string): number[] => {
+    const a = geo.attrs.point.require(name);
+    return Array.from(a.data.slice(0, geo.pointCount * a.tupleSize));
+  };
+
+  const P = { name: "w", boundary: "b", outName: "r" };
+
+  it("resets at every flagged point, which is what pathScan cannot do", async () => {
+    // Two runs of three. Exclusive is the default here because a marker
+    // is at distance zero from itself.
+    const geo = await runs(P, flagged([1, 2, 3, 4, 5, 6], [1, 0, 0, 1, 0, 0]));
+    expect(col(geo, "r")).toEqual([0, 1, 3, 0, 4, 9]);
+  });
+
+  it("ends each run on its whole total in inclusive mode", async () => {
+    const geo = await runs(
+      { ...P, mode: "inclusive" },
+      flagged([1, 2, 3, 4, 5, 6], [1, 0, 0, 1, 0, 0]),
+    );
+    expect(col(geo, "r")).toEqual([1, 3, 6, 4, 9, 15]);
+  });
+
+  it("starts a run at the path's own start when nothing flags it", async () => {
+    // The first point opens a run implicitly. Without this the column
+    // before the first marker would be undefined rather than measured.
+    const geo = await runs(P, flagged([1, 2, 3, 4], [0, 0, 1, 0]));
+    expect(col(geo, "r")).toEqual([0, 1, 0, 3]);
+  });
+
+  it("reads AHEAD instead of behind when the direction is backward", async () => {
+    // Same path, same flag. Forward, point 3 reads what lies behind it
+    // since the marker at 2; backward, point 0 reads what lies ahead of
+    // it up to that marker — 2 + 3. Neither is the other reversed,
+    // which is why both directions are built.
+    const geo = await runs({ ...P, direction: "backward" }, flagged([1, 2, 3, 4], [0, 0, 1, 0]));
+    expect(col(geo, "r")).toEqual([5, 3, 0, 0]);
+  });
+
+  it("carries a run across a closed path's seam, which is the case a lap has", async () => {
+    // One marker, at point 2, on a closed square. Wrapped, there is ONE
+    // run and it runs 2 -> 3 -> 0 -> 1 straight through the seam.
+    const square = () =>
+      withAttr(
+        withAttr(
+          createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+          "w",
+          [1, 2, 3, 4],
+        ),
+        "b",
+        [0, 0, 1, 0],
+      );
+    const wrapped = await runs(P, square());
+    expect(wrapped.pointCount).toBe(4);
+    expect(col(wrapped, "r")).toEqual([7, 8, 0, 3]);
+
+    // Unwrapped, the seam cuts it in two and points 0 and 1 lose the
+    // three-and-four that actually precede them around the lap. This is
+    // the answer a prefix sum is stuck with.
+    const cut = await runs({ ...P, wrap: false }, square());
+    expect(col(cut, "r")).toEqual([0, 1, 0, 3]);
+  });
+
+  it("falls back to the seam on a closed path with nothing flagged", async () => {
+    // A cyclic run has no place to begin, so there is nothing to rotate
+    // onto and wrapping is a no-op rather than an error.
+    const src = () =>
+      withAttr(
+        withAttr(
+          createPolyline([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], { closed: true }),
+          "w",
+          [1, 2, 3, 4],
+        ),
+        "b",
+        [0, 0, 0, 0],
+      );
+    expect(col(await runs(P, src()), "r")).toEqual([0, 1, 3, 6]);
+    expect(col(await runs({ ...P, wrap: false }, src()), "r")).toEqual([0, 1, 3, 6]);
+  });
+
+  it("is pathScan when a single boundary opens the path", async () => {
+    // The equivalence worth pinning: with one flag on the first point and
+    // no others, a segmented scan IS a prefix sum. If these two ever
+    // disagree, one of them has changed what accumulation means.
+    const src = flagged([1, 2, 3, 4, 5], [1, 0, 0, 0, 0]);
+    const seg = await runs({ ...P, mode: "inclusive" }, src);
+    const pre = firstGeo(
+      (await runNode(pathScan, { name: "w", outName: "s" }, { in: [makeGeometryItem(src)] })).out,
+    );
+    expect(col(seg, "r")).toEqual(col(pre, "s"));
+  });
+
+  it("does not carry a run from one path into the next", async () => {
+    const geo = withAttr(withAttr(twoPaths(), "w", [1, 2, 10, 20]), "b", [0, 0, 0, 0]);
+    const out = await runs(P, geo);
+    expect(col(out, "r")).toEqual([0, 1, 0, 10]);
+  });
+
+  it("accumulates a tuple componentwise and resets every component together", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 4; i++) pos.push(i, 0, 0);
+    const geo = withAttr(createPolyline(pos), "b", [0, 0, 1, 0]);
+    const w = geo.attrs.point.add("w", "f32", 2, [0, 0]);
+    w.setTuple(0, [1, 10]);
+    w.setTuple(1, [2, 20]);
+    w.setTuple(2, [3, 30]);
+    w.setTuple(3, [4, 40]);
+    const out = await runs(P, geo);
+    expect(col(out, "r")).toEqual([0, 0, 1, 10, 0, 0, 3, 30]);
+  });
+
+  it("takes any nonzero value as a flag, including a bool column", async () => {
+    const pos: number[] = [];
+    for (let i = 0; i < 4; i++) pos.push(i, 0, 0);
+    const geo = withAttr(createPolyline(pos), "w", [1, 2, 3, 4]);
+    const b = geo.attrs.point.add("b", "bool", 1, 0);
+    b.set(2, 1);
+    expect(col(await runs(P, geo), "r")).toEqual([0, 1, 0, 3]);
+  });
+
+  it("lets a NaN contribute zero, and refuses to read one as a boundary", async () => {
+    // A NaN value spoils one element rather than the tail of its run.
+    expect(col(await runs(P, flagged([1, NaN, 3, 4], [1, 0, 0, 0])), "r")).toEqual([0, 1, 1, 4]);
+    // A NaN FLAG is not a boundary. The opposite rule would let a column
+    // that could not be measured cut every run in the path, silently.
+    expect(col(await runs(P, flagged([1, 2, 3, 4], [0, NaN, NaN, 0])), "r")).toEqual([0, 1, 3, 6]);
+  });
+
+  it("leaves points in no polyline at zero and keeps the path a path", async () => {
+    const geo = createPointCloud(4);
+    const pos = geo.attrs.point.require("P");
+    pos.setTuple(0, [0, 0, 0]);
+    pos.setTuple(1, [1, 0, 0]);
+    pos.setTuple(2, [2, 0, 0]);
+    pos.setTuple(3, [9, 9, 9]); // in no polyline
+    setPolylineTopology(geo, [0, 1, 2], [0], [3]);
+    withAttr(withAttr(geo, "w", [5, 5, 5, 5]), "b", [0, 0, 0, 0]);
+    const out = await runs(P, geo);
+    expect(col(out, "r")).toEqual([0, 5, 10, 0]);
+    expect(topologyOf(out)).toEqual(topologyOf(geo));
+  });
+
+  it("refuses the names and shapes that would quietly produce nonsense", async () => {
+    const src = flagged([1, 2, 3], [1, 0, 0]);
+    const inputs = { in: [makeGeometryItem(src)] };
+    expect(await rejection(runNode(pathRuns, { ...P, outName: "w" }, inputs))).toContain(
+      "cannot be written over its own source",
+    );
+    expect(await rejection(runNode(pathRuns, { ...P, outName: "P" }, inputs))).toContain(
+      'cannot be "P"',
+    );
+    expect(await rejection(runNode(pathRuns, { ...P, outName: "b" }, inputs))).toContain(
+      "overwrite the flags",
+    );
+    expect(await rejection(runNode(pathRuns, { ...P, name: "nope" }, inputs))).toContain(
+      "not found",
+    );
+    expect(await rejection(runNode(pathRuns, { ...P, boundary: "nope" }, inputs))).toContain(
+      "not found",
+    );
+    // A boundary is one column: a wider one is refused rather than having
+    // a component picked for the author.
+    const wide = flagged([1, 2, 3], [0, 0, 0]);
+    wide.attrs.point.add("b2", "f32", 2, [0, 0]);
+    expect(
+      await rejection(
+        runNode(pathRuns, { ...P, boundary: "b2" }, { in: [makeGeometryItem(wide)] }),
+      ),
+    ).toContain("tupleSize 2");
+  });
+
+  it("is deterministic across fresh runs", async () => {
+    const src = flagged([1, 2, 3, 4, 5], [1, 0, 1, 0, 0]);
+    const run = async () => snapshotGeometry(await runs(P, src));
+    expect(await run()).toEqual(await run());
   });
 });

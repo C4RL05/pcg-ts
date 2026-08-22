@@ -436,6 +436,7 @@ describe("category metadata", () => {
       writeCurveFrame: "attribute",
       partitionByAttribute: "attribute",
       attributeReduce: "attribute",
+      pathRuns: "attribute",
       pathScan: "attribute",
       attributeRemap: "attribute",
       removeAttribute: "attribute",
