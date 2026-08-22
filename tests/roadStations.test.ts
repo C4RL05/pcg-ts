@@ -115,6 +115,14 @@ describe("the station process", () => {
     expect(at(32)).toBeGreaterThan(at(16));
     // And stops: 64 and 128 do not keep climbing. A lap-scale envelope
     // reaches 38 and 60 here, which is the thing this forbids.
+    //
+    // 64W AND 128W ARE THE DIAGNOSTIC WINDOWS, and worth knowing if an
+    // envelope is ever suspected of having crept back in. A depth-1.0
+    // lap-period envelope reads 1.9 / 2.8 / 4.5 / 9.8 / 17.7 / 38.3 /
+    // 60.2 — inside the source's p90 from 2W through 32W, and outside it
+    // only at the last two, which is exactly where a swell puts its
+    // variance and the only place the brackets are narrow relative to it.
+    // Everything narrower will look fine.
     expect(at(128)).toBeLessThan(at(32) * 1.15);
     expect(at(128)).toBeLessThan(12);
   });
@@ -173,7 +181,12 @@ describe("the station process", () => {
    * THE TWO NEGATIVES, AND WHY THEY ARE HERE RATHER THAN IN A COMMENT.
    *
    * The shape gate above is the only real gate in this file, so it is
-   * worth knowing it can FAIL. Upstream names two mechanisms that read as
+   * worth knowing it can FAIL.
+   *
+   * And it is the ONLY thing that catches a mild envelope. A depth-1.0
+   * one is caught by the brackets, but late — only at 64W and 128W. One
+   * mild enough to sit inside every bracket is invisible to them at every
+   * width, and the envelope built below is that kind. Upstream names two mechanisms that read as
    * the same rule and are not, and both were built and measured
    * downstream before being ruled out — so they are the exact shapes this
    * has to reject. Building them here and watching the gate refuse them
