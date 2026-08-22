@@ -52,6 +52,7 @@ import {
   type Preset,
   decodeCommittedStretches,
   encodeCommittedStretches,
+  lapMod,
   tenthOf,
 } from "../demos/racetrack/kit.js";
 
@@ -676,36 +677,31 @@ describe("road ribbon", () => {
 });
 
 /**
- * The corridor-art band, per preset, and the one preset that misses it.
- *
- * Worth a test of its own because the miss is a FACT about the kit rather
- * than a bug in the loop, and a fact nobody wrote down is a fact that gets
- * rediscovered. The band is the source material's own rate for the era a
- * preset reproduces: 17% for the two earlier recipes, 32% for the late
- * one, both measured with the same BOX predicate a template can evaluate.
- *
- * `dense` is the late recipe by every signal that identifies one — no
- * camera-facing quads, a density of 0.8–1.25 per W, and a band mix with
- * its mass moved inward — but it dresses from the EARLIER vocabulary,
- * which is the only one this kit carries. That vocabulary's art is
- * narrower, so a late-recipe band mix built out of it puts less over the
- * track than the late recipe actually did. It reads under its band, not
- * over: too clean rather than too dirty.
- *
- * Pinned rather than fixed, because the fix is the other vocabulary — a
- * second archetype table derived from geometry rather than from names —
- * and inventing numbers to close a 7-point gap would be fitting the kit
- * to the metric instead of to the measurement.
- */
-/**
  * The corrected best, which is what the pipeline actually emits.
  *
  * Scoring a single uncorrected pass would be scoring something no run of
  * the technique produces: the loop exists because the first pass is
  * reliably off, and the corridor share is one of the things it moves —
  * sparse reads 24.1% uncorrected and 21.1% corrected.
+ *
+ * Memoised on the preset, which is the only thing it varies with: the
+ * seed is a literal, the corrections start empty, and `measureLap` is
+ * itself memoised. It runs four cooks and this suite asks for it eight
+ * times across three presets, so without the memo more than half of them
+ * are recomputing an answer already in hand — about a quarter of the
+ * file's runtime.
  */
-async function bestOf(preset: Preset): Promise<Report> {
+const bestCache = new Map<Preset, Promise<Report>>();
+
+function bestOf(preset: Preset): Promise<Report> {
+  const hit = bestCache.get(preset);
+  if (hit) return hit;
+  const run = bestOfUncached(preset);
+  bestCache.set(preset, run);
+  return run;
+}
+
+async function bestOfUncached(preset: Preset): Promise<Report> {
   const { lapLength, committed } = await measureLap(preset);
   let c = noCorrections();
   let cur = await runOnce(preset, lapLength, c, 21, {}, committed);
@@ -896,14 +892,16 @@ describe("the density envelope's depth", () => {
     // every window. Both are withdrawn upstream.
     //
     // So this asserts only that the metric passes and that its detail
-    // line still carries the comparison, because a bare CV cannot be
-    // interpreted. What the number should be measured against is the
-    // index of dispersion, which has a well-defined null at every
-    // window — see the suite below.
+    // line still names the population it is read over, because a bare CV
+    // cannot be interpreted and an invented reference is worse than
+    // none. What the number should be measured against is the index of
+    // dispersion, which has a well-defined null at every window — see
+    // the suite below.
     const report = await bestOf(PRESETS.dense);
     const m = report.metrics.find((x) => x.id === 7);
     expect(m!.pass).toBe(true);
-    expect(m!.target).toMatch(/clumping alone/);
+    // The population, and nothing that pretends to be a reference.
+    expect(m!.target).toMatch(/\/tenth$/);
   });
 });
 
@@ -913,8 +911,7 @@ describe("the index of dispersion", () => {
     const bins = Math.max(2, Math.floor(lapW / w));
     const counts = new Array<number>(bins).fill(0);
     for (const s of stations) {
-      const u = ((s % lapW) + lapW) % lapW;
-      counts[Math.min(bins - 1, Math.floor(u / (lapW / bins)))]++;
+      counts[Math.min(bins - 1, Math.floor(lapMod(s, lapW) / (lapW / bins)))]++;
     }
     const mean = counts.reduce((a, b) => a + b, 0) / bins;
     const variance = counts.reduce((a, b) => a + (b - mean) ** 2, 0) / bins;

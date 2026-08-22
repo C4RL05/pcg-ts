@@ -29,6 +29,7 @@ import {
   type NodeHandle,
   type PointLineParams,
   type SetAttributeParams,
+  abs,
   add,
   atan2,
   attribute,
@@ -45,7 +46,6 @@ import {
   exp,
   filterByExpression,
   floor,
-  fract,
   fraction,
   Graph,
   gt,
@@ -69,6 +69,7 @@ import {
   position,
   pow,
   promoteAttribute,
+  ramp,
   randomField,
   sampleNearestPoint,
   select,
@@ -85,11 +86,11 @@ import {
 import {
   AFFINITY,
   ALL_ARCHETYPES,
-  ARCHETYPES,
   type Archetype,
   CORRIDOR,
   LADDER_P,
   archetypesFor,
+  correlationWeights,
   BUCKET_EDGES,
   CORNER_RADIUS_W,
   extentsOf,
@@ -121,14 +122,6 @@ const LANE = 10;
  * neighbour unambiguous.
  */
 const RING_R = 1000;
-
-/**
- * The golden-ratio conjugate. Stepping by it modulo one visits the unit
- * interval about as evenly as a sequence can without knowing in advance
- * how many steps it will take — which is exactly the property the anchor
- * counts need, since they are a knob a host turns after the fact.
- */
-const GOLDEN = 0.6180339887498949;
 
 /** The largest cluster the duplication pass can produce. */
 const MAX_CLUSTER = 6;
@@ -285,25 +278,28 @@ function byArchetype(pick: (id: string) => number, fallback = 0): Field<1> {
  * Archetypes with no ladder fall back to `fb`, and the caller discards
  * that branch — the two draws are blended on a 0/1 flag rather than
  * branched, because the grammar has no branch.
+ *
+ * ONE `ramp` PER ARCHETYPE, not one select chain per percentile. `ramp`
+ * is exactly this primitive — piecewise-linear through ascending stops,
+ * clamped past the ends — and it is part of the grammar the GPU
+ * compiler reads, so nothing is given up by using it. Building the
+ * cascade by hand instead cost 13 `byAttribute` chains over every
+ * archetype rather than one, which is 429 branch columns per ladder
+ * against 33.
  */
 function ladderByArchetype(
   pick: (a: Archetype) => readonly number[] | undefined,
   fb: (a: Archetype) => number,
   u: Field<1>,
 ): Field<1> {
-  const at = (k: number): Field<1> =>
-    byArchetype((x) => {
-      const ladder = pick(arch(x));
-      return ladder ? ladder[k] : fb(arch(x));
-    }, 0);
-  const pts = LADDER_P.map((_, k) => at(k));
-  let out: Field<1> = pts[LADDER_P.length - 1];
-  for (let k = LADDER_P.length - 2; k >= 0; k--) {
-    const span = LADDER_P[k + 1] - LADDER_P[k];
-    const f = div(sub(u, LADDER_P[k]), span) as Field<1>;
-    out = select(lt(u, LADDER_P[k + 1]), lerp(pts[k], pts[k + 1], f), out) as Field<1>;
+  const cases: Record<string, FieldLike> = {};
+  for (const a of ALL_ARCHETYPES) {
+    const ladder = pick(a);
+    cases[a.id] = ladder
+      ? ramp(u, LADDER_P.map((t, k) => [t, ladder[k]] as const))
+      : fb(a);
   }
-  return out;
+  return byAttribute("archetype", cases, 0) as Field<1>;
 }
 
 /** A per-archetype pair, as one tuple-2 field. */
@@ -1348,16 +1344,51 @@ function placeFromPack(
   // one. A negative r is the same blend against the size stream REVERSED,
   // so the weight is computed from |r| and the flag picks `u` or `1 - u`.
   const uAcross = tri(`${id}-across`);
-  const wOf = byArchetype((x) => {
-    const r = clampNum(Math.abs(arch(x).offsetSizeR ?? 0), 0, 0.999);
-    if (r === 0) return 0;
-    const k = r / Math.sqrt(1 - r * r);
-    return k / (1 + k);
-  }, 0);
+  // THE WEIGHTS ARE SQUARE ROOTS AND THEY SUM IN SQUARES, which is the
+  // only pair that delivers correlation `r` without also narrowing the
+  // draw. The obvious weighting — `w` and `1 - w` picked so the
+  // correlation comes out right — leaves `sqrt(w^2 + (1-w)^2)` of the
+  // spread, a 28% narrowing at the largest correlation this kit carries,
+  // and a fitter integrating the published pair would model a draw the
+  // graph does not make. `sqrt(r)` and `sqrt(1 - r)` square to one.
+  //
+  // Blended about the MIDPOINT rather than between the two streams,
+  // because variance is a property of the centred variable: at `r = 0`
+  // this is bit-identical to the independent draw it replaces, which is
+  // every archetype the kit ships on this path today.
+  const wShared = byArchetype(
+    (x) => correlationWeights(arch(x).offsetSizeR ?? 0)[0],
+    0,
+  );
+  const wIndep = byArchetype(
+    (x) => correlationWeights(arch(x).offsetSizeR ?? 0)[1],
+    1,
+  );
   const negOf = byArchetype((x) => ((arch(x).offsetSizeR ?? 0) < 0 ? 1 : 0), 0);
-  // `neg ? 1 - u : u`, without a branch: at neg = 0 it is u, at 1 it is 1 - u.
-  const uToward = add(negOf, mul(sub(1, mul(2, negOf)), uAcross));
-  const uLat = lerp(tri(`${id}-lat`), uToward, wOf);
+  // `neg ? 1 - u : u`, which is the reflection `|neg - u|` for a 0/1 flag.
+  const uToward = abs(sub(negOf, uAcross)) as Field<1>;
+  // THE TWO HALVES OF THE CORRIDOR RULE, written once each. It is one
+  // split — anchored inside the corridor and not in a band that means
+  // "over" or "under" the track, small art rises and large art stands
+  // aside — and spelling the shared terms at both sites is how a split
+  // stops partitioning: move a threshold and a piece falls through both
+  // branches, which is a wall on the racing line. Both are used below,
+  // one negated.
+  const dressableZone = byArchetype(
+    (x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1),
+    1,
+  );
+  const isSmallArt = mul(
+    lt(attribute("acrossW"), CORRIDOR.smallAcrossW),
+    lt(attribute("tallnessW"), CORRIDOR.smallTallW),
+  );
+  const uLat = add(
+    0.5,
+    add(
+      mul(wShared, sub(uToward, 0.5)),
+      mul(wIndep, sub(tri(`${id}-lat`), 0.5)),
+    ),
+  ) as Field<1>;
   const lat = rangeByArchetype((x) => arch(x).lateralW);
   // TWO DRAWS, BLENDED ON A 0/1 FLAG, because the two kits are measured
   // differently and one shape cannot serve both. A row with only an
@@ -1477,13 +1508,7 @@ function placeFromPack(
             push,
             lerp(lerp(component(lat, 0), component(lat, 1), uLat), latLadder, hasLatLadder),
           ),
-          mul(
-            mul(
-              byArchetype((x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1), 1),
-              sub(1, mul(lt(attribute("acrossW"), 1), lt(attribute("tallnessW"), 1.5))),
-            ),
-            CORRIDOR.halfWidthW,
-          ),
+          mul(mul(dressableZone, sub(1, isSmallArt)), CORRIDOR.halfWidthW),
         ),
       ),
     },
@@ -1571,11 +1596,8 @@ function placeFromPack(
   // stand-in for the joint, and it over-applies by roughly the half that
   // would have drawn high anyway.
   const overTrack = mul(
-    mul(
-      lt(fmax(attribute("lateralW"), mul(-1, attribute("lateralW"))), CORRIDOR.halfWidthW),
-      byArchetype((x) => (arch(x).zone === "Z7" || arch(x).zone === "Z8" ? 0 : 1), 1),
-    ),
-    mul(lt(attribute("acrossW"), 1), lt(attribute("tallnessW"), 1.5)),
+    mul(lt(abs(attribute("lateralW")), CORRIDOR.halfWidthW), dressableZone),
+    isSmallArt,
   );
   const deficit = fmax(
     sub(add(CORRIDOR.ceilingW, div(attribute("tallnessW"), 2)), drawnHeight),
@@ -2103,6 +2125,13 @@ function landmarkPass(
     // language — nothing about which side it sits on tells a driver
     // anything — so the two exemptions from mirroring do not cover it,
     // and it reads the same committed-lean table everything else does.
+    //
+    // But a RULE put it here, one per tenth of the lap, so it is not part
+    // of any family's rhythm and metric 13 must not read it as one. That
+    // is what `byRule` is for, and it is deliberately not `rulePlaced`:
+    // the two answer different questions, and this pass is the case that
+    // separates them.
+    byRule: true,
     memberOffset: false,
     variantFrom: "index",
   });

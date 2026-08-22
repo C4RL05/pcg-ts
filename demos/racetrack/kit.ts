@@ -323,13 +323,6 @@ export const AFFINITY: Record<AffinityProfile, readonly [number, number, number,
   clustered: [0.8, 1, 1.3, 2.0],
 };
 
-/** The three profiles, in the order the graph lays them out in lanes. */
-/**
- * An archetype's horizontal extents, along the lap and across it.
- *
- * The fallback is the square the kit described before the two were
- * separated, so an unmeasured archetype draws and tests exactly as it did.
- */
 /**
  * The thirteen percentiles every ladder in this kit is measured at.
  *
@@ -419,12 +412,13 @@ export function lateralAt(a: Archetype, u: number): number {
  * graph does not make. Squared weights summing to one fixes it: the
  * variance is held exactly and the correlation is still `r`.
  *
- * IT IS NEARLY DEAD, and deliberately kept. Every archetype upstream has
- * measured now carries ladders, and the ladder path draws from a single
- * stream where no correlation applies. Two rows of the named kit are the
- * exception — `skyline` and `banner` are ours and have no upstream
- * measurement, so they still take the published-pair path — and any
- * archetype a user adds with only a pair takes it too.
+ * IT IS INERT FOR EVERY ARCHETYPE THE KIT SHIPS, and still worth having
+ * right. Every row upstream has measured carries ladders, and the ladder
+ * path draws from a single stream where no correlation applies; the four
+ * rows without one — `banner` and the three rule-placed families — carry
+ * no `offsetSizeR`, so the weights come out `[0, 1]` and the blend is
+ * bit-identical to an independent draw. It exists for the archetype a
+ * user adds with a published pair and a measured correlation.
  *
  * A correlated LADDER draw is a Gaussian copula rather than a blend, and
  * upstream has measured that it buys nothing here: at each archetype's
@@ -438,13 +432,12 @@ export function correlationWeights(r: number): readonly [number, number] {
   return [Math.sqrt(clamped), Math.sqrt(1 - clamped)];
 }
 
-/** The across extent at quantile `u`, on the same rules as `lateralAt`. */
-export function acrossAt(a: Archetype, u: number): number {
-  if (a.acrossLadder) return sampleLadder(a.acrossLadder, u);
-  const [lo, hi] = extentsOf(a).across;
-  return lo + (hi - lo) * triQuantile(u);
-}
-
+/**
+ * An archetype's horizontal extents, along the lap and across it.
+ *
+ * The fallback is the square the kit described before the two were
+ * separated, so an unmeasured archetype draws and tests exactly as it did.
+ */
 export function extentsOf(a: Archetype): {
   readonly along: readonly [number, number];
   readonly across: readonly [number, number];
@@ -452,7 +445,7 @@ export function extentsOf(a: Archetype): {
   return { along: a.alongW ?? a.footprintW, across: a.acrossW ?? a.footprintW };
 }
 
-
+/** The three profiles, in the order the graph lays them out in lanes. */
 export const PROFILES: readonly AffinityProfile[] = ["flat", "built", "clustered"];
 
 /**
@@ -703,6 +696,23 @@ export interface Preset {
 }
 
 /**
+ * The named kit's rows whose published envelope pools source families
+ * that disagree, so it describes no real object.
+ *
+ * A property of the VOCABULARY rather than of any preset that draws from
+ * it — both named presets exclude exactly these, and the geometry preset
+ * cannot. Named once so the two lists cannot drift apart when a row is
+ * renamed or a fifth defect is found. See `corridorArtExclude` for what
+ * the exclusion buys and what it deliberately does not.
+ */
+export const NAMED_POOLED_ROWS: readonly string[] = [
+  "verge-rail",
+  "pipe-run",
+  "billboard",
+  "enclosure-shell",
+];
+
+/**
  * Three presets. The numbers are placement statistics, not art: what
  * changes between them is how much gets placed, how far out, how tightly
  * grouped and how much the kit leans on one part of itself.
@@ -711,7 +721,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
   sparse: {
     clusterSpanW: 0.54,
     gapCvAccept: [1.2, 2.6],
-    corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
+    corridorArtExclude: NAMED_POOLED_ROWS,
     vocabulary: "named",
     // 15.5% and not 17.1%: the era's rate re-derived after a
     // normalisation bug upstream, where three measurement scripts each
@@ -749,7 +759,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
   lush: {
     clusterSpanW: 0.37,
     gapCvAccept: [1.2, 2.6],
-    corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
+    corridorArtExclude: NAMED_POOLED_ROWS,
     vocabulary: "named",
     corridorArtAccept: 0.155,
     spriteShare: 0.28,
@@ -846,7 +856,16 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
  * about where a thing is PUT, not about how much room it takes once it is
  * there.
  */
+
 export const CORRIDOR = {
+  /**
+   * How small a piece has to be for "inside the corridor" to describe it
+   * rather than "around it". Larger art whose bounds centre lands on the
+   * racing line is a wall across it; smaller art is the furniture the
+   * source really does put over the track, and it rises instead.
+   */
+  smallAcrossW: 1,
+  smallTallW: 1.5,
   /** Half-width of the protected volume, in W. */
   halfWidthW: 1,
   /** Anything anchored at or above this clears the driver. */

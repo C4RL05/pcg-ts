@@ -17,7 +17,6 @@
  * corrections are measured on samples small enough to be noisy.
  */
 import {
-  ARCHETYPES,
   archetypesFor,
   AUXILIARY_FAMILIES,
   CORRIDOR,
@@ -45,50 +44,6 @@ export function isMovable(p: Placement): boolean {
   return Math.abs(p.radiusW) >= 12 && !RULE_PLACED.has(p.archetype);
 }
 
-/**
- * The density CV this lap would read if its clusters were scattered.
- *
- * Groups the placements into runs no more than `CLUSTER_GAP_W` apart
- * along the lap, then re-places each run whole at a station derived from
- * its own identity rather than from a random source — this runs inside a
- * scored report, and a metric that changes between two reads of the same
- * lap is not a metric. The offset is a hash of the run's first station,
- * which is stable, arbitrary with respect to the composition being
- * tested, and free of any RNG the caller would have to thread.
- *
- * See metric 7 for what the comparison means and why 1/sqrt(n) is not
- * the reference.
- */
-function reshuffledDensityCv(placements: readonly Placement[], lapW: number): number {
-  if (placements.length === 0 || lapW <= 0) return 0;
-  const stations = placements.map((p) => lapMod(p.stationW, lapW)).sort((a, b) => a - b);
-  const runs: number[][] = [];
-  let run: number[] = [stations[0]];
-  for (let i = 1; i < stations.length; i++) {
-    if (stations[i] - stations[i - 1] <= CLUSTER_GAP_W) run.push(stations[i]);
-    else {
-      runs.push(run);
-      run = [stations[i]];
-    }
-  }
-  runs.push(run);
-  const buckets = new Array<number>(10).fill(0);
-  for (const r of runs) {
-    // A stable, composition-blind offset: the golden ratio times the
-    // run's own head, which spreads consecutive runs across the lap
-    // without repeating and without a seed.
-    const at = lapMod((r[0] * 0.6180339887498949 + 0.5) * lapW, lapW);
-    for (const st of r) buckets[tenthOf(lapMod(at + (st - r[0]), lapW), lapW)]++;
-  }
-  return cv(buckets);
-}
-
-/**
- * The gap that separates one cluster from the next, in W. The clustering
- * rule's own threshold, and the scale at which the reshuffle above splits
- * clumping from composition.
- */
-const CLUSTER_GAP_W = 1.5;
 
 /** Coefficient of variation: how much a set varies against its own mean. */
 function cv(xs: readonly number[]): number {
@@ -146,10 +101,25 @@ export function noCorrections(): Corrections {
  * three measurement scripts normalised positions three different ways and
  * published two band mixes from one population.
  *
- * The height is still integrated as a uniform over its published pair.
- * That is the remaining approximation here: the graph draws it
- * triangularly, and for a symmetric envelope the two agree on the
- * midpoint and differ on how much lands at the ends.
+ * THE HEIGHT AXIS IS A KNOWN SECOND SPELLING, and this is the honest
+ * statement of it rather than a claim that none remains. It is
+ * integrated as a uniform over the published `heightW` pair. The graph
+ * draws that pair TRIANGULARLY, and for the fifteen rows carrying a
+ * measured `baseW` it does not read `heightW` at all — it seats them
+ * from `baseW + tallnessW / 2`, which for `enclosure` moves the
+ * over-versus-verge split by about nineteen points. The corridor rule's
+ * lift is unmodelled here too, and the graph's own comment measures that
+ * at two to six points from verge to over.
+ *
+ * MEASURED, NOT ASSUMED: modelling the seating correctly was tried. It
+ * improves what it should — the late preset's index of dispersion at a
+ * 16W window goes from 2.36 to 4.04 against a source that reads 4.79,
+ * and its band mix lands closer on five of six — and it costs the sparse
+ * preset metric 13 and moves the earlier presets' corridor art from
+ * 17.5% to 20.0% against a 15.5% band. That is a re-tuning, not a
+ * cleanup, so it is written down here rather than half-done: the fix is
+ * a `heightAt` in the kit beside `lateralAt`, and the work it implies is
+ * the correction loop, not the substitution.
  */
 function bandFractions(a: Archetype, push: number): Record<string, number> {
   const out: Record<string, number> = {};
@@ -615,39 +585,33 @@ export function score(
     buckets[tenthOf(p.stationW, lapW)]++;
   }
   const densityCv = cv(buckets);
-  // WHAT THIS MEASURES IS CLUMPING, NOT COMPOSITION, and the detail line
-  // has to carry the comparison that says so or the number cannot be
-  // read at all.
+  // THIS NUMBER CANNOT BE INTERPRETED ON ITS OWN, and it has now outlived
+  // three attempts to give it a reference.
   //
-  // The reference is not 1/sqrt(n). That was the first answer and it is
-  // wrong: it assumes independent placements, and nothing here is
-  // independent — clustering is the whole point of the anchor process.
-  // The honest instrument is a RESHUFFLE. Group the lap's own placements
-  // into clusters at the same 1.5W threshold the clustering rule uses,
-  // then re-place each cluster WHOLE at a random station. Every clump
-  // survives; any composition along the lap is destroyed. Whatever CV
-  // remains is what clumping alone produces.
+  // It was first scored against the source's own 0.25-0.6 per tenth, as
+  // though that were a target for composition along the lap. Then against
+  // a decomposition that subtracted 1/sqrt(n) as counting noise and
+  // called the rest deliberate — which assumes independent placements,
+  // and clustering is the whole point of the anchor process. Then against
+  // a reshuffle that regrouped the lap's own clusters and re-placed them
+  // at random, which turned out to be a BIASED null: scattered clusters
+  // can land on top of each other where the grouping threshold forbids
+  // it, so it manufactures clumps the source cannot contain and
+  // over-reads at every window. All three are withdrawn upstream.
   //
-  // Measured on the source material this way, randomly placed clusters
-  // are LUMPIER than the real laps — 0.50/0.54/0.56 across the three eras
-  // against a measured 0.43/0.49/0.45, with the measured-over-reshuffled
-  // ratio below 1.0 on 29 of 43 circuits. There is no density envelope in
-  // the originals to reproduce. So a lap reading below its own reshuffle
-  // has weak CLUMPING, and no envelope depth will fix that; a lap reading
-  // above it has composition the source does not have.
-  //
-  // The stated limit, because it is not scale-free: the split moves with
-  // the gap threshold, and at 0.5W the source's reshuffle falls below its
-  // measurement. From 1.0W up there is no residual to attribute, and
-  // 1.5W is the threshold the ruleset itself picked.
+  // So the band is kept, the reference is not invented, and the detail
+  // line carries only the population the reading is over. THE STATISTIC
+  // THAT REPLACED IT IS THE INDEX OF DISPERSION, read across window
+  // sizes, which has a well-defined null at every window — see the
+  // dispersion suite in the tests. That is the whole argument for a
+  // curve over a number, arrived at the long way.
   const perTenth = placements.length / TENTHS;
-  const reshuffled = reshuffledDensityCv(placements, lapW);
   add(
     7,
     "density CV per tenth of lap",
     densityCv,
     densityCv >= 0.12 && densityCv <= 0.75,
-    `0.12-0.75 (n ${perTenth.toFixed(0)}/tenth, clumping alone ${reshuffled.toFixed(2)}, ratio ${(reshuffled > 0 ? densityCv / reshuffled : 0).toFixed(2)})`,
+    `0.12-0.75 over ${perTenth.toFixed(0)}/tenth`,
   );
 
   // 8. Outside-of-corner share, over the placements that sit IN a bend.
@@ -678,26 +642,29 @@ export function score(
   // instances for a gap distribution to mean anything.
   const byKind = new Map<string, number[]>();
   for (const p of placements) {
-    // Rule-placed instances are not part of a family's rhythm — a
-    // coverage fill sits where a gap was, and counting it as decoration
-    // measures the fill pass rather than the draw.
-    if (p.byRule > 0) continue;
-    if (!byKind.has(p.archetype)) byKind.set(p.archetype, []);
-    byKind.get(p.archetype)!.push(lapMod(p.stationW, lapW));
-  }
-  const cvs: number[] = [];
-  for (const [id, ss] of byKind) {
     // RULE-PLACED FAMILIES ARE EXEMPT, and including them was measuring
     // the wrong population. The rule is "clump, do not space", and it is
     // about REPEATING families — decoration. A braking reference is
     // deliberately evenly spaced, because it is a ruler and not
     // decoration; a corner marker sits a fixed distance before each
-    // entry; a landmark is one per tenth of the lap by construction.
-    // All three are regular ON PURPOSE, and all three were dragging the
-    // median below the floor while the density-placed families sat
-    // comfortably inside the band — bush at 2.01, which is the measured
-    // median of the source material to two decimal places.
-    if (RULE_PLACED.has(id) || id === "landmark") continue;
+    // entry; a landmark is one per tenth of the lap by construction; a
+    // coverage fill sits where a gap was. All of them are regular ON
+    // PURPOSE, and all of them were dragging the median below the floor
+    // while the density-placed families sat comfortably inside the band.
+    //
+    // ONE FLAG ANSWERS THIS, and it used to be a flag plus a list of
+    // names checked further down. The list was unreachable for two of
+    // its three entries and load-bearing for the third, which is the
+    // worst state for a special case to be in: it reads as the rule
+    // while the flag beside it does the work. `byRule` is the column
+    // that means "a rule put this here", so every pass that places by
+    // rule sets it and nothing here needs to know their names.
+    if (p.byRule > 0) continue;
+    if (!byKind.has(p.archetype)) byKind.set(p.archetype, []);
+    byKind.get(p.archetype)!.push(lapMod(p.stationW, lapW));
+  }
+  const cvs: number[] = [];
+  for (const [, ss] of byKind) {
     if (ss.length < 8) continue;
     ss.sort((a, b) => a - b);
     const gaps: number[] = [];
@@ -790,18 +757,21 @@ export function score(
   // which under the geometry vocabulary is nearly a third of it: a bore
   // and a gantry are both Z7. Measured, that alone was the difference
   // between reading 24.5% and reading the era's rate.
+  // ONE PASS, TWO COUNTERS. The numerator's predicate begins with the
+  // denominator's, so filtering twice re-decides what the first pass
+  // already knew and allocates two arrays to read two lengths off.
   const artExcluded = new Set(preset.corridorArtExclude ?? []);
-  const sideAnchored = placements.filter(
-    (p) => Math.abs(p.lateralW) >= CORRIDOR.halfWidthW && !artExcluded.has(p.archetype),
-  ).length;
-  const corridorArt = placements.filter((p) => {
-    if (artExcluded.has(p.archetype)) return false; // see `corridorArtExclude`
-    if (Math.abs(p.lateralW) < CORRIDOR.halfWidthW) return false; // over-track by design
-    if (Math.abs(p.lateralW) - p.acrossW / 2 >= CORRIDOR.halfWidthW) return false;
+  let sideAnchored = 0;
+  let corridorArt = 0;
+  for (const p of placements) {
+    if (artExcluded.has(p.archetype)) continue; // see `corridorArtExclude`
+    if (Math.abs(p.lateralW) < CORRIDOR.halfWidthW) continue; // over-track by design
+    sideAnchored++;
+    if (Math.abs(p.lateralW) - p.acrossW / 2 >= CORRIDOR.halfWidthW) continue;
     const base = p.heightW - p.tallnessW / 2;
     const top = p.heightW + p.tallnessW / 2;
-    return top > 0 && base < CORRIDOR.ceilingW;
-  }).length;
+    if (top > 0 && base < CORRIDOR.ceilingW) corridorArt++;
+  }
   const corridorArtShare = sideAnchored > 0 ? corridorArt / sideAnchored : 0;
   // Judged against a 90% binomial interval, as any proportion on a few
   // hundred placements should be — with the five points the spec states
