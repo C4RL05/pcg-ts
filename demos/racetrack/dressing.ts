@@ -1535,17 +1535,17 @@ function placeFromPack(
   // source's own answer rather than ours. An earlier version floored the
   // lateral envelope at the corridor's edge, which keeps anchors out of
   // the driver's way by moving them aside; the material moves them up.
-  // `micro-detail` inside `|t|` of 1W has a median base 1.76W above the
-  // deck against 0.95W for the same archetype outboard — it rises as it
-  // comes inboard. Of the archetypes whose geometry reaches over the
-  // corridor, the ones that belong there clear the ceiling and the
-  // ground-hugging ones are merely beside it.
+  // Of the archetypes whose geometry reaches over the corridor, the ones
+  // that belong there clear the ceiling and the ground-hugging ones are
+  // merely beside it.
   //
-  // It is not a cosmetic difference. `micro-detail` is the single largest
-  // contributor to the verge band, and a lateral floor throws away
-  // exactly the mass below 1W that puts it there. Lifting instead keeps
-  // the offset distribution measured and still gives Z-1 what it asks
-  // for: no anchor over the track at driving height, ever.
+  // It is not a cosmetic difference. A lateral floor throws away exactly
+  // the mass below 1W that puts anything in the verge band at all.
+  // Lifting instead keeps the offset distribution measured and still
+  // gives Z-1 what it asks for: no anchor over the track at driving
+  // height, ever. See `lateralAt` in the kit for where the per-archetype
+  // evidence for this went — it was measured on a clustering the vertex
+  // -array correction replaced, and names a row that no longer exists.
   //
   // Z7 and Z8 are exempt because being over or under the track is what
   // those bands MEAN — a tunnel bore is anchored on the racing line

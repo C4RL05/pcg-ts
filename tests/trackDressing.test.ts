@@ -973,20 +973,48 @@ describe("the index of dispersion", () => {
     const { placements, lapW } = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
     const stations = placements.map((p) => p.stationW);
 
-    // Measured here, one lap, uncorrected: 1.62 / 1.64 / 2.27 / 2.78 /
-    // 5.01 / 8.25 / 12.36 at 2 / 4 / 8 / 16 / 32 / 64 / 128W. The source
-    // reads 1.36 / 1.78 / 2.97 / 4.79 / 6.52 / 5.50 / 6.25.
+    // RE-MEASURED ON THE REGENERATED VOCABULARY, and the whole curve
+    // moved. One lap, uncorrected, at 2 / 4 / 8 / 16 / 32 / 64 / 128W:
     //
-    // The small end lands: the clustering rule's own work is right.
-    expect(dispersionAt(stations, lapW, 2)).toBeGreaterThan(1.1);
-    expect(dispersionAt(stations, lapW, 2)).toBeLessThan(1.8);
-    // The middle runs SHORT — 2.4 against 4.8 at 16W — because nothing
-    // in this generator clumps at the scale between a cluster and a lap.
-    expect(dispersionAt(stations, lapW, 16)).toBeLessThan(3.5);
-    // And the top runs LONG, which is the same defect from the other
-    // side: the source plateaus near 6.3 and the envelope keeps climbing
-    // because a swell puts its variance at the largest scale there is.
-    expect(dispersionAt(stations, lapW, 128)).toBeGreaterThan(9);
+    //   now   1.94 / 2.49 / 3.51 / 5.68 /  9.41 / 16.90 / 35.99
+    //   was   1.35 / 1.49 / 1.80 / 2.36 /  3.89 /  6.29 / 11.70
+    //   source 1.36 / 1.78 / 2.97 / 4.79 /  6.52 /  5.50 /  6.25
+    //
+    // Roughly a doubling at every scale, and it is the TABLE rather than
+    // this generator: the twelve archetypes were regenerated from
+    // corrected geometry and nothing in the pipeline changed with them.
+    // Checked against the one judgment call in that swap — upstream has
+    // no `profile` column for this vocabulary, so each row is assigned
+    // here by least-squares fit to the three curves — by forcing all
+    // twelve onto one profile in turn: all-flat reads 2.11 / 2.56 / 3.77
+    // / 6.68 / 12.14 / 24.12 / 44.86, all-built 2.74 / 3.93 / 6.22 / 8.08
+    // / 15.29 / 29.07 / 45.25, all-clustered 2.58 / 3.70 / 5.91 / 10.11 /
+    // 16.11 / 32.92 / 25.60. Every configuration sits near or above the
+    // mixed one, so the assignment is not what moved the curve.
+    //
+    // WHERE THAT LEAVES THE COMPARISON. The middle is now the part that
+    // lands: 3.51 against 2.97 at 8W and 5.68 against 4.79 at 16W, where
+    // the old table ran short by half. The small end has gone from a near
+    // exact match to an overshoot, and the top has gone from long to
+    // very long. Whether the source column is still the right thing to
+    // read against is an OPEN QUESTION and is why nothing here is tuned
+    // toward it: along-lap position is a bounds centre, the misreading
+    // moved bounds centres, and it has not been said whether this curve
+    // was re-derived with the rest.
+    //
+    // The previous comment claimed 1.62 / 1.64 / 2.27 / 2.78 / 5.01 /
+    // 8.25 / 12.36 for a table that measures 1.35 / 1.49 / 1.80 / ...
+    // — it had drifted from the code before this change, which is the
+    // failure the pins below exist to prevent. Two-sided, all of them.
+    expect(dispersionAt(stations, lapW, 2)).toBeGreaterThan(1.7);
+    expect(dispersionAt(stations, lapW, 2)).toBeLessThan(2.2);
+    expect(dispersionAt(stations, lapW, 16)).toBeGreaterThan(5.0);
+    expect(dispersionAt(stations, lapW, 16)).toBeLessThan(6.4);
+    // The top is pinned on a value that is WRONG by a factor of six
+    // against the source column. It fails if the swell grows and it fails
+    // if someone fixes the mechanism; the second is the point.
+    expect(dispersionAt(stations, lapW, 128)).toBeGreaterThan(30);
+    expect(dispersionAt(stations, lapW, 128)).toBeLessThan(42);
   });
 });
 
@@ -1025,43 +1053,47 @@ describe("corridor art", () => {
     expect(preset.corridorArtExclude).not.toContain("set-piece");
   });
 
-  it("records that the late recipe still runs cleaner than the era it reproduces", async () => {
+  it("records the joint excess the marginal ladders cannot express", async () => {
     const report = await bestOf(PRESETS.dense);
-    // It PASSES, and the metric is a ceiling, so running clean is not a
-    // failure. Pinned because the number is worth watching: the era
-    // measured 32.4% under this same box predicate and we read about two
-    // thirds of it.
+    // THE SIGN OF THIS TEST FLIPPED. It used to record the recipe running
+    // CLEANER than the era it reproduces — 28.2% against a measured
+    // 32.2%, about two thirds once the cull had taken its share. Both
+    // numbers came through inflated bounding boxes. Corrected, the era
+    // intrudes at 11.1% and this generator reads 14.45%: it now runs
+    // DIRTIER than its source, by about three and a third points.
     //
-    // THE REST OF THE GAP IS ACCOUNTED FOR AND IS NOT A LEAK. The raw
-    // draw, scored before any cull, reads about 36% against that 32.2%,
-    // so the ladders do not under-produce — they over-produce by roughly
-    // the four points upstream predicts from drawing the offset and the
-    // across extent independently, since the corridor predicate is a
-    // statement about the two TOGETHER and the ladders reproduce each
-    // marginal rather than the joint. What removes the difference and
-    // more is the sightline cull, and that rule is a decision to be
-    // BETTER than the source, which makes no look-ahead guarantee and has
-    // genuinely blind corners. Where the legibility rules and the corridor
-    // band pull against each other the rule wins and this metric reads
-    // low, exactly as specified.
+    // THAT EXCESS IS THE JOINT, AND IT IS EXPECTED. The ladders reproduce
+    // each marginal exactly and neither joint: the corridor predicate is
+    // a statement about `|t|` and `across` TOGETHER, and drawing them
+    // independently puts about 24.9% of side placements over the corridor
+    // in plan against a measured 14.8% — ten points, where the inflated
+    // extents had suggested three or four. What lands here is smaller
+    // than that because this predicate is the driver's SLAB rather than
+    // the plan, and because the sightline cull removes some of it on its
+    // way past.
     //
-    // Two earlier candidates are ruled out rather than untested. The
-    // vocabulary is not the reason: this preset dresses from the geometry
-    // kit. Neither is a missing offset/size correlation: it was measured
-    // for the twelve and there is none to apply, because these archetypes
-    // are clusters cut on position and both extents at once, so
-    // conditioning on membership has already removed it.
+    // It still PASSES metric 18, which is a ceiling with a binomial band
+    // on it rather than a hard cut, and the pass is doing real work: the
+    // point estimate is over the ceiling and the band covers it. Read a
+    // future failure here as the joint having grown, not as a regression
+    // in the sampler.
     //
-    // Deliberately NOT tuned toward the band. A ceiling is not a target,
-    // and closing the gap by turning knobs would be fitting the kit to
-    // the metric rather than to the measurement.
+    // NOT TO BE CLOSED BY TUNING. A ceiling is not a target, and moving
+    // either ladder to fix a joint is what put a spelling artefact in the
+    // band mix the last time it was tried. The fix is a boolean subtract
+    // against the swept corridor volume, which trims the art instead of
+    // moving the anchor, and the library has no boolean operation yet.
+    //
+    // One earlier candidate is no longer ruled out. "No offset/size
+    // correlation to apply" was measured on the scrambled geometry and
+    // has not been re-published, so it is UNKNOWN rather than zero; see
+    // the vocabulary's comment in the kit. The vocabulary itself is still
+    // ruled out — this preset dresses from the geometry kit, which the
+    // test below asserts.
     const m = report.metrics.find((x) => x.id === 18);
     expect(m!.pass).toBe(true);
-    expect(report.corridorArtShare).toBeLessThan(PRESETS.dense.corridorArtAccept);
-    // It used to read about two thirds of the era's rate. The ladders
-    // closed most of that: this is the assertion that says the remaining
-    // gap is the cull's four points and not a sampler that under-draws.
-    expect(report.corridorArtShare).toBeGreaterThan(0.2);
+    expect(report.corridorArtShare).toBeGreaterThan(PRESETS.dense.corridorArtAccept);
+    expect(report.corridorArtShare).toBeLessThan(0.16);
   });
 
   it("dresses the late recipe from the geometry vocabulary, and only that one", async () => {

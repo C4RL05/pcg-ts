@@ -53,11 +53,11 @@ export interface Archetype {
    * ONE cumulative distribution per profile — three scans serve every
    * archetype — so an archetype gets its profile's response to curvature
    * rather than its own. Each row here is assigned to the profile whose
-   * curve fits it best in least squares, which is exact for `enclosure`
-   * (0.02) and loosest for `high-mass` (0.18), whose U-shaped response
-   * no shared curve reproduces. Recording the measurement is what makes
-   * the approximation visible, and what a per-archetype distribution
-   * would be built from.
+   * curve fits it best in least squares, which is close for `near-prop`
+   * (0.012) and a coin toss for `far-mass` (0.262 against 0.296), whose
+   * vector sits between two curves rather than on either. Recording the
+   * measurement is what makes the approximation visible, and what a
+   * per-archetype distribution would be built from.
    */
   readonly affinity?: readonly [number, number, number, number];
   readonly profile: AffinityProfile;
@@ -231,52 +231,108 @@ const NAMED_ARCHETYPES: readonly Archetype[] = [
  *
  * What survives is the geometry. Clustering every object on measured
  * position, both horizontal extents, height and polygon count gives these
- * twelve, covering 100% of the objects.
+ * twelve, covering 100% of the 7,372 objects.
+ *
+ * REGENERATED FROM CORRECTED GEOMETRY, and this table shares no row with
+ * the one it replaces. The late game's scenery vertex array had been read
+ * as plain triples where it is 12-byte PAIRS with the second vertex's z
+ * leading — a misreading that leaves every index in range and every
+ * vertex referenced, so nothing downstream complained while the geometry
+ * was scrambled. Quad planarity is what separates the two readings: 96.6%
+ * of 76,899 quads are flat read as pairs against 10.8% read as triples,
+ * with the earlier game's own quads at 88.8% for what "flat" is worth.
+ * Every bounding box a scrambled quad had stretched was too big, so the
+ * clustering re-partitioned from scratch. Twelve again is the fixed `k`
+ * and not a partition that survived: some old rows split, some merged,
+ * and no migration from the previous ids is meaningful. It was replaced,
+ * not amended.
  *
  * THE NAMES DESCRIBE WHAT WAS MEASURED — position and mass — and not what
  * the objects are. Nothing in the data says whether `mid-mass` is a rock,
  * a hangar or a stack of containers; that is a theme decision and stays
- * one. Each cluster does carry a label voted by the minority of its
- * members whose names the named rules recognise, but those are hints with
- * a stated support (77% of the 24% of `outer-mass` that is named at all
- * reads as terrain) and never identifications, so they are not encoded
- * here as ids.
+ * one. They are derived from the measurement rather than assigned by
+ * hand, because k-means renumbers arbitrarily and a hand-maintained id
+ * moves under the table whenever the input does. Where two clusters land
+ * on the same description the second is suffixed — `near-detail-2`,
+ * `mid-mass-2`, `near-prop-2` — which is honest about them being alike in
+ * position and mass while differing elsewhere, and `near-detail-2` shows
+ * how far elsewhere can go: it sits in Z7 at a base of 0.18–2.07W, over
+ * the track rather than beside it.
  *
- * EVERY COLUMN HERE IS MEASURED, including `cluster` and `baseW`, which
- * were derived and absent when this table first landed. `cluster` was
- * inverted out of a stated gap CV by CV = sqrt(2m - 1), which is close
- * for the tight ones and drifts badly on the loose — `micro-detail`
- * inverted to 3.96 against a measured 2.6. Note how flat the measured
- * column is: nine of the twelve sit between 1.1 and 1.8, because this era
- * clumps far less than the earlier ones, with 86% of its clusters holding
- * a single instance against 66%.
+ * Each cluster carries a label voted by the minority of its members whose
+ * names the named rules recognise, and those are hints with a stated
+ * support rather than identifications, which is why they are not encoded
+ * here as ids. Read `mid-mass-2 / terrain-shell / 97% / 23%` as "of the
+ * 23% of this cluster that carries a name the rules know, 97% are terrain
+ * families" — good evidence there, and thin for `enclosure` at 38% of
+ * 10%. The votes, as label/support/named-share: `near-prop` wall-panel
+ * 46%/13%, `near-detail` set-piece 46%/9%, `mid-mass` terrain-shell
+ * 65%/24%, `enclosure` enclosure-shell 38%/10%, `near-detail-2` bush
+ * 63%/12%, `mid-mass-2` terrain-shell 97%/23%, `tall-mass` terrain-shell
+ * 79%/11%, `near-prop-2` lamp-arm 38%/17%, `high-detail` pipe-run
+ * 45%/13%, `far-mass` terrain-shell 67%/17%, `high-mass` terrain-shell
+ * 46%/8%, `under-deck` terrain-shell 86%/8%.
  *
- * `affinity` is the one approximation left, and it is about how the graph
- * reads the table rather than about the table.
+ * `profile` IS OURS AND NOT MEASURED. There is no such column for this
+ * vocabulary and upstream declines to invent one, correctly: it
+ * classifies what a thing IS, and this vocabulary exists because that
+ * game's objects are not named after what they are. Each row is assigned
+ * here to the profile whose curve fits its measured `affinity` best in
+ * least squares, which is reproducible from the two arrays. The fits are
+ * clean for `near-prop` (0.012), `mid-mass` (0.044) and `near-prop-2`
+ * (0.052), and a coin toss for `far-mass` (flat 0.262, built 0.296) and
+ * `high-detail` (built 0.275, flat 0.306), where the vector sits between
+ * two curves rather than on either. NOTHING LANDS ON `clustered`. That is
+ * the table talking: this era's affinities run mild and straight-biased,
+ * and the rising-into-tight-corners shape the named kit needs has no
+ * member here. Where a row's fit is poor the graph is applying a curve
+ * the archetype does not have, and `affinity` is the column that says so.
  *
- * NO OFFSET/SIZE CORRELATION, and that is measured rather than missing.
- * The twelve run -0.21 to +0.18 with a mean absolute value of 0.082 —
- * nothing to apply. The named kit's correlations are largely
- * between-family structure surviving inside a loosely defined archetype;
- * these archetypes are k-means clusters cut on position and both extents
- * together, so conditioning on membership has already removed the
- * covariance that `offsetSizeR` measures. It is not two answers to one
- * question: the structure it captures is structure these archetypes do
- * not contain.
+ * `rate` is placements per 100W of lap. The twelve sum to 93.1, i.e. 0.93
+ * per W against the 0.97 measured directly; the difference is objects
+ * carrying no vertices, which are skipped rather than placed.
+ *
+ * `cluster` is the mean number of instances of THAT ONE archetype within
+ * 1.5W of each other, which is not the pooled 3–5 the cluster ruleset
+ * quotes — different statistic, different population, and reading one as
+ * the other is how a constructed-clump generator goes three times too
+ * dispersed. Note how flat the column is: nine of the twelve sit between
+ * 1.1 and 2.0, because this era clumps far less than the earlier ones.
+ *
+ * NO `offsetSizeR` HERE, and the reason has changed. It used to be that
+ * the correlation was measured at -0.21 to +0.18 and was nothing to
+ * apply. That measurement was taken on the scrambled geometry and has not
+ * been re-published, so the honest state is UNKNOWN rather than zero. The
+ * structural argument for expecting it near zero still stands — these
+ * archetypes are k-means clusters cut on position and both extents
+ * together, so conditioning on membership has already removed most of the
+ * covariance `offsetSizeR` measures — but an argument is not a
+ * measurement, and this comment is the difference.
+ *
+ * SHAPE MODES EXIST UPSTREAM AND ARE NOT CONSUMED HERE. Each archetype is
+ * split into modes on surface occupancy — `slab`, `shell`, `ring`,
+ * `frame`, `wedge` — and eight of the twelve are a single `slab`. The
+ * splits worth having are `enclosure` finding its bore (ring 28%),
+ * `far-mass` (frame 19%), `near-detail` (wedge 25%) and `near-prop`
+ * (shell 34%). Nothing here can use them: a mode describes where the
+ * SURFACE is inside the bounding box, and this kit places boxes. They
+ * become load-bearing when placements are meshes, which is the same point
+ * at which the corridor rule needs a boolean subtract rather than a box
+ * predicate.
  */
 const GEOMETRY_ARCHETYPES: readonly Archetype[] = [
-  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.1, 3.3], lateralLadder: [0.79, 1.38, 1.7, 1.97, 2.24, 2.46, 2.69, 2.97, 3.16, 3.41, 3.76, 4.16, 6.43], heightW: [0.9, 2.1], baseW: [-1.05, 0.05], footprintW: [3.5, 4.9], alongW: [3.5, 4.9], acrossW: [3.2, 4.5], acrossLadder: [0.18, 2.18, 2.58, 2.93, 3.29, 3.59, 3.8, 4.04, 4.3, 4.65, 5.15, 5.73, 8.8], tallnessW: [3.3, 4.9], polygons: 22, rate: 15.9, cluster: 1.5, outsideBias: 0.59, affinity: [1.05, 0.97, 0.91, 1.04] },
-  { id: "near-mass", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 2.6], lateralLadder: [0.44, 1.14, 1.48, 1.7, 1.83, 2.02, 2.16, 2.33, 2.58, 2.9, 3.36, 3.69, 5.65], heightW: [0.1, 1.0], baseW: [-1.22, -0.04], footprintW: [2.5, 3.6], alongW: [2.5, 3.6], acrossW: [2.3, 3.3], acrossLadder: [0.23, 1.43, 1.77, 2.13, 2.36, 2.59, 2.78, 2.93, 3.15, 3.44, 3.83, 4.25, 7.07], tallnessW: [1.8, 3.0], polygons: 12, rate: 13.4, cluster: 1.6, outsideBias: 0.54, affinity: [1.08, 1.06, 0.93, 0.78] },
-  { id: "outer-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.8, 5.5], lateralLadder: [1.45, 2.65, 3.13, 3.53, 3.82, 4.18, 4.42, 4.8, 5.2, 5.92, 7.42, 8.93, 15.76], heightW: [0.8, 2.2], baseW: [-2.8, -0.79], footprintW: [5.4, 7.8], alongW: [4.3, 7.1], acrossW: [5.4, 7.8], acrossLadder: [1.63, 3.82, 4.43, 5.05, 5.5, 5.98, 6.46, 6.86, 7.36, 8.04, 8.57, 9.6, 20.59], tallnessW: [5.3, 8.5], polygons: 21, rate: 10.1, cluster: 1.5, outsideBias: 0.8, affinity: [0.89, 1.09, 1.13, 1.03] },
-  { id: "near-detail", zone: "Z3", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 3.0], lateralLadder: [0.03, 0.9, 1.19, 1.47, 1.69, 1.84, 2.01, 2.33, 2.76, 3.27, 4.08, 5.24, 12.8], heightW: [0.2, 1.2], baseW: [-0.53, 0.43], footprintW: [1.5, 2.4], alongW: [1.5, 2.4], acrossW: [0.9, 1.9], acrossLadder: [0.09, 0.36, 0.51, 0.81, 0.96, 1.13, 1.31, 1.47, 1.69, 1.98, 2.32, 2.63, 4.51], tallnessW: [0.9, 2.1], polygons: 4, rate: 10.0, cluster: 1.8, outsideBias: 0.65, affinity: [1.2, 1.08, 0.7, 0.71] },
-  { id: "far-mass", zone: "Z5", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [4.7, 7.3], lateralLadder: [2.28, 3.46, 3.97, 4.54, 5.11, 5.48, 6.11, 6.7, 7.24, 7.93, 9.22, 10.67, 19.85], heightW: [0.9, 2.8], baseW: [-0.82, 0.69], footprintW: [2.7, 4.4], alongW: [2.6, 4.0], acrossW: [2.7, 4.4], acrossLadder: [0.2, 1.59, 1.99, 2.47, 2.96, 3.18, 3.51, 3.86, 4.15, 4.61, 5.64, 6.38, 9.65], tallnessW: [3.0, 4.3], polygons: 10, rate: 7.6, cluster: 1.7, outsideBias: 0.85, affinity: [1.2, 0.98, 0.8, 0.69] },
-  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.0, 0.3], lateralLadder: [0.0, 0.0, 0.01, 0.02, 0.04, 0.07, 0.1, 0.14, 0.21, 0.34, 0.68, 1.23, 1.51], heightW: [0.4, 1.7], baseW: [-1.96, -0.23], footprintW: [4.1, 6.5], alongW: [3.5, 5.3], acrossW: [4.1, 6.5], acrossLadder: [2.49, 3.07, 3.44, 3.83, 4.18, 4.48, 4.84, 5.35, 6.04, 6.88, 8.14, 9.78, 20.7], tallnessW: [3.5, 6.0], polygons: 44, rate: 7.5, cluster: 1.1, outsideBias: 0.66, affinity: [1.32, 0.88, 0.7, 0.58] },
-  { id: "micro-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.2, 2.8], lateralLadder: [0.0, 0.35, 0.52, 1.17, 1.35, 1.52, 1.72, 1.89, 2.12, 2.7, 3.62, 4.5, 15.5], heightW: [0.7, 2.9], baseW: [0.32, 2.73], footprintW: [0.2, 0.7], alongW: [0.2, 0.6], acrossW: [0.2, 0.7], acrossLadder: [0.0, 0.04, 0.07, 0.18, 0.26, 0.32, 0.41, 0.51, 0.63, 0.78, 1.06, 1.55, 2.4], tallnessW: [0.2, 0.7], polygons: 4, rate: 6.9, cluster: 2.6, outsideBias: 0.53, affinity: [1.09, 0.94, 1.01, 0.75] },
-  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.8, 3.0], lateralLadder: [0.11, 1.04, 1.27, 1.53, 1.63, 1.75, 1.91, 2.18, 2.46, 3.0, 3.51, 3.96, 6.91], heightW: [0.8, 1.4], baseW: [-0.14, 0.29], footprintW: [1.3, 2.3], alongW: [1.2, 2.1], acrossW: [1.3, 2.3], acrossLadder: [0.44, 0.84, 0.93, 1.11, 1.28, 1.48, 1.7, 1.86, 1.99, 2.26, 2.49, 2.8, 5.71], tallnessW: [1.7, 2.5], polygons: 20, rate: 5.4, cluster: 1.2, outsideBias: 0.51, affinity: [0.89, 1.22, 1.0, 1.02] },
-  { id: "overhead", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.1, 0.6], lateralLadder: [0.0, 0.0, 0.01, 0.04, 0.09, 0.16, 0.24, 0.34, 0.5, 0.67, 0.97, 1.24, 1.67], heightW: [1.4, 3.3], baseW: [0.0, 1.87], footprintW: [2.4, 4.0], alongW: [1.7, 3.8], acrossW: [2.4, 4.0], acrossLadder: [0.23, 1.65, 2.0, 2.39, 2.62, 2.87, 3.14, 3.45, 3.97, 4.36, 5.0, 6.09, 9.29], tallnessW: [1.7, 3.4], polygons: 7, rate: 5.0, cluster: 1.5, outsideBias: 0.57, affinity: [1.43, 0.67, 0.54, 0.81] },
-  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.8, 5.7], lateralLadder: [0.01, 0.21, 0.82, 1.89, 2.13, 2.92, 3.39, 3.86, 4.62, 5.47, 7.12, 7.89, 17.22], heightW: [4.5, 6.7], baseW: [0.05, 3.18], footprintW: [4.2, 8.4], alongW: [4.1, 7.9], acrossW: [4.2, 8.4], acrossLadder: [2.26, 3.24, 3.57, 4.31, 5.15, 6.24, 7.16, 8.3, 9.92, 11.73, 13.22, 13.95, 23.41], tallnessW: [4.8, 10.1], polygons: 18, rate: 4.8, cluster: 1.6, outsideBias: 0.82, affinity: [1.14, 0.74, 0.81, 1.22] },
-  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.2, 4.8], lateralLadder: [0.18, 1.06, 1.46, 1.95, 2.36, 2.76, 3.19, 3.58, 4.38, 4.94, 6.13, 7.66, 9.07], heightW: [3.7, 5.8], baseW: [2.78, 4.69], footprintW: [1.5, 2.9], alongW: [1.2, 2.9], acrossW: [1.5, 2.7], acrossLadder: [0.28, 0.7, 0.87, 1.42, 1.72, 1.87, 2.0, 2.21, 2.58, 3.0, 3.59, 4.37, 7.94], tallnessW: [1.2, 3.2], polygons: 4, rate: 4.4, cluster: 2.0, outsideBias: 0.81, affinity: [1.31, 0.79, 0.74, 0.71] },
-  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.6, 5.5], lateralLadder: [0.1, 0.38, 0.89, 1.15, 2.03, 3.13, 3.67, 4.18, 4.76, 6.06, 8.27, 12.52, 20.0], heightW: [-4.9, -2.9], baseW: [-9.63, -6.31], footprintW: [3.9, 8.7], alongW: [3.6, 8.2], acrossW: [3.9, 8.7], acrossLadder: [1.16, 2.14, 2.51, 3.12, 4.09, 4.86, 5.42, 6.51, 7.79, 10.15, 10.91, 11.82, 12.76], tallnessW: [4.6, 10.8], polygons: 10, rate: 2.1, cluster: 1.7, outsideBias: 0.48, affinity: [1.38, 1.06, 0.46, 0.54] },
+  { id: "near-prop", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.77, 2.71], lateralLadder: [0.14, 0.95, 1.25, 1.68, 1.86, 2.04, 2.17, 2.33, 2.57, 2.83, 3.24, 3.63, 5.21], heightW: [0.91, 1.66], baseW: [-0.23, 0.06], footprintW: [2.89, 4.2], alongW: [2.91, 4.27], acrossW: [1.33, 2.46], acrossLadder: [0.0, 0.57, 0.85, 1.22, 1.45, 1.66, 1.87, 2.08, 2.35, 2.62, 3.01, 3.33, 4.67], tallnessW: [2.19, 3.46], polygons: 20, rate: 14.1, cluster: 1.6, outsideBias: 0.52, affinity: [0.99, 0.93, 1.04, 1.07] },
+  { id: "near-detail", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.45, 2.07], lateralLadder: [0.0, 0.39, 0.88, 1.29, 1.55, 1.67, 1.75, 1.85, 1.99, 2.18, 2.51, 2.96, 6.42], heightW: [0.18, 0.96], baseW: [0.02, 0.5], footprintW: [2.46, 3.89], alongW: [2.51, 3.8], acrossW: [0.45, 1.22], acrossLadder: [0.0, 0.02, 0.09, 0.28, 0.55, 0.73, 0.89, 1.03, 1.17, 1.36, 1.75, 2.02, 5.01], tallnessW: [0.24, 1.04], polygons: 6, rate: 12.9, cluster: 1.96, outsideBias: 0.59, affinity: [1.13, 1.31, 0.7, 0.62] },
+  { id: "mid-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [3.35, 5.42], lateralLadder: [0.82, 2.23, 2.74, 3.19, 3.5, 3.83, 4.16, 4.6, 5.14, 5.75, 7.46, 8.76, 18.74], heightW: [0.85, 2.26], baseW: [-1.23, 0.05], footprintW: [4.63, 6.91], alongW: [3.56, 5.91], acrossW: [3.83, 6.13], acrossLadder: [1.43, 2.71, 3.03, 3.66, 4.02, 4.47, 4.86, 5.27, 5.79, 6.59, 7.81, 8.63, 16.63], tallnessW: [2.72, 5.68], polygons: 28, rate: 9.1, cluster: 1.34, outsideBias: 0.72, affinity: [0.89, 1.03, 1.13, 1.12] },
+  { id: "enclosure", zone: "Z7", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [0.03, 0.2], lateralLadder: [0.0, 0.0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.11, 0.16, 0.27, 0.49, 0.78, 1.91], heightW: [0.57, 1.84], baseW: [-0.74, 0.41], footprintW: [3.76, 6.25], alongW: [0.66, 3.25], acrossW: [3.58, 6.25], acrossLadder: [1.87, 2.63, 2.94, 3.42, 3.76, 4.2, 4.58, 4.93, 5.64, 6.48, 7.4, 8.56, 16.47], tallnessW: [1.53, 3.85], polygons: 39, rate: 8.7, cluster: 1.16, outsideBias: 0.65, affinity: [1.33, 0.87, 0.69, 0.6] },
+  { id: "near-detail-2", zone: "Z7", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [0.58, 1.9], lateralLadder: [0.0, 0.02, 0.09, 0.28, 1.02, 1.24, 1.44, 1.64, 1.81, 1.98, 2.56, 2.91, 5.05], heightW: [0.73, 2.52], baseW: [0.18, 2.07], footprintW: [0.31, 1.51], alongW: [0.1, 0.52], acrossW: [0.27, 1.43], acrossLadder: [0.0, 0.07, 0.12, 0.23, 0.3, 0.44, 0.55, 0.8, 1.09, 1.84, 2.81, 3.43, 9.06], tallnessW: [0.35, 1.27], polygons: 4, rate: 8.4, cluster: 2.43, outsideBias: 0.56, affinity: [1.23, 0.72, 0.92, 0.78] },
+  { id: "mid-mass-2", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.64, 4.03], lateralLadder: [0.18, 2.1, 2.33, 2.58, 2.8, 2.97, 3.16, 3.47, 3.77, 4.32, 4.85, 5.67, 20.43], heightW: [0.05, 0.67], baseW: [-0.22, 0.06], footprintW: [3.57, 5.49], alongW: [3.07, 4.47], acrossW: [2.99, 5.11], acrossLadder: [1.17, 2.17, 2.4, 2.79, 3.15, 3.4, 3.66, 4.02, 4.6, 5.52, 6.76, 7.51, 14.03], tallnessW: [0.38, 1.4], polygons: 15, rate: 8.4, cluster: 1.46, outsideBias: 0.66, affinity: [1.02, 1.08, 1.07, 0.68] },
+  { id: "tall-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.55, 4.6], lateralLadder: [0.12, 1.75, 2.03, 2.43, 2.85, 3.14, 3.47, 3.74, 4.31, 4.93, 6.21, 7.2, 11.03], heightW: [1.49, 3.35], baseW: [-2.75, 0.05], footprintW: [2.39, 3.61], alongW: [1.83, 3.18], acrossW: [0.71, 2.52], acrossLadder: [0.0, 0.02, 0.1, 0.48, 0.92, 1.37, 1.66, 2.02, 2.34, 2.76, 3.53, 4.13, 7.37], tallnessW: [5.53, 8.53], polygons: 12, rate: 8.0, cluster: 1.76, outsideBias: 0.75, affinity: [1.0, 1.18, 0.83, 1.04] },
+  { id: "near-prop-2", zone: "Z3", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [1.71, 3.17], lateralLadder: [0.74, 1.19, 1.45, 1.65, 1.79, 2.08, 2.36, 2.65, 3.03, 3.37, 4.0, 5.07, 8.23], heightW: [0.69, 1.5], baseW: [-0.28, 0.28], footprintW: [0.96, 2.15], alongW: [0.64, 1.54], acrossW: [0.88, 2.11], acrossLadder: [0.0, 0.39, 0.53, 0.79, 0.92, 1.06, 1.26, 1.58, 1.9, 2.47, 3.43, 4.0, 7.46], tallnessW: [1.57, 2.88], polygons: 16, rate: 6.5, cluster: 1.41, outsideBias: 0.72, affinity: [1.05, 1.04, 0.81, 1.11] },
+  { id: "high-detail", zone: "Z4", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [2.65, 4.55], lateralLadder: [0.23, 1.39, 1.6, 2.31, 2.88, 3.15, 3.44, 3.81, 4.39, 4.75, 5.92, 8.02, 15.59], heightW: [2.56, 5.23], baseW: [1.65, 4.14], footprintW: [0.97, 2.71], alongW: [0.61, 2.33], acrossW: [0.19, 1.44], acrossLadder: [0.0, 0.01, 0.03, 0.14, 0.26, 0.52, 0.77, 0.96, 1.24, 1.71, 2.13, 3.34, 6.58], tallnessW: [0.66, 2.0], polygons: 3, rate: 6.1, cluster: 1.98, outsideBias: 0.79, affinity: [1.31, 0.83, 0.72, 0.68] },
+  { id: "far-mass", zone: "Z5", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [5.13, 7.91], lateralLadder: [2.21, 3.64, 4.08, 4.86, 5.28, 6.06, 6.56, 7.05, 7.59, 8.39, 9.4, 10.93, 19.83], heightW: [0.77, 2.53], baseW: [-0.19, 1.57], footprintW: [2.91, 4.61], alongW: [2.13, 3.98], acrossW: [1.82, 3.77], acrossLadder: [0.0, 0.9, 1.19, 1.57, 1.94, 2.44, 2.85, 3.25, 3.6, 4.11, 5.09, 6.31, 8.63], tallnessW: [0.94, 2.92], polygons: 8, rate: 4.7, cluster: 1.56, outsideBias: 0.84, affinity: [1.28, 0.87, 0.76, 0.67] },
+  { id: "high-mass", zone: "Z4", profile: "flat", kind: "mesh", vocabulary: "geometry", lateralW: [2.51, 5.97], lateralLadder: [0.01, 0.77, 1.72, 2.12, 2.92, 3.51, 4.18, 4.85, 5.47, 6.89, 7.96, 9.71, 17.16], heightW: [5.45, 7.87], baseW: [0.05, 4.11], footprintW: [3.64, 6.53], alongW: [2.73, 5.15], acrossW: [0.88, 4.67], acrossLadder: [0.0, 0.0, 0.05, 0.7, 1.32, 2.03, 2.74, 3.46, 4.47, 5.23, 6.93, 7.6, 14.28], tallnessW: [4.92, 11.55], polygons: 18, rate: 4.0, cluster: 1.69, outsideBias: 0.82, affinity: [1.29, 0.69, 0.79, 0.86] },
+  { id: "under-deck", zone: "Z8", profile: "built", kind: "mesh", vocabulary: "geometry", lateralW: [1.85, 4.53], lateralLadder: [0.08, 0.31, 0.6, 1.3, 2.03, 2.43, 3.01, 3.77, 4.3, 5.02, 6.05, 6.82, 17.93], heightW: [-4.82, -2.56], baseW: [-9.68, -5.58], footprintW: [2.42, 4.43], alongW: [1.71, 3.11], acrossW: [1.18, 3.83], acrossLadder: [0.0, 0.02, 0.21, 0.82, 1.45, 2.11, 2.13, 2.79, 3.36, 4.07, 4.82, 5.32, 10.54], tallnessW: [2.86, 10.47], polygons: 6, rate: 2.3, cluster: 2.06, outsideBias: 0.31, affinity: [1.46, 0.85, 0.43, 0.63] },
 ];
 
 /**
@@ -378,18 +434,24 @@ function triQuantile(u: number): number {
  * THE CORRIDOR IS NOT DEFENDED HERE any more, and that is the correction
  * that matters. An earlier version floored a widened envelope at the
  * corridor's edge, which kept anchors out of the driver's way by moving
- * them ASIDE. The source moves them UP: `micro-detail` inside `|t|` of 1W
- * has a median base 1.76W above the deck against 0.95W for the same
- * archetype outboard, and of the archetypes whose geometry reaches over
- * the corridor the ones that belong there clear the ceiling while the
- * ground-hugging ones are merely beside it. Genuinely low furniture over
- * the track is 47 objects of 7,371, spread over half the circuits —
- * present, not a technique.
+ * them ASIDE. The source moves them UP: of the archetypes whose geometry
+ * reaches over the corridor, the ones that belong there clear the ceiling
+ * while the ground-hugging ones are merely beside it. So the offset is
+ * drawn as measured and the HEIGHT carries the rule; see where `heightW`
+ * is set in the graph. A lateral floor would throw away exactly the mass
+ * below 1.0W that puts anything in the verge band at all.
  *
- * So the offset is drawn as measured and the HEIGHT carries the rule; see
- * where `heightW` is set in the graph. That matters beyond tidiness:
- * `micro-detail` is the single largest contributor to the verge band, and
- * its mass below 1.0W is exactly what a lateral floor throws away.
+ * THE PER-ARCHETYPE EVIDENCE FOR THIS WAS MEASURED ON A SUPERSEDED
+ * CLUSTERING and has not been re-published. It read: `micro-detail`
+ * inside `|t|` of 1W had a median base 1.76W above the deck against 0.95W
+ * for the same archetype outboard — it rose as it came inboard — and it
+ * was the single largest contributor to the verge band. That archetype
+ * does not exist in the regenerated vocabulary. What the current table
+ * shows in its place is `near-detail-2`, which sits in Z7 with a lateral
+ * ladder reaching 0.28W at p20 and a base of 0.18–2.07W: inboard, and
+ * lifted clear. The rule stands on the table it is applied to; the two
+ * figures above are history and are kept because a rule whose evidence
+ * quietly vanished is worse than one that says where its evidence went.
  */
 export function lateralAt(a: Archetype, u: number): number {
   if (a.lateralLadder) return sampleLadder(a.lateralLadder, u);
@@ -812,7 +874,28 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     clusterSpanW: 0.48,
     gapCvAccept: [1.0, 2.6],
     vocabulary: "geometry",
-    corridorArtAccept: 0.322,
+    // 0.13 and not 0.322, which is the single largest correction this
+    // preset has taken. The era's scenery vertex array was being read as
+    // plain triples where it is 12-byte PAIRS, so every bounding box a
+    // scrambled quad had stretched was too big and every corridor figure
+    // taken through one was inflated. Corrected, this era intrudes on the
+    // corridor LESS than the earlier pair — 11.1% against 15.5% — which
+    // is the opposite of what the inflated boxes said, and the ceiling
+    // was roughly three times too generous. Real geometry in the driver's
+    // slab reads 6.2% and not 17.8%.
+    //
+    // EXPECT THIS TO SCORE RED, and read it as the joint rather than as a
+    // regression. The ladders are marginals: drawing `|t|` and `across`
+    // independently puts about 24.9% of side placements over the corridor
+    // against a measured 14.8%, a ten-point excess where the inflated
+    // extents had suggested three or four. A 0.13 ceiling does not
+    // accommodate that and should not be widened to. The fix is a boolean
+    // subtract against the swept corridor volume, which trims the art
+    // rather than moving the anchor; until the library has one, the
+    // honest lever is the corridor-height rule and not either ladder,
+    // because moving a marginal to fix a joint is what put a spelling
+    // artefact in the band mix the last time it was tried.
+    corridorArtAccept: 0.13,
     spriteShare: 0.0,
     spriteAccept: [0, 0.05],
     polysPerW: 18.8,
@@ -822,23 +905,24 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     minInstances: 3,
     density: 0.97,
     densityAccept: [0.8, 1.25],
-    // Measured over all 7,371 objects of the era this preset reproduces,
+    // Measured over all 7,372 objects of the era this preset reproduces,
     // where these used to be the EARLIER era's authored targets — the one
     // place a geometry-vocabulary preset was still fitted against a named
     // -vocabulary number.
     //
-    // RE-DERIVED after a normalisation bug upstream. An object's position
-    // in the track frame is its lateral offset over a half-width, and
-    // there are two defensible half-widths: the section's own and the
-    // median across the lap. Three measurement scripts disagreed, and one
-    // also anchored objects at their own origin rather than the bounds
-    // centre the size contract fixes. The local half-width runs 0.50 to
-    // 1.57 times the median and a sixth of the objects sit more than a
-    // fifth off it — junctions and width changes, which is exactly where
-    // scenery crowds in — so it is not rounding. In one consistent
-    // spelling: near is 0.283 and not 0.266, far is 0.128 and not 0.140,
-    // verge is 0.081 and not 0.075.
-    bands: { over: 0.157, verge: 0.081, near: 0.283, mid: 0.346, far: 0.128, distant: 0.005 },
+    // Re-derived twice: once after a normalisation bug upstream, where an
+    // object's position in the track frame is its lateral offset over a
+    // half-width and three measurement scripts each picked a different
+    // one, and again after the vertex-array misreading that regenerated
+    // the whole vocabulary. The band mix moved far less than the corridor
+    // rate did under the second correction — tenths of a point, against a
+    // factor of three — because a band is decided by where a thing is
+    // ANCHORED and the misreading distorted how big it is.
+    //
+    // Exact counts over 7,372: over 1130, verge 562, near 2129, mid 2583,
+    // far 930, distant 38. Carried to five places because they sum to
+    // 1.00000 that way and to 0.999 rounded, and the fitter reads the sum.
+    bands: { over: 0.15328, verge: 0.07623, near: 0.2888, mid: 0.35038, far: 0.12615, distant: 0.00515 },
     clusterMean: 1.18,
     coverageFloor: 0.85,
     maxGapW: 25,
@@ -848,8 +932,23 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     bankMaxDeg: 14.3,
     referenceRadiusW: 7,
     envelope: 1.8,
-    kitBias: { "terrain-shell": 0.8, "set-piece": 1.3, "wall-panel": 1.2, "tree-group": 0.5, bush: 0.6, tree: 0.8, "verge-rail": 1.4 },
-    lateralPush: { "tree-group": 0.7, bush: 0.75, billboard: 0.85, dome: 0.85, "wall-panel": 0.85 },
+    // EMPTY, and that is the correction rather than an omission. This
+    // preset carried seven `kitBias` entries and five `lateralPush` ones,
+    // and not one of the twelve had ever applied: both are read as
+    // `[a.id] ?? 1`, keyed by archetype id, and every key in them named a
+    // NAMED-vocabulary row — `terrain-shell`, `set-piece`, `wall-panel`,
+    // `tree-group`, `bush`, `tree`, `verge-rail`, `billboard`, `dome` —
+    // while this preset draws from the geometry vocabulary and never sees
+    // any of them. Twelve numbers that read as tuning and were a
+    // fall-through to 1.
+    //
+    // The same class as the band targets above, found the same way and
+    // one round later: a geometry-vocabulary preset still spelled in the
+    // named vocabulary. Nothing replaces them, because nothing measured
+    // says the corrected clustering wants a per-archetype weighting, and
+    // an honest absence beats seven invented numbers.
+    kitBias: {},
+    lateralPush: {},
   },
 };
 
