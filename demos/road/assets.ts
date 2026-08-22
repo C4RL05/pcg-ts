@@ -209,6 +209,18 @@ export function bandOfPlacement(
 ): Band {
   const a = Math.abs(t);
   const h = datum === "base" ? centreH - tallW / 2 : centreH;
+  // ANCHORED INSIDE THE CORRIDOR IS `over`, WHATEVER ITS HEIGHT. Z2's
+  // verge is 1.0-1.5W and Z1 holds nothing, so a placement recorded at
+  // |t| < 1W is not verge art that strayed — it is something SPANNING the
+  // corridor, logged at its centre. §13: "object centres stand in for
+  // placements ... which is why 8% of terrain reads as over the track".
+  //
+  // This was `a < 1.5` for both, which counted the corridor as verge and
+  // put seven points of a 362-placement circuit in the wrong band —
+  // `over` 3% against a true 10%, `verge` 13% against 6%. It was caught
+  // by a second measurement of the same circuit disagreeing, not by
+  // anything here.
+  if (a < 1) return "over";
   if (a < 1.5 && (h > 1.2 || h < 0)) return "over";
   if (a < 1.5) return "verge";
   if (a < 2.5) return "near";

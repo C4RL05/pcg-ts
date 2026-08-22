@@ -350,9 +350,17 @@ export function lateralFor(
   return { zone, t: right ? t : -t, baseH };
 }
 
-/** Which band an already-placed lateral belongs to, for scoring a result. */
+/**
+ * Which band an already-placed lateral belongs to, for scoring a result.
+ *
+ * `|t| < 1W` is `over` whatever its height: Z2's verge is 1.0-1.5W and Z1
+ * holds nothing, so anything anchored inside the corridor is spanning it
+ * rather than standing in it. See `bandOfPlacement` in assets.ts for the
+ * seven points this cost before it was caught.
+ */
 export function bandOf(t: number, h: number): "over" | "verge" | "near" | "mid" | "far" | "distant" {
   const a = Math.abs(t);
+  if (a < CORRIDOR.halfWidthW) return "over";
   if (a < 1.5 && (h > CORRIDOR.ceilingW || h < 0)) return "over";
   if (a < 1.5) return "verge";
   if (a < 2.5) return "near";
