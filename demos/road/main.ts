@@ -55,7 +55,8 @@ import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/pane
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
-import { type Lap, poseAt, readLap } from "./lap.js";
+import { type Kit, loadKit, placeKit } from "./kit.js";
+import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 
 // ------------------------------------------------------------------ //
@@ -166,6 +167,11 @@ function setPass(pass: "chase" | "map"): void {
   car.scale.setScalar(pass === "map" ? mapMarkerScale : 1);
 }
 
+/** Load the optional kit once, before the first cook draws anything. */
+async function loadReference(): Promise<void> {
+  kit = await loadKit();
+}
+
 /** The map. Orthographic, because a layout read in perspective is a lie. */
 const mapCamera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 8000);
 // +Z runs DOWN the screen, so the map reads like a map rather than like a
@@ -199,6 +205,12 @@ layers.push({
 // Building the drawables from a cook.
 // ------------------------------------------------------------------ //
 
+/**
+ * The measured kit, if one was made available. See `kit.js` — it is
+ * optional, absent for almost everyone, and the page owes it nothing.
+ */
+let kit: Kit | undefined;
+
 /** Everything a cook put in the scene, so a recook can take it out again. */
 let built: Object3D[] = [];
 
@@ -211,6 +223,59 @@ function disposeBuilt(): void {
   // The car is layer 0 and survives every recook; everything after it
   // belongs to the cook that has just been replaced.
   layers.length = 1;
+}
+
+/**
+ * Draw the measured kit's placements on THIS spline.
+ *
+ * The whole point of the track frame, made visible. These are 442
+ * placements measured on a real circuit, dropped onto a lap they were
+ * never measured from, through nothing but a station, a signed lateral
+ * and a height. If the two sides mean the same thing by those, this reads
+ * as a track; if either has a convention backwards, it reads as a cloud.
+ *
+ * A REFERENCE AND NOT A TARGET: nothing this page generates is fitted to
+ * these. They are drawn beside the generated verges so a person can see
+ * whether the generated ones read, which is the judgement no statistic
+ * replaced.
+ */
+function buildReference(circuit: Circuit): InstancedMesh | undefined {
+  if (!kit) return undefined;
+  const lap = circuit.lap;
+  const boxes = placeKit(kit, lap, (station, lateral, height) => {
+    const pose = poseAt(lap, station * lap.halfWidth);
+    return {
+      p: placeAt(lap, { station, lateral, height }).p,
+      across: pose.across,
+      along: pose.dir,
+      up: pose.up,
+    };
+  });
+
+  const mesh = new InstancedMesh(
+    PROP_BOX,
+    new MeshBasicMaterial({ color: 0xff9d6b, wireframe: true, transparent: true, opacity: 0.85 }),
+    boxes.length,
+  );
+  const basis = new Matrix4();
+  const local = new Matrix4();
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i];
+    // The box is axis-aligned in the TRACK frame, so the instance's
+    // rotation is that frame's three axes as columns — not a yaw about
+    // world up, which would be wrong the moment the track has relief.
+    basis.set(
+      b.basis.across[0], b.basis.along[0], b.basis.up[0], b.centre[0],
+      b.basis.across[1], b.basis.along[1], b.basis.up[1], b.centre[1],
+      b.basis.across[2], b.basis.along[2], b.basis.up[2], b.centre[2],
+      0, 0, 0, 1,
+    );
+    local.makeScale(b.size[0], b.size[1], b.size[2]);
+    mesh.setMatrixAt(i, basis.multiply(local));
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.frustumCulled = false;
+  return mesh;
 }
 
 /** The placeholder prop. See `dressVerges` in graph.ts. */
@@ -280,7 +345,28 @@ function buildCircuit(circuit: Circuit): void {
     chase: props.material,
     map: new MeshBasicMaterial({ color: 0x4a9a76, wireframe: true }),
   });
+
+  const reference = buildReference(circuit);
+  if (reference) {
+    reference.visible = state.referenceOn;
+    scene.add(reference);
+    built.push(reference);
+    layers.push({
+      obj: reference,
+      // Narrowed because InstancedMesh types its material as one OR an
+      // array; this one is built above with a single material.
+      chase: reference.material as Material,
+      map: new MeshBasicMaterial({ color: 0xb0703f, wireframe: true }),
+    });
+    referenceMesh = reference;
+    statReference(`${reference.count} boxes`);
+  } else {
+    statReference("no kit.json");
+  }
 }
+
+/** The reference layer, so the checkbox can reach it between cooks. */
+let referenceMesh: InstancedMesh | undefined;
 
 /**
  * Frame the whole circuit in the map camera.
@@ -331,6 +417,7 @@ const state = {
   chaseHeight: 6,
   mapOn: true,
   mapZoom: 1,
+  referenceOn: true,
   paused: false,
   /** Distance travelled round the lap, in world units. */
   station: 0,
@@ -359,6 +446,10 @@ overlay.addSlider("map zoom", { min: 0.5, max: 4, step: 0.05, value: state.mapZo
   state.mapZoom = v;
   if (circuit) frameMap(circuit, state.mapZoom);
 });
+overlay.addCheckbox("reference kit", state.referenceOn, (on) => {
+  state.referenceOn = on;
+  if (referenceMesh) referenceMesh.visible = on;
+});
 overlay.addCheckbox("pause", state.paused, (on) => {
   state.paused = on;
 });
@@ -367,6 +458,7 @@ const statFps = overlay.addStat("fps");
 const statStation = overlay.addStat("station");
 const statLap = overlay.addStat("lap length");
 const statProps = overlay.addStat("dressing");
+const statReference = overlay.addStat("reference");
 const statCook = overlay.addStat("cook");
 
 // The slot is claimed HERE, where the panel is built, so this page decides
@@ -466,9 +558,14 @@ function frame(): void {
   }
 }
 
-void recook().then(() => {
-  frame();
-});
+// The kit first, so the opening cook can draw it: a reference layer that
+// appears a beat after the page does reads as a bug rather than as an
+// optional extra.
+void loadReference()
+  .then(() => recook())
+  .then(() => {
+    frame();
+  });
 
 /**
  * The capture probe.
