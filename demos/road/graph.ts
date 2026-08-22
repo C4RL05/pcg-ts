@@ -63,17 +63,27 @@ export const OUTPUTS = {
 } as const;
 
 /**
- * The horizontal axis across the road at each frame.
+ * The horizontal axis across the road at each frame, pointing RIGHT of
+ * travel.
  *
  * NOT `curveBinormal`. `writeCurveFrame` transports a rotation-minimizing
  * frame along the curve, which is the right thing for a tube and the
  * wrong thing for a road: it is free to roll, and a lap this long ends up
  * with its normal well off vertical, so anything placed on the binormal
- * drifts under the road and then over it. World up crossed with the
- * tangent is the axis a driver would call "across", and it is stable for
- * as long as the track is not vertical — which a racetrack is not.
+ * drifts under the road and then over it. The tangent crossed with world
+ * up is the axis a driver would call "across", and it is stable for as
+ * long as the track is not vertical — which a racetrack is not.
+ *
+ * THE ORDER OF THE CROSS IS THE CONTRACT, not a preference. `cross(up,
+ * tangent)` points LEFT of travel in a right-handed Y-up frame — check it
+ * with tangent +Z and up +Y and you get +X, which is the driver's left.
+ * The kit this demo is built to dress states `lateral` as positive to the
+ * RIGHT of travel, so the operands are this way round and must stay this
+ * way round. Getting it backwards mirrors every placement about the
+ * centreline, which on a symmetric-looking lap is a silent failure: it
+ * costs nothing to read and everything to notice.
  */
-const ACROSS = normalize(cross(vec(0, 1, 0), attribute("tangent", 3)));
+const ACROSS = normalize(cross(attribute("tangent", 3), vec(0, 1, 0)));
 
 /**
  * One row of dressing down one side of the road.
@@ -95,10 +105,14 @@ function dressVerges(
   const row = g.add(pathResample, { mode: "count", count: opts.stations }, "propRow");
   g.connect(frames, "out", row, "in");
 
+  // The sign IS the kit's `lateral`: positive is right of travel, because
+  // ACROSS points right. `side` is written with that sign rather than a
+  // left/right word, so the placeholder already speaks the coordinate the
+  // real rules are stated in.
   const sides: NodeHandle[] = [];
   for (const [name, sign] of [
-    ["left", 1],
-    ["right", -1],
+    ["right", 1],
+    ["left", -1],
   ] as const) {
     const moved = g.add(
       setAttribute,
