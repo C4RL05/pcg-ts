@@ -61,7 +61,13 @@ export function bucketOf(radiusW: number): CurvatureBucket {
 }
 
 /** Deterministic uniform for `(seed, index, salt)`. */
-function rand(seed: number, index: number, salt: number): number {
+/**
+ * The placement stream's hash. Exported because §7's rules draw from the
+ * SAME stream — a second generator would make a marker's position depend
+ * on which module asked for it, and the whole demo is a determinism
+ * claim.
+ */
+export function rand(seed: number, index: number, salt: number): number {
   let h = (seed * 0x9e3779b1 + index * 0x85ebca6b + salt * 0xc2b2ae35) >>> 0;
   h ^= h >>> 16;
   h = Math.imul(h, 0x7feb352d) >>> 0;
@@ -321,6 +327,12 @@ export function repairBandMix(
   assets: readonly PlaceableAsset[],
   seed: number,
   datum: "centre" | "base" = "centre",
+  /**
+   * Asset ids the corner language reserved. §7 outranks §3 — a marker
+   * moved to balance a band is a corner that no longer announces itself,
+   * and the band mix has 200 other placements to work with.
+   */
+  protect: ReadonlySet<number> = new Set(),
 ): MixRepair {
   const out = [...placements];
   const live = (): { i: number; band: Band }[] =>
@@ -394,7 +406,7 @@ export function repairBandMix(
     const dst = pick(to, from);
     if (!src || !dst || src === dst) break;
 
-    const donor = live().find((x) => x.band === src);
+    const donor = live().find((x) => x.band === src && !protect.has(out[x.i]?.asset.id ?? -1));
     if (!donor) break;
 
     // Re-place the station with an asset whose OWN measurements put it in
@@ -403,6 +415,7 @@ export function repairBandMix(
     // and where its instances actually sat.
     const [lo, hi] = BAND_T[dst];
     const pool = assets.filter((a) => {
+      if (protect.has(a.id)) return false;
       const m = a.where?.lateral.median;
       return m !== undefined && Math.abs(m) >= lo && Math.abs(m) < hi;
     });
