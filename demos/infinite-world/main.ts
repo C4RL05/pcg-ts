@@ -66,6 +66,7 @@ import {
 import { createFpsMeter } from "../../shared/fps.js";
 import { createOverlay } from "../../shared/overlay.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
+import { attachWordmark } from "../../shared/wordmark.js";
 import { createScene } from "../../shared/scene.js";
 
 /** Where the fields are evaluated. */
@@ -585,6 +586,10 @@ function paintGpuStats(): void {
    to several hundred pixels on this page, and a thumbnail under them is a
    thumbnail below the fold. */
 const graphSlot = overlay.addSlot();
+
+/* The mark, bottom left, linking back to the shelf these came from.
+   Every demo is otherwise a page you can arrive at and not leave. */
+attachWordmark();
 overlay.addNote(
   "Drag “cell size”: the blue grid re-cells the world and the rocks do not move or resize. Untick “halo” to watch every border grow a band of undersized rocks, and “world-anchored” to watch the same drag re-roll the world from scratch.",
 );

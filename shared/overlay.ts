@@ -19,7 +19,13 @@ function injectStyles(): void {
   style.textContent = `
 .pcg-overlay {
   position: fixed; top: 12px; left: 12px; z-index: 10;
-  width: 300px; max-height: calc(100vh - 24px); overflow-y: auto;
+  /* Stops SHORT OF THE BOTTOM, not 12px from it: the wordmark sits in this
+     corner (see shared/wordmark.ts) and a panel long enough to reach the
+     floor lands on top of it. 45px is the mark's 13, its own 12 of margin,
+     the panel's 12 at the top, and 8 of air between the two. Every page
+     that builds this overlay draws that mark, so there is no case where
+     this reserves space for nothing. */
+  width: 300px; max-height: calc(100vh - 45px); overflow-y: auto;
   padding: 14px 16px; box-sizing: border-box;
   background: rgba(13, 17, 23, 0.88);
   border: 1px solid #2a3548; border-radius: 10px;

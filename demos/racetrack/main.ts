@@ -61,6 +61,7 @@ import {
   noCorrections,
 } from "./calibrate.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
+import { attachWordmark } from "../../shared/wordmark.js";
 import { buildTrackDressingGraph } from "./dressing.js";
 import { PRESETS, REFINE_PASSES, SIGHTLINE, type Preset } from "./kit.js";
 import { TRACK, col, refine, scoreCook } from "./read.js";
@@ -633,6 +634,10 @@ const statFps = overlay.addStat("fps");
    to several hundred pixels on this page, and a thumbnail under them is a
    thumbnail below the fold. */
 const graphSlot = overlay.addSlot();
+
+/* The mark, bottom left, linking back to the shelf these came from.
+   Every demo is otherwise a page you can arrive at and not leave. */
+attachWordmark();
 const card = overlay.addCollapsible("metric card", false);
 overlay.addNote(
   "Every box is one placement, drawn at its measured extents along the " +

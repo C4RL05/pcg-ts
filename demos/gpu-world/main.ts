@@ -56,6 +56,7 @@ import { createFpsMeter } from "../../shared/fps.js";
 import { NARROW_MEDIA_QUERY } from "../../shared/mobile.js";
 import { createOverlay } from "../../shared/overlay.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
+import { attachWordmark } from "../../shared/wordmark.js";
 import { FINE_CELL, MAX_SCALE_TALL, MAX_SCALE_WIDE, makeSpireLevel } from "./levels.js";
 
 // -- tunables --------------------------------------------------------------
@@ -657,6 +658,10 @@ statStatus("initialising…");
    to several hundred pixels on this page, and a thumbnail under them is a
    thumbnail below the fold. */
 const graphSlot = overlay.addSlot();
+
+/* The mark, bottom left, linking back to the shelf these came from.
+   Every demo is otherwise a page you can arrive at and not leave. */
+attachWordmark();
 const diagnostics = overlay.addCollapsible("diagnostics");
 
 overlay.addNote(
