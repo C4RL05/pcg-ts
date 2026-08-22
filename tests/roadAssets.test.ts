@@ -15,25 +15,37 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  type Band,
   type CurvatureBucket,
   type PlaceableAsset,
+  Z3,
   bandOfPlacement,
   bucketOf,
   drawQuantile,
   placeAsset,
   weightAt,
 } from "../demos/road/assets.js";
+import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
 import { inCorridor, resolveCorridor } from "../demos/road/zones.js";
 
-const KIT = "<kit-dir>/street-kit.json";
-const RULE = {
-  over: [0.1, 0.21],
-  verge: [0.04, 0.12],
-  near: [0.23, 0.35],
-  mid: [0.28, 0.4],
-  far: [0.07, 0.19],
-  distant: [0, 0.03],
-} as const;
+/**
+ * WHICH CIRCUIT, and why it is not the first one.
+ *
+ * The first exemplar was chosen for reuse and coherence and never checked
+ * against the population on anything else. It turned out to be at or past
+ * the edge on six figures — the worst band mix of twenty-two, and a
+ * curvature response of 2.97 straight-to-tight against a population 1.33.
+ * Since that response is exactly the mechanism this module relies on, a
+ * generator learning from it would have been faithfully reproducing an
+ * outlier.
+ *
+ * `vegetation` is second-best of the twenty-two on band mix and has all
+ * four affinity buckets inside the per-circuit band. `street` is kept
+ * beside it because the comparison is the evidence.
+ */
+const DIR = "<kit-dir>/";
+const KIT = DIR + KITS[DEFAULT_KIT];
+const OTHER = DIR + KITS.street;
 
 describe("drawing from three quantiles", () => {
   const q = { p10: 1, median: 3, p90: 9 };
@@ -108,53 +120,67 @@ describe.skipIf(!existsSync(KIT))("placing from the kit's own `where`", () => {
       for (const p of lap(seed)) if (p) seen.add(p.asset.id);
     }
     console.log(`distinct assets over 8 laps: ${seen.size} of ${assets.length}`);
-    // 135 of the 206 appeared exactly once on the source circuit, so a
-    // weighting that dropped one-offs would collapse the vocabulary — and
-    // L-4's landmark-per-tenth comes from exactly those.
+    // Most of any circuit's assets appear once or twice, so a weighting
+    // that dropped one-offs would collapse the vocabulary — and L-4's
+    // landmark-per-tenth comes from exactly those.
     expect(seen.size).toBeGreaterThan(assets.length * 0.5);
   });
 
   /**
-   * THE MEASUREMENT THIS FILE IS FOR.
+   * THE MEASUREMENT THIS FILE IS FOR — and the comparison it has to make
+   * carefully.
    *
-   * Reported rather than gated, because the reference circuit's OWN
-   * placements do not satisfy Z-3 either — near 10.9% against a rule of
-   * 23-35, mid 43.2 against 28-40, far 27.4 against 7-19. Gating my output
-   * to a range its own source misses would be repairing the generator to
-   * hide a disagreement between two published figures.
+   * A GENERATED lap is scored against Z-3's pooled rule. A REAL circuit is
+   * compared against the per-circuit spread, which is roughly twice as
+   * wide: the rule is pooled over all of the source era's objects, and any one
+   * original sits outside it on some band as a matter of course. Scoring
+   * an original against the rule is how a good exemplar gets mistaken for
+   * a bad generator, which is very nearly what happened here.
+   *
+   * BANDED ON THE CENTRE, because every figure upstream publishes is. The
+   * base datum is the physically meaningful one and gives a different
+   * answer — it is a different statistic, not a better one, and quoting it
+   * against a centre-banded rule compares two things.
    */
-  it("reports the band mix that `where` produces, beside the source's own", () => {
+  it("reports the band mix from `where`, against the rule and the spread", () => {
     const counts: Record<string, number> = {};
     let n = 0;
     for (let seed = 1; seed <= 8; seed++) {
       for (const p of lap(seed)) {
         if (!p) continue;
-        const b = bandOfPlacement(p.t, p.h, p.asset.size.tall);
-        counts[b] = (counts[b] ?? 0) + 1;
+        counts[bandOfPlacement(p.t, p.h, p.asset.size.tall)] =
+          (counts[bandOfPlacement(p.t, p.h, p.asset.size.tall)] ?? 0) + 1;
         n++;
       }
     }
-    const ref: Record<string, number> = {};
-    for (const p of kit.placements) {
-      const b = bandOfPlacement(p.lateral, p.height, p.size.tall);
-      ref[b] = (ref[b] ?? 0) + 1;
-    }
-    const rn = kit.placements.length;
+    const refOf = (path: string): { c: Record<string, number>; n: number } => {
+      const k = JSON.parse(readFileSync(path, "utf8")) as typeof kit;
+      const c: Record<string, number> = {};
+      for (const p of k.placements) {
+        const b = bandOfPlacement(p.lateral, p.height, p.size.tall);
+        c[b] = (c[b] ?? 0) + 1;
+      }
+      return { c, n: k.placements.length };
+    };
+    const here = refOf(KIT);
+    const there = refOf(OTHER);
+
+    const pc = (v: number): string => `${(100 * v).toFixed(0)}%`.padStart(4);
     console.log(
       [
-        "band mix, banded on the BASE (see bandOfPlacement)",
-        ...Object.keys(RULE).map((b) => {
-          const mine = (100 * (counts[b] ?? 0)) / n;
-          const theirs = (100 * (ref[b] ?? 0)) / rn;
-          const [lo, hi] = RULE[b as keyof typeof RULE];
-          const mark = (v: number): string => (v >= 100 * lo && v <= 100 * hi ? " " : "*");
+        `band mix, centre datum, ${DEFAULT_KIT}`,
+        "  band      mine   this circuit   street    rule       spread",
+        ...(Object.keys(Z3) as Band[]).map((b) => {
+          const z = Z3[b];
+          const mine = (counts[b] ?? 0) / n;
+          const inRule = mine >= z.rule[0] && mine <= z.rule[1];
           return (
-            `  ${b.padEnd(8)} from where ${mine.toFixed(1)}%${mark(mine)}` +
-            `   reference ${theirs.toFixed(1)}%${mark(theirs)}` +
-            `   rule ${(100 * lo).toFixed(0)}-${(100 * hi).toFixed(0)}%`
+            `  ${b.padEnd(8)} ${pc(mine)}${inRule ? " " : "*"}     ${pc((here.c[b] ?? 0) / here.n)}` +
+            `         ${pc((there.c[b] ?? 0) / there.n)}    ` +
+            `${pc(z.rule[0])}-${pc(z.rule[1])}  ${pc(z.spread[0])}-${pc(z.spread[1])}`
           );
         }),
-        "  (* = outside Z-3)",
+        "  (* = my lap outside Z-3's pooled rule)",
       ].join("\n"),
     );
     expect(n).toBeGreaterThan(1000);
@@ -163,7 +189,7 @@ describe.skipIf(!existsSync(KIT))("placing from the kit's own `where`", () => {
   /**
    * THE CORRIDOR RULE, FIRING FOR REAL AT LAST.
    *
-   * 32 of the 206 assets have a lateral p10 inside 1W, so drawing from
+   * Assets whose lateral p10 reaches inside 1W are what produce these, so drawing from
    * `where` produces genuine conflicts where drawing from a band produced
    * none. This reports the count for the same reason every repair here
    * does: a resolution that never runs is indistinguishable from one that

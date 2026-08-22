@@ -161,25 +161,55 @@ export function placeAsset(
   return { asset: chosen, t: right ? Math.abs(t) : -Math.abs(t), h };
 }
 
+export type Band = "over" | "verge" | "near" | "mid" | "far" | "distant";
+
 /**
- * Which band a placement falls in, for scoring against Z-3.
+ * Z-3's shares — the POOLED rule, and the per-circuit spread behind it.
  *
- * ON THE BASE, NOT THE CENTRE. The kit records an object at its bounds
- * centre — §13's "object centres stand in for placements" — so a gantry
- * spanning the track is logged at a height of 3.19W with its legs on the
- * ground. Banding on the centre puts the reference circuit's `over` share
- * at 9.5% against a rule of 10-21 and its `verge` at 9.0; banding on the
- * base moves them to 12.7 and 5.9, both inside. The height datum is the
- * whole difference, and neither figure is a placement error.
+ * The rule is pooled over all of the source era's objects, and a single
+ * circuit sits outside it on some band as a matter of course: the
+ * per-circuit p10-p90 is roughly twice as wide. So Z-3 is a target for a
+ * GENERATED lap, not a description any original satisfies, and an
+ * original missing it is not evidence against it.
+ *
+ * A generated lap is scored against `rule`. A real circuit is compared
+ * against `spread`, and comparing one to the other is how a good exemplar
+ * gets mistaken for a bad generator.
+ */
+export const Z3 = {
+  over: { rule: [0.1, 0.21], spread: [0.06, 0.32], median: 0.13 },
+  verge: { rule: [0.04, 0.12], spread: [0.01, 0.17], median: 0.06 },
+  near: { rule: [0.23, 0.35], spread: [0.16, 0.39], median: 0.27 },
+  mid: { rule: [0.28, 0.4], spread: [0.19, 0.45], median: 0.34 },
+  far: { rule: [0.07, 0.19], spread: [0.03, 0.21], median: 0.08 },
+  distant: { rule: [0, 0.03], spread: [0, 0.01], median: 0 },
+} as const satisfies Record<Band, { rule: readonly [number, number] | number[]; spread: number[] | readonly [number, number]; median: number }>;
+
+/**
+ * Which band a placement falls in.
+ *
+ * THE DATUM IS A PARAMETER BECAUSE IT CHANGES THE ANSWER, and Z-3 does
+ * not state which one it means. Everything upstream publishes is on the
+ * BOUNDS CENTRE — §13's "object centres stand in for placements" — so a
+ * gantry over the track is logged at h = 3.19W with its legs on the
+ * ground, and `centre` is the only datum that can be compared against
+ * those figures.
+ *
+ * `base` is the physically meaningful one and gives a different answer:
+ * on one circuit it moved `over` from 9.5% to 12.7% and `verge` from 9.0%
+ * to 5.9%. It is not more correct, it is a different statistic, and
+ * quoting a base-banded figure against a centre-banded rule is a
+ * comparison of two things.
  */
 export function bandOfPlacement(
   t: number,
   centreH: number,
   tallW: number,
-): "over" | "verge" | "near" | "mid" | "far" | "distant" {
+  datum: "centre" | "base" = "centre",
+): Band {
   const a = Math.abs(t);
-  const baseH = centreH - tallW / 2;
-  if (a < 1.5 && (baseH > 1.2 || baseH < 0)) return "over";
+  const h = datum === "base" ? centreH - tallW / 2 : centreH;
+  if (a < 1.5 && (h > 1.2 || h < 0)) return "over";
   if (a < 1.5) return "verge";
   if (a < 2.5) return "near";
   if (a < 5) return "mid";
