@@ -498,6 +498,7 @@ const statStation = overlay.addStat("station");
 const statLap = overlay.addStat("lap length");
 const statProps = overlay.addStat("dressing");
 const statReference = overlay.addStat("reference");
+const statCorners = overlay.addStat("corner language");
 const statRules = overlay.addStat("repairs");
 const statCook = overlay.addStat("cook");
 
@@ -525,13 +526,26 @@ async function recook(): Promise<void> {
     if (lastStats) {
       const s = lastStats;
       statProps(`${s.placed} placements, ${s.cookMs.toFixed(0)} ms`);
+      // The corner language gets its own line: L-2 and L-3 are the only
+      // rules that ADD placements, so their two counts are what makes
+      // D-1's budget drift explicable rather than mysterious. The losses
+      // to the cull are on the same line because L-1 runs after them and
+      // has the last word — a marker can be placed correctly and still
+      // not survive.
+      statCorners(
+        `${s.corners} corners (${s.tightCorners} tight) · ` +
+          `L-2 ${s.markersConverted}+${s.markersAdded} · ` +
+          `L-3 ${s.brakeMarks}-${s.brakeDisplaced} · ` +
+          `cull took ${s.markersLostToCull} markers, ${s.rulersLostToCull} rulers`,
+      );
       statRules(
-        `gaps ${s.gapRepairs} · corridor ${s.corridorFixes} · ` +
+        `gaps ${s.stationGapRepairs}+${s.coverageMoves} (worst ${s.worstGapW.toFixed(0)}W) · corridor ${s.corridorFixes} · ` +
           `sightline ${s.blocked} (${s.pushedOut} out, ${s.dropped} cut) · ` +
           `landmarks ${s.landmarkFixes} · mix ${s.mixMoves}`,
       );
     } else {
       statProps(`${next.props.pointCount} placeholder rows`);
+      statCorners("no kit.json — no vocabulary");
       statRules("no kit.json — rules idle");
     }
     statCook(`${next.cookMs.toFixed(0)} ms`);

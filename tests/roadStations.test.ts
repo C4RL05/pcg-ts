@@ -33,6 +33,8 @@
 import { describe, expect, it } from "vitest";
 import { Pcg32, hashCombine } from "pcg-ts";
 import {
+  COVERAGE,
+  type CoverageRepair,
   DENSITY,
   DISPERSION_SPREAD,
   DISPERSION_TARGET,
@@ -44,6 +46,8 @@ import {
   indexOfDispersion,
   makeStations,
   makeStationsDetailed,
+  placementCoverageIsMinimal,
+  repairPlacementCoverage,
 } from "../demos/road/stations.js";
 
 /** The demo's own lap length, so the gate is measured where it is used. */
@@ -305,5 +309,446 @@ describe("the station process", () => {
     const short = makeStations(300, 1).length;
     const long = makeStations(600, 1).length;
     expect(long / short).toBeCloseTo(2, 1);
+  });
+});
+
+/**
+ * D-4 AT THE PLACEMENT LEVEL — §9's stage 6, which is the one that
+ * actually enforces the rule.
+ *
+ * WHY THERE ARE TWO COVERAGE PASSES AND NOT ONE. The pass above runs at
+ * stage 1, on bare stations, and it is honest there: it closes every hole
+ * the two-level clustering left. Then stage 4's sightline cull moves and
+ * DROPS placements, and every gap it opens is opened after the only thing
+ * that was looking for gaps had already finished. A lap can therefore
+ * finish outside D-4 while the stage-1 figure reads zero repairs — the
+ * exact mis-sequencing that put the band mix and the landmark rules after
+ * the cull rather than before it.
+ *
+ * THE REPAIR MOVES, IT DOES NOT RE-DRAW, and that is the whole reason it
+ * is generic over the placement rather than operating on stations. A
+ * station-level pass can only hand back numbers, so a caller wanting to
+ * close a gap in a DRESSED lap would have to draw a fresh asset for the
+ * hole — which passes a count check while quietly re-rolling the
+ * vocabulary L-4 is measured on. Moving the donor keeps its asset, its
+ * lateral and its height, so D-1's count and L-4's uniqueness both come
+ * through untouched.
+ *
+ * EVERY CHECK HERE IS PROVED ABLE TO FAIL FIRST. A hole is built by hand
+ * before the repair is asked to close one; the identity check is shown
+ * rejecting a re-drawn asset; the minimality check is shown rejecting a
+ * repair with a surplus move; and the protection is tested on a lap where
+ * the protected placement would otherwise have been the donor. A check
+ * whose only evidence is that it passes on correct input is
+ * indistinguishable from one that always passes.
+ */
+describe("D-4 after the cull", () => {
+  /**
+   * A stand-in for a dressed placement: a station plus the fields a move
+   * must not touch. `t`/`h` are drawn as f32s so the triple is a
+   * fingerprint — a re-drawn placement cannot collide with the one it
+   * replaced by accident.
+   */
+  interface TestPlacement {
+    readonly station: number;
+    /** Stands in for the asset id. */
+    readonly id: number;
+    readonly t: number;
+    readonly h: number;
+    /** What the corner language would pin. */
+    readonly pinned?: boolean;
+  }
+
+  function dressStations(lapW: number, seed: number): TestPlacement[] {
+    const rng = new Pcg32(hashCombine(seed, 0x0d4e));
+    return makeStations(lapW, seed).map((station) => ({
+      station,
+      id: 100 + Math.floor(rng.nextF32() * 40),
+      t: rng.nextF32() * 6 - 3,
+      h: rng.nextF32() * 2,
+    }));
+  }
+
+  /** The multiset of everything that is not a station. */
+  const fingerprint = (ps: readonly TestPlacement[]): string[] =>
+    ps.map((p) => `${p.id}:${p.t}:${p.h}`).sort();
+
+  /**
+   * TWO STAND-INS FOR THE CULL, because the shape of what it removes is
+   * what decides whether a hole opens at all.
+   *
+   * The uniform one is the OPTIMISTIC model: scattered single drops
+   * rarely leave a hole, because a placement's neighbours are still
+   * there. The real cull is not uniform — it drops what stands in the
+   * cone, which is the inside of corners, so it removes correlated runs.
+   * The window model is that shape. Neither is a measurement of the real
+   * cull, which needs a cooked lap and the kit and so lives in
+   * `roadSightline.test.ts`; they are here to say what the repair does
+   * with each shape, and the honest reading is that the uniform figures
+   * are a LOWER bound on how often stage 6 has work to do.
+   */
+  function dropUniform(
+    ps: readonly TestPlacement[],
+    rate: number,
+    seed: number,
+  ): TestPlacement[] {
+    const rng = new Pcg32(hashCombine(seed, 0xc011));
+    return ps.filter(() => rng.nextF32() >= rate);
+  }
+
+  function dropWindow(
+    ps: readonly TestPlacement[],
+    widthW: number,
+    seed: number,
+    lapW = LAP_W,
+  ): TestPlacement[] {
+    const rng = new Pcg32(hashCombine(seed, 0xc02e));
+    const s0 = rng.nextF32() * lapW;
+    return ps.filter((p) => {
+      let d = (p.station - s0) % lapW;
+      if (d < 0) d += lapW;
+      return d >= widthW;
+    });
+  }
+
+  const CULLS: {
+    name: string;
+    apply: (ps: readonly TestPlacement[], seed: number) => TestPlacement[];
+  }[] = [
+    { name: "no cull", apply: (ps) => [...ps] },
+    { name: "uniform 20%", apply: (ps, seed) => dropUniform(ps, 0.2, seed) },
+    { name: "26W window", apply: (ps, seed) => dropWindow(ps, 26, seed) },
+  ];
+
+  /**
+   * THE NEGATIVE CONTROL, BUILT BY HAND rather than sampled.
+   *
+   * A hole is placed where the wrap is, because that is the gap a naive
+   * scan misses: the lap is a loop and the start line is an arbitrary cut
+   * in it, so the run from the last station back to the first is a gap
+   * like any other. Thirty-one placements over the first 60W of a 100W
+   * lap leave exactly 40W empty across it — fifteen past D-4's limit.
+   *
+   * The detector is checked before the repair is, and against
+   * `coverage()`, which is the independent one the gate above uses. If
+   * the two disagreed, every zero the repair reports would be worthless.
+   */
+  it("sees a hole it was built to have, and closes it", () => {
+    const lapW = 100;
+    const built: TestPlacement[] = [];
+    for (let s = 0; s <= 60; s += 2) built.push({ station: s, id: s, t: 0.5, h: 1 });
+
+    const before = coverage(
+      built.map((p) => p.station),
+      lapW,
+    );
+    expect(before.longestGapW).toBeCloseTo(40, 6);
+    expect(before.longestGapW).toBeGreaterThan(COVERAGE.maxGapW);
+
+    const r = repairPlacementCoverage(built, lapW);
+    // The repair's own reading of "before" is the same number the
+    // independent detector gave.
+    expect(r.worstGapBeforeW).toBeCloseTo(before.longestGapW, 6);
+    expect(r.moves).toBeGreaterThan(0);
+    expect(r.worstGapAfterW).toBeLessThanOrEqual(COVERAGE.maxGapW);
+    // And the independent detector agrees about the repaired lap too.
+    const after = coverage(
+      r.placements.map((p) => p.station),
+      lapW,
+    );
+    expect(after.longestGapW).toBeLessThanOrEqual(COVERAGE.maxGapW);
+  });
+
+  /**
+   * THE OTHER HALF OF THE CONTROL. A repair that fires on a compliant lap
+   * is as wrong as one that never fires, and it would pass every bound
+   * check above — the output would simply be a lap that was already fine,
+   * rearranged.
+   */
+  it("does nothing to a lap that already satisfies D-4", () => {
+    const lapW = 100;
+    const even: TestPlacement[] = [];
+    for (let s = 0; s < lapW; s += 5) even.push({ station: s, id: s, t: 0, h: 0 });
+    const r = repairPlacementCoverage(even, lapW);
+    expect(r.worstGapBeforeW).toBeCloseTo(5, 6);
+    expect(r.moves).toBe(0);
+    expect(r.log).toEqual([]);
+    expect(r.worstGapAfterW).toBeCloseTo(5, 6);
+    expect(r.placements.map((p) => p.station)).toEqual(even.map((p) => p.station));
+  });
+
+  /**
+   * D-1'S BUDGET SURVIVES STAGE 6.
+   *
+   * This is the claim that decides MOVE versus ADD, and it is checked on
+   * every seed under every cull shape rather than on the one that
+   * happened to fire: a repair that added a placement when it could not
+   * find a donor would pass the coverage gate and break the density band,
+   * and the shape of the cull is exactly what decides whether it reaches
+   * that branch.
+   */
+  it("conserves the count, exactly, on every seed", () => {
+    for (const seed of SEEDS) {
+      for (const cull of CULLS) {
+        const input = cull.apply(dressStations(LAP_W, seed), seed);
+        const r = repairPlacementCoverage(input, LAP_W);
+        expect(r.placements.length, `seed ${seed}, ${cull.name}`).toBe(input.length);
+      }
+    }
+  });
+
+  /**
+   * AND THE MOVED PLACEMENT IS THE SAME PLACEMENT.
+   *
+   * The count check above cannot see the difference between moving a
+   * placement and deleting one to draw a fresh one into the gap — both
+   * hand back the same number of placements. What separates them is
+   * whether the multiset of everything that is not a station came through
+   * unchanged, which is why the fingerprint carries `t` and `h` as well
+   * as the asset: a re-draw that happened to pick the same asset would
+   * still have re-rolled the lateral.
+   */
+  it("keeps every asset, lateral and height it was given", () => {
+    for (const seed of SEEDS) {
+      for (const cull of CULLS) {
+        const input = cull.apply(dressStations(LAP_W, seed), seed);
+        const r = repairPlacementCoverage(input, LAP_W);
+        expect(fingerprint(r.placements), `seed ${seed}, ${cull.name}`).toEqual(fingerprint(input));
+      }
+    }
+
+    // THE FINGERPRINT, PROVED ABLE TO FAIL. One placement re-drawn — the
+    // exact thing this test exists to forbid — and the multiset differs.
+    const input = dressStations(LAP_W, 1);
+    const redrawn = input.map((p, i) => (i === 5 ? { ...p, id: p.id + 1 } : p));
+    expect(fingerprint(redrawn)).not.toEqual(fingerprint(input));
+  });
+
+  /**
+   * MINIMALITY, by the criterion every conserved-count repair in this
+   * demo is held to.
+   *
+   * Nothing can be said about where a placement ENDS UP, because the
+   * repair conserves the count: any statement about the output is a
+   * statement about a lap with the same number of placements as the
+   * input, which is what the input already was. What CAN be said is
+   * whether any single move was surplus — put the donor back where it
+   * came from and ask whether D-4 still holds. Idempotence would not do:
+   * a pass that closed one gap six times over would halt afterwards and
+   * pass it.
+   */
+  it("makes no move it did not need", () => {
+    for (const seed of SEEDS) {
+      for (const cull of CULLS) {
+        const input = cull.apply(dressStations(LAP_W, seed), seed);
+        const r = repairPlacementCoverage(input, LAP_W);
+        const { minimal, removable } = placementCoverageIsMinimal(r, LAP_W);
+        expect(
+          minimal,
+          `seed ${seed}, ${cull.name}: ${removable} of ${r.moves} moves unnecessary`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  /**
+   * AND THE MINIMALITY CHECK CAN SAY NO — on a repair built to be
+   * surplus.
+   *
+   * A compliant lap, one placement moved anyway, and the move logged. The
+   * checker has to see that putting it back leaves D-4 satisfied, or its
+   * green above means only that it never says anything.
+   */
+  it("sees a move that did not need making", () => {
+    const lapW = 100;
+    const even: TestPlacement[] = [];
+    for (let s = 0; s < lapW; s += 5) even.push({ station: s, id: s, t: 0, h: 0 });
+    const from = 50;
+    const to = 52.5;
+    const surplus: CoverageRepair<TestPlacement> = {
+      placements: even
+        .map((p) => (p.station === from ? { ...p, station: to } : p))
+        .sort((a, b) => a.station - b.station),
+      moves: 1,
+      worstGapBeforeW: 5,
+      worstGapAfterW: 7.5,
+      log: [{ from, to }],
+    };
+    expect(placementCoverageIsMinimal(surplus, lapW)).toEqual({ minimal: false, removable: 1 });
+  });
+
+  /**
+   * PROTECT, ON A LAP WHERE THE PROTECTED PLACEMENT WOULD HAVE BEEN THE
+   * DONOR.
+   *
+   * The corner language pins its markers and rulers to a measured
+   * distance before a corner entry, so a coverage pass that moved one
+   * would satisfy D-4 by breaking L-2 or L-3 — a repair that fixes its
+   * own rule by breaking another's is worse than the hole it closed.
+   *
+   * The lap here is built so the protection has to BIND rather than
+   * merely be declared: a tight clump at station 10 whose members are a
+   * tenth of a W apart is by far the most redundant thing on it, and the
+   * unprotected run is asserted to take its donor from there. A protect
+   * test on a lap where nothing tempting was protected passes for the
+   * wrong reason, and would keep passing if `protect` were ignored
+   * entirely.
+   */
+  it("never takes a protected placement, on a lap where it was tempted", () => {
+    const lapW = 100;
+    // A clump nobody would miss one of, pinned.
+    const clump = [10, 10.1, 10.5, 11];
+    const built: TestPlacement[] = clump.map((station, i) => ({
+      station,
+      id: i,
+      t: 0,
+      h: 0,
+      pinned: true,
+    }));
+    // A regular run out to 70, then 40W of nothing across the start line.
+    for (let s = 20; s <= 70; s += 5) built.push({ station: s, id: 100 + s, t: 0, h: 0 });
+    expect(repairPlacementCoverage(built, lapW).worstGapBeforeW).toBeCloseTo(40, 6);
+
+    // UNPROTECTED: the donor comes out of the clump. This is the half
+    // that proves the protection below had something to refuse.
+    const loose = repairPlacementCoverage(built, lapW);
+    expect(loose.moves).toBeGreaterThan(0);
+    expect(clump).toContain(loose.log[0].from);
+
+    // PROTECTED: same lap, same hole, and the clump is untouched.
+    const pinnedStations = new Set(clump);
+    const tight = repairPlacementCoverage(built, lapW, { protect: (p) => p.pinned === true });
+    expect(tight.moves).toBeGreaterThan(0);
+    for (const m of tight.log) expect(pinnedStations.has(m.from)).toBe(false);
+    // Not just absent from the log: still where they were put.
+    const stillThere = tight.placements.filter((p) => p.pinned).map((p) => p.station);
+    expect(stillThere.sort((a, b) => a - b)).toEqual(clump);
+    // And the hole is closed anyway, from the run instead.
+    expect(tight.worstGapAfterW).toBeLessThanOrEqual(COVERAGE.maxGapW);
+  });
+
+  /**
+   * THE FIRE COUNT — the one figure that separates a working repair from
+   * an unreachable one.
+   *
+   * Zero fires and a working repair leave identical green tests, so
+   * everything above is compatible with a stage that never runs. This
+   * prints what it did across the seeds and across cull shapes, and the
+   * uniform sweep is the part worth reading: it says how much of a lap
+   * has to disappear before a hole opens, which is the only honest answer
+   * to "does stage 6 have work to do on a real lap".
+   *
+   * The `no cull` row is expected to be zero and is printed anyway,
+   * because that zero is the FINDING: stage 1 leaves the lap compliant,
+   * so anything stage 6 does is work the cull created.
+   */
+  it("reports how often it fires, by how much of the lap the cull removed", () => {
+    const rows: string[] = [];
+    let totalFires = 0;
+
+    for (const rate of [0, 0.1, 0.2, 0.3, 0.4, 0.5]) {
+      let over = 0;
+      let worstBefore = 0;
+      let worstAfter = 0;
+      let moves = 0;
+      let n = 0;
+      for (const seed of SEEDS) {
+        const input = dropUniform(dressStations(LAP_W, seed), rate, seed);
+        const r = repairPlacementCoverage(input, LAP_W);
+        if (r.worstGapBeforeW > COVERAGE.maxGapW) over++;
+        worstBefore = Math.max(worstBefore, r.worstGapBeforeW);
+        worstAfter = Math.max(worstAfter, r.worstGapAfterW);
+        moves += r.moves;
+        n += input.length;
+      }
+      totalFires += moves;
+      rows.push(
+        `  uniform ${(100 * rate).toFixed(0).padStart(3)}%  ` +
+          `${(n / SEEDS.length).toFixed(0).padStart(4)} placed  ` +
+          `${over}/${SEEDS.length} laps over  ` +
+          `worst gap ${worstBefore.toFixed(1).padStart(5)} -> ${worstAfter.toFixed(1).padStart(5)} W  ` +
+          `${moves} moves`,
+      );
+    }
+
+    // The corner-shaped stand-in: one contiguous stretch of lap emptied,
+    // which is what the real cull does at the inside of a corner.
+    for (const widthW of [10, 20, 26]) {
+      let over = 0;
+      let worstBefore = 0;
+      let worstAfter = 0;
+      let moves = 0;
+      for (const seed of SEEDS) {
+        const input = dropWindow(dressStations(LAP_W, seed), widthW, seed);
+        const r = repairPlacementCoverage(input, LAP_W);
+        if (r.worstGapBeforeW > COVERAGE.maxGapW) over++;
+        worstBefore = Math.max(worstBefore, r.worstGapBeforeW);
+        worstAfter = Math.max(worstAfter, r.worstGapAfterW);
+        moves += r.moves;
+      }
+      totalFires += moves;
+      rows.push(
+        `  window ${widthW.toString().padStart(4)}W  ` +
+          `             ${over}/${SEEDS.length} laps over  ` +
+          `worst gap ${worstBefore.toFixed(1).padStart(5)} -> ${worstAfter.toFixed(1).padStart(5)} W  ` +
+          `${moves} moves`,
+      );
+    }
+
+    console.log(
+      [
+        `D-4 at the placement level, ${LAP_W} W lap, ${SEEDS.length} seeds ` +
+          `(limit ${COVERAGE.maxGapW} W)`,
+        ...rows,
+        `  total moves across every row: ${totalFires}`,
+      ].join("\n"),
+    );
+
+    // THE CLAIM THIS PINS: the repair is reachable. A cull that empties a
+    // stretch of lap opens a hole stage 1 cannot have seen, and this
+    // stage closes it.
+    expect(totalFires).toBeGreaterThan(0);
+  });
+
+  /**
+   * SAME INPUT, SAME OUTPUT. The repair is part of a deterministic
+   * pipeline, so it may not depend on iteration order or on anything it
+   * did not receive.
+   */
+  it("is deterministic", () => {
+    const input = dropWindow(dressStations(LAP_W, 3), 26, 3);
+    const a = repairPlacementCoverage(input, LAP_W);
+    const b = repairPlacementCoverage(input, LAP_W);
+    expect(a.placements).toEqual(b.placements);
+    expect(a.log).toEqual(b.log);
+  });
+
+  /**
+   * A LAP WITH NOTHING TO TAKE FROM IS REPORTED, NOT THROWN.
+   *
+   * Two placements have no donor that is not one side of the gap, and a
+   * lap whose every candidate is pinned has none either. Both are real
+   * states a pipeline can reach — a cull can drop a lap down to almost
+   * nothing — and the contract is that `worstGapAfterW` says the rule
+   * still fails rather than the pass pretending it succeeded.
+   */
+  it("reports an un-closable gap instead of spinning on it", () => {
+    const lapW = 100;
+    const two: TestPlacement[] = [
+      { station: 0, id: 0, t: 0, h: 0 },
+      { station: 50, id: 1, t: 0, h: 0 },
+    ];
+    const r = repairPlacementCoverage(two, lapW);
+    expect(r.moves).toBe(0);
+    expect(r.worstGapAfterW).toBeCloseTo(50, 6);
+    expect(r.worstGapAfterW).toBeGreaterThan(COVERAGE.maxGapW);
+
+    // And with everything pinned: a hole it can see and may not fix.
+    const built: TestPlacement[] = [];
+    for (let s = 0; s <= 60; s += 2) built.push({ station: s, id: s, t: 0, h: 0, pinned: true });
+    const stuck = repairPlacementCoverage(built, lapW, { protect: (p) => p.pinned === true });
+    expect(stuck.moves).toBe(0);
+    expect(stuck.worstGapAfterW).toBeCloseTo(40, 6);
+    expect(stuck.placements.length).toBe(built.length);
   });
 });

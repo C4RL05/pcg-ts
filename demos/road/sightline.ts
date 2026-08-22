@@ -186,6 +186,16 @@ export function cullSightlines<T extends Occluder>(
   frameAt: (stationW: number, lateralW: number, heightW: number) => Frame,
   halfWidth: number,
   eyeStations?: readonly number[],
+  /**
+   * Occluders that must be DROPPED rather than pushed outward.
+   *
+   * For L-3's braking marks. A ruler with one mark shoved out of line
+   * reads as a mistake; a ruler with two marks reads as a shorter ruler,
+   * which is still a ruler. The rule the cull enforces does not change —
+   * L-1 still wins — only what winning looks like for a piece whose whole
+   * value is being in line with its neighbours.
+   */
+  dropRatherThanMove?: (o: T) => boolean,
 ): CullResult<T> {
   const eyes = eyeStations ?? defaultEyeStations(lapW);
   const kept: T[] = [];
@@ -211,6 +221,11 @@ export function cullSightlines<T extends Occluder>(
       continue;
     }
     blocking++;
+
+    if (dropRatherThanMove?.(o)) {
+      dropped++;
+      continue;
+    }
 
     let fixed: T | undefined;
     const sign = o.t >= 0 ? 1 : -1;

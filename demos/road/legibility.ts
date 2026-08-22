@@ -312,14 +312,27 @@ export function reserveMarkers(
   const cands = markerCandidates(assets);
   if (cands.length < 3) return { pool: [...assets] };
 
-  // Drawn from the candidates, then assigned by size: the bigger object
-  // goes to the corner that needs the earlier decision. That last step is
-  // a choice rather than a measurement, and it is the only part of the
-  // selection that is.
+  // WEIGHTED BY HOW OFTEN THE SOURCE USED THE ASSET, not uniform over the
+  // candidates. L-2 puts its marker at every corner of a severity, so
+  // whatever is chosen becomes one of the most repeated objects on the
+  // lap — and promoting a one-off to that is a far bigger departure from
+  // the source than L-2 intends. Of this kit's eight verticals one has 18
+  // instances and one has 1; a uniform draw treats those as equally
+  // plausible corner furniture, which they are not.
   const picked: PlaceableAsset[] = [];
   const rest = [...cands];
   for (let k = 0; k < 3; k++) {
-    const i = Math.min(rest.length - 1, Math.floor(rand(seed, k, 0x4d21) * rest.length));
+    let total = 0;
+    for (const a of rest) total += Math.max(1, a.instances);
+    let u = rand(seed, k, 0x4d21) * total;
+    let i = rest.length - 1;
+    for (let j = 0; j < rest.length; j++) {
+      u -= Math.max(1, rest[j].instances);
+      if (u <= 0) {
+        i = j;
+        break;
+      }
+    }
     picked.push(rest[i]);
     rest.splice(i, 1);
   }

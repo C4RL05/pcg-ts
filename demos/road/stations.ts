@@ -226,6 +226,13 @@ export function makeStationsDetailed(
 
 /** The longest gap in a sorted, wrapped station list. */
 function longestGap(sorted: readonly number[], lapW: number): number {
+  // AN EMPTY LAP IS ONE GAP THE WHOLE WAY ROUND, not a covered one. The
+  // loop below returns zero for it, which reads as perfect coverage —
+  // unreachable from the station process, whose count is always at least
+  // one, but reachable at the placement level the moment a cull drops
+  // everything. `coverage()` already answers `lapW` here; this is the
+  // same answer given by the other of the two functions D-4 is read from.
+  if (sorted.length === 0) return lapW;
   let worst = 0;
   for (let i = 0; i < sorted.length; i++) {
     const next = i + 1 < sorted.length ? sorted[i + 1] : sorted[0] + lapW;
@@ -259,17 +266,116 @@ export const COVERAGE = { within2W: 0.85, maxGapW: 25 } as const;
  * pathological input cannot spin here.
  */
 function enforceCoverage(sorted: number[], lapW: number): StationStats {
-  const out = [...sorted];
-  const worstGapBeforeW = longestGap(out, lapW);
-  const log: StationStats["log"] = [];
-  let gapRepairs = 0;
+  const r = repairPlacementCoverage(
+    sorted.map((station) => ({ station })),
+    lapW,
+  );
+  return {
+    stations: r.placements.map((p) => p.station),
+    gapRepairs: r.moves,
+    worstGapBeforeW: r.worstGapBeforeW,
+    log: r.log.map((m) => ({ removed: m.from, added: m.to })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// D-4 at the placement level: the same repair, after the cull.
+// ---------------------------------------------------------------------------
+
+/** Anything that sits at a station along the lap. */
+export interface Stationed {
+  readonly station: number;
+}
+
+/**
+ * One move: the donor's station before, and where it went.
+ *
+ * STATIONS RATHER THAN INDICES, unlike the band-mix and landmark logs.
+ * Those two repairs re-draw a placement IN PLACE, so an index identifies
+ * the move for as long as the array exists. This one re-sorts after every
+ * move, so an index means nothing a pass later — and the pair of stations
+ * is what a minimality check needs anyway: put `to` back at `from` and ask
+ * whether D-4 still holds.
+ */
+export interface CoverageMove {
+  readonly from: number;
+  readonly to: number;
+}
+
+/** What a placement-level coverage pass had to do. */
+export interface CoverageRepair<T> {
+  readonly placements: T[];
+  /** Placements moved to close a gap longer than D-4 allows. */
+  readonly moves: number;
+  /** The longest gap before the pass, in W. */
+  readonly worstGapBeforeW: number;
+  /**
+   * And after it — which is NOT always inside D-4. The pass is bounded,
+   * and a lap with fewer than three placements has no donor to take, so
+   * an un-closable lap is reported rather than thrown. A caller that
+   * wants a gate reads this figure; one that wants a fire count reads
+   * `moves`.
+   */
+  readonly worstGapAfterW: number;
+  readonly log: CoverageMove[];
+}
+
+export interface CoverageRepairOptions<T> {
+  /**
+   * Placements that may never be the donor. The corner language pins its
+   * markers and rulers to a measured distance before an entry, so moving
+   * one to close a gap would satisfy D-4 by breaking L-2 or L-3 — a
+   * repair that fixes its own rule by breaking another's is worse than
+   * the hole it closed.
+   */
+  readonly protect?: (p: T) => boolean;
+}
+
+/**
+ * {@link enforceCoverage}, lifted off bare numbers and onto whatever
+ * carries a station — and this is the one that belongs in the pipeline.
+ *
+ * WHY IT HAS TO RUN LATE. §9's stage 1 enforces D-4 on the stations, and
+ * stage 4's sightline cull then MOVES AND DROPS placements. Every gap the
+ * cull opens is opened after the only pass that was looking for gaps, so
+ * a lap can finish with a 30W hole while the stage-1 figure reads zero
+ * repairs. Enforcing coverage on stations is enforcing it on a lap that
+ * no longer exists, which is the same mis-sequencing the band mix and the
+ * landmark rules were moved after the cull to avoid.
+ *
+ * MOVED, NOT RE-DRAWN. The donor keeps its asset, its lateral and its
+ * height and changes only its station, so the count stays exactly D-1's
+ * budget and the band mix sees the same population it would have seen.
+ * A repair that drew a fresh asset into the gap would pass a count check
+ * and quietly re-roll the vocabulary L-4 is measured on.
+ *
+ * The donor is the placement whose nearest neighbour along the lap is
+ * closest — the one with the most company, so the one whose absence
+ * changes the picture least — and never one of the two placements
+ * bounding the gap being filled, since taking either widens the hole it
+ * is trying to close.
+ */
+export function repairPlacementCoverage<T extends Stationed>(
+  placements: readonly T[],
+  lapW: number,
+  opts: CoverageRepairOptions<T> = {},
+): CoverageRepair<T> {
+  const out = [...placements].sort((a, b) => a.station - b.station);
+  const at = (i: number): number => out[i].station;
+  const stations = (): number[] => out.map((p) => p.station);
+  const worstGapBeforeW = longestGap(stations(), lapW);
+  const log: CoverageMove[] = [];
+  let moves = 0;
+
+  // Bounded by the number of gaps it could ever need to fix, so a
+  // pathological input cannot spin here.
   const maxPasses = Math.ceil(lapW / COVERAGE.maxGapW) + 2;
   for (let pass = 0; pass < maxPasses; pass++) {
     let worst = -1;
     let worstGap = 0;
     for (let i = 0; i < out.length; i++) {
-      const next = i + 1 < out.length ? out[i + 1] : out[0] + lapW;
-      const gap = next - out[i];
+      const next = i + 1 < out.length ? at(i + 1) : at(0) + lapW;
+      const gap = next - at(i);
       if (gap > worstGap) {
         worstGap = gap;
         worst = i;
@@ -281,27 +387,71 @@ function enforceCoverage(sorted: number[], lapW: number): StationStats {
     let donorGap = Infinity;
     for (let i = 0; i < out.length; i++) {
       if (i === worst || i === (worst + 1) % out.length) continue;
-      const prev = out[(i - 1 + out.length) % out.length];
-      const next = out[(i + 1) % out.length];
+      if (opts.protect?.(out[i])) continue;
+      const prev = at((i - 1 + out.length) % out.length);
+      const next = at((i + 1) % out.length);
       const near = Math.min(
-        Math.abs(out[i] - prev + (i === 0 ? lapW : 0)),
-        Math.abs(next - out[i] + (i === out.length - 1 ? lapW : 0)),
+        Math.abs(at(i) - prev + (i === 0 ? lapW : 0)),
+        Math.abs(next - at(i) + (i === out.length - 1 ? lapW : 0)),
       );
       if (near < donorGap) {
         donorGap = near;
         donor = i;
       }
     }
+    // Every candidate protected, or too few placements to have one: the
+    // gap stays open and `worstGapAfterW` says so.
     if (donor < 0) break;
 
-    const mid = (out[worst] + worstGap / 2) % lapW;
-    log.push({ removed: out[donor], added: mid });
-    out.splice(donor, 1);
-    out.push(mid);
-    out.sort((a, b) => a - b);
-    gapRepairs++;
+    const mid = (at(worst) + worstGap / 2) % lapW;
+    log.push({ from: at(donor), to: mid });
+    out[donor] = { ...out[donor], station: mid };
+    out.sort((a, b) => a.station - b.station);
+    moves++;
   }
-  return { stations: out, gapRepairs, worstGapBeforeW, log };
+  return {
+    placements: out,
+    moves,
+    worstGapBeforeW,
+    worstGapAfterW: longestGap(stations(), lapW),
+    log,
+  };
+}
+
+/**
+ * Is a placement-level coverage repair minimal — could any single move be
+ * undone with D-4 still holding?
+ *
+ * See {@link coverageIsMinimal}, which asks the same question of the
+ * station-level pass, and {@link CoverageMove} for why a move is
+ * identified by its two stations. Undoing a move means putting the donor
+ * back where it came from, which is exactly `to -> from`.
+ *
+ * O(moves) rather than exponential, and deliberately: the criterion is
+ * "no SINGLE move is removable", not "no subset is". That is what
+ * separates a repair that stops at the bound from one that carries on
+ * past it, and idempotence would separate neither — a pass that closed
+ * one gap six times over would halt afterwards and pass it.
+ */
+export function placementCoverageIsMinimal<T extends Stationed>(
+  repair: CoverageRepair<T>,
+  lapW: number,
+): { minimal: boolean; removable: number } {
+  let removable = 0;
+  for (const m of repair.log) {
+    const trial = repair.placements.map((p) => p.station);
+    // ONE occurrence, not every station equal to it: two placements can
+    // share a station, and dropping both would test a lap with a
+    // placement missing rather than a move undone.
+    const i = trial.indexOf(m.to);
+    // A later pass moved this one again, so the move is not the thing
+    // undoing `to -> from` would undo. Not removable, by inspection.
+    if (i < 0) continue;
+    trial[i] = m.from;
+    trial.sort((a, b) => a - b);
+    if (longestGap(trial, lapW) <= COVERAGE.maxGapW) removable++;
+  }
+  return { minimal: removable === 0, removable };
 }
 
 /**

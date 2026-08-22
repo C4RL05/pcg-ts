@@ -23,6 +23,8 @@
  * affinity denominator, one level up.
  */
 
+import { CORRIDOR } from "./zones.js";
+
 /** The per-asset measurements this module places from. */
 export interface AssetWhere {
   readonly lateral: { readonly median: number; readonly p10: number; readonly p90: number };
@@ -238,7 +240,11 @@ export function bandOfPlacement(
 /** The |t| span each band occupies, for choosing an asset that lands in it. */
 const BAND_T: Record<Band, readonly [number, number]> = {
   over: [0, 1.5],
-  verge: [0, 1.5],
+  // FROM 1W, NOT FROM 0. The verge is 1-1.5W, and drawing from 0 let the
+  // repair pick an asset whose own lateral sits at 0.4W, place it there,
+  // and land in `over` instead — a move that costs a pass and does not
+  // fill the band it was made for.
+  verge: [1, 1.5],
   near: [1.5, 2.5],
   mid: [2.5, 5],
   far: [5, 13],
@@ -246,14 +252,14 @@ const BAND_T: Record<Band, readonly [number, number]> = {
 };
 
 /** One re-draw, kept so the repair can be checked for MINIMALITY. */
-export interface MixMove {
+export interface MixMove<T extends AssetPlacement = AssetPlacement> {
   readonly index: number;
-  readonly before: AssetPlacement | undefined;
+  readonly before: T | undefined;
 }
 
 /** What a Z-3 repair had to do. Reported, for the usual reason. */
-export interface MixRepair {
-  readonly placements: (AssetPlacement | undefined)[];
+export interface MixRepair<T extends AssetPlacement = AssetPlacement> {
+  readonly placements: (T | undefined)[];
   /** Placements re-drawn to bring a band inside Z-3. */
   readonly moves: number;
   /** Bands that were outside before, with the share they held. */
@@ -276,7 +282,7 @@ export interface MixRepair {
    * where things END UP can be right. Three of those were tried here
    * before this one.
    */
-  readonly log: MixMove[];
+  readonly log: MixMove<T>[];
 }
 
 /** Are all six bands inside Z-3's rule for this set of placements? */
@@ -322,8 +328,8 @@ export function mixInsideRule(
  * So: lift a band to its floor, trim it to its ceiling, stop. Enforce the
  * bound, preserve the spread inside it.
  */
-export function repairBandMix(
-  placements: readonly (AssetPlacement | undefined)[],
+export function repairBandMix<T extends AssetPlacement>(
+  placements: readonly (T | undefined)[],
   assets: readonly PlaceableAsset[],
   seed: number,
   datum: "centre" | "base" = "centre",
@@ -333,7 +339,7 @@ export function repairBandMix(
    * and the band mix has 200 other placements to work with.
    */
   protect: ReadonlySet<number> = new Set(),
-): MixRepair {
+): MixRepair<T> {
   const out = [...placements];
   const live = (): { i: number; band: Band }[] =>
     out.flatMap((p, i) =>
@@ -353,7 +359,7 @@ export function repairBandMix(
   };
 
   const before = shares();
-  const log: MixMove[] = [];
+  const log: MixMove<T>[] = [];
   const wasOutside: MixRepair["wasOutside"] = [];
   for (const b of Object.keys(Z3) as Band[]) {
     const [lo, hi] = Z3[b].rule;
@@ -420,10 +426,36 @@ export function repairBandMix(
       return m !== undefined && Math.abs(m) >= lo && Math.abs(m) < hi;
     });
     if (pool.length === 0) break;
-    const replacement = placeAsset(pool, "straight", seed, donor.i + 0x9e37 * (pass + 1));
+    let replacement = placeAsset(pool, "straight", seed, donor.i + 0x9e37 * (pass + 1));
     if (!replacement) break;
+
+    // AN `over` PLACEMENT SPANS THE CORRIDOR; IT DOES NOT SIT IN IT.
+    // The band is |t| < 1W — which is the corridor — so filling it from
+    // an asset's own measured height puts an object on the racing line
+    // at about knee height. Z-1 then either raises it (fine) or stands
+    // it off to the corridor edge, which takes it OUT of this band, so
+    // the mix refills it and the two rules oscillate: measured at 147
+    // mix moves against 95 corridor fixes over six rounds, never
+    // settling, finishing with eight objects in the middle of the road.
+    //
+    // So the height comes from the BAND here rather than from the asset.
+    // Raised, it stays `over` for any |t| under 1.5W, Z-1 has nothing to
+    // fix, and the loop settles in two.
+    if (dst === "over") {
+      const tall = replacement.asset.size.tall;
+      replacement = { ...replacement, h: CORRIDOR.ceilingW + tall / 2 };
+    }
     log.push({ index: donor.i, before: out[donor.i] });
-    out[donor.i] = replacement;
+    // SPREAD OVER THE DONOR, never straight onto it. `placeAsset` returns
+    // an asset, a lateral and a height and knows nothing about the rest
+    // of a placement — so assigning its result whole silently DELETES
+    // every other field the caller was carrying. Here that was the
+    // station: forty of a lap's placements came out of this repair with
+    // no station at all, which put their boxes at NaN in the world,
+    // hid them from the cull that runs after this, and made D-4's
+    // longest gap unreadable. Nothing failed. The lap just quietly lost
+    // an eighth of its dressing.
+    out[donor.i] = { ...(out[donor.i] as T), ...replacement };
     moves++;
   }
   return { placements: out, moves, wasOutside, log };
@@ -439,8 +471,8 @@ export function repairBandMix(
  * carries on after the bounds are met, and checking subsets would be
  * checking a different and much stronger claim than the rule makes.
  */
-export function repairIsMinimal(
-  repair: MixRepair,
+export function repairIsMinimal<T extends AssetPlacement>(
+  repair: MixRepair<T>,
   datum: "centre" | "base" = "centre",
 ): { minimal: boolean; removable: number[] } {
   const removable: number[] = [];
