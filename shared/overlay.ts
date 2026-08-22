@@ -89,11 +89,40 @@ function injectStyles(): void {
 .pcg-overlay input[type="range"]:focus { outline: none; }
 .pcg-overlay input[type="range"]:focus-visible { outline: 1px solid var(--ed-focus); outline-offset: 3px; }
 .pcg-overlay input[type="range"]:hover { filter: brightness(1.45); }
+/* The number field and its stepper, kept in step with
+   shared/NumberBox.svelte: minus and plus, square, the full height of
+   the field, at its right edge, shown on hover. One look built twice for
+   the same reason the slider is — this panel is plain DOM and that one
+   is Svelte. The platform spinner cannot be reshaped into this (one box
+   for both arrows on WebKit, nothing at all on Firefox), so it is hidden
+   and replaced rather than restyled. */
+.pcg-overlay .pcg-numbox { position: relative; display: inline-flex; width: 90px; }
 .pcg-overlay input[type="number"] {
-  width: 90px; padding: 3px 6px; box-sizing: border-box;
+  width: 100%; padding: 3px 6px; box-sizing: border-box;
   background: var(--ed-well); color: var(--ed-ink); border: 1px solid var(--ed-edge); border-radius: var(--ed-radius);
   font: 12px ui-monospace, monospace;
 }
+.pcg-overlay input[type="number"]::-webkit-outer-spin-button,
+.pcg-overlay input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pcg-overlay input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.pcg-overlay .pcg-steps {
+  position: absolute; top: 1px; right: 1px; bottom: 1px;
+  display: flex; opacity: 0; pointer-events: none; transition: opacity 0.08s;
+}
+.pcg-overlay .pcg-numbox:hover .pcg-steps,
+.pcg-overlay .pcg-numbox:focus-within .pcg-steps { opacity: 1; pointer-events: auto; }
+.pcg-overlay .pcg-steps button {
+  height: 100%; aspect-ratio: 1; padding: 0;
+  display: grid; place-items: center;
+  background: transparent; color: var(--ed-ink-mid);
+  border: 0; border-radius: 0;
+  font: 12px system-ui, sans-serif; line-height: 1; cursor: pointer; user-select: none;
+}
+/* At rest only the glyph: the field already has a border, and a plate
+   inside it would be a second frame four pixels from the first. The
+   fill arrives under the pointer, where it says which one you will hit. */
+.pcg-overlay .pcg-steps button:hover { background: var(--ed-raised-hi); color: var(--ed-ink-hi); }
+.pcg-overlay .pcg-steps button:active { background: var(--ed-edge); }
 .pcg-overlay select {
   flex: 1; padding: 3px 6px; background: var(--ed-well); color: var(--ed-ink);
   border: 1px solid var(--ed-edge); border-radius: var(--ed-radius); font: 12px system-ui, sans-serif;
@@ -262,6 +291,62 @@ export function createOverlay(opts: { title: string; info?: string }): Overlay {
     return div;
   }
 
+  /**
+   * Wrap a number input in the panel's stepper: minus and plus, square,
+   * at the field's right edge, shown on hover.
+   *
+   * The pair is built rather than styled, because the platform's spinner
+   * is one pseudo-element for both arrows on WebKit and nothing at all
+   * on Firefox — see the stylesheet above. `commit` is the caller's own
+   * change handler, called directly: a synthesised change event would
+   * have to be trusted to reach a listener attached before the wrap, and
+   * calling the function is the same thing without the indirection.
+   */
+  function withStepper(input: HTMLInputElement, commit: () => void): HTMLElement {
+    const box = document.createElement("span");
+    box.className = "pcg-numbox";
+    box.appendChild(input);
+    const steps = document.createElement("span");
+    steps.className = "pcg-steps";
+
+    for (const [direction, glyph, label] of [
+      [-1, "−", "decrease"],
+      [1, "+", "increase"],
+    ] as const) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.tabIndex = -1;
+      button.textContent = glyph;
+      button.setAttribute("aria-label", label);
+      let hold: ReturnType<typeof setTimeout> | undefined;
+      let run: ReturnType<typeof setInterval> | undefined;
+      const nudge = (): void => {
+        if (direction > 0) input.stepUp();
+        else input.stepDown();
+        commit();
+      };
+      const stop = (): void => {
+        clearTimeout(hold);
+        clearInterval(run);
+      };
+      button.addEventListener("pointerdown", (e) => {
+        /* The caret stays where it is: a step is not a focus change. */
+        e.preventDefault();
+        nudge();
+        hold = setTimeout(() => {
+          run = setInterval(nudge, 60);
+        }, 400);
+      });
+      for (const done of ["pointerup", "pointerleave", "pointercancel"]) {
+        button.addEventListener(done, stop);
+      }
+      steps.appendChild(button);
+    }
+
+    box.appendChild(steps);
+    return box;
+  }
+
   return {
     el,
     addSeed(initial, onChange) {
@@ -269,12 +354,14 @@ export function createOverlay(opts: { title: string; info?: string }): Overlay {
       const input = document.createElement("input");
       input.type = "number";
       input.step = "1";
+      input.min = "0";
       input.value = String(initial);
-      input.addEventListener("change", () => {
-        const v = Math.floor(Number(input.value));
+      const commit = (): void => {
+        const v = Math.floor(input.valueAsNumber);
         if (Number.isFinite(v)) onChange(v >>> 0);
-      });
-      div.appendChild(input);
+      };
+      input.addEventListener("change", commit);
+      div.appendChild(withStepper(input, commit));
     },
     addSlider(label, o, onChange) {
       const div = row(label);

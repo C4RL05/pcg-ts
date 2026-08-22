@@ -241,10 +241,45 @@
   .seed-ctl label { color: var(--muted); }
   .seed-ctl input {
     font-family: var(--mono); font-size: 13px;
-    width: 76px; padding: 5px 8px;
+    /* 112, not 76: the stepper is two squares the height of the field,
+       so at the old width a hovered box was almost entirely buttons and
+       the value you were setting had nowhere to be read. */
+    width: 112px; padding: 5px 8px;
     color: var(--ink); background: var(--bg);
     border: 1px solid var(--line); border-radius: 6px;
   }
+  /* The stepper: minus and plus, square, the full height of the field,
+     at its right edge, shown on hover. The platform's spinner is two
+     stacked arrows a few pixels wide — a target you aim at rather than
+     hit — and it cannot be reshaped into this: WebKit gives one box for
+     both arrows and Firefox gives nothing. So it is hidden and replaced.
+     The app chrome carries the same control; see shared/NumberBox.svelte. */
+  .seed-ctl .numbox { position: relative; display: inline-flex; }
+  .seed-ctl input::-webkit-outer-spin-button,
+  .seed-ctl input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .seed-ctl input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+  .seed-ctl .steps {
+    position: absolute; top: 1px; right: 1px; bottom: 1px;
+    display: flex; opacity: 0; pointer-events: none;
+    /* One less than the field's 6px, because the pair sits inside its
+       1px border — so the outer corner follows the frame exactly. */
+    border-radius: 0 5px 5px 0; overflow: hidden;
+    transition: opacity .08s;
+  }
+  .seed-ctl .numbox:hover .steps,
+  .seed-ctl .numbox:focus-within .steps { opacity: 1; pointer-events: auto; }
+  .seed-ctl .steps button {
+    height: 100%; aspect-ratio: 1; padding: 0;
+    display: grid; place-items: center;
+    /* At rest only the glyph: the field already has a border, and a
+       plate inside it would be a second frame a pixel from the first. */
+    background: transparent; color: var(--muted);
+    border: 0; border-radius: 0;
+    font: 13px system-ui, sans-serif; line-height: 1;
+    cursor: pointer; user-select: none;
+  }
+  .seed-ctl .steps button:hover { background: var(--line); color: var(--ink-hi); }
+  .seed-ctl .steps button:active { background: var(--line-hi); }
   .seed-note { color: var(--faint); }
 
   /* ---------- stats strip ---------- */
@@ -457,7 +492,13 @@
     <a href="./editor/" class="editor-link">Open the editor →</a>
     <span class="seed-ctl">
       <label for="seed">seed</label>
-      <input id="seed" type="number" value="42" step="1" />
+      <span class="numbox">
+        <input id="seed" type="number" value="42" step="1" />
+        <span class="steps">
+          <button type="button" tabindex="-1" data-step="-1" aria-label="decrease">&minus;</button>
+          <button type="button" tabindex="-1" data-step="1" aria-label="increase">+</button>
+        </span>
+      </span>
       <span class="seed-note">← this header is cooked from it. Same seed, same field — always.</span>
     </span>
   </div>
@@ -884,6 +925,27 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
   }
 
   input.addEventListener("input", draw);
+
+  // The stepper's two buttons. `stepUp`/`stepDown` are the browser's own
+  // arithmetic, and dispatching `input` leaves the listener above as the
+  // only thing that knows how to redraw. Press and hold runs.
+  for (const button of document.querySelectorAll(".seed-ctl .steps button")) {
+    const direction = Number(button.dataset.step);
+    let hold, run;
+    const nudge = () => {
+      if (direction > 0) input.stepUp(); else input.stepDown();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const stop = () => { clearTimeout(hold); clearInterval(run); };
+    button.addEventListener("pointerdown", (e) => {
+      e.preventDefault();          // the caret stays where it is
+      nudge();
+      hold = setTimeout(() => { run = setInterval(nudge, 60); }, 400);
+    });
+    for (const done of ["pointerup", "pointerleave", "pointercancel"]) {
+      button.addEventListener(done, stop);
+    }
+  }
   window.addEventListener("resize", draw);
   // The theme-change redraws that used to live here are gone with the
   // themes: the palette no longer varies, so there is nothing to react to.

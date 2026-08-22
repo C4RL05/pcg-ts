@@ -14,6 +14,7 @@
   import { clampToSchema } from "./controller.js";
   import type { ParamView } from "./controller.js";
   import FieldTree from "./FieldTree.svelte";
+  import NumberBox from "../shared/NumberBox.svelte";
 
   /**
    * Move the overlay to `<body>`, WITHOUT which it is not an overlay.
@@ -136,16 +137,14 @@
     return new Array<number>(arity).fill(n.length === 1 ? n[0] : 0);
   });
 
-  function commitScalar(e: Event): void {
-    const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
+  function commitScalar(v: number): void {
     // Clamped before it is committed: `min`/`max` on the input element are
     // advisory (typing is not constrained), and setParam refuses what the
     // schema does not admit.
     if (Number.isFinite(v)) error = onPlain(clampToSchema(view.schema, v));
   }
 
-  function commitComponent(index: number, e: Event): void {
-    const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
+  function commitComponent(index: number, v: number): void {
     if (!Number.isFinite(v)) return;
     const next = [...components];
     next[index] = clampToSchema(view.schema, v);
@@ -168,25 +167,23 @@
     {#if view.schema.type === "vec3" || view.schema.type === "vec4"}
       <div class="vec">
         {#each components as comp, i}
-          <input
-            type="number"
+          <NumberBox
             step="any"
             min={view.schema.min}
             max={view.schema.max}
             value={comp}
-            onchange={(e) => commitComponent(i, e)}
-          />
+            ariaLabel="{view.key} {i}"
+            onCommit={(v) => commitComponent(i, v)} />
         {/each}
       </div>
     {:else}
-      <input
-        type="number"
+      <NumberBox
         step="any"
         min={view.schema.min}
         max={view.schema.max}
         value={typeof view.value === "number" ? view.value : Number(view.schema.default)}
-        onchange={commitScalar}
-      />
+        ariaLabel={view.key}
+        onCommit={commitScalar} />
     {/if}
   {:else}
     <textarea rows="7" spellcheck="false" bind:value={text}></textarea>
@@ -253,17 +250,6 @@
   .vec {
     display: flex;
     gap: 4px;
-  }
-  input[type="number"] {
-    width: 100%;
-    min-width: 0;
-    box-sizing: border-box;
-    padding: 3px 6px;
-    background: var(--ed-well);
-    color: var(--ed-ink);
-    border: 1px solid var(--ed-edge);
-    border-radius: var(--ed-radius);
-    font: var(--ed-t-body) var(--ed-mono);
   }
   textarea {
     width: 100%;

@@ -12,6 +12,7 @@
    * reason: "nothing selected" is expressed by the panel not existing.
    */
   import FieldParam from "./FieldParam.svelte";
+  import NumberBox from "../shared/NumberBox.svelte";
   import { clampToSchema } from "./controller.js";
   import type { EditorController, ParamView } from "./controller.js";
   import type { NodeView } from "./model.js";
@@ -52,14 +53,12 @@
   const clampNumber = (view: ParamView, raw: number): number =>
     clampToSchema(view.schema, raw);
 
-  function commitNumber(view: ParamView, e: Event): void {
-    const raw = (e.currentTarget as HTMLInputElement).valueAsNumber;
+  function commitNumber(view: ParamView, raw: number): void {
     if (!Number.isFinite(raw)) return;
     onPlain(node.id, view.key, clampNumber(view, raw));
   }
 
-  function commitVecComponent(view: ParamView, index: number, e: Event): void {
-    const raw = (e.currentTarget as HTMLInputElement).valueAsNumber;
+  function commitVecComponent(view: ParamView, index: number, raw: number): void {
     if (!Number.isFinite(raw)) return;
     const next = asNumbers(view.value);
     next[index] = clampNumber(view, raw);
@@ -126,14 +125,13 @@
             onField={(text) => onFieldApply(node.id, view.key, text)}
           />
         {:else if view.schema.type === "f32" || view.schema.type === "i32" || view.schema.type === "u32"}
-          <input
-            type="number"
+          <NumberBox
             value={asNumber(view.value)}
             min={view.schema.min}
             max={view.schema.max}
             step={view.schema.type === "f32" ? "any" : 1}
-            onchange={(e) => commitNumber(view, e)}
-          />
+            ariaLabel={view.key}
+            onCommit={(v) => commitNumber(view, v)} />
         {:else if view.schema.type === "bool"}
           <input type="checkbox" checked={asBool(view.value)} onchange={(e) => commitBool(view, e)} />
         {:else if view.schema.type === "enum"}
@@ -147,12 +145,11 @@
         {:else if view.schema.type === "vec3" || view.schema.type === "vec4"}
           <div class="vec">
             {#each asNumbers(view.value) as comp, i}
-              <input
-                type="number"
+              <NumberBox
                 step="any"
                 value={comp}
-                onchange={(e) => commitVecComponent(view, i, e)}
-              />
+                ariaLabel="{view.key} {i}"
+                onCommit={(v) => commitVecComponent(view, i, v)} />
             {/each}
           </div>
         {:else if view.schema.type === "stringList"}
@@ -254,7 +251,8 @@
     font-size: var(--ed-t-meta);
     font-style: italic;
   }
-  input[type="number"],
+  /* The number fields are NumberBox now and carry this recipe
+     themselves — see that component for why it had to move. */
   input[type="text"],
   select {
     width: 100%;
@@ -272,9 +270,6 @@
   .vec {
     display: flex;
     gap: 4px;
-  }
-  .vec input {
-    min-width: 0;
   }
   .list-row {
     display: flex;

@@ -19,6 +19,7 @@
    * styles come with it.
    */
   import type { Snippet } from "svelte";
+  import NumberBox from "./NumberBox.svelte";
   import {
     clampToRange,
     formatNumber,
@@ -93,11 +94,10 @@
     if (settled || control.live === true) onCommit(commit);
   }
 
-  function typeNumber(control: NumberControl<P>, raw: string): void {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return;
+  function typeNumber(control: NumberControl<P>, entered: number): void {
+    if (!Number.isFinite(entered)) return;
     const value = clampToRange(
-      parsed,
+      entered,
       control.min ?? -Infinity,
       control.max ?? Infinity,
       control.step ?? 0,
@@ -114,12 +114,11 @@
   }
 
   /** One component changes; the commit carries the whole vector. */
-  function typeVector(control: VectorControl<P>, index: number, raw: string): void {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return;
+  function typeVector(control: VectorControl<P>, index: number, entered: number): void {
+    if (!Number.isFinite(entered)) return;
     const value = [...asVector(control.key)];
     value[index] = clampToRange(
-      parsed,
+      entered,
       control.min ?? -Infinity,
       control.max ?? Infinity,
       control.step ?? 0,
@@ -147,10 +146,9 @@
     onCommit(commit);
   }
 
-  function numberGrid(control: NumberGridControl<P>, item: string, raw: string): void {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return;
-    const value = clampToRange(parsed, control.min, control.max, control.step);
+  function numberGrid(control: NumberGridControl<P>, item: string, entered: number): void {
+    if (!Number.isFinite(entered)) return;
+    const value = clampToRange(entered, control.min, control.max, control.step);
     const commit: ControlCommit<P> = { kind: "numberGrid", control, key: control.key, item, value };
     onInput(commit);
     onCommit(commit);
@@ -222,14 +220,13 @@
       {:else if control.kind === "number"}
         <label class="row" title={control.description}>
           <span>{control.label}</span>
-          <input
-            class="num"
-            type="number"
+          <NumberBox
             min={control.min}
             max={control.max}
             step={control.step ?? "any"}
             value={asNumber(control.key)}
-            onchange={(e) => typeNumber(control, e.currentTarget.value)} />
+            ariaLabel={control.label}
+            onCommit={(v) => typeNumber(control, v)} />
           {#if control.unit !== undefined}<em class="unit">{control.unit}</em>{/if}
         </label>
       {:else if control.kind === "text"}
@@ -246,14 +243,13 @@
           <span>{control.label}</span>
           <div class="vec">
             {#each asVector(control.key) as component, i (i)}
-              <input
-                class="num"
-                type="number"
+              <NumberBox
                 min={control.min}
                 max={control.max}
                 step={control.step ?? "any"}
                 value={component}
-                onchange={(e) => typeVector(control, i, e.currentTarget.value)} />
+                ariaLabel="{control.label} {i}"
+                onCommit={(v) => typeVector(control, i, v)} />
             {/each}
           </div>
         </div>
@@ -303,14 +299,13 @@
             {#each control.items as item (item.item)}
               <label class="cell">
                 <span>{item.label}</span>
-                <input
-                  class="num"
-                  type="number"
+                <NumberBox
                   min={control.min}
                   max={control.max}
                   step={control.step}
                   value={asNumbers(control.key)[item.item] ?? control.min}
-                  onchange={(e) => numberGrid(control, item.item, e.currentTarget.value)} />
+                  ariaLabel={item.label}
+                  onCommit={(v) => numberGrid(control, item.item, v)} />
               </label>
             {/each}
           </div>
@@ -482,6 +477,9 @@
   input[type="range"]:hover {
     filter: brightness(1.45);
   }
+  /* `.num` is the TEXT field only. Every number on this panel is a
+     NumberBox, which carries its own copy of this recipe because Svelte
+     scopes styles to whoever renders the markup — see that component. */
   select,
   .num {
     flex: 1;
@@ -509,9 +507,6 @@
     gap: 4px;
     min-width: 0;
   }
-  .vec .num {
-    min-width: 0;
-  }
   .grid {
     margin: 6px 0 10px;
     padding: 8px;
@@ -537,11 +532,6 @@
   .cell > span {
     color: var(--ed-ink-mid, var(--ed-ink-mid));
     font-size: 11px;
-  }
-  .cell .num {
-    flex: 0 0 auto;
-    width: 100%;
-    box-sizing: border-box;
   }
   .check {
     display: flex;

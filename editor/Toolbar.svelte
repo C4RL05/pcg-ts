@@ -12,6 +12,7 @@
   import { WORDMARK_PATHS, WORDMARK_VIEWBOX } from "../shared/wordmark.js";
   import type { GpuState } from "./main.js";
   import type { CookStatus } from "./controller.js";
+  import NumberBox from "../shared/NumberBox.svelte";
 
   let {
     seed,
@@ -219,8 +220,8 @@
         : "probing for a WebGPU adapter…",
   );
 
-  function commitSeed(e: Event): void {
-    const v = Math.floor((e.currentTarget as HTMLInputElement).valueAsNumber);
+  function commitSeed(raw: number): void {
+    const v = Math.floor(raw);
     if (Number.isFinite(v)) onSeed(v >>> 0);
   }
 
@@ -290,7 +291,9 @@
     </label>
     <label>
       seed
-      <input type="number" step="1" min="0" value={seed} onchange={commitSeed} />
+      <span class="seedbox">
+        <NumberBox step={1} min={0} value={seed} ariaLabel="seed" onCommit={commitSeed} />
+      </span>
     </label>
     <!-- Icons from here on, and the WORD IS NOT GONE: every one of these
          keeps its name in `title` for the pointer and in `aria-label` for
@@ -563,14 +566,15 @@
     color: var(--ed-ink-mid);
     font-size: var(--ed-t-body);
   }
-  input[type="number"] {
-    width: 78px;
-    padding: 3px 6px;
-    background: var(--ed-well);
-    color: var(--ed-ink);
-    border: 1px solid var(--ed-edge);
-    border-radius: var(--ed-radius);
-    font: var(--ed-t-body) var(--ed-mono);
+  /* The field itself is NumberBox's; this only says how wide. The
+     component fills the slot it is given and reaches for nothing. */
+  .seedbox {
+    display: flex;
+    /* 96, not the 78 this field had: the stepper overlays the right end
+       of the value on hover, and at 78 a seed you were stepping had
+       about five characters left to be read in. The bar has slack for
+       it — see the measurement above. */
+    width: 96px;
   }
   select {
     max-width: 260px;
