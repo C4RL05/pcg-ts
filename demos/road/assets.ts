@@ -286,11 +286,14 @@ export interface MixRepair<T extends AssetPlacement = AssetPlacement> {
 }
 
 /** Are all six bands inside Z-3's rule for this set of placements? */
-export function mixInsideRule(
-  placements: readonly (AssetPlacement | undefined)[],
+export function mixInsideRule<T extends AssetPlacement>(
+  placements: readonly (T | undefined)[],
   datum: "centre" | "base" = "centre",
+  /** Must match whatever the repair excluded, or the gate scores a
+   *  different population from the one the repair balanced. */
+  exclude: (p: T) => boolean = () => false,
 ): boolean {
-  const live = placements.filter((p): p is AssetPlacement => p !== undefined);
+  const live = placements.filter((p): p is T => p !== undefined && !exclude(p));
   if (live.length === 0) return true;
   const c = Object.fromEntries((Object.keys(Z3) as Band[]).map((b) => [b, 0])) as Record<
     Band,
@@ -339,11 +342,22 @@ export function repairBandMix<T extends AssetPlacement>(
    * and the band mix has 200 other placements to work with.
    */
   protect: ReadonlySet<number> = new Set(),
+  /**
+   * Placements outside the mix altogether — neither counted in a band's
+   * share nor available as a donor.
+   *
+   * L-6's cover uses this. Its pieces are all `over` by geometry and a
+   * lap can carry forty of them, which would take the band from a tenth
+   * to a quarter of the population and make Z-3 unsatisfiable on any
+   * circuit that has a tunnel. They are structure rather than dressing,
+   * and the share Z-3 states was measured on dressing.
+   */
+  exclude: (p: T) => boolean = () => false,
 ): MixRepair<T> {
   const out = [...placements];
   const live = (): { i: number; band: Band }[] =>
     out.flatMap((p, i) =>
-      p ? [{ i, band: bandOfPlacement(p.t, p.h, p.asset.size.tall, datum) }] : [],
+      p && !exclude(p) ? [{ i, band: bandOfPlacement(p.t, p.h, p.asset.size.tall, datum) }] : [],
     );
 
   const n = live().length;

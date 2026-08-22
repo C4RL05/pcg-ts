@@ -124,7 +124,12 @@ describe.skipIf(!existsSync(KIT))("the assembled pipeline", () => {
     const l = await theLap();
     for (const seed of SEEDS) {
       const d = dressLap(kit, l, seed);
-      expect(mixInsideRule(d.placements), `seed ${seed}`).toBe(true);
+      // The same exclusion the repair uses. Scoring a different
+      // population from the one that was balanced is a gate that fails on
+      // correct output, which is worse than one that passes on wrong.
+      expect(mixInsideRule(d.placements, "centre", (p) => p.cover === true), `seed ${seed}`).toBe(
+        true,
+      );
     }
   }, 300_000);
 
@@ -275,6 +280,23 @@ function boxProfile(
   return { h, edge, volume };
 }
 
+/**
+ * The DRESSING, without L-6's cover.
+ *
+ * The silhouette is compared against the reference circuit's own
+ * placements, and that circuit is 2% enclosed — its longest covered
+ * stretch is nine tenths of a half-width. A generator building the
+ * POPULATION's 10.5% therefore cannot match it on anything that counts
+ * overhead structure, and should not be asked to: it would mean either
+ * dropping enclosure or reproducing an exemplar that upstream has now
+ * warned about three times. So scenery is compared with scenery, and the
+ * enclosure share is gated separately, by measurement, against the
+ * population figure it actually comes from.
+ */
+function scenery(boxes: readonly PlacedBox[]): PlacedBox[] {
+  return boxes.filter((b) => !b.cover);
+}
+
 function quantile(xs: readonly number[], f: number): number {
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.floor(f * (s.length - 1))];
@@ -312,7 +334,7 @@ describe.skipIf(!existsSync(KIT))("the silhouette", () => {
 
   it("stands at the same height as the dressing it was measured from", async () => {
     const l = await theLap();
-    const gen = boxProfile(l, dressLap(kit, l, 1).boxes);
+    const gen = boxProfile(l, scenery(dressLap(kit, l, 1).boxes));
     const ref = boxProfile(l, await reference());
 
     // p99 AND max, not the median alone. The canopy left the median
@@ -333,7 +355,7 @@ describe.skipIf(!existsSync(KIT))("the silhouette", () => {
 
   it("is built from pieces the same size as the source's", async () => {
     const l = await theLap();
-    const gen = boxProfile(l, dressLap(kit, l, 1).boxes);
+    const gen = boxProfile(l, scenery(dressLap(kit, l, 1).boxes));
     const ref = boxProfile(l, await reference());
     for (const f of [0.5, 0.9]) {
       expect(Math.abs(quantile(gen.edge, f) - quantile(ref.edge, f))).toBeLessThan(0.5);
@@ -353,7 +375,7 @@ describe.skipIf(!existsSync(KIT))("the silhouette", () => {
    */
   it("sees a lap with a roof on it", async () => {
     const l = await theLap();
-    const gen = dressLap(kit, l, 1).boxes;
+    const gen = scenery(dressLap(kit, l, 1).boxes);
     const ref = boxProfile(l, await reference());
     // Every box raised four half-widths: the canopy, in one line.
     const raised = gen.map((b) => ({
@@ -367,7 +389,7 @@ describe.skipIf(!existsSync(KIT))("the silhouette", () => {
 
   it("reports both profiles, so a reader can see how close they are", async () => {
     const l = await theLap();
-    const gen = boxProfile(l, dressLap(kit, l, 1).boxes);
+    const gen = boxProfile(l, scenery(dressLap(kit, l, 1).boxes));
     const ref = boxProfile(l, await reference());
     const row = (n: string, p: ReturnType<typeof boxProfile>): string =>
       `  ${n.padEnd(10)} n=${String(p.h.length).padStart(5)} | ` +

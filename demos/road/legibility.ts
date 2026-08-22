@@ -33,6 +33,19 @@ export const LANDMARK = {
 /** A placement with the station it sits at, which §7 needs and §3 does not. */
 export interface StationedPlacement extends AssetPlacement {
   readonly station: number;
+  /**
+   * Set on L-6's cover pieces.
+   *
+   * WHY THEY ARE MARKED RATHER THAN INFERRED. A tunnel rib is structure,
+   * not scenery: its lateral is dictated by the tunnel it belongs to and
+   * not drawn from a measured distribution, and it is placed as one of a
+   * repeated run rather than at a station of its own. Z-3's bands
+   * describe where scenery sits across the track, so counting forty ribs
+   * as forty `over` placements measures the tunnel instead of the
+   * dressing. It cannot be inferred from the asset, because cover is
+   * tiled from the same vocabulary the dressing draws on.
+   */
+  readonly cover?: boolean;
 }
 
 /**
@@ -136,6 +149,9 @@ export function repairLandmarks(
     for (let i = 0; i < out.length; i++) {
       if (stretchOf(out[i].station) !== k) continue;
       if (protect.has(out[i].asset.id)) continue;
+      // Cover is structure. Swapping a tunnel rib for a one-off makes a
+      // landmark and a hole in the roof at the same time.
+      if (out[i].cover) continue;
       const n = counts.get(out[i].asset.id) ?? 0;
       if (n > victimCount) {
         victimCount = n;

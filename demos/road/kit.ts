@@ -95,6 +95,8 @@ export interface PlacedBox {
     readonly up: readonly [number, number, number];
   };
   readonly role: string;
+  /** Part of an L-6 cover run rather than dressing. */
+  readonly cover?: boolean;
   readonly thickness: number;
 }
 

@@ -57,6 +57,7 @@ import {
   reserveMarkers,
 } from "./legibility.js";
 import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
+import { placeEnclosure } from "./tunnels.js";
 import { makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
 import { resolveCorridor } from "./zones.js";
 
@@ -92,6 +93,11 @@ export interface DressStats {
   readonly blocked: number;
   readonly pushedOut: number;
   readonly dropped: number;
+  /** L-6: runs of cover placed, and the pieces they are tiled from. */
+  readonly coverStretches: number;
+  readonly coverPieces: number;
+  /** The share of lap the plan intended. What it ACHIEVES is measured. */
+  readonly plannedEnclosure: number;
   /** How many validate-and-feed-back rounds the tail needed. */
   readonly rounds: number;
   /** Whether it reached a fixed point, or ran out of rounds still repairing. */
@@ -173,6 +179,23 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );
 
+  // 0.5. L-6's enclosure, which §9 puts at step 5 — BEFORE the set-piece,
+  //      structure and rhythm passes, because cover is what the rest is
+  //      dressed around rather than something laid over it afterwards.
+  //
+  //      TARGETED AT THE POPULATION, NOT AT THE EXEMPLAR. The circuit
+  //      this vocabulary is measured from is 43% enclosed; the population
+  //      median is 10.5% and the rule asks for 10-25%. Building to 43%
+  //      would be building the outlier again, which this demo has already
+  //      done once and paid for.
+  const enclosure = placeEnclosure(
+    all,
+    lap.lengthW,
+    corners,
+    (s) => radiusAtW(lap, s),
+    seed,
+  );
+
   // 1. Stations.
   const st = makeStationsDetailed(lap.lengthW, seed);
 
@@ -186,10 +209,20 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     if (p) placements.push({ ...p, station: s });
   }
 
+  // Cover joins the population here, after the station pass and before
+  // every rule that has an opinion about the finished lap. It counts
+  // toward D-1 and D-4 — it is real dressing a driver passes — and is
+  // excluded from Z-3's mix, for the reason on `StationedPlacement.cover`.
+  placements.push(...enclosure.placements.map((p) => ({ ...p, cover: true as const })));
+
   // 3. Z-1, by size. The asset's own lateral distribution reaches inside
   //    the corridor for some assets, which is what makes this reachable.
   let corridorFixes = 0;
   placements = placements.map((p) => {
+    // Cover is placed clear of the corridor by construction — see
+    // `coverPlacements`. Standing a tunnel rib off to the corridor edge
+    // puts a hole in the roof over the racing line.
+    if (p.cover) return p;
     const baseH = p.h - p.asset.size.tall / 2;
     const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
     if (fixed.t === p.t && fixed.baseH === baseH) return p;
@@ -258,6 +291,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     // word, so L-1 goes last.
     let fixedThisRound = 0;
     placements = placements.map((p) => {
+      if (p.cover) return p;
       const baseH = p.h - p.asset.size.tall / 2;
       const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
       if (fixed.t === p.t && fixed.baseH === baseH) return p;
@@ -300,7 +334,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     // that no longer announces itself, and there are three hundred other
     // placements to move instead.
     const cov = repairPlacementCoverage(placements, lap.lengthW, {
-      protect: (p) => reserved.has(p.asset.id),
+      protect: (p) => reserved.has(p.asset.id) || p.cover === true,
     });
     placements = cov.placements;
     coverageMoves += cov.moves;
@@ -312,7 +346,14 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     landmarkFixes += marks.moves;
 
     // Z-3 next, against the lap that actually exists.
-    const mix = repairBandMix(placements, pool, seed + rounds, "centre", reserved);
+    const mix = repairBandMix(
+      placements,
+      pool,
+      seed + rounds,
+      "centre",
+      reserved,
+      (p) => p.cover === true,
+    );
     placements = mix.placements.filter((p): p is StationedPlacement => p !== undefined);
     mixMoves += mix.moves;
 
@@ -357,6 +398,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
         ],
         basis: { across: frame.across, along: frame.dir, up: frame.up },
         role: b.role ?? "mass",
+        cover: p.cover === true,
         thickness: b.thickness ?? 0,
       });
     }
@@ -386,6 +428,9 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
       converged,
       markersLostToCull: Math.max(0, after.unmarked - before.unmarked),
       rulersLostToCull: Math.max(0, after.brokenRulers - before.brokenRulers),
+      coverStretches: enclosure.plans.length,
+      coverPieces: enclosure.placements.length,
+      plannedEnclosure: enclosure.plannedShare,
       landmarkFixes: marks.moves + landmarkFixes,
       mixMoves,
       cookMs: performance.now() - t0,

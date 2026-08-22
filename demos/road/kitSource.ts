@@ -30,7 +30,40 @@ export const KITS = {
    * because work was done against it, NOT as the thing to learn from.
    */
   street: "street-kit.json",
+  /**
+   * The most ENCLOSED of the twenty-two, at 43% of its lap running under
+   * cover against a population median of 10.5%.
+   *
+   * Here because neither of the others can exercise L-6 at all: vegetation
+   * is 2% enclosed with a longest covered stretch of 0.9W, and its eight
+   * overhead objects are thin arches — CURLY_SURROUND is 3.9W across and
+   * 0.43W along. A rule cannot be developed against a circuit that never
+   * triggers it, and a validator scoring vegetation for enclosure is
+   * measuring the exemplar, not the generator.
+   *
+   * Atypical in the other direction, and the same caution applies to it
+   * as to the others: 43% is above the rule's own 10-25% ceiling. It is
+   * the circuit L-6 is BUILT against, not the one its target comes from.
+   *
+   * ITS COVER IS NOT AN ASSET. 126 separate objects hold it up and the
+   * largest single one is 5.9% of it; HPIP62 is 4.59 x 5.83 x 2.05W and
+   * appears 22 times. Enclosure here is a placement PATTERN — a run of
+   * repeated pieces over a station range — which is why L-6 is built as
+   * one and not as a search for a tunnel model.
+   */
+  enclosed: "enclosed-kit.json",
 } as const;
 
 /** The one the demo and its gates use. See KITS for why. */
 export const DEFAULT_KIT: keyof typeof KITS = "vegetation";
+
+/**
+ * The one L-6 is developed and gated against.
+ *
+ * SEPARATE FROM `DEFAULT_KIT` ON PURPOSE. Every other rule here is tested
+ * on the circuit the demo actually dresses, which is the honest way round
+ * — but enclosure cannot be, because that circuit has almost none. Naming
+ * the exception is better than quietly switching the default and moving
+ * every other figure in the suite along with it.
+ */
+export const ENCLOSURE_KIT: keyof typeof KITS = "enclosed";
