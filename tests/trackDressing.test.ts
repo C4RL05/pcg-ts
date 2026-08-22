@@ -976,36 +976,71 @@ describe("the index of dispersion", () => {
     // RE-MEASURED ON THE REGENERATED VOCABULARY, and the whole curve
     // moved. One lap, uncorrected, at 2 / 4 / 8 / 16 / 32 / 64 / 128W:
     //
-    //   now   1.94 / 2.49 / 3.51 / 5.68 /  9.41 / 16.90 / 35.99
-    //   was   1.35 / 1.49 / 1.80 / 2.36 /  3.89 /  6.29 / 11.70
-    //   source 1.36 / 1.78 / 2.97 / 4.79 /  6.52 /  5.50 /  6.25
+    //   now    1.94 / 2.49 / 3.51 / 5.68 /  9.41 / 16.90 / 35.99
+    //   was    1.35 / 1.49 / 1.80 / 2.36 /  3.89 /  6.29 / 11.70
+    //   source 1.48 / 1.81 / 3.01 / 5.03 /  6.63 /  5.98 /  5.11
+    //   null   1.00 / 1.09 / 1.02 / 1.00 /  0.95 /  0.83 /  0.79
     //
-    // Roughly a doubling at every scale, and it is the TABLE rather than
-    // this generator: the twelve archetypes were regenerated from
-    // corrected geometry and nothing in the pipeline changed with them.
-    // Checked against the one judgment call in that swap — upstream has
-    // no `profile` column for this vocabulary, so each row is assigned
-    // here by least-squares fit to the three curves — by forcing all
-    // twelve onto one profile in turn: all-flat reads 2.11 / 2.56 / 3.77
-    // / 6.68 / 12.14 / 24.12 / 44.86, all-built 2.74 / 3.93 / 6.22 / 8.08
-    // / 15.29 / 29.07 / 45.25, all-clustered 2.58 / 3.70 / 5.91 / 10.11 /
-    // 16.11 / 32.92 / 25.60. Every configuration sits near or above the
-    // mixed one, so the assignment is not what moved the curve.
+    // The source column is the RE-DERIVED one, taken on the corrected
+    // geometry in the same commit as the ladders — an along-lap station
+    // is a bounds centre and the misreading moved bounds centres, so it
+    // had the same exposure the extents did. It moved by hundredths at
+    // the small end and about a point at 64 and 128W. `null` is a Poisson
+    // process simulated through the identical pipeline rather than
+    // assumed to be 1.0, which is why it drifts under 1 at the wide end
+    // where a lap holds few windows.
     //
-    // WHERE THAT LEAVES THE COMPARISON. The middle is now the part that
-    // lands: 3.51 against 2.97 at 8W and 5.68 against 4.79 at 16W, where
-    // the old table ran short by half. The small end has gone from a near
-    // exact match to an overshoot, and the top has gone from long to
-    // very long. Whether the source column is still the right thing to
-    // read against is an OPEN QUESTION and is why nothing here is tuned
-    // toward it: along-lap position is a bounds centre, the misreading
-    // moved bounds centres, and it has not been said whether this curve
-    // was re-derived with the rest.
+    // WHAT MOVED THE CURVE, decomposed rather than asserted. The ladders
+    // that were swapped carry `|t|` and `across`, which are both LATERAL,
+    // and this statistic is computed on `station`, which is LONGITUDINAL.
+    // A change confined to the cross-section should move it by nothing,
+    // so the doubling is a coupling and worth naming. At 128W:
     //
-    // The previous comment claimed 1.62 / 1.64 / 2.27 / 2.78 / 5.01 /
-    // 8.25 / 12.36 for a table that measures 1.35 / 1.49 / 1.80 / ...
-    // — it had drifted from the code before this change, which is the
-    // failure the pins below exist to prevent. Two-sided, all of them.
+    //   new table, as it ships                                    35.99
+    //   ... with every `cluster` forced to 1                      20.35
+    //   ... with `cluster` at 1 and every `rate` equal            22.48
+    //   ... and the profile split changed from 9/3 to 6/6         12.32
+    //   old table, same neutralisation, 6/6                       11.29
+    //
+    // So the SHORT range is the table's own mix — `cluster` and `rate`
+    // carry 2W and most of 16W, and the era's rows genuinely clump
+    // harder. The LAP SCALE is not the table at all: it is the profile
+    // split, which is ours. Upstream publishes no `profile` column for
+    // this vocabulary, each row is assigned by least-squares fit to the
+    // three curves, and the corrected clustering happens to put nine of
+    // twelve on `flat` where the superseded one split six and six.
+    //
+    // The mechanism is the density envelope, and this is the second
+    // independent demonstration that it is the wrong one. The graph
+    // builds ONE lap-periodic envelope per profile, each with its own
+    // phase. Concentrating the placement mass onto fewer profiles puts
+    // more of it on one phase, so the lap-period swells add instead of
+    // partially cancelling — which is exactly the variance a 128W window
+    // measures. It is monotonic in concentration: 6/6 reads 12.32, the
+    // shipped 9/3 reads 22.48, and forcing all twelve onto one profile
+    // reads 44.86 (all `flat`) or 45.25 (all `built`). A kit that happens
+    // to fit one curve therefore moves a statistic about WHERE THINGS SIT
+    // ALONG THE LAP, which nothing about a kit should.
+    //
+    // AN EARLIER READING OF THIS WAS WRONG and the correction is the
+    // useful part. Forcing all twelve onto a single profile was run as a
+    // control, every configuration came out at or above the mixed one,
+    // and the conclusion drawn was that the assignment was not what moved
+    // the curve. That is the wrong comparison: it tests full
+    // concentration against 9/3 when the question is 9/3 against the old
+    // 6/6, and under a mechanism monotonic in concentration the control's
+    // result is exactly what the assignment being responsible looks like.
+    //
+    // Nothing here is tuned toward the source column. The split is not
+    // moved to 6/6 to buy back 10 points of dispersion: the assignment is
+    // least-squares against a measured `affinity` and stands on that, and
+    // it is the envelope rather than the assignment that turns it into a
+    // lap-scale artefact.
+    //
+    // The comment this replaced claimed 1.62 / 1.64 / 2.27 / 2.78 / 5.01
+    // / 8.25 / 12.36 for a table that measured 1.35 / 1.49 / 1.80 / ...
+    // — it had drifted from the code, which is the failure the pins below
+    // exist to prevent. Two-sided, all of them.
     expect(dispersionAt(stations, lapW, 2)).toBeGreaterThan(1.7);
     expect(dispersionAt(stations, lapW, 2)).toBeLessThan(2.2);
     expect(dispersionAt(stations, lapW, 16)).toBeGreaterThan(5.0);
