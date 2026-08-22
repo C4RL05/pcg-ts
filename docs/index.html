@@ -121,17 +121,23 @@
 
   /* ---------- hero ---------- */
   header { border-bottom: 1px solid var(--line); }
-  /* The hero is sized by its CONTENT, with the field stretched behind it,
-     rather than the field being a fixed 340px band and the title centred
-     over it absolutely. The lockup keeps the artwork's aspect ratio, so its
-     height is a function of the viewport width — a fixed band would crop it
-     or leave a gap at every width but one. */
-  .hero { position: relative; min-height: 260px; }
+  /* TWO BANDS, and the field is only behind the second one. The lockup
+     gets plain ground and room around it; the sentence under it gets the
+     field, because that sentence is what the field is evidence for.
+
+     Both are sized by their CONTENT rather than being fixed bands with
+     something centred over them absolutely: the lockup keeps the
+     artwork's aspect ratio, so its height is a function of the viewport
+     width, and a fixed band would crop it or leave a gap at every width
+     but one. The min-height on the field band is a floor for the FIELD,
+     not for the text — a scatter needs some depth to read as one. */
+  .hero-logo { background: var(--bg); padding: 64px 0 56px; }
+  .hero { position: relative; min-height: 190px; }
   .hero canvas {
     position: absolute; inset: 0;
     display: block; width: 100%; height: 100%;
   }
-  .hero-overlay { position: relative; padding: 40px 0 30px; }
+  .hero-overlay { position: relative; padding: 48px 0; }
   .hero-overlay .wrap { width: 100%; }
   .hero-title {
     margin: 0;
@@ -194,13 +200,21 @@
   .hero-sub {
     font-size: clamp(15px, 2.2vw, 18px);
     color: var(--muted);
-    margin: 10px 0 0;
+    /* No top margin any more: it used to sit under the lockup inside one
+       band, and it is now the only thing in its own. */
+    margin: 0;
     max-width: 46ch;
   }
+  /* A column: the seed reads with the field above it, and the row of
+     places to go next reads on its own. Side by side they were one long
+     line in which the only control on the page was just another item. */
   .hero-bar {
-    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
-    padding: 14px 0;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 16px;
+    padding: 18px 0 22px;
     font-family: var(--mono); font-size: 13px;
+  }
+  .hero-actions {
+    display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center;
   }
   .hero-bar .install {
     background: var(--card);
@@ -225,18 +239,24 @@
   }
   /* Beside the CTA and quieter than it: --g is spent on ONE hero button,
      and two competing greens would leave neither of them the thing to
-     click. The same shape, in greyscale. */
-  .hero-bar .editor-link {
+     click. The same shape, in greyscale — and now three of them, which is
+     the reason the green one still reads as the one to press. */
+  .hero-bar .editor-link,
+  .hero-bar .out-link {
     border: 1px solid var(--line-hi);
     border-radius: 6px;
     padding: 6px 12px;
     color: var(--ink);
     pointer-events: auto;
   }
-  .hero-bar .editor-link:hover, .hero-bar .editor-link:focus-visible {
+  .hero-bar .editor-link:hover, .hero-bar .editor-link:focus-visible,
+  .hero-bar .out-link:hover, .hero-bar .out-link:focus-visible {
     border-color: var(--ink);
     background: var(--card);
   }
+  /* Off-site, and dimmer for it: these two leave the documentation, so
+     they sit a step behind the two that do not. */
+  .hero-bar .out-link { color: var(--muted); border-color: var(--line); }
   .seed-ctl { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
   .seed-ctl label { color: var(--muted); }
   .seed-ctl input {
@@ -470,6 +490,10 @@
     display: flex; flex-wrap: wrap; gap: 8px 28px;
   }
   @media (max-width: 560px) {
+    /* The band around the lockup is generous on a desktop and would be
+       half a phone screen of nothing here; the lockup itself already
+       scales with the viewport. */
+    .hero-logo { padding: 36px 0 32px; }
     .hero { min-height: 200px; }
     .roadmap li { grid-template-columns: 1fr; gap: 6px; }
   }
@@ -477,19 +501,25 @@
 </style>
 
 <header>
+  <!-- The logo stands on plain black. The field is a different statement —
+       "this header is cooked from that seed" — and running it behind the
+       lockup made both harder to read: the animation is already a moving
+       figure, and a moving ground under it is two things competing for the
+       same glance. It belongs behind the sentence that claims it. -->
+  <div class="hero-logo">
+    <div class="wrap">
+      <h1 class="hero-title"><span class="vh">pcg-ts</span><span class="lockup" data-logo hidden aria-hidden="true"></span><svg class="wordmark" data-logo-static viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></h1>
+    </div>
+  </div>
   <div class="hero">
     <canvas id="field" aria-hidden="true"></canvas>
     <div class="hero-overlay">
       <div class="wrap">
-        <h1 class="hero-title"><span class="vh">pcg-ts</span><span class="lockup" data-logo hidden aria-hidden="true"></span><svg class="wordmark" data-logo-static viewBox="0 0 1055 128" aria-hidden="true" focusable="false"><g fill-rule="nonzero" transform="translate(-9.14,127.96)"><path d="M147.76,-95.97L147.76,-127.96L9.14,-127.96L9.14,-95.97L147.76,-95.97ZM147.762,-95.97L147.762,-63.98L41.13,-63.98L9.14,-31.99L9.14,0L41.13,0L41.13,-31.99L147.762,-31.99L179.752,-63.98L179.752,-95.97L147.762,-95.97Z"/><path d="M368.768,-95.97L368.768,-127.96L230.145,-127.96L198.155,-95.97L198.155,-31.99L230.139,-31.99L230.139,0L368.768,0L368.768,-31.99L230.145,-31.99L230.145,-95.97L368.768,-95.97Z"/><path d="M557.783,-95.97L557.783,-127.96L419.16,-127.96L387.17,-95.97L387.17,-31.99L419.16,-31.99L419.16,-95.97L557.783,-95.97ZM478.925,0L510.917,-31.99L525.793,-31.99L525.793,0L557.783,0L557.783,-63.98L497.696,-63.98L465.706,-31.99L419.16,-31.99L419.16,0L478.925,0Z"/><rect x="576.186" y="-63.98" width="127.96" height="31.99"/><g transform="translate(-18.4628,0)"><path d="M823.908,0L823.908,-95.97L791.918,-95.97L791.918,0L823.908,0ZM893.218,-95.97L893.218,-127.96L823.911,-127.96L823.911,-95.97L893.218,-95.97ZM791.912,-95.97L791.912,-127.96L722.608,-127.96L722.608,-95.97L791.912,-95.97Z"/></g><g transform="translate(884.017944,0)"><path d="M41.13,-95.97L147.762,-95.97L147.762,-127.96L41.13,-127.96L9.14,-95.97L9.14,-63.98L179.752,0L179.752,-34.149L41.13,-86.156L41.13,-95.97ZM41.13,0L41.13,-31.99L9.14,-31.99L9.14,0L41.13,0ZM179.755,-63.986L179.755,-95.97L147.765,-95.97L147.765,-63.986L179.755,-63.986Z"/></g></g></svg></h1>
         <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
       </div>
     </div>
   </div>
   <div class="wrap hero-bar">
-    <span class="install">npm install pcg-ts</span>
-    <a href="./manual.html" class="manual-link">Read the manual →</a>
-    <a href="./editor/" class="editor-link">Open the editor →</a>
     <span class="seed-ctl">
       <label for="seed">seed</label>
       <span class="numbox">
@@ -501,6 +531,18 @@
       </span>
       <span class="seed-note">← this header is cooked from it. Same seed, same field — always.</span>
     </span>
+    <!-- Under the seed, not above it: the seed belongs to the field
+         directly above, and the row of places to go next is what you read
+         after you are done with the header. The two off-site links carry
+         an outward arrow rather than the forward one, which is the only
+         thing distinguishing "another page here" from "you are leaving". -->
+    <div class="hero-actions">
+      <span class="install">npm install pcg-ts</span>
+      <a href="./manual.html" class="manual-link">Read the manual →</a>
+      <a href="./editor/" class="editor-link">Open the editor →</a>
+      <a href="https://github.com/C4RL05/pcg-ts" class="out-link">GitHub ↗</a>
+      <a href="https://www.npmjs.com/package/pcg-ts" class="out-link">npm ↗</a>
+    </div>
   </div>
 </header>
 
