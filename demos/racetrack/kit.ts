@@ -564,7 +564,30 @@ export interface Preset {
   readonly minInstances: number;
   /** Target share of placements per lateral band, keyed by band name. */
   readonly bands: Readonly<Record<string, number>>;
-  /** Mean geometric cluster size across the kit. */
+  /**
+   * Mean geometric cluster size across the kit.
+   *
+   * WHAT THE PUBLISHED CLUSTER TABLES ARE, since it cost a rewrite to
+   * find out. The spec quotes clusters per 100W, mean instances per
+   * cluster and a size distribution, all found by grouping placements at
+   * a 1.5W threshold. At roughly one placement per W that threshold
+   * chains most neighbours together whatever the process produced, so a
+   * homogeneous Poisson process at the same density reproduces almost the
+   * whole table on its own: 21.3 clusters per 100W against a measured
+   * 19.3 for the late era, mean 4.38 against 4.90, single-instance
+   * clusters 24% against 23%.
+   *
+   * They are VALIDATION statistics, not a specification. Constructing a
+   * generator from them double-counts — explicit clumps are placed and
+   * then the threshold finds those plus the merging it would have done
+   * anyway — and a generator built that way reads an index of dispersion
+   * of about 4.2 at a 2W window against a measured 1.36. Both teams
+   * measured that number independently and got the same answer.
+   *
+   * The information in the tables is the EXCESS over the Poisson null,
+   * which is small and lives in the gaps rather than in the counts. The
+   * generative target is the dispersion curve.
+   */
   readonly clusterMean: number;
   /** Share of the lap within 2W of a placement. */
   readonly coverageFloor: number;
@@ -579,20 +602,21 @@ export interface Preset {
   readonly bankMaxDeg: number;
   readonly referenceRadiusW: number;
   /**
-   * How far apart a cluster's members sit along the lap, in W.
+   * The STEP between a cluster's members along the lap, in W.
    *
-   * MEASURED, and the previous single constant was two to five times too
-   * wide. Cluster spans end to end run at a median of 0.23W in the
-   * sparsest era, 0.45W in the earliest and 0.61W in the latest, against
-   * a median cluster size of two — so this is the span of a typical
-   * cluster, and members are close to coincident rather than strung out.
-   * The p90 span is 3 to 5W, which a linear offset reproduces because a
-   * p90 cluster holds nine to eleven members.
+   * Measured, and it took two corrections to get right. It began as one
+   * constant of 0.55W for every era. Then it was set to the median
+   * cluster SPAN — 0.23, 0.45 and 0.61W — which is a different quantity:
+   * a span is a step times one less than the size, and the pooled median
+   * span is dominated by two-member clusters, so using it as a step
+   * happened to be close and for the wrong reason. Broken out by size,
+   * the span grows linearly and the step is stable: 0.37W in the
+   * earliest era, 0.54 in the sparsest and 0.48 in the latest.
    *
-   * It matters beyond tidiness: a cluster spread over 1.5W is barely a
-   * cluster, and the gap statistics that judge this dressing are measured
-   * at a 1.5W grouping threshold. Spread the members that far and the
-   * thing being measured stops existing.
+   * A step rather than a span is also the right shape for a linear
+   * offset, which is what the graph applies. The two agree at size two
+   * and diverge everywhere else, which is exactly where the earlier
+   * version was wrong without looking wrong.
    */
   readonly clusterSpanW: number;
   /**
@@ -685,7 +709,7 @@ export interface Preset {
  */
 export const PRESETS: Readonly<Record<string, Preset>> = {
   sparse: {
-    clusterSpanW: 0.23,
+    clusterSpanW: 0.54,
     gapCvAccept: [1.2, 2.6],
     corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
     vocabulary: "named",
@@ -723,7 +747,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 0.9, bush: 0.9 },
   },
   lush: {
-    clusterSpanW: 0.45,
+    clusterSpanW: 0.37,
     gapCvAccept: [1.2, 2.6],
     corridorArtExclude: ["verge-rail", "pipe-run", "billboard", "enclosure-shell"],
     vocabulary: "named",
@@ -751,7 +775,7 @@ export const PRESETS: Readonly<Record<string, Preset>> = {
     lateralPush: { "tree-group": 1.15, bush: 1.1 },
   },
   dense: {
-    clusterSpanW: 0.61,
+    clusterSpanW: 0.48,
     gapCvAccept: [1.0, 2.6],
     vocabulary: "geometry",
     corridorArtAccept: 0.322,

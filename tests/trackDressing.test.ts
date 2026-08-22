@@ -934,7 +934,7 @@ describe("the index of dispersion", () => {
     // keeps climbing, because a swell puts its variance at the largest
     // scales there are.
     //
-    // FOUR REPLACEMENTS WERE TRIED AND NONE SHIPPED, recorded so the
+    // FIVE REPLACEMENTS WERE TRIED AND NONE SHIPPED, recorded so the
     // next attempt starts further along:
     //
     //  - Deleting the envelope alone flattens the curve to about 1.9 at
@@ -944,18 +944,38 @@ describe("the index of dispersion", () => {
     //    128W: regular spacing suppresses large-scale variance rather
     //    than adding it.
     //  - A modulation at the super scale rather than the lap scale gives
-    //    a PEAK, not a plateau. Any wave does; that is what a wave is.
+    //    a PEAK, not a plateau. Any wave does; that is what a wave is. A
+    //    periodic rate averages out in windows wider than its period, so
+    //    only clumps of finite extent, scattered, plateau.
     //  - Duplicating each anchor into a super-cluster gives the right
-    //    SHAPE — climb to 16W, then flat — and breaks something else:
-    //    an archetype is chosen per anchor, so a duplicated super holds
-    //    one archetype and inflates its per-archetype cluster size from
-    //    1.5 to near 8. The band mix and the corridor rate both moved
-    //    outside their targets. The measured super-cluster is a POOLED
-    //    object holding several archetypes, and reproducing it needs the
-    //    archetype chosen per cluster — which this graph assigns in
-    //    contiguous index blocks to keep the counts exact.
+    //    SHAPE and breaks something else: an archetype is chosen per
+    //    anchor, so a duplicated super holds one archetype and inflates
+    //    its per-archetype cluster size from 1.5 to near 8.
+    //  - A full rewrite of the placement core — anchors as scattered
+    //    super-clusters, both size levels sampled from the spec's
+    //    measured tables, and the archetype drawn per PLACEMENT so the
+    //    clumps come out mixed — scored 15 of 18 and read 4.18 here at
+    //    2W against a measured 1.36.
     //
-    // So the pin is deliberately on the WRONG value. It fails if the
+    // THAT LAST ONE IS THE INTERESTING FAILURE, and it is why this
+    // generator keeps its shape. The spec team rebuilt it independently
+    // and read 4.21, so it is not an implementation slip. The cause is
+    // that the published cluster tables are DESCRIPTIVE OUTPUT rather
+    // than a specification: they come from grouping placements at a 1.5W
+    // threshold, and at roughly one placement per W that threshold chains
+    // most neighbours together whatever the process produced. A
+    // homogeneous Poisson process reproduces almost the whole table on
+    // its own. Constructing from them double-counts — explicit clumps are
+    // placed and then the threshold finds those plus the merging it would
+    // have done anyway.
+    //
+    // So the generator that reproduces BOTH the cluster tables and this
+    // curve is the near-Poisson one, and this suite exists to keep it
+    // that way. The archetype-per-placement finding was real and does not
+    // bite here: with a mean cluster size near 1.5, most anchors carry
+    // one placement and the clumps this makes are already mixed.
+    //
+    // The pin is deliberately on the WRONG value at 128W. It fails if the
     // shortfall grows and it fails if someone fixes the mechanism; the
     // second is the point, and this comment is what they should read.
     const preset = PRESETS.dense;
@@ -963,8 +983,8 @@ describe("the index of dispersion", () => {
     const { placements, lapW } = await runOnce(preset, lapLength, noCorrections(), 21, {}, committed);
     const stations = placements.map((p) => p.stationW);
 
-    // Measured here, one lap, uncorrected: 1.32 / 1.53 / 1.80 / 2.36 /
-    // 3.89 / 6.29 / 11.70 at 2 / 4 / 8 / 16 / 32 / 64 / 128W. The source
+    // Measured here, one lap, uncorrected: 1.62 / 1.64 / 2.27 / 2.78 /
+    // 5.01 / 8.25 / 12.36 at 2 / 4 / 8 / 16 / 32 / 64 / 128W. The source
     // reads 1.36 / 1.78 / 2.97 / 4.79 / 6.52 / 5.50 / 6.25.
     //
     // The small end lands: the clustering rule's own work is right.
