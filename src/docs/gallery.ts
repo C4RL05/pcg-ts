@@ -221,7 +221,7 @@ function renderTile(entry: ExampleEntry, options: GalleryOptions): string {
   if (images.length === 0) images.push(`<span class="missing">no frame captured</span>`);
 
   return [
-    `      <a class="tile" id="${name}" href="./pages/editor/?graph=${name}"`,
+    `      <a class="tile" id="${name}" href="./editor/?graph=${name}"`,
     ` data-family="${familyOf(name)}" data-find="${escapeHtml(find)}">`,
     `<span class="frame">${images.join("")}</span>`,
     `<span class="meta"><b>${name}</b>`,
@@ -449,7 +449,7 @@ export function renderGallery(
     <p class="eyebrow">Corpus</p>
     <h1>${entries.length} graphs, every one a file you can cook</h1>
     <p class="lead">Every graph in <code>graphs/</code>, cooked in the editor and shot from the frame it draws into. <strong>${escapeHtml(breakdown)}.</strong> Each file teaches one thing and cooks from JSON alone — <code>pcg cook graphs/&lt;name&gt;.json</code> reproduces what you see here from the seed the file carries, on any machine and in any cook order.</p>
-    <p class="sub">Hover a card for the node graph behind the frame. Click to open it in the <a href="./pages/editor/">editor</a> and change it live. The files themselves are in <a href="https://github.com/C4RL05/pcg-ts/tree/main/graphs">graphs/</a>; the same index in prose is <a href="./graphs.md">graphs.md</a>.</p>
+    <p class="sub">Hover a card for the node graph behind the frame. Click to open it in the <a href="./editor/">editor</a> and change it live. The files themselves are in <a href="https://github.com/C4RL05/pcg-ts/tree/main/graphs">graphs/</a>; the same index in prose is <a href="./graphs.md">graphs.md</a>.</p>
   </div>
 </header>
 

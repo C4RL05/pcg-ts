@@ -3,7 +3,7 @@
  *
  * INLINE AND NOT A `src`. The pages that draw it are served from two roots
  * — the vite dev server at the repository root, and the built site under
- * `docs/pages/<page>/` — so any path to an asset is right in one and
+ * `docs/` — so any path to an asset is right in one and
  * broken in the other. That reasoning was worked out for the editor's
  * toolbar, which carried its own copy of these paths; this module is where
  * the copy went when the demos wanted the same mark.
@@ -59,25 +59,21 @@ function injectStyles(): void {
 }
 
 /**
- * Where the mark points: the landing page, whichever root this is.
+ * Where the mark points: the landing page, two levels up.
  *
- * The two roots bite once more here, and this time no single relative
- * path spans them. Published, a demo sits at `/pcg-ts/pages/demos/<id>/`
- * and the landing page is three levels up at `/pcg-ts/`. On the dev
- * server the same demo is at `/demos/<id>/` and the landing page is a
- * hand-written file at `/docs/index.html`, which is two levels up and
- * then down again. The published layout is the one with a marker in it —
- * only the build puts a `pages/` segment in the path — so that is what
- * this reads.
+ * ONE PATH FOR BOTH ROOTS, and that is arranged rather than lucky. A demo
+ * sits two levels down in each — `/demos/<id>/` on the dev server,
+ * `/pcg-ts/demos/<id>/` published — and published, two levels up IS the
+ * landing page. The dev server has nothing there on its own, so
+ * `vite.config.ts` redirects `/` to `docs/index.html`; see the plugin
+ * there for why that beats every way of asking, at runtime, which root
+ * this is.
  *
- * It used to point at the demo shelf, which needed no branch because both
- * roots happened to have one at `../../`. The shelf is gone: the landing
+ * It used to point at the demo shelf. The shelf is gone: the landing
  * page's own card grid was the navigation anyone actually used, and a
  * second index nothing linked to was a page to keep in step for nothing.
  */
-function landingPage(): string {
-  return window.location.pathname.includes("/pages/demos/") ? "../../../" : "../../docs/index.html";
-}
+const LANDING_PAGE = "../../";
 
 /**
  * Put the wordmark in the bottom-left corner of the page.
@@ -89,7 +85,7 @@ export function attachWordmark(opts: { href?: string; label?: string } = {}): HT
   injectStyles();
   const a = document.createElement("a");
   a.className = "pcg-wordmark";
-  a.href = opts.href ?? landingPage();
+  a.href = opts.href ?? LANDING_PAGE;
   a.title = opts.label ?? "pcg-ts";
   a.setAttribute("aria-label", opts.label ?? "pcg-ts");
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");

@@ -93,7 +93,9 @@ Not public API:
   what the `*.testsupport.ts` suffix carries inside `src/` (see Conventions).
   Imports run one way — `tests/` may import a `src/**/*.testsupport.ts`,
   never the reverse
-- `scripts/` — doc/catalog generators, demo capture, preview, dist smoke
+- `scripts/` — doc/catalog generators, demo capture, preview, dist smoke,
+  and `clean-pages.mjs`, which removes the previous browser-page build from
+  `docs/` (the site build cannot empty its own output directory)
 
 The browser pages. One vite app rooted at the repository root
 (`vite.config.ts`, `index.html`), because what it serves no longer shares
@@ -130,13 +132,20 @@ a parent — these are three different kinds of thing and the old single
 - `npm run build` — build the library (subpath exports: `.`, `./three`)
 - `npm run check` — `tsc --noEmit`; needs a current `dist/` first, because
   the browser pages import `pcg-ts` by package name
-- `npm run examples` — vite dev server for the editor and the demos. There
-  is no page at `/`: go to `/editor/`, `/demos/<id>/`, or `/docs/index.html`
-  for the hand-written landing page
-- `npm run examples:pages` — build the browser pages into `docs/pages/`,
-  which is a COMMITTED artifact and the one thing `npm run docs` does not
+- `npm run examples` — vite dev server for the editor and the demos, at
+  `/editor/` and `/demos/<id>/`, the same paths they publish at. `/`
+  redirects to `/docs/index.html`, the hand-written landing page, so that
+  two levels up from a demo is the landing page in both roots and nothing
+  has to work out at runtime which root it is in
+- `npm run examples:pages` — build the browser pages into `docs/` itself,
+  beside the hand-written ones, so the editor publishes at
+  `/pcg-ts/editor/` and a demo at `/pcg-ts/demos/<id>/` — the same paths
+  the dev server uses. It owns exactly `docs/assets/`, `docs/editor/` and
+  `docs/demos/`, which `scripts/clean-pages.mjs` removes first because
+  emptying the output directory would delete the rest of the site. Those
+  three are a COMMITTED artifact and the one thing `npm run docs` does not
   regenerate. CI diffs `docs` after running the docs chain, so a stale
-  `docs/pages/` passes CI silently: the source can be right and the live
+  build passes CI silently: the source can be right and the live
   demos months behind it. Run this whenever anything under `editor/`,
   `demos/` or `shared/` changes, and check the BUILT site rather than the
   dev server — relative bases, hashed asset names and minified components
