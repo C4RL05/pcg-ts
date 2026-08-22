@@ -5,8 +5,8 @@
  * what is checked is everything upstream of the pixels: that each demo's
  * graph survives the round trip into a serialized form, that the reader
  * turns it into boxes and cables with no dangling ends, that the layout is
- * a function of the graph and not of when it ran, and that all four pages
- * are actually wired to the panel.
+ * a function of the graph and not of when it ran, and that every page
+ * is actually wired to the panel.
  *
  * IT USES THE DEMOS' REAL BUILDERS, not a fixture. The reader's whole job
  * is to survive whatever a page hands it, and the racetrack's 238-node
@@ -29,8 +29,8 @@ import { makeLandmarkLevel, makeRockLevel } from "../demos/infinite-world/levels
 import { buildTrackDressingGraph } from "../demos/racetrack/dressing.js";
 import { PRESETS } from "../demos/racetrack/kit.js";
 import { TRACK } from "../demos/racetrack/read.js";
-import { buildRoadsideGraph } from "../demos/roadside/graph.js";
-import { makeTrackSpline } from "../demos/roadside/spline.js";
+import { buildRoadGraph } from "../demos/road/graph.js";
+import { makeTrackSpline } from "../demos/road/spline.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
@@ -60,8 +60,8 @@ function demoGraphs(): { name: string; graph: Graph }[] {
       }).graph,
     },
     {
-      name: "roadside/road + verges",
-      graph: buildRoadsideGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 }),
+      name: "road/verges",
+      graph: buildRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 }),
     },
   ];
 }
@@ -134,7 +134,8 @@ describe("the lens", () => {
   const rect = { width: 800, height: 500, left: 0, top: 0 } as DOMRect;
 
   it("frames a whole graph inside the viewport", () => {
-    const { json } = CASES[CASES.length - 1];
+    const wide = CASES.find((c) => c.name === "racetrack/lap");
+    const { json } = wide as NonNullable<typeof wide>;
     const pic = readGraph(json);
     const rows = new Map([...pic.previews].map(([id, r]) => [id, r.length]));
     const b = contentBounds(pic.nodes, rows);
@@ -163,7 +164,7 @@ describe("the lens", () => {
   });
 
   it("lowers the floor to fit a graph too wide for the flat one", () => {
-    // Named, not positional. This read `CASES[CASES.length - 1]` and meant
+    // Named, not positional, as above: `CASES[CASES.length - 1]` meant
     // "the racetrack", which is only the last case until a demo is added
     // after it — and then the assertion silently changes what it is about.
     const wide = CASES.find((c) => c.name === "racetrack/lap");
@@ -216,7 +217,7 @@ describe("the param rows", () => {
 });
 
 describe("the demos are wired to it", () => {
-  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack", "roadside"];
+  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack", "road"];
 
   it.each(DEMOS)("%s attaches the graph panel", (demo) => {
     const src = readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8");

@@ -39,7 +39,7 @@ import {
 import type { Spline } from "./spline.js";
 
 /** What the page can turn without rebuilding the graph's shape. */
-export interface RoadsideOptions {
+export interface RoadOptions {
   /** The centreline the whole page is about. */
   readonly spline: Spline;
   /** Frames placed around the lap — the resolution every rule reads. */
@@ -131,7 +131,7 @@ function dressVerges(
 }
 
 /** Build the graph, with the host's spline already bound into it. */
-export function buildRoadsideGraph(opts: RoadsideOptions): Graph {
+export function buildRoadGraph(opts: RoadOptions): Graph {
   const { spline } = opts;
   const frameCount = opts.frames ?? 900;
   const stations = opts.propStations ?? 260;

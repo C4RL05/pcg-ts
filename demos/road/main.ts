@@ -50,7 +50,7 @@ import { createOverlay } from "../../shared/overlay.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
-import { OUTPUTS, buildRoadsideGraph } from "./graph.js";
+import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import { type Lap, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 
@@ -71,14 +71,14 @@ interface Circuit {
 
 function requireGeo(name: string, collection: DataCollection | undefined): Geometry {
   const geo = collection ? firstGeometry(collection) : undefined;
-  if (!geo) throw new Error(`roadside: the graph produced no '${name}' geometry`);
+  if (!geo) throw new Error(`road: the graph produced no '${name}' geometry`);
   return geo;
 }
 
 async function cookCircuit(seed: number): Promise<Circuit> {
   const t0 = performance.now();
   const spline = makeTrackSpline({ seed });
-  const graph = buildRoadsideGraph({ spline, seed });
+  const graph = buildRoadGraph({ spline, seed });
   const out = (await cook(graph)).outputs;
   const frames = requireGeo(OUTPUTS.frames, out[OUTPUTS.frames]);
   return {
@@ -312,7 +312,7 @@ function frameMap(circuit: Circuit, zoom: number): void {
 // ------------------------------------------------------------------ //
 
 const overlay = createOverlay({
-  title: "roadside",
+  title: "road",
   info:
     "A centreline this page did not make, handed to pcg-ts: it sweeps the road and dresses the verges. " +
     "The map is the whole lap from above; the chase view is the only viewpoint the result is ever " +
@@ -474,10 +474,10 @@ void recook().then(() => {
  */
 declare global {
   interface Window {
-    pcgRoadside?: { seek(station: number): void; pause(on: boolean): void };
+    pcgRoad?: { seek(station: number): void; pause(on: boolean): void };
   }
 }
-window.pcgRoadside = {
+window.pcgRoad = {
   seek(station: number): void {
     state.station = station;
   },
