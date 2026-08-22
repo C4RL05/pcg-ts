@@ -880,33 +880,30 @@ describe("the density envelope's depth", () => {
     expect(m!.value).toBeGreaterThan(1.5);
   });
 
-  it("varies its density the way clumping alone would, which is what the source does", async () => {
-    // THE RULE THIS USED TO ASSERT HAS BEEN WITHDRAWN. It read the
-    // source's 0.25-0.6 density CV as a target for composition along the
-    // lap, and the decomposition behind it — subtract 1/sqrt(n) counting
-    // noise, call the rest deliberate — assumed independent placements,
-    // which these are not. Clustering is the whole point of the anchor
-    // process.
+  it("keeps the density metric's detail line, whose reference has been withdrawn twice", async () => {
+    // This metric has now had three references and lost two of them, and
+    // the history is the useful part.
     //
-    // The instrument that replaced it: group this lap's own placements at
-    // the clustering rule's 1.5W threshold and re-place each cluster
-    // WHOLE at an arbitrary station. Clumps survive, composition does
-    // not. On the source, scattered clusters come out LUMPIER than the
-    // real laps — a measured-over-reshuffled ratio with a median of 0.82
-    // across 43 circuits — so there is no density envelope in the
-    // originals at all, and the metric measures the clustering rule
-    // rather than anything on top of it.
+    // First it was scored against the source's own 0.25-0.6 per tenth as
+    // though that were a target for composition along the lap. Then the
+    // decomposition behind it — subtract 1/sqrt(n) counting noise, call
+    // the rest deliberate — turned out to assume independent placements,
+    // which these are not: clustering is the whole point of the anchor
+    // process. Then the reshuffle that replaced it turned out to be a
+    // BIASED null: re-placing clusters at random lets two land on top of
+    // each other, which the 1.5W grouping forbids by construction, so it
+    // manufactures clumps the source cannot contain and over-reads at
+    // every window. Both are withdrawn upstream.
     //
-    // Asserted as that ratio, against the source's own. Reading far below
-    // it means something is spacing placements more evenly than their
-    // clumping would; far above means composition the material does not
-    // have.
+    // So this asserts only that the metric passes and that its detail
+    // line still carries the comparison, because a bare CV cannot be
+    // interpreted. What the number should be measured against is the
+    // index of dispersion, which has a well-defined null at every
+    // window — see the suite below.
     const report = await bestOf(PRESETS.dense);
     const m = report.metrics.find((x) => x.id === 7);
     expect(m!.pass).toBe(true);
-    const ratio = Number(/ratio ([0-9.]+)/.exec(m!.target)?.[1]);
-    expect(ratio).toBeGreaterThan(0.6);
-    expect(ratio).toBeLessThan(1.1);
+    expect(m!.target).toMatch(/clumping alone/);
   });
 });
 
