@@ -56,6 +56,35 @@ export type ZoneName = keyof typeof ZONES;
  */
 export const CORRIDOR = { halfWidthW: 1.0, floorW: 0, ceilingW: 1.2 } as const;
 
+/**
+ * How high overhead furniture may reach.
+ *
+ * Z7 IS GANTRIES, SIGNS, LAMP ARMS AND BANNERS — its own description says
+ * so — and every one of those is a small thing hung a little way above the
+ * road. It is NOT enclosure: a tunnel shell also has |t| < 1.5W and also
+ * sits above the corridor, and it belongs to L-6, which places it as a
+ * run of repeated pieces rather than as one object in a band.
+ *
+ * The distinction has to be enforced, because the two are not
+ * interchangeable and the failure is silent. An `over` placement takes
+ * its height from the band rather than from the asset — it must, since a
+ * spanning object's own bounds centre sits in its own empty middle and
+ * means nothing. Stand a nine-half-width shell on that floor and it
+ * reaches ten half-widths up and twelve across, and the lap acquires a
+ * ceiling: every rule still passes, the band mix is exactly on target,
+ * and the chase view is a tunnel with the sky bricked over. It was
+ * invisible until somebody looked from the driver's seat.
+ *
+ * Six is the ceiling upstream's enclosure measurement uses, for the same
+ * reason: without one, the skybox is a tunnel.
+ */
+export const OVERHEAD = { ceilingW: 6 } as const;
+
+/** Can this piece hang over the road as furniture, rather than enclose it? */
+export function fitsOverhead(tallW: number): boolean {
+  return CORRIDOR.ceilingW + tallW <= OVERHEAD.ceilingW;
+}
+
 /** Is this position inside the protected volume? */
 export function inCorridor(t: number, h: number): boolean {
   return Math.abs(t) < CORRIDOR.halfWidthW && h >= CORRIDOR.floorW && h < CORRIDOR.ceilingW;

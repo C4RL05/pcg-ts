@@ -23,7 +23,7 @@
  * affinity denominator, one level up.
  */
 
-import { CORRIDOR } from "./zones.js";
+import { CORRIDOR, fitsOverhead } from "./zones.js";
 
 /** The per-asset measurements this module places from. */
 export interface AssetWhere {
@@ -422,6 +422,10 @@ export function repairBandMix<T extends AssetPlacement>(
     const [lo, hi] = BAND_T[dst];
     const pool = assets.filter((a) => {
       if (protect.has(a.id)) return false;
+      // Z7 is FURNITURE, not enclosure. Anything too tall to hang under
+      // the overhead ceiling is a shell, and a shell placed here becomes
+      // a roof over the whole band. See `fitsOverhead`.
+      if (dst === "over" && !fitsOverhead(a.size.tall)) return false;
       const m = a.where?.lateral.median;
       return m !== undefined && Math.abs(m) >= lo && Math.abs(m) < hi;
     });

@@ -28,7 +28,7 @@ import { cook, firstGeometry } from "pcg-ts";
 import { mixInsideRule } from "../demos/road/assets.js";
 import { dressLap, frameLookup } from "../demos/road/dress.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import type { Kit } from "../demos/road/kit.js";
+import { type Kit, type PlacedBox, placeKit } from "../demos/road/kit.js";
 import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import {
@@ -205,5 +205,177 @@ describe.skipIf(!existsSync(KIT))("the assembled pipeline", () => {
     // still breaking a threshold somewhere, and every number above would
     // look exactly the same.
     expect(s.converged, `tail did not settle in ${s.rounds} rounds`).toBe(true);
+  }, 300_000);
+});
+
+/**
+ * THE SILHOUETTE, which is the only gate here a viewer could have
+ * written.
+ *
+ * Every other check in this file asks whether a rule holds. This one asks
+ * whether the result LOOKS like its source — and it exists because a lap
+ * passed every rule while being visibly wrong, and nothing caught it
+ * except opening the page and looking down the road from the driver's
+ * seat.
+ *
+ * WHAT WENT WRONG, because the shape of the bug is the shape of the test.
+ * Z-3's `over` band is |t| < 1W, which is the corridor, so its members
+ * have to take their height from the band rather than from the asset: a
+ * spanning object's measured height is its bounds centre, and a shell's
+ * bounds centre sits in its own empty middle, which on this kit reads
+ * 0.49W — the middle of the road at knee height. Correct so far. But the
+ * band's pool was every asset whose lateral sat there, INCLUDING TUNNEL
+ * SHELLS, and standing a nine-half-width shell on the corridor ceiling
+ * puts it ten half-widths up and twelve across. The lap acquired a roof.
+ * Band mix: exactly on target. Corridor: clear. Cone: clear. Every
+ * repair: settled. The sky: bricked over.
+ *
+ * So the comparison is against the REFERENCE's own profile, measured the
+ * same way on the same lap with the same renderer, which is the fairest
+ * available standard and the one the page itself puts on screen beside
+ * it. Heights, longest edges and volumes, at quantiles rather than means,
+ * because a canopy is a tail event: it moves p99 and max and leaves the
+ * mean alone.
+ */
+function boxProfile(
+  lap: Lap,
+  boxes: readonly { centre: number[]; size: number[] }[],
+): { h: number[]; edge: number[]; volume: number[] } {
+  const W = lap.halfWidth;
+  const dot = (a: readonly number[], b: readonly number[]): number =>
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const h: number[] = [];
+  const edge: number[] = [];
+  const volume: number[] = [];
+  for (const b of boxes) {
+    // Nearest frame, then decompose onto its up axis. World Y will not do:
+    // the circuit has 26 units of relief, which is three half-widths of
+    // elevation change, and it swamps the quantity being measured.
+    let best = 0;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < lap.count; i++) {
+      const dd =
+        (b.centre[0] - lap.p[i * 3]) ** 2 +
+        (b.centre[1] - lap.p[i * 3 + 1]) ** 2 +
+        (b.centre[2] - lap.p[i * 3 + 2]) ** 2;
+      if (dd < bestD) {
+        bestD = dd;
+        best = i;
+      }
+    }
+    const v = [
+      b.centre[0] - lap.p[best * 3],
+      b.centre[1] - lap.p[best * 3 + 1],
+      b.centre[2] - lap.p[best * 3 + 2],
+    ];
+    h.push(dot(v, [lap.up[best * 3], lap.up[best * 3 + 1], lap.up[best * 3 + 2]]) / W);
+    edge.push(Math.max(...b.size) / W);
+    volume.push((b.size[0] * b.size[1] * b.size[2]) / (W * W * W));
+  }
+  return { h, edge, volume };
+}
+
+function quantile(xs: readonly number[], f: number): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(f * (s.length - 1))];
+}
+
+describe.skipIf(!existsSync(KIT))("the silhouette", () => {
+  const kit = JSON.parse(readFileSync(KIT, "utf8")) as Kit;
+
+  let lap: Lap | undefined;
+  async function theLap(): Promise<Lap> {
+    if (!lap) {
+      const frames = firstGeometry(
+        (await cook(buildRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 })))
+          .outputs[OUTPUTS.frames] ?? [],
+      );
+      if (!frames) throw new Error("no frames");
+      lap = readLap(frames);
+    }
+    return lap;
+  }
+
+  async function reference(): Promise<PlacedBox[]> {
+    const l = await theLap();
+    const fa = frameLookup(l);
+    return placeKit(kit, l, (st, lat, h) => {
+      const f = fa(st, lat, h);
+      return {
+        p: [...f.p] as [number, number, number],
+        across: [...f.across] as [number, number, number],
+        along: [...f.dir] as [number, number, number],
+        up: [...f.up] as [number, number, number],
+      };
+    });
+  }
+
+  it("stands at the same height as the dressing it was measured from", async () => {
+    const l = await theLap();
+    const gen = boxProfile(l, dressLap(kit, l, 1).boxes);
+    const ref = boxProfile(l, await reference());
+
+    // p99 AND max, not the median alone. The canopy left the median
+    // exactly where it was and moved only the top percentile, which is
+    // what a tail event does and why a mean would have missed it.
+    for (const f of [0.5, 0.9, 0.99]) {
+      const g = quantile(gen.h, f);
+      const r = quantile(ref.h, f);
+      expect(
+        Math.abs(g - r),
+        `height p${f * 100}: generated ${g.toFixed(2)}W against reference ${r.toFixed(2)}W`,
+      ).toBeLessThan(1);
+    }
+    // Nothing may stand more than a half-width above the tallest thing
+    // the source itself put on this circuit.
+    expect(Math.max(...gen.h)).toBeLessThan(Math.max(...ref.h) + 1);
+  }, 300_000);
+
+  it("is built from pieces the same size as the source's", async () => {
+    const l = await theLap();
+    const gen = boxProfile(l, dressLap(kit, l, 1).boxes);
+    const ref = boxProfile(l, await reference());
+    for (const f of [0.5, 0.9]) {
+      expect(Math.abs(quantile(gen.edge, f) - quantile(ref.edge, f))).toBeLessThan(0.5);
+    }
+    // And the same amount of material overall, within a quarter.
+    const gv = gen.volume.reduce((a, b) => a + b, 0);
+    const rv = ref.volume.reduce((a, b) => a + b, 0);
+    expect(Math.abs(gv - rv) / rv, `${gv.toFixed(0)} against ${rv.toFixed(0)} W3`).toBeLessThan(
+      0.25,
+    );
+  }, 300_000);
+
+  /**
+   * THE CHECK, PROVED ABLE TO FAIL — on the exact defect it was written
+   * for, reproduced by lifting the dressing rather than by regenerating
+   * it. Lifting is the right forgery: it changes nothing a rule looks at.
+   */
+  it("sees a lap with a roof on it", async () => {
+    const l = await theLap();
+    const gen = dressLap(kit, l, 1).boxes;
+    const ref = boxProfile(l, await reference());
+    // Every box raised four half-widths: the canopy, in one line.
+    const raised = gen.map((b) => ({
+      ...b,
+      centre: [b.centre[0], b.centre[1] + 4 * l.halfWidth, b.centre[2]] as [number, number, number],
+    }));
+    const lifted = boxProfile(l, raised);
+    expect(Math.abs(quantile(lifted.h, 0.5) - quantile(ref.h, 0.5))).toBeGreaterThan(1);
+    expect(Math.max(...lifted.h)).toBeGreaterThan(Math.max(...ref.h) + 1);
+  }, 300_000);
+
+  it("reports both profiles, so a reader can see how close they are", async () => {
+    const l = await theLap();
+    const gen = boxProfile(l, dressLap(kit, l, 1).boxes);
+    const ref = boxProfile(l, await reference());
+    const row = (n: string, p: ReturnType<typeof boxProfile>): string =>
+      `  ${n.padEnd(10)} n=${String(p.h.length).padStart(5)} | ` +
+      `h above road: med=${quantile(p.h, 0.5).toFixed(2)} p90=${quantile(p.h, 0.9).toFixed(2)} ` +
+      `p99=${quantile(p.h, 0.99).toFixed(2)} max=${Math.max(...p.h).toFixed(2)} | ` +
+      `longest edge: med=${quantile(p.edge, 0.5).toFixed(2)} p90=${quantile(p.edge, 0.9).toFixed(2)} | ` +
+      `volume: total=${p.volume.reduce((a, b) => a + b, 0).toFixed(0)}W3`;
+    console.log(["the silhouette, in half-widths:", row("generated", gen), row("reference", ref)].join("\n"));
+    expect(gen.h.length).toBeGreaterThan(0);
   }, 300_000);
 });
