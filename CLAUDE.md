@@ -107,8 +107,8 @@ a parent — these are three different kinds of thing and the old single
   Unnumbered on purpose: four of them encode no order. Each exists because
   what it shows needs a host — a streamed world, a device-resident
   renderer, a spline scored against a measured spec. Each also shows the
-  graph behind it, read-only, in a corner thumbnail that opens
-  (`shared/graph/`)
+  graph behind it, read-only, as a thumbnail in its own control panel that
+  opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`)
 - `graphs/` — the graph corpus: test fixtures, documentation source and
   teaching material at once. `graphs/panels/` carries the optional
   presentation spec the editor reads for a graph

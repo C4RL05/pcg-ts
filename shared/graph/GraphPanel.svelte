@@ -8,6 +8,13 @@
    * and here is its shape"; the expanded view is there for reading the
    * shape you just saw the silhouette of.
    *
+   * IT LIVES IN THE DEMO'S OWN PANEL, in a slot the overlay hands out
+   * (`Overlay.addSlot`), and not in a card of its own in the far corner.
+   * Two panels on one page is two claims about where the chrome is, and
+   * the reader has to check both to find anything — the graph is one more
+   * thing this page can tell you about itself, which is what the panel
+   * already is.
+   *
    * IT IS READ-ONLY, and not because editing was cut for time. A demo's
    * graph is built in TypeScript by the page around it — the racetrack
    * calibrates its counts against a measured lap and rebuilds the graph
@@ -26,6 +33,7 @@
    */
   import { onMount } from "svelte";
   import GraphView from "./GraphView.svelte";
+  import { portal } from "./portal.js";
   import { readGraph, type GraphPicture } from "./fromSerialized.js";
   import type { SerializedGraph } from "pcg-ts";
 
@@ -122,9 +130,11 @@
 <svelte:window onkeydown={onKeydown} />
 
 <!-- `pcg-graph-panel` is the hook `scripts/capture-demos.mjs` hides before
-     it shoots: the committed screenshots are of the demos, and a graph in
-     the corner of every one of them would be four pictures of the same
-     card. -->
+     it shoots. It is the same card on all four pages, so it says nothing
+     about the demo it is standing in front of — and hiding it rather than
+     reshooting is what keeps the committed screenshots valid, since a
+     display:none section leaves the rest of the panel exactly where it
+     was. -->
 <div class="pcg-graph-panel">
   <button
     class="thumb"
@@ -154,10 +164,18 @@
 </div>
 
 {#if open}
+  <!-- MOVED TO THE BODY, and it has to be. The panel this component now
+       sits in carries `backdrop-filter`, and a filtered element is a
+       containing block for its `position: fixed` descendants — so a
+       full-screen backdrop rendered here would be full-screen relative to a
+       300px card, and the modal would open inside the thumbnail. Svelte
+       scopes styles with a class on the element itself, so the markup keeps
+       its styling wherever it is moved to. -->
   <!-- The backdrop closes on its own click only: a click that started on
        the graph and ended out here is the end of a pan, not a dismissal. -->
   <div
     class="backdrop"
+    use:portal
     role="presentation"
     onpointerdown={(e) => e.target === e.currentTarget && (open = false)}
   >
@@ -207,63 +225,59 @@
 {/if}
 
 <style>
+  /* A section of the panel, not a card on the page: no border, no blur, no
+     position of its own. The slot it sits in draws the rule above it, the
+     same one `.pcg-stats` gets. */
   .pcg-graph-panel {
-    position: fixed;
-    right: 12px;
-    bottom: 12px;
-    z-index: 10;
-  }
-  /* Below the shared breakpoint the overlay becomes a full-width bottom
-     sheet and owns this corner. See `shared/mobile.ts` — a Svelte <style>
-     cannot interpolate the constant, so the query is spelled out. */
-  @media (max-width: 700px), (max-height: 500px) {
-    .pcg-graph-panel {
-      display: none;
-    }
+    display: block;
   }
   .thumb {
     display: block;
-    width: 220px;
+    width: 100%;
     padding: 0;
-    background: rgba(13, 17, 23, 0.88);
-    border: 1px solid #2a3548;
-    border-radius: 10px;
+    background: none;
+    border: 0;
     color: #dbe4f0;
     font: 13px/1.45 system-ui, sans-serif;
     text-align: left;
     cursor: pointer;
-    overflow: hidden;
-    backdrop-filter: blur(6px);
-  }
-  .thumb:hover {
-    border-color: #4c8dff;
   }
   .cap {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     gap: 8px;
-    padding: 6px 10px;
+    /* Reads as a `.pcg-stat` row, because that is what it is: a label and a
+       figure. The frame below is the part the panel has no vocabulary for. */
+    margin-bottom: 6px;
   }
   .name {
     font-size: 12px;
+    color: #aeb9c9;
+  }
+  .thumb:hover .name {
     color: #f0f4fa;
   }
   .count {
-    font: 11px ui-monospace, monospace;
-    color: #8b98ab;
+    font: 12px ui-monospace, monospace;
+    color: #8fd0ff;
   }
   .frame {
     display: block;
-    height: 118px;
-    border-top: 1px solid #223047;
+    height: 108px;
     background: #05070a;
+    border: 1px solid #223047;
+    border-radius: 6px;
+    overflow: hidden;
     /* A cropped thumbnail has to say it is cropped, or it reads as the
        whole graph with three nodes in it. The fade is the only cue that
-       survives at this size — a border says "edge of the card", a fade
+       survives at this size — a border says "edge of the frame", a fade
        says "edge of what fits". It costs nothing on a graph that fits,
        because there is nothing out there to fade. */
     mask-image: linear-gradient(to right, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  }
+  .thumb:hover .frame {
+    border-color: #33405a;
   }
   .backdrop {
     position: fixed;

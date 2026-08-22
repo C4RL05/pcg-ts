@@ -292,7 +292,7 @@ let graphPanel: GraphPanelHandle | undefined;
 function showGraph(spires: Graph): void {
   const entries = [{ name: "spires", graph: spires }];
   if (graphPanel) graphPanel.set(entries);
-  else graphPanel = attachGraphPanel(entries, { title: "GPU world" });
+  else graphPanel = attachGraphPanel(entries, { into: graphSlot, title: "GPU world" });
 }
 
 // -- world lifecycle -------------------------------------------------------
@@ -651,6 +651,12 @@ const statUploaded = overlay.addStat("matrices uploaded");
 const statStatus = overlay.addStat("status");
 statStatus("initialising…");
 
+/* The graph section, claimed HERE rather than where the panel is filled,
+   so this page decides where in its own panel the graph sits. Right after
+   the readouts and above the prose: the collapsibles and notes below run
+   to several hundred pixels on this page, and a thumbnail under them is a
+   thumbnail below the fold. */
+const graphSlot = overlay.addSlot();
 const diagnostics = overlay.addCollapsible("diagnostics");
 
 overlay.addNote(

@@ -58,6 +58,10 @@ function injectStyles(): void {
   color: #9ecbff; font: 11px/1.5 ui-monospace, monospace; white-space: pre;
 }
 .pcg-overlay .pcg-note { margin-top: 8px; color: #6f7c8f; font-size: 11px; }
+/* A section the overlay does not draw itself. Same rule and spacing as
+   .pcg-stats, so whatever fills it reads as part of the panel rather than as
+   something sitting on top of it. */
+.pcg-overlay .pcg-slot { margin-top: 10px; padding-top: 8px; border-top: 1px solid #223047; }
 /* The chevron only exists for the bottom-sheet layout below; on desktop the
    title is not a toggle, so the glyph stays hidden. */
 .pcg-overlay .pcg-chevron { display: none; }
@@ -115,6 +119,22 @@ export interface Overlay {
   /** A collapsible section holding a <pre>; returns the pre element. */
   addCollapsible(summary: string, open?: boolean): HTMLPreElement;
   addNote(text: string): void;
+  /**
+   * An empty section at the bottom of the panel, for a caller to fill.
+   *
+   * The overlay builds plain DOM and stops there; anything richer is
+   * Svelte, per the project's rule. This is the seam: the panel owns where
+   * the section sits and what separates it from the one above, and the
+   * caller owns what goes in it. The graph thumbnail is the first tenant —
+   * before it, a demo that wanted one had to float a second panel over the
+   * page, which is two panels saying "this is the chrome".
+   *
+   * Appended, like {@link Overlay.addCollapsible} and
+   * {@link Overlay.addNote} and for the same reason: some pages find the
+   * controls container as `.pcg-stats.previousElementSibling`, so nothing
+   * may be inserted between those two.
+   */
+  addSlot(): HTMLDivElement;
 }
 
 /** Create the overlay panel and attach it to the page. */
@@ -269,6 +289,12 @@ export function createOverlay(opts: { title: string; info?: string }): Overlay {
       p.className = "pcg-note";
       p.textContent = text;
       el.appendChild(p);
+    },
+    addSlot() {
+      const div = document.createElement("div");
+      div.className = "pcg-slot";
+      el.appendChild(div);
+      return div;
     },
   };
 }

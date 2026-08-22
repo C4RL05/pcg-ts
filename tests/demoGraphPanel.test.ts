@@ -216,6 +216,46 @@ describe("the demos are wired to it", () => {
     expect(src).toContain("attachGraphPanel");
   });
 
+  it.each(DEMOS)("%s puts it in its own panel, not a second one", (demo) => {
+    const src = readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8");
+    // Two panels on one page is two claims about where the chrome is. The
+    // `into` argument is required, so a demo cannot drift back to a
+    // floating card without this failing to compile first — this only
+    // catches the case where someone adds a container that is not the
+    // demo's own overlay.
+    // The slot is claimed where the panel is BUILT, not where it is filled,
+    // so each page decides where in its own panel the graph sits — under
+    // the readouts and above the prose, which on two of these pages is the
+    // difference between visible and below the fold.
+    expect(src).toContain("overlay.addSlot()");
+    expect(src).toContain("into: graphSlot");
+  });
+
+  /**
+   * The pairing that makes the modal work, and the one nothing else would
+   * catch.
+   *
+   * `position: fixed` is relative to the viewport only while no ancestor is
+   * a containing block for it, and an ancestor becomes one by carrying a
+   * filter, a backdrop-filter, or a transform. The demos' panel carries
+   * `backdrop-filter: blur(6px)` — so the graph modal, which now renders
+   * inside that panel, has to be moved to the body or it opens at the size
+   * of the 300px card it was launched from. Measured in a browser with the
+   * portal removed: the "full-screen" backdrop came out 298x658, and the
+   * wheel died with it.
+   *
+   * Either side may legitimately change. What may not happen is the blur
+   * staying while the portal goes.
+   */
+  it("moves the modal out of the panel for as long as the panel is filtered", () => {
+    const overlay = readFileSync(`${ROOT}shared/overlay.ts`, "utf8");
+    const panel = readFileSync(`${ROOT}shared/graph/GraphPanel.svelte`, "utf8");
+    const traps = /backdrop-filter:(?!\s*none)|[^-]filter:(?!\s*none)|transform:(?!\s*none)/.test(
+      overlay,
+    );
+    if (traps) expect(panel).toContain("use:portal");
+  });
+
   /**
    * BOTH OF THESE ARE TEXT CHECKS, and both were bugs that shipped.
    *

@@ -206,7 +206,7 @@ function showGraphs(landmarks: Graph, rocks: Graph): void {
     { name: "rocks", graph: rocks },
   ];
   if (graphPanel) graphPanel.set(entries);
-  else graphPanel = attachGraphPanel(entries, { title: "infinite world" });
+  else graphPanel = attachGraphPanel(entries, { into: graphSlot, title: "infinite world" });
 }
 
 // -- world lifecycle -------------------------------------------------------
@@ -579,6 +579,12 @@ function paintGpuStats(): void {
   statFallbacks(fmtFallbacks(lastGpu.fallbacks));
 }
 
+/* The graph section, claimed HERE rather than where the panel is filled,
+   so this page decides where in its own panel the graph sits. Right after
+   the readouts and above the prose: the collapsibles and notes below run
+   to several hundred pixels on this page, and a thumbnail under them is a
+   thumbnail below the fold. */
+const graphSlot = overlay.addSlot();
 overlay.addNote(
   "Drag “cell size”: the blue grid re-cells the world and the rocks do not move or resize. Untick “halo” to watch every border grow a band of undersized rocks, and “world-anchored” to watch the same drag re-roll the world from scratch.",
 );

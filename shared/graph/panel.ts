@@ -7,6 +7,11 @@
  * it exists so that adding the panel to a demo is one import and one call
  * rather than each of the four pages learning how to mount a component.
  *
+ * It mounts INTO A SLOT the demo's own overlay hands out, rather than
+ * floating a second panel over the page. `into` is required for that
+ * reason: an optional target would default to the body, and the default is
+ * exactly the arrangement this replaced.
+ *
  * IT TAKES LIVE GRAPHS AND SERIALIZES THEM ITSELF. The alternative was to
  * take the JSON and let each demo call `serializeGraph`, which is one more
  * line per page and one more chance for two pages to hand the panel
@@ -69,10 +74,10 @@ function serializeAll(graphs: readonly PanelGraph[]): Entry[] {
 /** Mount the graph panel on the current page. */
 export function attachGraphPanel(
   graphs: readonly PanelGraph[],
-  opts: { title?: string } = {},
+  opts: { into: HTMLElement; title?: string },
 ): GraphPanelHandle {
   const host = document.createElement("div");
-  document.body.appendChild(host);
+  opts.into.appendChild(host);
   const app = mount(GraphPanel, {
     target: host,
     props: { initial: serializeAll(graphs), title: opts.title ?? "graph" },

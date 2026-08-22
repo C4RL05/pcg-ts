@@ -627,6 +627,12 @@ const statLap = overlay.addStat("lap");
 const statCook = overlay.addStat("cook");
 const statStation = overlay.addStat("station");
 const statFps = overlay.addStat("fps");
+/* The graph section, claimed HERE rather than where the panel is filled,
+   so this page decides where in its own panel the graph sits. Right after
+   the readouts and above the prose: the collapsibles and notes below run
+   to several hundred pixels on this page, and a thumbnail under them is a
+   thumbnail below the fold. */
+const graphSlot = overlay.addSlot();
 const card = overlay.addCollapsible("metric card", false);
 overlay.addNote(
   "Every box is one placement, drawn at its measured extents along the " +
@@ -743,7 +749,7 @@ let graphPanel: GraphPanelHandle | undefined;
 function showGraph(graph: Graph): void {
   const entries = [{ name: `${presetName} lap`, graph }];
   if (graphPanel) graphPanel.set(entries);
-  else graphPanel = attachGraphPanel(entries, { title: "racetrack" });
+  else graphPanel = attachGraphPanel(entries, { into: graphSlot, title: "racetrack" });
 }
 
 function layout(): void {
