@@ -24,6 +24,7 @@
  * someone puts them side by side.
  */
 
+import "./graph/tokens.css";
 import { NARROW_MEDIA_QUERY } from "./mobile.js";
 
 /** The box the geometry is drawn in. Every consumer needs it. */
@@ -43,7 +44,7 @@ function injectStyles(): void {
 .pcg-wordmark {
   position: fixed; left: 12px; bottom: 12px; z-index: 10;
   display: block; line-height: 0;
-  color: #dbe4f0; opacity: 0.45;
+  color: var(--ed-ink); opacity: 0.45;
   transition: opacity 0.15s;
 }
 .pcg-wordmark:hover, .pcg-wordmark:focus-visible { opacity: 0.9; }

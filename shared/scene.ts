@@ -15,7 +15,15 @@ import {
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /** Shared dark background color (also used by page CSS). */
-export const BACKGROUND = 0x0d1117;
+/**
+ * The ground every demo's render sits on, and the colour its fog fades to.
+ *
+ * BLACK, because the site is. It was `0x0d1117` — a blue-black, and the
+ * one hue left on a page whose chrome is now pure greyscale. The editor
+ * had already opted out of it by passing `0x000000` of its own, which is
+ * the clearest statement anyone made about what this should be.
+ */
+export const BACKGROUND = 0x000000;
 
 /** Options for {@link createScene}. */
 export interface SceneOptions {

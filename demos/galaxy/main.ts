@@ -647,8 +647,8 @@ const cardStyle = document.createElement("style");
 cardStyle.textContent = `
 .pcg07-card {
   position: fixed; top: 16px; right: 16px; width: 300px; z-index: 10;
-  background: rgba(15,20,30,0.92); border: 1px solid #223047; border-radius: 10px;
-  padding: 16px 18px; color: #dbe4f0; font: 13px/1.5 ui-monospace, monospace;
+  background: var(--ed-solid); border: 1px solid var(--ed-rule); border-radius: 10px;
+  padding: 16px 18px; color: var(--ed-ink); font: 13px/1.5 ui-monospace, monospace;
 }
 /* On narrow screens the shared overlay owns the bottom edge, so the card
    spans the top instead and scrolls internally rather than growing past a
@@ -677,19 +677,19 @@ function showCard(spec: SystemSpec, dist: number): void {
       ]
         .filter(Boolean)
         .join(", ");
-      return `<tr><td style="padding-right:10px;color:#8fd0ff">${p.name}</td>` +
-        `<td style="color:#8b98ab">${p.kind}${extras ? " · " + extras : ""}</td></tr>`;
+      return `<tr><td style="padding-right:10px;color:var(--ed-figure)">${p.name}</td>` +
+        `<td style="color:var(--ed-ink-dim)">${p.kind}${extras ? " · " + extras : ""}</td></tr>`;
     })
     .join("");
   card.innerHTML =
-    `<div style="font-size:17px;color:#f0f4fa">${spec.name}</div>` +
-    `<div style="color:#55617a;margin-bottom:8px">${spec.catalog}</div>` +
+    `<div style="font-size:17px;color:var(--ed-ink-hi)">${spec.name}</div>` +
+    `<div style="color:var(--ed-ink-ghost);margin-bottom:8px">${spec.catalog}</div>` +
     `<div>class ${spec.spectral} · ${spec.tempK.toLocaleString()} K</div>` +
-    `<div style="color:#8b98ab;margin-bottom:8px">${dist.toFixed(0)} u from your last position</div>` +
+    `<div style="color:var(--ed-ink-dim);margin-bottom:8px">${dist.toFixed(0)} u from your last position</div>` +
     (spec.planets.length > 0
       ? `<table style="border-spacing:0">${rows}</table>`
-      : `<div style="color:#8b98ab">no planets — a lonely star</div>`) +
-    `<div style="margin-top:10px;color:#55617a">Esc — back to the galaxy</div>`;
+      : `<div style="color:var(--ed-ink-dim)">no planets — a lonely star</div>`) +
+    `<div style="margin-top:10px;color:var(--ed-ink-ghost)">Esc — back to the galaxy</div>`;
   card.style.display = "block";
 }
 

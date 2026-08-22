@@ -399,13 +399,13 @@ style.textContent = `
 .pcg04-seg { display: flex; gap: 6px; margin: 4px 0 4px; }
 .pcg04-seg button {
   flex: 1; padding: 6px 4px; cursor: pointer; border-radius: 6px;
-  border: 1px solid #33405a; background: #161d29; color: #aeb9c9;
+  border: 1px solid var(--ed-edge); background: var(--ed-well); color: var(--ed-ink-mid);
   font: 12px system-ui, sans-serif;
 }
-.pcg04-seg button:hover:not(:disabled) { border-color: #4c8dff; color: #dbe4f0; }
-.pcg04-seg button[aria-pressed="true"] { background: #1d3a6b; border-color: #4c8dff; color: #eaf2ff; }
+.pcg04-seg button:hover:not(:disabled) { border-color: var(--ed-accent); color: var(--ed-ink); }
+.pcg04-seg button[aria-pressed="true"] { background: var(--ed-raised-hi); border-color: var(--ed-accent); color: var(--ed-ink-hi); }
 .pcg04-seg button:disabled { opacity: 0.4; cursor: not-allowed; }
-.pcg04-hint { margin: 0 0 10px; color: #6f7c8f; font-size: 11px; }
+.pcg04-hint { margin: 0 0 10px; color: var(--ed-ink-faint); font-size: 11px; }
 `;
 document.head.appendChild(style);
 

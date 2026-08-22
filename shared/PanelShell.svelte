@@ -96,10 +96,10 @@
     overflow-y: auto;
     box-sizing: border-box;
     padding: 14px 16px;
-    background: rgba(13, 17, 23, 0.9);
-    border: 1px solid #2a3548;
+    background: var(--ed-panel);
+    border: 1px solid var(--ed-rule);
     border-radius: 10px;
-    color: #dbe4f0;
+    color: var(--ed-ink);
     font: 13px/1.45 system-ui, sans-serif;
     backdrop-filter: blur(6px);
   }
@@ -107,7 +107,7 @@
     margin: 0 0 2px;
     font-size: 15px;
     font-weight: 600;
-    color: #f0f4fa;
+    color: var(--ed-ink-hi);
   }
   /* Desktop: the chevron does not exist. This rule must precede the media
      block so the narrow-screen rule wins the cascade at equal specificity. */
@@ -138,14 +138,14 @@
       margin: 0 -16px;
       padding: 13px 16px;
       line-height: 22px; /* 13 + 22 + 13 = the 48px collapsed bar */
-      background: rgba(13, 17, 23, 0.96);
+      background: var(--ed-solid);
       cursor: pointer;
     }
     .chevron {
       /* No `display: inline-block` beside the float: a floated box is
          treated as `block` regardless, so the declaration was inert. */
       float: right;
-      color: #8b98ab;
+      color: var(--ed-ink-dim);
       transition: transform 0.2s;
     }
     /* Collapse clips via max-height + overflow, never {#if}: the capture

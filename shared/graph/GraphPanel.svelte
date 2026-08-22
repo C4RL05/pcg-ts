@@ -237,7 +237,7 @@
     padding: 0;
     background: none;
     border: 0;
-    color: #dbe4f0;
+    color: var(--ed-ink);
     font: 13px/1.45 system-ui, sans-serif;
     text-align: left;
     cursor: pointer;
@@ -253,20 +253,20 @@
   }
   .name {
     font-size: 12px;
-    color: #aeb9c9;
+    color: var(--ed-ink-mid);
   }
   .thumb:hover .name {
-    color: #f0f4fa;
+    color: var(--ed-ink-hi);
   }
   .count {
     font: 12px ui-monospace, monospace;
-    color: #8fd0ff;
+    color: var(--ed-figure);
   }
   .frame {
     display: block;
     height: 108px;
-    background: #05070a;
-    border: 1px solid #223047;
+    background: var(--ed-grid-bg);
+    border: 1px solid var(--ed-rule);
     border-radius: 6px;
     overflow: hidden;
     /* A cropped thumbnail has to say it is cropped, or it reads as the
@@ -277,7 +277,7 @@
     mask-image: linear-gradient(to right, transparent, #000 14px, #000 calc(100% - 14px), transparent);
   }
   .thumb:hover .frame {
-    border-color: #33405a;
+    border-color: var(--ed-edge);
   }
   .backdrop {
     position: fixed;
@@ -301,11 +301,11 @@
        the sheet takes the screen and the dead zone is gone with it. */
     width: 100%;
     height: 100%;
-    background: #05070a;
-    border: 1px solid #2a3548;
+    background: var(--ed-grid-bg);
+    border: 1px solid var(--ed-rule);
     border-radius: 10px;
     overflow: hidden;
-    color: #dbe4f0;
+    color: var(--ed-ink);
     font: 13px/1.45 system-ui, sans-serif;
   }
   header {
@@ -313,7 +313,7 @@
     align-items: center;
     gap: 12px;
     padding: 8px 10px;
-    border-bottom: 1px solid #223047;
+    border-bottom: 1px solid var(--ed-rule);
   }
   .heading,
   .tabs {
@@ -321,7 +321,7 @@
     min-width: 0;
   }
   .heading {
-    color: #f0f4fa;
+    color: var(--ed-ink-hi);
   }
   .tabs {
     display: flex;
@@ -330,27 +330,27 @@
   }
   .tabs button {
     padding: 3px 10px;
-    background: #161d29;
-    color: #aeb9c9;
-    border: 1px solid #33405a;
+    background: var(--ed-well);
+    color: var(--ed-ink-mid);
+    border: 1px solid var(--ed-edge);
     border-radius: 5px;
     font: 12px system-ui, sans-serif;
     cursor: pointer;
   }
   .tabs button.on {
-    background: #26344a;
-    color: #f0f4fa;
+    background: var(--ed-tab-on);
+    color: var(--ed-ink-hi);
   }
   .meta {
     font: 11px ui-monospace, monospace;
-    color: #8b98ab;
+    color: var(--ed-ink-dim);
     white-space: nowrap;
   }
   .close {
     padding: 3px 8px;
-    background: #161d29;
-    color: #dbe4f0;
-    border: 1px solid #33405a;
+    background: var(--ed-well);
+    color: var(--ed-ink);
+    border: 1px solid var(--ed-edge);
     border-radius: 5px;
     cursor: pointer;
   }
@@ -360,12 +360,12 @@
   }
   .empty {
     margin: 24px;
-    color: #8b98ab;
+    color: var(--ed-ink-dim);
   }
   footer {
     padding: 6px 10px;
-    border-top: 1px solid #223047;
+    border-top: 1px solid var(--ed-rule);
     font: 11px ui-monospace, monospace;
-    color: #8b98ab;
+    color: var(--ed-ink-dim);
   }
 </style>

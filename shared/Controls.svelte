@@ -313,11 +313,11 @@
   .group {
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid var(--ed-rule, #223047);
+    border-top: 1px solid var(--ed-rule, var(--ed-rule));
   }
   h2 {
     margin: 0 0 4px;
-    color: var(--ed-ink, #cfe0f5);
+    color: var(--ed-ink, var(--ed-ink));
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.06em;
@@ -337,29 +337,29 @@
     gap: 3px;
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid var(--ed-rule, #223047);
+    border-top: 1px solid var(--ed-rule, var(--ed-rule));
   }
   .tab {
     flex: 1 1 auto;
     padding: 4px 7px;
     font: inherit;
     font-size: 11px;
-    color: var(--ed-ink-dim, #8fa3bf);
-    background: var(--ed-tab, #131c2b);
-    border: 1px solid var(--ed-rule, #223047);
+    color: var(--ed-ink-dim, var(--ed-ink-mid));
+    background: var(--ed-tab, var(--ed-well));
+    border: 1px solid var(--ed-rule, var(--ed-rule));
     border-radius: var(--ed-radius, 4px);
     cursor: pointer;
   }
   .tab:hover {
-    color: var(--ed-ink, #d6e2f2);
+    color: var(--ed-ink, var(--ed-ink));
   }
   .tab.on {
-    color: var(--ed-ink-hi, #eaf1fa);
-    background: var(--ed-tab-on, #24344d);
-    border-color: var(--ed-tab-on-edge, #35507a);
+    color: var(--ed-ink-hi, var(--ed-ink-hi));
+    background: var(--ed-tab-on, var(--ed-raised));
+    border-color: var(--ed-tab-on-edge, var(--ed-raised-hi));
   }
   .tab:focus-visible {
-    outline: 2px solid var(--ed-focus, #4d7fd1);
+    outline: 2px solid var(--ed-focus, var(--ed-accent));
     outline-offset: 1px;
   }
   .row {
@@ -373,29 +373,29 @@
   }
   .row > span {
     flex: 0 0 84px;
-    color: var(--ed-ink-mid, #aeb9c9);
+    color: var(--ed-ink-mid, var(--ed-ink-mid));
     font-size: 12px;
   }
   .row > em {
     flex: 0 0 56px;
     text-align: right;
     font-style: normal;
-    color: var(--ed-figure, #8fd0ff);
+    color: var(--ed-figure, var(--ed-figure));
     font: 12px ui-monospace, monospace;
   }
   input[type="range"] {
     flex: 1;
     min-width: 0;
-    accent-color: var(--ed-accent, #4c8dff);
+    accent-color: var(--ed-accent, var(--ed-accent));
   }
   select,
   .num {
     flex: 1;
     min-width: 0;
     padding: 3px 6px;
-    background: var(--ed-well, #161d29);
-    color: var(--ed-ink, #dbe4f0);
-    border: 1px solid var(--ed-edge, #33405a);
+    background: var(--ed-well, var(--ed-well));
+    color: var(--ed-ink, var(--ed-ink));
+    border: 1px solid var(--ed-edge, var(--ed-edge));
     border-radius: var(--ed-radius, 5px);
     font: 12px system-ui, sans-serif;
   }
@@ -421,13 +421,13 @@
   .grid {
     margin: 6px 0 10px;
     padding: 8px;
-    background: var(--ed-grid-bg, #111823);
-    border: 1px solid var(--ed-rule, #223047);
+    background: var(--ed-grid-bg, var(--ed-well));
+    border: 1px solid var(--ed-rule, var(--ed-rule));
     border-radius: var(--ed-radius, 6px);
   }
   .gridhead {
     margin-bottom: 6px;
-    color: var(--ed-ink-dim, #8b98ab);
+    color: var(--ed-ink-dim, var(--ed-ink-dim));
     font-size: 11.5px;
   }
   .gridrow {
@@ -441,7 +441,7 @@
     gap: 3px;
   }
   .cell > span {
-    color: var(--ed-ink-mid, #aeb9c9);
+    color: var(--ed-ink-mid, var(--ed-ink-mid));
     font-size: 11px;
   }
   .cell .num {
@@ -454,7 +454,7 @@
     flex: 0 0 auto;
     align-items: center;
     gap: 5px;
-    color: var(--ed-ink-mid, #aeb9c9);
+    color: var(--ed-ink-mid, var(--ed-ink-mid));
     font-size: 12px;
     cursor: pointer;
   }
@@ -466,6 +466,6 @@
   }
   input[type="checkbox"] {
     margin: 0;
-    accent-color: var(--ed-accent, #4c8dff);
+    accent-color: var(--ed-accent, var(--ed-accent));
   }
 </style>

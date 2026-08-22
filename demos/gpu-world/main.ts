@@ -521,24 +521,24 @@ style.textContent = `
 .pcg09-seg { display: flex; gap: 6px; margin: 4px 0 4px; }
 .pcg09-seg button {
   flex: 1; padding: 6px 4px; cursor: pointer; border-radius: 6px;
-  border: 1px solid #33405a; background: #161d29; color: #aeb9c9;
+  border: 1px solid var(--ed-edge); background: var(--ed-well); color: var(--ed-ink-mid);
   font: 12px system-ui, sans-serif;
 }
-.pcg09-seg button:hover:not(:disabled) { border-color: #4c8dff; color: #dbe4f0; }
-.pcg09-seg button[aria-pressed="true"] { background: #1d3a6b; border-color: #4c8dff; color: #eaf2ff; }
+.pcg09-seg button:hover:not(:disabled) { border-color: var(--ed-accent); color: var(--ed-ink); }
+.pcg09-seg button[aria-pressed="true"] { background: var(--ed-raised-hi); border-color: var(--ed-accent); color: var(--ed-ink-hi); }
 .pcg09-seg button:disabled { opacity: 0.4; cursor: not-allowed; }
-.pcg09-hint { margin: 0 0 10px; color: #6f7c8f; font-size: 11px; }
+.pcg09-hint { margin: 0 0 10px; color: var(--ed-ink-faint); font-size: 11px; }
 .pcg09-hud {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 10;
   max-width: max(240px, min(680px, calc(100vw - 360px))); padding: 8px 14px; box-sizing: border-box;
   text-align: center; border-radius: 8px;
-  background: rgba(13, 17, 23, 0.84); border: 1px solid #2a3548;
-  color: #aeb9c9; font: 12px/1.55 system-ui, sans-serif; backdrop-filter: blur(6px);
+  background: var(--ed-panel); border: 1px solid var(--ed-rule);
+  color: var(--ed-ink-mid); font: 12px/1.55 system-ui, sans-serif; backdrop-filter: blur(6px);
 }
-.pcg09-hud b { color: #8fd0ff; font-weight: 600; }
-.pcg09-hud .pcg09-keys { color: #6f7c8f; }
-.pcg09-hud.pcg09-warn { border-color: #7a4a2a; color: #ffd8b4; }
-.pcg09-hud.pcg09-warn b { color: #ffb066; }
+.pcg09-hud b { color: var(--ed-figure); font-weight: 600; }
+.pcg09-hud .pcg09-keys { color: var(--ed-ink-faint); }
+.pcg09-hud.pcg09-warn { border-color: var(--ed-edge-warn); color: var(--ed-ink-mid); }
+.pcg09-hud.pcg09-warn b { color: var(--ed-ink-hi); }
 /* On narrow screens the shared overlay becomes a bottom sheet, so the HUD
    moves to the top edge the overlay vacated instead of colliding with it.
    The desktop max-width reserved 360px for the left panel; there is no side

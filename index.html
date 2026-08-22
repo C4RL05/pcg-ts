@@ -5,33 +5,59 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>pcg-ts demos</title>
   <style>
-    :root { color-scheme: dark; }
-    html, body { margin: 0; min-height: 100%; background: #0d1117; }
+    /* The site's greyscale, the same palette `docs/index.html` and
+       `docs/manual.html` are set in: every value R = G = B, no hue
+       anywhere, and the three primaries left for marks. This page is the
+       shelf those pages send people to, so it had no business being the
+       one blue thing between them.
+
+       Declared inline rather than linked because this page is built by
+       vite into `docs/pages/` while the two it matches are hand-written in
+       `docs/` — there is no path that reaches both, which is the same
+       reason the wordmark's geometry is inline. */
+    :root {
+      color-scheme: dark;
+      --bg: #000000;
+      --ink-hi: #ffffff;
+      --ink: #ededed;
+      --muted: #9a9a9a;
+      --faint: #7a7a7a;
+      --line: #262626;
+      --line-hi: #3a3a3a;
+      --card: #0d0d0d;
+      --g: #00ff00;
+      --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+      --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); }
     body {
       display: flex; justify-content: center;
-      color: #dbe4f0; font: 15px/1.5 system-ui, sans-serif;
+      color: var(--ink); font: 15px/1.5 var(--sans);
       padding: 48px 20px;
     }
     main { width: 100%; max-width: 660px; }
-    h1 { margin: 0; font-size: 26px; color: #f0f4fa; }
-    h1 code { color: #8fd0ff; font-family: ui-monospace, monospace; }
+    h1 { margin: 0; font-size: 26px; color: var(--ink-hi); }
+    h1 code { color: var(--ink-hi); font-family: var(--mono); }
     h2 {
       margin: 32px 0 10px; font-size: 12px; font-weight: 600;
-      letter-spacing: 0.09em; text-transform: uppercase; color: #55617a;
+      letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint);
     }
-    .sub { margin: 6px 0 28px; color: #8b98ab; }
+    .sub { margin: 6px 0 28px; color: var(--muted); }
     a.card {
       display: block;
       margin: 10px 0; padding: 14px 18px;
-      background: #131a26; border: 1px solid #223047; border-radius: 10px;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
       text-decoration: none; color: inherit;
       transition: border-color 0.15s, background 0.15s;
     }
-    a.card:hover { border-color: #4c8dff; background: #16202f; }
-    a.card .name { font-weight: 600; color: #eaf1fa; }
-    a.card .desc { margin-top: 2px; color: #8b98ab; font-size: 13px; }
-    footer { margin-top: 28px; color: #55617a; font-size: 12px; }
-    footer code { font-family: ui-monospace, monospace; }
+    /* Green on hover and nowhere else: the landing page spends this hue on
+       interactive state and one call to action, and a shelf of links is
+       nothing but interactive state. */
+    a.card:hover { border-color: var(--g); }
+    a.card .name { font-weight: 600; color: var(--ink-hi); }
+    a.card .desc { margin-top: 2px; color: var(--muted); font-size: 13px; }
+    footer { margin-top: 28px; color: var(--faint); font-size: 12px; }
+    footer code { font-family: var(--mono); }
   </style>
 </head>
 <body>
