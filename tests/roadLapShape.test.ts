@@ -22,12 +22,25 @@
 import { describe, expect, it } from "vitest";
 import { makeTrackSpline } from "../demos/road/spline.js";
 
-/** Curvature bucket cuts, in W. Upstream's, not guessed. */
+/**
+ * Curvature bucket cuts in W, and the share of lap length each holds.
+ *
+ * The cuts are upstream's rather than guessed — an earlier version here
+ * used 8 / 16 / 30 and the straight edge was well off, which moves a lot
+ * of track between buckets for a keyed statistic.
+ *
+ * The shares are the PER-CIRCUIT p10-p90 over twenty-two circuits, not
+ * the exemplar kit's. THE STREET CIRCUIT reads 58.7% straight, above the
+ * population's p90 of 53.3: it is an unusually straight circuit and was
+ * handed over as the one reference. Tuning toward it would have been
+ * tuning toward an outlier, which is a caution that applies to anything
+ * else read off that one circuit as though it were the population.
+ */
 const BUCKETS = [
-  { name: "tight", lo: 0, hi: 7 },
-  { name: "medium", lo: 7, hi: 15 },
-  { name: "easy", lo: 15, hi: 40 },
-  { name: "straight", lo: 40, hi: Infinity },
+  { name: "tight", lo: 0, hi: 7, share: [0.046, 0.189] },
+  { name: "medium", lo: 7, hi: 15, share: [0.134, 0.374] },
+  { name: "easy", lo: 15, hi: 40, share: [0.129, 0.332] },
+  { name: "straight", lo: 40, hi: Infinity, share: [0.342, 0.533] },
 ] as const;
 
 interface Shape {
@@ -38,6 +51,7 @@ interface Shape {
   corners: number;
   perTwentyW: number;
   cornerShare: number;
+  trueStraight: number;
 }
 
 /**
@@ -107,6 +121,11 @@ function shapeOf(seed: number): Shape {
     corners,
     perTwentyW: (corners / lapW) * 20,
     cornerShare: inCorner / n,
+    // R >= 200W is straight in the sense a DRIVER would recognise. The
+    // `straight` bucket starts at 40W and 40W still curves visibly over a
+    // long run, so the bucket overstates real straight by nearly double —
+    // which is why this is measured separately and not read off it.
+    trueStraight: R.filter((r) => r >= 200).length / n,
   };
 }
 
@@ -123,6 +142,7 @@ describe("the demo's lap is shaped like a measured circuit", () => {
         `  tightest corner   ${s.tightest.toFixed(1)} W        [2.2-5.5]`,
         `  corners           ${s.corners} (${s.perTwentyW.toFixed(2)} per 20W)  [0.61-1.33]`,
         `  share in corner   ${(100 * s.cornerShare).toFixed(0)}%        [20-37]`,
+        `  truly straight    ${(100 * s.trueStraight).toFixed(0)}%        [14.2-39.7]  R >= 200W`,
       ].join("\n"),
     );
     expect(s.lapW).toBeGreaterThan(0);
@@ -135,6 +155,7 @@ describe("the demo's lap is shaped like a measured circuit", () => {
     ["tightest corner", () => s.tightest, 2.2, 5.5],
     ["corners per 20W", () => s.perTwentyW, 0.61, 1.33],
     ["share of lap in corner", () => s.cornerShare, 0.2, 0.37],
+    ["truly straight share", () => s.trueStraight, 0.142, 0.397],
   ])("%s lands inside the measured band", (_name, get, lo, hi) => {
     const v = get();
     expect(v).toBeGreaterThanOrEqual(lo);
@@ -146,7 +167,7 @@ describe("the demo's lap is shaped like a measured circuit", () => {
    * changed. L-2 and L-3 dress corner approaches and tight bends; with
    * nothing in the tight bucket a generator satisfies them vacuously.
    */
-  it("has real tight corners to dress", () => {
+  it("holds every curvature bucket inside its measured share", () => {
     const spline = makeTrackSpline({ seed: 1 });
     const p = spline.positions;
     const n = p.length / 3;
@@ -180,10 +201,35 @@ describe("the demo's lap is shaped like a measured circuit", () => {
     console.log(
       "curvature buckets: " + shares.map((b) => `${b.name} ${(100 * b.share).toFixed(1)}%`).join("  "),
     );
-    const tight = shares.find((b) => b.name === "tight");
-    // THE STREET CIRCUIT carries 11.6% of its length in the tight bucket. Well below
-    // that and the corner rules have nothing to act on.
-    expect((tight as { share: number }).share).toBeGreaterThan(0.04);
+    // Every bucket, not only the tight one: a lap can carry enough tight
+    // corners while being wrong everywhere else, and the four shares are a
+    // stricter statement of "this is the kind of track the rules were
+    // measured on" than any single figure.
+    for (const b of BUCKETS) {
+      const got = shares.find((x) => x.name === b.name) as { share: number };
+      expect(got.share, `${b.name} share`).toBeGreaterThanOrEqual(b.share[0]);
+      expect(got.share, `${b.name} share`).toBeLessThanOrEqual(b.share[1]);
+    }
+  });
+
+  /**
+   * THE ONE A MEDIAN CANNOT SEE, and the reason it is gated separately.
+   *
+   * The first windowless wobble put the median radius squarely in band
+   * and left only 11.5% of the lap truly straight, under a measured p10
+   * of 14.2. "Half the lap curves" and "a quarter of it does not" are
+   * both true of a real circuit and neither implies the other, so a lap
+   * can satisfy the median while having no straight at all — which is a
+   * different track to drive and a different one to dress.
+   *
+   * Checked across seeds because the window's phase moves with the seed,
+   * and a window that happens to align with the long edges on seed 1
+   * would pass here while failing for everyone else.
+   */
+  it.each([1, 2, 3, 4])("keeps a real straight on seed %i", (seed) => {
+    const t = shapeOf(seed).trueStraight;
+    expect(t).toBeGreaterThanOrEqual(0.142);
+    expect(t).toBeLessThanOrEqual(0.397);
   });
 
   it("gives a different lap for a different seed, and the same one twice", () => {

@@ -30,13 +30,26 @@
  * figure a real circuit is measured by becomes a knob rather than an
  * emergent property.
  *
- * PLUS A GENTLE WOBBLE, which is the part that is not obvious. A
- * filleted polygon has LITERAL straights, and half a lap of literal
+ * PLUS A WINDOWED WOBBLE, which is the part that is not obvious, and
+ * which took two goes.
+ *
+ * A filleted polygon has LITERAL straights, and half a lap of literal
  * straight reads as an infinite radius: the median came out at 76W
- * against a measured 31.5. Real circuits have almost no true straight —
- * a median radius of 31.5W means half the lap is curving at less than
- * that. A low-order radial wobble bends the long edges without touching a
- * 4W fillet, and it is what moves the median into the measured band.
+ * against a measured 31.5. So the long edges have to bend. A low-order
+ * radial wobble does that without touching a 4W fillet, and it moved the
+ * median into band immediately.
+ *
+ * It also bent EVERYTHING, which the median could not see. A quarter of a
+ * real lap — 25.4% [14.2-39.7] at R >= 200W — is straight in the sense a
+ * driver would recognise, and a global wobble left 11.5%, under the tenth
+ * percentile. So the wobble is WINDOWED: a raised sinusoid clipped at a
+ * floor, active over part of the lap and exactly zero over the rest, with
+ * the clip smooth enough that the window is not itself a corner.
+ *
+ * Two figures, one of which is invisible to the other. "Half the lap
+ * curves" and "a quarter of it does not" are both true and neither
+ * implies the other, which is the whole reason the second one is gated
+ * separately.
  */
 
 /** A closed centreline: flat xyz triples, first point NOT repeated. */
@@ -72,22 +85,39 @@ export interface TrackOptions {
  *   tightest corner         3.1 W   [2.2-5.5]
  *   corners per lap          18     [11-24]      runs under R = 12W
  *   share of lap in corner   30%    [20-37]
+ *   truly straight          25.4%   [14.2-39.7]  R >= 200W
+ *
+ * A CORNER IS A MAXIMAL RUN of frames under R = 12W, with no hysteresis
+ * and no minimum length, so two bends with a frame of straight between
+ * them are two corners. That is upstream's definition and it is crude on
+ * purpose: tightening it to a 2W minimum run moves their population
+ * figure from 18 corners to 15, which is not enough to matter. Entry is
+ * the run's first frame in racing order and severity is its tightest
+ * radius, which is what L-2 and L-3 assume.
  */
 const LAP = {
   /** Corners around the lap. This IS the vertex count of the polygon. */
-  corners: 26,
+  corners: 23,
   /** Mean polygon radius, in world units. Sets the lap's length. */
-  radius: 497.8,
+  radius: 440.4,
   /** Per-vertex radial jitter, as a fraction of `radius`. */
-  jitterR: 0.204,
+  jitterR: 0.230,
   /** Per-vertex angular jitter, in radians. */
-  jitterA: 0.136,
+  jitterA: 0.165,
   /** Corner radius range, in half-widths, drawn per corner. */
-  cornerMinW: 2.53,
-  cornerMaxW: 14.0,
+  cornerMinW: 3.85,
+  cornerMaxW: 19.99,
   /** The wobble that bends the straights. Amplitude is a fraction of radius. */
-  wobbleAmp: 0.113,
-  wobbleOrder: 5,
+  wobbleAmp: 0.0606,
+  wobbleOrder: 6,
+  /**
+   * The window the wobble acts through. `maskOrder` is how many times
+   * round the lap it opens and closes; `maskFloor` is where the raised
+   * sinusoid is clipped, so a higher floor leaves more of the lap
+   * genuinely straight.
+   */
+  maskOrder: 2,
+  maskFloor: -0.067,
   /** Peak height swing of the circuit, in world units. */
   relief: 26,
   /**
@@ -207,6 +237,7 @@ export function makeTrackSpline(opts: TrackOptions = {}): Spline {
   const positions = new Float64Array(count * 3);
   const reliefPhase = hash(seed, 2) * Math.PI * 2;
   const wobblePhase = hash(seed, 5) * Math.PI * 2;
+  const maskPhase = hash(seed, 7) * Math.PI * 2;
   let k = 0;
   for (let m = 0; m < count; m++) {
     const d = (m / count) * total;
@@ -217,10 +248,14 @@ export function makeTrackSpline(opts: TrackOptions = {}): Spline {
     let x = pts[k][0] + (pts[j][0] - pts[k][0]) * f;
     let z = pts[k][1] + (pts[j][1] - pts[k][1]) * f;
 
-    // The wobble. Radial and low-order, so it bends a long straight and
-    // leaves a tight fillet alone — see the header.
+    // The wobble, through its window. Radial and low-order, so it bends a
+    // long straight and leaves a tight fillet alone; windowed, so a
+    // quarter of the lap keeps a straight a driver would recognise. See
+    // the header for why one figure cannot stand in for the other.
     const theta = Math.atan2(z, x);
-    const scale = 1 + LAP.wobbleAmp * Math.sin(LAP.wobbleOrder * theta + wobblePhase);
+    const raw = Math.sin(LAP.maskOrder * theta + maskPhase);
+    const gate = Math.max(0, raw - LAP.maskFloor) / (1 - LAP.maskFloor);
+    const scale = 1 + LAP.wobbleAmp * gate * Math.sin(LAP.wobbleOrder * theta + wobblePhase);
     x *= scale;
     z *= scale;
 
