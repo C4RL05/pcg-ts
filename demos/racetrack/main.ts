@@ -61,7 +61,7 @@ import {
   noCorrections,
 } from "./calibrate.js";
 import { buildTrackDressingGraph } from "./dressing.js";
-import { PRESETS, REFINE_PASSES, type Preset } from "./kit.js";
+import { PRESETS, REFINE_PASSES, SIGHTLINE, type Preset } from "./kit.js";
 import { TRACK, col, refine, scoreCook } from "./read.js";
 
 // ------------------------------------------------------------------ //
@@ -533,7 +533,19 @@ const overlay = createOverlay({
 let presetName = "lush";
 let seed = 21;
 let speedW = 45;
-let eyeW = 0.8;
+// THE CAMERA RIDES WHERE THE RULES SAY THE DRIVER'S EYE IS, and it did
+// not before: this was a literal 0.8 while the sightline cull, the score
+// and the kit all worked from 0.3. The comment on `SIGHTLINE` warns about
+// exactly that — the same number typed twice is how a picture starts
+// disagreeing with the card beside it — and the picture was the reader
+// that never took the constant.
+//
+// It matters for what this demo is FOR. The sightline rule guarantees a
+// clear view of the centreline twelve half-widths ahead FROM THIS
+// HEIGHT; showing the lap from nearly three times up is showing a
+// guarantee nobody made. The slider still raises it, which is the right
+// place for a taste knob to live.
+let eyeW: number = SIGHTLINE.eyeHeightW;
 let planOn = true;
 let paused = false;
 

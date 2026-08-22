@@ -142,9 +142,6 @@ const BRAKE_RADIUS_W = 8;
  */
 const SEVERITY_PROBE_W = 2;
 
-/** The cockpit eye height the sightline is tested from, in W. */
-const EYE_H_W = 0.3;
-
 /** How far ahead the centreline must stay visible, in W. */
 const LOOK_AHEAD_W = 12;
 
@@ -2052,7 +2049,7 @@ function cullSightline(
       // separately as metric 14.
       mul(lt(attribute("zone"), 6), gt(attribute("zone"), 2)),
       mul(
-        gt(add(attribute("heightW"), attribute("tallnessW")), EYE_H_W),
+        gt(add(attribute("heightW"), attribute("tallnessW")), SIGHTLINE.eyeHeightW),
         lt(attribute("heightW"), 3),
       ),
     ),
