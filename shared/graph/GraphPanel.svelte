@@ -267,7 +267,7 @@
     height: 108px;
     background: var(--ed-grid-bg);
     border: 1px solid var(--ed-rule);
-    border-radius: 6px;
+    border-radius: var(--ed-radius);
     overflow: hidden;
     /* A cropped thumbnail has to say it is cropped, or it reads as the
        whole graph with three nodes in it. The fade is the only cue that
@@ -303,7 +303,7 @@
     height: 100%;
     background: var(--ed-grid-bg);
     border: 1px solid var(--ed-rule);
-    border-radius: 10px;
+    border-radius: var(--ed-radius-lg);
     overflow: hidden;
     color: var(--ed-ink);
     font: 13px/1.45 system-ui, sans-serif;
@@ -333,7 +333,7 @@
     background: var(--ed-well);
     color: var(--ed-ink-mid);
     border: 1px solid var(--ed-edge);
-    border-radius: 5px;
+    border-radius: var(--ed-radius);
     font: 12px system-ui, sans-serif;
     cursor: pointer;
   }
@@ -351,7 +351,7 @@
     background: var(--ed-well);
     color: var(--ed-ink);
     border: 1px solid var(--ed-edge);
-    border-radius: 5px;
+    border-radius: var(--ed-radius);
     cursor: pointer;
   }
   .body {

@@ -313,7 +313,7 @@
     padding: 4px 7px;
     background: #131a26;
     border: 1px solid #223047;
-    border-radius: 5px;
+    border-radius: var(--ed-radius);
     color: #8b98ab;
     font: 10px/1.5 ui-monospace, monospace;
   }

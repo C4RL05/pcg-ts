@@ -100,10 +100,21 @@
   --ed-tab-on: #262626;
   --ed-tab-on-edge: #4a4a4a;
 
-  /* native widget tint (sliders, checkboxes) and the focus ring */
+  /* native widget tint and the focus ring. `--ed-accent` dresses the
+     checkboxes, which are the last native widget still wearing their
+     own parts — the slider is DRAWN (below), not tinted, so it stopped
+     reading this the day it stopped using a thumb. */
   --ed-accent: #ffffff;
   --ed-focus: #ffffff;
   --ed-grid-bg: #0a0a0a;
+
+  /* the slider: a solid bar filled to its value, no thumb. Two greys
+     rather than one reused elsewhere — the unfilled bar sits between
+     `--ed-well` and `--ed-rule` so it reads as a groove and not as a
+     row rule, and the fill is held under `--ed-ink` so a panel of them
+     does not out-shout the numbers they are there to set. */
+  --ed-slider-track: #1f1f1f;
+  --ed-slider-fill: #bfbfbf;
 
   /* type. Three sizes, and no fourth: 11 names things, 12 is prose and
      controls, 14 titles a panel. */
@@ -114,13 +125,21 @@
   --ed-t-title: 14px;
 
   /**
-   * geometry — TWO radii, and no third.
+   * geometry — NO radius, on either tier.
    *
    * The page had 4, 5, 6, 8 and 10 in it, most of them a pixel apart
-   * and none of them meaning anything by being different. One radius
-   * for things you click or type into, one for floating surfaces.
+   * and none of them meaning anything by being different. That got cut
+   * to two — one for things you click or type into, one for floating
+   * surfaces — and both are now zero: the chrome is drawn in straight
+   * lines, so a rounded corner is the one shape on the page that is
+   * neither a rule nor a bar.
+   *
+   * The two names STAY, at 0, rather than being deleted from the ~30
+   * rules that read them. They record which tier a corner belongs to,
+   * which is what a future non-zero value would need to know, and the
+   * alternative is a sweep that has to be re-derived by hand to undo.
    */
-  --ed-radius: 4px;                     /* buttons, inputs, tabs */
-  --ed-radius-lg: 8px;                  /* panels, menus, the modal */
+  --ed-radius: 0;                       /* buttons, inputs, tabs */
+  --ed-radius-lg: 0;                    /* panels, menus, the modal */
   --ed-btn-pad: 3px 10px;
 }

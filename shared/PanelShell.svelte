@@ -98,7 +98,7 @@
     padding: 14px 16px;
     background: var(--ed-panel);
     border: 1px solid var(--ed-rule);
-    border-radius: 10px;
+    border-radius: var(--ed-radius-lg);
     color: var(--ed-ink);
     font: 13px/1.45 system-ui, sans-serif;
     backdrop-filter: blur(6px);
@@ -125,7 +125,7 @@
       z-index: 12;
       max-height: 50vh;
       max-height: 50dvh; /* dvh where supported; vh fallback above */
-      border-radius: 12px 12px 0 0;
+      border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
       border-width: 1px 0 0 0;
       padding: 0 16px calc(10px + env(safe-area-inset-bottom));
       transition: max-height 0.25s ease;

@@ -398,7 +398,7 @@ const style = document.createElement("style");
 style.textContent = `
 .pcg04-seg { display: flex; gap: 6px; margin: 4px 0 4px; }
 .pcg04-seg button {
-  flex: 1; padding: 6px 4px; cursor: pointer; border-radius: 6px;
+  flex: 1; padding: 6px 4px; cursor: pointer; border-radius: var(--ed-radius);
   border: 1px solid var(--ed-edge); background: var(--ed-well); color: var(--ed-ink-mid);
   font: 12px system-ui, sans-serif;
 }

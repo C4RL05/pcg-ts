@@ -41,7 +41,7 @@ function injectStyles(): void {
   scrollbar-width: thin; scrollbar-color: var(--ed-edge) transparent;
   padding: 14px 16px; box-sizing: border-box;
   background: var(--ed-panel);
-  border: 1px solid var(--ed-rule); border-radius: 10px;
+  border: 1px solid var(--ed-rule); border-radius: var(--ed-radius-lg);
   color: var(--ed-ink); font: 13px/1.45 system-ui, sans-serif;
   backdrop-filter: blur(6px);
 }
@@ -49,15 +49,54 @@ function injectStyles(): void {
 .pcg-overlay .pcg-info { margin: 0 0 10px; color: var(--ed-ink-dim); font-size: 12px; }
 .pcg-overlay .pcg-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
 .pcg-overlay .pcg-row > label { flex: 0 0 96px; color: var(--ed-ink-mid); font-size: 12px; }
-.pcg-overlay input[type="range"] { flex: 1; accent-color: var(--ed-accent); min-width: 0; }
+/* The slider: a solid bar filled to its value, and no thumb. Kept
+   character for character in step with the same rule in
+   shared/Controls.svelte — the two panels are one look built twice, this
+   one in plain DOM and that one in Svelte, and a slider that differs
+   between the demos and the editor is the seam showing. Both layers are
+   painted on the input and both engine tracks are blanked, because
+   neither engine's own parts can express a fill both of them draw:
+   Firefox has ::-moz-range-progress and Chrome has nothing like it. The
+   width comes from --p, set per element in addSlider. */
+.pcg-overlay input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  flex: 1; min-width: 0; height: 16px; margin: 0;
+  background-color: transparent;
+  background-image:
+    linear-gradient(var(--ed-slider-fill), var(--ed-slider-fill)),
+    linear-gradient(var(--ed-slider-track), var(--ed-slider-track));
+  background-repeat: no-repeat;
+  background-position: left center, left center;
+  background-size: var(--p, 0%) 8px, 100% 8px;
+  cursor: ew-resize;
+}
+.pcg-overlay input[type="range"]::-webkit-slider-runnable-track { height: 100%; background: none; border: 0; }
+.pcg-overlay input[type="range"]::-moz-range-track { height: 100%; background: none; border: 0; }
+/* Transparent and one pixel wide rather than absent: a zero-width thumb
+   loses the grab target on WebKit and display:none takes the drag with
+   it. What the eye follows is the edge of the fill, which is where the
+   thumb still is. */
+.pcg-overlay input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 1px; height: 8px; margin-top: 4px;
+  border: 0; border-radius: 0; background: transparent;
+}
+.pcg-overlay input[type="range"]::-moz-range-thumb {
+  width: 1px; height: 8px; border: 0; border-radius: 0; background: transparent;
+}
+/* The default ring follows the thumb, which is now invisible and a pixel
+   wide, so it goes around the whole track instead. */
+.pcg-overlay input[type="range"]:focus { outline: none; }
+.pcg-overlay input[type="range"]:focus-visible { outline: 1px solid var(--ed-focus); outline-offset: 3px; }
+.pcg-overlay input[type="range"]:hover { filter: brightness(1.45); }
 .pcg-overlay input[type="number"] {
   width: 90px; padding: 3px 6px; box-sizing: border-box;
-  background: var(--ed-well); color: var(--ed-ink); border: 1px solid var(--ed-edge); border-radius: 5px;
+  background: var(--ed-well); color: var(--ed-ink); border: 1px solid var(--ed-edge); border-radius: var(--ed-radius);
   font: 12px ui-monospace, monospace;
 }
 .pcg-overlay select {
   flex: 1; padding: 3px 6px; background: var(--ed-well); color: var(--ed-ink);
-  border: 1px solid var(--ed-edge); border-radius: 5px; font: 12px system-ui, sans-serif;
+  border: 1px solid var(--ed-edge); border-radius: var(--ed-radius); font: 12px system-ui, sans-serif;
 }
 .pcg-overlay input[type="checkbox"] { accent-color: var(--ed-accent); }
 .pcg-overlay .pcg-val { flex: 0 0 44px; text-align: right; color: var(--ed-figure); font: 12px ui-monospace, monospace; }
@@ -73,7 +112,7 @@ function injectStyles(): void {
 .pcg-overlay summary { cursor: pointer; color: var(--ed-ink-mid); font-size: 12px; user-select: none; }
 .pcg-overlay pre {
   margin: 8px 0 0; padding: 8px; max-height: 260px; overflow: auto;
-  background: var(--ed-well); border: 1px solid var(--ed-rule); border-radius: 6px;
+  background: var(--ed-well); border: 1px solid var(--ed-rule); border-radius: var(--ed-radius);
   color: var(--ed-ink-mid); font: 11px/1.5 ui-monospace, monospace; white-space: pre;
 }
 .pcg-overlay .pcg-note { margin-top: 8px; color: var(--ed-ink-faint); font-size: 11px; }
@@ -94,7 +133,7 @@ function injectStyles(): void {
     width: auto; z-index: 12;
     max-height: 50vh;   /* fallback for pre-dvh browsers */
     max-height: 50dvh;
-    border-radius: 12px 12px 0 0;
+    border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
     border-width: 1px 0 0 0;
     padding: 0 16px calc(10px + env(safe-area-inset-bottom));
     transition: max-height 0.25s ease;
@@ -249,9 +288,21 @@ export function createOverlay(opts: { title: string; info?: string }): Overlay {
       val.className = "pcg-val";
       const fmt = o.format ?? ((v: number) => String(v));
       val.textContent = fmt(o.value);
+      /* How much of the bar is filled. The stylesheet draws the fill as a
+         background layer sized from this, because a native range hands CSS
+         no other way to know where the value sits. Clamped, so a caller
+         whose initial value is outside its own min/max paints a full or an
+         empty bar rather than one that overruns the track. */
+      const paint = (v: number): void => {
+        const span = o.max - o.min;
+        const t = span > 0 ? (v - o.min) / span : 0;
+        input.style.setProperty("--p", `${Math.min(1, Math.max(0, t)) * 100}%`);
+      };
+      paint(o.value);
       input.addEventListener("input", () => {
         const v = Number(input.value);
         val.textContent = fmt(v);
+        paint(v);
         onChange(v);
       });
       div.appendChild(input);

@@ -401,6 +401,7 @@
         max={LEGIBILITY_MAX}
         step="0.05"
         value={legibility}
+        style="--p: {(Math.min(LEGIBILITY_MAX, Math.max(0, legibility)) / LEGIBILITY_MAX) * 100}%"
         disabled={!legibilityApplies}
         aria-label="how far the scene is pushed back so the graph can be read over it"
         oninput={(e) => onLegibility(e.currentTarget.valueAsNumber)}
@@ -649,9 +650,68 @@
      it; the word is gone now and the width is simply left where it was,
      because the slack is no longer the binding constraint and a wider
      track was never the reason to drop it. */
+  /* The knob panel's slider, at toolbar width: a solid bar filled to the
+     value, no thumb, the same rule as `shared/Controls.svelte` and
+     `shared/overlay.ts` carry. The bar is 6px here rather than 8 — it
+     shares a 24px-tall row with icon buttons, and the panel's height
+     would sit taller than the glyphs beside it. `accent-color` is gone
+     with the thumb it used to tint. */
   .legibility input {
+    -webkit-appearance: none;
+    appearance: none;
     width: 76px;
-    accent-color: var(--ed-accent);
+    height: 16px;
+    margin: 0;
+    background-color: transparent;
+    background-image: linear-gradient(var(--ed-slider-fill), var(--ed-slider-fill)),
+      linear-gradient(var(--ed-slider-track), var(--ed-slider-track));
+    background-repeat: no-repeat;
+    background-position:
+      left center,
+      left center;
+    background-size:
+      var(--p, 0%) 6px,
+      100% 6px;
+    cursor: ew-resize;
+  }
+  .legibility input::-webkit-slider-runnable-track {
+    height: 100%;
+    background: none;
+    border: 0;
+  }
+  .legibility input::-moz-range-track {
+    height: 100%;
+    background: none;
+    border: 0;
+  }
+  .legibility input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 1px;
+    height: 6px;
+    margin-top: 5px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .legibility input::-moz-range-thumb {
+    width: 1px;
+    height: 6px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .legibility input:focus {
+    outline: none;
+  }
+  .legibility input:focus-visible {
+    outline: 1px solid var(--ed-focus);
+    outline-offset: 3px;
+  }
+  /* Not while it is disabled: out of the combined view this control does
+     nothing, and a bar that lights under the pointer says otherwise. */
+  .legibility:not(.off) input:hover {
+    filter: brightness(1.45);
   }
   /* Every button on this bar is an icon now, so the padding is square
      rather than the text token's 3px 10px — a glyph in a wide slab reads

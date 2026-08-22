@@ -647,7 +647,7 @@ const cardStyle = document.createElement("style");
 cardStyle.textContent = `
 .pcg07-card {
   position: fixed; top: 16px; right: 16px; width: 300px; z-index: 10;
-  background: var(--ed-solid); border: 1px solid var(--ed-rule); border-radius: 10px;
+  background: var(--ed-solid); border: 1px solid var(--ed-rule); border-radius: var(--ed-radius-lg);
   padding: 16px 18px; color: var(--ed-ink); font: 13px/1.5 ui-monospace, monospace;
 }
 /* On narrow screens the shared overlay owns the bottom edge, so the card

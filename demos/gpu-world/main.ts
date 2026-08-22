@@ -520,7 +520,7 @@ const style = document.createElement("style");
 style.textContent = `
 .pcg09-seg { display: flex; gap: 6px; margin: 4px 0 4px; }
 .pcg09-seg button {
-  flex: 1; padding: 6px 4px; cursor: pointer; border-radius: 6px;
+  flex: 1; padding: 6px 4px; cursor: pointer; border-radius: var(--ed-radius);
   border: 1px solid var(--ed-edge); background: var(--ed-well); color: var(--ed-ink-mid);
   font: 12px system-ui, sans-serif;
 }
@@ -531,7 +531,7 @@ style.textContent = `
 .pcg09-hud {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 10;
   max-width: max(240px, min(680px, calc(100vw - 360px))); padding: 8px 14px; box-sizing: border-box;
-  text-align: center; border-radius: 8px;
+  text-align: center; border-radius: var(--ed-radius-lg);
   background: var(--ed-panel); border: 1px solid var(--ed-rule);
   color: var(--ed-ink-mid); font: 12px/1.55 system-ui, sans-serif; backdrop-filter: blur(6px);
 }

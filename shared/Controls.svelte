@@ -156,6 +156,24 @@
     onCommit(commit);
   }
 
+  /**
+   * How much of the track is filled, as a percentage.
+   *
+   * A native range keeps its value out of CSS reach — there is no
+   * `::-webkit-slider-progress`, and `::-moz-range-progress` exists on
+   * one engine only — so the fill is a background layer on the input
+   * sized from this custom property. Set on the element because that is
+   * the only place the value exists. Clamped: a param whose value has
+   * drifted outside its own min/max (a graph edited by hand, a spec
+   * loosened after the fact) would otherwise paint past the track.
+   */
+  function fillPercent(control: SliderControl<P>): string {
+    const span = control.max - control.min;
+    if (span <= 0) return "0%";
+    const t = (asNumber(control.key) - control.min) / span;
+    return `${Math.min(1, Math.max(0, t)) * 100}%`;
+  }
+
   /** Stable per-control key for the {#each} blocks. */
   function idOf(control: Control<P>, index: number): string {
     return control.kind === "flags" ? `flags:${index}` : `${control.kind}:${control.key}`;
@@ -196,6 +214,7 @@
             max={control.max}
             step={control.step}
             value={asNumber(control.key)}
+            style="--p: {fillPercent(control)}"
             oninput={(e) => slide(control, e.currentTarget.value, false)}
             onchange={(e) => slide(control, e.currentTarget.value, true)} />
           <em>{formatNumber(asNumber(control.key), control.step, control.unit)}</em>
@@ -306,9 +325,12 @@
    * Colours are `var(--ed-*, <literal>)` throughout. The literal is what
    * every demo has always rendered and is what still renders — only a
    * page that DEFINES these names changes, which today is the greyscale
-   * editor and nothing else. Without this the knob panel would keep a
-   * bright blue slider thumb on an otherwise hueless page, since
-   * `accent-color` is not something a parent can tint.
+   * editor and nothing else. It was `accent-color` that forced the
+   * pattern — a parent cannot tint it, so an undeclared name meant a
+   * bright blue thumb on an otherwise hueless page. The slider no longer
+   * has a thumb to tint, but the checkboxes still do, and the fallbacks
+   * are what keep this component renderable off a page that declares
+   * none of these names.
    */
   .group {
     margin-top: 10px;
@@ -347,7 +369,7 @@
     color: var(--ed-ink-dim, var(--ed-ink-mid));
     background: var(--ed-tab, var(--ed-well));
     border: 1px solid var(--ed-rule, var(--ed-rule));
-    border-radius: var(--ed-radius, 4px);
+    border-radius: var(--ed-radius, 0);
     cursor: pointer;
   }
   .tab:hover {
@@ -383,10 +405,82 @@
     color: var(--ed-figure, var(--ed-figure));
     font: 12px ui-monospace, monospace;
   }
+  /**
+   * The slider: a solid bar, and no thumb.
+   *
+   * Both layers are painted on the INPUT rather than on either engine's
+   * track pseudo-element, and both tracks are blanked, because that is
+   * the only way Chrome and Firefox draw the same picture — Firefox has
+   * `::-moz-range-progress` for the fill and Chrome has nothing like it,
+   * so neither engine's own parts can express this. The fill's width
+   * comes from `--p`, set per element in the markup above.
+   *
+   * The thumb is not hidden, it is TRANSPARENT and one pixel wide: a
+   * zero-width thumb drops the grab target on WebKit, and `display:
+   * none` takes the drag with it. What the eye tracks is the edge of the
+   * fill, which is where the thumb is. `accent-color` is gone with it —
+   * it tints the parts this rule replaces, so it now says nothing.
+   */
   input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
     flex: 1;
     min-width: 0;
-    accent-color: var(--ed-accent, var(--ed-accent));
+    height: 16px;
+    margin: 0;
+    background-color: transparent;
+    background-image: linear-gradient(
+        var(--ed-slider-fill, #bfbfbf),
+        var(--ed-slider-fill, #bfbfbf)
+      ),
+      linear-gradient(var(--ed-slider-track, #1f1f1f), var(--ed-slider-track, #1f1f1f));
+    background-repeat: no-repeat;
+    background-position:
+      left center,
+      left center;
+    background-size:
+      var(--p, 0%) 8px,
+      100% 8px;
+    cursor: ew-resize;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 100%;
+    background: none;
+    border: 0;
+  }
+  input[type="range"]::-moz-range-track {
+    height: 100%;
+    background: none;
+    border: 0;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 1px;
+    height: 8px;
+    margin-top: 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 1px;
+    height: 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  /* The default ring follows the thumb, which is now invisible and a
+     pixel wide — so it is replaced by one around the whole track. */
+  input[type="range"]:focus {
+    outline: none;
+  }
+  input[type="range"]:focus-visible {
+    outline: 1px solid var(--ed-focus, var(--ed-accent));
+    outline-offset: 3px;
+  }
+  input[type="range"]:hover {
+    filter: brightness(1.45);
   }
   select,
   .num {
@@ -396,7 +490,7 @@
     background: var(--ed-well, var(--ed-well));
     color: var(--ed-ink, var(--ed-ink));
     border: 1px solid var(--ed-edge, var(--ed-edge));
-    border-radius: var(--ed-radius, 5px);
+    border-radius: var(--ed-radius, 0);
     font: 12px system-ui, sans-serif;
   }
   .num {
@@ -423,7 +517,7 @@
     padding: 8px;
     background: var(--ed-grid-bg, var(--ed-well));
     border: 1px solid var(--ed-rule, var(--ed-rule));
-    border-radius: var(--ed-radius, 6px);
+    border-radius: var(--ed-radius, 0);
   }
   .gridhead {
     margin-bottom: 6px;

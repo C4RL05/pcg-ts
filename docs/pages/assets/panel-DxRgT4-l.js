@@ -1,0 +1,128 @@
+import{$ as e,A as t,At as n,B as r,C as i,Dt as a,Gt as o,J as s,Mt as c,N as l,Nt as u,O as d,Ot as f,Q as p,Qt as m,R as h,S as g,St as _,T as v,W as y,Y as b,Z as x,_ as S,_t as C,a as w,bt as T,c as ee,ct as E,d as D,et as O,g as k,gt as A,h as j,ht as te,i as M,it as N,jt as ne,k as P,kt as re,l as F,lt as I,mt as L,nt as R,ot as z,p as ie,pt as B,q as V,rt as H,s as ae,st as U,tt as oe,ut as W,vt as G,w as K,wt as q,x as J,xt as Y,yt as X,z as se}from"./wordmark-Mve2f1qM.js";var Z=!1;function ce(){if(Z)return;Z=!0;let e=document.createElement(`style`);e.textContent=`
+.pcg-overlay {
+  position: fixed; top: 12px; left: 12px; z-index: 10;
+  /* Stops SHORT OF THE BOTTOM, not 12px from it: the wordmark sits in this
+     corner (see shared/wordmark.ts) and a panel long enough to reach the
+     floor lands on top of it. 45px is the mark's 13, its own 12 of margin,
+     the panel's 12 at the top, and 8 of air between the two. Every page
+     that builds this overlay draws that mark, so there is no case where
+     this reserves space for nothing. */
+  width: 300px; max-height: calc(100vh - 45px); overflow-y: auto;
+  /* The panel scrolls on the longer pages, and the platform's default bar
+     is a bright slab down a surface that is otherwise pure black — the one
+     part of this chrome nobody had styled, invisible until the surface
+     under it stopped being blue-grey. */
+  scrollbar-width: thin; scrollbar-color: var(--ed-edge) transparent;
+  padding: 14px 16px; box-sizing: border-box;
+  background: var(--ed-panel);
+  border: 1px solid var(--ed-rule); border-radius: var(--ed-radius-lg);
+  color: var(--ed-ink); font: 13px/1.45 system-ui, sans-serif;
+  backdrop-filter: blur(6px);
+}
+.pcg-overlay h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; color: var(--ed-ink-hi); }
+.pcg-overlay .pcg-info { margin: 0 0 10px; color: var(--ed-ink-dim); font-size: 12px; }
+.pcg-overlay .pcg-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+.pcg-overlay .pcg-row > label { flex: 0 0 96px; color: var(--ed-ink-mid); font-size: 12px; }
+/* The slider: a solid bar filled to its value, and no thumb. Kept
+   character for character in step with the same rule in
+   shared/Controls.svelte — the two panels are one look built twice, this
+   one in plain DOM and that one in Svelte, and a slider that differs
+   between the demos and the editor is the seam showing. Both layers are
+   painted on the input and both engine tracks are blanked, because
+   neither engine's own parts can express a fill both of them draw:
+   Firefox has ::-moz-range-progress and Chrome has nothing like it. The
+   width comes from --p, set per element in addSlider. */
+.pcg-overlay input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  flex: 1; min-width: 0; height: 16px; margin: 0;
+  background-color: transparent;
+  background-image:
+    linear-gradient(var(--ed-slider-fill), var(--ed-slider-fill)),
+    linear-gradient(var(--ed-slider-track), var(--ed-slider-track));
+  background-repeat: no-repeat;
+  background-position: left center, left center;
+  background-size: var(--p, 0%) 8px, 100% 8px;
+  cursor: ew-resize;
+}
+.pcg-overlay input[type="range"]::-webkit-slider-runnable-track { height: 100%; background: none; border: 0; }
+.pcg-overlay input[type="range"]::-moz-range-track { height: 100%; background: none; border: 0; }
+/* Transparent and one pixel wide rather than absent: a zero-width thumb
+   loses the grab target on WebKit and display:none takes the drag with
+   it. What the eye follows is the edge of the fill, which is where the
+   thumb still is. */
+.pcg-overlay input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 1px; height: 8px; margin-top: 4px;
+  border: 0; border-radius: 0; background: transparent;
+}
+.pcg-overlay input[type="range"]::-moz-range-thumb {
+  width: 1px; height: 8px; border: 0; border-radius: 0; background: transparent;
+}
+/* The default ring follows the thumb, which is now invisible and a pixel
+   wide, so it goes around the whole track instead. */
+.pcg-overlay input[type="range"]:focus { outline: none; }
+.pcg-overlay input[type="range"]:focus-visible { outline: 1px solid var(--ed-focus); outline-offset: 3px; }
+.pcg-overlay input[type="range"]:hover { filter: brightness(1.45); }
+.pcg-overlay input[type="number"] {
+  width: 90px; padding: 3px 6px; box-sizing: border-box;
+  background: var(--ed-well); color: var(--ed-ink); border: 1px solid var(--ed-edge); border-radius: var(--ed-radius);
+  font: 12px ui-monospace, monospace;
+}
+.pcg-overlay select {
+  flex: 1; padding: 3px 6px; background: var(--ed-well); color: var(--ed-ink);
+  border: 1px solid var(--ed-edge); border-radius: var(--ed-radius); font: 12px system-ui, sans-serif;
+}
+.pcg-overlay input[type="checkbox"] { accent-color: var(--ed-accent); }
+.pcg-overlay .pcg-val { flex: 0 0 44px; text-align: right; color: var(--ed-figure); font: 12px ui-monospace, monospace; }
+.pcg-overlay .pcg-stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ed-rule); }
+/* Flex items default to min-width:auto, so a long value used to overrun the
+   label. Wrap the row instead: when the pair does not fit, the value drops to
+   its own right-aligned line rather than breaking "105.0 KiB" mid-number or
+   clipping the label. */
+.pcg-overlay .pcg-stat { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 10px; margin: 2px 0; }
+.pcg-overlay .pcg-stat span:first-child { color: var(--ed-ink-dim); font-size: 12px; flex: 0 1 auto; min-width: 0; }
+.pcg-overlay .pcg-stat span:last-child { color: var(--ed-figure); font: 12px ui-monospace, monospace; flex: 0 1 auto; margin-left: auto; min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.pcg-overlay details { margin-top: 10px; border-top: 1px solid var(--ed-rule); padding-top: 8px; }
+.pcg-overlay summary { cursor: pointer; color: var(--ed-ink-mid); font-size: 12px; user-select: none; }
+.pcg-overlay pre {
+  margin: 8px 0 0; padding: 8px; max-height: 260px; overflow: auto;
+  background: var(--ed-well); border: 1px solid var(--ed-rule); border-radius: var(--ed-radius);
+  color: var(--ed-ink-mid); font: 11px/1.5 ui-monospace, monospace; white-space: pre;
+}
+.pcg-overlay .pcg-note { margin-top: 8px; color: var(--ed-ink-faint); font-size: 11px; }
+/* A section the overlay does not draw itself. Same rule and spacing as
+   .pcg-stats, so whatever fills it reads as part of the panel rather than as
+   something sitting on top of it. */
+.pcg-overlay .pcg-slot { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ed-rule); }
+/* The chevron only exists for the bottom-sheet layout below; on desktop the
+   title is not a toggle, so the glyph stays hidden. */
+.pcg-overlay .pcg-chevron { display: none; }
+/* Below the shared breakpoint the panel becomes a full-width bottom sheet so
+   the 3D content keeps the screen. Collapse is a max-height clip rather than
+   display:none: the capture tooling scrapes .pcg-stat textContent for
+   readiness, so the stat rows must stay in the DOM. */
+@media ${M} {
+  .pcg-overlay {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: auto; z-index: 12;
+    max-height: 50vh;   /* fallback for pre-dvh browsers */
+    max-height: 50dvh;
+    border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
+    border-width: 1px 0 0 0;
+    padding: 0 16px calc(10px + env(safe-area-inset-bottom));
+    transition: max-height 0.25s ease;
+    overscroll-behavior: contain;
+  }
+  .pcg-overlay h1 {
+    position: sticky; top: 0; z-index: 1;
+    margin: 0 -16px;                    /* full-bleed tap target */
+    padding: 13px 16px;
+    line-height: 22px;                  /* bar height: 22 + 2*13 = 48px */
+    background: var(--ed-solid); /* content scrolls under the sticky bar */
+    cursor: pointer;
+  }
+  .pcg-overlay .pcg-chevron { display: inline-block; float: right; color: var(--ed-ink-dim); transition: transform 0.2s; }
+  .pcg-overlay.pcg-collapsed { max-height: calc(48px + env(safe-area-inset-bottom)); overflow: hidden; }
+  .pcg-overlay.pcg-collapsed .pcg-chevron { transform: rotate(180deg); }
+}
+`,document.head.appendChild(e)}function le(e){ce();let t=document.createElement(`div`);t.className=`pcg-overlay`;let n=document.createElement(`h1`);n.textContent=e.title;let r=document.createElement(`span`);r.className=`pcg-chevron`,r.textContent=`▾`,n.appendChild(r),t.appendChild(n),n.setAttribute(`role`,`button`),n.tabIndex=0;let i=()=>{n.setAttribute(`aria-expanded`,String(!t.classList.contains(`pcg-collapsed`)))},a=()=>{t.classList.toggle(`pcg-collapsed`),i()};n.addEventListener(`click`,a),n.addEventListener(`keydown`,e=>{(e.key===`Enter`||e.key===` `)&&(e.preventDefault(),a())});let o=w();if(o.matches&&t.classList.add(`pcg-collapsed`),o.addEventListener(`change`,e=>{t.classList.toggle(`pcg-collapsed`,e.matches),i()}),i(),e.info){let n=document.createElement(`p`);n.className=`pcg-info`,n.textContent=e.info,t.appendChild(n)}let s=document.createElement(`div`);t.appendChild(s);let c=document.createElement(`div`);c.className=`pcg-stats`,t.appendChild(c),document.body.appendChild(t);function l(e){let t=document.createElement(`div`);t.className=`pcg-row`;let n=document.createElement(`label`);return n.textContent=e,t.appendChild(n),s.appendChild(t),t}return{el:t,addSeed(e,t){let n=l(`seed`),r=document.createElement(`input`);r.type=`number`,r.step=`1`,r.value=String(e),r.addEventListener(`change`,()=>{let e=Math.floor(Number(r.value));Number.isFinite(e)&&t(e>>>0)}),n.appendChild(r)},addSlider(e,t,n){let r=l(e),i=document.createElement(`input`);i.type=`range`,i.min=String(t.min),i.max=String(t.max),i.step=String(t.step),i.value=String(t.value);let a=document.createElement(`span`);a.className=`pcg-val`;let o=t.format??(e=>String(e));a.textContent=o(t.value);let s=e=>{let n=t.max-t.min,r=n>0?(e-t.min)/n:0;i.style.setProperty(`--p`,`${Math.min(1,Math.max(0,r))*100}%`)};s(t.value),i.addEventListener(`input`,()=>{let e=Number(i.value);a.textContent=o(e),s(e),n(e)}),r.appendChild(i),r.appendChild(a)},addSelect(e,t,n,r){let i=l(e),a=document.createElement(`select`);for(let e of t){let t=document.createElement(`option`);t.value=e.value,t.textContent=e.label,a.appendChild(t)}a.value=n,a.addEventListener(`change`,()=>r(a.value)),i.appendChild(a)},addCheckbox(e,t,n){let r=l(e),i=document.createElement(`input`);i.type=`checkbox`,i.checked=t,i.addEventListener(`change`,()=>n(i.checked)),r.appendChild(i)},addStat(e){let t=document.createElement(`div`);t.className=`pcg-stat`;let n=document.createElement(`span`);n.textContent=e;let r=document.createElement(`span`);return r.textContent=`–`,t.appendChild(n),t.appendChild(r),c.appendChild(t),e=>{r.textContent=String(e)}},addCollapsible(e,n=!1){let r=document.createElement(`details`);r.open=n;let i=document.createElement(`summary`);i.textContent=e,r.appendChild(i);let a=document.createElement(`pre`);return r.appendChild(a),t.appendChild(r),a},addNote(e){let n=document.createElement(`p`);n.className=`pcg-note`,n.textContent=e,t.appendChild(n)},addSlot(){let e=document.createElement(`div`);return e.className=`pcg-slot`,t.appendChild(e),e}}}Q[u]=`shared/graph/GraphView.svelte`;var ue=I(H(`<path class="edge-casing svelte-v559t8"></path><path></path>`,1),Q[u],[[193,8],[194,8]]),de=I(H(`<svg role="img"><g><!><!></g></svg>`),Q[u],[[171,0,[[185,2]]]]);function Q(e,r){s(new.target),re(r,!0,Q);let i=P(r,`previews`,19,()=>new Map),o=P(r,`interactive`,3,!0),u=P(r,`label`,3,`node graph`),d=n(_(void 0),`svgEl`),p=n(_(T({x:0,y:0,z:1})),`view`),m=null,g=n(q(()=>new Map([...i()].map(([e,t])=>[e,t.length]))),`rowCounts`),v=n(q(()=>new Map(r.nodes.map(e=>[e.id,e]))),`byId`);function x(e,t){return r.floor??k(e,t)}function w(){if(!W(d))return;let e=W(d).getBoundingClientRect();if(X(e.width,0)||X(e.height,0))return;let t=D(r.nodes,W(g));Y(p,ie(t,e,{floor:x(t,e),preferActual:o()}),!0)}function M(){if(!W(d))return;let e=D(r.nodes,W(g));Y(p,X(e,null)?{x:0,y:0,z:1}:F(1,e,W(d).getBoundingClientRect()),!0)}L(()=>{r.nodes,r.floor,o(),w()}),L(()=>{let e=W(d);if(!e)return;let t=new ResizeObserver(()=>w());return t.observe(e),()=>t.disconnect()});function N(e){if(!o()||!W(d))return;e.preventDefault();let t=W(d).getBoundingClientRect(),n=x(D(r.nodes,W(g)),t);Y(p,j(W(p),t,e.clientX,e.clientY,e.deltaY,n),!0)}function ne(e){!o()||X(e.button,0,!1)||(m={px:e.clientX,py:e.clientY,ox:W(p).x,oy:W(p).y},W(d)?.setPointerCapture(e.pointerId))}function I(e){m&&Y(p,{...W(p),x:m.ox+(e.clientX-m.px),y:m.oy+(e.clientY-m.py)},!0)}function R(){m=null}function z(){o()&&w()}var H={...b(),get fit(){return w},get actualSize(){return M}},K=de();E(`pointermove`,te,I),E(`pointerup`,te,R);let J;var Z=A(K),ce=A(Z);a(()=>y(ce,17,()=>r.edges,e=>`${e.from}.${e.fromPin}->${e.to}.${e.toPin}`,(e,t)=>{let r=n(q(()=>ee(W(v),W(t))),`d`);W(r);var i=oe(),o=C(i),s=e=>{var n=ue(),i=C(n),a=G(i);B(e=>{l(i,`d`,W(r)),se(a,0,`edge-line k-${e??``}`,`svelte-v559t8`),l(a,`d`,W(r))},[()=>ae(W(v),W(t))]),O(e,n)};a(()=>V(o,e=>{W(r)&&e(s)}),`if`,Q,191,6),O(e,i)}),`each`,Q,189,4);var le=G(ce);return a(()=>y(le,17,()=>r.nodes,e=>e.id,(e,t)=>{{let n=q(()=>i().get(W(t).id));a(()=>S(e,{get node(){return W(t)},get params(){return W(n)}}),`component`,Q,198,6,{componentTag:`NodeBox`})}}),`each`,Q,197,4),c(Z),c(K),t(K,e=>Y(d,e),()=>W(d)),B(e=>{J=se(K,0,`view svelte-v559t8`,null,J,{interactive:o()}),l(K,`aria-label`,u()),l(Z,`transform`,`translate(${W(p).x??``} ${W(p).y??``}) scale(${W(p).z??``})`),h(Z,`--hairline: ${e??``}`)},[()=>Math.max(1,1/W(p).z)]),E(`wheel`,K,N),U(`pointerdown`,K,ne),U(`dblclick`,K,z),O(e,K),f(H)}z([`pointerdown`,`dblclick`]);function fe(e){let t=e.parentNode;return document.body.appendChild(e),{destroy(){t&&e.parentNode===document.body&&t.appendChild(e),e.remove()}}}function pe(e){return typeof e==`object`&&!!e&&!Array.isArray(e)&&`fn`in e}function me(e){if(pe(e))try{return`ƒ ${m(e).replace(/\s+/g,` `)}`}catch{return`ƒ`}return typeof e==`number`?J(e):typeof e==`boolean`?String(e):typeof e==`string`?e===``?`–`:e:Array.isArray(e)?e.length===0?`–`:e.map(e=>typeof e==`number`?J(e):String(e)).join(`, `):e==null?`–`:`…`}function he(e,t){try{return i(e.type)}catch{let n=e=>[...e??[]].map(e=>({name:e,kind:`any`,multi:!1}));return{inputs:n(t.inputs.get(e.id)),outputs:n(t.outputs.get(e.id))}}}function ge(e){let t=new Map,n=new Map,r=(e,t,n)=>{let r=e.get(t);r||e.set(t,r=new Set),r.add(n)};for(let i of e.connections??[])r(n,i.from[0],i.from[1]),r(t,i.to[0],i.to[1]);for(let t of e.outputs??[])r(n,t.id,t.pin);return{inputs:t,outputs:n}}function _e(e){let t=ge(e),n=new Map,r=e.nodes.map(e=>{let r=he(e,t),i=g(e.type),a=Object.entries(e.params).map(([e,t])=>({key:e,value:me(t),field:pe(t)}));return n.set(e.id,K(a)),{id:e.id,type:e.type,...e.ref===void 0?{}:{label:e.ref.name},...i===void 0?{}:{category:i},x:0,y:0,inputs:r.inputs,outputs:r.outputs}}),i=(e.connections??[]).map(e=>({from:e.from[0],fromPin:e.from[1],to:e.to[0],toPin:e.to[1]}));return v(r,i,new Map([...n].map(([e,t])=>[e,t.length]))),{nodes:r,edges:i,previews:n}}$[u]=`shared/graph/GraphPanel.svelte`;var ve=I(R(`<button type="button" role="tab"> </button>`),$[u],[[187,14]]),ye=I(R(`<div class="tabs svelte-ul999b" role="tablist" aria-label="graphs"></div>`),$[u],[[185,10]]),be=I(R(`<span class="heading svelte-ul999b"> </span>`),$[u],[[197,10]]),xe=I(R(`<p class="empty svelte-ul999b">This graph could not be laid out.</p>`),$[u],[[215,10]]),Se=I(R(`<div class="backdrop svelte-ul999b" role="presentation"><div class="sheet svelte-ul999b" role="dialog" aria-modal="true"><header class="svelte-ul999b"><!> <span class="meta svelte-ul999b"><!></span> <button class="close svelte-ul999b" type="button" aria-label="close">✕</button></header> <div class="body svelte-ul999b"><!></div> <footer class="svelte-ul999b">scroll to zoom · drag to pan · double-click to fit · read-only</footer></div></div>`),$[u],[[176,2,[[182,4,[[183,6,[[199,8],[202,8]]],[206,6],[222,6]]]]]]),Ce=I(R(`<div class="pcg-graph-panel svelte-ul999b"><button class="thumb svelte-ul999b" type="button"><span class="cap svelte-ul999b"><span class="name svelte-ul999b"> </span> <span class="count svelte-ul999b"><!></span></span> <span class="frame svelte-ul999b"><!></span></button></div> <!>`,1),$[u],[[138,0,[[139,2,[[145,4,[[146,6],[147,6]]],[151,4]]]]]]);function $(e,t){s(new.target),re(t,!0,$);let i=P(t,`title`,3,`graph`),o=n(_(T(t.initial)),`graphs`),u=n(_(!1),`open`),m=n(_(0),`selected`);function h(e){Y(o,e,!0),W(m)>=e.length&&Y(m,0),S()}let g=n(_(T([])),`pictures`),v=n(q(()=>W(g)[Math.min(W(m),W(g).length-1)]??null),`current`),x=n(q(()=>W(o)[Math.min(W(m),W(o).length-1)]?.name??``),`currentName`);function S(){Y(g,W(o).map(e=>{try{return _e(e.json)}catch{return null}}),!0)}d(S);function w(e){X(e.key,`Escape`)&&W(u)&&(e.preventDefault(),Y(u,!1))}var ee={...b(),get setGraphs(){return h}},D=Ce();E(`keydown`,te,w);var k=C(D),j=A(k),M=A(j),F=A(M),I=A(F,!0);c(F);var L=G(F,2),R=A(L),z=e=>{var t=N();B(()=>p(t,`${W(v).nodes.length??``} nodes`)),O(e,t)},ie=e=>{var t=N(`…`);O(e,t)};a(()=>V(R,e=>{W(v)?e(z):e(ie,-1)}),`if`,$,148,8),c(L),c(M);var H=G(M,2),ae=A(H),oe=e=>{a(()=>Q(e,{get nodes(){return W(v).nodes},get edges(){return W(v).edges},get previews(){return W(v).previews},interactive:!1,floor:.09,get label(){return`${W(x)??``} graph, thumbnail`}}),`component`,$,153,8,{componentTag:`GraphView`})};a(()=>V(ae,e=>{W(v)&&e(oe)}),`if`,$,152,6),c(H),c(j),c(k);var K=G(k,2),J=e=>{var t=Se(),n=A(t),i=A(n),s=A(i),d=e=>{var t=ye();a(()=>y(t,23,()=>W(o),e=>e.name,(e,t,n)=>{var r=ve();let i;var a=A(r,!0);c(r),B(()=>{l(r,`aria-selected`,X(W(n),W(m))),i=se(r,1,`svelte-ul999b`,null,i,{on:X(W(n),W(m))}),p(a,W(t).name)}),U(`click`,r,function(){return Y(m,W(n),!0)}),O(e,r)}),`each`,$,186,12),c(t),O(e,t)},f=e=>{var t=be(),n=A(t,!0);c(t),B(()=>p(n,W(x))),O(e,t)};a(()=>V(s,e=>{W(o).length>1?e(d):e(f,-1)}),`if`,$,184,8);var h=G(s,2),g=A(h),_=e=>{var t=N();B(()=>p(t,`${W(v).nodes.length??``} nodes · ${W(v).edges.length??``} connections`)),O(e,t)};a(()=>V(g,e=>{W(v)&&e(_)}),`if`,$,200,10),c(h);var b=G(h,2);c(i);var S=G(i,2),C=A(S),w=e=>{a(()=>Q(e,{get nodes(){return W(v).nodes},get edges(){return W(v).edges},get previews(){return W(v).previews},get label(){return`${W(x)??``} graph`}}),`component`,$,208,10,{componentTag:`GraphView`})},T=e=>{var t=xe();O(e,t)};a(()=>V(C,e=>{W(v)?e(w):e(T,-1)}),`if`,$,207,8),c(S),ne(2),c(n),c(t),r(t,e=>fe?.(e)),B(()=>l(n,`aria-label`,`${W(x)??``} graph`)),U(`pointerdown`,t,function(e){return X(e.target,e.currentTarget)&&Y(u,!1)}),U(`click`,b,function(){return Y(u,!1)}),O(e,t)};return a(()=>V(K,e=>{W(u)&&e(J)}),`if`,$,166,0),B(()=>{l(j,`aria-label`,`show the ${(W(x)||i())??``} graph`),p(I,W(x)||i())}),U(`click`,j,function(){return Y(u,!0)}),O(e,D),f(ee)}z([`click`,`pointerdown`]);function we(e){let t=[];for(let n of e)try{t.push({name:n.name,json:o(n.graph)})}catch(e){console.warn(`graph panel: "${n.name}" could not be serialized, so it is not shown`,e)}return t}function Te(t,n){let r=document.createElement(`div`);n.into.appendChild(r);let i=x($,{target:r,props:{initial:we(t),title:n.title??`graph`}}),a=i;return{set(e){a.setGraphs(we(e))},destroy(){e(i),r.remove()}}}export{le as n,Te as t};
