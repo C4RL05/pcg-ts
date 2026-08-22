@@ -143,7 +143,34 @@ function gauss(u: () => number): number {
  * total float adds variance at the lap scale, which is the one place the
  * source has none.
  */
+/**
+ * What a generating pass had to REPAIR, reported rather than swallowed.
+ *
+ * A rule that resolves a conflict has to say how often it fired, because
+ * ZERO IS INDISTINGUISHABLE FROM SUCCESS at the assertion level: a repair
+ * that never ran and a repair that ran and worked both leave a green
+ * test. This is the generalisation of a corridor rule in `zones.ts` that
+ * passed every assertion while being unreachable, and it is cheap enough
+ * to apply everywhere a repair exists.
+ */
+export interface StationStats {
+  readonly stations: number[];
+  /** Placements moved to close a gap longer than D-4 allows. */
+  readonly gapRepairs: number;
+  /** The longest gap before any repair, in W. */
+  readonly worstGapBeforeW: number;
+}
+
 export function makeStations(lapW: number, seed: number, p: StationParams = FITTED): number[] {
+  return makeStationsDetailed(lapW, seed, p).stations;
+}
+
+/** {@link makeStations}, with what it had to repair on the way. */
+export function makeStationsDetailed(
+  lapW: number,
+  seed: number,
+  p: StationParams = FITTED,
+): StationStats {
   const total = Math.max(1, Math.round(p.density * lapW));
   const wantBackground = Math.round(total * p.background);
   const wantClustered = total - wantBackground;
@@ -186,6 +213,16 @@ export function makeStations(lapW: number, seed: number, p: StationParams = FITT
   return enforceCoverage(out, lapW);
 }
 
+/** The longest gap in a sorted, wrapped station list. */
+function longestGap(sorted: readonly number[], lapW: number): number {
+  let worst = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const next = i + 1 < sorted.length ? sorted[i + 1] : sorted[0] + lapW;
+    worst = Math.max(worst, next - sorted[i]);
+  }
+  return worst;
+}
+
 /** D-4's limits. A floor to satisfy, not a distribution to match. */
 export const COVERAGE = { within2W: 0.85, maxGapW: 25 } as const;
 
@@ -210,8 +247,10 @@ export const COVERAGE = { within2W: 0.85, maxGapW: 25 } as const;
  * Bounded by the number of gaps it could ever need to fix, so a
  * pathological input cannot spin here.
  */
-function enforceCoverage(sorted: number[], lapW: number): number[] {
+function enforceCoverage(sorted: number[], lapW: number): StationStats {
   const out = [...sorted];
+  const worstGapBeforeW = longestGap(out, lapW);
+  let gapRepairs = 0;
   const maxPasses = Math.ceil(lapW / COVERAGE.maxGapW) + 2;
   for (let pass = 0; pass < maxPasses; pass++) {
     let worst = -1;
@@ -247,8 +286,9 @@ function enforceCoverage(sorted: number[], lapW: number): number[] {
     out.splice(donor, 1);
     out.push(mid);
     out.sort((a, b) => a - b);
+    gapRepairs++;
   }
-  return out;
+  return { stations: out, gapRepairs, worstGapBeforeW };
 }
 
 /**

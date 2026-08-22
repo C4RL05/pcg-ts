@@ -223,6 +223,18 @@ export function bandOfZone(z: ZoneName): keyof typeof BAND_MIX {
  * most to spare.
  */
 export function zonesForLap(count: number, seed: number): ZoneName[] {
+  return zonesForLapDetailed(count, seed).zones;
+}
+
+/** What {@link zonesForLap} had to repair. See `StationStats` for why. */
+export interface ZoneStats {
+  readonly zones: ZoneName[];
+  /** Placements moved between bands to bring the mix inside Z-3. */
+  readonly mixRepairs: number;
+}
+
+/** {@link zonesForLap}, with the count of corrections it applied. */
+export function zonesForLapDetailed(count: number, seed: number): ZoneStats {
   const zones: ZoneName[] = [];
   for (let i = 0; i < count; i++) zones.push(zoneFor(seed, i));
 
@@ -246,6 +258,7 @@ export function zonesForLap(count: number, seed: number): ZoneName[] {
   // Bounded by the number of placements: each pass moves exactly one, and
   // a mix that cannot be repaired in that many is a broken rule table
   // rather than a slow convergence.
+  let mixRepairs = 0;
   for (let pass = 0; pass < count; pass++) {
     const c = countOf();
     let from: keyof typeof BAND_MIX | undefined;
@@ -283,8 +296,9 @@ export function zonesForLap(count: number, seed: number): ZoneName[] {
     const idx = zones.findIndex((z) => bandOfZone(z) === from);
     if (idx < 0) break;
     zones[idx] = zoneOfBand[to];
+    mixRepairs++;
   }
-  return zones;
+  return { zones, mixRepairs };
 }
 
 /**

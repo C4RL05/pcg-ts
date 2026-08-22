@@ -30,6 +30,7 @@ import {
   resolveCorridor,
   zoneFor,
   zonesForLap,
+  zonesForLapDetailed,
 } from "../demos/road/zones.js";
 
 const N = 330;
@@ -70,6 +71,31 @@ describe("the band mix", () => {
       expect(got, `seed ${seed}`).toBeGreaterThanOrEqual(b.lo);
       expect(got, `seed ${seed}`).toBeLessThanOrEqual(b.hi);
     }
+  });
+
+  /**
+   * THE REPAIR HAS TO SAY HOW OFTEN IT FIRED, for the same reason the
+   * coverage repair does: zero fires and a working repair leave identical
+   * green tests, and this file already shipped one rule that passed every
+   * assertion while being unreachable.
+   *
+   * It also pins the claim that Z-3 needs repairing at all — if the
+   * sampler never went out of range, the repair would be ceremony and the
+   * rule would be a distribution after all.
+   */
+  it("reports how often the mix repair fired, and it is not never", () => {
+    let fired = 0;
+    const needed: number[] = [];
+    for (const seed of SEEDS) {
+      const d = zonesForLapDetailed(N, seed);
+      fired += d.mixRepairs;
+      if (d.mixRepairs > 0) needed.push(seed);
+    }
+    console.log(
+      `Z-3 repair: fired ${fired} times over ${SEEDS.length} laps; ` +
+        `laps that needed it: ${needed.length}/${SEEDS.length}`,
+    );
+    expect(fired).toBeGreaterThan(0);
   });
 
   /**

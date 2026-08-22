@@ -42,6 +42,7 @@ import {
   dispersionCurve,
   indexOfDispersion,
   makeStations,
+  makeStationsDetailed,
 } from "../demos/road/stations.js";
 
 /** The demo's own lap length, so the gate is measured where it is used. */
@@ -243,6 +244,41 @@ describe("the station process", () => {
       // Whatever it does, it must not reproduce the two-level shape.
       expect(at(32) / at(2)).toBeLessThan(meanCurve()[4] / meanCurve()[0]);
     });
+  });
+
+  /**
+   * THE REPAIR HAS TO SAY HOW OFTEN IT FIRED.
+   *
+   * Zero fires and a working repair leave identical green tests, so a
+   * coverage gate alone cannot tell "the process never left a hole" from
+   * "the repair fixed every hole" from "the repair is unreachable and the
+   * process happened to be fine on these eight seeds". This is the
+   * generalisation of a corridor rule in `zones.ts` that passed every
+   * assertion while being impossible to trigger.
+   *
+   * It also pins a real claim: the process DOES leave holes, which is why
+   * the repair exists rather than being belt-and-braces over a fit that
+   * was already good enough.
+   */
+  it("reports how often the coverage repair fired, and it is not never", () => {
+    let fired = 0;
+    let worstBefore = 0;
+    const overLimit: number[] = [];
+    for (const seed of SEEDS) {
+      const d = makeStationsDetailed(LAP_W, seed);
+      fired += d.gapRepairs;
+      worstBefore = Math.max(worstBefore, d.worstGapBeforeW);
+      if (d.worstGapBeforeW > 25) overLimit.push(seed);
+    }
+    console.log(
+      `D-4 repair: fired ${fired} times over ${SEEDS.length} laps; ` +
+        `worst gap before repair ${worstBefore.toFixed(1)} W; ` +
+        `laps that needed it: ${overLimit.length}/${SEEDS.length}`,
+    );
+    expect(fired).toBeGreaterThan(0);
+    // And the un-repaired process really does violate D-4, which is the
+    // claim that justifies a repair pass over more fitting.
+    expect(worstBefore).toBeGreaterThan(25);
   });
 
   it("gives the same lap twice and a different one per seed", () => {
