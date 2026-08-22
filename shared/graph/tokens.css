@@ -1,0 +1,126 @@
+/**
+ * The overlay's shared vocabulary.
+ *
+ * A CSS file rather than a `<style>` block, and in `shared/graph/` rather
+ * than in the editor, because the boxes it colours are drawn on more than
+ * one page now: the editor draws a graph you can edit, the demos draw the
+ * one they cooked, and both draw it out of `shared/graph/`. The values had
+ * to follow the drawing — a NodeBox that read `--ed-select` on a page
+ * where nothing declared it would render an unstyled box, which is the one
+ * thing a shared component may not do.
+ *
+ * The `--ed-` prefix is where the vocabulary was WORKED OUT, not where it
+ * is allowed to be read. Renaming it would touch every rule in eight
+ * editor components and change nothing about the page, so it keeps the
+ * name and this paragraph.
+ *
+ * Everything below is declared even where only some of it is read: the
+ * demos draw node boxes and no editor chrome. An unread custom property
+ * costs nothing, and splitting the block down the middle would cut the
+ * reasoning below in half — the hue budget is an argument about the whole
+ * set, and half of it is not an argument.
+ *
+ * MONO AS THE BASE, with sparse colour. Every surface, rule and ink
+ * value below is r == g == b on pure black. Nothing here is a tint of
+ * anything: the page had a blue cast in its surfaces, its ink and its
+ * accents at once, and taking it out of only some of them would read
+ * as a mistake rather than a choice.
+ *
+ * THREE HUES SPEND THE WHOLE BUDGET, and they are drawn from the
+ * site's declared marks (`docs/index.html` — pure RGB, spent as marks
+ * and never on body copy). Ranked by contrast against #000000:
+ *   yellow 19.6:1 · cyan 16.8 · green 15.3 · magenta 6.7 · red 5.3 ·
+ *   blue 2.4. That is an 8x spread, so they are NOT six equal-weight
+ *   marks — blue sits under even the 3.0 large-text floor. Only the
+ *   top three are spent here, and the bottom three are left unspent:
+ *   an unspent hue is not a failure, spending one on nothing is.
+ *   · `--ed-select` GREEN — which node am I editing. The first hue,
+ *     and still the one a glance across the canvas needs most.
+ *   · `--ed-k-instances` CYAN — the terminal a graph is built to
+ *     reach. One dot on one node type in a whole graph.
+ *   · `--ed-k-value` YELLOW — a constant entering the graph. Same
+ *     rarity: one dot, one node type.
+ *
+ * WHAT STAYS MONO, and why each is not a hue:
+ *   · state (error / warn / ok) — BORDER BRIGHTNESS, loudest for an
+ *     error, plus the monospace face the error styles already used.
+ *   · `--ed-k-geometry` — the substrate. Every input pin in the
+ *     shipped library is geometry and every edge in the graph corpus
+ *     is geometry->geometry (445 of 445, measured across `graphs/`),
+ *     so a hue here would tint the canvas rather than mark anything.
+ *   · `--ed-k-any` — a WILDCARD, not a kind. It matches whatever it
+ *     meets at `connect` time, so giving it a hue would assert a kind
+ *     it does not have. Grey is the honest answer.
+ *   · a field vs a constant — white against grey.
+ *
+ * `shared/Controls.svelte` is deliberately NOT converted: it inherits
+ * enough from these that the editor reads as one surface anyway.
+ */
+:root {
+  /* surfaces */
+  --ed-panel: rgba(0, 0, 0, 0.92);      /* over the live render */
+  --ed-solid: rgba(0, 0, 0, 0.97);      /* over the render AND itself */
+  --ed-well: #0c0c0c;                   /* inside an input */
+  --ed-raised: #1a1a1a;                 /* a button at rest */
+  --ed-raised-hi: #2e2e2e;              /* a button under the pointer */
+
+  /* lines. Two tiers: one between PANELS, a softer one between rows. */
+  --ed-rule: #2b2b2b;
+  --ed-rule-soft: #1c1c1c;
+  --ed-edge: #3f3f3f;                   /* the border of a control */
+
+  /* ink, brightest to faintest */
+  --ed-ink-hi: #ffffff;
+  --ed-ink: #e8e8e8;
+  --ed-ink-mid: #b6b6b6;
+  --ed-ink-dim: #909090;
+  --ed-ink-faint: #6e6e6e;
+  --ed-ink-ghost: #4f4f4f;
+  --ed-action: #ffffff;                 /* text on a button */
+  --ed-figure: #ffffff;                 /* a number worth reading */
+  --ed-danger: #ffffff;                 /* loud by weight, not by hue */
+
+  /* state, told apart by how bright the border is */
+  --ed-alert-bg: #121212;
+  --ed-edge-err: #ffffff;
+  --ed-edge-warn: #8f8f8f;
+  --ed-edge-ok: #5a5a5a;
+
+  /* Pin kinds, and the cables that carry them. The two RARE kinds
+     take a hue; the substrate and the wildcard stay grey. See the
+     note above for which is which and why. */
+  --ed-k-instances: #00ffff;            /* 16.8:1 on black */
+  --ed-k-value: #ffff00;                /* 19.6:1 on black */
+  --ed-k-geometry: #c4c4c4;             /* the substrate — mono */
+  --ed-k-any: #6a6a6a;                  /* a wildcard — mono */
+  --ed-select: #00ff00;                 /* the node you are editing */
+
+  /* tab bars — the sidebar's and the knob panel's, kept identical */
+  --ed-tab: #101010;
+  --ed-tab-on: #262626;
+  --ed-tab-on-edge: #4a4a4a;
+
+  /* native widget tint (sliders, checkboxes) and the focus ring */
+  --ed-accent: #ffffff;
+  --ed-focus: #ffffff;
+  --ed-grid-bg: #0a0a0a;
+
+  /* type. Three sizes, and no fourth: 11 names things, 12 is prose and
+     controls, 14 titles a panel. */
+  --ed-mono: ui-monospace, monospace;
+  --ed-sans: system-ui, sans-serif;
+  --ed-t-meta: 11px;
+  --ed-t-body: 12px;
+  --ed-t-title: 14px;
+
+  /**
+   * geometry — TWO radii, and no third.
+   *
+   * The page had 4, 5, 6, 8 and 10 in it, most of them a pixel apart
+   * and none of them meaning anything by being different. One radius
+   * for things you click or type into, one for floating surfaces.
+   */
+  --ed-radius: 4px;                     /* buttons, inputs, tabs */
+  --ed-radius-lg: 8px;                  /* panels, menus, the modal */
+  --ed-btn-pad: 3px 10px;
+}

@@ -6,7 +6,7 @@
  * star: click one to fly into its planetary system, generated on the
  * spot from the star's seed. Same seed, same universe — for everyone.
  */
-import { World, hashCombine, type CellOutputs, type GeometryItem } from "pcg-ts";
+import { World, hashCombine, type CellOutputs, type GeometryItem, type Graph } from "pcg-ts";
 import { Pcg32 } from "pcg-ts";
 import {
   ACESFilmicToneMapping,
@@ -40,6 +40,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createFpsMeter } from "../../shared/fps.js";
 import { NARROW_MEDIA_QUERY } from "../../shared/mobile.js";
 import { createOverlay } from "../../shared/overlay.js";
+import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { FINE_CELL, deriveGalaxy, makeHaloLevel, makeStarLevel, type GalaxyForm } from "./galaxy.js";
 import { generateSystem, type SystemSpec } from "./system.js";
 
@@ -174,6 +175,25 @@ function buildPoints(item: GeometryItem, soft: boolean): { points: Points; pick:
   return { points, pick: { positions, colors, temps, count: n } };
 }
 
+/**
+ * The graphs behind the page, in the corner.
+ *
+ * Attached on the first build and updated on every later one: a new seed
+ * derives a new galaxy, and its arm count and clump frequency are baked
+ * into the graph's field expressions rather than bound per cell — so the
+ * graph really is a different graph, not the same one with a new seed.
+ */
+let graphPanel: GraphPanelHandle | undefined;
+
+function showGraphs(halo: Graph, stars: Graph): void {
+  const entries = [
+    { name: "halo", graph: halo },
+    { name: "stars", graph: stars },
+  ];
+  if (graphPanel) graphPanel.set(entries);
+  else graphPanel = attachGraphPanel(entries, { title: "galaxy" });
+}
+
 // -- world lifecycle -------------------------------------------------------
 
 function cellCap(radius: number, cellSize: number): number {
@@ -233,9 +253,14 @@ function buildWorld(): void {
 
   const cells = new Map<string, CellEntry>();
   const next: WorldRig = { world: undefined as unknown as World, form, cells, disposed: false };
+  // Named, so the corner panel can show what each level cooks. The two are
+  // genuinely different graphs — the halo is one unbounded cell of dust and
+  // the stars are a streamed grid — which is the thing worth seeing here.
+  const levels = [makeHaloLevel(form), makeStarLevel(form, genRadius)];
+  showGraphs(levels[0].graph, levels[1].graph);
   next.world = new World({
     seed,
-    levels: [makeHaloLevel(form), makeStarLevel(form, genRadius)],
+    levels,
     maxCellsPerLevel: cellCap(genRadius, FINE_CELL),
     onCellReady: (level, coord, outputs: CellOutputs) => {
       if (next.disposed) return;

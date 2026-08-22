@@ -42,7 +42,7 @@
  * fuses nothing at all — see the "diagnostics" section in the panel for
  * why that is a property of these graphs rather than of the device.
  */
-import { CookCancelledError, World, type CellOutputs, type GpuCookStats } from "pcg-ts";
+import { CookCancelledError, World, type CellOutputs, type GpuCookStats, type Graph } from "pcg-ts";
 import type { GpuFieldEvaluator } from "pcg-ts/gpu";
 import { WorldThreeBinding, type AssetMap } from "pcg-ts/three";
 import {
@@ -65,6 +65,7 @@ import {
 } from "three";
 import { createFpsMeter } from "../../shared/fps.js";
 import { createOverlay } from "../../shared/overlay.js";
+import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { createScene } from "../../shared/scene.js";
 
 /** Where the fields are evaluated. */
@@ -196,6 +197,18 @@ function activeEvaluator(): GpuFieldEvaluator | undefined {
   return acceptDerived ? evalDerived : evalStrict;
 }
 
+/** The graphs behind the page, in the corner. Rebuilt with the world. */
+let graphPanel: GraphPanelHandle | undefined;
+
+function showGraphs(landmarks: Graph, rocks: Graph): void {
+  const entries = [
+    { name: "landmarks", graph: landmarks },
+    { name: "rocks", graph: rocks },
+  ];
+  if (graphPanel) graphPanel.set(entries);
+  else graphPanel = attachGraphPanel(entries, { title: "infinite world" });
+}
+
 // -- world lifecycle -------------------------------------------------------
 
 function cellCap(genRadius: number, cellSize: number): number {
@@ -263,14 +276,20 @@ function buildWorld(): void {
     abort: new AbortController(),
     disposed: false,
   };
+  // The world seed reaches the fine level through ctx.worldSeed, not
+  // through this page: the level factory takes no seed at all.
+  const levels = [
+    makeLandmarkLevel(),
+    makeRockLevel({ cellSize: fineCell, generationRadius: radius, anchored, halo }),
+  ];
+  // Named for the corner panel. The rock level is REBUILT here rather than
+  // rebound because the "world-anchored" switch changes which scatter node
+  // sources it — the panel shows that switch as a different graph, which is
+  // what it is.
+  showGraphs(levels[0].graph, levels[1].graph);
   next.world = new World({
     seed,
-    // The world seed reaches the fine level through ctx.worldSeed, not
-    // through this page: the level factory takes no seed at all.
-    levels: [
-      makeLandmarkLevel(),
-      makeRockLevel({ cellSize: fineCell, generationRadius: radius, anchored, halo }),
-    ],
+    levels,
     maxCellsPerLevel: cellCap(radius, fineCell),
     ...(next.tap !== undefined ? { gpu: next.tap } : {}),
     onCellReady: (level, coord, outputs) => {

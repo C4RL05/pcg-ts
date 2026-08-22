@@ -27,7 +27,7 @@
  * runs on import, and a graph that opened differently each time would make
  * every screenshot and every "it looked like this yesterday" a lie.
  */
-import type { EdgeView, NodeView } from "./model.js";
+import type { EdgeView, NodeView } from "./view.js";
 import { NODE_W, nodeHeight, pinRowY } from "./layout.js";
 
 /** Horizontal gap between columns. */

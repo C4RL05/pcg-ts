@@ -8,7 +8,7 @@
  * than one node, and it lives in `autoLayout.ts`. That module imports this
  * one; nothing here needs to know a graph exists.
  */
-import type { NodeView } from "./model.js";
+import type { NodeView } from "./view.js";
 
 /** Node box width in canvas units. */
 export const NODE_W = 168;

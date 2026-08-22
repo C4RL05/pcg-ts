@@ -54,7 +54,7 @@ import {
 import { PARTIAL_FUSION } from "../shared/gpu.js";
 import type { Knob, KnobPatch, KnobTarget } from "../shared/graphUi.js";
 import { makeRecooker } from "../shared/recook.js";
-import { autoLayout } from "./autoLayout.js";
+import { autoLayout } from "../shared/graph/autoLayout.js";
 import {
   nodeCategory,
   nodePinsForType,

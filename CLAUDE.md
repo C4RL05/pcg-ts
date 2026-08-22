@@ -103,16 +103,26 @@ a parent — these are three different kinds of thing and the old single
 - `editor/` — a TOOL, not a demo: it opens any graph in `graphs/` and
   edits it live. It carried a `01-` prefix once, which is exactly what
   made it read as the first demo
-- `demos/` — `infinite-world`, `galaxy`, `gpu-world`. Unnumbered on
-  purpose: three of them encode no order. Each exists because what it
-  shows needs a host — a streamed world, a device-resident renderer
+- `demos/` — `infinite-world`, `galaxy`, `gpu-world`, `racetrack`.
+  Unnumbered on purpose: four of them encode no order. Each exists because
+  what it shows needs a host — a streamed world, a device-resident
+  renderer, a spline scored against a measured spec. Each also shows the
+  graph behind it, read-only, in a corner thumbnail that opens
+  (`shared/graph/`)
 - `graphs/` — the graph corpus: test fixtures, documentation source and
   teaching material at once. `graphs/panels/` carries the optional
   presentation spec the editor reads for a graph
 - `preview/` — the page `scripts/preview.mjs` drives. It shares its
   directory with that script's output, which is why `.gitignore` re-admits
   its two source files by name
-- `shared/` — chrome and helpers common to all of the above
+- `shared/` — chrome and helpers common to all of the above.
+  `shared/graph/` is the node-graph drawing kit: the box component, the
+  layout, the lens (pan/zoom), the wire geometry, the design tokens, and a
+  read-only `GraphView` the demos put in a corner. It came out of `editor/`
+  when the demos needed the same picture, the way `draw.ts` and `frame.ts`
+  did before it — the editor still owns everything about EDITING a graph
+  (the canvas' gestures, the palette, the controller), and imports the
+  drawing from here
 
 ## Commands
 

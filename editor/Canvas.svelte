@@ -16,8 +16,20 @@
    * The canvas has no ground of its own: it is drawn over the render, and
    * a grid on top of a scene reads as a screen door rather than as depth.
    */
-  import NodeBox from "./NodeBox.svelte";
-  import { NODE_W, nodeHeight, pinRowY } from "./layout.js";
+  import NodeBox from "../shared/graph/NodeBox.svelte";
+  import { NODE_W, pinRowY } from "../shared/graph/layout.js";
+  import {
+    ACTUAL,
+    centreAt,
+    clampZoom,
+    contentBounds,
+    fitZoom,
+    toGraph as toGraphUnits,
+    zoomAt,
+    type Bounds,
+    type Viewport,
+  } from "../shared/graph/viewport.js";
+  import { curve, edgeKind as kindOf, edgePath as pathOf } from "../shared/graph/wires.js";
   import type { EdgeView, NodeView, ParamPreview, StructureModel } from "./model.js";
 
   let {
@@ -46,7 +58,7 @@
 
   let svgEl: SVGSVGElement | undefined = $state();
   /** Pan in screen px, and scale. Purely a view: never written to the model. */
-  let view = $state({ x: 0, y: 0, z: 1 });
+  let view = $state<Viewport>({ x: 0, y: 0, z: ACTUAL });
   let panning: { px: number; py: number; ox: number; oy: number } | null = null;
   let dragNode = $state<{ id: string; offX: number; offY: number } | null>(null);
   let wire = $state<{
@@ -61,36 +73,16 @@
     hover: { to: string; toPin: string } | null;
   } | null>(null);
 
-  const MIN_ZOOM = 0.2;
-  const MAX_ZOOM = 2.5;
-  /** One graph unit to one screen pixel — the size the boxes were drawn at. */
-  const ACTUAL = 1;
-  /** Breathing room between the framed content and the viewport edge. */
-  const PAD = 40;
-
   /** Pointer position in graph units — the space node x/y live in. */
   function toGraph(e: { clientX: number; clientY: number }): { x: number; y: number } {
     if (!svgEl) return { x: 0, y: 0 };
-    const r = svgEl.getBoundingClientRect();
-    return { x: (e.clientX - r.left - view.x) / view.z, y: (e.clientY - r.top - view.y) / view.z };
+    return toGraphUnits(view, svgEl.getBoundingClientRect(), e.clientX, e.clientY);
   }
 
-  /**
-   * Zoom about the pointer: the graph point under the cursor is the one
-   * that must not move, which is what makes a wheel feel like a lens
-   * rather than a scrollbar.
-   */
   function onWheel(e: WheelEvent): void {
     if (!svgEl) return;
     e.preventDefault();
-    const r = svgEl.getBoundingClientRect();
-    const cx = e.clientX - r.left;
-    const cy = e.clientY - r.top;
-    const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.z * Math.exp(-e.deltaY * 0.0015)));
-    const k = next / view.z;
-    view.x = cx - (cx - view.x) * k;
-    view.y = cy - (cy - view.y) * k;
-    view.z = next;
+    view = zoomAt(view, svgEl.getBoundingClientRect(), e.clientX, e.clientY, e.deltaY);
   }
 
   function startPan(e: PointerEvent): void {
@@ -103,30 +95,11 @@
     return toGraph({ clientX, clientY });
   }
 
-  /** The nodes' bounding box in graph units, or null when there are none. */
-  function contentBounds(): { minX: number; minY: number; w: number; h: number } | null {
-    if (model.nodes.length === 0) return null;
-    const minX = Math.min(...model.nodes.map((n) => n.x));
-    const minY = Math.min(...model.nodes.map((n) => n.y));
-    const maxX = Math.max(...model.nodes.map((n) => n.x + NODE_W));
-    const maxY = Math.max(
-      ...model.nodes.map((n) => n.y + nodeHeight(n, previews.get(n.id)?.length ?? 0)),
-    );
-    return { minX, minY, w: maxX - minX, h: maxY - minY };
-  }
+  /** How tall each box's param band is — what `contentBounds` measures by. */
+  const rowCounts = $derived(new Map([...previews].map(([id, rows]) => [id, rows.length])));
 
-  /** Put the content in the middle of the viewport at zoom `z`. */
-  function centreAt(
-    z: number,
-    b: { minX: number; minY: number; w: number; h: number },
-    r: DOMRect,
-  ): void {
-    view = { z, x: (r.width - b.w * z) / 2 - b.minX * z, y: (r.height - b.h * z) / 2 - b.minY * z };
-  }
-
-  /** The zoom at which the whole graph just fits, ignoring the clamps. */
-  function fitZoom(b: { w: number; h: number }, r: DOMRect): number {
-    return Math.min((r.width - PAD * 2) / b.w, (r.height - PAD * 2) / b.h);
+  function bounds(): Bounds | null {
+    return contentBounds(model.nodes, rowCounts);
   }
 
   /**
@@ -144,7 +117,7 @@
    */
   export function resetView(opts: { preferActual?: boolean } = {}): void {
     if (!svgEl) return;
-    const b = contentBounds();
+    const b = bounds();
     if (b === null) {
       view = { x: 0, y: 0, z: ACTUAL };
       return;
@@ -152,11 +125,10 @@
     const r = svgEl.getBoundingClientRect();
     const fit = fitZoom(b, r);
     // `fit >= ACTUAL` is exactly "the content fits at 1:1 with its padding".
-    if (opts.preferActual === true && fit >= ACTUAL) {
-      centreAt(ACTUAL, b, r);
-      return;
-    }
-    centreAt(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit)), b, r);
+    view =
+      opts.preferActual === true && fit >= ACTUAL
+        ? centreAt(ACTUAL, b, r)
+        : centreAt(clampZoom(fit), b, r);
   }
 
   /**
@@ -166,12 +138,9 @@
    */
   export function actualSize(): void {
     if (!svgEl) return;
-    const b = contentBounds();
-    if (b === null) {
-      view = { x: 0, y: 0, z: ACTUAL };
-      return;
-    }
-    centreAt(ACTUAL, b, svgEl.getBoundingClientRect());
+    const b = bounds();
+    view =
+      b === null ? { x: 0, y: 0, z: ACTUAL } : centreAt(ACTUAL, b, svgEl.getBoundingClientRect());
   }
 
   /**
@@ -182,43 +151,12 @@
    */
   const byId = $derived(new Map(model.nodes.map((n) => [n.id, n])));
 
-  function nodeById(id: string): NodeView | undefined {
-    return byId.get(id);
-  }
-
-  function pinPos(id: string, pinName: string, side: "in" | "out"): { x: number; y: number } | null {
-    const node = nodeById(id);
-    if (!node) return null;
-    const pins = side === "in" ? node.inputs : node.outputs;
-    const i = pins.findIndex((p) => p.name === pinName);
-    if (i < 0) return null;
-    return { x: node.x + (side === "out" ? NODE_W : 0), y: node.y + pinRowY(i) };
-  }
-
-  function curve(a: { x: number; y: number }, b: { x: number; y: number }): string {
-    const dx = Math.max(46, Math.min(130, Math.abs(b.x - a.x) * 0.5));
-    return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
-  }
-
   function edgePath(e: EdgeView): string | null {
-    const a = pinPos(e.from, e.fromPin, "out");
-    const b = pinPos(e.to, e.toPin, "in");
-    return a && b ? curve(a, b) : null;
+    return pathOf(byId, e);
   }
 
-  /**
-   * The kind a cable CARRIES, read off the output pin it leaves from.
-   *
-   * The source pin and not the target: a connection is only legal when
-   * the two agree (or one is the `any` wildcard), so the source is the
-   * side that always names something concrete. The fallback is `any`
-   * rather than `geometry` — a cable whose source pin cannot be found is
-   * a cable of unknown kind, and guessing the common one would draw a
-   * confident answer to a question that failed. It is unreachable in
-   * practice: `edgePath` already returns null for a missing endpoint.
-   */
   function edgeKind(e: EdgeView): string {
-    return nodeById(e.from)?.outputs.find((p) => p.name === e.fromPin)?.kind ?? "any";
+    return kindOf(byId, e);
   }
 
   function startBodyDrag(node: NodeView, e: PointerEvent): void {
@@ -236,8 +174,11 @@
 
   function onPointerMove(e: PointerEvent): void {
     if (panning) {
-      view.x = panning.ox + (e.clientX - panning.px);
-      view.y = panning.oy + (e.clientY - panning.py);
+      view = {
+        ...view,
+        x: panning.ox + (e.clientX - panning.px),
+        y: panning.oy + (e.clientY - panning.py),
+      };
       return;
     }
     if (dragNode) {

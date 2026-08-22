@@ -7,6 +7,13 @@
    * them. Drag/connect gestures are reported to the Canvas via callbacks;
    * hit circles over the pins keep the targets comfortable.
    *
+   * THE GESTURES ARE OPTIONAL, and a box drawn without them is not a
+   * disabled box — it is a box with nothing to disable. The read-only view
+   * the demos show passes none, and then the hit circles are not rendered
+   * at all rather than rendered inert: an invisible 9-unit target that
+   * answers nothing is a place the pointer changes shape over for no
+   * reason, and on a thumbnail it is most of the box.
+   *
    * There is no delete affordance ON the box. Deleting has two homes
    * already — the button in the node panel and the Delete key over a
    * selection — and a third one, a 10px glyph sitting in the corner of a
@@ -29,11 +36,11 @@
     paramRowY,
     pinRowY,
   } from "./layout.js";
-  import type { NodeView, ParamPreview } from "./model.js";
+  import type { NodeView, ParamPreview } from "./view.js";
 
   let {
     node,
-    selected,
+    selected = false,
     params = [],
     onSelect,
     onBodyDown,
@@ -42,15 +49,23 @@
     onInLeave,
   }: {
     node: NodeView;
-    selected: boolean;
+    selected?: boolean;
     /** What this node's params currently read, as the box shows them. */
     params?: readonly ParamPreview[];
-    onSelect: () => void;
-    onBodyDown: (e: PointerEvent) => void;
-    onOutDown: (e: PointerEvent, pinName: string, index: number) => void;
-    onInEnter: (pinName: string) => void;
-    onInLeave: () => void;
+    /**
+     * The editing gestures. All five together or none of them: a canvas
+     * that can move a node can also wire it, and one that can do neither
+     * is the read-only view. `onBodyDown` is the one tested for, because
+     * it is the one every other gesture starts from.
+     */
+    onSelect?: () => void;
+    onBodyDown?: (e: PointerEvent) => void;
+    onOutDown?: (e: PointerEvent, pinName: string, index: number) => void;
+    onInEnter?: (pinName: string) => void;
+    onInLeave?: () => void;
   } = $props();
+
+  const interactive = $derived(onBodyDown !== undefined);
 
   const h = $derived(nodeHeight(node, params.length));
   /**
@@ -68,19 +83,23 @@
   <!-- No halo ring behind it: selection is carried by the border's colour
        alone, so the shape a node has when selected is the shape it has the
        rest of the time. -->
-  <rect
-    class="body"
-    width={NODE_W}
-    height={h}
-    rx={NODE_RADIUS}
-    role="button"
-    tabindex="-1"
-    aria-label="node {node.id}"
-    onpointerdown={(e) => {
-      onSelect();
-      onBodyDown(e);
-    }}
-  />
+  {#if interactive}
+    <rect
+      class="body"
+      width={NODE_W}
+      height={h}
+      rx={NODE_RADIUS}
+      role="button"
+      tabindex="-1"
+      aria-label="node {node.id}"
+      onpointerdown={(e) => {
+        onSelect?.();
+        onBodyDown?.(e);
+      }}
+    />
+  {:else}
+    <rect class="body inert" width={NODE_W} height={h} rx={NODE_RADIUS} />
+  {/if}
   <line class="sep" x1="0" y1={HEADER_H} x2={NODE_W} y2={HEADER_H} />
   {#if icon !== undefined}
     <!-- A `g` with a scale rather than a nested `svg`: a nested viewport
@@ -101,38 +120,42 @@
   <text class="nodeid" x={TEXT_X} y={ID_Y}>{node.id}</text>
   {#each node.inputs as pin, i (pin.name)}
     <circle class="pin k-{pin.kind}" cx="0" cy={pinRowY(i)} r="4.5" />
-    <circle
-      class="pin-hit"
-      cx="0"
-      cy={pinRowY(i)}
-      r="9"
-      role="button"
-      tabindex="-1"
-      aria-label="input pin {pin.name}"
-      onpointerenter={() => onInEnter(pin.name)}
-      onpointerleave={() => onInLeave()}
-    >
-      <title>{pin.name} · {pin.kind}{pin.multi ? " · multi" : ""}</title>
-    </circle>
+    {#if interactive}
+      <circle
+        class="pin-hit"
+        cx="0"
+        cy={pinRowY(i)}
+        r="9"
+        role="button"
+        tabindex="-1"
+        aria-label="input pin {pin.name}"
+        onpointerenter={() => onInEnter?.(pin.name)}
+        onpointerleave={() => onInLeave?.()}
+      >
+        <title>{pin.name} · {pin.kind}{pin.multi ? " · multi" : ""}</title>
+      </circle>
+    {/if}
     <text class="pinlabel in" x="10" y={pinRowY(i) + 3}>{pin.name}</text>
   {/each}
   {#each node.outputs as pin, i (pin.name)}
     <circle class="pin k-{pin.kind}" cx={NODE_W} cy={pinRowY(i)} r="4.5" />
-    <circle
-      class="pin-hit out"
-      cx={NODE_W}
-      cy={pinRowY(i)}
-      r="9"
-      role="button"
-      tabindex="-1"
-      aria-label="output pin {pin.name}"
-      onpointerdown={(e) => {
-        e.stopPropagation();
-        onOutDown(e, pin.name, i);
-      }}
-    >
-      <title>{pin.name} · {pin.kind} — drag to an input pin</title>
-    </circle>
+    {#if interactive}
+      <circle
+        class="pin-hit out"
+        cx={NODE_W}
+        cy={pinRowY(i)}
+        r="9"
+        role="button"
+        tabindex="-1"
+        aria-label="output pin {pin.name}"
+        onpointerdown={(e) => {
+          e.stopPropagation();
+          onOutDown?.(e, pin.name, i);
+        }}
+      >
+        <title>{pin.name} · {pin.kind} — drag to an input pin</title>
+      </circle>
+    {/if}
     <text class="pinlabel out" x={NODE_W - 10} y={pinRowY(i) + 3}>{pin.name}</text>
   {/each}
   {#if params.length > 0}
@@ -161,6 +184,13 @@
   }
   .body:hover {
     stroke: #5e5e5e;
+  }
+  /* Nothing to grab and nothing to hover, so it says neither. The pan
+     gesture belongs to the surface underneath, and a box that took the
+     pointer here would be a hole in it. */
+  .body.inert {
+    cursor: inherit;
+    pointer-events: none;
   }
   .selected .body {
     stroke: var(--ed-select);

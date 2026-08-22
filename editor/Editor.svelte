@@ -27,7 +27,7 @@
   import type { CookPath } from "../shared/gpu.js";
   import type { GpuState } from "./main.js";
   import type { CookStatus, EditorController } from "./controller.js";
-  import { autoLayout } from "./autoLayout.js";
+  import { autoLayout } from "../shared/graph/autoLayout.js";
   import {
     STARTER_GRAPH_TEXT,
     allocateId,

@@ -30,7 +30,7 @@
  * the page says exactly what was missing and runs the CPU path, so it
  * still renders.
  */
-import { World, hashCombine, type CellCoord, type CellOutputs } from "pcg-ts";
+import { World, hashCombine, type CellCoord, type CellOutputs, type Graph } from "pcg-ts";
 import { GpuFieldEvaluator, type GpuAdapterInfoLike, type GpuDeviceLike } from "pcg-ts/gpu";
 import {
   WorldThreeBinding,
@@ -55,6 +55,7 @@ import { MeshStandardNodeMaterial, WebGPURenderer } from "three/webgpu";
 import { createFpsMeter } from "../../shared/fps.js";
 import { NARROW_MEDIA_QUERY } from "../../shared/mobile.js";
 import { createOverlay } from "../../shared/overlay.js";
+import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { FINE_CELL, MAX_SCALE_TALL, MAX_SCALE_WIDE, makeSpireLevel } from "./levels.js";
 
 // -- tunables --------------------------------------------------------------
@@ -278,6 +279,22 @@ function residentAvailable(): boolean {
   return residentEval !== undefined && deviceAdapter !== undefined && !deviceLost;
 }
 
+/**
+ * The graph behind the page, in the corner.
+ *
+ * One level and so one graph, and the spire count is a PARAM of it rather
+ * than something bound per cell — so moving that slider rebuilds the graph
+ * and the panel has to be told. It is the same shape either way; the
+ * number in the box is what changes.
+ */
+let graphPanel: GraphPanelHandle | undefined;
+
+function showGraph(spires: Graph): void {
+  const entries = [{ name: "spires", graph: spires }];
+  if (graphPanel) graphPanel.set(entries);
+  else graphPanel = attachGraphPanel(entries, { title: "GPU world" });
+}
+
 // -- world lifecycle -------------------------------------------------------
 
 function cellCap(genRadius: number, cellSize: number): number {
@@ -453,9 +470,11 @@ function buildWorld(): void {
   // one; only the spawner terminal's residency differs. With no WebGPU
   // at all the resolver is absent and the whole cook is JS.
   const resolver = deviceLost ? undefined : useDevice ? residentEval : cpuEval;
+  const spires = makeSpireLevel(hashCombine(seed, 7), radius, perCell);
+  showGraph(spires.graph);
   next.world = new World({
     seed,
-    levels: [makeSpireLevel(hashCombine(seed, 7), radius, perCell)],
+    levels: [spires],
     maxCellsPerLevel: cellCap(radius, FINE_CELL),
     ...(resolver !== undefined ? { gpu: resolver } : {}),
     onCellReady: (level, coord, outputs) => {

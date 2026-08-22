@@ -15,7 +15,7 @@
    * Tab, a few letters, Enter — without the hand leaving the keyboard.
    */
   import { tick } from "svelte";
-  import { CATEGORY_ICONS, ICON_VIEWBOX } from "./icons.js";
+  import { CATEGORY_ICONS, ICON_VIEWBOX } from "../shared/graph/icons.js";
   import type { PaletteGroup } from "./model.js";
 
   let {

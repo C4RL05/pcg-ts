@@ -8,7 +8,7 @@
     splitFallbacks,
     type CookPath,
   } from "../shared/gpu.js";
-  import { ICON_VIEWBOX, TOOLBAR_ICONS } from "./icons.js";
+  import { ICON_VIEWBOX, TOOLBAR_ICONS } from "../shared/graph/icons.js";
   import type { GpuState } from "./main.js";
   import type { CookStatus } from "./controller.js";
 

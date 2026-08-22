@@ -454,6 +454,25 @@ function pageInstrumentation() {
  * and `has(v)`, which is false for a readout the demo has not written yet (the
  * shared overlay initialises every value to an en dash).
  */
+/**
+ * Hide the graph thumbnail before the page paints.
+ *
+ * Two reasons, and the second is the one that matters. It is the same card
+ * on all four pages, so it says nothing about the demo it is standing in
+ * front of — and it is laid out on an idle callback, so whether it has
+ * appeared yet is a race the pixel-stability check would either lose or
+ * have to wait out. A screenshot that sometimes contains a node graph is
+ * not a stable screenshot.
+ *
+ * A stylesheet rather than a `remove()` because it has to hold against a
+ * component that mounts after this runs.
+ */
+function hideGraphPanel() {
+  const style = document.createElement("style");
+  style.textContent = ".pcg-graph-panel { display: none !important; }";
+  document.documentElement.appendChild(style);
+}
+
 async function waitForPredicate(page, predicate, timeout) {
   await page.waitForFunction(
     (src) => {
@@ -530,6 +549,7 @@ async function captureDemo(browser, encPage, origin, demo, log) {
     });
     await page.evaluateOnNewDocument(frameCounterScript);
     await page.evaluateOnNewDocument(pageInstrumentation);
+    await page.evaluateOnNewDocument(hideGraphPanel);
     await page.setViewport({ width: size.css[0], height: size.css[1], deviceScaleFactor: 2 });
     await page.bringToFront();
 

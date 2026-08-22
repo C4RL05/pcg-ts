@@ -27,7 +27,7 @@
  * architecture rather than a workaround, and it is why this ships as a
  * demo with a host instead of a graph in the corpus. See `dressing.ts`.
  */
-import { cook, firstGeometry, type DataCollection, type Geometry } from "pcg-ts";
+import { cook, firstGeometry, type DataCollection, type Geometry, type Graph } from "pcg-ts";
 import { toBufferGeometry } from "pcg-ts/three";
 import {
   BufferAttribute,
@@ -60,6 +60,7 @@ import {
   chooseCommittedStretches,
   noCorrections,
 } from "./calibrate.js";
+import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { buildTrackDressingGraph } from "./dressing.js";
 import { PRESETS, REFINE_PASSES, SIGHTLINE, type Preset } from "./kit.js";
 import { TRACK, col, refine, scoreCook } from "./read.js";
@@ -80,6 +81,15 @@ interface Lap {
   readonly card: string;
   readonly cookMs: number;
   readonly cooks: number;
+  /**
+   * The graph that produced THIS lap — the winning pass, not the last one.
+   *
+   * Worth keeping because the loop below builds one graph per pass and
+   * keeps the best, so "the graph the page is showing" is a specific one
+   * of three or four. Handing the corner panel the last one built would
+   * show a lap that was measured and rejected.
+   */
+  readonly graph: Graph;
 }
 
 function requireGeo(name: string, collection: DataCollection | undefined): Geometry {
@@ -134,7 +144,7 @@ async function dressLap(preset: Preset, seed: number): Promise<Lap> {
     }).graph;
     cooks++;
     const out = await cook(graph);
-    return { ...scoreCook(out, preset, lapW), out };
+    return { ...scoreCook(out, preset, lapW), out, graph };
   };
 
   // Which stretches can carry a lean is a fact about the dressed lap, so
@@ -150,6 +160,7 @@ async function dressLap(preset: Preset, seed: number): Promise<Lap> {
     frames: requireGeo("frames", best.out.outputs.frames),
     road: requireGeo("road", best.out.outputs.road),
     lapW,
+    graph: best.graph,
     passed: best.report.passed,
     total: metrics.length,
     corridorArtShare: best.report.corridorArtShare,
@@ -712,9 +723,27 @@ async function regenerate(): Promise<void> {
     statLap(`${lap.lapW.toFixed(0)} W`);
     statCook(`${lap.cookMs.toFixed(0)} ms, ${lap.cooks} cooks`);
     card.textContent = lap.card;
+    showGraph(lap.graph);
   } finally {
     cooking = false;
   }
+}
+
+/**
+ * The graph behind the lap, in the corner.
+ *
+ * Updated on every regeneration, and it genuinely changes: the calibration
+ * decides how many placements each affinity profile gets and how many art
+ * variants each archetype spends, and both are node counts. A different
+ * preset is a visibly different graph, which is most of the reason this
+ * demo has a panel at all.
+ */
+let graphPanel: GraphPanelHandle | undefined;
+
+function showGraph(graph: Graph): void {
+  const entries = [{ name: `${presetName} lap`, graph }];
+  if (graphPanel) graphPanel.set(entries);
+  else graphPanel = attachGraphPanel(entries, { title: "racetrack" });
 }
 
 function layout(): void {

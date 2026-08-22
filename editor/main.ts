@@ -16,6 +16,14 @@
  * registered subgraphs, and the palette lists node types.
  */
 import "pcg-ts/primitives";
+/**
+ * The overlay's shared vocabulary, as a stylesheet rather than as a
+ * `<style>` block in `index.html`. It moved to `shared/graph/` when the
+ * demos grew a read-only view of their own graph: `NodeBox.svelte` went
+ * with it, and a component may not read custom properties that only one
+ * of its two pages declares. See that file.
+ */
+import "../shared/graph/tokens.css";
 import type { DataItem } from "pcg-ts";
 import { mount } from "svelte";
 import {
