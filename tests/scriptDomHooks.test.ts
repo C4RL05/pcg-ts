@@ -178,3 +178,64 @@ describe("scripts' DOM hooks still exist in editor/demos/shared", () => {
     });
   }
 });
+
+/**
+ * A second thing `scripts/*.mjs` does that no compiler answers for: it
+ * injects functions with `evaluateOnNewDocument`, which fires BEFORE the
+ * page is parsed. There is no `<html>` yet at that moment, so
+ * `document.documentElement` is null and `document.head` is null, and a
+ * function that appends to either throws.
+ *
+ * It cost a whole capture run to learn. The thrown error surfaced as seven
+ * identical "page reported 1 error(s): Cannot read properties of null" —
+ * one per demo, naming the appendChild and not the reason — and the run
+ * produced no frames at all. Nothing before this caught it, because the
+ * function is a string handed to a browser: it is never imported, never
+ * typechecked, and never executed by any test.
+ *
+ * The rule is narrow on purpose: touch the document from one of these and
+ * you must say what happens when it is not there yet. A guard, a `??`, or
+ * a wait — this does not care which, only that the question was asked.
+ */
+const EARLY_RE = /evaluateOnNewDocument\(\s*([A-Za-z_$][\w$]*)\s*\)/g;
+
+/** The source of a top-level `function name(...) { ... }`, braces matched. */
+function functionBody(src: string, name: string): string | null {
+  const start = src.search(new RegExp(`^function ${name}\\s*\\(`, "m"));
+  if (start < 0) return null;
+  let depth = 0;
+  for (let i = src.indexOf("{", start); i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
+  }
+  return null;
+}
+
+describe("what the capture scripts inject before the page exists", () => {
+  const injected: { script: string; name: string; body: string }[] = [];
+  for (const file of scriptFiles) {
+    const src = readFileSync(file, "utf8");
+    for (const m of src.matchAll(EARLY_RE)) {
+      const body = functionBody(src, m[1]);
+      if (body !== null) injected.push({ script: displayName(file), name: m[1], body });
+    }
+  }
+
+  it("finds the injected functions at all", () => {
+    // Without this the suite below passes by iterating an empty list, which
+    // is the failure mode of every test that looks for a pattern in source.
+    expect(injected.length).toBeGreaterThan(0);
+  });
+
+  it.each(injected)("$script: $name survives a document that is not there yet", ({ body }) => {
+    const reaches = /document\.(documentElement|head|body)\s*\.\s*(appendChild|insertBefore|append|prepend)/.test(
+      body,
+    );
+    if (!reaches) return;
+    const guarded =
+      /\?\?/.test(body) ||
+      /\bif\s*\(\s*document\.(documentElement|head|body)/.test(body) ||
+      /DOMContentLoaded|readystatechange/.test(body);
+    expect(guarded).toBe(true);
+  });
+});

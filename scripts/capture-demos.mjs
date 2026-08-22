@@ -457,20 +457,28 @@ function pageInstrumentation() {
 /**
  * Hide the graph thumbnail before the page paints.
  *
- * Two reasons, and the second is the one that matters. It is the same card
- * on all four pages, so it says nothing about the demo it is standing in
- * front of — and it is laid out on an idle callback, so whether it has
- * appeared yet is a race the pixel-stability check would either lose or
- * have to wait out. A screenshot that sometimes contains a node graph is
- * not a stable screenshot.
+ * It is the same section on all four pages, so it says nothing about the
+ * demo it is sitting in, and hiding it rather than reshooting around it
+ * keeps the rest of the panel exactly where it was. A stylesheet rather
+ * than a `remove()`, because it has to hold against a component that
+ * mounts long after this runs.
  *
- * A stylesheet rather than a `remove()` because it has to hold against a
- * component that mounts after this runs.
+ * THE DOCUMENT DOES NOT EXIST YET when this runs. `evaluateOnNewDocument`
+ * means what it says: it fires before the page is parsed, so
+ * `document.documentElement` is null and appending to it throws — which it
+ * did, on all seven captures, silently turning `npm run capture` into
+ * seven "page reported 1 error(s)" lines that named the thrower and not
+ * the cause. Hence the wait, and hence appending to whichever of head or
+ * documentElement exists by then.
  */
 function hideGraphPanel() {
-  const style = document.createElement("style");
-  style.textContent = ".pcg-graph-panel { display: none !important; }";
-  document.documentElement.appendChild(style);
+  const add = () => {
+    const style = document.createElement("style");
+    style.textContent = ".pcg-graph-panel { display: none !important; }";
+    (document.head ?? document.documentElement).appendChild(style);
+  };
+  if (document.head ?? document.documentElement) add();
+  else document.addEventListener("DOMContentLoaded", add, { once: true });
 }
 
 async function waitForPredicate(page, predicate, timeout) {
