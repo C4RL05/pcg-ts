@@ -90,6 +90,62 @@ describe("what counts as a false edge", () => {
     expect(isFalseEdge(runs[0])).toBe(true);
   });
 
+  /**
+   * THE START LINE IS NOT A BREAK IN THE LAP.
+   *
+   * `edgeRuns` took `lapW` and discarded it, scanning the station-sorted
+   * list straight through — so a line laid across station 0 was read as
+   * two runs, one at the end of the lap and one at the beginning, each
+   * too short to be a false edge. The detector was blind at exactly one
+   * place on every lap, and the same blindness reached the repair, which
+   * cannot fix what it is not shown.
+   *
+   * Built as ONE line of six, then rotated onto the seam: the answer is
+   * known by construction and is the same answer either way.
+   */
+  it("reads a line laid across the start line as one run", () => {
+    const line = Array.from({ length: 6 }, (_, i) =>
+      at((lapW - 5 + 2 * i + lapW) % lapW, 1.2 + 0.05 * (2 * i), 0.4),
+    );
+    const runs = edgeRuns(line, lapW);
+    expect(runs.length).toBe(1);
+    expect(runs[0].members.length).toBe(6);
+    // The same 10W span and the same 0.05 slope the unrotated line has.
+    expect(runs[0].spanW).toBeCloseTo(10, 6);
+    expect(runs[0].slope).toBeCloseTo(0.05, 3);
+    expect(runs[0].residualW).toBeLessThan(1e-6);
+    expect(isFalseEdge(runs[0])).toBe(true);
+  });
+
+  it("gives a wrapped line the same verdict as the identical unwrapped one", () => {
+    // The control for the test above: rotating a line around the lap is
+    // not supposed to change anything about it, so the two readings must
+    // agree on every reported figure.
+    const straight = Array.from({ length: 6 }, (_, i) =>
+      at(40 + 2 * i, 1.2 + 0.05 * (2 * i), 0.4),
+    );
+    const wrapped = Array.from({ length: 6 }, (_, i) =>
+      at((lapW - 5 + 2 * i) % lapW, 1.2 + 0.05 * (2 * i), 0.4),
+    );
+    const a = edgeRuns(straight, lapW)[0];
+    const b = edgeRuns(wrapped, lapW)[0];
+    expect(b.members.length).toBe(a.members.length);
+    expect(b.spanW).toBeCloseTo(a.spanW, 6);
+    expect(b.slope).toBeCloseTo(a.slope, 6);
+    expect(isFalseEdge(b)).toBe(isFalseEdge(a));
+  });
+
+  it("still breaks a run where the lap really does have a gap", () => {
+    // And the other direction: closing the seam must not weld together
+    // two lines that are genuinely far apart. Two groups of four, a
+    // third of a lap between them.
+    const near = Array.from({ length: 4 }, (_, i) => at(10 + 2 * i, 1.2 + 0.05 * (2 * i), 0.4));
+    const far = Array.from({ length: 4 }, (_, i) => at(110 + 2 * i, 1.2 + 0.05 * (2 * i), 0.4));
+    const runs = edgeRuns([...near, ...far], lapW);
+    expect(runs.length).toBe(2);
+    expect(runs.every((r) => r.members.length === 4)).toBe(true);
+  });
+
   it("permits the same line when it runs parallel", () => {
     // THE DISTINCTION THE WHOLE RULE TURNS ON, and the thing the source
     // actually does: a continuous line at the same height in the same

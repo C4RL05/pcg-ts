@@ -419,6 +419,22 @@ describe("the band-mix fallback", () => {
     const ps = overhead(10).map((p) => ({ ...p, cover: true as const }));
     const r = reduceEnclosure(ps, alwaysOver, 0);
     expect(r.moves).toBe(0);
+    // AND THE DIAGNOSIS IS "NOTHING TO TRIM", NOT "BLOCKED BY Z-3".
+    // This asserted `blockedByBandMix` when the floor here is zero and
+    // was never consulted: every piece is L-6's own cover, so there is
+    // no candidate at all. Blaming the band mix sends a reader to the
+    // wrong rule — the two flags now say which happened.
+    expect(r.nothingToTrim).toBe(true);
+    expect(r.blockedByBandMix).toBe(false);
+  });
+
+  it("blames Z-3 only when Z-3 actually refused a trim", () => {
+    // The control for the pair above: same shape of failure — no moves —
+    // but reached because the floor turned a real candidate away.
+    const ps = overhead(10);
+    const r = reduceEnclosure(ps, alwaysOver, 9);
+    expect(r.moves).toBe(0);
     expect(r.blockedByBandMix).toBe(true);
+    expect(r.nothingToTrim).toBe(false);
   });
 });

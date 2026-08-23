@@ -505,7 +505,23 @@ export function reduceEnclosure<T extends StationedPlacement>(
   runsTrimmed: number;
   before: number;
   after: number;
+  /**
+   * The trim stopped short because Z-3's floor refused a trim that was
+   * otherwise available — the band mix genuinely held enclosure back.
+   */
   blockedByBandMix: boolean;
+  /**
+   * The trim stopped short because there was no incidental overhead to
+   * trim in the first place.
+   *
+   * A DIFFERENT DIAGNOSIS, and it used to be reported as the one above.
+   * A lap whose overhead is all L-6's own deliberate cover has nothing
+   * this pass may touch, and saying "held back by Z-3" of it blames a
+   * rule that was never consulted. The two answers send a reader to
+   * different places: one says the vocabulary cannot make a lap this
+   * open, the other says the band mix is binding.
+   */
+  nothingToTrim: boolean;
 } {
   const ceiling = ENCLOSE.ruleShare[1];
   const maxPasses = 6;
@@ -516,6 +532,7 @@ export function reduceEnclosure<T extends StationedPlacement>(
   let runsTrimmed = 0;
   let after = before;
   let blockedByBandMix = false;
+  let nothingToTrim = false;
 
   const isTrimmable = (p: T): boolean =>
     !p.cover &&
@@ -529,6 +546,10 @@ export function reduceEnclosure<T extends StationedPlacement>(
     if (after <= ceiling) break;
 
     const overheadCount = out.filter(isTrimmable).length;
+    if (overheadCount === 0) {
+      nothingToTrim = true;
+      break;
+    }
     if (overheadCount <= keepOverhead) {
       blockedByBandMix = true;
       break;
@@ -537,13 +558,18 @@ export function reduceEnclosure<T extends StationedPlacement>(
     // Shortest stretch first: the long ones are the tunnels.
     const runs = [...report.stretches].sort((a, b) => a.lengthW - b.lengthW);
     let took = 0;
+    // PER PASS, NOT STICKY. A run refused for the floor used to set the
+    // result flag directly, so a pass that went on to trim a different
+    // run successfully still reported itself held back by Z-3. What the
+    // flag should say is why the reduction STOPPED.
+    let refusedForFloor = false;
     for (const run of runs) {
       const over = out
         .map((p, i) => ({ p, i }))
         .filter(({ p }) => isTrimmable(p) && inRun(p.station, run));
       if (over.length === 0) continue;
       if (overheadCount - over.length < keepOverhead) {
-        blockedByBandMix = true;
+        refusedForFloor = true;
         continue;
       }
       for (const { p, i } of over) {
@@ -554,10 +580,17 @@ export function reduceEnclosure<T extends StationedPlacement>(
       took = over.length;
       break;
     }
-    if (took === 0) break;
+    if (took === 0) {
+      // Nothing was trimmed this pass, so this is where it ends — and
+      // which of the two reasons applies is exactly whether the floor
+      // turned a candidate away or there was never a candidate.
+      blockedByBandMix = refusedForFloor;
+      nothingToTrim = !refusedForFloor;
+      break;
+    }
     after = reportOf(out).share;
   }
-  return { placements: out, moves, runsTrimmed, before, after, blockedByBandMix };
+  return { placements: out, moves, runsTrimmed, before, after, blockedByBandMix, nothingToTrim };
 }
 
 /** Is this station inside a stretch, which may wrap the start line? */

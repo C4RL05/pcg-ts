@@ -270,6 +270,20 @@ export interface MixRepair<T extends AssetPlacement = AssetPlacement> {
    * before this one.
    */
   readonly log: MixMove<T>[];
+  /**
+   * The datum and the exclusion this repair ran under, carried on the
+   * result so the minimality gate cannot be handed a different pair.
+   *
+   * `mixInsideRule`'s own doc says the exclusion "must match whatever
+   * the repair excluded" — and `repairIsMinimal` then called it with the
+   * default, which excludes nothing, while production excludes L-6's
+   * cover. The gate was scoring a population the repair had never tried
+   * to balance, so the only configuration it could check was the one
+   * nothing runs. A doc comment is the wrong place to enforce an
+   * invariant that the type can carry.
+   */
+  readonly datum: "centre" | "base";
+  readonly exclude: (p: T) => boolean;
 }
 
 /** Are all six bands inside Z-3's rule for this set of placements? */
@@ -348,7 +362,7 @@ export function repairBandMix<T extends AssetPlacement>(
     );
 
   const n = live().length;
-  if (n === 0) return { placements: out, moves: 0, wasOutside: [], log: [] };
+  if (n === 0) return { placements: out, moves: 0, wasOutside: [], log: [], datum, exclude };
 
   const shares = (): Record<Band, number> => {
     const c = Object.fromEntries(
@@ -481,7 +495,7 @@ export function repairBandMix<T extends AssetPlacement>(
     out[donor.i] = { ...(out[donor.i] as T), ...replacement };
     moves++;
   }
-  return { placements: out, moves, wasOutside, log };
+  return { placements: out, moves, wasOutside, log, datum, exclude };
 }
 
 /**
@@ -496,13 +510,16 @@ export function repairBandMix<T extends AssetPlacement>(
  */
 export function repairIsMinimal<T extends AssetPlacement>(
   repair: MixRepair<T>,
-  datum: "centre" | "base" = "centre",
 ): { minimal: boolean; removable: number[] } {
   const removable: number[] = [];
   for (const m of repair.log) {
     const trial = [...repair.placements];
     trial[m.index] = m.before;
-    if (mixInsideRule(trial, datum)) removable.push(m.index);
+    // THE REPAIR'S OWN datum AND exclusion, off the result. Taking them
+    // as parameters let the gate score a different population from the
+    // one the repair balanced; there is now no way to ask the wrong
+    // question.
+    if (mixInsideRule(trial, repair.datum, repair.exclude)) removable.push(m.index);
   }
   return { minimal: removable.length === 0, removable };
 }

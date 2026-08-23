@@ -135,6 +135,8 @@ export interface DressStats {
   readonly enclosureRunsTrimmed: number;
   /** L-6 left unsatisfied because trimming further would break Z-3. */
   readonly enclosureBlocked: boolean;
+  /** No incidental overhead existed to trim — NOT the same as blocked. */
+  readonly enclosureNothingToTrim: boolean;
   /** L-5: lines in Z2-Z3 that a driver could mistake for the track edge. */
   readonly falseEdges: number;
   readonly edgeMoves: number;
@@ -452,6 +454,7 @@ export function dressLap(
   let enclosureTrims = 0;
   let enclosureRunsTrimmed = 0;
   let enclosureBlocked = false;
+  let enclosureNothingToTrim = false;
   let edgeMoves = 0;
   let edgesFound = 0;
   let converged = false;
@@ -573,6 +576,7 @@ export function dressLap(
     enclosureTrims += reduce.moves;
     enclosureRunsTrimmed += reduce.runsTrimmed;
     if (reduce.blockedByBandMix) enclosureBlocked = true;
+    if (reduce.nothingToTrim) enclosureNothingToTrim = true;
 
     // D-4, on the lap the cull actually left. The station process
     // enforces coverage too, but at step 1 — before a single one of the
@@ -690,6 +694,7 @@ export function dressLap(
       enclosureTrims,
       enclosureRunsTrimmed,
       enclosureBlocked,
+      enclosureNothingToTrim,
       falseEdges: edgesFound,
       edgeMoves,
       enclosureBefore: Math.max(0, enclosureBefore),

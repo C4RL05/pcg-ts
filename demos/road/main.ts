@@ -607,7 +607,11 @@ async function cookAndBuild(): Promise<void> {
       statCover(
         `${(100 * s.enclosureBefore).toFixed(1)}% -> ${(100 * s.enclosureAfter).toFixed(1)}% of lap · ` +
           `+${s.coverStretches} runs (${s.coverPieces} pieces) · ${s.enclosureTrims} trimmed` +
-          (s.enclosureBlocked ? " · held back by Z-3" : ""),
+          (s.enclosureBlocked
+            ? " · held back by Z-3"
+            : s.enclosureNothingToTrim
+              ? " · no incidental overhead to trim"
+              : ""),
       );
       statCorners(
         `${s.corners} corners (${s.tightCorners} tight) · ` +

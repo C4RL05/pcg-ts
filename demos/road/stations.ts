@@ -511,22 +511,27 @@ export function coverage(stations: readonly number[], lapW: number): {
   longestGapW: number;
 } {
   if (stations.length === 0) return { within2W: 0, longestGapW: lapW };
-  let longest = 0;
-  for (let i = 0; i < stations.length; i++) {
-    const next = i + 1 < stations.length ? stations[i + 1] : stations[0] + lapW;
-    longest = Math.max(longest, next - stations[i]);
-  }
+  // The gap loop is `longestGap`'s, so it is `longestGap`. It was
+  // written out again here, which is how the two answers to D-4's
+  // second figure drift apart.
+  const longest = longestGap(stations, lapW);
+
   // Share of the lap within 2W of a placement, sampled at 0.25W — fine
   // enough that a 2W radius is twenty samples across.
+  const n = stations.length;
   const steps = Math.max(1, Math.round(lapW / 0.25));
   let covered = 0;
-  let j = 0;
+  // ONE POINTER, NOT A SCAN PER SAMPLE. Both the samples and the
+  // stations ascend, so the neighbours either side of a sample only ever
+  // move forwards — but a `stations.findIndex` sat inside this loop and
+  // re-scanned the whole lap for each of ~1400 samples, next to the
+  // two-pointer that was already here and already correct.
+  let j = -1;
   for (let i = 0; i < steps; i++) {
     const s = (i / steps) * lapW;
-    while (j < stations.length - 1 && stations[j + 1] < s) j++;
-    const before = stations[j] <= s ? s - stations[j] : s + lapW - stations[stations.length - 1];
-    const afterIdx = stations.findIndex((v) => v >= s);
-    const after = afterIdx >= 0 ? stations[afterIdx] - s : stations[0] + lapW - s;
+    while (j + 1 < n && stations[j + 1] <= s) j++;
+    const before = j >= 0 ? s - stations[j] : s + lapW - stations[n - 1];
+    const after = j + 1 < n ? stations[j + 1] - s : stations[0] + lapW - s;
     if (Math.min(before, after) <= 2) covered++;
   }
   return { within2W: covered / steps, longestGapW: longest };

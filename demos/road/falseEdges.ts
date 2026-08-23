@@ -162,12 +162,21 @@ export interface EdgeRun {
  * defect and halve the detector's sensitivity on whichever side the
  * threshold was written for.
  */
-function fitRun(placements: readonly StationedPlacement[], members: readonly number[]): {
+function fitRun(
+  placements: readonly StationedPlacement[],
+  members: readonly number[],
+  /**
+   * The members' stations, UNWRAPPED — ascending even where the run
+   * crosses the start line, so a line through station 0 fits as the line
+   * it is rather than as a jump back to zero.
+   */
+  stations: readonly number[],
+): {
   slope: number;
   residualW: number;
 } {
   const n = members.length;
-  const s = members.map((i) => placements[i].station);
+  const s = stations;
   const t = members.map((i) => Math.abs(placements[i].t));
   const ms = s.reduce((a, b) => a + b, 0) / n;
   const mt = t.reduce((a, b) => a + b, 0) / n;
@@ -199,26 +208,70 @@ export function edgeRuns(placements: readonly StationedPlacement[], lapW: number
       .map((p, i) => i)
       .filter((i) => inEdgeBand(placements[i]) && Math.sign(placements[i].t || 1) === side)
       .sort((a, b) => placements[a].station - placements[b].station);
+    const n = idx.length;
+    if (n === 0) continue;
 
-    let run: number[] = [];
+    // WHERE THE SCAN STARTS DECIDES WHETHER A LINE THROUGH THE START LINE
+    // IS ONE RUN OR TWO.
+    //
+    // This scanned the sorted list straight through and discarded `lapW`,
+    // so station 0 was treated as a break that the lap does not have: a
+    // line of eight objects laid across the start line was read as two
+    // runs of four, each of them shorter than `minSpanW` and neither of
+    // them a false edge. The rule that exists to catch a line a driver
+    // would mistake for the road edge was blind to it at exactly one
+    // place on every lap.
+    //
+    // Same model as `cornersOf`, and for the same reason: find a REAL
+    // break first, then scan from there. The gap before the first
+    // member is measured the long way round, through the start line.
+    const gapBefore = (k: number): number => {
+      const prev = placements[idx[(k + n - 1) % n]].station;
+      const here = placements[idx[k]].station;
+      return k === 0 ? here + lapW - prev : here - prev;
+    };
+    let start = 0;
+    for (let k = 0; k < n; k++) {
+      if (gapBefore(k) >= FALSE_EDGE.gapW) {
+        start = k;
+        break;
+      }
+    }
+    // No break anywhere on this side: every member is within `gapW` of
+    // its neighbour all the way round, so the side is ONE ring. Scanning
+    // from an arbitrary point is then correct — there is no wrong place
+    // to cut a ring that has no gap in it — and the members stay in one
+    // run rather than being split at whichever index sorted first.
+
+    // Unwrap: rotating the sorted list puts the low stations last, so
+    // they carry a lap to stay ascending. `fitRun` and the span both
+    // need a monotonic axis.
+    const walk = Array.from({ length: n }, (_, k) => {
+      const pos = (start + k) % n;
+      const i = idx[pos];
+      return { i, s: placements[i].station + (pos < start ? lapW : 0) };
+    });
+
+    let run: { i: number; s: number }[] = [];
     const flush = (): void => {
       if (run.length < FALSE_EDGE.minMembers) return;
-      const startW = placements[run[0]].station;
-      const spanW = placements[run[run.length - 1]].station - startW;
-      const { slope, residualW } = fitRun(placements, run);
-      out.push({ members: [...run], startW, spanW, slope, residualW, side });
+      const members = run.map((r) => r.i);
+      const stations = run.map((r) => r.s);
+      const spanW = stations[stations.length - 1] - stations[0];
+      const { slope, residualW } = fitRun(placements, members, stations);
+      // Reported back in lap coordinates: a run that began before the
+      // start line still starts where it starts.
+      out.push({ members, startW: stations[0] % lapW, spanW, slope, residualW, side });
     };
-    for (const i of idx) {
-      if (run.length > 0 && placements[i].station - placements[run[run.length - 1]].station < FALSE_EDGE.gapW) {
-        run.push(i);
-      } else {
+    for (const w of walk) {
+      if (run.length > 0 && w.s - run[run.length - 1].s < FALSE_EDGE.gapW) run.push(w);
+      else {
         flush();
-        run = [i];
+        run = [w];
       }
     }
     flush();
   }
-  void lapW;
   return out;
 }
 
