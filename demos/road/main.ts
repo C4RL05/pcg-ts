@@ -57,7 +57,7 @@ import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import { type DressStats, dressLap } from "./dress.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
-import { syntheticKit } from "./vocabulary.js";
+import { shippedVocabulary } from "./vocabulary.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 
@@ -207,13 +207,12 @@ function dressingKit(lap: { lengthW: number }): Kit {
   // measured art without looking out of place.
   if (measuredKit) return measuredKit;
 
-  // KEYED ON THE SEED, so changing it changes the vocabulary as well as
-  // the placement. A cached catalogue would make every seed dress the
-  // same circuit from the same objects, which is half a demonstration.
-  if (!vocabulary || vocabulary.seed !== state.seed) {
-    vocabulary = { seed: state.seed, kit: syntheticKit(lap.lengthW, 1000, state.seed) };
-  }
-  return vocabulary.kit;
+  // Otherwise the committed vocabulary: the same measured dimensions and
+  // statistics, carrying no level layout and no source identifiers. It is
+  // what every visitor to the published page dresses from.
+  if (!vocabulary) vocabulary = shippedVocabulary();
+  void lap;
+  return vocabulary;
 }
 
 /** The map. Orthographic, because a layout read in perspective is a lie. */
@@ -256,7 +255,7 @@ layers.push({
 let measuredKit: Kit | undefined;
 
 /** The published vocabulary the rules dress from. Built once per seed. */
-let vocabulary: { seed: number; kit: Kit } | undefined;
+let vocabulary: Kit | undefined;
 
 /** Everything a cook put in the scene, so a recook can take it out again. */
 let built: Object3D[] = [];

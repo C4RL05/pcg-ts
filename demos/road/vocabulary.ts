@@ -38,6 +38,33 @@
  */
 import { rand } from "./assets.js";
 import type { Kit, KitBox } from "./kit.js";
+import measured from "./vocabulary.json";
+
+/**
+ * THE VOCABULARY THE PAGE ACTUALLY SHIPS WITH.
+ *
+ * Per-asset bounding-box decompositions and the placement statistics the
+ * rules read, measured from a source circuit and committed — see
+ * `scripts/gen-road-vocabulary.mjs` for what it carries and what it
+ * deliberately leaves behind. It is dimensions and statistics: a median
+ * of five axis-aligned boxes per asset, which is a guide for generating
+ * an asset rather than an asset, and no level layout or source
+ * identifiers at all.
+ *
+ * IT IS HERE BECAUSE THE GENERATED ALTERNATIVE WAS NOT GOOD ENOUGH. A
+ * catalogue built from the rule ranges alone came out at 1.7 boxes per
+ * asset against this one's 5.2, and a placement dressed from it reads as
+ * a crate rather than as a grandstand. The rules were never the problem;
+ * the vocabulary was, and the part of a real vocabulary that matters
+ * turns out to be its internal structure rather than its dimensions.
+ */
+export function shippedVocabulary(): Kit {
+  return {
+    track: { lapLengthW: measured.lapLengthW, halfWidthGameUnits: 1000 },
+    assets: measured.assets as unknown as Kit["assets"],
+    placements: [],
+  };
+}
 
 /** A generated asset, in the shape the placement rules read. */
 interface VocabAsset {

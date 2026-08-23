@@ -35,7 +35,7 @@ import {
 import { defaultEyeStations, occludes } from "../demos/road/sightline.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
 import { COVERAGE, coverage } from "../demos/road/stations.js";
-import { buildVocabulary, syntheticKit } from "../demos/road/vocabulary.js";
+import { buildVocabulary, shippedVocabulary, syntheticKit } from "../demos/road/vocabulary.js";
 
 let lap: Lap | undefined;
 async function theLap(): Promise<Lap> {
@@ -104,6 +104,80 @@ describe("the published vocabulary", () => {
     expect(new Set([markers!.sharp.id, markers!.open.id, markers!.brake.id]).size).toBe(3);
     expect(pool.length).toBe(buildVocabulary(1).length - 3);
   });
+});
+
+/**
+ * THE COMMITTED VOCABULARY, which is what a visitor actually dresses
+ * from — and therefore the one that has to be gated hardest.
+ *
+ * The generated catalogue below it is a second, independent vocabulary
+ * kept for a different claim: that the rules do not depend on ANY
+ * particular catalogue. Both run without a kit, so CI sees both.
+ */
+describe("the committed vocabulary", () => {
+  const kit = shippedVocabulary();
+
+  it("carries dimensions and statistics, and no layout or identifiers", () => {
+    const assets = kit.assets as unknown as {
+      name: string;
+      shape: string;
+      instances: number;
+      size: { across: number; along: number; tall: number };
+      where: unknown;
+      boxes: unknown[];
+    }[];
+    expect(assets.length).toBeGreaterThan(150);
+
+    // NO LEVEL LAYOUT. The arrangement of art around a real circuit is
+    // the one part of a measured kit that is a record of someone's
+    // choices rather than a fact about an object, and nothing here reads
+    // it — it feeds only the optional local reference overlay.
+    expect(kit.placements.length, "the committed vocabulary carries a layout").toBe(0);
+
+    // NO SOURCE IDENTIFIERS. Names are this project's own shape
+    // classification, which is why they all match this shape.
+    for (const a of assets) {
+      expect(a.name, `"${a.name}" is not a generated name`).toMatch(
+        /^(block|frame|panel|post|shell)-\d{2,}$/,
+      );
+    }
+
+    // AND THE STRUCTURE THAT MAKES A PLACEMENT READ AS SCENERY. The
+    // generated catalogue managed 1.7 boxes per asset and looked like a
+    // row of crates; this is the figure that fixed it.
+    const boxes = assets.reduce((n, a) => n + a.boxes.length, 0);
+    expect(boxes / assets.length, "not enough internal structure").toBeGreaterThan(3);
+    console.log(
+      `committed vocabulary: ${assets.length} assets, ${boxes} boxes ` +
+        `(${(boxes / assets.length).toFixed(1)}/asset)`,
+    );
+  });
+
+  it("dresses a lap that satisfies every rule", async () => {
+    const l = await theLap();
+    const d = dressLap(kit, l, 1);
+    expect(d.stats.converged).toBe(true);
+    expect(landmarksSatisfied(d.placements, l.lengthW), "L-4").toBe(true);
+    expect(falseEdges(d.placements, l.lengthW).length, "L-5").toBe(0);
+    expect(
+      mixInsideRule(d.placements, "centre", (p) => p.cover === true),
+      "Z-3",
+    ).toBe(true);
+    expect(measureEnclosure(l, d.boxes).share, "L-6").toBeLessThanOrEqual(
+      ENCLOSE.ruleShare[1] + 0.02,
+    );
+    expect(
+      coverage(
+        d.placements.map((p) => p.station).sort((a, b) => a - b),
+        l.lengthW,
+      ).longestGapW,
+      "D-4",
+    ).toBeLessThanOrEqual(COVERAGE.maxGapW + 1e-6);
+    console.log(
+      `committed vocabulary dresses: ${d.stats.placed} placements, ${d.boxes.length} boxes ` +
+        `(${(d.boxes.length / d.stats.placed).toFixed(1)}/placement), ${d.stats.rounds} rounds`,
+    );
+  }, 900_000);
 });
 
 describe("a lap dressed from the published vocabulary", () => {
