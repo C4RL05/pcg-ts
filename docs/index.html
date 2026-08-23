@@ -152,17 +152,31 @@
      full-width one here would sit a few pixels under it saying the same
      thing twice. */
   header { }
+  /* The glyph is Phosphor's `graph`, bold, at the 256 viewBox it ships in
+     — the same path the editor's own toolbar wears, copied rather than
+     imported because this page has no build step and loads no module for
+     its chrome. If `shared/graph/icons.ts` ever redraws it, this is the
+     other copy. `currentColor` so it takes the hover with the word. */
   .hero-open {
     position: absolute;
     top: 16px;
     right: 16px;
     z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     padding: 6px 12px;
     border: 1px solid var(--line);
     border-radius: 6px;
     color: var(--muted);
     font-family: var(--mono);
     font-size: 13px;
+  }
+  .hero-open .ic {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    fill: currentColor;
   }
   .hero-open:hover, .hero-open:focus-visible {
     border-color: var(--ink);
@@ -653,7 +667,7 @@
     <a
       class="hero-open"
       href="./editor/?graph=basics-filter-by-density"
-      title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here.">open in the editor →</a>
+      title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here."><svg class="ic" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><path d="M200,152a35.77,35.77,0,0,0-16.46,4l-21.39-16.64A35.49,35.49,0,0,0,164,128.65l10.35-3.44A36,36,0,1,0,164,100c0,1.11.06,2.21.16,3.3l-7.78,2.59A36,36,0,0,0,128,92c-1,0-1.88,0-2.81.12l-4.45-10A36,36,0,1,0,96,92c1,0,1.88,0,2.81-.12l4.45,10a35.91,35.91,0,0,0-8.59,39.7L73.39,160.49a36,36,0,1,0,15.94,17.93l21.28-18.91a35.91,35.91,0,0,0,36.8-1.21L167,173.56A36,36,0,1,0,200,152Zm0-64a12,12,0,1,1-12,12A12,12,0,0,1,200,88ZM84,56A12,12,0,1,1,96,68,12,12,0,0,1,84,56ZM56,204a12,12,0,1,1,12-12A12,12,0,0,1,56,204Zm60-76a12,12,0,1,1,12,12A12,12,0,0,1,116,128Zm84,72a12,12,0,1,1,12-12A12,12,0,0,1,200,200Z"/></svg>Editor →</a>
     <div class="hero-overlay">
       <div class="wrap">
         <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
