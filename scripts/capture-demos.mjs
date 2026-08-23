@@ -126,6 +126,7 @@ const SIZES = {
   galaxy: { css: [1454, 783], out: [1454, 783] },
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
   racetrack: { css: [1454, 783], out: [1454, 783] },
+  road: { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -341,6 +342,23 @@ const DEMOS = [
     settle: () => window.pcgTrack.pauseAt(250),
     ready: (s, has) =>
       has(s["placements"]) && s["placements"] !== "0" && has(s["metrics passed"]),
+  },
+  {
+    id: "road",
+    // Same pinning problem as the racetrack and the same answer: the lap
+    // travels forever, so the shot is fixed by naming a STATION rather
+    // than by pausing, which would stop it wherever this machine happened
+    // to have got to. Station 250 W is the same one the racetrack shot
+    // uses, so the two demos frame the same part of a lap and the
+    // difference between the pictures is the difference between the
+    // demos rather than between two viewpoints.
+    path: "demos/road/",
+    settleWait: () => !!window.pcgRoad,
+    settle: () => {
+      window.pcgRoad.seek(250);
+      window.pcgRoad.pause(true);
+    },
+    ready: (s, has) => has(s["dressing"]) && has(s["enclosure"]) && has(s["corner language"]),
   },
   {
     id: "gpu-world",

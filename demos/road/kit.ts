@@ -71,6 +71,30 @@ export interface Kit {
  * have the optional comparison data" into "the demo is broken".
  */
 export async function loadKit(url = "/kit.json"): Promise<Kit | undefined> {
+  // NOT EVEN REQUESTED WHEN IT CANNOT BE THERE. The published build has
+  // no kit — it is derived measurement of a commercial game and is not
+  // ours to redistribute — so asking for it on the live site buys a 404
+  // in every visitor's console for a file that is deliberately absent.
+  // Worse, it is an error a headless capture cannot distinguish from a
+  // real one, and it failed the screenshot run.
+  //
+  // THE DISCRIMINATOR IS THE BUILD, NOT THE HOST, and it took two
+  // attempts. Gating on localhost is wrong twice over: the capture serves
+  // a PRODUCTION build from 127.0.0.1, and someone self-hosting the real
+  // site locally would get a reference layer they should not. Gating on
+  // `import.meta.env?.DEV` failed too — the optional chain stops the
+  // build-time substitution, so the guard survived as a runtime test and
+  // then folded the wrong way.
+  //
+  // `import.meta.hot` is the dev server's own hallmark: defined when it
+  // is serving, statically undefined in every build. It is exactly the
+  // condition under which a kit at the repository root can be served.
+  const dev = import.meta.hot !== undefined;
+  const asked =
+    typeof location === "undefined" ? null : new URLSearchParams(location.search).get("kit");
+  if (asked) url = asked;
+  else if (!dev) return undefined;
+
   try {
     const res = await fetch(url);
     if (!res.ok) return undefined;
