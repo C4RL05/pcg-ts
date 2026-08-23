@@ -27,10 +27,16 @@
  * facing which way. Solid boxes with a light on them would read as bad
  * art; a wireframe reads as what it is, which is the measurement.
  */
-import { cook, firstGeometry, type DataCollection, type Geometry, type Graph } from "pcg-ts";
-import { toBufferGeometry, toLineGeometry } from "pcg-ts/three";
 import {
-  BoxGeometry,
+  buildInstanceBatches,
+  cook,
+  firstGeometry,
+  type DataCollection,
+  type Geometry,
+  type Graph,
+} from "pcg-ts";
+import { toBufferGeometry, toInstancedMeshes, toLineGeometry } from "pcg-ts/three";
+import {
   ConeGeometry,
   Euler,
   Fog,
@@ -38,7 +44,6 @@ import {
   LineBasicMaterial,
   LineSegments,
   type Material,
-  Matrix4,
   Mesh,
   MeshBasicMaterial,
   type Object3D,
@@ -60,6 +65,13 @@ import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { shippedVocabulary } from "./vocabulary.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
+import { ASSET_ATTR, DEFAULT_ASSET, boxCloud } from "./spawn.js";
+import {
+  type Population,
+  disposeAssetMap,
+  makeAssetMap,
+  makeMapMaterials,
+} from "./assets3d.js";
 
 // ------------------------------------------------------------------ //
 // The cook.
@@ -260,16 +272,22 @@ let vocabulary: Kit | undefined;
 let built: Object3D[] = [];
 
 function disposeBuilt(): void {
-  // WHAT THIS OWNS AND WHAT IT DOES NOT. `PROP_BOX` is the shared unit
-  // cube every instanced layer draws, so disposing "the geometry of
-  // everything built" threw it away twice per recook and forced a GPU
-  // re-upload of a buffer that never changes. The MATERIALS, meanwhile,
-  // are made fresh per cook — two per layer, chase and map — and were
-  // never disposed at all, which is the actual leak.
+  // WHAT THIS OWNS AND WHAT IT DOES NOT, and the ownership rule now comes
+  // from the asset map rather than from a name this file has to remember.
+  // An instanced mesh BORROWS its geometry — every one of them draws the
+  // asset map's single shared unit cube — and OWNS its material, which is
+  // a per-mesh clone and the one signal three uses to release that mesh's
+  // cached render state. So: dispose the mesh and its two materials,
+  // never its geometry. (This used to be spelled as an identity test
+  // against a module-level `PROP_BOX`, which was the same rule stated in
+  // a way only this file could check.)
   for (const obj of built) {
     scene.remove(obj);
-    const geo = (obj as Mesh).geometry;
-    if (geo && geo !== PROP_BOX) geo.dispose();
+    if (obj instanceof InstancedMesh) {
+      obj.dispose();
+      continue;
+    }
+    (obj as Mesh).geometry?.dispose();
   }
   for (const l of layers.slice(1)) {
     l.chase.dispose();
@@ -295,7 +313,7 @@ function disposeBuilt(): void {
  * whether the generated ones read, which is the judgement no statistic
  * replaced.
  */
-function buildReference(circuit: Circuit): InstancedMesh | undefined {
+function buildReference(circuit: Circuit): SpawnedLayer | undefined {
   // Through `dressingKit`, so the choice of source is made in exactly one
   // place and the shipped vocabulary is parsed once rather than re-wrapped
   // on every cook.
@@ -309,7 +327,7 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
     const { p, pose } = placeAt(lap, { station, lateral, height });
     return { p, across: pose.across, along: pose.dir, up: pose.up };
   });
-  return boxMesh(boxes, 0x999999, 0.85);
+  return spawnBoxes(boxes, "reference");
 }
 
 /**
@@ -320,43 +338,85 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
  * different material would be a different picture, and the whole question
  * is whether the generated one reads like the measured one.
  */
-function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressStats } {
+function buildDressing(circuit: Circuit): { layer: SpawnedLayer; stats: DressStats } {
   const d = dressLap(dressingKit(), circuit.lap, state.seed, {
     density: state.density,
   });
-  return { mesh: boxMesh(d.boxes, 0x404040, 0.95), stats: d.stats };
+  return { layer: spawnBoxes(d.boxes, "generated"), stats: d.stats };
 }
 
-/** One instanced mesh from a list of world-space boxes. */
-function boxMesh(boxes: readonly PlacedBox[], colour: number, opacity: number): InstancedMesh {
-  const mesh = new InstancedMesh(
-    PROP_BOX,
-    new MeshBasicMaterial({ color: colour, wireframe: true, transparent: true, opacity }),
-    Math.max(1, boxes.length),
-  );
-  const basis = new Matrix4();
-  const local = new Matrix4();
-  for (let i = 0; i < boxes.length; i++) {
-    const b = boxes[i];
-    // The box is axis-aligned in the TRACK frame, so the instance's
-    // rotation is that frame's three axes as columns — not a yaw about
-    // world up, which would be wrong the moment the track has relief.
-    basis.set(
-      b.basis.across[0], b.basis.along[0], b.basis.up[0], b.centre[0],
-      b.basis.across[1], b.basis.along[1], b.basis.up[1], b.centre[1],
-      b.basis.across[2], b.basis.along[2], b.basis.up[2], b.centre[2],
-      0, 0, 0, 1,
-    );
-    local.makeScale(b.size[0], b.size[1], b.size[2]);
-    mesh.setMatrixAt(i, basis.multiply(local));
+/** One population's meshes, and the map-pass material each of them swaps to. */
+interface SpawnedLayer {
+  readonly meshes: readonly InstancedMesh[];
+  readonly mapMaterials: Readonly<Record<string, MeshBasicMaterial>>;
+  /** Total instances across the meshes — what the readout used to count. */
+  readonly count: number;
+}
+
+/**
+ * Boxes to instanced meshes, through the library's spawner.
+ *
+ * WHAT CHANGED AND WHAT DID NOT. This used to be a hand-written loop that
+ * composed a `Matrix4` per box and pushed it into one `InstancedMesh`.
+ * The matrices it built are the same matrices the spawner builds — the
+ * box is axis-aligned in the TRACK frame, so the instance's rotation is
+ * that frame's three axes as columns, never a yaw about world up, which
+ * would be wrong the moment the track has relief. `spawn.ts` writes that
+ * frame as the standard `rot` quaternion and the spawner composes
+ * `T(P) * R(rot) * S(scale)` from it; `tests/racetrackSpawn.test.ts`
+ * checks the two against each other rather than trusting this paragraph.
+ *
+ * WHAT IT BUYS is one mesh per ASSET ID instead of one mesh for
+ * everything. That costs a few more draw calls on a lap that has never
+ * been draw-call bound, and it is the entire point: an id is a name a
+ * real prop can be bound to, and there was no such name before.
+ */
+function spawnBoxes(boxes: readonly PlacedBox[], population: Population): SpawnedLayer {
+  const batches = buildInstanceBatches(boxCloud(boxes), {
+    defaultAssetId: DEFAULT_ASSET,
+    assetAttr: ASSET_ATTR,
+  });
+  // The map's materials are templates: `toInstancedMeshes` clones one per
+  // mesh, and the clone is what renders and what releases that mesh's
+  // render state on dispose. These originals are never uploaded, so
+  // disposing them here is bookkeeping rather than GPU work — and it
+  // leaves every live material owned by exactly one mesh, which is what
+  // makes `disposeBuilt` correct without a special case.
+  const assets = makeAssetMap(population);
+  let meshes: InstancedMesh[];
+  try {
+    meshes = toInstancedMeshes(batches, assets);
+  } finally {
+    disposeAssetMap(assets);
   }
-  mesh.instanceMatrix.needsUpdate = true;
-  mesh.frustumCulled = false;
-  return mesh;
+  // Frustum culling stays off, as it was: the map pass frames the whole
+  // circuit at once and the chase pass wants the lap ahead, so there is
+  // nothing here a per-mesh sphere test can usefully reject.
+  for (const m of meshes) m.frustumCulled = false;
+  return {
+    meshes,
+    mapMaterials: makeMapMaterials(
+      population,
+      meshes.map((m) => m.name),
+    ),
+    count: batches.reduce((n, b) => n + b.count, 0),
+  };
 }
 
-/** The unit box every placed box is scaled from. */
-const PROP_BOX = new BoxGeometry(1, 1, 1);
+/** Add a spawned population to the scene, one layer per mesh. */
+function addSpawned(layer: SpawnedLayer): void {
+  for (const mesh of layer.meshes) {
+    scene.add(mesh);
+    built.push(mesh);
+    layers.push({
+      obj: mesh,
+      // Narrowed because InstancedMesh types its material as one OR an
+      // array; the spawner gives each mesh exactly one.
+      chase: mesh.material as Material,
+      map: layer.mapMaterials[mesh.name],
+    });
+  }
+}
 
 function buildCircuit(circuit: Circuit): void {
   disposeBuilt();
@@ -402,36 +462,29 @@ function buildCircuit(circuit: Circuit): void {
   // branch became unreachable and the placeholder it drew became dead
   // weight in the node graph the panel puts on screen.
   const dressed = buildDressing(circuit);
-  scene.add(dressed.mesh);
-  built.push(dressed.mesh);
-  layers.push({
-    obj: dressed.mesh,
-    chase: dressed.mesh.material as Material,
-    map: new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
-  });
+  addSpawned(dressed.layer);
   lastStats = dressed.stats;
 
   const reference = buildReference(circuit);
   if (reference) {
-    reference.visible = state.referenceOn;
-    scene.add(reference);
-    built.push(reference);
-    layers.push({
-      obj: reference,
-      // Narrowed because InstancedMesh types its material as one OR an
-      // array; this one is built above with a single material.
-      chase: reference.material as Material,
-      map: new MeshBasicMaterial({ color: 0x999999, wireframe: true }),
-    });
-    referenceMesh = reference;
+    for (const m of reference.meshes) m.visible = state.referenceOn;
+    addSpawned(reference);
+    referenceMeshes = reference.meshes;
     statReference(`${reference.count} boxes`);
   } else {
+    referenceMeshes = [];
     statReference("none — generated only");
   }
 }
 
-/** The reference layer, so the checkbox can reach it between cooks. */
-let referenceMesh: InstancedMesh | undefined;
+/**
+ * The reference layer, so the checkbox can reach it between cooks.
+ *
+ * A LIST NOW, NOT ONE MESH. The spawner emits one mesh per asset id, so
+ * "the reference" is however many ids its boxes carried — and the toggle
+ * has to reach all of them or it hides part of a population.
+ */
+let referenceMeshes: readonly InstancedMesh[] = [];
 
 /** What the last dressing pass had to repair, for the readouts. */
 let lastStats: DressStats | undefined;
@@ -531,7 +584,7 @@ overlay.addSlider("map zoom", { min: 0.5, max: 4, step: 0.05, value: state.mapZo
 });
 overlay.addCheckbox("reference kit", state.referenceOn, (on) => {
   state.referenceOn = on;
-  if (referenceMesh) referenceMesh.visible = on;
+  for (const m of referenceMeshes) m.visible = on;
 });
 overlay.addCheckbox("pause", state.paused, (on) => {
   state.paused = on;
