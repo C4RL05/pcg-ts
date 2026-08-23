@@ -426,15 +426,30 @@ export function reduceEnclosure<T extends StationedPlacement>(
   /**
    * How many overhead pieces must survive.
    *
-   * THE FALLBACK, NOT THE MECHANISM. Z-3 wants a tenth of the population
-   * over the corridor and L-6 wants at most a quarter of the lap roofed.
-   * Across the twenty-two circuits those are not independent axes —
-   * enclosure correlates with `over` share at r = 0.57, roughly
-   * 2.5% + 0.62 x over-share — but at the ranges as written they are
-   * compatible: Z-3's 10-21% predicts 9-16% enclosure, comfortably inside
-   * L-6. A kit can still exhaust the trim, and then this floor stops it
-   * and the caller reports the shortfall, which means something specific:
-   * THIS VOCABULARY CANNOT MAKE A LAP THIS OPEN.
+   * THE FALLBACK, NOT THE MECHANISM — and it has never once fired.
+   *
+   * Z-3 wants a tenth of the population over the corridor and L-6 wants
+   * at most a quarter of the lap roofed. Across the twenty-two circuits
+   * those are not independent axes: enclosure correlates with `over`
+   * share at r = 0.57, roughly 2.5% + 0.62 x over-share. But at the
+   * ranges as written they are compatible — Z-3's 10-21% predicts 9-16%
+   * enclosure, comfortably inside L-6 — and the two circuits that satisfy
+   * both are ORDINARY ones, ranking 2nd and 4th most typical of the
+   * twenty-two on eight axes chosen to exclude enclosure and `over` share
+   * so the question could not answer itself. The ruleset describes a real
+   * and unremarkable circuit.
+   *
+   * Measured here: twelve laps across two vocabularies — including the
+   * most overhead-rich circuit in the source, whose own `over` share is
+   * 32%, half again above Z-3's ceiling — and this floor stopped the trim
+   * on none of them. Every lap landed inside L-6's range with runs to
+   * spare.
+   *
+   * So when it DOES fire the diagnosis is specific and it is not the
+   * ruleset: THIS VOCABULARY CANNOT MAKE A LAP THIS OPEN. It is kept, and
+   * exercised by a constructed case rather than by a real lap, because a
+   * path no test can reach is a path that will be wrong when it is first
+   * needed.
    */
   keepOverhead: number,
   ceiling = ENCLOSE.ruleShare[1],

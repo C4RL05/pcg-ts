@@ -33,12 +33,14 @@ import type { Kit } from "../demos/road/kit.js";
 import { ENCLOSURE_KIT, KITS } from "../demos/road/kitSource.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
+import type { StationedPlacement } from "../demos/road/legibility.js";
 import {
   ENCLOSE,
   coverCandidates,
   drawStretchLengthW,
   longStretchShare,
   planEnclosure,
+  reduceEnclosure,
 } from "../demos/road/tunnels.js";
 
 const KIT = `<kit-dir>/${KITS[ENCLOSURE_KIT]}`;
@@ -275,4 +277,90 @@ describe.skipIf(!existsSync(KIT))("enclosure, placed and then measured", () => {
       ).toBeLessThanOrEqual(ENCLOSE.ruleShare[1] + 0.02);
     }
   }, 900_000);
+});
+
+/**
+ * THE Z-3 FALLBACK, WHICH NEVER FIRES ON A REAL LAP.
+ *
+ * `reduceEnclosure` stops trimming when taking another run would empty
+ * Z-3's `over` band below its floor, and reports `blockedByBandMix` so
+ * the caller can say which rule yielded. Measured across twelve laps and
+ * two vocabularies — including the most overhead-rich circuit in the
+ * source, whose own `over` share is half again above Z-3's ceiling — it
+ * has stopped the trim exactly zero times.
+ *
+ * WHICH IS THE PROBLEM. A branch that no lap reaches is a branch that
+ * will be wrong the first time it is needed, and by this project's own
+ * convention a rule that never fires is not a rule that passed. Upstream
+ * settled the question the other way round at the same time: the two
+ * circuits satisfying both Z-3 and L-6 rank 2nd and 4th most ORDINARY of
+ * the twenty-two, on axes deliberately chosen to exclude the two rules
+ * under test — so the ranges describe a real circuit and the fallback
+ * should be rare.
+ *
+ * Rare is not never, and the right response to a path real data cannot
+ * reach is to construct one that does, not to delete the path or to
+ * report a green because nothing tripped it.
+ */
+describe("the band-mix fallback", () => {
+  /** Overhead pieces, all trimmable: inside the span, above the corridor. */
+  function overhead(n: number): StationedPlacement[] {
+    return Array.from({ length: n }, (_, i) => ({
+      station: i * 4,
+      t: 0.4,
+      h: 2,
+      asset: {
+        id: i,
+        name: `piece-${i}`,
+        shape: "box",
+        instances: 1,
+        size: { across: 0.5, along: 0.5, tall: 0.4 },
+      },
+    }));
+  }
+
+  /**
+   * A lap that is always over the ceiling, whatever is removed — which is
+   * what an exhausted trim looks like from the inside.
+   */
+  const alwaysOver = (): { share: number; stretches: { startW: number; endW: number; lengthW: number }[] } => ({
+    share: 0.5,
+    stretches: [{ startW: 0, endW: 40, lengthW: 40 }],
+  });
+
+  it("stops at Z-3's floor rather than emptying the band", () => {
+    const ps = overhead(10);
+    // Keep nine of ten: one trim is possible, then the floor binds.
+    const r = reduceEnclosure(ps, alwaysOver, 9);
+    expect(r.blockedByBandMix, "the floor never bound").toBe(true);
+    // And it did not empty the band to get there.
+    const left = r.placements.filter((p) => Math.abs(p.t) < 1.5 && p.h >= 1.2).length;
+    expect(left).toBeGreaterThanOrEqual(9);
+  });
+
+  /**
+   * THE CONTROL. With the floor out of the way the same input trims — so
+   * the assertion above is about the floor binding and not about the
+   * reduction being unable to do anything at all. Without this, a
+   * `reduceEnclosure` that simply never worked would pass the test above.
+   */
+  it("trims the same lap when the floor is not in the way", () => {
+    const ps = overhead(10);
+    const r = reduceEnclosure(ps, alwaysOver, 0);
+    expect(r.moves).toBeGreaterThan(0);
+    expect(r.runsTrimmed).toBeGreaterThan(0);
+    // Moved OUT rather than dropped: the count is conserved.
+    expect(r.placements.length).toBe(ps.length);
+    const moved = r.placements.filter((p) => Math.abs(p.t) >= 1.5);
+    expect(moved.length).toBe(r.moves);
+  });
+
+  it("never touches L-6's own cover", () => {
+    // Taking a deliberate tunnel apart to satisfy L-6 would be absurd, so
+    // the only thing left to trim is the incidental cover.
+    const ps = overhead(10).map((p) => ({ ...p, cover: true as const }));
+    const r = reduceEnclosure(ps, alwaysOver, 0);
+    expect(r.moves).toBe(0);
+    expect(r.blockedByBandMix).toBe(true);
+  });
 });
