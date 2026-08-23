@@ -73,8 +73,11 @@ export function clampZoom(z: number, floor: number = MIN_ZOOM): number {
  * to see all of it, and never further.
  *
  * {@link MIN_ZOOM} alone is wrong for a graph bigger than the floor can
- * show. The racetrack's is 23208 units wide, which fits a 1340px panel at
- * 0.054 — a quarter of the flat floor. Framing it opens on the whole
+ * show. The widest graph measured here is 23208 units across, which fits
+ * a 1340px panel at 0.054 — a quarter of the flat floor. (That figure was
+ * taken from the retired racetrack demo; `tests/support/wideGraph.ts`
+ * reproduces the same width so the case stays exercised.) Framing it
+ * opens on the whole
  * pipeline and the first wheel-out then snaps to 0.2, four times closer,
  * with no way back: the view has a home it refuses to return to. Deriving
  * the floor from the content makes "everything at once" the furthest out a
@@ -162,8 +165,9 @@ export function fitZoom(b: Bounds, rect: DOMRect): number {
  * fit that declines to fit is a broken control.
  *
  * `floor` is what stops a fit from becoming a hairline. A wide graph in a
- * small frame fits at a scale that draws nothing: the racetrack's is 14.5
- * to 1, and contained in a 220px card it is a smear three pixels tall —
+ * small frame fits at a scale that draws nothing: the measured case is
+ * 14.5 to 1, and contained in a 220px card it is a smear three pixels
+ * tall —
  * technically the whole graph and legible as nothing at all. Passing a
  * floor makes the fit CROP instead of vanish, which is the trade a
  * thumbnail wants and an interactive view does not. See {@link zoomFloor}

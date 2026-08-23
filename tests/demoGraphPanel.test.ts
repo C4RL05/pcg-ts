@@ -9,10 +9,17 @@
  * is actually wired to the panel.
  *
  * IT USES THE DEMOS' REAL BUILDERS, not a fixture. The reader's whole job
- * is to survive whatever a page hands it, and the racetrack's 238-node
- * graph is the only thing in the repository that exercises it at that
- * size. A fixture graph would pass this suite on the day a demo grew a
- * node type the reader cannot classify.
+ * is to survive whatever a page hands it, and a fixture graph would pass
+ * this suite on the day a demo grew a node type the reader cannot
+ * classify. That applies to every reader case below and it is why they
+ * are built from the demos' own builders.
+ *
+ * THE LENS IS THE EXCEPTION, and deliberately. Its tests are about bounds
+ * and zoom, which no node type enters into; what they need is a graph
+ * wide enough that the flat floor cannot show it. That used to be the
+ * racetrack demo's 238-node graph purely because it was the biggest thing
+ * in the repository — a coupling that made a viewport assertion depend on
+ * which demos existed. It is now `tests/support/wideGraph.ts`.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -35,6 +42,7 @@ import { makeTrackSpline } from "../demos/road/spline.js";
 // of `road` and its module names are identical on purpose. See the header
 // of demos/simple-road/main.ts.
 import { buildRoadGraph as buildSimpleRoadGraph } from "../demos/simple-road/graph.js";
+import { RETIRED_WIDE_SUBJECT, buildWideGraph } from "./support/wideGraph.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
@@ -78,6 +86,24 @@ const CASES: { name: string; json: SerializedGraph }[] = demoGraphs().map((g) =>
   name: g.name,
   json: serializeGraph(g.graph),
 }));
+
+/**
+ * The lens' wide subject, which is NOT one of the demos.
+ *
+ * The reader cases above stay on the demos' real builders for the reason
+ * this file's header gives. The lens is a different question — bounds and
+ * zoom, with no node type in it — and taking its subject from whichever
+ * demo happened to be biggest is what let one of these assertions be
+ * written as `CASES[CASES.length - 1]` and silently change meaning when a
+ * demo was added after it. See `tests/support/wideGraph.ts`.
+ */
+const WIDE = serializeGraph(buildWideGraph());
+
+/** Bounds and preview rows for a serialized graph, as the panel takes them. */
+function boundsOf(json: SerializedGraph): ReturnType<typeof contentBounds> {
+  const pic = readGraph(json);
+  return contentBounds(pic.nodes, new Map([...pic.previews].map(([id, r]) => [id, r.length])));
+}
 
 describe("the demos' graphs reach the panel", () => {
   it.each(CASES)("$name serializes and reads into a picture", ({ json }) => {
@@ -141,16 +167,52 @@ describe("the demos' graphs reach the panel", () => {
 describe("the lens", () => {
   const rect = { width: 800, height: 500, left: 0, top: 0 } as DOMRect;
 
+  /**
+   * THE STAND-IN IS STILL STANDING IN FOR SOMETHING.
+   *
+   * A fixture nobody has compared to the thing it replaced is just a
+   * different graph, and the comparison cannot be made later — the
+   * subject is being deleted. So its measurements are pinned here, taken
+   * while both existed, and the fixture is checked against them.
+   *
+   * WIDTH IS THE PROPERTY THAT MATTERS. `zoomFloor` lowers `MIN_ZOOM`
+   * only when the content cannot fit above it, so a subject that is not
+   * genuinely wide makes every assertion below pass for the wrong reason.
+   */
+  it("stands where the retired subject stood", () => {
+    const b = boundsOf(WIDE);
+    expect(b).not.toBeNull();
+    const w = b as NonNullable<typeof b>;
+
+    // The same width, to within a column.
+    expect(Math.abs(w.w - RETIRED_WIDE_SUBJECT.widthUnits)).toBeLessThan(300);
+
+    // And the same regime: it clears the flat floor, by at least as much
+    // as the graph it replaced did.
+    const fit = fitZoom(w, rect);
+    expect(fit).toBeLessThan(MIN_ZOOM);
+    expect(fit).toBeLessThanOrEqual(rect.width / RETIRED_WIDE_SUBJECT.widthUnits + 1e-9);
+  });
+
+  /**
+   * THE CONTROL. The assertions above are only about a wide graph if a
+   * graph that is NOT wide fails them — otherwise `fitZoom < MIN_ZOOM`
+   * could be true of everything and prove nothing. The road demo's graph
+   * is ten nodes and fits this viewport at about a third.
+   */
+  it("does not clear the floor for an ordinary demo graph", () => {
+    const road = CASES.find((c) => c.name === "road/verges");
+    const b = boundsOf((road as NonNullable<typeof road>).json);
+    expect(fitZoom(b as NonNullable<typeof b>, rect)).toBeGreaterThan(MIN_ZOOM);
+    expect(zoomFloor(b, rect)).toBe(MIN_ZOOM);
+  });
+
   it("frames a whole graph inside the viewport", () => {
-    const wide = CASES.find((c) => c.name === "racetrack/lap");
-    const { json } = wide as NonNullable<typeof wide>;
-    const pic = readGraph(json);
-    const rows = new Map([...pic.previews].map(([id, r]) => [id, r.length]));
-    const b = contentBounds(pic.nodes, rows);
+    const b = boundsOf(WIDE);
     expect(b).not.toBeNull();
     // With the floor an interactive view uses: `zoomFloor` is exactly "far
     // enough out to see everything", so framing at it must put everything
-    // inside the viewport for the racetrack's 14.5-to-1 graph too.
+    // inside the viewport for a graph this wide too.
     const view = framed(b, rect, { floor: zoomFloor(b, rect) });
     const w = b as NonNullable<typeof b>;
     expect(view.x + w.minX * view.z).toBeGreaterThanOrEqual(0);
@@ -172,15 +234,12 @@ describe("the lens", () => {
   });
 
   it("lowers the floor to fit a graph too wide for the flat one", () => {
-    // Named, not positional, as above: `CASES[CASES.length - 1]` meant
-    // "the racetrack", which is only the last case until a demo is added
-    // after it — and then the assertion silently changes what it is about.
-    const wide = CASES.find((c) => c.name === "racetrack/lap");
-    const { json } = wide as NonNullable<typeof wide>;
-    const pic = readGraph(json);
-    const rows = new Map([...pic.previews].map(([id, r]) => [id, r.length]));
-    const b = contentBounds(pic.nodes, rows);
-    // The racetrack's graph fits this viewport at about 0.03. A flat 0.2
+    // This once read `CASES[CASES.length - 1]`, meaning "the racetrack"
+    // only until a demo was added after it, at which point the assertion
+    // silently changed what it was about. Naming the case fixed that; a
+    // subject that is not a demo at all removes the hazard.
+    const b = boundsOf(WIDE);
+    // A graph this wide fits this viewport at about 0.03. A flat 0.2
     // floor would let it be framed and then refuse to zoom back out to
     // that framing, which is a view with a home it will not return to.
     expect(zoomFloor(b, rect)).toBeLessThan(MIN_ZOOM);
