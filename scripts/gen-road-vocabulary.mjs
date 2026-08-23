@@ -76,6 +76,16 @@ const kit = JSON.parse(readFileSync(src, "utf8"));
 // measured behaviour and would sit in the catalogue doing nothing.
 const source = kit.assets.filter((a) => a.where);
 
+/** Round a box list, and keep nothing that says where it stood. */
+const trim = (boxes) =>
+  (boxes ?? []).map((b) => ({
+    min: b.min.map((v) => r(v, 3)),
+    max: b.max.map((v) => r(v, 3)),
+    ...(b.role ? { role: b.role } : {}),
+    ...(b.thickness ? { thickness: r(b.thickness, 3) } : {}),
+  }));
+
+const idOf = new Map(source.map((a, i) => [a.id, i]));
 const perShape = new Map();
 const assets = source.map((a, i) => {
   const shape = a.shape ?? "block";
@@ -111,14 +121,54 @@ const assets = source.map((a, i) => {
         tight: r(a.where.affinity.tight, 3),
       },
     },
-    boxes: (a.boxes ?? []).map((b) => ({
-      min: b.min.map((v) => r(v, 3)),
-      max: b.max.map((v) => r(v, 3)),
-      ...(b.role ? { role: b.role } : {}),
-      ...(b.thickness ? { thickness: r(b.thickness, 3) } : {}),
-    })),
+    // NO BOXES ON THE ASSET. Its one representative pose is redundant once
+    // every recorded instance ships its own, and the instances are the
+    // correct ones — see the note on `placements` below.
+    // EVERY RECORDED POSE OF THIS ASSET, and nothing about where it stood.
+    //
+    // The format stores no rotation, so an asset's own box list is one
+    // representative pose — and a generator that draws from it stamps the
+    // same object at the same yaw all the way round a lap. But each
+    // recorded instance carries its OWN correct boxes, and on this kit 362
+    // instances give 361 distinct box sets: the yaw the format did not
+    // store survives in the shapes.
+    //
   };
 });
+
+/**
+ * The recorded instances: which asset, where it stood, and its own boxes.
+ *
+ * WHY THE POSITIONS SHIP. A layout only means anything paired with the
+ * track it was authored on — "just before the hairpin" is the content,
+ * and the hairpin is not ours. The demo generates its own spline, of a
+ * different length with corners in different places, so this sequence
+ * lands on geometry it was never made for and reproduces nothing anybody
+ * could recognise or rebuild. That is exactly what makes it good
+ * evidence: real art on a lap it never saw, which is the whole test of
+ * the track-frame contract.
+ *
+ * TWO FIELDS ARE DROPPED BECAUSE THEY DESCRIBE THE TRACK, NOT THE ART.
+ * Each instance also recorded the `curvature` and `bank` of the original
+ * centreline at its station, and 362 of those pairs is a coarse profile
+ * of that circuit's shape — the one thing in the source file that is
+ * their geometry rather than their objects. Nothing reads them.
+ *
+ * And the boxes here are the reason the generated dressing can stop
+ * looking stamped: the format stores no rotation, so an asset has one
+ * representative pose, but each instance's own boxes are correct. On this
+ * kit 362 instances give 361 distinct box sets — the yaw the format never
+ * stored, surviving in the shapes.
+ */
+const placements = (kit.placements ?? [])
+  .filter((pl) => pl.boxes?.length)
+  .map((pl) => ({
+    asset: idOf.get(pl.asset) ?? 0,
+    station: r(pl.station, 3),
+    lateral: r(pl.lateral, 3),
+    height: r(pl.height, 3),
+    boxes: trim(pl.boxes),
+  }));
 
 const doc = {
   note:
@@ -133,11 +183,12 @@ const doc = {
   },
   lapLengthW: r(kit.track.lapLengthW, 3),
   assets,
+  placements,
 };
 
 writeFileSync(out, `${JSON.stringify(doc, null, 1)}\n`, "utf8");
 
-const boxes = assets.reduce((n, a) => n + a.boxes.length, 0);
+const boxes = placements.reduce((n, p) => n + p.boxes.length, 0);
 const shapes = [...perShape.entries()].map(([k, v]) => `${v} ${k}`).join(", ");
 console.log(
   `gen-road-vocabulary: ${assets.length} assets, ${boxes} boxes ` +

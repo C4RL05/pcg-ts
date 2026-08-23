@@ -46,6 +46,13 @@ export interface StationedPlacement extends AssetPlacement {
    * tiled from the same vocabulary the dressing draws on.
    */
   readonly cover?: boolean;
+  /**
+   * Which recorded pose of its asset to draw, if the caller has an
+   * opinion. L-6's cover does: a tunnel is the SAME piece repeated, so a
+   * run picks one pose and every piece in it uses that one. Scenery has
+   * no opinion and takes a pose per copy.
+   */
+  readonly pose?: number;
 }
 
 /**

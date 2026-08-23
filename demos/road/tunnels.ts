@@ -294,6 +294,13 @@ export function coverPlacements(plan: EnclosurePlan, lapW: number, seed: number)
   // corridor edge and the tunnel acquires a hole exactly where the driver
   // looks. Raising it here is what makes cover exempt from Z-1 honest:
   // it is exempt because it is already clear, not because it is special.
+  // ONE POSE FOR THE WHOLE RUN. Every recorded instance of an asset has
+  // its own box set — the yaw the format never stored — and drawing a
+  // fresh one per piece is right for scenery and wrong here. A tunnel is
+  // the same segment repeated; varying the shape along it reopens the
+  // seams the overlap was added to close, and a 17W covered stretch fell
+  // back to 8W the moment poses were drawn per piece.
+  const pose = Math.floor(rand(seed, Math.round(plan.startW * 31), 0x7091) * 1024);
   const measured = plan.asset.where?.height.median ?? 2;
   const baseH = Math.max(measured, CORRIDOR.ceilingW + plan.asset.size.tall / 2);
   // ROUNDED UP, SO PIECES OVERLAP RATHER THAN ABUT. Rounding to nearest
@@ -323,6 +330,7 @@ export function coverPlacements(plan: EnclosurePlan, lapW: number, seed: number)
         t,
         h: baseH + lift,
         station,
+        pose,
       });
     }
   }

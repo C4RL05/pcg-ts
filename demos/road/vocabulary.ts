@@ -62,7 +62,15 @@ export function shippedVocabulary(): Kit {
   return {
     track: { lapLengthW: measured.lapLengthW, halfWidthGameUnits: 1000 },
     assets: measured.assets as unknown as Kit["assets"],
-    placements: [],
+    // THE RECORDED INSTANCES, which do two jobs. They are the reference
+    // layer the page draws beside the generated dressing, and they are
+    // the pose library that stops every copy of an object facing the same
+    // way. What they are NOT is a level: a layout only means anything
+    // paired with the track it was authored on, and this demo generates
+    // its own spline — different length, corners in different places — so
+    // the sequence lands on geometry it was never made for. That is
+    // exactly what makes it good evidence rather than a copy.
+    placements: measured.placements as unknown as Kit["placements"],
   };
 }
 

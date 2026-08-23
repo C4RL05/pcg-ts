@@ -286,9 +286,12 @@ function disposeBuilt(): void {
  * replaced.
  */
 function buildReference(circuit: Circuit): InstancedMesh | undefined {
-  if (!measuredKit) return undefined;
+  // The measured kit if this machine has one, otherwise the recorded
+  // instances that ship with the page — the same art either way.
+  const from = measuredKit ?? shippedVocabulary();
+  if (from.placements.length === 0) return undefined;
   const lap = circuit.lap;
-  const boxes = placeKit(measuredKit, lap, (station, lateral, height) => {
+  const boxes = placeKit(from, lap, (station, lateral, height) => {
     const pose = poseAt(lap, station * lap.halfWidth);
     return {
       p: placeAt(lap, { station, lateral, height }).p,

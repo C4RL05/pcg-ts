@@ -201,6 +201,23 @@ function buildBoxes(
   const W = lap.halfWidth;
   const frameAt = frameLookup(lap);
   const boxes: PlacedBox[] = [];
+
+  // EVERY RECORDED POSE OF EACH ASSET, gathered from the kit's own
+  // instances. The format stores no rotation, so an asset has one
+  // representative box set and drawing every copy from it stamps the same
+  // object at the same yaw all the way round the lap. But each instance's
+  // boxes are correct, and on this kit 362 of them give 361 distinct
+  // sets — the yaw the format never stored, surviving in the shapes.
+  const poseOf = new Map<number, { min: number[]; max: number[]; role?: string; thickness?: number }[][]>();
+  for (const pl of (kit.placements ?? []) as unknown as {
+    asset: number;
+    boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[];
+  }[]) {
+    if (!pl.boxes?.length) continue;
+    const list = poseOf.get(pl.asset) ?? [];
+    list.push(pl.boxes);
+    poseOf.set(pl.asset, list);
+  }
   for (const p of placements) {
     const frame = frameAt(p.station, p.t, p.h);
     const kitAsset = kit.assets.find((a) => (a as unknown as PlaceableAsset).id === p.asset.id) as
@@ -223,10 +240,13 @@ function buildBoxes(
     // So the vocabulary keeps them as `poses` and a placement draws one.
     // It is the measured art being used as what it is — a library of real
     // poses — rather than a layout, which is the part that stays behind.
-    const poses = kitAsset?.poses;
+    const poses = poseOf.get(p.asset.id) ?? kitAsset?.poses;
     const pose =
       poses && poses.length > 0
-        ? poses[Math.floor(rand(seed, Math.round(p.station * 97), 0x7053) * poses.length) % poses.length]
+        ? poses[
+            (p.pose ?? Math.floor(rand(seed, Math.round(p.station * 97), 0x7053) * poses.length)) %
+              poses.length
+          ]
         : (kitAsset?.boxes ?? []);
     for (const b of pose) {
       const c = [

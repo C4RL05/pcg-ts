@@ -124,15 +124,24 @@ describe("the committed vocabulary", () => {
       instances: number;
       size: { across: number; along: number; tall: number };
       where: unknown;
-      boxes: unknown[];
     }[];
     expect(assets.length).toBeGreaterThan(150);
 
-    // NO LEVEL LAYOUT. The arrangement of art around a real circuit is
-    // the one part of a measured kit that is a record of someone's
-    // choices rather than a fact about an object, and nothing here reads
-    // it — it feeds only the optional local reference overlay.
-    expect(kit.placements.length, "the committed vocabulary carries a layout").toBe(0);
+    // THE RECORDED INSTANCES SHIP, and they do two jobs: the reference
+    // layer beside the generated dressing, and the pose library that
+    // stops every copy of an object facing the same way.
+    //
+    // They are not a level. A layout only means anything paired with the
+    // track it was authored on, and this demo generates its own spline —
+    // a different length with corners in different places — so the
+    // sequence lands on geometry it was never made for. What IS dropped
+    // is the pair of fields that described that track rather than the
+    // art: the curvature and bank of the original centreline at each
+    // station, which 362 samples of would have profiled its shape.
+    expect(kit.placements.length).toBeGreaterThan(300);
+    for (const pl of kit.placements as unknown as Record<string, unknown>[]) {
+      expect(Object.keys(pl).sort()).toEqual(["asset", "boxes", "height", "lateral", "station"]);
+    }
 
     // NO SOURCE IDENTIFIERS. Names are this project's own shape
     // classification, which is why they all match this shape.
@@ -143,13 +152,25 @@ describe("the committed vocabulary", () => {
     }
 
     // AND THE STRUCTURE THAT MAKES A PLACEMENT READ AS SCENERY. The
-    // generated catalogue managed 1.7 boxes per asset and looked like a
-    // row of crates; this is the figure that fixed it.
-    const boxes = assets.reduce((n, a) => n + a.boxes.length, 0);
-    expect(boxes / assets.length, "not enough internal structure").toBeGreaterThan(3);
+    // generated catalogue managed 1.7 boxes per placement and looked like
+    // a row of crates; this is the figure that fixed it.
+    const boxes = (kit.placements as unknown as { boxes: unknown[] }[]).reduce(
+      (n, pl) => n + pl.boxes.length,
+      0,
+    );
+    expect(boxes / kit.placements.length, "not enough internal structure").toBeGreaterThan(3);
+
+    // POSES, NOT COPIES. If every instance of an asset carried the same
+    // boxes there would be no yaw variety and the whole point of shipping
+    // them would be lost.
+    const sigs = new Set(
+      (kit.placements as unknown as { boxes: unknown[] }[]).map((pl) => JSON.stringify(pl.boxes)),
+    );
+    expect(sigs.size / kit.placements.length, "instances are copies, not poses").toBeGreaterThan(0.9);
     console.log(
-      `committed vocabulary: ${assets.length} assets, ${boxes} boxes ` +
-        `(${(boxes / assets.length).toFixed(1)}/asset)`,
+      `committed vocabulary: ${assets.length} assets, ${kit.placements.length} recorded poses, ` +
+        `${boxes} boxes (${(boxes / kit.placements.length).toFixed(1)}/pose), ` +
+        `${sigs.size} distinct`,
     );
   });
 
