@@ -149,7 +149,21 @@ export function planEnclosure(
   corners: readonly Corner[],
   radiusAt: (stationW: number) => number,
   seed: number,
-  targetShare = ENCLOSE.sourceShare,
+  /** How much lap to put under cover, in W. */
+  budgetW: number,
+  /**
+   * The lowest quantile a stretch length may be drawn from.
+   *
+   * L-6 IS USUALLY ASKED FOR THE TAIL, NOT THE TOTAL. Measured by ray
+   * cast, the ordinary dressing on an overhead-rich kit already runs a
+   * fifth to a quarter of the lap under something — but in fifty-odd
+   * SHORT stretches with a heavy-tail share of zero, where the source has
+   * about fifteen stretches holding 39% of their covered length in the
+   * few longer than 10W. The total is right and the shape is wrong. So
+   * what enclosure has to supply is the long stretches the incidental
+   * cover never produces, and this is the knob that says so.
+   */
+  minQuantile = 0,
 ): { plans: EnclosurePlan[]; attempted: number; rejectedInCorner: number; rejectedOverlap: number } {
   const cover = coverCandidates(assets);
   const plans: EnclosurePlan[] = [];
@@ -157,7 +171,7 @@ export function planEnclosure(
     return { plans, attempted: 0, rejectedInCorner: 0, rejectedOverlap: 0 };
   }
 
-  const budget = targetShare * lapW;
+  const budget = budgetW;
   let covered = 0;
   let attempted = 0;
   let rejectedInCorner = 0;
@@ -168,7 +182,8 @@ export function planEnclosure(
   const maxTries = 2000;
   for (let k = 0; k < maxTries && covered < budget; k++) {
     attempted++;
-    const lengthW = Math.max(ENCLOSE.minLengthW, drawStretchLengthW(rand(seed, k, 0x6c01)));
+    const uLen = minQuantile + rand(seed, k, 0x6c01) * (1 - minQuantile);
+    const lengthW = Math.max(ENCLOSE.minLengthW, drawStretchLengthW(uLen));
     const startW = rand(seed, k, 0x6c02) * lapW;
 
     // L-6: never START inside a tight corner. Entering cover mid-corner
@@ -286,18 +301,152 @@ export function placeEnclosure(
   corners: readonly Corner[],
   radiusAt: (stationW: number) => number,
   seed: number,
-  targetShare = ENCLOSE.sourceShare,
+  budgetW: number,
+  minQuantile = 0,
 ): { placements: StationedPlacement[]; plans: EnclosurePlan[]; plannedShare: number } {
-  const { plans } = planEnclosure(assets, lapW, corners, radiusAt, seed, targetShare);
+  const { plans } = planEnclosure(assets, lapW, corners, radiusAt, seed, budgetW, minQuantile);
   const placements: StationedPlacement[] = [];
   for (const p of plans) placements.push(...coverPlacements(p, lapW, seed));
   const plannedShare = plans.reduce((a, p) => a + p.lengthW, 0) / lapW;
   return { placements, plans, plannedShare };
 }
 
+/**
+ * How much LONG cover to add, given what the lap already has.
+ *
+ * TWO TARGETS, AND THE FIRST DRAFT COLLAPSED THEM INTO ONE. L-6 asks for
+ * a total (10-25% of lap, population median 10.5%) and the measurement
+ * behind it carries a shape (39% of covered length in stretches longer
+ * than 10W). Solving only for the shape gives
+ * `x = (f*total - long)/(1 - f)`, which is correct arithmetic and wrong:
+ * on a lap with NO cover it returns zero, because 39% of nothing is
+ * nothing. A bare circuit would have got no tunnels at all and the
+ * formula would have looked right.
+ *
+ * So the total target comes first — lift the lap to the population share
+ * if it is under, leave it alone if it is already above — and the shape
+ * target is then a fraction of THAT rather than of what happens to be
+ * there. The ceiling caps both: L-6 says at most a quarter of the lap may
+ * be enclosed, and satisfying the shape by breaking the total is not
+ * satisfying L-6.
+ *
+ * Returns zero when there is no room for even one long stretch. A budget
+ * of half a half-width cannot buy a 10W tunnel, and spending it anyway
+ * would overshoot the ceiling by twenty times the budget.
+ */
+export function longCoverBudgetW(
+  totalCoveredW: number,
+  longCoveredW: number,
+  lapW: number,
+): number {
+  const targetTotalW =
+    Math.min(ENCLOSE.ruleShare[1], Math.max(ENCLOSE.sourceShare, totalCoveredW / lapW)) * lapW;
+  const targetLongW = ENCLOSE.sourceLongShare * targetTotalW;
+  const room = ENCLOSE.ruleShare[1] * lapW - totalCoveredW;
+  const budget = Math.min(targetLongW - longCoveredW, room);
+  return budget >= ENCLOSE.longW ? budget : 0;
+}
+
+/**
+ * The quantile at which a drawn stretch first exceeds `longW`.
+ *
+ * DERIVED FROM THE DISTRIBUTION, not chosen: `drawStretchLengthW` crosses
+ * 10W at u = 0.9198, which sits neatly against the source's own figure
+ * that 6% of its stretches are that long. Drawing above it gives 12.1W at
+ * 0.93, 17.6W at 0.95 and 37.2W at 0.99 — the tunnels, and only the
+ * tunnels.
+ */
+export const LONG_QUANTILE = 0.92;
+
 /** The share of covered length held by stretches longer than `longW`. */
 export function longStretchShare(lengths: readonly number[]): number {
   const total = lengths.reduce((a, b) => a + b, 0);
   if (total <= 0) return 0;
   return lengths.filter((l) => l > ENCLOSE.longW).reduce((a, b) => a + b, 0) / total;
+}
+
+/**
+ * Bring an over-enclosed lap back under L-6's ceiling.
+ *
+ * WHY A REDUCTION EXISTS AT ALL. L-6 reads as a rule about building
+ * tunnels, and the top-up above treats it that way. But it is stated as a
+ * range — at most a quarter of the lap — and on a kit whose vocabulary is
+ * half overhead pieces the ORDINARY dressing sails past that without any
+ * enclosure pass running: 27.6% on one seed, from nothing but each asset
+ * being placed where its own instances sat. Adding cannot fix that. The
+ * lap needs less cover, not more, and every other threshold in this demo
+ * has a repair rather than a hope.
+ *
+ * IT MOVES RATHER THAN DROPS, so D-1's count stays exact — the same
+ * choice D-4's coverage repair and Z-3's mix both make. An overhead piece
+ * pushed out past the corridor is still on the lap and still dressing it;
+ * it just no longer roofs the racing line.
+ *
+ * COVER IS NEVER TOUCHED. L-6's own runs are the part of the enclosure
+ * that is deliberate, and taking them apart to satisfy L-6 would be
+ * absurd. What comes out is the incidental cover the dressing produced
+ * without meaning to.
+ *
+ * The caller supplies `shareOf` because measuring means building boxes
+ * and casting rays, which this module has no business doing — and because
+ * the measurement has to be the SAME one the gate uses. A reduction
+ * scored against its own private estimate of enclosure is a reduction
+ * that stops when it thinks it is done.
+ */
+export function reduceEnclosure<T extends StationedPlacement>(
+  placements: readonly T[],
+  shareOf: (ps: readonly T[]) => number,
+  /**
+   * How many overhead pieces must survive.
+   *
+   * WHICH RULE YIELDS, STATED. Z-3 wants a tenth to a fifth of the
+   * population in the `over` band and L-6 wants at most a quarter of the
+   * lap roofed, and on a kit whose vocabulary is half overhead pieces
+   * those two are not jointly satisfiable: trimming to L-6's ceiling
+   * empties the band below Z-3's floor, Z-3 refills it, and the pair
+   * oscillate until the round bound stops them — six rounds, seventy-odd
+   * mix moves, and a lap that never settles. So the reduction stops at
+   * Z-3's floor and L-6 goes unsatisfied by however much is left. A rule
+   * that yields visibly is worth more than two rules that fight.
+   */
+  keepOverhead: number,
+  ceiling = ENCLOSE.ruleShare[1],
+  maxPasses = 6,
+): { placements: T[]; moves: number; before: number; after: number; blockedByBandMix: boolean } {
+  let out = [...placements];
+  const before = shareOf(out);
+  let moves = 0;
+  let after = before;
+  let blockedByBandMix = false;
+
+  for (let pass = 0; pass < maxPasses && after > ceiling; pass++) {
+    // Everything sitting over the corridor that L-6 did not put there.
+    const overhead = out
+      .map((p, i) => ({ p, i }))
+      .filter(
+        ({ p }) =>
+          !p.cover &&
+          Math.abs(p.t) < ENCLOSE.coverW &&
+          p.h >= CORRIDOR.ceilingW &&
+          p.h < 6,
+      )
+      // Most central first: the pieces doing most of the roofing.
+      .sort((a, b) => Math.abs(a.p.t) - Math.abs(b.p.t));
+    if (overhead.length <= keepOverhead) {
+      blockedByBandMix = true;
+      break;
+    }
+
+    // A tenth at a time, so the repair cannot overshoot the ceiling by
+    // clearing the whole band on its first pass — and never past the
+    // floor Z-3 needs.
+    const batch = Math.max(1, Math.min(overhead.length - keepOverhead, Math.ceil(overhead.length / 10)));
+    for (let k = 0; k < batch && k < overhead.length; k++) {
+      const { p, i } = overhead[k];
+      out[i] = { ...p, t: Math.sign(p.t || 1) * (ENCLOSE.coverW + p.asset.size.across / 2) };
+      moves++;
+    }
+    after = shareOf(out);
+  }
+  return { placements: out, moves, before, after, blockedByBandMix };
 }

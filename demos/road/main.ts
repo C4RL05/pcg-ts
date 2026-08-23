@@ -498,6 +498,7 @@ const statStation = overlay.addStat("station");
 const statLap = overlay.addStat("lap length");
 const statProps = overlay.addStat("dressing");
 const statReference = overlay.addStat("reference");
+const statCover = overlay.addStat("enclosure");
 const statCorners = overlay.addStat("corner language");
 const statRules = overlay.addStat("repairs");
 const statCook = overlay.addStat("cook");
@@ -532,6 +533,15 @@ async function recook(): Promise<void> {
       // to the cull are on the same line because L-1 runs after them and
       // has the last word — a marker can be placed correctly and still
       // not survive.
+      // MEASURED, not planned. L-6's only real claim is what a ray cast
+      // finds, and the dressing already encloses a good deal of lap
+      // before any enclosure run is placed — so the interesting numbers
+      // are the before and after, not the intent.
+      statCover(
+        `${(100 * s.enclosureBefore).toFixed(1)}% -> ${(100 * s.enclosureAfter).toFixed(1)}% of lap · ` +
+          `+${s.coverStretches} runs (${s.coverPieces} pieces) · ${s.enclosureTrims} trimmed` +
+          (s.enclosureBlocked ? " · held back by Z-3" : ""),
+      );
       statCorners(
         `${s.corners} corners (${s.tightCorners} tight) · ` +
           `L-2 ${s.markersConverted}+${s.markersAdded} · ` +
@@ -545,6 +555,7 @@ async function recook(): Promise<void> {
       );
     } else {
       statProps(`${next.props.pointCount} placeholder rows`);
+      statCover("no kit.json — no cover");
       statCorners("no kit.json — no vocabulary");
       statRules("no kit.json — rules idle");
     }

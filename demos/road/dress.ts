@@ -41,6 +41,7 @@ import {
   type PlaceableAsset,
   bucketOf,
   placeAsset,
+  Z3,
   repairBandMix,
 } from "./assets.js";
 import { type Corner, cornersOf, radiusAtW } from "./corners.js";
@@ -57,7 +58,8 @@ import {
   reserveMarkers,
 } from "./legibility.js";
 import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
-import { placeEnclosure } from "./tunnels.js";
+import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
+import { measureEnclosure } from "./enclosure.js";
 import { makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
 import { resolveCorridor } from "./zones.js";
 
@@ -96,8 +98,16 @@ export interface DressStats {
   /** L-6: runs of cover placed, and the pieces they are tiled from. */
   readonly coverStretches: number;
   readonly coverPieces: number;
-  /** The share of lap the plan intended. What it ACHIEVES is measured. */
+  /** The share of lap the top-up intended. What it ACHIEVES is measured. */
   readonly plannedEnclosure: number;
+  /** Overhead pieces moved out to bring an over-enclosed lap under. */
+  readonly enclosureTrims: number;
+  /** L-6 left unsatisfied because trimming further would break Z-3. */
+  readonly enclosureBlocked: boolean;
+  /** Enclosure the ORDINARY dressing already produced, before L-6 ran. */
+  readonly enclosureBefore: number;
+  /** And what the finished lap measures. L-6's only real claim. */
+  readonly enclosureAfter: number;
   /** How many validate-and-feed-back rounds the tail needed. */
   readonly rounds: number;
   /** Whether it reached a fixed point, or ran out of rounds still repairing. */
@@ -143,6 +153,52 @@ export function frameLookup(lap: Lap): (s: number, t: number, h: number) => Fram
   };
 }
 
+
+/**
+ * Each placement's own box decomposition, put on the lap.
+ *
+ * A FUNCTION BECAUSE IT RUNS TWICE. L-6 has to know how much of the lap
+ * the dressing ALREADY covers before it can decide how much to add, and
+ * that is a question about boxes rather than about placements — a
+ * placement is a point, and whether something spans the corridor is a
+ * fact about its geometry.
+ */
+function buildBoxes(kit: Kit, lap: Lap, placements: readonly StationedPlacement[]): PlacedBox[] {
+  const W = lap.halfWidth;
+  const frameAt = frameLookup(lap);
+  const boxes: PlacedBox[] = [];
+  for (const p of placements) {
+    const frame = frameAt(p.station, p.t, p.h);
+    const kitAsset = kit.assets.find((a) => (a as unknown as PlaceableAsset).id === p.asset.id) as
+      | { boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[] }
+      | undefined;
+    for (const b of kitAsset?.boxes ?? []) {
+      const c = [
+        ((b.min[0] + b.max[0]) / 2) * W,
+        ((b.min[1] + b.max[1]) / 2) * W,
+        ((b.min[2] + b.max[2]) / 2) * W,
+      ];
+      boxes.push({
+        centre: [
+          frame.p[0] + frame.across[0] * c[0] + frame.dir[0] * c[1] + frame.up[0] * c[2],
+          frame.p[1] + frame.across[1] * c[0] + frame.dir[1] * c[1] + frame.up[1] * c[2],
+          frame.p[2] + frame.across[2] * c[0] + frame.dir[2] * c[1] + frame.up[2] * c[2],
+        ],
+        size: [
+          Math.max((b.max[0] - b.min[0]) * W, 1e-3),
+          Math.max((b.max[1] - b.min[1]) * W, 1e-3),
+          Math.max((b.max[2] - b.min[2]) * W, 1e-3),
+        ],
+        basis: { across: frame.across, along: frame.dir, up: frame.up },
+        role: b.role ?? "mass",
+        cover: p.cover === true,
+        thickness: b.thickness ?? 0,
+      });
+    }
+  }
+  return boxes;
+}
+
 /** How many corners are still correctly marked, and how many rulers hold. */
 function legibilityHealth(
   placements: readonly StationedPlacement[],
@@ -179,23 +235,6 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     markers ? [markers.sharp.id, markers.open.id, markers.brake.id] : [],
   );
 
-  // 0.5. L-6's enclosure, which §9 puts at step 5 — BEFORE the set-piece,
-  //      structure and rhythm passes, because cover is what the rest is
-  //      dressed around rather than something laid over it afterwards.
-  //
-  //      TARGETED AT THE POPULATION, NOT AT THE EXEMPLAR. The circuit
-  //      this vocabulary is measured from is 43% enclosed; the population
-  //      median is 10.5% and the rule asks for 10-25%. Building to 43%
-  //      would be building the outlier again, which this demo has already
-  //      done once and paid for.
-  const enclosure = placeEnclosure(
-    all,
-    lap.lengthW,
-    corners,
-    (s) => radiusAtW(lap, s),
-    seed,
-  );
-
   // 1. Stations.
   const st = makeStationsDetailed(lap.lengthW, seed);
 
@@ -208,12 +247,6 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     const p = placeAsset(pool, bucket, seed, i);
     if (p) placements.push({ ...p, station: s });
   }
-
-  // Cover joins the population here, after the station pass and before
-  // every rule that has an opinion about the finished lap. It counts
-  // toward D-1 and D-4 — it is real dressing a driver passes — and is
-  // excluded from Z-3's mix, for the reason on `StationedPlacement.cover`.
-  placements.push(...enclosure.placements.map((p) => ({ ...p, cover: true as const })));
 
   // 3. Z-1, by size. The asset's own lateral distribution reaches inside
   //    the corridor for some assets, which is what makes this reachable.
@@ -266,6 +299,12 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
   let landmarkFixes = 0;
   let mixMoves = 0;
   let worstGapW = 0;
+  let coverStretches = 0;
+  let coverPieces = 0;
+  let plannedEnclosure = 0;
+  let enclosureBefore = -1;
+  let enclosureTrims = 0;
+  let enclosureBlocked = false;
   let converged = false;
   while (rounds < MAX_REPAIR_ROUNDS) {
     rounds++;
@@ -322,6 +361,62 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     pushedOut += cull.moved;
     dropped += cull.dropped;
 
+    // L-6, AS A TOP-UP AND AFTER THE CULL.
+    //
+    // §9 puts enclosure at step 5 and places it before anything else is
+    // dressed, which assumes cover comes only from the enclosure pass. It
+    // does not: measured by ray cast, the ordinary dressing on an
+    // overhead-rich kit already runs a fifth to a third of the lap under
+    // something, from nothing but the per-asset placement of a vocabulary
+    // that happens to be half overhead pieces.
+    //
+    // AND IT HAS TO BE MEASURED HERE RATHER THAN BEFORE THE CULL. Before
+    // it the same lap reads 34.2%; after it, 24.8% — L-1 pushes overhead
+    // pieces outward and takes nine points of enclosure with them.
+    // Topping up against the pre-cull figure adds nothing and then
+    // watches the cull open the roof, which is the same mistake as
+    // repairing coverage against a lap the cull has not run on yet.
+    //
+    // WHAT IT SUPPLIES IS THE TAIL, NOT THE TOTAL. That incidental cover
+    // is fifty-odd SHORT stretches with a heavy-tail share of ZERO, where
+    // the source holds 39% of its covered length in the few longer than
+    // 10W. The total can be right while the shape is wrong: what the
+    // dressing never produces on its own is a tunnel.
+    const already = measureEnclosure(lap, buildBoxes(kit, lap, placements));
+    if (enclosureBefore < 0) enclosureBefore = already.share;
+    const coveredW = already.share * lap.lengthW;
+    const budgetW = longCoverBudgetW(coveredW, already.heavyTailShare * coveredW, lap.lengthW);
+    let addedCover = 0;
+    if (budgetW > 0) {
+      const add = placeEnclosure(
+        all,
+        lap.lengthW,
+        corners,
+        (st) => radiusAtW(lap, st),
+        seed + rounds,
+        budgetW,
+        LONG_QUANTILE,
+      );
+      placements = [...placements, ...add.placements.map((p) => ({ ...p, cover: true as const }))];
+      coverStretches += add.plans.length;
+      coverPieces += add.placements.length;
+      plannedEnclosure += add.plannedShare;
+      addedCover = add.plans.length;
+    }
+
+    // And the other end of the range. See `reduceEnclosure`: on a kit
+    // whose vocabulary is half overhead pieces the dressing sails past
+    // L-6's ceiling with no enclosure pass having run at all, and no
+    // amount of adding fixes a lap that already has too much roof.
+    const reduce = reduceEnclosure(
+      placements,
+      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps)).share,
+      Math.ceil(Z3.over.rule[0] * placements.length),
+    );
+    placements = reduce.placements;
+    enclosureTrims += reduce.moves;
+    if (reduce.blockedByBandMix) enclosureBlocked = true;
+
     // D-4, on the lap the cull actually left. The station process
     // enforces coverage too, but at step 1 — before a single one of the
     // gaps it is meant to close has been opened. It matters: under a
@@ -362,7 +457,9 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
       cov.moves === 0 &&
       marks.moves === 0 &&
       mix.moves === 0 &&
-      fixedThisRound === 0
+      fixedThisRound === 0 &&
+      addedCover === 0 &&
+      reduce.moves === 0
     ) {
       converged = true;
       break;
@@ -371,38 +468,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
 
   const after = legibilityHealth(placements, corners, markers, lap.lengthW);
 
-  // Finally: each placement's own box decomposition, put on the lap.
-  const W = lap.halfWidth;
-  const boxes: PlacedBox[] = [];
-  for (const p of placements) {
-    const frame = frameAt(p.station, p.t, p.h);
-    const kitAsset = kit.assets.find((a) => (a as unknown as PlaceableAsset).id === p.asset.id) as
-      | { boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[] }
-      | undefined;
-    for (const b of kitAsset?.boxes ?? []) {
-      const c = [
-        ((b.min[0] + b.max[0]) / 2) * W,
-        ((b.min[1] + b.max[1]) / 2) * W,
-        ((b.min[2] + b.max[2]) / 2) * W,
-      ];
-      boxes.push({
-        centre: [
-          frame.p[0] + frame.across[0] * c[0] + frame.dir[0] * c[1] + frame.up[0] * c[2],
-          frame.p[1] + frame.across[1] * c[0] + frame.dir[1] * c[1] + frame.up[1] * c[2],
-          frame.p[2] + frame.across[2] * c[0] + frame.dir[2] * c[1] + frame.up[2] * c[2],
-        ],
-        size: [
-          Math.max((b.max[0] - b.min[0]) * W, 1e-3),
-          Math.max((b.max[1] - b.min[1]) * W, 1e-3),
-          Math.max((b.max[2] - b.min[2]) * W, 1e-3),
-        ],
-        basis: { across: frame.across, along: frame.dir, up: frame.up },
-        role: b.role ?? "mass",
-        cover: p.cover === true,
-        thickness: b.thickness ?? 0,
-      });
-    }
-  }
+  const boxes = buildBoxes(kit, lap, placements);
 
   return {
     boxes,
@@ -428,9 +494,13 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
       converged,
       markersLostToCull: Math.max(0, after.unmarked - before.unmarked),
       rulersLostToCull: Math.max(0, after.brokenRulers - before.brokenRulers),
-      coverStretches: enclosure.plans.length,
-      coverPieces: enclosure.placements.length,
-      plannedEnclosure: enclosure.plannedShare,
+      coverStretches,
+      coverPieces,
+      plannedEnclosure,
+      enclosureTrims,
+      enclosureBlocked,
+      enclosureBefore: Math.max(0, enclosureBefore),
+      enclosureAfter: measureEnclosure(lap, boxes).share,
       landmarkFixes: marks.moves + landmarkFixes,
       mixMoves,
       cookMs: performance.now() - t0,
