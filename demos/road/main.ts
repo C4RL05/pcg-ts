@@ -193,6 +193,20 @@ async function loadReference(): Promise<void> {
  * catalogue has demonstrated nothing.
  */
 function dressingKit(lap: { lengthW: number }): Kit {
+  // THE MEASURED KIT WHEN THERE IS ONE. The generated vocabulary exists
+  // so the PUBLISHED page has something to dress from; making it
+  // unconditional was a mistake that confused what ships with what runs,
+  // and it cost most of the demo's quality wherever a kit was available.
+  //
+  // Measured on the same lap under the same rules: dressing from the
+  // measured kit gives 2033 boxes at 5.8 per placement from 153 distinct
+  // assets, against 580 boxes at 1.7 per placement from 90. The real
+  // vocabulary's own box decompositions are what make a placement read as
+  // a grandstand rather than as a crate — and 5.8 against the reference
+  // layer's 6.1 is why the generated dressing used to sit beside the
+  // measured art without looking out of place.
+  if (measuredKit) return measuredKit;
+
   // KEYED ON THE SEED, so changing it changes the vocabulary as well as
   // the placement. A cached catalogue would make every seed dress the
   // same circuit from the same objects, which is half a demonstration.
