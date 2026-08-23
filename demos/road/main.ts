@@ -502,11 +502,11 @@ const state = {
   density: 1,
   seed: 1,
   /** World units per second. */
-  speed: 45,
+  speed: 100,
   chaseBack: 16,
   chaseHeight: 6,
   mapOn: true,
-  mapZoom: 1,
+  mapZoom: 0.9,
   referenceOn: true,
   paused: false,
   /** Distance travelled round the lap, in world units. */
