@@ -798,6 +798,22 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
   </section>
 
   <section>
+    <p class="eyebrow">Determinism</p>
+    <h2>What byte-identical means, and where it stops</h2>
+    <p>Every random decision flows from a seed through one hash chain, so the same
+    graph and seed produce byte-identical output across runs, platforms, cook orders
+    and streaming paths. That is a promise about one path re-run — same seed, any cook
+    order, any budget, any machine.</p>
+    <p><strong>Cooking on a GPU device is the one documented exception</strong>, and it
+    is an exception with a published size rather than a disclaimer: elementwise
+    arithmetic is bit-exact, and the noise interiors round in f32 within the per-family
+    tolerances the parity table in <code>docs/authoring.md</code> states. The CPU is the
+    reference and the device is a documented approximation of it; whatever cannot run
+    on the device falls back to the CPU with a machine-readable reason rather than
+    silently doing something else.</p>
+  </section>
+
+  <section>
     <p class="eyebrow">Next</p>
     <h2>Where to go from here</h2>
     <p>The <a href="./manual.html">user manual</a> is the long form of all of

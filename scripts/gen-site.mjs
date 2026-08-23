@@ -72,6 +72,24 @@ if (typeof docs.renderSiteVersion !== "function" || !Array.isArray(docs.SITE_PAG
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const version = pkg.version;
 
+/**
+ * The landing page's opening paragraphs, from the README.
+ *
+ * Read once, before the loop: it is one source for one hole, and a page
+ * that has no hole simply does not get one — only `docs/index.html`
+ * borrows it today, and `renderSiteLede` is only called where the markers
+ * are. A missing README block, or markdown the converter does not
+ * implement, stops the build here rather than publishing its own syntax.
+ */
+let ledeHtml;
+try {
+  const markdown = readFileSync(join(root, docs.LEDE_SOURCE), "utf8");
+  ledeHtml = docs.ledeToHtml(docs.extractLede(markdown, docs.LEDE_SOURCE), docs.LEDE_SOURCE);
+} catch (err) {
+  console.error(`gen-site: ${err && err.message ? err.message : String(err)}`);
+  process.exit(1);
+}
+
 const changed = [];
 let stamps = 0;
 
@@ -92,6 +110,11 @@ for (const page of docs.SITE_PAGES) {
   let result;
   try {
     result = docs.renderSiteVersion(html, version, file);
+    // The lede goes in wherever a page opened a hole for it.
+    if (result.html.includes("<!--pcg:lede-->")) {
+      const withLede = docs.renderSiteLede(result.html, ledeHtml, file);
+      result = { html: withLede.html, stamps: result.stamps + withLede.stamps };
+    }
   } catch (err) {
     console.error(`gen-site: ${err && err.message ? err.message : String(err)}`);
     process.exit(1);

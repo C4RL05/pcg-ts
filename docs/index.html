@@ -749,9 +749,22 @@
   <section>
     <p class="eyebrow">What it is</p>
     <h2>A node-graph PCG library, deterministic by construction</h2>
-    <p class="lead">pcg-ts generates content — scattered and filtered points, sampled surfaces and splines, resampled paths, networks over shared points, instanced geometry, streamed worlds around a moving camera — from <strong>seeded node graphs</strong> you build in code, in JSON, in the visual editor, or from the <code>pcg</code> command line.</p>
+    <!-- BORROWED FROM THE README, and generated into place: everything
+         between these markers is written in README.md and stamped here by
+         `npm run docs:site`. Editing it here is editing a build artifact —
+         the next docs run puts it back, and `src/docs/site.test.ts` fails
+         in the meantime. See LEDE_SOURCE in src/docs/site.ts.
+
+         The sentence that stood here listed six kinds of output in
+         forty-five words before saying how you build one. The README's
+         opening shows the recipe instead, and names the vocabulary as it
+         goes — which is what a first paragraph is for. -->
+    <!--pcg:lede-->
+      <p><strong>Build worlds out of rules instead of files.</strong> You write the recipe — scatter points over this ground, thin them out with noise, turn each survivor a random amount, put a tree on every one — and pcg-ts runs it. The recipe is a small graph of nodes; running it is called a <em>cook</em>. Feed it the same seed and you get the same world back, byte for byte, on any machine, forever.</p>
+      <p>pcg-ts is built for real-time use — cooking is budgeted and cancellable so it can run inside a frame, and the field grammar compiles to WGSL to run on a GPU device when one is there.</p>
+    <!--/pcg:lede-->
     <p>Any parameter can vary across space instead of being a constant: a value can be a function of where it lands, resolved per point.</p>
-    <p>Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. Cooking on the GPU device is the one documented exception: elementwise arithmetic is bit-exact, and the noise interiors round in f32 within published per-family tolerances.</p>
+    <p>Every random decision flows from a seed through one hash chain, so the same graph and seed produce <strong>byte-identical output</strong> across runs, platforms, cook orders, and streaming paths. Cooking on a GPU device is the one documented exception, and <a href="./architecture.html">architecture</a> states its tolerances.</p>
     <p>The heavy work moves to the GPU: field expressions compile to WGSL, and instance matrices are composed there and handed straight to three.js — without ever touching the CPU.</p>
     <p>It is built to be driven by AI agents as much as by humans: nodes carry machine-readable schemas, graphs serialize to stable JSON, and every error names the node, pin, or param at fault and states the fix.</p>
 

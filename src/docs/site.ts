@@ -55,6 +55,20 @@ const STAMP_KINDS: Record<string, (version: string) => string> = {
 const STAMP_KIND_NAMES = Object.keys(STAMP_KINDS).sort();
 
 /**
+ * `pcg:` markers that are NOT version stamps.
+ *
+ * The scanner below sees every marker in the namespace, which is what
+ * makes a typo'd kind an error rather than a silent no-op — so a second
+ * kind of marker cannot simply opt out of it. It is declared here
+ * instead: a BLOCK wraps generated MARKUP rather than a run of text, so
+ * the stamp rules (no angle brackets in the body, body rewritten with the
+ * version) do not apply. `scanStamps` still checks that it is paired and
+ * unnested, then leaves it to its own renderer — `renderSiteLede` is the
+ * one that exists.
+ */
+const BLOCK_KINDS = new Set(["lede"]);
+
+/**
  * Every `pcg:` marker in the document, opening or closing, in order.
  *
  * This is the scanner behind the validation: it sees ALL markers, so a
@@ -140,9 +154,9 @@ export function scanStamps(html: string, file: string): string[] {
     const kind = m[2] as string;
     const where = `${file}:${lineOf(html, m.index)}`;
 
-    if (!(kind in STAMP_KINDS)) {
+    if (!(kind in STAMP_KINDS) && !BLOCK_KINDS.has(kind)) {
       throw new Error(
-        `${where}: unknown version-stamp kind "${kind}". Valid kinds: ${STAMP_KIND_NAMES.join(", ")}.`,
+        `${where}: unknown pcg marker kind "${kind}". Version stamps: ${STAMP_KIND_NAMES.join(", ")}. Generated blocks: ${[...BLOCK_KINDS].sort().join(", ")}.`,
       );
     }
     if (!closing) {
@@ -165,6 +179,12 @@ export function scanStamps(html: string, file: string): string[] {
       );
     }
     const body = html.slice(open.index + `<!--pcg:${kind}-->`.length, m.index);
+    // A block's body IS markup, and its own renderer owns it. Pairing is
+    // checked above; the stamp rules below are not its rules.
+    if (BLOCK_KINDS.has(kind)) {
+      open = undefined;
+      continue;
+    }
     if (/[<>]/.test(body)) {
       throw new Error(
         `${where}: the <!--pcg:${kind}--> stamp opened on line ${lineOf(html, open.index)} wraps markup (${JSON.stringify(body)}). A stamp may only wrap the version text itself — put the markers inside the element, not around it.`,
@@ -188,6 +208,131 @@ function assertVersion(version: string, file: string): void {
       `${file}: refusing to stamp "${version}" — package.json's version is not a plain semver string. Fix package.json rather than relaxing the check; every stamped page would otherwise carry it.`,
     );
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * The lede, borrowed from the README
+ * ------------------------------------------------------------------ */
+
+/**
+ * The file the landing page's opening paragraphs are written in.
+ *
+ * ONE SOURCE, because two copies of a paragraph is two paragraphs. The
+ * README's opening is the best short statement of what this library is —
+ * it shows the recipe before it names the vocabulary, and it puts
+ * determinism in words a stranger already has — and the landing page had
+ * its own, longer, colder version of the same claims. Rather than paste
+ * it and let the two drift, the page carries a marked hole and the docs
+ * chain fills it.
+ */
+export const LEDE_SOURCE = "README.md";
+
+const LEDE_OPEN = "<!--pcg:lede-->";
+const LEDE_CLOSE = "<!--/pcg:lede-->";
+
+/**
+ * The lede's markdown, from between the markers in the README.
+ *
+ * `file` is used only in error messages.
+ */
+export function extractLede(markdown: string, file: string): string {
+  const open = markdown.indexOf(LEDE_OPEN);
+  const close = markdown.indexOf(LEDE_CLOSE);
+  if (open < 0 || close < 0 || close < open) {
+    throw new Error(
+      [
+        `${file}: no ${LEDE_OPEN} … ${LEDE_CLOSE} block, so the landing page's opening has no source.`,
+        "Wrap the opening paragraphs in those two markers, or remove the",
+        "matching hole from docs/index.html if the page should stop borrowing them.",
+      ].join("\n"),
+    );
+  }
+  return markdown.slice(open + LEDE_OPEN.length, close).trim();
+}
+
+/**
+ * The little of markdown this borrow needs, and NOTHING ELSE.
+ *
+ * Bold, italic and paragraph breaks are what the lede uses. Every other
+ * construct throws rather than passing through, because the failure it
+ * prevents is silent: an unimplemented `[link](url)` would reach the
+ * published page as literal brackets, and a page that renders its own
+ * source is worse than a build that stopped.
+ *
+ * Escaping runs FIRST and the inline markers are applied to the escaped
+ * text, so a `<` in the prose can never open a tag.
+ */
+export function ledeToHtml(markdown: string, file: string): string {
+  const paragraphs = markdown.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p !== "");
+  if (paragraphs.length === 0) {
+    throw new Error(`${file}: the lede block is empty.`);
+  }
+
+  return paragraphs
+    .map((paragraph) => {
+      for (const [pattern, what] of UNSUPPORTED) {
+        if (pattern.test(paragraph)) {
+          throw new Error(
+            [
+              `${file}: the lede uses ${what}, which the landing page's converter does not implement.`,
+              "It renders bold, italic and paragraph breaks and nothing else — see ledeToHtml",
+              "in src/docs/site.ts. Either reword the lede or teach the converter, but do not",
+              "leave it: unhandled markdown reaches the published page as its own syntax.",
+            ].join("\n"),
+          );
+        }
+      }
+      const escaped = paragraph
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replace(/\s*\n\s*/g, " ");
+      const inline = escaped
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+      return `      <p>${inline}</p>`;
+    })
+    .join("\n");
+}
+
+/** Markdown the converter refuses to guess at, and what to call it. */
+const UNSUPPORTED: readonly (readonly [RegExp, string])[] = [
+  [/\[[^\]]*\]\(/, "a link"],
+  [/`/, "a code span"],
+  [/^\s*[-*+]\s/m, "a list"],
+  [/^\s*#/m, "a heading"],
+  [/^\s*>/m, "a block quote"],
+  [/!\[/, "an image"],
+];
+
+/**
+ * Put `ledeHtml` into the page's marked hole.
+ *
+ * A block marker rather than the `[^<>]*` stamp body above: this one's
+ * content IS markup, so it cannot borrow that pattern's guarantee. What
+ * replaces it instead is a non-greedy span between two literal markers,
+ * checked to contain no second marker — the same reachability argument,
+ * made a different way.
+ */
+export function renderSiteLede(html: string, ledeHtml: string, file: string): SiteRenderResult {
+  const open = html.indexOf(LEDE_OPEN);
+  const close = html.indexOf(LEDE_CLOSE);
+  if (open < 0 || close < 0 || close < open) {
+    throw new Error(
+      [
+        `${file}: no ${LEDE_OPEN} … ${LEDE_CLOSE} hole, so the README's opening would silently stop reaching it.`,
+        `Put the markers around the paragraphs that should come from ${LEDE_SOURCE}.`,
+      ].join("\n"),
+    );
+  }
+  const body = html.slice(open + LEDE_OPEN.length, close);
+  if (body.includes(LEDE_OPEN) || body.includes(LEDE_CLOSE)) {
+    throw new Error(`${file}: nested ${LEDE_OPEN} markers — the hole must be one span.`);
+  }
+  const out = html.slice(0, open + LEDE_OPEN.length) + `
+${ledeHtml}
+    ` + html.slice(close);
+  return { html: out, stamps: 1 };
 }
 
 /* ------------------------------------------------------------------ *

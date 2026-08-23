@@ -34,7 +34,11 @@ import {
   SITE_PAGES,
   extractFieldFnList,
   findStatedCounts,
+  extractLede,
+  LEDE_SOURCE,
+  ledeToHtml,
   listRoadmapEntries,
+  renderSiteLede,
   renderSiteVersion,
   scanStamps,
   withoutRoadmap,
@@ -369,3 +373,57 @@ function stampDiff(committed: string, generated: string): string[] {
   }
   return lines.length > 0 ? lines : ["  (pages differ only in trailing bytes)"];
 }
+
+describe("the borrowed lede", () => {
+  const markdown = readRepoFile(LEDE_SOURCE);
+  const ledeHtml = ledeToHtml(extractLede(markdown, LEDE_SOURCE), LEDE_SOURCE);
+
+  /**
+   * THE DRIFT THIS EXISTS TO CATCH. Two copies of a paragraph is two
+   * paragraphs: edit one and the other is quietly wrong, with nothing to
+   * say so. The page carries a hole and the README carries the words, so
+   * re-rendering has to be a no-op.
+   */
+  it("docs/index.html carries exactly what README.md says", () => {
+    const committed = page("index.html");
+    const { html } = renderSiteLede(committed, ledeHtml, "docs/index.html");
+    if (html !== committed) {
+      throw new Error(
+        [
+          `docs/index.html's lede is not ${LEDE_SOURCE}'s. It is generated, so the page is what is stale.`,
+          "Run:",
+          "",
+          "  npm run build && npm run docs:site",
+          "",
+          "If the words should change, change them in " + LEDE_SOURCE + " — editing the page",
+          "edits a build artifact and the next docs run puts it back.",
+        ].join("\n"),
+      );
+    }
+  });
+
+  it("renders the markdown the lede actually uses", () => {
+    const html = ledeToHtml("**bold** and *italic*" + "\n\n" + "a second paragraph", "test");
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).toContain("<em>italic</em>");
+    expect(html.match(/<p>/g)?.length).toBe(2);
+  });
+
+  it("escapes markup rather than passing it through", () => {
+    expect(ledeToHtml("a < b & c > d", "test")).toContain("a &lt; b &amp; c &gt; d");
+  });
+
+  /**
+   * The failure mode worth a test of its own: an unimplemented construct
+   * that reached the page would publish its own syntax, and nobody reads
+   * their own landing page closely enough to notice a stray bracket.
+   */
+  it.each([
+    ["a link", "see [the manual](./manual.html)"],
+    ["a code span", "call `cook()`"],
+    ["a list", "- one\n- two"],
+    ["a heading", "# Title"],
+  ])("refuses %s rather than emitting it literally", (_what, md) => {
+    expect(() => ledeToHtml(md, "test")).toThrow(/does not implement/);
+  });
+});
