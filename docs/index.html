@@ -89,12 +89,43 @@
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  /**
+   * ONE COLUMN, TWELVE TRACKS, ONE MEASURE.
+   *
+   * Every width on this page used to be its own number. The column was
+   * 960, prose was `70ch`, the lead `64ch` and the hero paragraph `46ch`
+   * — and because `ch` scales with the element's OWN font-size, three
+   * measures written to look alike landed at 707, 707 and 522px. The 64
+   * was already a patch for that: it exists because `70ch` at the lead's
+   * 17.5px overhung the 16px paragraphs under it. Patching each new
+   * element against the last one does not converge.
+   *
+   * So the grid is stated instead, and read. `--track` is derived rather
+   * than typed so the arithmetic cannot drift: thirteen gutters (two
+   * outer, eleven between) subtracted from the page, split twelve ways.
+   * A span of n tracks is `track*n + gutter*(n-1)`.
+   *
+   *   page 960 · gutter 24 · track 54 · 12 tracks = 912 of content
+   *
+   * Press `g` (or load with `?grid`) to see it — the overlay draws these
+   * same values, so a width that does not land on a track shows up as
+   * one that does not line up.
+   */
+  :root {
+    --page: 960px;
+    --gutter: 24px;
+    --track: calc((var(--page) - var(--gutter) * 13) / 12);
+    /* PROSE IS NINE OF TWELVE — 678px. Nearest track span to the 707 the
+       page had settled on, so the body it was tuned for barely moves,
+       and now it is a column count rather than a coincidence. */
+    --measure: calc(var(--track) * 9 + var(--gutter) * 8);
+  }
+  .wrap { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
 
   h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; color: var(--ink-hi); }
   h2 { font-size: 26px; font-weight: 600; margin: 0 0 8px; }
   h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
-  p { margin: 0 0 14px; max-width: 70ch; }
+  p { margin: 0 0 14px; max-width: var(--measure); }
   /* The rule is grey and only the HOVER is green: a link at rest is body
      copy, so colour marks the interaction rather than the text. */
   a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid var(--line-hi); }
@@ -112,11 +143,7 @@
   }
   section { padding: 44px 0 20px; }
   section + section { border-top: 1px solid var(--line); }
-  /* `ch` scales with the element's own font-size, so the 70ch measure
-     on `p` renders 66px wider here at 17.5px than in body copy at 16px
-     — the lead's right edge visibly overhung the paragraphs under it.
-     70 x 16/17.5 = 64 lands both on the same measure. */
-  .lead { font-size: 17.5px; color: var(--muted); max-width: 64ch; }
+  .lead { font-size: 17.5px; color: var(--muted); max-width: var(--measure); }
   .lead strong { color: var(--ink); font-weight: 600; }
 
   /* ---------- hero ---------- */
@@ -236,7 +263,10 @@
     /* No top margin any more: it used to sit under the lockup inside one
        band, and it is now the only thing in its own. */
     margin: 0;
-    max-width: 46ch;
+    /* The same nine tracks the prose below it gets. It was `46ch`, which
+       at 18px came out 185px short of every paragraph on the page — the
+       one width here that belonged to no system. */
+    max-width: var(--measure);
   }
   /* A column: the seed reads with the field above it, and the row of
      places to go next reads on its own. Side by side they were one long
@@ -535,6 +565,51 @@
     margin-top: 30px; padding: 24px 0 40px;
     font-family: var(--mono); font-size: 13px; color: var(--muted);
     display: flex; flex-wrap: wrap; gap: 8px 28px;
+  }
+  /**
+   * THE GRID, MADE VISIBLE — a development tool, off in every visitor's
+   * browser and one keystroke away in yours.
+   *
+   * Drawn from the same four custom properties the layout is, never from
+   * a second copy of the numbers: an overlay that agrees with a hand-typed
+   * grid rather than with the page is worse than none, because it tells
+   * you a width lines up when it does not.
+   *
+   * `position: fixed` and `pointer-events: none`, so it covers the
+   * viewport as you scroll and nothing on the page becomes unclickable
+   * while it is up.
+   */
+  .grid-guide {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    pointer-events: none;
+  }
+  :root.show-grid .grid-guide { display: block; }
+  .grid-guide .wrap {
+    height: 100%;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 0 var(--gutter);
+  }
+  .grid-guide span { background: rgba(255, 0, 0, 0.11); }
+  /* Where the prose measure ends: nine tracks in. A line rather than a
+     tint, because the question it answers is "does this edge land on the
+     grid", and an edge is what you compare against an edge. */
+  .grid-guide span:nth-child(9) { box-shadow: 1px 0 0 rgba(0, 255, 0, 0.55); }
+  .grid-note {
+    position: fixed;
+    right: 8px;
+    bottom: 8px;
+    z-index: 100;
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--line-hi);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    pointer-events: none;
   }
   @media (max-width: 560px) {
     /* The band around the lockup is generous on a desktop and would be
@@ -1109,6 +1184,44 @@ mermaid.initialize({
     fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
   },
 });
+</script>
+<!-- Development only: hidden until `.show-grid` is set on <html>, which
+     the script below does for `?grid` or the `g` key. -->
+<div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
+
+<script>
+(() => {
+  // `g` toggles the grid; `?grid` opens with it up. Ignored while a field
+  // has focus, or typing a seed of 4816 would flash the overlay twice.
+  const root = document.documentElement;
+  let note = null;
+  function show(on) {
+    root.classList.toggle("show-grid", on);
+    if (on && note === null) {
+      note = document.createElement("div");
+      note.className = "grid-note";
+      // MEASURED off a track, not read off the property: a custom
+      // property returns the token it was written as, so reading --track
+      // hands back the calc() rather than the 54px it comes to — and a
+      // readout that cannot resolve its own arithmetic is worth nothing
+      // to the person checking whether a width lands on it.
+      const cell = document.querySelector(".grid-guide span");
+      const track = Math.round(cell.getBoundingClientRect().width * 10) / 10;
+      const gutter = getComputedStyle(document.querySelector(".grid-guide .wrap")).columnGap;
+      note.textContent = `12 x ${track}px · gutter ${gutter} · prose 9 · g to hide`;
+      document.body.appendChild(note);
+    }
+    if (note !== null) note.style.display = on ? "" : "none";
+  }
+  if (new URLSearchParams(location.search).has("grid")) show(true);
+  addEventListener("keydown", (e) => {
+    const t = e.target;
+    const typing = t instanceof HTMLElement &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "g" || e.key === "G") show(!root.classList.contains("show-grid"));
+  });
+})();
 </script>
 </body>
 </html>
