@@ -42,7 +42,7 @@ function injectStyles(): void {
   const style = document.createElement("style");
   style.textContent = `
 .pcg-wordmark {
-  position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 10;
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 28px; z-index: 10;
   display: block; line-height: 0;
   color: var(--ed-ink); opacity: 0.45;
   transition: opacity 0.15s;
