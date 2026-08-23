@@ -30,7 +30,7 @@ import { makeTrackSpline } from "../demos/road/spline.js";
  * of track between buckets for a keyed statistic.
  *
  * The shares are the PER-CIRCUIT p10-p90 over twenty-two circuits, not
- * the exemplar kit's. THE STREET CIRCUIT reads 58.7% straight, above the
+ * the exemplar kit's. The street circuit reads 58.7% straight, above the
  * population's p90 of 53.3: it is an unusually straight circuit and was
  * handed over as the one reference. Tuning toward it would have been
  * tuning toward an outlier, which is a caution that applies to anything

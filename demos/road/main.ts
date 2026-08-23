@@ -310,7 +310,9 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
  * is whether the generated one reads like the measured one.
  */
 function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressStats } | undefined {
-  const d = dressLap(dressingKit(circuit.lap), circuit.lap, state.seed);
+  const d = dressLap(dressingKit(circuit.lap), circuit.lap, state.seed, {
+    density: state.density,
+  });
   return { mesh: boxMesh(d.boxes, 0x7de2b0, 0.95), stats: d.stats };
 }
 
@@ -494,6 +496,8 @@ const overlay = createOverlay({
 });
 
 const state = {
+  /** Multiplier on D-1's fitted 0.95 placements per W. */
+  density: 1,
   seed: 1,
   /** World units per second. */
   speed: 45,
@@ -517,6 +521,19 @@ overlay.addSeed(state.seed, (seed) => {
 overlay.addSlider("speed", { min: 0, max: 160, step: 1, value: state.speed }, (v) => {
   state.speed = v;
 });
+// DENSITY IS THE ONE RULE PARAMETER ON THE PANEL, because it is the one
+// a viewer will want to argue with — and because leaving the measured
+// reference layer off makes the generated dressing look thinner than the
+// two together did. The readout names D-1's accepted band so the slider
+// cannot quietly imply that every position on it is equally valid.
+overlay.addSlider(
+  "density",
+  { min: 0.4, max: 3, step: 0.05, value: state.density, format: (v) => `x${v.toFixed(2)}` },
+  (v) => {
+    state.density = v;
+    void recook();
+  },
+);
 overlay.addSlider("chase back", { min: 4, max: 60, step: 1, value: state.chaseBack }, (v) => {
   state.chaseBack = v;
 });
@@ -571,7 +588,13 @@ async function recook(): Promise<void> {
     statLap(`${next.lap.lengthW.toFixed(1)} W (${next.lap.length.toFixed(0)} u)`);
     if (lastStats) {
       const s = lastStats;
-      statProps(`${s.placed} placements, ${s.cookMs.toFixed(0)} ms`);
+      // D-1 in its own units, with the verdict rather than just the
+      // number: 0.6-1.2 per W is the accepted band and under 0.6 means
+      // unfinished rather than sparse.
+      const band = s.perW < 0.6 ? " — under D-1" : s.perW > 1.2 ? " — over D-1" : " — inside D-1";
+      statProps(
+        `${s.placed} placements, ${s.perW.toFixed(2)}/W${band}, ${s.cookMs.toFixed(0)} ms`,
+      );
       // The corner language gets its own line: L-2 and L-3 are the only
       // rules that ADD placements, so their two counts are what makes
       // D-1's budget drift explicable rather than mysterious. The losses

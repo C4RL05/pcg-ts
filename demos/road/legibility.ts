@@ -265,7 +265,7 @@ export function isVertical(a: PlaceableAsset): boolean {
  * The stricter reading, which also asks that the asset's instances
  * HISTORICALLY sat at marker height.
  *
- * NOT THE ONE USED, and the reason is worth keeping. On vegetation the
+ * NOT THE ONE USED, and the reason is worth keeping. On the demo's kit the
  * proportion test alone finds 8 verticals out of 229 placeable assets;
  * adding the height-median band leaves exactly 3 — the bare minimum the
  * corner language needs, which makes the seeded choice between them

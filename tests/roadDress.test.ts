@@ -22,14 +22,14 @@
  * document deliberately ordered never conflict, which is not something
  * this pipeline promises or should.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { mixInsideRule } from "../demos/road/assets.js";
 import { dressLap, frameLookup } from "../demos/road/dress.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
 import { type Kit, type PlacedBox, placeKit } from "../demos/road/kit.js";
-import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
+import { DEFAULT_KIT, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import {
   brakingRulersSatisfied,
@@ -41,10 +41,10 @@ import { defaultEyeStations, occludes } from "../demos/road/sightline.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
 import { COVERAGE, coverage } from "../demos/road/stations.js";
 
-const KIT = `<kit-dir>/${KITS[DEFAULT_KIT]}`;
+const KIT = kitPath(DEFAULT_KIT);
 
-describe.skipIf(!existsSync(KIT))("the assembled pipeline", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as Kit;
+describe.skipIf(!KIT)("the assembled pipeline", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {
@@ -302,8 +302,8 @@ function quantile(xs: readonly number[], f: number): number {
   return s[Math.floor(f * (s.length - 1))];
 }
 
-describe.skipIf(!existsSync(KIT))("the silhouette", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as Kit;
+describe.skipIf(!KIT)("the silhouette", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {

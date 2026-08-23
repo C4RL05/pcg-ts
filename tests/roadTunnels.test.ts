@@ -14,15 +14,15 @@
  * dresses from is 2% enclosed, with a longest covered stretch of nine
  * tenths of a half-width and eight overhead objects that are all thin
  * arches. A rule cannot be developed against a circuit that never
- * triggers it. `ENCLOSURE_KIT` names the exception; see `kitSource.ts`
+ * triggers it. `ENCLOSURE_KIT` names the exception; see `tests/support/kits.ts`
  * for why that is better than switching the default.
  *
- * AND THE TARGET IS THE POPULATION'S, NOT THAT KIT'S. THE ENCLOSED CIRCUIT is 43%
+ * AND THE TARGET IS THE POPULATION'S, NOT THAT KIT'S. It is 43%
  * enclosed and the rule asks for 10-25%, with a population median of
  * 10.5%. Building to 43% would be fitting the outlier, which this demo
  * has already done once and paid a week for.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { cornersOf, radiusAtW } from "../demos/road/corners.js";
@@ -30,7 +30,7 @@ import { dressLap } from "../demos/road/dress.js";
 import { ENCLOSURE, measureEnclosure } from "../demos/road/enclosure.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
 import type { Kit } from "../demos/road/kit.js";
-import { ENCLOSURE_KIT, KITS } from "../demos/road/kitSource.js";
+import { ENCLOSURE_KIT, KITS, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
 import type { StationedPlacement } from "../demos/road/legibility.js";
@@ -43,7 +43,7 @@ import {
   reduceEnclosure,
 } from "../demos/road/tunnels.js";
 
-const KIT = `<kit-dir>/${KITS[ENCLOSURE_KIT]}`;
+const KIT = kitPath(ENCLOSURE_KIT);
 
 /**
  * The length draw, checked against the quantiles it was built from.
@@ -105,8 +105,8 @@ describe("the stretch-length draw", () => {
   });
 });
 
-describe.skipIf(!existsSync(KIT))("enclosure, placed and then measured", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as Kit;
+describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
 
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {

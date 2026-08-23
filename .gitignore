@@ -32,3 +32,9 @@ coverage/
 # outside both repositories: never ours to commit, and the page does
 # without it.
 /kit.json
+
+# Where the measured kits live on THIS machine. The kits are measurements
+# of a commercial product and neither they nor their filenames belong in a
+# public checkout; see tests/support/kits.ts. Absent for almost everyone,
+# which is why every suite that needs one skips.
+/road-kits.local.json

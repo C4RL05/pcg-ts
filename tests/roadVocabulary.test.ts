@@ -161,6 +161,50 @@ describe("a lap dressed from the published vocabulary", () => {
   }, 900_000);
 
   /**
+   * THE DENSITY KNOB, which is the one rule parameter the page exposes.
+   *
+   * D-1 is a distribution with a threshold hidden in its floor: 0.6 to
+   * 1.2 placements per W is the accepted band, and "under 0.6" means
+   * unfinished rather than sparse. So the knob has to do three things and
+   * each is checked here — scale the count, report where the lap actually
+   * landed in D-1's own units, and still produce a lap the other rules
+   * hold on, because every one of them is a share or a threshold over the
+   * population rather than an absolute.
+   */
+  it("scales the lap with density, and says where D-1 puts it", async () => {
+    const l = await theLap();
+    const kit = syntheticKit(l.lengthW, 1000, 1);
+    const rows: string[] = [];
+    let last = 0;
+    for (const density of [0.5, 1, 2]) {
+      const d = dressLap(kit, l, 1, { density });
+      // MONOTONIC. A knob that does not move the thing it names is worse
+      // than no knob, because the panel then reports a number the slider
+      // cannot change.
+      expect(d.stats.placed, `density ${density} did not raise the count`).toBeGreaterThan(last);
+      last = d.stats.placed;
+      // The reported figure must describe the lap it came from.
+      expect(d.stats.perW).toBeCloseTo(d.stats.placed / l.lengthW, 6);
+      // And the rest of the rules still hold at every setting.
+      expect(landmarksSatisfied(d.placements, l.lengthW), `L-4 at density ${density}`).toBe(true);
+      expect(falseEdges(d.placements, l.lengthW).length, `L-5 at density ${density}`).toBe(0);
+      expect(d.stats.converged, `tail did not settle at density ${density}`).toBe(true);
+      rows.push(
+        `  x${density.toFixed(2)}: ${d.stats.placed} placements, ${d.stats.perW.toFixed(2)}/W ` +
+          `(D-1 accepts 0.6-1.2), ${d.stats.rounds} rounds`,
+      );
+    }
+    console.log(["the density knob:", ...rows].join("\n"));
+
+    // THE BAND IS REACHABLE FROM BOTH SIDES, or the readout that names it
+    // is decoration: the slider must be able to leave D-1 in either
+    // direction, which is the whole reason the panel states a verdict
+    // rather than only a number.
+    expect(dressLap(kit, l, 1, { density: 0.4 }).stats.perW).toBeLessThan(0.6);
+    expect(dressLap(kit, l, 1, { density: 3 }).stats.perW).toBeGreaterThan(1.2);
+  }, 900_000);
+
+  /**
    * AND EVERY RULE MUST HAVE HAD SOMETHING TO DO.
    *
    * This is the assertion that would have caught the published build

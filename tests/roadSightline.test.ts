@@ -12,7 +12,7 @@
  * whose answers are known by construction; the cull on top of it can
  * then be trusted to be asking the right question of a right answer.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
@@ -27,7 +27,7 @@ import {
   occludes,
   segmentHitsBox,
 } from "../demos/road/sightline.js";
-import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
+import { DEFAULT_KIT, kitPath } from "./support/kits.js";
 import {
   type CurvatureBucket,
   type PlaceableAsset,
@@ -36,7 +36,7 @@ import {
 } from "../demos/road/assets.js";
 import { makeStations } from "../demos/road/stations.js";
 
-const KIT = `<kit-dir>/${KITS[DEFAULT_KIT]}`;
+const KIT = kitPath(DEFAULT_KIT);
 
 const UNIT = {
   across: [1, 0, 0] as const,
@@ -99,8 +99,8 @@ describe("segment against box", () => {
   });
 });
 
-describe.skipIf(!existsSync(KIT))("the look-ahead cull", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as { assets: PlaceableAsset[] };
+describe.skipIf(!KIT)("the look-ahead cull", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as { assets: PlaceableAsset[] };
   const assets = kit.assets.filter((a) => a.where);
 
   let cached: { lap: Lap; frameAt: (s: number, t: number, h: number) => Frame } | undefined;

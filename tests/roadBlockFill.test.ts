@@ -13,9 +13,10 @@
  * for it — does it have the same emptiness — and a generator that is not
  * measured against that answer is a generator nobody can correct.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
+import { kitPath } from "./support/kits.js";
 import {
   FILL_ATTRS,
   FILL_OUTPUT,
@@ -25,8 +26,7 @@ import {
   calibrateKeep,
 } from "../demos/road/fill.js";
 
-/** Where the derived kit lives. Outside both repos, by design. */
-const KIT = "<kit-dir>/street-kit.json";
+const KIT = kitPath("street");
 
 interface KitAsset {
   readonly name: string;
@@ -171,9 +171,9 @@ describe("the fill keeps the share it is asked for", () => {
   });
 });
 
-describe.skipIf(!existsSync(KIT))("against the measured kit", () => {
-  const kit = existsSync(KIT)
-    ? (JSON.parse(readFileSync(KIT, "utf8")) as { assets: KitAsset[] })
+describe.skipIf(!KIT)("against the measured kit", () => {
+  const kit = !!KIT
+    ? (JSON.parse(readFileSync(KIT!, "utf8")) as { assets: KitAsset[] })
     : { assets: [] };
 
   const bboxOf = (a: KitAsset): [number[], number[]] => {

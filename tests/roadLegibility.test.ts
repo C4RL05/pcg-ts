@@ -6,7 +6,7 @@
  * was removable. Idempotence alone would pass a repair that swapped six
  * placements into one bare stretch and then halted.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import {
@@ -16,7 +16,7 @@ import {
   placeAsset,
 } from "../demos/road/assets.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
+import { DEFAULT_KIT, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import {
   BRAKING,
@@ -39,10 +39,10 @@ import { type Corner, cornersOf, radiusAtW } from "../demos/road/corners.js";
 import { makeStations } from "../demos/road/stations.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
 
-const KIT = `<kit-dir>/${KITS[DEFAULT_KIT]}`;
+const KIT = kitPath(DEFAULT_KIT);
 
-describe.skipIf(!existsSync(KIT))("L-4, landmark uniqueness", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as { assets: PlaceableAsset[] };
+describe.skipIf(!KIT)("L-4, landmark uniqueness", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as { assets: PlaceableAsset[] };
   const assets = kit.assets.filter((a) => a.where);
 
   let lap: Lap | undefined;
@@ -187,8 +187,8 @@ describe.skipIf(!existsSync(KIT))("L-4, landmark uniqueness", () => {
  * the 0.46 the source manages by accident on the 4% of corners where
  * three happen to fall there at all.
  */
-describe.skipIf(!existsSync(KIT))("L-2 and L-3, the corner language", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as { assets: PlaceableAsset[] };
+describe.skipIf(!KIT)("L-2 and L-3, the corner language", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as { assets: PlaceableAsset[] };
   const all = kit.assets.filter((a) => a.where);
 
   let cache: { lap: Lap; corners: Corner[] } | undefined;

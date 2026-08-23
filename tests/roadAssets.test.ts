@@ -12,7 +12,7 @@
  *
  * Skips without the kit, which lives outside both repositories.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   type Band,
@@ -28,7 +28,7 @@ import {
   repairIsMinimal,
   weightAt,
 } from "../demos/road/assets.js";
-import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
+import { DEFAULT_KIT, kitPath } from "./support/kits.js";
 import { inCorridor, resolveCorridor } from "../demos/road/zones.js";
 
 /**
@@ -42,13 +42,13 @@ import { inCorridor, resolveCorridor } from "../demos/road/zones.js";
  * generator learning from it would have been faithfully reproducing an
  * outlier.
  *
- * `vegetation` is second-best of the twenty-two on band mix and has all
- * four affinity buckets inside the per-circuit band. `street` is kept
+ * The vegetation circuit is second-best of the set on band mix and has
+ * all four affinity buckets inside the per-circuit band. The street one
+ * is kept
  * beside it because the comparison is the evidence.
  */
-const DIR = "<kit-dir>/";
-const KIT = DIR + KITS[DEFAULT_KIT];
-const OTHER = DIR + KITS.street;
+const KIT = kitPath(DEFAULT_KIT);
+const OTHER = kitPath("street");
 
 describe("drawing from three quantiles", () => {
   const q = { p10: 1, median: 3, p90: 9 };
@@ -83,8 +83,8 @@ describe("drawing from three quantiles", () => {
   });
 });
 
-describe.skipIf(!existsSync(KIT))("placing from the kit's own `where`", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as {
+describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as {
     assets: PlaceableAsset[];
     placements: { lateral: number; height: number; size: { tall: number } }[];
     track: { curvatureShare: Record<CurvatureBucket, number> };
@@ -135,7 +135,7 @@ describe.skipIf(!existsSync(KIT))("placing from the kit's own `where`", () => {
    *
    * A GENERATED lap is scored against Z-3's pooled rule. A REAL circuit is
    * compared against the per-circuit spread, which is roughly twice as
-   * wide: the rule is pooled over all of the source era's objects, and any one
+   * wide: the rule is pooled over every object in the source era, and any one
    * original sits outside it on some band as a matter of course. Scoring
    * an original against the rule is how a good exemplar gets mistaken for
    * a bad generator, which is very nearly what happened here.
@@ -165,14 +165,14 @@ describe.skipIf(!existsSync(KIT))("placing from the kit's own `where`", () => {
       }
       return { c, n: k.placements.length };
     };
-    const here = refOf(KIT);
-    const there = refOf(OTHER);
+    const here = refOf(KIT!);
+    const there = refOf(OTHER!);
 
     const pc = (v: number): string => `${(100 * v).toFixed(0)}%`.padStart(4);
     console.log(
       [
         `band mix, centre datum, ${DEFAULT_KIT}`,
-        "  band      mine   this circuit   street    rule       spread",
+        "  band      mine   this circuit   the other   rule       spread",
         ...(Object.keys(Z3) as Band[]).map((b) => {
           const z = Z3[b];
           const mine = (counts[b] ?? 0) / n;

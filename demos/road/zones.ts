@@ -10,7 +10,7 @@
  * THE CORRIDOR IS THE ONE HARD RULE. `|t| < 1W` below `h = 1.2W` carries
  * no geometry. That is a decision to be BETTER THAN THE SOURCE rather
  * than a description of it, and it has to be labelled that way: 12.3% of
- * the source era's objects have geometry inside 1W at driver height, and the
+ * the source's objects have geometry inside 1W at driver height, and the
  * median reaches 0.24W from the centreline. It is not a technique, it is
  * a stray — filtered to furniture small enough for the question to mean
  * anything, 1.2% of objects do it — but the source does do it and a
@@ -112,7 +112,7 @@ export function inCorridor(t: number, h: number): boolean {
  * of its inside-1W placements are large, at a median height of 3.19W —
  * gantries and spanning shells recorded at their centres. The small-art
  * figures (53% of small objects inside 1W sit above the ceiling, against
- * 26% of large ones) are the source era across circuits, not this one.
+ * 26% of large ones) are the whole source population, not this circuit.
  */
 export function resolveCorridor(
   t: number,
@@ -135,8 +135,8 @@ export function resolveCorridor(
  *
  * The bands are the RULE's ranges; the aim points are their centres. The
  * source's own figures are 15 / 8 / 29 / 35 / 13 / 0.5 for
- * over / verge / near / mid / far / distant, which is the source era and NOT
- * the earlier games — the difference between the eras is the largest in
+ * over / verge / near / mid / far / distant, which is the LATE era and
+ * not the earlier one — the difference between the two is the largest in
  * the whole ruleset, the near band nearly doubling and the far band
  * halving as the mass came in off the horizon to where a driver can read
  * it at speed.

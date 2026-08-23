@@ -174,7 +174,7 @@ export type Band = "over" | "verge" | "near" | "mid" | "far" | "distant";
 /**
  * Z-3's shares — the POOLED rule, and the per-circuit spread behind it.
  *
- * The rule is pooled over all of the source era's objects, and a single
+ * The rule is pooled over every object in the source era, and a single
  * circuit sits outside it on some band as a matter of course: the
  * per-circuit p10-p90 is roughly twice as wide. So Z-3 is a target for a
  * GENERATED lap, not a description any original satisfies, and an

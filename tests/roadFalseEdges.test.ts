@@ -31,7 +31,7 @@
  * null — so it produces false edges at the null rate unless something
  * stops it.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { dressLap } from "../demos/road/dress.js";
@@ -48,12 +48,12 @@ import {
 } from "../demos/road/falseEdges.js";
 import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
 import type { Kit } from "../demos/road/kit.js";
-import { DEFAULT_KIT, KITS } from "../demos/road/kitSource.js";
+import { DEFAULT_KIT, kitPath } from "./support/kits.js";
 import type { StationedPlacement } from "../demos/road/legibility.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
 
-const KIT = `<kit-dir>/${KITS[DEFAULT_KIT]}`;
+const KIT = kitPath(DEFAULT_KIT);
 
 /** A placement stub: the detector reads only station, t, h and size. */
 function at(station: number, t: number, h: number): StationedPlacement {
@@ -233,8 +233,8 @@ describe("breaking a false edge", () => {
   });
 });
 
-describe.skipIf(!existsSync(KIT))("false edges on a generated lap", () => {
-  const kit = JSON.parse(readFileSync(KIT, "utf8")) as Kit;
+describe.skipIf(!KIT)("false edges on a generated lap", () => {
+  const kit = JSON.parse(readFileSync(KIT!, "utf8")) as Kit;
   let lap: Lap | undefined;
   async function theLap(): Promise<Lap> {
     if (!lap) {

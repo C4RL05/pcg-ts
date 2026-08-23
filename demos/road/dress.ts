@@ -61,7 +61,7 @@ import { repairFalseEdges } from "./falseEdges.js";
 import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
 import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
 import { measureEnclosure } from "./enclosure.js";
-import { makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
+import { FITTED, makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
 import { resolveCorridor } from "./zones.js";
 
 export { radiusAtW };
@@ -77,9 +77,31 @@ export { radiusAtW };
  */
 const MAX_REPAIR_ROUNDS = 6;
 
+/** Knobs a host may turn without rewriting the rules. */
+export interface DressOptions {
+  /**
+   * Multiplier on D-1's fitted density, which is 0.95 placements per W.
+   *
+   * A KNOB, NOT A RULE. D-1 is a distribution with a threshold hidden in
+   * its floor: 0.6 to 1.2 placements per W is the accepted band and
+   * "under 0.6" means unfinished. Turning this past either edge leaves
+   * the rule, so `perW` is reported and the page says when the lap has
+   * stopped being compliant rather than letting the slider imply it is
+   * all equally valid.
+   *
+   * Everything downstream follows the count, because every other rule is
+   * expressed as a share or a threshold over the population rather than
+   * as an absolute — so a denser lap gets proportionally more markers,
+   * more cover and more repairs without anything being retuned.
+   */
+  readonly density?: number;
+}
+
 /** What each stage had to do, so a page can show it. */
 export interface DressStats {
   readonly placed: number;
+  /** Placements per W of lap — D-1's own units. Accepted band 0.6-1.2. */
+  readonly perW: number;
   /** D-4 closed at step 1, on the stations, before anything was culled. */
   readonly stationGapRepairs: number;
   /** D-4 closed again at step 7, on the lap the cull left behind. */
@@ -226,7 +248,12 @@ function legibilityHealth(
  * a page can draw generated dressing and measured dressing with one
  * renderer — which is the only way a viewer can compare them fairly.
  */
-export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
+export function dressLap(
+  kit: Kit,
+  lap: Lap,
+  seed: number,
+  opts: DressOptions = {},
+): Dressing {
   const t0 = performance.now();
   const all = (kit.assets as unknown as PlaceableAsset[]).filter((a) => a.where);
   const frameAt = frameLookup(lap);
@@ -242,7 +269,12 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
   );
 
   // 1. Stations.
-  const st = makeStationsDetailed(lap.lengthW, seed);
+  const scale = opts.density ?? 1;
+  const st = makeStationsDetailed(
+    lap.lengthW,
+    seed,
+    scale === 1 ? FITTED : { ...FITTED, density: FITTED.density * scale },
+  );
 
   // 2. An asset per station, from its own measured behaviour, weighted by
   //    the curvature THERE. This is the only place curvature enters.
@@ -495,6 +527,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     markers,
     stats: {
       placed: placements.length,
+      perW: placements.length / lap.lengthW,
       stationGapRepairs: st.gapRepairs,
       coverageMoves,
       worstGapW,
