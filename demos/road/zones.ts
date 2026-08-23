@@ -127,7 +127,20 @@ export function resolveCorridor(
     return { t, baseH: CORRIDOR.ceilingW };
   }
   // LARGE ART STANDS OFF, to the edge and no further, keeping its band.
-  return { t: Math.sign(t || 1) * CORRIDOR.halfWidthW, baseH };
+  //
+  // ITS EDGE GOES TO THE CORRIDOR EDGE, NOT ITS CENTRE. Moving the centre
+  // to |t| = 1W leaves half the object's width still over the road, and
+  // the wider the piece the worse it is: a 13.4W slab stood off this way
+  // hangs 6.7W of itself across the racing line, at whatever height it
+  // was already at. Reported from the driver's seat as a structure
+  // looming over the road, and it is the same bounds-centre mistake as
+  // the raised shells, the `over` band and the grass bank — the fifth
+  // time in this demo that a centre has been used where an extent was
+  // meant.
+  //
+  // "To the edge and no further" is a statement about the OBJECT, so the
+  // object's near face is what lands on the edge.
+  return { t: Math.sign(t || 1) * (CORRIDOR.halfWidthW + acrossW / 2), baseH };
 }
 
 /**

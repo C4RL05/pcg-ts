@@ -56,6 +56,7 @@ import {
   cornerMarkersSatisfied,
   placeCornerLanguage,
   repairLandmarks,
+  landmarkAssets,
   reserveMarkers,
 } from "./legibility.js";
 import { repairFalseEdges } from "./falseEdges.js";
@@ -70,13 +71,19 @@ export { radiusAtW };
 /**
  * How many times the tail may validate and feed back before giving up.
  *
- * Six is generous: the loop converges in two on every seed measured. It
+ * TWELVE, RAISED FROM SIX. Six was generous when the tail was four
+ * repairs and settled in two rounds. It is now seven — Z-1, L-1, L-6's
+ * top-up and trim, D-4, L-4, L-5 and Z-3 — and each one that yields to
+ * another adds a round: protecting landmarks from the mix stopped those
+ * two fighting, and the cost of not fighting is that the mix takes
+ * longer to reach its bands. The bound exists to stop a hang, not to
+ * enforce a quality bar, and `converged` is reported either way. It
  * is bounded at all because the four repairs it runs can in principle
  * chase each other — the cull drops what coverage just placed, coverage
  * replaces it, and so on — and a demo that hangs on one seed in a hundred
  * is worse than one that reports it did not settle.
  */
-const MAX_REPAIR_ROUNDS = 6;
+const MAX_REPAIR_ROUNDS = 12;
 
 /** Knobs a host may turn without rewriting the rules. */
 export interface DressOptions {
@@ -275,6 +282,27 @@ function buildBoxes(
   return boxes;
 }
 
+/**
+ * Did Z-1 actually move this, or is it an epsilon?
+ *
+ * A REPAIR THAT CANNOT TELL ITS OWN NO-OP NEVER SETTLES. The corridor
+ * resolution sets a base of exactly 1.2W, and a placement stores its
+ * CENTRE — so the next round recovers the base as `h - tall/2` and gets
+ * 1.1999999999999997, which is below the ceiling, so the rule fires
+ * again. And again.
+ *
+ * Traced on one lap: rounds three to twelve did nothing but this, one
+ * phantom fix per round, on a lap where every rule had been satisfied
+ * since round two. The stat line read 56 mix moves against 23 corridor
+ * fixes and NOT CONVERGED, which looks exactly like an unresolved
+ * conflict between Z-1 and Z-3 — I spent two changes treating it as one.
+ * There was no conflict. There was a value that could not survive a
+ * round trip through its own datum.
+ */
+function moved(fixed: { t: number; baseH: number }, t: number, baseH: number): boolean {
+  return Math.abs(fixed.t - t) > 1e-9 || Math.abs(fixed.baseH - baseH) > 1e-9;
+}
+
 /** How many corners are still correctly marked, and how many rulers hold. */
 function legibilityHealth(
   placements: readonly StationedPlacement[],
@@ -344,7 +372,7 @@ export function dressLap(
     if (p.cover) return p;
     const baseH = p.h - p.asset.size.tall / 2;
     const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
-    if (fixed.t === p.t && fixed.baseH === baseH) return p;
+    if (!moved(fixed, p.t, baseH)) return p;
     corridorFixes++;
     return { ...p, t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
   });
@@ -422,7 +450,7 @@ export function dressLap(
       if (p.cover) return p;
       const baseH = p.h - p.asset.size.tall / 2;
       const fixed = resolveCorridor(p.t, baseH, p.asset.size.across, p.asset.size.tall);
-      if (fixed.t === p.t && fixed.baseH === baseH) return p;
+      if (!moved(fixed, p.t, baseH)) return p;
       fixedThisRound++;
       return { ...p, t: fixed.t, h: fixed.baseH + p.asset.size.tall / 2 };
     });
@@ -538,17 +566,41 @@ export function dressLap(
     edgesFound += edges.before;
 
     // Z-3 next, against the lap that actually exists.
+    // LANDMARKS ARE PROTECTED FROM THE MIX, for the same reason markers
+    // are: L-4 is a THRESHOLD and Z-3 is a distribution, and a threshold
+    // outranks a distribution when they cannot both be had.
+    //
+    // Left unprotected they fight. The mix re-draws a placement's asset,
+    // which either takes a landmark away or adds a second copy of one
+    // elsewhere — and uniqueness is a property of the whole lap, so
+    // either move destroys it. L-4 restores it, the mix breaks it again,
+    // and the loop ran out at six rounds with 61 mix moves and a bare
+    // tenth. Protecting by ASSET ID covers both directions: a landmark
+    // cannot be donated away, and no second copy of one can be drawn in.
+    //
+    // ONE PER TENTH, not every unique asset: see `landmarkAssets`.
+    // Protecting all of them withholds 94 of 229 from the mix and leaves
+    // Z-3 unable to reach its bands at all.
+    const protectIds = new Set(reserved);
+    for (const id of landmarkAssets(placements, lap.lengthW)) protectIds.add(id);
+
     const mix = repairBandMix(
       placements,
       pool,
       seed + rounds,
       "centre",
-      reserved,
+      protectIds,
       (p) => p.cover === true,
     );
     placements = mix.placements.filter((p): p is StationedPlacement => p !== undefined);
     mixMoves += mix.moves;
 
+    if (process.env.ROAD_TRACE) {
+      console.log(
+        `  round ${rounds}: corridor=${fixedThisRound} cull=${cull.blocking} cover+=${addedCover} ` +
+          `trim=${reduce.moves} cov=${cov.moves} L4=${marks.moves} L5=${edges.moves} mix=${mix.moves}`,
+      );
+    }
     if (
       cull.blocking === 0 &&
       cov.moves === 0 &&

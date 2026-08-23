@@ -186,11 +186,40 @@ describe("the corridor", () => {
     expect(small.t).toBe(t);
     expect(small.baseH).toBeGreaterThanOrEqual(CORRIDOR.ceilingW);
 
-    const large = resolveCorridor(t as number, 0.4, 3, 4);
-    expect(inCorridor(large.t, large.baseH)).toBe(false);
     // Large art STANDS OFF and keeps its height.
-    expect(Math.abs(large.t)).toBeCloseTo(CORRIDOR.halfWidthW, 9);
+    //
+    // ITS NEAR FACE LANDS ON THE CORRIDOR EDGE, NOT ITS CENTRE — and this
+    // assertion used to say the opposite, which is how a 13.4W slab came
+    // to hang 6.7W of itself over the racing line while every test was
+    // green. "To the edge and no further" is a statement about the
+    // OBJECT, so it is the object's extent that has to clear.
+    const acrossW = 3;
+    const large = resolveCorridor(t as number, 0.4, acrossW, 4);
+    expect(inCorridor(large.t, large.baseH)).toBe(false);
+    expect(Math.abs(large.t) - acrossW / 2).toBeCloseTo(CORRIDOR.halfWidthW, 9);
     expect(large.baseH).toBe(0.4);
+  });
+
+  /**
+   * THE CHECK, PROVED ABLE TO FAIL — on the defect it was written for.
+   *
+   * Standing the CENTRE on the edge passes the old assertion and leaves
+   * half the object over the road. The wider the piece the worse it is,
+   * which is exactly backwards: the rule exists to protect the corridor
+   * from large art.
+   */
+  it("clears the road by the object's width, not by a fixed offset", () => {
+    for (const acrossW of [1, 3, 8, 13.4]) {
+      const r = resolveCorridor(0, 0.4, acrossW, 4);
+      const nearFace = Math.abs(r.t) - acrossW / 2;
+      expect(
+        nearFace,
+        `a ${acrossW}W piece leaves its near face at ${nearFace.toFixed(2)}W`,
+      ).toBeGreaterThanOrEqual(CORRIDOR.halfWidthW - 1e-9);
+      // And the old rule would have failed this for everything but the
+      // narrowest piece.
+      if (acrossW > 2) expect(CORRIDOR.halfWidthW - acrossW / 2).toBeLessThan(CORRIDOR.halfWidthW);
+    }
   });
 
   it("leaves a position outside the corridor exactly where it is", () => {

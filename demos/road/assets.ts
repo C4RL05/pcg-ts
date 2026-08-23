@@ -23,7 +23,7 @@
  * affinity denominator, one level up.
  */
 
-import { CORRIDOR, fitsOverhead } from "./zones.js";
+import { CORRIDOR, fitsOverhead, resolveCorridor } from "./zones.js";
 
 /** The per-asset measurements this module places from. */
 export interface AssetWhere {
@@ -462,6 +462,24 @@ export function repairBandMix<T extends AssetPlacement>(
     if (dst === "over") {
       const tall = replacement.asset.size.tall;
       replacement = { ...replacement, h: CORRIDOR.ceilingW + tall / 2 };
+    } else {
+      // AND EVERY OTHER BAND GETS Z-1 APPLIED AT THE POINT OF DRAWING.
+      //
+      // A replacement's lateral comes from its asset's own distribution,
+      // which reaches inside 1W for a good part of the vocabulary — so
+      // the mix emits corridor violations, Z-1 relocates them on the next
+      // round, relocating changes their band, and the mix rebalances.
+      // Neither repair is wrong and the pair never settles: measured at
+      // 56 mix moves and 23 corridor fixes over twelve rounds on a lap
+      // where every rule was already satisfied by round two.
+      //
+      // A repair must not emit something another repair has to undo.
+      const tall = replacement.asset.size.tall;
+      const baseH = replacement.h - tall / 2;
+      const fixed = resolveCorridor(replacement.t, baseH, replacement.asset.size.across, tall);
+      if (fixed.t !== replacement.t || fixed.baseH !== baseH) {
+        replacement = { ...replacement, t: fixed.t, h: fixed.baseH + tall / 2 };
+      }
     }
     log.push({ index: donor.i, before: out[donor.i] });
     // SPREAD OVER THE DONOR, never straight onto it. `placeAsset` returns

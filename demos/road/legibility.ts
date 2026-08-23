@@ -88,6 +88,39 @@ export function landmarksPerStretch(
   return counts;
 }
 
+/**
+ * ONE landmark asset per stretch — the minimum L-4 actually needs.
+ *
+ * WHY NOT ALL OF THEM. Uniqueness is a property of the whole lap, so
+ * anything that re-draws an asset can destroy a landmark: take it away,
+ * or add a second copy of it elsewhere. Z-3's mix does exactly that, and
+ * left alone the two rules fight — the mix breaks a landmark, L-4
+ * restores it, and the loop runs out.
+ *
+ * Protecting every unique asset stops the fight and starts a worse one:
+ * on this vocabulary that is 94 of 229 assets withheld from the mix's
+ * donors AND its replacement pool, which leaves Z-3 unable to reach its
+ * bands at all. L-4's threshold is ONE per tenth, so one per tenth is
+ * what gets protected — ten ids rather than ninety-four.
+ *
+ * Deterministic: the lowest-id unique asset in each stretch, so the same
+ * lap always protects the same ten.
+ */
+export function landmarkAssets(
+  placements: readonly StationedPlacement[],
+  lapW: number,
+): Set<number> {
+  const unique = uniqueAssets(placements);
+  const perStretch = new Map<number, number>();
+  for (const p of placements) {
+    if (!unique.has(p.asset.id)) continue;
+    const k = Math.min(LANDMARK.tenths - 1, Math.floor((p.station / lapW) * LANDMARK.tenths));
+    const held = perStretch.get(k);
+    if (held === undefined || p.asset.id < held) perStretch.set(k, p.asset.id);
+  }
+  return new Set(perStretch.values());
+}
+
 /** One re-draw, kept so the repair can be checked for minimality. */
 export interface LandmarkMove {
   readonly index: number;
