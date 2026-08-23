@@ -257,11 +257,13 @@
        which the demos draw from too; see that file for why it is inline
        rather than a `src`, and for the two standalone SVGs it has to stay
        in agreement with. -->
-    <svg
-      class="mark"
-      viewBox={WORDMARK_VIEWBOX}
-      aria-hidden="true"
-      focusable="false">{@html WORDMARK_PATHS}</svg
+    <span class="markbox"
+      ><svg
+        class="mark"
+        viewBox={WORDMARK_VIEWBOX}
+        aria-hidden="true"
+        focusable="false">{@html WORDMARK_PATHS}</svg
+      ></span
     >Editor<span class="chevron" class:flip={collapsed}>▾</span></span>
 
   <!-- Grouped by LAYER, with a hairline between groups. The two middle
@@ -543,6 +545,25 @@
      the page belongs to, with `editor` naming which page that is, so the
      mark sits one step down rather than competing. The word carries that
      on its case now rather than on its weight — see `.title`. */
+  /* A WHITE PLATE, the height of the icon buttons beside it. The mark
+     ships as `fill="currentColor"`, so the plate sets `color` and the
+     glyph follows it to black — no second copy of the artwork, and the
+     one in `shared/wordmark.ts` stays the only one.
+
+     25px is STATED, not stretched: it is the icon buttons' own box — a
+     15px glyph, 4px of padding twice, 1px of border twice — and
+     `align-self: stretch` would take the tallest thing on the line
+     instead, which is the 26px select. If those buttons are ever
+     re-padded, this is the number that has to follow them. */
+  .markbox {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    height: 25px;
+    padding: 0 9px;
+    background: #ffffff;
+    color: #000000;
+  }
   .mark {
     height: 11px;
     width: auto;
