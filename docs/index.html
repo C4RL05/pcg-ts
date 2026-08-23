@@ -132,7 +132,19 @@
      but one. The min-height on the field band is a floor for the FIELD,
      not for the text — a scatter needs some depth to read as one. */
   .hero-logo { background: var(--bg); padding: 64px 0 56px; }
-  .hero { position: relative; min-height: 190px; }
+  /* Ruled top and bottom, full width. The field is the one band on this
+     page with a ground of its own, and without an edge it bled into the
+     black above and below it — the dots simply thinned out and you could
+     not tell where the cooked strip began. The same hairline every other
+     seam on the page uses, so the header reads as banded rather than as
+     having grown a frame. The canvas is `inset: 0` against the PADDING
+     box, so it stops inside these rather than painting over them. */
+  .hero {
+    position: relative;
+    min-height: 190px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
   .hero canvas {
     position: absolute; inset: 0;
     display: block; width: 100%; height: 100%;
