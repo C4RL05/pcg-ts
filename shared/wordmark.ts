@@ -42,7 +42,7 @@ function injectStyles(): void {
   const style = document.createElement("style");
   style.textContent = `
 .pcg-wordmark {
-  position: fixed; left: 12px; bottom: 12px; z-index: 10;
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 10;
   display: block; line-height: 0;
   color: var(--ed-ink); opacity: 0.45;
   transition: opacity 0.15s;
@@ -50,7 +50,7 @@ function injectStyles(): void {
 .pcg-wordmark:hover, .pcg-wordmark:focus-visible { opacity: 0.9; }
 .pcg-wordmark svg { height: 13px; width: auto; display: block; }
 /* Below the shared breakpoint the overlay becomes a full-width bottom
-   sheet and takes this corner. See shared/mobile.ts. */
+   sheet and takes this edge. See shared/mobile.ts. */
 @media ${NARROW_MEDIA_QUERY} {
   .pcg-wordmark { display: none; }
 }
@@ -76,7 +76,10 @@ function injectStyles(): void {
 const LANDING_PAGE = "../../";
 
 /**
- * Put the wordmark in the bottom-left corner of the page.
+ * Put the wordmark at the bottom centre of the page.
+ *
+ * CENTRED RATHER THAN IN THE CORNER, because the panel already owns the
+ * left edge in every demo and the mark sat under it.
  *
  * A LINK, because it is the only navigation a demo has — every one of
  * them is otherwise a page you can arrive at and not leave.
