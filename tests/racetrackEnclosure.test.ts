@@ -23,15 +23,15 @@
  * answer nothing.
  */
 import { describe, expect, it } from "vitest";
-import type { PlacedBox } from "../demos/road/kit.js";
+import type { PlacedBox } from "../demos/racetrack/kit.js";
 import {
   ENCLOSURE,
   RAY_LATERALS_W,
   enclosedAtFrame,
   enclosureMask,
   measureEnclosure,
-} from "../demos/road/enclosure.js";
-import { type Lap, placeAt } from "../demos/road/lap.js";
+} from "../demos/racetrack/enclosure.js";
+import { type Lap, placeAt } from "../demos/racetrack/lap.js";
 
 /** Half the road width, in world units — the scale every W is measured in. */
 const W = 4;

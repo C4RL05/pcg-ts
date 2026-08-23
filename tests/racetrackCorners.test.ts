@@ -22,10 +22,10 @@ import {
   cornersOf,
   radiusAtIndex,
   signedCurvatureAt,
-} from "../demos/road/corners.js";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import { type Lap, readLap } from "../demos/road/lap.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
+} from "../demos/racetrack/corners.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
 const W = 4;
 

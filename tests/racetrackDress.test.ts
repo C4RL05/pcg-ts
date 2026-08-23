@@ -25,21 +25,21 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
-import { mixInsideRule } from "../demos/road/assets.js";
-import { dressLap, frameLookup } from "../demos/road/dress.js";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import { type Kit, type PlacedBox, placeKit } from "../demos/road/kit.js";
+import { mixInsideRule } from "../demos/racetrack/assets.js";
+import { dressLap, frameLookup } from "../demos/racetrack/dress.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { type Kit, type PlacedBox, placeKit } from "../demos/racetrack/kit.js";
 import { DEFAULT_KIT, kitPath } from "./support/kits.js";
-import { type Lap, readLap } from "../demos/road/lap.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import {
   brakingRulersSatisfied,
   cornerMarkersSatisfied,
   landmarksPerStretch,
   landmarksSatisfied,
-} from "../demos/road/legibility.js";
-import { defaultEyeStations, occludes } from "../demos/road/sightline.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
-import { COVERAGE, coverage } from "../demos/road/stations.js";
+} from "../demos/racetrack/legibility.js";
+import { defaultEyeStations, occludes } from "../demos/racetrack/sightline.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
+import { COVERAGE, coverage } from "../demos/racetrack/stations.js";
 
 const KIT = kitPath(DEFAULT_KIT);
 

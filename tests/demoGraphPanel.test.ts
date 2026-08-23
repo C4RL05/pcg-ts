@@ -38,12 +38,12 @@ import { previewRows } from "../shared/graph/view.js";
 import { deriveGalaxy, makeHaloLevel, makeStarLevel } from "../demos/galaxy/galaxy.js";
 import { makeSpireLevel } from "../demos/gpu-world/levels.js";
 import { makeLandmarkLevel, makeRockLevel } from "../demos/infinite-world/levels.js";
-import { buildRoadGraph } from "../demos/road/graph.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
-// Aliased, not renamed at the source: `simple-road` is a deliberate copy
+import { buildRoadGraph } from "../demos/racetrack/graph.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
+// Aliased, not renamed at the source: `road` is a deliberate copy
 // of `road` and its module names are identical on purpose. See the header
-// of demos/simple-road/main.ts.
-import { buildRoadGraph as buildSimpleRoadGraph } from "../demos/simple-road/graph.js";
+// of demos/road/main.ts.
+import { buildRoadGraph as buildSimpleRoadGraph } from "../demos/road/graph.js";
 import { RETIRED_WIDE_SUBJECT, buildWideGraph } from "./support/wideGraph.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -62,11 +62,11 @@ function demoGraphs(): { name: string; graph: Graph }[] {
         .graph,
     },
     {
-      name: "road/verges",
+      name: "racetrack/dressed",
       graph: buildRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 }),
     },
     {
-      name: "simple-road/verges",
+      name: "road/verges",
       graph: buildSimpleRoadGraph({ spline: makeTrackSpline({ seed: 1 }), seed: 1 }),
     },
   ];
@@ -274,7 +274,7 @@ describe("the param rows", () => {
 });
 
 describe("the demos are wired to it", () => {
-  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "road", "simple-road"];
+  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack", "road"];
 
   it.each(DEMOS)("%s attaches the graph panel", (demo) => {
     const src = readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8");

@@ -34,7 +34,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
-import { dressLap } from "../demos/road/dress.js";
+import { dressLap } from "../demos/racetrack/dress.js";
 import {
   BARRIER,
   FALSE_EDGE,
@@ -45,13 +45,13 @@ import {
   inEdgeBand,
   isFalseEdge,
   repairFalseEdges,
-} from "../demos/road/falseEdges.js";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import type { Kit } from "../demos/road/kit.js";
+} from "../demos/racetrack/falseEdges.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import type { Kit } from "../demos/racetrack/kit.js";
 import { DEFAULT_KIT, kitPath } from "./support/kits.js";
-import type { StationedPlacement } from "../demos/road/legibility.js";
-import { type Lap, readLap } from "../demos/road/lap.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
+import type { StationedPlacement } from "../demos/racetrack/legibility.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
 const KIT = kitPath(DEFAULT_KIT);
 

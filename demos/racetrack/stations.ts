@@ -95,7 +95,7 @@ export interface StationParams {
 }
 
 /**
- * Fitted against the published curve. See `tests/roadStations.test.ts`,
+ * Fitted against the published curve. See `tests/racetrackStations.test.ts`,
  * which holds these to it — every one is a knob with no independent
  * justification, so the test is the only thing keeping them honest.
  */

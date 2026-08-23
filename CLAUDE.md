@@ -105,14 +105,16 @@ a parent — these are three different kinds of thing and the old single
 - `editor/` — a TOOL, not a demo: it opens any graph in `graphs/` and
   edits it live. It carried a `01-` prefix once, which is exactly what
   made it read as the first demo
-- `demos/` — `infinite-world`, `galaxy`, `gpu-world`, `road`,
-  `simple-road`. Unnumbered on purpose: they encode no order. Each exists
+- `demos/` — `infinite-world`, `galaxy`, `gpu-world`, `racetrack`,
+  `road`. Unnumbered on purpose: they encode no order. Each exists
   because what it shows needs a host — a streamed world, a device-resident
-  renderer, a spline scored against a measured spec, a spline the page was
-  handed rather than made. `simple-road` is a deliberate COPY of `road`
+  renderer, a spline the page was handed rather than made. `racetrack` is
+  the one the placement rules run on; `road` is a deliberate COPY of it
   rather than a mode of it, kept as the version with no placement rules in
-  it; their module names are identical so the diff between them reads as
-  what the rules added. Each also shows the
+  it. Their module names are identical so the diff between them reads as
+  what the rules added. (A different `racetrack` demo held the name until
+  2026-08-23 — a scored, host-corrected circuit, retired and archived; see
+  PLAN.md for what it established.) Each also shows the
   graph behind it, read-only, as a thumbnail in its own control panel that
   opens full-screen (`shared/graph/`, mounted through `Overlay.addSlot`)
 - `graphs/` — the graph corpus: test fixtures, documentation source and

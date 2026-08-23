@@ -20,22 +20,22 @@
  */
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
-import { mixInsideRule } from "../demos/road/assets.js";
-import { dressLap, frameLookup } from "../demos/road/dress.js";
-import { ENCLOSE } from "../demos/road/tunnels.js";
-import { measureEnclosure } from "../demos/road/enclosure.js";
-import { falseEdges } from "../demos/road/falseEdges.js";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import { type Lap, readLap } from "../demos/road/lap.js";
+import { mixInsideRule } from "../demos/racetrack/assets.js";
+import { dressLap, frameLookup } from "../demos/racetrack/dress.js";
+import { ENCLOSE } from "../demos/racetrack/tunnels.js";
+import { measureEnclosure } from "../demos/racetrack/enclosure.js";
+import { falseEdges } from "../demos/racetrack/falseEdges.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import {
   landmarksSatisfied,
   markerCandidates,
   reserveMarkers,
-} from "../demos/road/legibility.js";
-import { defaultEyeStations, occludes } from "../demos/road/sightline.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
-import { COVERAGE, coverage } from "../demos/road/stations.js";
-import { buildVocabulary, shippedVocabulary, syntheticKit } from "../demos/road/vocabulary.js";
+} from "../demos/racetrack/legibility.js";
+import { defaultEyeStations, occludes } from "../demos/racetrack/sightline.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
+import { COVERAGE, coverage } from "../demos/racetrack/stations.js";
+import { buildVocabulary, shippedVocabulary, syntheticKit } from "../demos/racetrack/vocabulary.js";
 
 let lap: Lap | undefined;
 async function theLap(): Promise<Lap> {

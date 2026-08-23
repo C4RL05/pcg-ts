@@ -15,9 +15,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import { type Lap, placeAt, poseAt, readLap } from "../demos/road/lap.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { type Lap, placeAt, poseAt, readLap } from "../demos/racetrack/lap.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
 import {
   type Frame,
   type Occluder,
@@ -26,15 +26,15 @@ import {
   defaultEyeStations,
   occludes,
   segmentHitsBox,
-} from "../demos/road/sightline.js";
+} from "../demos/racetrack/sightline.js";
 import { DEFAULT_KIT, kitPath } from "./support/kits.js";
 import {
   type CurvatureBucket,
   type PlaceableAsset,
   bucketOf,
   placeAsset,
-} from "../demos/road/assets.js";
-import { makeStations } from "../demos/road/stations.js";
+} from "../demos/racetrack/assets.js";
+import { makeStations } from "../demos/racetrack/stations.js";
 
 const KIT = kitPath(DEFAULT_KIT);
 

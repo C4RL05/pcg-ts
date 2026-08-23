@@ -71,8 +71,8 @@ describe("the wordmark", () => {
       "galaxy",
       "gpu-world",
       "infinite-world",
+      "racetrack",
       "road",
-      "simple-road",
     ]) {
       expect(readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8")).toContain("attachWordmark()");
     }

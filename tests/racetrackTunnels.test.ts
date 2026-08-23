@@ -25,17 +25,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
-import { cornersOf, radiusAtW } from "../demos/road/corners.js";
-import { dressLap } from "../demos/road/dress.js";
-import { ENCLOSURE, measureEnclosure } from "../demos/road/enclosure.js";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import type { Kit } from "../demos/road/kit.js";
+import { cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
+import { dressLap } from "../demos/racetrack/dress.js";
+import { ENCLOSURE, measureEnclosure } from "../demos/racetrack/enclosure.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import type { Kit } from "../demos/racetrack/kit.js";
 import { ENCLOSURE_KIT, KITS, kitPath } from "./support/kits.js";
-import { type Lap, readLap } from "../demos/road/lap.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
-import type { PlaceableAsset } from "../demos/road/assets.js";
-import type { StationedPlacement } from "../demos/road/legibility.js";
-import { CORRIDOR } from "../demos/road/zones.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
+import type { PlaceableAsset } from "../demos/racetrack/assets.js";
+import type { StationedPlacement } from "../demos/racetrack/legibility.js";
+import { CORRIDOR } from "../demos/racetrack/zones.js";
 import {
   ENCLOSE,
   coverCandidates,
@@ -43,7 +43,7 @@ import {
   longStretchShare,
   planEnclosure,
   reduceEnclosure,
-} from "../demos/road/tunnels.js";
+} from "../demos/racetrack/tunnels.js";
 
 const KIT = kitPath(ENCLOSURE_KIT);
 

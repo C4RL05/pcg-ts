@@ -45,7 +45,7 @@ import measured from "./vocabulary.json";
  *
  * Per-asset bounding-box decompositions and the placement statistics the
  * rules read, measured from a source circuit and committed — see
- * `scripts/gen-road-vocabulary.mjs` for what it carries and what it
+ * `scripts/gen-racetrack-vocabulary.mjs` for what it carries and what it
  * deliberately leaves behind. It is dimensions and statistics: a median
  * of five axis-aligned boxes per asset, which is a guide for generating
  * an asset rather than an asset, and no level layout or source

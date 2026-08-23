@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * gen-road-vocabulary.mjs — build `demos/road/vocabulary.json` from a
+ * gen-racetrack-vocabulary.mjs — build `demos/racetrack/vocabulary.json` from a
  * measured kit.
  *
- * Usage: node scripts/gen-road-vocabulary.mjs [path-to-kit.json]
+ * Usage: node scripts/gen-racetrack-vocabulary.mjs [path-to-kit.json]
  *
  * WHAT THIS SHIPS AND WHAT IT DELIBERATELY DOES NOT.
  *
@@ -172,10 +172,10 @@ const placements = (kit.placements ?? [])
 
 const doc = {
   note:
-    "Dimensional vocabulary for demos/road: per-asset bounding-box " +
+    "Dimensional vocabulary for demos/racetrack: per-asset bounding-box " +
     "decompositions and the placement statistics the rules read. " +
     "Measurements of objects, not the objects. No level layout and no " +
-    "source identifiers — see scripts/gen-road-vocabulary.mjs.",
+    "source identifiers — see scripts/gen-racetrack-vocabulary.mjs.",
   units: {
     length: "track half-widths (W)",
     axes: "across (right of travel), along (racing direction), up (surface normal)",
@@ -191,7 +191,7 @@ writeFileSync(out, `${JSON.stringify(doc, null, 1)}\n`, "utf8");
 const boxes = placements.reduce((n, p) => n + p.boxes.length, 0);
 const shapes = [...perShape.entries()].map(([k, v]) => `${v} ${k}`).join(", ");
 console.log(
-  `gen-road-vocabulary: ${assets.length} assets, ${boxes} boxes ` +
+  `gen-racetrack-vocabulary: ${assets.length} assets, ${boxes} boxes ` +
     `(${(boxes / assets.length).toFixed(1)}/asset) — ${shapes}\n` +
     `  wrote ${out}`,
 );

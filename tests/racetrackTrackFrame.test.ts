@@ -14,9 +14,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry, type Geometry } from "pcg-ts";
-import { OUTPUTS, TRACK_FRAME, buildRoadGraph } from "../demos/road/graph.js";
-import { placeAt, poseAt, readLap } from "../demos/road/lap.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
+import { OUTPUTS, TRACK_FRAME, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { placeAt, poseAt, readLap } from "../demos/racetrack/lap.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
 const spline = makeTrackSpline({ seed: 1 });
 

@@ -125,7 +125,7 @@ const SIZES = {
   "infinite-world": { css: [1454, 783], out: [1454, 783] },
   galaxy: { css: [1454, 783], out: [1454, 783] },
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
-  road: { css: [1454, 783], out: [1454, 783] },
+  racetrack: { css: [1454, 783], out: [1454, 783] },
 };
 
 /**
@@ -329,7 +329,7 @@ const DEMOS = [
     animated: true,
   },
   {
-    id: "road",
+    id: "racetrack",
     // Same pinning problem the retired racetrack demo had, and the same
     // answer: the lap
     // travels forever, so the shot is fixed by naming a STATION rather
@@ -338,7 +338,7 @@ const DEMOS = [
     // uses, so the two demos frame the same part of a lap and the
     // difference between the pictures is the difference between the
     // demos rather than between two viewpoints.
-    path: "demos/road/",
+    path: "demos/racetrack/",
     settleWait: () => !!window.pcgRoad,
     settle: () => {
       window.pcgRoad.seek(250);

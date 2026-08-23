@@ -31,7 +31,7 @@ import {
   zoneFor,
   zonesForLap,
   zonesForLapDetailed,
-} from "../demos/road/zones.js";
+} from "../demos/racetrack/zones.js";
 
 const N = 330;
 const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];

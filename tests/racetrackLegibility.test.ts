@@ -14,10 +14,10 @@ import {
   type PlaceableAsset,
   bucketOf,
   placeAsset,
-} from "../demos/road/assets.js";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
+} from "../demos/racetrack/assets.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
 import { DEFAULT_KIT, kitPath } from "./support/kits.js";
-import { type Lap, readLap } from "../demos/road/lap.js";
+import { type Lap, readLap } from "../demos/racetrack/lap.js";
 import {
   BRAKING,
   LANDMARK,
@@ -34,10 +34,10 @@ import {
   reserveMarkers,
   strictlyVertical,
   uniqueAssets,
-} from "../demos/road/legibility.js";
-import { type Corner, cornersOf, radiusAtW } from "../demos/road/corners.js";
-import { makeStations } from "../demos/road/stations.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
+} from "../demos/racetrack/legibility.js";
+import { type Corner, cornersOf, radiusAtW } from "../demos/racetrack/corners.js";
+import { makeStations } from "../demos/racetrack/stations.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
 const KIT = kitPath(DEFAULT_KIT);
 

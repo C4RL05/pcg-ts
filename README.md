@@ -80,13 +80,13 @@ And five demos, each one something a single graph cannot be on its own:
 <td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/"><img alt="The infinite world demo, shown small: a dark plain seen from just above it, strewn with thousands of pale low-poly pebbles thinning toward the horizon, with a handful of large dark boulders standing among them as landmarks. A faint blue grid marks the streaming cells. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/infinite-world.jpg" width="100%"></a></td>
 <td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/"><img alt="The galaxy demo, shown small: tens of thousands of coloured stars wrapped in loose spiral arms around a soft glowing bulge, on black. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/galaxy.jpg" width="100%"></a></td>
 <td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/"><img alt="The gpu-world demo, shown small: a dense field of tall teal blades tipped with small pale seed heads, receding to the horizon on a dark ground. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/gpu-world.jpg" width="100%"></a></td>
-<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/road/"><img alt="The road demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/road.jpg" width="100%"></a></td>
+<td width="20%"><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/"><img alt="The racetrack demo, shown small: a circuit drawn as a pale ribbon seen from above, its whole lap lined on both verges with hundreds of small green wireframe boxes and spanned overhead in places, with the driven view of the road running away beneath it. A controls-and-readout panel fills the left edge, too small at this size to read." src="./docs/thumbs/racetrack.jpg" width="100%"></a></td>
 </tr>
 <tr>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/infinite-world/">infinite world</a></b><br>A world streamed around a flying camera, coarse to fine. Drag the cell size and watch the rocks not move.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/galaxy/">galaxy</a></b><br>An unbounded spiral galaxy that is a pure function of its seed. Click a star to visit its planets.</td>
 <td><b><a href="https://c4rl05.github.io/pcg-ts/demos/gpu-world/">gpu world</a></b><br>The same streaming, with every instance matrix composed on the GPU and drawn without ever being read back.</td>
-<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/road/">road</a></b><br>Roadside art placed along a spline the page was handed, to six legibility rules measured from a racing game. Every repair says how much it had to do.</td>
+<td><b><a href="https://c4rl05.github.io/pcg-ts/demos/racetrack/">racetrack</a></b><br>Roadside art placed along a spline the page was handed, to six legibility rules measured from a racing game. Every repair says how much it had to do.</td>
 </tr>
 </table>
 
@@ -976,12 +976,12 @@ infinite deterministic spiral galaxy with click-to-visit star systems
 world drawing from device-resident instance transforms
 ([live](https://c4rl05.github.io/pcg-ts/demos/gpu-world/)), and roadside
 art placed along a spline the page was handed rather than made
-([live](https://c4rl05.github.io/pcg-ts/demos/road/)), to six legibility
+([live](https://c4rl05.github.io/pcg-ts/demos/racetrack/)), to six legibility
 rules measured from a racing game and run as a bounded fixed point,
 because a single pass through them cannot satisfy them all. Beside it,
-[`demos/simple-road`](https://c4rl05.github.io/pcg-ts/demos/simple-road/)
+[`demos/road`](https://c4rl05.github.io/pcg-ts/demos/road/)
 is the same page with no placement rules in it at all: the two have
-identical module names on purpose, so `diff demos/road demos/simple-road`
+identical module names on purpose, so `diff demos/racetrack demos/road`
 reads as exactly what the rules added.
 [`editor/`](#the-editor) beside them is a tool rather than a demo, and
 has its own chapter above.

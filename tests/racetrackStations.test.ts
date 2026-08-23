@@ -48,7 +48,7 @@ import {
   makeStationsDetailed,
   placementCoverageIsMinimal,
   repairPlacementCoverage,
-} from "../demos/road/stations.js";
+} from "../demos/racetrack/stations.js";
 
 /** The demo's own lap length, so the gate is measured where it is used. */
 const LAP_W = 347;

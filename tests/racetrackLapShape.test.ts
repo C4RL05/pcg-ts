@@ -20,7 +20,7 @@
  * so a failure points at `spline.ts` and not at the graph.
  */
 import { describe, expect, it } from "vitest";
-import { makeTrackSpline } from "../demos/road/spline.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
 
 /**
  * Curvature bucket cuts in W, and the share of lap length each holds.

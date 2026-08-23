@@ -19,10 +19,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
-import { OUTPUTS, buildRoadGraph } from "../demos/road/graph.js";
-import { type Lap, placeAt, poseAt, readLap } from "../demos/road/lap.js";
-import { makeTrackSpline } from "../demos/road/spline.js";
-import { type Kit, type PlacedBox, placeKit } from "../demos/road/kit.js";
+import { OUTPUTS, buildRoadGraph } from "../demos/racetrack/graph.js";
+import { type Lap, placeAt, poseAt, readLap } from "../demos/racetrack/lap.js";
+import { makeTrackSpline } from "../demos/racetrack/spline.js";
+import { type Kit, type PlacedBox, placeKit } from "../demos/racetrack/kit.js";
 import { kitPath } from "./support/kits.js";
 
 const KIT = kitPath("street");

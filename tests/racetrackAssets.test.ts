@@ -27,9 +27,9 @@ import {
   repairBandMix,
   repairIsMinimal,
   weightAt,
-} from "../demos/road/assets.js";
+} from "../demos/racetrack/assets.js";
 import { DEFAULT_KIT, kitPath } from "./support/kits.js";
-import { inCorridor, resolveCorridor } from "../demos/road/zones.js";
+import { inCorridor, resolveCorridor } from "../demos/racetrack/zones.js";
 
 /**
  * WHICH CIRCUIT, and why it is not the first one.

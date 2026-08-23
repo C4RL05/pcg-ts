@@ -13,48 +13,25 @@
  * distance in world units and the car moves at the speed it is given.
  */
 import { type Geometry } from "pcg-ts";
-import { TRACK_FRAME } from "./graph.js";
 
-/** A pose on the lap: where, and the three axes of the track frame there. */
+/** A pose on the lap: where, which way, and which way is up. */
 export interface Pose {
   readonly p: [number, number, number];
-  /** `along` — the racing direction. */
   readonly dir: [number, number, number];
-  /** `up` — the surface normal. */
   readonly up: [number, number, number];
-  /** `across` — right of travel. */
-  readonly across: [number, number, number];
 }
 
-/** A place on the track, in the coordinates every placement rule uses. */
-export interface TrackCoord {
-  /** Arc length from the start line, in half-widths. Wraps at the lap. */
-  readonly station: number;
-  /** Signed offset across the track, positive RIGHT of travel, in half-widths. */
-  readonly lateral: number;
-  /** Height above the road surface, in half-widths. */
-  readonly height: number;
-}
-
-/** The lap, in the form the cameras and the placement lookup read it. */
+/** The lap, in the form the cameras read it. */
 export interface Lap {
   readonly count: number;
   /** Positions, xyz per frame. */
   readonly p: Float64Array;
-  /** Unit tangents, xyz per frame — the frame's `along`. */
+  /** Unit tangents, xyz per frame. */
   readonly tangent: Float64Array;
-  /** Unit axis right of travel, xyz per frame. */
-  readonly across: Float64Array;
-  /** Unit surface normal, xyz per frame. */
-  readonly up: Float64Array;
   /** Running distance to each frame, plus the total at [count]. */
   readonly s: Float64Array;
   /** Total lap length in world units. */
   readonly length: number;
-  /** Half the road width, in world units — the scale W is measured in. */
-  readonly halfWidth: number;
-  /** Total lap length in half-widths, which is what a station wraps at. */
-  readonly lengthW: number;
 }
 
 /** Read a numeric point column as plain numbers, live elements only. */
@@ -72,13 +49,7 @@ function col(g: Geometry, name: string): Float64Array {
 export function readLap(frames: Geometry): Lap {
   const count = frames.pointCount;
   const p = col(frames, "P");
-  // The PUBLISHED axes, not axes re-derived here. The graph and the host
-  // reading the same three columns is the whole point of TRACK_FRAME —
-  // a second derivation is a second chance to mirror one of them.
-  const tangent = col(frames, TRACK_FRAME.along);
-  const across = col(frames, TRACK_FRAME.across);
-  const up = col(frames, TRACK_FRAME.up);
-  const halfWidth = frames.attrs.point.require(TRACK_FRAME.halfWidth).data[0];
+  const tangent = col(frames, "tangent");
   const s = new Float64Array(count + 1);
   for (let i = 0; i < count; i++) {
     const j = (i + 1) % count;
@@ -87,8 +58,7 @@ export function readLap(frames: Geometry): Lap {
     const dz = p[j * 3 + 2] - p[i * 3 + 2];
     s[i + 1] = s[i] + Math.hypot(dx, dy, dz);
   }
-  const length = s[count];
-  return { count, p, tangent, across, up, s, length, halfWidth, lengthW: length / halfWidth };
+  return { count, p, tangent, s, length: s[count] };
 }
 
 /**
@@ -116,57 +86,27 @@ export function poseAt(lap: Lap, station: number): Pose {
   const span = lap.s[i + 1] - lap.s[i];
   const t = span > 0 ? (d - lap.s[i]) / span : 0;
 
-  const p = lerp3(lap.p, i, j, t);
-  // The frame's OWN axes, interpolated — not world up made perpendicular
-  // to the tangent, which is how the host used to get an up and is a
-  // second definition of the same thing. Reading the published columns
-  // means a banked track banks the camera without anyone changing this.
-  const dir = unit(lerp3(lap.tangent, i, j, t));
-  const up = unit(lerp3(lap.up, i, j, t));
-  const across = unit(lerp3(lap.across, i, j, t));
-  return { p, dir, up, across };
-}
+  const p: [number, number, number] = [0, 0, 0];
+  const dir: [number, number, number] = [0, 0, 0];
+  for (let a = 0; a < 3; a++) {
+    p[a] = lap.p[i * 3 + a] + (lap.p[j * 3 + a] - lap.p[i * 3 + a]) * t;
+    dir[a] = lap.tangent[i * 3 + a] + (lap.tangent[j * 3 + a] - lap.tangent[i * 3 + a]) * t;
+  }
+  const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+  dir[0] /= dl;
+  dir[1] /= dl;
+  dir[2] /= dl;
 
-/** Linear blend of an xyz column between two frames. */
-function lerp3(a: Float64Array, i: number, j: number, t: number): [number, number, number] {
-  return [
-    a[i * 3] + (a[j * 3] - a[i * 3]) * t,
-    a[i * 3 + 1] + (a[j * 3 + 1] - a[i * 3 + 1]) * t,
-    a[i * 3 + 2] + (a[j * 3 + 2] - a[i * 3 + 2]) * t,
-  ];
-}
+  // The up the CAR uses, not the curve's: world up made perpendicular to
+  // the direction. See `ACROSS` in graph.ts — a transported frame rolls,
+  // and a rolling camera on a flat track is the artifact you notice
+  // first.
+  const dotY = dir[1];
+  const up: [number, number, number] = [-dir[0] * dotY, 1 - dir[1] * dotY, -dir[2] * dotY];
+  const ul = Math.hypot(up[0], up[1], up[2]) || 1;
+  up[0] /= ul;
+  up[1] /= ul;
+  up[2] /= ul;
 
-/**
- * Renormalize after a blend.
- *
- * Two unit vectors averaged are not a unit vector, and the shortfall is a
- * function of the angle between them — so it is worst exactly where the
- * track turns hardest, which is where a placement being slightly off its
- * offset would show.
- */
-function unit(v: [number, number, number]): [number, number, number] {
-  const l = Math.hypot(v[0], v[1], v[2]) || 1;
-  return [v[0] / l, v[1] / l, v[2] / l];
-}
-
-/**
- * Track coordinates to a world position — the lookup a placement log
- * needs, and the inverse of what the kit's exporter measured.
- *
- * `station` is in HALF-WIDTHS and wraps, matching the contract; the
- * conversion to the arc length `poseAt` wants happens here so no caller
- * has to remember which of the two units it is holding.
- */
-export function placeAt(lap: Lap, at: TrackCoord): { p: [number, number, number]; pose: Pose } {
-  const pose = poseAt(lap, at.station * lap.halfWidth);
-  const lateral = at.lateral * lap.halfWidth;
-  const height = at.height * lap.halfWidth;
-  return {
-    p: [
-      pose.p[0] + pose.across[0] * lateral + pose.up[0] * height,
-      pose.p[1] + pose.across[1] * lateral + pose.up[1] * height,
-      pose.p[2] + pose.across[2] * lateral + pose.up[2] * height,
-    ],
-    pose,
-  };
+  return { p, dir, up };
 }

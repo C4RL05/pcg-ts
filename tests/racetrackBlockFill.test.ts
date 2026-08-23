@@ -24,7 +24,7 @@ import {
   buildFillGraph,
   buildShellGraph,
   calibrateKeep,
-} from "../demos/road/fill.js";
+} from "../demos/racetrack/fill.js";
 
 const KIT = kitPath("street");
 
