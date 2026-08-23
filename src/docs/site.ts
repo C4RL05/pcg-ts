@@ -29,7 +29,7 @@
  */
 
 /** The hand-authored pages, relative to `docs/`. */
-export const SITE_PAGES = ["index.html", "manual.html"] as const;
+export const SITE_PAGES = ["index.html", "architecture.html", "manual.html"] as const;
 
 /* ------------------------------------------------------------------ *
  * Version stamps
@@ -295,7 +295,8 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
     pattern: /<b>([\d,]+)<\/b><span>registered node types<\/span>/g,
   },
   {
-    page: "docs/index.html",
+    // Fig. 1 moved to the architecture page; the claim followed it.
+    page: "docs/architecture.html",
     label: "node types (Fig. 1, src/nodes)",
     source: "listNodeTypes().length",
     pattern: /src\/nodes — ([\d,]+) types/g,
@@ -307,7 +308,8 @@ export const COUNT_CLAIMS: readonly CountClaim[] = [
     pattern: /<b>([\d,]+)<\/b><span>named primitives<\/span>/g,
   },
   {
-    page: "docs/index.html",
+    // Fig. 1 moved to the architecture page; the claim followed it.
+    page: "docs/architecture.html",
     label: "named primitives (Fig. 1, src/primitives)",
     source: "docs/primitives.json entries",
     pattern: /src\/primitives — ([\d,]+) named recipes/g,

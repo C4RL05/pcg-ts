@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>pcg-ts — architecture</title>
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
+</head>
+<body>
+<!--
+  THE TWO DIAGRAM SECTIONS, off the landing page.
+
+  They are the longest things on it and the slowest to read — two mermaid
+  figures, a module list and a worked example — and a landing page is
+  read in the order it is written, so anyone who wanted the next section
+  scrolled past both. Moved rather than cut: this is the material a
+  reader goes looking for once the page has convinced them, and it is
+  worth a URL of its own.
+
+  THE STYLE BLOCK IS INDEX'S, COPIED. Every page in `docs/` carries its
+  own — the manual and the gallery do too — because none of them has a
+  build step to share one through. Copied whole rather than trimmed to
+  what these two sections use, so the two pages cannot drift apart in the
+  parts they do share, and so moving a section back is a cut and a paste
+  rather than a hunt for the rules it needs. If this grows to a fifth
+  page, extract `docs/site.css` instead of making a fifth copy.
+-->
+<style>
+  /* Self-hosted rather than linked from a font CDN: no third-party
+     request, nothing to block, and the page keeps its typography
+     offline. Both files are the latin subset of a VARIABLE font, so one
+     file per family covers every weight used here. OFL licensed. */
+  @font-face {
+    font-family: "Inter";
+    src: url("./fonts/inter-latin.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/jetbrains-mono-latin.woff2") format("woff2");
+    font-weight: 100 800;
+    font-style: normal;
+    font-display: swap;
+  }
+  :root {
+    /* ONE world, deliberately — there is no light theme and no
+       [data-theme] hook, because the three primaries below cannot
+       survive a light ground: #00ff00 on white measures 1.37:1 against
+       the 4.5 AA floor for text. A light scheme would need different
+       accents, i.e. a different design, so the page commits to black.
+       `color-scheme: dark` still declares that intent to the browser so
+       forced/auto dark mode has nothing left to invert. */
+    color-scheme: dark;
+    /* `color-scheme` gets the TRACK right and leaves the thumb the
+       platform's mid-grey, which is a bright bar down a page whose
+       ground is #000. These two are the standard, cross-engine pair and
+       they inherit, so the whole page is covered here. `--line-hi`
+       because a scrollbar is an emphasised border, which is the value's
+       existing job. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-hi) transparent;
+    --bg: #000000;
+
+    /* Pure greyscale — every value has R = G = B, no hue anywhere. The
+       ratios are measured against #000000. */
+    --ink-hi: #ffffff;   /* headings, max emphasis      21.00:1 */
+    --ink: #ededed;      /* body text                   17.94:1 */
+    --muted: #9a9a9a;    /* secondary text               7.46:1 */
+    --faint: #7a7a7a;    /* tertiary text                4.89:1 */
+    --line: #262626;     /* borders                             */
+    --line-hi: #3a3a3a;  /* link rules, emphasised borders      */
+    --card: #0d0d0d;
+    --plate: #0a0a0a;
+    --code-bg: #0a0a0a;
+    --code-ink: #ededed;
+
+    /* The three primaries, spent as MARKS and never on body copy. On
+       #000 red measures 5.25:1 and green 15.30:1, so both clear AA as
+       text — but blue is 2.44:1, under even the 3.0 large-text floor.
+       So --b is only ever a fill or a stroke. Never set text to it. */
+    --r: #ff0000;
+    --g: #00ff00;
+    --b: #0000ff;
+
+    /* Kept under their old names so the ~40 var(--accent*) call sites
+       downstream keep reading naturally. Note --accent-ink is now
+       GREYSCALE: link and inline-code text carries no colour, and --g is
+       spent only on interactive states and the one hero CTA. */
+    --accent: #00ff00;
+    --accent-ink: #ededed;
+    --amber: #ff0000;
+
+    --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  /**
+   * ONE COLUMN, TWELVE TRACKS, ONE MEASURE.
+   *
+   * Every width on this page used to be its own number. The column was
+   * 960, prose was `70ch`, the lead `64ch` and the hero paragraph `46ch`
+   * — and because `ch` scales with the element's OWN font-size, three
+   * measures written to look alike landed at 707, 707 and 522px. The 64
+   * was already a patch for that: it exists because `70ch` at the lead's
+   * 17.5px overhung the 16px paragraphs under it. Patching each new
+   * element against the last one does not converge.
+   *
+   * So the grid is stated instead, and read. `--track` is derived rather
+   * than typed so the arithmetic cannot drift: thirteen gutters (two
+   * outer, eleven between) subtracted from the page, split twelve ways.
+   * A span of n tracks is `track*n + gutter*(n-1)`.
+   *
+   *   page 960 · gutter 24 · track 54 · 12 tracks = 912 of content
+   *
+   * Press `g` (or load with `?grid`) to see it — the overlay draws these
+   * same values, so a width that does not land on a track shows up as
+   * one that does not line up.
+   */
+  :root {
+    --page: 960px;
+    --gutter: 24px;
+    --track: calc((var(--page) - var(--gutter) * 13) / 12);
+    /* PROSE IS NINE OF TWELVE — 678px. Nearest track span to the 707 the
+       page had settled on, so the body it was tuned for barely moves,
+       and now it is a column count rather than a coincidence. */
+    --measure: calc(var(--track) * 9 + var(--gutter) * 8);
+  }
+  .wrap { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
+
+  h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; color: var(--ink-hi); }
+  h2 { font-size: 26px; font-weight: 600; margin: 0 0 8px; }
+  /* The heading a page that is not the landing page leads with — the
+     landing page's own <h1> is the lockup, which is why this is the
+     first plain one on the site. */
+  .page-title { font-size: 30px; font-weight: 600; margin: 0 0 10px; }
+  /* A section that ends by pointing somewhere else. Set like a link and
+     spaced like a paragraph, because it IS the paragraph after the last
+     one — not a button pretending to be a call to action. */
+  .more-link { color: var(--g); }
+  .more-link:hover, .more-link:focus-visible { color: var(--ink-hi); }
+  h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+  p { margin: 0 0 14px; max-width: var(--measure); }
+  /* The rule is grey and only the HOVER is green: a link at rest is body
+     copy, so colour marks the interaction rather than the text. */
+  a { color: var(--accent-ink); text-decoration: none; border-bottom: 1px solid var(--line-hi); }
+  a:hover, a:focus-visible { border-bottom-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 10px;
+  }
+  section { padding: 44px 0 20px; }
+  section + section { border-top: 1px solid var(--line); }
+  .lead { font-size: 17.5px; color: var(--muted); max-width: var(--measure); }
+  .lead strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- hero ---------- */
+  /* No rule of its own: the one under the buttons is drawn at the TEXT's
+     width rather than the viewport's (see `.hero-actions`), and a
+     full-width one here would sit a few pixels under it saying the same
+     thing twice. */
+  header { }
+  /* The glyph is Phosphor's `graph`, bold, at the 256 viewBox it ships in
+     — the same path the editor's own toolbar wears, copied rather than
+     imported because this page has no build step and loads no module for
+     its chrome. If `shared/graph/icons.ts` ever redraws it, this is the
+     other copy. `currentColor` so it takes the hover with the word. */
+  .hero-open {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .hero-open .ic {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    fill: currentColor;
+  }
+  .hero-open:hover, .hero-open:focus-visible {
+    border-color: var(--ink);
+    color: var(--ink-hi);
+    background: var(--card);
+  }
+  /* TWO BANDS, and the field is only behind the second one. The lockup
+     gets plain ground and room around it; the sentence under it gets the
+     field, because that sentence is what the field is evidence for.
+
+     Both are sized by their CONTENT rather than being fixed bands with
+     something centred over them absolutely: the lockup keeps the
+     artwork's aspect ratio, so its height is a function of the viewport
+     width, and a fixed band would crop it or leave a gap at every width
+     but one. The min-height on the field band is a floor for the FIELD,
+     not for the text — a scatter needs some depth to read as one. */
+  .hero-logo { background: var(--bg); padding: 64px 0 56px; }
+  /* Ruled top and bottom, full width. The field is the one band on this
+     page with a ground of its own, and without an edge it bled into the
+     black above and below it — the dots simply thinned out and you could
+     not tell where the cooked strip began. The same hairline every other
+     seam on the page uses, so the header reads as banded rather than as
+     having grown a frame. The canvas is `inset: 0` against the PADDING
+     box, so it stops inside these rather than painting over them. */
+  /* `position: relative` for two things now: the canvas stretched behind
+     the band, and the editor link cornered inside it. */
+  .hero {
+    position: relative;
+    min-height: 190px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .hero canvas {
+    position: absolute; inset: 0;
+    display: block; width: 100%; height: 100%;
+  }
+  .hero-overlay { position: relative; padding: 48px 0; }
+  .hero-overlay .wrap { width: 100%; }
+  .hero-title {
+    margin: 0;
+    line-height: 0;
+    color: var(--ink);
+  }
+  /* Out of sight, kept in the accessibility tree. The lockup is a canvas
+     and a field of glyph outlines, so without this the page's only <h1>
+     would contain no text at all. */
+  .hero-title .vh {
+    position: absolute; width: 1px; height: 1px;
+    margin: -1px; padding: 0; border: 0;
+    clip-path: inset(50%); overflow: hidden; white-space: nowrap;
+  }
+  /* ---------- the animated lockup ---------- */
+
+  /* Two surfaces stacked in one box, so they cannot drift apart: a canvas
+     for the wordmark, which is sliced and channel-split every frame — that
+     is blitting rather than clipping — and an SVG for the split-flap board,
+     where flipping a character is one href write against an outline that is
+     already parsed, which is what lets the board run with no font anywhere.
+     Driven by docs/logo/logo.js; the static wordmark beside it is what a
+     browser that cannot run the module keeps. */
+  .lockup {
+    display: block;
+    position: relative;
+    width: min(100%, 1055px);
+    aspect-ratio: 1055 / 245;
+  }
+  .lockup > canvas, .lockup > svg {
+    position: absolute; inset: 0;
+    display: block; width: 100%; height: 100%;
+  }
+  /* The board's three states. Greyscale like the rest of the page: the
+     primaries are spent on the field's marks behind it, never here. */
+  .lockup .cell { fill: var(--ink-hi); }
+  .lockup .cell.roll { fill: var(--muted); opacity: 0.68; }
+  .lockup .cell.corrupt { fill: var(--muted); }
+  .lockup .cell.blank { visibility: hidden; }
+  /* The wordmark ships white on transparent, which is invisible on the
+     light scheme, so it is INLINED rather than linked: `fill:
+     currentColor` lets it take --ink and stay legible in both. An <img>
+     could not be recoloured. Sized by height with width:auto — the
+     viewBox carries the 8.24:1 aspect ratio, and the clamp keeps it
+     inside a narrow viewport. */
+  .hero-title .wordmark {
+    display: block;
+    height: clamp(30px, 5vw, 46px);
+    width: auto;
+    max-width: 100%;
+    fill: currentColor;
+  }
+  /* AFTER both of the rules above, deliberately. `hidden` is a UA rule at
+     the lowest specificity there is, and each of them sets `display` from a
+     class selector — which outranks it outright. This one only TIES with
+     `.hero-title .wordmark`, so it has to come later to win, and a swap
+     that reordered the block would put the fallback back on screen
+     underneath the lockup. */
+  .hero-title [hidden] { display: none; }
+  .hero-sub {
+    font-size: clamp(15px, 2.2vw, 18px);
+    color: var(--muted);
+    /* No top margin any more: it used to sit under the lockup inside one
+       band, and it is now the only thing in its own. */
+    margin: 0;
+    /* The same nine tracks the prose below it gets. It was `46ch`, which
+       at 18px came out 185px short of every paragraph on the page — the
+       one width here that belonged to no system. */
+    max-width: var(--measure);
+  }
+  /* A column: the seed reads with the field above it, and the row of
+     places to go next reads on its own. Side by side they were one long
+     line in which the only control on the page was just another item. */
+  /* The horizontal padding is `.wrap`'s own 24px, restated because this
+     shorthand would otherwise drop it — which is what had the buttons
+     starting a gutter's width left of the sentence above them, and would
+     now put the rule under them out of line with the text too. */
+  .hero-bar {
+    display: flex; flex-direction: column; align-items: flex-start;
+    padding: 18px 24px 0;
+    font-family: var(--mono); font-size: 13px;
+  }
+  /* `align-self: stretch` so the row fills the wrap's CONTENT box, which
+     is what puts the rule under it at the width of the text rather than
+     of the viewport — the buttons themselves are narrower than that and a
+     rule ending with them would read as an underline on the last one. */
+  .hero-actions {
+    align-self: stretch;
+    display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--line);
+  }
+  .hero-bar .install {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--ink);
+  }
+  .hero-bar .install::before { content: "$ "; color: var(--faint); }
+  .hero-bar .manual-link {
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--g);
+    font-weight: 600;
+    pointer-events: auto;
+  }
+  .hero-bar .manual-link:hover, .hero-bar .manual-link:focus-visible {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: var(--accent);
+  }
+  /* Beside the CTA and quieter than it: --g is spent on ONE hero button,
+     and two competing greens would leave neither of them the thing to
+     click. The same shape, in greyscale — and now three of them, which is
+     the reason the green one still reads as the one to press. */
+  .hero-bar .editor-link,
+  .hero-bar .out-link {
+    border: 1px solid var(--line-hi);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--ink);
+    pointer-events: auto;
+  }
+  .hero-bar .editor-link:hover, .hero-bar .editor-link:focus-visible,
+  .hero-bar .out-link:hover, .hero-bar .out-link:focus-visible {
+    border-color: var(--ink);
+    background: var(--card);
+  }
+  /* Off-site, and dimmer for it: these two leave the documentation, so
+     they sit a step behind the two that do not. */
+  .hero-bar .out-link { color: var(--muted); border-color: var(--line); }
+  .seed-ctl { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
+  /* Set off from the sentence above rather than run on from it: they are
+     a claim and the control that backs it, not one paragraph. */
+  .hero-overlay .seed-ctl { margin-top: 22px; font-family: var(--mono); font-size: 13px; }
+  .seed-ctl label { color: var(--muted); }
+  .seed-ctl input {
+    font-family: var(--mono); font-size: 13px;
+    /* 112, not 76: the stepper is two squares the height of the field,
+       so at the old width a hovered box was almost entirely buttons and
+       the value you were setting had nowhere to be read. */
+    width: 112px; padding: 5px 8px;
+    color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  /* The stepper: minus and plus, square, the full height of the field,
+     at its right edge, shown on hover. The platform's spinner is two
+     stacked arrows a few pixels wide — a target you aim at rather than
+     hit — and it cannot be reshaped into this: WebKit gives one box for
+     both arrows and Firefox gives nothing. So it is hidden and replaced.
+     The app chrome carries the same control; see shared/NumberBox.svelte. */
+  .seed-ctl .numbox { position: relative; display: inline-flex; }
+  .seed-ctl input::-webkit-outer-spin-button,
+  .seed-ctl input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .seed-ctl input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+  .seed-ctl .steps {
+    position: absolute; top: 1px; right: 1px; bottom: 1px;
+    display: flex; opacity: 0; pointer-events: none;
+    /* One less than the field's 6px, because the pair sits inside its
+       1px border — so the outer corner follows the frame exactly. */
+    border-radius: 0 5px 5px 0; overflow: hidden;
+    transition: opacity .08s;
+  }
+  .seed-ctl .numbox:hover .steps,
+  .seed-ctl .numbox:focus-within .steps { opacity: 1; pointer-events: auto; }
+  .seed-ctl .steps button {
+    height: 100%; aspect-ratio: 1; padding: 0;
+    display: grid; place-items: center;
+    /* At rest only the glyph: the field already has a border, and a
+       plate inside it would be a second frame a pixel from the first. */
+    background: transparent; color: var(--muted);
+    border: 0; border-radius: 0;
+    font: 13px system-ui, sans-serif; line-height: 1;
+    cursor: pointer; user-select: none;
+  }
+  .seed-ctl .steps button:hover { background: var(--line); color: var(--ink-hi); }
+  .seed-ctl .steps button:active { background: var(--line-hi); }
+  .seed-note { color: var(--faint); }
+
+  /* ---------- stats strip ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 26px 0 6px;
+  }
+  .stat { background: var(--card); padding: 14px 16px; }
+  .stat b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .stat span { font-size: 12.5px; color: var(--muted); }
+
+  /* ---------- pillar cards ---------- */
+  .cards {
+    display: grid;
+    /* Four cards, so two columns beats three: three leaves a lone card
+       stranded on a second row. The min() keeps it responsive without a
+       media query — below ~380px of track the grid drops to one column
+       on its own. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+    gap: 14px;
+    margin: 18px 0 8px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 18px 14px;
+  }
+  .card h3 { color: var(--ink); }
+  .card h3 code { color: var(--accent-ink); }
+  .card p { font-size: 14.5px; color: var(--muted); margin: 0; }
+
+  /* ---------- diagrams as plates ---------- */
+  .plate {
+    background: var(--plate);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 14px 8px;
+    margin: 18px 0 10px;
+    overflow-x: auto;
+  }
+  .plate pre.mermaid { margin: 0; display: flex; justify-content: center; min-width: 560px; }
+  /* Diagram ink follows the page theme tokens — transparent node fills,
+     outlines matching the text — overriding whatever theme mermaid's
+     runtime injects. Tokens (not pinned hex) keep the diagram coherent
+     even under forced-dark/inverter extensions. */
+  .plate svg .node rect, .plate svg .node circle, .plate svg .node ellipse,
+  .plate svg .node polygon, .plate svg .node path {
+    fill: transparent !important;
+    stroke: var(--ink) !important;
+    stroke-width: 1.1px !important;
+  }
+  .plate svg .nodeLabel, .plate svg .nodeLabel p, .plate svg .label text, .plate svg text {
+    color: var(--ink) !important;
+    fill: var(--ink) !important;
+  }
+  .plate svg .cluster rect {
+    fill: transparent !important;
+    stroke: var(--faint) !important;
+    stroke-dasharray: 4 3 !important;
+  }
+  .plate svg .cluster-label text, .plate svg .cluster-label .nodeLabel,
+  .plate svg .cluster-label p {
+    color: var(--muted) !important;
+    fill: var(--muted) !important;
+  }
+  .plate svg .edgePath path, .plate svg path.flowchart-link {
+    stroke: var(--muted) !important;
+  }
+  .plate svg marker path { fill: var(--muted) !important; stroke: var(--muted) !important; }
+  .plate svg .edgeLabel, .plate svg .edgeLabel p {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: var(--muted) !important;
+    fill: var(--muted) !important;
+  }
+  .plate svg .edgeLabel rect { fill: transparent !important; opacity: 0 !important; }
+  .caption {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    letter-spacing: 0.04em;
+    margin: 8px 0 0;
+  }
+  .caption b { color: var(--muted); font-weight: 600; }
+
+  /* ---------- module list ---------- */
+  .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 4px 28px; margin: 16px 0 8px; padding: 0; list-style: none; }
+  /* Two columns, not a flex row: the module names differ in width
+     (src/gpu 55px, src/primitives 110px), so a flex row started every
+     description at a different x and wrapped lines under it. The fixed
+     first column lands them all on one edge. At 13px the mono advance is
+     7.8px, so 112px clears the longest name (src/primitives, 14 chars)
+     — widen it if a longer one is ever added. */
+  .modules li { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+  .modules code { font-family: var(--mono); font-size: 13px; color: var(--accent-ink); white-space: nowrap; }
+  .modules span { color: var(--muted); }
+
+  /* ---------- code ---------- */
+  .codeblock {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 16px 0 10px;
+  }
+  .codeblock pre { margin: 0; font-family: var(--mono); font-size: 13.5px; line-height: 1.65; }
+  /* Syntax is carried by LIGHTNESS, not hue — four steps down the same
+     greyscale ramp. Colouring tokens would spend the primaries on the
+     most repeated element on the page, the opposite of sparingly. */
+  .codeblock .k { color: #ffffff; font-weight: 600; }
+  .codeblock .s { color: #9a9a9a; }
+  .codeblock .c { color: #5a5a5a; font-style: italic; }
+  .codeblock .n { color: #c8c8c8; }
+
+  /* ---------- feature columns ---------- */
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 32px; margin: 14px 0; padding: 0; list-style: none; }
+  .features li { padding: 7px 0 7px 20px; position: relative; font-size: 14.5px; color: var(--muted); }
+  .features li::before { content: "▸"; position: absolute; left: 0; color: var(--faint); }
+  .features li b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- examples ---------- */
+  /* The one full-width shot on the page: the editor doing the thing the grid
+     below only links to. Same border and radius as a card, no hover state,
+     because it is not a link. */
+  .lead-shot {
+    display: block; width: 100%; height: auto; margin: 16px 0 4px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  }
+  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 14px; margin: 16px 0 8px; }
+  a.example {
+    display: block;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg);
+    overflow: hidden; /* clip the thumbnail to the card's rounded corners */
+    transition: border-color 0.15s ease;
+  }
+  a.example:hover, a.example:focus-visible { border-color: var(--accent); }
+  /* The frame's aspect is reserved up front so lazily-loaded thumbnails
+     cannot reflow the grid as they arrive. */
+  .example img {
+    display: block; width: 100%; aspect-ratio: 640 / 345; object-fit: cover;
+    background: var(--card);
+    border-bottom: 1px solid var(--line);
+    opacity: 0.92; transition: opacity 0.15s ease;
+  }
+  a.example:hover img, a.example:focus-visible img { opacity: 1; }
+  .example .meta { display: block; padding: 12px 14px 14px; }
+  .example b { font-family: var(--mono); font-size: 13px; display: block; margin-bottom: 4px; color: var(--accent-ink); }
+  .example span { font-size: 13px; color: var(--muted); }
+
+  /* ---------- roadmap ---------- */
+  .roadmap { list-style: none; margin: 20px 0 8px; padding: 0; }
+  .roadmap li {
+    display: grid; grid-template-columns: 120px 1fr; gap: 18px;
+    padding: 16px 0; border-top: 1px dashed var(--line);
+  }
+  .roadmap li:first-child { border-top: none; }
+  .rm-ver { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+  .rm-ver small { display: block; font-weight: 400; color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+  .rm-body p { font-size: 14.5px; color: var(--muted); margin: 6px 0 0; }
+  .chip {
+    display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 2px 9px; border-radius: 99px; vertical-align: 2px;
+  }
+  .chip.shipped { color: var(--accent-ink); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .chip.next { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 30px; padding: 24px 0 40px;
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 8px 28px;
+  }
+  /**
+   * THE GRID, MADE VISIBLE — a development tool, off in every visitor's
+   * browser and one keystroke away in yours.
+   *
+   * Drawn from the same four custom properties the layout is, never from
+   * a second copy of the numbers: an overlay that agrees with a hand-typed
+   * grid rather than with the page is worse than none, because it tells
+   * you a width lines up when it does not.
+   *
+   * `position: fixed` and `pointer-events: none`, so it covers the
+   * viewport as you scroll and nothing on the page becomes unclickable
+   * while it is up.
+   */
+  .grid-guide {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    pointer-events: none;
+  }
+  :root.show-grid .grid-guide { display: block; }
+  .grid-guide .wrap {
+    height: 100%;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 0 var(--gutter);
+  }
+  .grid-guide span { background: rgba(255, 0, 0, 0.11); }
+  /* Where the prose measure ends: nine tracks in. A line rather than a
+     tint, because the question it answers is "does this edge land on the
+     grid", and an edge is what you compare against an edge. */
+  .grid-guide span:nth-child(9) { box-shadow: 1px 0 0 rgba(0, 255, 0, 0.55); }
+  .grid-note {
+    position: fixed;
+    right: 8px;
+    bottom: 8px;
+    z-index: 100;
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--line-hi);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    pointer-events: none;
+  }
+  @media (max-width: 560px) {
+    /* The band around the lockup is generous on a desktop and would be
+       half a phone screen of nothing here; the lockup itself already
+       scales with the viewport. */
+    .hero-logo { padding: 36px 0 32px; }
+    .hero { min-height: 200px; }
+    .roadmap li { grid-template-columns: 1fr; gap: 6px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main class="wrap">
+  <p class="eyebrow"><a href="./index.html">pcg-ts</a> · architecture</p>
+  <h1 class="page-title">How it is built, and how a world gets made</h1>
+  <p class="lead">The module layers and the streaming cook path, in two
+  figures. Everything here is the same library the <a href="./index.html">landing
+  page</a> introduces; this is the level below it.</p>
+
+  <section>
+    <p class="eyebrow">Architecture</p>
+    <h2>Layered core, optional adapters</h2>
+    <p>The core has zero dependencies and never imports three.js or WebGPU — guard tests enforce that only the adapters may. Each layer depends only on the ones before it.</p>
+
+    <div class="plate">
+      <pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis", "subGraphTitleMargin": {"top": 12, "bottom": 6}}}}%%
+flowchart TB
+  subgraph L1["foundation"]
+    direction LR
+    RANDOM["src/random — PCG32 · hashing"]
+    DATA["src/data — SoA attributes · domains"]
+  end
+  subgraph L2["values"]
+    direction LR
+    FIELDS["src/fields — deferred values · combinators"]
+    NOISE["src/noise — 5 noise types as fields"]
+  end
+  subgraph L3["execution"]
+    direction LR
+    GRAPH["src/graph — executor · memo cache · subgraphs"]
+    NODES["src/nodes — 48 types · registry · JSON"]
+    SPATIAL["src/spatial — uniform grid · adjacency CSR"]
+  end
+  subgraph L4["orchestration"]
+    direction LR
+    RUNTIME["src/runtime — World · streaming"]
+    SPAWN["src/spawn — InstanceBatch protocol"]
+  end
+  subgraph L5["authoring"]
+    direction LR
+    PRIMS["src/primitives — 37 named recipes"]
+    CLI["src/cli — pcg: validate · cook · inspect · render"]
+  end
+  THREE["src/three — optional adapter, the only module importing three"]
+  GPU["src/gpu — optional WGSL compiler + WebGPU device runtime"]
+  L1 --> L2 --> L3 --> L4 --> L5
+  L4 -. render-agnostic boundary .-> THREE
+  L2 -. structural resolver boundary .-> GPU
+      </pre>
+      <p class="caption"><b>Fig. 1</b> — module layers; arrows are the only allowed dependency direction.</p>
+    </div>
+
+    <ul class="modules">
+      <li><code>src/data</code><span>typed-array attribute storage, geometry, promote/transfer</span></li>
+      <li><code>src/random</code><span>PCG32 RNG and seed hashing — no Math.random anywhere</span></li>
+      <li><code>src/fields</code><span>deferred values, evaluation contexts, memoization</span></li>
+      <li><code>src/noise</code><span>five noise fields with published raw ranges + normalized mode</span></li>
+      <li><code>src/graph</code><span>nodes, pins, scheduler, caching, subgraph composition</span></li>
+      <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
+      <li><code>src/spatial</code><span>uniform grid and adjacency CSR the spatial nodes share</span></li>
+      <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
+      <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
+      <li><code>src/primitives</code><span>named subgraph recipes referenced from JSON by name</span></li>
+      <li><code>src/cli</code><span>the <code>pcg</code> binary — validate, cook, inspect, render</span></li>
+      <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, device-resident runs, parity-budgeted</span></li>
+      <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">How a world gets made</p>
+    <h2>From a seed to instances on screen</h2>
+
+    <div class="plate">
+      <pre class="mermaid">
+%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
+flowchart TB
+  SEED(["seed + viewpoint"]) --> WORLD["World: coarse to fine levels"]
+  WORLD --> CELLS["wanted cells: hysteresis · LRU"]
+  CELLS --> COOK["cook per cell, seeded by coords"]
+  COOK <--> CACHE[("memo cache")]
+  COOK --> ITEMS["DataItems: geometry · instances"]
+  ITEMS --> BATCH["InstanceBatch: assetId · transforms"]
+  BATCH --> ADAPTER["three adapter"]
+  ADAPTER --> MESH(["InstancedMesh in the scene"])
+      </pre>
+      <p class="caption"><b>Fig. 2</b> — the streaming cook path. Budgeted, cancellable, resumable; identical results in any cook order.</p>
+    </div>
+
+    <div class="codeblock"><pre><span class="c">// Scatter points in a box, displace them with a noise field.</span>
+<span class="k">import</span> { Graph, cook, firstGeometry, pointScatterInBounds,
+         jitterPoints, fbm, perlinNoise, remap } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
+
+<span class="k">const</span> graph = <span class="k">new</span> <span class="n">Graph</span>(<span class="s">42</span>);  <span class="c">// every node seed derives from this</span>
+
+<span class="k">const</span> scatter = graph.<span class="n">add</span>(pointScatterInBounds, {
+  count: <span class="s">500</span>, boundsMin: [<span class="s">0</span>, <span class="s">0</span>, <span class="s">0</span>], boundsMax: [<span class="s">50</span>, <span class="s">0</span>, <span class="s">50</span>],
+});
+
+<span class="c">// `amount` is field-capable: scalar noise, evaluated per point.</span>
+<span class="k">const</span> jitter = graph.<span class="n">add</span>(jitterPoints, {
+  amount: <span class="n">remap</span>(<span class="n">fbm</span>(perlinNoise, { seed: <span class="s">7</span>, frequency: <span class="s">0.05</span> }), -<span class="s">1</span>, <span class="s">1</span>, <span class="s">0</span>, <span class="s">1</span>),
+});
+
+graph.<span class="n">connect</span>(scatter, <span class="s">"out"</span>, jitter, <span class="s">"in"</span>);
+graph.<span class="n">output</span>(jitter, <span class="s">"out"</span>, <span class="s">"points"</span>);
+
+<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
+<span class="k">const</span> geo = <span class="n">firstGeometry</span>(result.outputs.points);
+console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 2, cached: 0, elapsedMs: … }</span></pre></div>
+    <p class="caption">Cook again: both nodes are cache hits. Change one param: only its dependents recook.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Next</p>
+    <h2>Where to go from here</h2>
+    <p>The <a href="./manual.html">user manual</a> is the long form of all of
+    this, chapter by chapter. The <a href="./gallery.html">corpus gallery</a> is
+    every graph in the repository, cooked and shot. The
+    <a href="./editor/">editor</a> opens any of them and lets you change it.</p>
+    <p><a href="./index.html">← back to the landing page</a></p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex; flex-wrap:wrap; gap:8px 28px;">
+    <span>pcg-ts <!--pcg:version-->v0.16.0<!--/pcg:version--></span>
+    <span>MIT license</span>
+    <a href="./manual.html">user manual</a>
+    <a href="./architecture.html">architecture</a>
+    <a href="./gallery.html">corpus gallery</a>
+    <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
+    <span>ESM · TypeScript strict · three.js optional</span>
+  </div>
+</footer>
+
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+// Mermaid ships a light theme by default, which would drop a white slab
+// onto a black page. Driven off the same greyscale ramp as the CSS.
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    darkMode: true,
+    background: "#000000",
+    mainBkg: "#0d0d0d",
+    primaryColor: "#0d0d0d",
+    primaryTextColor: "#ededed",
+    primaryBorderColor: "#3a3a3a",
+    secondaryColor: "#0a0a0a",
+    tertiaryColor: "#0a0a0a",
+    nodeBorder: "#3a3a3a",
+    clusterBkg: "#0a0a0a",
+    clusterBorder: "#262626",
+    lineColor: "#7a7a7a",
+    textColor: "#ededed",
+    edgeLabelBackground: "#000000",
+    fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
+  },
+});
+</script>
+
+     the script below does for `?grid` or the `g` key. -->
+<div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
+
+<script>
+(() => {
+  // `g` toggles the grid; `?grid` opens with it up. Ignored while a field
+  // has focus, or typing a seed of 4816 would flash the overlay twice.
+  const root = document.documentElement;
+  let note = null;
+  function show(on) {
+    root.classList.toggle("show-grid", on);
+    if (on && note === null) {
+      note = document.createElement("div");
+      note.className = "grid-note";
+      // MEASURED off a track, not read off the property: a custom
+      // property returns the token it was written as, so reading --track
+      // hands back the calc() rather than the 54px it comes to — and a
+      // readout that cannot resolve its own arithmetic is worth nothing
+      // to the person checking whether a width lands on it.
+      const cell = document.querySelector(".grid-guide span");
+      const track = Math.round(cell.getBoundingClientRect().width * 10) / 10;
+      const gutter = getComputedStyle(document.querySelector(".grid-guide .wrap")).columnGap;
+      note.textContent = `12 x ${track}px · gutter ${gutter} · prose 9 · g to hide`;
+      document.body.appendChild(note);
+    }
+    if (note !== null) note.style.display = on ? "" : "none";
+  }
+  if (new URLSearchParams(location.search).has("grid")) show(true);
+  addEventListener("keydown", (e) => {
+    const t = e.target;
+    const typing = t instanceof HTMLElement &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "g" || e.key === "G") show(!root.classList.contains("show-grid"));
+  });
+})();
+</script>
+</body>
+</html>

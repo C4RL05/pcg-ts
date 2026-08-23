@@ -124,6 +124,15 @@
 
   h1, h2, h3 { font-family: var(--mono); letter-spacing: -0.01em; text-wrap: balance; color: var(--ink-hi); }
   h2 { font-size: 26px; font-weight: 600; margin: 0 0 8px; }
+  /* The heading a page that is not the landing page leads with — the
+     landing page's own <h1> is the lockup, which is why this is the
+     first plain one on the site. */
+  .page-title { font-size: 30px; font-weight: 600; margin: 0 0 10px; }
+  /* A section that ends by pointing somewhere else. Set like a link and
+     spaced like a paragraph, because it IS the paragraph after the last
+     one — not a button pretending to be a call to action. */
+  .more-link { color: var(--g); }
+  .more-link:hover, .more-link:focus-visible { color: var(--ink-hi); }
   h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
   p { margin: 0 0 14px; max-width: var(--measure); }
   /* The rule is grey and only the HOVER is green: a link at rest is body
@@ -759,109 +768,20 @@
     </div>
   </section>
 
+  <!-- The two diagram sections used to sit here. They are the longest
+       things on the page and the slowest to read, and a landing page is
+       read in the order it is written — so everything after them was
+       behind two mermaid figures, a module list and a worked example.
+       They are a page now, and this is the door to it. -->
   <section>
     <p class="eyebrow">Architecture</p>
     <h2>Layered core, optional adapters</h2>
-    <p>The core has zero dependencies and never imports three.js or WebGPU — guard tests enforce that only the adapters may. Each layer depends only on the ones before it.</p>
-
-    <div class="plate">
-      <pre class="mermaid">
-%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis", "subGraphTitleMargin": {"top": 12, "bottom": 6}}}}%%
-flowchart TB
-  subgraph L1["foundation"]
-    direction LR
-    RANDOM["src/random — PCG32 · hashing"]
-    DATA["src/data — SoA attributes · domains"]
-  end
-  subgraph L2["values"]
-    direction LR
-    FIELDS["src/fields — deferred values · combinators"]
-    NOISE["src/noise — 5 noise types as fields"]
-  end
-  subgraph L3["execution"]
-    direction LR
-    GRAPH["src/graph — executor · memo cache · subgraphs"]
-    NODES["src/nodes — 48 types · registry · JSON"]
-    SPATIAL["src/spatial — uniform grid · adjacency CSR"]
-  end
-  subgraph L4["orchestration"]
-    direction LR
-    RUNTIME["src/runtime — World · streaming"]
-    SPAWN["src/spawn — InstanceBatch protocol"]
-  end
-  subgraph L5["authoring"]
-    direction LR
-    PRIMS["src/primitives — 37 named recipes"]
-    CLI["src/cli — pcg: validate · cook · inspect · render"]
-  end
-  THREE["src/three — optional adapter, the only module importing three"]
-  GPU["src/gpu — optional WGSL compiler + WebGPU device runtime"]
-  L1 --> L2 --> L3 --> L4 --> L5
-  L4 -. render-agnostic boundary .-> THREE
-  L2 -. structural resolver boundary .-> GPU
-      </pre>
-      <p class="caption"><b>Fig. 1</b> — module layers; arrows are the only allowed dependency direction.</p>
-    </div>
-
-    <ul class="modules">
-      <li><code>src/data</code><span>typed-array attribute storage, geometry, promote/transfer</span></li>
-      <li><code>src/random</code><span>PCG32 RNG and seed hashing — no Math.random anywhere</span></li>
-      <li><code>src/fields</code><span>deferred values, evaluation contexts, memoization</span></li>
-      <li><code>src/noise</code><span>five noise fields with published raw ranges + normalized mode</span></li>
-      <li><code>src/graph</code><span>nodes, pins, scheduler, caching, subgraph composition</span></li>
-      <li><code>src/nodes</code><span>standard library, self-describing registry, JSON round-trips</span></li>
-      <li><code>src/spatial</code><span>uniform grid and adjacency CSR the spatial nodes share</span></li>
-      <li><code>src/runtime</code><span>hierarchical World, partitioned cooking, invalidation</span></li>
-      <li><code>src/spawn</code><span>render-agnostic instancing terminal</span></li>
-      <li><code>src/primitives</code><span>named subgraph recipes referenced from JSON by name</span></li>
-      <li><code>src/cli</code><span>the <code>pcg</code> binary — validate, cook, inspect, render</span></li>
-      <li><code>src/gpu</code><span>field-expression → WGSL compiler, WebGPU evaluator, device-resident runs, parity-budgeted</span></li>
-      <li><code>src/three</code><span>BufferGeometry/Curve converters, InstancedMesh, scene binding</span></li>
-    </ul>
-  </section>
-
-  <section>
-    <p class="eyebrow">How a world gets made</p>
-    <h2>From a seed to instances on screen</h2>
-
-    <div class="plate">
-      <pre class="mermaid">
-%%{init: {"theme": "neutral", "flowchart": {"htmlLabels": false, "curve": "basis"}}}%%
-flowchart TB
-  SEED(["seed + viewpoint"]) --> WORLD["World: coarse to fine levels"]
-  WORLD --> CELLS["wanted cells: hysteresis · LRU"]
-  CELLS --> COOK["cook per cell, seeded by coords"]
-  COOK <--> CACHE[("memo cache")]
-  COOK --> ITEMS["DataItems: geometry · instances"]
-  ITEMS --> BATCH["InstanceBatch: assetId · transforms"]
-  BATCH --> ADAPTER["three adapter"]
-  ADAPTER --> MESH(["InstancedMesh in the scene"])
-      </pre>
-      <p class="caption"><b>Fig. 2</b> — the streaming cook path. Budgeted, cancellable, resumable; identical results in any cook order.</p>
-    </div>
-
-    <div class="codeblock"><pre><span class="c">// Scatter points in a box, displace them with a noise field.</span>
-<span class="k">import</span> { Graph, cook, firstGeometry, pointScatterInBounds,
-         jitterPoints, fbm, perlinNoise, remap } <span class="k">from</span> <span class="s">"pcg-ts"</span>;
-
-<span class="k">const</span> graph = <span class="k">new</span> <span class="n">Graph</span>(<span class="s">42</span>);  <span class="c">// every node seed derives from this</span>
-
-<span class="k">const</span> scatter = graph.<span class="n">add</span>(pointScatterInBounds, {
-  count: <span class="s">500</span>, boundsMin: [<span class="s">0</span>, <span class="s">0</span>, <span class="s">0</span>], boundsMax: [<span class="s">50</span>, <span class="s">0</span>, <span class="s">50</span>],
-});
-
-<span class="c">// `amount` is field-capable: scalar noise, evaluated per point.</span>
-<span class="k">const</span> jitter = graph.<span class="n">add</span>(jitterPoints, {
-  amount: <span class="n">remap</span>(<span class="n">fbm</span>(perlinNoise, { seed: <span class="s">7</span>, frequency: <span class="s">0.05</span> }), -<span class="s">1</span>, <span class="s">1</span>, <span class="s">0</span>, <span class="s">1</span>),
-});
-
-graph.<span class="n">connect</span>(scatter, <span class="s">"out"</span>, jitter, <span class="s">"in"</span>);
-graph.<span class="n">output</span>(jitter, <span class="s">"out"</span>, <span class="s">"points"</span>);
-
-<span class="k">const</span> result = <span class="k">await</span> <span class="n">cook</span>(graph);
-<span class="k">const</span> geo = <span class="n">firstGeometry</span>(result.outputs.points);
-console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 2, cached: 0, elapsedMs: … }</span></pre></div>
-    <p class="caption">Cook again: both nodes are cache hits. Change one param: only its dependents recook.</p>
+    <p>A core that imports nothing outside itself, and adapters that depend on
+    it one way only: three.js interop, the WebGPU compiler and device runtime,
+    the worker pool, the CLI. Above that, a streaming runtime that cooks a
+    world around a moving camera in budgeted, cancellable slices — and returns
+    the same result whatever order it cooked in.</p>
+    <p><a class="more-link" href="./architecture.html">The module layers and the cook path, in two figures →</a></p>
   </section>
 
   <section>
@@ -1037,6 +957,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     <span>pcg-ts <!--pcg:version-->v0.16.0<!--/pcg:version--></span>
     <span>MIT license</span>
     <a href="./manual.html">user manual</a>
+    <a href="./architecture.html">architecture</a>
     <a href="./gallery.html">corpus gallery</a>
     <a href="https://github.com/C4RL05/pcg-ts">github.com/C4RL05/pcg-ts</a>
     <span>ESM · TypeScript strict · three.js optional</span>
@@ -1177,32 +1098,10 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
 })();
 </script>
 <script type="module" src="./logo/logo.js"></script>
-<script type="module">
-import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-// Mermaid ships a light theme by default, which would drop a white slab
-// onto a black page. Driven off the same greyscale ramp as the CSS.
-mermaid.initialize({
-  startOnLoad: true,
-  theme: "base",
-  themeVariables: {
-    darkMode: true,
-    background: "#000000",
-    mainBkg: "#0d0d0d",
-    primaryColor: "#0d0d0d",
-    primaryTextColor: "#ededed",
-    primaryBorderColor: "#3a3a3a",
-    secondaryColor: "#0a0a0a",
-    tertiaryColor: "#0a0a0a",
-    nodeBorder: "#3a3a3a",
-    clusterBkg: "#0a0a0a",
-    clusterBorder: "#262626",
-    lineColor: "#7a7a7a",
-    textColor: "#ededed",
-    edgeLabelBackground: "#000000",
-    fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
-  },
-});
-</script>
+<!-- The mermaid import that used to sit here went with the two figures
+     it was for (docs/architecture.html). It is a CDN module and this page
+     no longer draws a diagram, so keeping it would be a network request
+     for nothing on the first page anyone loads. -->
 <!-- Development only: hidden until `.show-grid` is set on <html>, which
      the script below does for `?grid` or the `g` key. -->
 <div class="grid-guide" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
