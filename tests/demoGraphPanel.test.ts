@@ -19,7 +19,12 @@
  * wide enough that the flat floor cannot show it. That used to be the
  * racetrack demo's 238-node graph purely because it was the biggest thing
  * in the repository — a coupling that made a viewport assertion depend on
- * which demos existed. It is now `tests/support/wideGraph.ts`.
+ * which demos existed. It is now `tests/support/wideGraph.ts`, which is
+ * what let that demo be retired without the lens tests going quiet.
+ *
+ * The reader cases lost their largest REAL subject with it: the biggest
+ * that remains is `gpu-world/spires`. Seven real demo graphs still cover
+ * the classification the header is about, but not at that size.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -33,9 +38,6 @@ import { previewRows } from "../shared/graph/view.js";
 import { deriveGalaxy, makeHaloLevel, makeStarLevel } from "../demos/galaxy/galaxy.js";
 import { makeSpireLevel } from "../demos/gpu-world/levels.js";
 import { makeLandmarkLevel, makeRockLevel } from "../demos/infinite-world/levels.js";
-import { buildTrackDressingGraph } from "../demos/racetrack/dressing.js";
-import { PRESETS } from "../demos/racetrack/kit.js";
-import { TRACK } from "../demos/racetrack/read.js";
 import { buildRoadGraph } from "../demos/road/graph.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
 // Aliased, not renamed at the source: `simple-road` is a deliberate copy
@@ -49,7 +51,6 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 /** Every graph the demos put in front of the panel. */
 function demoGraphs(): { name: string; graph: Graph }[] {
   const form = deriveGalaxy(7);
-  const preset = Object.values(PRESETS)[0] as never;
   return [
     { name: "galaxy/halo", graph: makeHaloLevel(form).graph },
     { name: "galaxy/stars", graph: makeStarLevel(form, 400).graph },
@@ -59,17 +60,6 @@ function demoGraphs(): { name: string; graph: Graph }[] {
       name: "infinite-world/rocks",
       graph: makeRockLevel({ cellSize: 64, generationRadius: 200, anchored: true, halo: true })
         .graph,
-    },
-    {
-      name: "racetrack/lap",
-      graph: buildTrackDressingGraph({
-        ...TRACK,
-        preset,
-        seed: 1,
-        ribbon: true,
-        countByProfile: { flat: 1, built: 1, clustered: 1 },
-        weightByArchetype: {},
-      }).graph,
     },
     {
       name: "road/verges",
@@ -284,7 +274,7 @@ describe("the param rows", () => {
 });
 
 describe("the demos are wired to it", () => {
-  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "racetrack", "road", "simple-road"];
+  const DEMOS = ["galaxy", "gpu-world", "infinite-world", "road", "simple-road"];
 
   it.each(DEMOS)("%s attaches the graph panel", (demo) => {
     const src = readFileSync(`${ROOT}demos/${demo}/main.ts`, "utf8");

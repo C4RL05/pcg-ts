@@ -125,7 +125,6 @@ const SIZES = {
   "infinite-world": { css: [1454, 783], out: [1454, 783] },
   galaxy: { css: [1454, 783], out: [1454, 783] },
   "gpu-world": { css: [1079, 791], out: [1079, 791] },
-  racetrack: { css: [1454, 783], out: [1454, 783] },
   road: { css: [1454, 783], out: [1454, 783] },
 };
 
@@ -330,25 +329,12 @@ const DEMOS = [
     animated: true,
   },
   {
-    id: "racetrack",
-    // The lap travels forever, so the shot has to be pinned rather than
-    // waited out — and pinning it with the pause checkbox would stop it
-    // wherever this machine happened to have got to. `pauseAt` names a
-    // station, which makes the framing a pure function of the seed.
-    // Station 250 W is mid-corner: the amber road sweeping away, its
-    // centreline on it, and the outside-of-bend lean, in one frame.
-    path: "demos/racetrack/",
-    settleWait: () => !!window.pcgTrack && window.pcgTrack.ready(),
-    settle: () => window.pcgTrack.pauseAt(250),
-    ready: (s, has) =>
-      has(s["placements"]) && s["placements"] !== "0" && has(s["metrics passed"]),
-  },
-  {
     id: "road",
-    // Same pinning problem as the racetrack and the same answer: the lap
+    // Same pinning problem the retired racetrack demo had, and the same
+    // answer: the lap
     // travels forever, so the shot is fixed by naming a STATION rather
     // than by pausing, which would stop it wherever this machine happened
-    // to have got to. Station 250 W is the same one the racetrack shot
+    // to have got to. Station 250 W is the same one that demo shot
     // uses, so the two demos frame the same part of a lap and the
     // difference between the pictures is the difference between the
     // demos rather than between two viewpoints.

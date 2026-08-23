@@ -105,7 +105,7 @@ a parent — these are three different kinds of thing and the old single
 - `editor/` — a TOOL, not a demo: it opens any graph in `graphs/` and
   edits it live. It carried a `01-` prefix once, which is exactly what
   made it read as the first demo
-- `demos/` — `infinite-world`, `galaxy`, `gpu-world`, `racetrack`, `road`,
+- `demos/` — `infinite-world`, `galaxy`, `gpu-world`, `road`,
   `simple-road`. Unnumbered on purpose: they encode no order. Each exists
   because what it shows needs a host — a streamed world, a device-resident
   renderer, a spline scored against a measured spec, a spline the page was

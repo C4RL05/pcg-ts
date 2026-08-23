@@ -71,7 +71,6 @@ describe("the wordmark", () => {
       "galaxy",
       "gpu-world",
       "infinite-world",
-      "racetrack",
       "road",
       "simple-road",
     ]) {
