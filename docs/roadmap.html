@@ -558,11 +558,14 @@
   /* The one full-width shot on the page: the editor doing the thing the grid
      below only links to. Same border and radius as a card, no hover state,
      because it is not a link. */
-  .lead-shot {
-    display: block; width: 100%; height: auto; margin: 16px 0 4px;
-    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
-  }
-  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 14px; margin: 16px 0 8px; }
+  /* TWO COLUMNS, not `auto-fit`: the row above them is one tile spanning
+     both, so the count has to be knowable — `auto-fit` would have put
+     three demos on a wide screen and left the fourth alone under them. */
+  .examples { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 16px 0 8px; }
+  /* `full`, not `lead`: `.lead` is the section-opening paragraph and
+     carries the prose measure, which a tile spanning the grid must
+     not inherit — it capped this one at 678 of its 912. */
+  .example.full { grid-column: 1 / -1; }
   a.example {
     display: block;
     border: 1px solid var(--line); border-radius: 10px;
@@ -573,8 +576,14 @@
   a.example:hover, a.example:focus-visible { border-color: var(--accent); }
   /* The frame's aspect is reserved up front so lazily-loaded thumbnails
      cannot reflow the grid as they arrive. */
+  /* `height: auto` is load-bearing, not tidiness: the `height` attribute
+     on an <img> applies as a presentational CSS height, and with a width
+     AND a height set the `aspect-ratio` below is ignored. Every thumbnail
+     here is 640x345 so nobody could see it — the first picture with a
+     different intrinsic size (the editor capture, 1454x783) rendered
+     910 wide by its own 783 tall. */
   .example img {
-    display: block; width: 100%; aspect-ratio: 640 / 345; object-fit: cover;
+    display: block; width: 100%; height: auto; aspect-ratio: 640 / 345; object-fit: cover;
     background: var(--card);
     border-bottom: 1px solid var(--line);
     opacity: 0.92; transition: opacity 0.15s ease;
@@ -660,6 +669,9 @@
     .hero-logo { padding: 36px 0 32px; }
     .hero { min-height: 200px; }
     .roadmap li { grid-template-columns: 1fr; gap: 6px; }
+    /* One column: two 248px tiles do not fit, and the lead tile spans
+       whatever it is given either way. */
+    .examples { grid-template-columns: 1fr; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
