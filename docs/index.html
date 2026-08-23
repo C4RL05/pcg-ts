@@ -150,8 +150,8 @@
   /* No rule of its own: the one under the buttons is drawn at the TEXT's
      width rather than the viewport's (see `.hero-actions`), and a
      full-width one here would sit a few pixels under it saying the same
-     thing twice. Positioned for the corner link only. */
-  header { position: relative; }
+     thing twice. */
+  header { }
   .hero-open {
     position: absolute;
     top: 16px;
@@ -187,6 +187,8 @@
      seam on the page uses, so the header reads as banded rather than as
      having grown a frame. The canvas is `inset: 0` against the PADDING
      box, so it stops inside these rather than painting over them. */
+  /* `position: relative` for two things now: the canvas stretched behind
+     the band, and the editor link cornered inside it. */
   .hero {
     position: relative;
     min-height: 190px;
@@ -623,21 +625,6 @@
 </style>
 
 <header>
-  <!-- TOP RIGHT OF THE WHOLE HEADER, outside the content column, because
-       it belongs to the band rather than to a line of it.
-
-       It says "in the editor" and not "the graph behind this", which
-       would not be true: the field above is drawn straight onto a canvas
-       by the script at the foot of this page — the same construction the
-       library uses, in forty lines, so the landing page ships no bundle.
-       What this opens is the corpus graph that builds the same picture
-       with the library: a scatter, a noise field written to `density`,
-       and a thinning pass. The seed travels with it, so whatever is in
-       the box below arrives in the editor as the scatter's own seed. -->
-  <a
-    class="hero-open"
-    href="./editor/?graph=basics-filter-by-density"
-    title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here.">open in the editor →</a>
   <!-- The logo stands on plain black. The field is a different statement —
        "this header is cooked from that seed" — and running it behind the
        lockup made both harder to read: the animation is already a moving
@@ -650,6 +637,23 @@
   </div>
   <div class="hero">
     <canvas id="field" aria-hidden="true"></canvas>
+    <!-- TOP RIGHT OF THIS BAND, not of the header: the link is about the
+         dots, and the dots are what this band is. Outside the content
+         column on purpose — it belongs to the strip rather than to a line
+         of it.
+
+         It says "in the editor" and not "the graph behind this", which
+         would not be true: the field here is drawn straight onto a canvas
+         by the script at the foot of this page — the same construction the
+         library uses, in forty lines, so the landing page ships no bundle.
+         What this opens is the corpus graph that builds the same picture
+         with the library: a scatter, a noise field written to `density`,
+         and a thinning pass. The seed travels with it, so whatever is in
+         the box below arrives in the editor as the scatter's own seed. -->
+    <a
+      class="hero-open"
+      href="./editor/?graph=basics-filter-by-density"
+      title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here.">open in the editor →</a>
     <div class="hero-overlay">
       <div class="wrap">
         <p class="hero-sub">Real-time procedural content generation for TypeScript — deterministic by construction, WebGPU accelerated, in the browser and Node, with optional three.js interop.</p>
