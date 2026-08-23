@@ -57,6 +57,7 @@ import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import { type DressStats, dressLap } from "./dress.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
+import { syntheticKit } from "./vocabulary.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
 import { type Spline, makeTrackSpline, splineBounds } from "./spline.js";
 
@@ -168,9 +169,37 @@ function setPass(pass: "chase" | "map"): void {
   car.scale.setScalar(pass === "map" ? mapMarkerScale : 1);
 }
 
-/** Load the optional kit once, before the first cook draws anything. */
+/**
+ * Load the optional MEASURED kit once, before the first cook draws
+ * anything. It is the reference layer only; the dressing does not depend
+ * on it. See `measuredKit` below.
+ */
 async function loadReference(): Promise<void> {
-  kit = await loadKit();
+  measuredKit = await loadKit();
+}
+
+/**
+ * The vocabulary the rules dress from.
+ *
+ * THE MEASURED KIT IS THE REFERENCE, NOT THE SOURCE. It cannot be
+ * published — it is derived measurement of a commercial game — so a build
+ * without it used to draw placeholder boxes and report "rules idle",
+ * which meant the live demo showed none of the thing it exists to show.
+ * The dressing now runs on a vocabulary built from the published RULES
+ * (see `vocabulary.ts`), and the measured kit, when present, is drawn
+ * beside it as the comparison.
+ *
+ * Which also makes the better point: a generator that only works on one
+ * catalogue has demonstrated nothing.
+ */
+function dressingKit(lap: { lengthW: number }): Kit {
+  // KEYED ON THE SEED, so changing it changes the vocabulary as well as
+  // the placement. A cached catalogue would make every seed dress the
+  // same circuit from the same objects, which is half a demonstration.
+  if (!vocabulary || vocabulary.seed !== state.seed) {
+    vocabulary = { seed: state.seed, kit: syntheticKit(lap.lengthW, 1000, state.seed) };
+  }
+  return vocabulary.kit;
 }
 
 /** The map. Orthographic, because a layout read in perspective is a lie. */
@@ -210,7 +239,10 @@ layers.push({
  * The measured kit, if one was made available. See `kit.js` — it is
  * optional, absent for almost everyone, and the page owes it nothing.
  */
-let kit: Kit | undefined;
+let measuredKit: Kit | undefined;
+
+/** The published vocabulary the rules dress from. Built once per seed. */
+let vocabulary: { seed: number; kit: Kit } | undefined;
 
 /** Everything a cook put in the scene, so a recook can take it out again. */
 let built: Object3D[] = [];
@@ -241,9 +273,9 @@ function disposeBuilt(): void {
  * replaced.
  */
 function buildReference(circuit: Circuit): InstancedMesh | undefined {
-  if (!kit) return undefined;
+  if (!measuredKit) return undefined;
   const lap = circuit.lap;
-  const boxes = placeKit(kit, lap, (station, lateral, height) => {
+  const boxes = placeKit(measuredKit, lap, (station, lateral, height) => {
     const pose = poseAt(lap, station * lap.halfWidth);
     return {
       p: placeAt(lap, { station, lateral, height }).p,
@@ -264,8 +296,7 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
  * is whether the generated one reads like the measured one.
  */
 function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressStats } | undefined {
-  if (!kit) return undefined;
-  const d = dressLap(kit, circuit.lap, state.seed);
+  const d = dressLap(dressingKit(circuit.lap), circuit.lap, state.seed);
   return { mesh: boxMesh(d.boxes, 0x7de2b0, 0.95), stats: d.stats };
 }
 
@@ -397,7 +428,7 @@ function buildCircuit(circuit: Circuit): void {
     referenceMesh = reference;
     statReference(`${reference.count} boxes`);
   } else {
-    statReference("no kit.json");
+    statReference("none — generated only");
   }
 }
 
@@ -555,10 +586,13 @@ async function recook(): Promise<void> {
           `mix ${s.mixMoves}`,
       );
     } else {
-      statProps(`${next.props.pointCount} placeholder rows`);
-      statCover("no kit.json — no cover");
-      statCorners("no kit.json — no vocabulary");
-      statRules("no kit.json — rules idle");
+      statProps(`${next.props.pointCount} rows, no dressing`);
+      // Unreachable now that the dressing has its own vocabulary, and
+      // kept only so a cook that produced no dressing at all says so
+      // rather than leaving the last lap's numbers on screen.
+      statCover("no dressing");
+      statCorners("no dressing");
+      statRules("no dressing");
     }
     statCook(`${next.cookMs.toFixed(0)} ms`);
     // Called only when the graph CHANGED — it re-serializes and re-lays

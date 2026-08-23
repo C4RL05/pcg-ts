@@ -7,33 +7,43 @@
  * road. Diverging ground detail must sit below h = 0.2W or beyond
  * |t| = 2.5W.
  *
- * UPSTREAM CALLED THIS ONE INVENTED AND EXPECTED IT TO BE WRONG. It is
- * not, and the evidence is worth stating precisely because it is the only
- * §7 rule with a mechanism confirmed from the source rather than assumed.
+ * UPSTREAM CALLED THIS ONE INVENTED AND EXPECTED IT TO BE WRONG. The
+ * answer, from a pooled sweep of all twenty-two circuits, is that half of
+ * it is confirmed and half of it is refuted — and the half that is
+ * refuted is the half I first reported.
  *
- * Scanning the exemplar for the thing the rule describes — runs of three
- * or more placements in the band, gaps under 3W, spanning at least 4W —
- * finds seven runs, of which two span far enough to qualify. Both are
- * genuine LINES: one fits a straight line with a maximum residual of
- * 0.00W over 6.2W, which is a barrier and not a coincidence. And both are
- * PARALLEL, at slopes of 0.001 and 0.015 W per W against the rule's 0.02
- * divergence threshold.
+ * SEVENTEEN QUALIFYING RUNS, against a null that shuffles which lateral
+ * goes with which station inside the band and side, so the runs form in
+ * the same places and only the offsets are dealt at random:
  *
- * So the precondition occurs. The originals do build continuous
- * horizontal lines at exactly this height in exactly this band, and the
- * ones they build do not diverge. L-5 is not describing an imaginary
- * failure.
+ *   worst residual off the fitted line   0.063W real   0.237W null   p < 0.002
+ *   |slope| of the line                  0.004         0.012         p = 0.008
+ *   lines diverging past 0.02            5 of 17       7 of 17       p = 0.264
  *
- * WHAT IT DOES NOT SHOW, and this matters as much. Shuffling which
- * lateral goes with which station inside the band — stations kept, so the
- * run structure is identical — makes 39% of qualifying runs into false
- * edges, with a median |slope| of 0.029, above the threshold. Against
- * that null, zero-of-two is p = 0.37. TWO RUNS CANNOT DEMONSTRATE
- * COMPLIANCE. The residual is the stronger signal (0.10 real against 0.22
- * median null), and it argues these are deliberate straight lines rather
- * than that they were deliberately kept parallel. Upstream has all
- * twenty-two circuits and can settle it; this file's claim is only that
- * the rule is reachable, not that the source obeys it.
+ * THE LINES ARE REAL. Four times tighter to a straight fit than chance,
+ * and flatter than chance. The originals do build continuous horizontal
+ * lines at exactly this height in exactly this band, and they are
+ * assembled, not scattered.
+ *
+ * THE NON-DIVERGENCE IS NOT. Five of seventeen diverge against seven
+ * expected: A THIRD OF THE ORIGINALS' VERGE LINES ARE FALSE EDGES BY THIS
+ * RULE'S OWN DEFINITION. And that is not an underpowered null — seventeen
+ * runs at a 41% null rate would have given p = 0.0006 had none diverged,
+ * so the test could have confirmed the rule and did not. It is
+ * non-significant at every qualifying span from 4W to 8W, so it is not a
+ * threshold artefact either.
+ *
+ * The reading: the tightness is a property of how the art was assembled —
+ * repeated pieces set along a barrier at a fixed offset — and not of any
+ * rule against divergence. Where a line drifts, the originals let it
+ * drift. So L-5 stays INVENTED, with the invention now separated from the
+ * observation: build the lines the way the source does, and add the
+ * non-divergence yourself, knowing it is yours.
+ *
+ * WHICH MAKES THE REPAIR MATTER MORE THAN A GREEN WOULD HAVE. If the
+ * originals only avoid two thirds of these by accident, a generator that
+ * avoids all of them is doing something the source does not, deliberately
+ * and for a stated reason.
  *
  * The generator, by contrast, places laterals independently from each
  * asset's own distribution — which is the null — so it produces false

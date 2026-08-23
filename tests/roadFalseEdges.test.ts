@@ -1,29 +1,30 @@
 /**
  * L-5: no false edges.
  *
- * THE RULE UPSTREAM EXPECTED TO BE WRONG, and it is the only §7 rule
- * whose mechanism is confirmed from the source rather than assumed. Their
- * instruction was to check whether the exemplar can exercise it at all
- * before concluding anything, because a rule that never fires on the
- * source is a rule about nothing. It fires.
+ * THE RULE UPSTREAM EXPECTED TO BE WRONG. Half of it is confirmed and
+ * half of it is refuted, and the refuted half is the half I first
+ * reported from two runs on one circuit — which is exactly why the
+ * pooled sweep was worth asking for.
  *
- * WHAT THE SOURCE SHOWS. Seven runs of three or more placements in the
- * band, two of which span far enough to qualify — and both are genuine
- * straight lines, one with a maximum residual of 0.00W over 6.2W, which
- * is a barrier rather than a coincidence. Both are parallel, at 0.001 and
- * 0.015 W per W against the rule's 0.02 threshold. The thing L-5
- * describes exists on the circuit, and the instances of it do not
- * diverge.
+ * ACROSS ALL TWENTY-TWO CIRCUITS, seventeen qualifying runs, against a
+ * null that keeps the stations and shuffles the offsets:
  *
- * WHAT IT DOES NOT SHOW, kept here because the temptation is to report
- * the first half. Shuffling which lateral goes with which station inside
- * the band — stations kept, so the run structure is identical — turns 39%
- * of qualifying runs into false edges, with a median |slope| of 0.029,
- * ABOVE the threshold. Zero-of-two against that null is p = 0.37. Two
- * runs cannot demonstrate compliance, and this suite does not claim they
- * do. The straightness is the stronger signal (0.10 real against a null
- * median of 0.22) and it argues these are deliberate lines, not that they
- * were deliberately kept parallel.
+ *   worst residual   0.063W real vs 0.237W null   p < 0.002
+ *   |slope|          0.004 vs 0.012               p = 0.008
+ *   diverging        5 of 17 vs 7 of 17           p = 0.264
+ *
+ * The lines are real and deliberately assembled. THE NON-DIVERGENCE IS
+ * NOT: a third of the originals' verge lines are false edges by L-5's own
+ * definition. Seventeen runs at a 41% null rate would have given
+ * p = 0.0006 had none diverged, so this is a test that could have
+ * confirmed the rule and did not — not an underpowered one.
+ *
+ * MY EARLIER READING WAS WRONG AND IS KEPT HERE AS A CAUTION. Two runs
+ * showing 0.001 and 0.015 looked like a rule being obeyed. It was a
+ * sample of two. The residual was the statistic worth trusting and it is
+ * the one that survived pooling; the divergence count was the one I
+ * should not have read anything into, and I said so at the time without
+ * quite believing it enough.
  *
  * WHICH IS WHY THE REPAIR EXISTS ANYWAY. The generator draws each
  * lateral independently from its asset's own distribution — that IS the
@@ -276,9 +277,9 @@ describe.skipIf(!existsSync(KIT))("false edges on a generated lap", () => {
     console.log(
       [
         `L-5, in Z2-Z3 at h ${FALSE_EDGE.heightW[0]}-${FALSE_EDGE.heightW[1]}W. ` +
-          `Source exemplar: 7 runs of ${FALSE_EDGE.minMembers}+, 2 spanning ${FALSE_EDGE.minSpanW}W+, ` +
-          `both parallel (slopes 0.001 and 0.015) and both straight (residuals 0.00 and 0.10W). ` +
-          `Null with laterals shuffled: 39% of qualifying runs diverge.`,
+          `Pooled over 22 source circuits: 17 qualifying runs. Residual 0.063W real vs 0.237W ` +
+          `null (p<0.002) — the lines are real. Diverging 5 of 17 vs 7 expected (p=0.264) — ` +
+          `the non-divergence is NOT the source's, it is ours.`,
         ...rows,
       ].join("\n"),
     );

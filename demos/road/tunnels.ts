@@ -183,7 +183,16 @@ export function planEnclosure(
   for (let k = 0; k < maxTries && covered < budget; k++) {
     attempted++;
     const uLen = minQuantile + rand(seed, k, 0x6c01) * (1 - minQuantile);
-    const lengthW = Math.max(ENCLOSE.minLengthW, drawStretchLengthW(uLen));
+    // CLAMPED TO WHAT IS LEFT. The budget is already capped by L-6's own
+    // ceiling, but a single draw from the tail is 10 to 42W and will
+    // sail past a budget of twelve — and the lap then finishes
+    // over-enclosed with nothing able to fix it, because the reduction
+    // never touches L-6's own runs. One overshooting draw was taking a
+    // lap to 26.3% against a 25% ceiling.
+    const lengthW = Math.min(
+      Math.max(ENCLOSE.minLengthW, drawStretchLengthW(uLen)),
+      Math.max(ENCLOSE.minLengthW, budget - covered),
+    );
     const startW = rand(seed, k, 0x6c02) * lapW;
 
     // L-6: never START inside a tight corner. Entering cover mid-corner
