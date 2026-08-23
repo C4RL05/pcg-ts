@@ -104,7 +104,21 @@ export const FALSE_EDGE = {
  * offset over a stretch — which is the same shape as L-6's tiled cover in
  * `tunnels.ts`. If those are one primitive, L-5 and L-6 are both
  * satisfied by CONSTRUCTION by the same code, which would be a better
- * outcome than two repairs. Nobody has compared them yet.
+ * outcome than two repairs.
+ *
+ * NOBODY HAS COMPARED THEM, AND THE PREDICTION IS ON THE RECORD SO IT CAN
+ * BE WRONG. Upstream's guess, made before anyone checked: ONE primitive.
+ * Both are repeated pieces at a fixed offset over a station range, and
+ * both showed the same tiling signature from opposite directions — L-6's
+ * cover measured as 126 separate objects with no single one above 5.9% of
+ * it, L-5's barrier measured as a spacing CV of 0.37 against C-1's
+ * 1.5-2.5 — and neither had any reason to resemble the other unless the
+ * artists had one way of building a run.
+ *
+ * If it turns out to be TWO, the interesting part is what separates them,
+ * and that is the better finding. Written down here rather than left in a
+ * message thread because a prediction that cannot be found later is not a
+ * prediction.
  */
 export const BARRIER = {
   piecesPerRun: { p10: 3, median: 5, p90: 13, max: 15 },
