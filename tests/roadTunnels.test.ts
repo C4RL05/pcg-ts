@@ -202,7 +202,9 @@ describe.skipIf(!existsSync(KIT))("enclosure, placed and then measured", () => {
           `${d.stats.coverStretches} runs of ${d.stats.coverPieces} pieces -> ` +
           `measured ${(100 * all.share).toFixed(1)}% (cover alone ${(100 * coverOnly.share).toFixed(1)}%) ` +
           `in ${all.stretches.length} stretches, median ${med.toFixed(1)}W, ` +
-          `longest ${all.longestW.toFixed(1)}W, tail ${(100 * all.heavyTailShare).toFixed(0)}%`,
+          `longest ${all.longestW.toFixed(1)}W, tail ${(100 * all.heavyTailShare).toFixed(0)}%; ` +
+          `trimmed ${d.stats.enclosureRunsTrimmed} runs (${d.stats.enclosureTrims} pieces)` +
+          (d.stats.enclosureBlocked ? ", held back by Z-3" : ""),
       );
     }
     console.log(

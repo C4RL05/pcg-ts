@@ -366,28 +366,43 @@ export function longStretchShare(lengths: readonly number[]): number {
 }
 
 /**
- * Bring an over-enclosed lap back under L-6's ceiling.
+ * Bring an over-enclosed lap back under L-6's ceiling, BY RUN.
  *
  * WHY A REDUCTION EXISTS AT ALL. L-6 reads as a rule about building
  * tunnels, and the top-up above treats it that way. But it is stated as a
  * range — at most a quarter of the lap — and on a kit whose vocabulary is
  * half overhead pieces the ORDINARY dressing sails past that without any
- * enclosure pass running: 27.6% on one seed, from nothing but each asset
- * being placed where its own instances sat. Adding cannot fix that. The
- * lap needs less cover, not more, and every other threshold in this demo
- * has a repair rather than a hope.
+ * enclosure pass running. Adding cannot fix that. The lap needs less
+ * cover, not more, and every other threshold in this demo has a repair
+ * rather than a hope.
  *
- * IT MOVES RATHER THAN DROPS, so D-1's count stays exact — the same
- * choice D-4's coverage repair and Z-3's mix both make. An overhead piece
- * pushed out past the corridor is still on the lap and still dressing it;
- * it just no longer roofs the racing line.
+ * THE FIRST VERSION TRIMMED THE MOST CENTRAL PIECES AND WAS WRONG, in a
+ * way worth keeping because the reasoning looked sound. Of the enclosure
+ * exemplar's 124 covered frames, only 11 are roofed by a SINGLE object;
+ * the median frame has three holders and the p90 has six. TILED COVER IS
+ * REDUNDANT COVER. So removing an overhead piece costs a placement and
+ * opens no sky about nine times in ten — the trim was paying in
+ * population for a reduction it was not buying, emptying Z-3's `over`
+ * band long before it moved the share, and the two rules oscillated until
+ * the round bound stopped them. Six rounds, 73 mix moves, 580ms, NOT
+ * CONVERGED.
  *
- * COVER IS NEVER TOUCHED. L-6's own runs are the part of the enclosure
- * that is deliberate, and taking them apart to satisfy L-6 would be
- * absurd. What comes out is the incidental cover the dressing produced
+ * SO IT TAKES OUT A WHOLE STRETCH. Every non-cover overhead piece over
+ * the chosen run goes, which actually opens the sky there, and costs the
+ * band far less than shaving pieces off runs that stay roofed anyway.
+ *
+ * THE SHORTEST STRETCH FIRST, which is the same choice as everywhere else
+ * here — take what costs least — and it happens to be exactly what L-6
+ * wants: the long stretches are the tunnels, and the tail is the part of
+ * the distribution the rule is hardest to satisfy on. Trimming from the
+ * short end preserves the shape while fixing the total.
+ *
+ * IT MOVES RATHER THAN DROPS, so D-1's count stays exact, and it never
+ * touches L-6's own runs — taking a deliberate tunnel apart to satisfy
+ * L-6 would be absurd. What comes out is the cover the dressing produced
  * without meaning to.
  *
- * The caller supplies `shareOf` because measuring means building boxes
+ * The caller supplies `reportOf` because measuring means building boxes
  * and casting rays, which this module has no business doing — and because
  * the measurement has to be the SAME one the gate uses. A reduction
  * scored against its own private estimate of enclosure is a reduction
@@ -395,58 +410,85 @@ export function longStretchShare(lengths: readonly number[]): number {
  */
 export function reduceEnclosure<T extends StationedPlacement>(
   placements: readonly T[],
-  shareOf: (ps: readonly T[]) => number,
+  reportOf: (ps: readonly T[]) => {
+    share: number;
+    stretches: readonly { startW: number; endW: number; lengthW: number }[];
+  },
   /**
    * How many overhead pieces must survive.
    *
-   * WHICH RULE YIELDS, STATED. Z-3 wants a tenth to a fifth of the
-   * population in the `over` band and L-6 wants at most a quarter of the
-   * lap roofed, and on a kit whose vocabulary is half overhead pieces
-   * those two are not jointly satisfiable: trimming to L-6's ceiling
-   * empties the band below Z-3's floor, Z-3 refills it, and the pair
-   * oscillate until the round bound stops them — six rounds, seventy-odd
-   * mix moves, and a lap that never settles. So the reduction stops at
-   * Z-3's floor and L-6 goes unsatisfied by however much is left. A rule
-   * that yields visibly is worth more than two rules that fight.
+   * THE FALLBACK, NOT THE MECHANISM. Z-3 wants a tenth of the population
+   * over the corridor and L-6 wants at most a quarter of the lap roofed.
+   * Across the twenty-two circuits those are not independent axes —
+   * enclosure correlates with `over` share at r = 0.57, roughly
+   * 2.5% + 0.62 x over-share — but at the ranges as written they are
+   * compatible: Z-3's 10-21% predicts 9-16% enclosure, comfortably inside
+   * L-6. A kit can still exhaust the trim, and then this floor stops it
+   * and the caller reports the shortfall, which means something specific:
+   * THIS VOCABULARY CANNOT MAKE A LAP THIS OPEN.
    */
   keepOverhead: number,
   ceiling = ENCLOSE.ruleShare[1],
   maxPasses = 6,
-): { placements: T[]; moves: number; before: number; after: number; blockedByBandMix: boolean } {
+): {
+  placements: T[];
+  moves: number;
+  runsTrimmed: number;
+  before: number;
+  after: number;
+  blockedByBandMix: boolean;
+} {
   let out = [...placements];
-  const before = shareOf(out);
+  const first = reportOf(out);
+  const before = first.share;
   let moves = 0;
+  let runsTrimmed = 0;
   let after = before;
   let blockedByBandMix = false;
 
+  const isTrimmable = (p: T): boolean =>
+    !p.cover && Math.abs(p.t) < ENCLOSE.coverW && p.h >= CORRIDOR.ceilingW && p.h < 6;
+
   for (let pass = 0; pass < maxPasses && after > ceiling; pass++) {
-    // Everything sitting over the corridor that L-6 did not put there.
-    const overhead = out
-      .map((p, i) => ({ p, i }))
-      .filter(
-        ({ p }) =>
-          !p.cover &&
-          Math.abs(p.t) < ENCLOSE.coverW &&
-          p.h >= CORRIDOR.ceilingW &&
-          p.h < 6,
-      )
-      // Most central first: the pieces doing most of the roofing.
-      .sort((a, b) => Math.abs(a.p.t) - Math.abs(b.p.t));
-    if (overhead.length <= keepOverhead) {
+    const report = pass === 0 ? first : reportOf(out);
+    after = report.share;
+    if (after <= ceiling) break;
+
+    const overheadCount = out.filter(isTrimmable).length;
+    if (overheadCount <= keepOverhead) {
       blockedByBandMix = true;
       break;
     }
 
-    // A tenth at a time, so the repair cannot overshoot the ceiling by
-    // clearing the whole band on its first pass — and never past the
-    // floor Z-3 needs.
-    const batch = Math.max(1, Math.min(overhead.length - keepOverhead, Math.ceil(overhead.length / 10)));
-    for (let k = 0; k < batch && k < overhead.length; k++) {
-      const { p, i } = overhead[k];
-      out[i] = { ...p, t: Math.sign(p.t || 1) * (ENCLOSE.coverW + p.asset.size.across / 2) };
-      moves++;
+    // Shortest stretch first: the long ones are the tunnels.
+    const runs = [...report.stretches].sort((a, b) => a.lengthW - b.lengthW);
+    let took = 0;
+    for (const run of runs) {
+      const over = out
+        .map((p, i) => ({ p, i }))
+        .filter(({ p }) => isTrimmable(p) && inRun(p.station, run));
+      if (over.length === 0) continue;
+      if (overheadCount - over.length < keepOverhead) {
+        blockedByBandMix = true;
+        continue;
+      }
+      for (const { p, i } of over) {
+        out[i] = { ...p, t: Math.sign(p.t || 1) * (ENCLOSE.coverW + p.asset.size.across / 2) };
+        moves++;
+      }
+      runsTrimmed++;
+      took = over.length;
+      break;
     }
-    after = shareOf(out);
+    if (took === 0) break;
+    after = reportOf(out).share;
   }
-  return { placements: out, moves, before, after, blockedByBandMix };
+  return { placements: out, moves, runsTrimmed, before, after, blockedByBandMix };
+}
+
+/** Is this station inside a stretch, which may wrap the start line? */
+function inRun(station: number, run: { startW: number; endW: number }): boolean {
+  return run.startW <= run.endW
+    ? station >= run.startW && station <= run.endW
+    : station >= run.startW || station <= run.endW;
 }

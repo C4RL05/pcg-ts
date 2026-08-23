@@ -103,6 +103,8 @@ export interface DressStats {
   readonly plannedEnclosure: number;
   /** Overhead pieces moved out to bring an over-enclosed lap under. */
   readonly enclosureTrims: number;
+  /** And how many whole covered runs those pieces made up. */
+  readonly enclosureRunsTrimmed: number;
   /** L-6 left unsatisfied because trimming further would break Z-3. */
   readonly enclosureBlocked: boolean;
   /** L-5: lines in Z2-Z3 that a driver could mistake for the track edge. */
@@ -308,6 +310,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
   let plannedEnclosure = 0;
   let enclosureBefore = -1;
   let enclosureTrims = 0;
+  let enclosureRunsTrimmed = 0;
   let enclosureBlocked = false;
   let edgeMoves = 0;
   let edgesFound = 0;
@@ -416,11 +419,12 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     // amount of adding fixes a lap that already has too much roof.
     const reduce = reduceEnclosure(
       placements,
-      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps)).share,
+      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps)),
       Math.ceil(Z3.over.rule[0] * placements.length),
     );
     placements = reduce.placements;
     enclosureTrims += reduce.moves;
+    enclosureRunsTrimmed += reduce.runsTrimmed;
     if (reduce.blockedByBandMix) enclosureBlocked = true;
 
     // D-4, on the lap the cull actually left. The station process
@@ -512,6 +516,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
       coverPieces,
       plannedEnclosure,
       enclosureTrims,
+      enclosureRunsTrimmed,
       enclosureBlocked,
       falseEdges: edgesFound,
       edgeMoves,
