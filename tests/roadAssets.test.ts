@@ -373,6 +373,46 @@ describe.skipIf(!KIT)("placing from the kit's own `where`", () => {
   });
 
   /**
+   * THE GATE, ON THE CONFIGURATION PRODUCTION ACTUALLY RUNS.
+   *
+   * `mixInsideRule`'s exclusion must match the repair's, or the gate
+   * scores a different population from the one the repair balanced — and
+   * `repairIsMinimal` used to take that exclusion as its own parameter,
+   * defaulting to "exclude nothing" while the demo excludes L-6's cover.
+   * The only configuration the gate could check was the one nothing runs.
+   *
+   * The exclusion now travels on the repair, so this cannot be got wrong
+   * — but "cannot be asked wrongly" is not the same as "has been asked",
+   * and until this test the excluded configuration had never been put
+   * through the gate at all.
+   */
+  it("checks minimality against the exclusion the repair actually used", () => {
+    const seed = 3;
+    // A lap where a tenth of the placements are L-6 cover, which the
+    // production repair holds outside the mix entirely.
+    const raw = lap(seed).map((p, i) =>
+      p && i % 10 === 0 ? { ...p, cover: true as const } : p,
+    );
+    const exclude = (p: (typeof raw)[number] & object): boolean =>
+      (p as { cover?: boolean }).cover === true;
+
+    const r = repairBandMix(raw, assets, seed, "centre", new Set(), exclude);
+    expect(r.exclude, "the repair should carry its own exclusion").toBe(exclude);
+    expect(r.datum).toBe("centre");
+
+    // The bands it balanced are the bands the gate must score.
+    expect(mixInsideRule(r.placements, r.datum, r.exclude)).toBe(true);
+    expect(repairIsMinimal(r).minimal).toBe(true);
+
+    // AND THE TWO POPULATIONS ARE GENUINELY DIFFERENT, or this asserts
+    // nothing: scored WITHOUT the exclusion, the cover pieces are counted
+    // and the shares are not the ones the repair worked to.
+    const withCover = r.placements.filter((p): p is NonNullable<typeof p> => p != null);
+    const excluded = withCover.filter((p) => !exclude(p));
+    expect(excluded.length).toBeLessThan(withCover.length);
+  });
+
+  /**
    * THE MINIMALITY CHECK, PROVED ABLE TO FAIL.
    *
    * An instrument that has never said no has not been shown to work, and

@@ -428,6 +428,43 @@ describe("the band-mix fallback", () => {
     expect(r.blockedByBandMix).toBe(false);
   });
 
+  /**
+   * THE OTHER HALF OF THE SPLIT, which the flags alone do not show.
+   *
+   * The refusal used to be recorded on the RESULT the moment one run was
+   * turned away, so a pass that refused a run and then trimmed a
+   * different one successfully still reported itself held back by Z-3.
+   * Two stretches: the first is too big to take without breaching the
+   * floor, the second is not. The trim should happen, and nothing should
+   * be blamed for anything.
+   */
+  it("does not report a refusal it recovered from", () => {
+    const ps = overhead(10);
+    let calls = 0;
+    const twoStretches = (): {
+      share: number;
+      stretches: { startW: number; endW: number; lengthW: number }[];
+    } => {
+      calls++;
+      return {
+        // Over the ceiling first time round, inside it once a run is
+        // trimmed — so the loop stops because it SUCCEEDED.
+        share: calls <= 1 ? 0.5 : 0.05,
+        stretches: [
+          // Holds pieces 0-6: taking all seven would breach a floor of 5.
+          { startW: 0, endW: 26, lengthW: 26 },
+          // Holds pieces 8-9: two is affordable.
+          { startW: 32, endW: 40, lengthW: 8 },
+        ],
+      };
+    };
+    const r = reduceEnclosure(ps, twoStretches, 5);
+    expect(r.moves).toBeGreaterThan(0);
+    expect(r.runsTrimmed).toBe(1);
+    expect(r.blockedByBandMix, "a recovered refusal was reported as a block").toBe(false);
+    expect(r.nothingToTrim).toBe(false);
+  });
+
   it("blames Z-3 only when Z-3 actually refused a trim", () => {
     // The control for the pair above: same shape of failure — no moves —
     // but reached because the floor turned a real candidate away.

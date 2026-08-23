@@ -175,8 +175,12 @@ function fitRun(
   slope: number;
   residualW: number;
 } {
-  const n = members.length;
+  // FROM `stations`, NOT `members`. The two are parallel by
+  // construction and there is one call site — but deriving the length
+  // from one array while averaging over the other is how a mismatch
+  // becomes a silent misfit rather than an error.
   const s = stations;
+  const n = s.length;
   const t = members.map((i) => Math.abs(placements[i].t));
   const ms = s.reduce((a, b) => a + b, 0) / n;
   const mt = t.reduce((a, b) => a + b, 0) / n;

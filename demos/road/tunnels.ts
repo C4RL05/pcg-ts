@@ -511,8 +511,9 @@ export function reduceEnclosure<T extends StationedPlacement>(
    */
   blockedByBandMix: boolean;
   /**
-   * The trim stopped short because there was no incidental overhead to
-   * trim in the first place.
+   * The trim stopped short because it had nothing it was allowed to
+   * take: either no incidental overhead exists at all, or none of what
+   * exists lies inside a stretch that is over the ceiling.
    *
    * A DIFFERENT DIAGNOSIS, and it used to be reported as the one above.
    * A lap whose overhead is all L-6's own deliberate cover has nothing
