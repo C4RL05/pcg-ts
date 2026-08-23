@@ -36,6 +36,7 @@ import { describe, expect, it } from "vitest";
 import { cook, firstGeometry } from "pcg-ts";
 import { dressLap } from "../demos/road/dress.js";
 import {
+  BARRIER,
   FALSE_EDGE,
   type EdgeRun,
   edgeRepairIsMinimal,
@@ -276,6 +277,11 @@ describe.skipIf(!existsSync(KIT))("false edges on a generated lap", () => {
     }
     console.log(
       [
+        `What a real barrier is: ${BARRIER.piecesPerRun.median} pieces at ` +
+          `${BARRIER.spacingW.median}W spacing, CV ${BARRIER.spacingW.cv} — against C-1's ` +
+          `${BARRIER.furnitureCv[0]}-${BARRIER.furnitureCv[1]} for scattered furniture. ` +
+          `A barrier is a REGULAR RUN, not dense furniture, and this demo builds neither: ` +
+          `it declines to produce a diverging line rather than producing an assembled one.`,
         `L-5, in Z2-Z3 at h ${FALSE_EDGE.heightW[0]}-${FALSE_EDGE.heightW[1]}W. ` +
           `Pooled over 22 source circuits: 17 qualifying runs. Residual 0.063W real vs 0.237W ` +
           `null (p<0.002) — the lines are real. Diverging 5 of 17 vs 7 expected (p=0.264) — ` +

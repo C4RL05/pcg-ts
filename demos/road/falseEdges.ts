@@ -71,6 +71,51 @@ export const FALSE_EDGE = {
   singleSpanW: 4,
 } as const;
 
+/**
+ * WHAT A REAL BARRIER LOOKS LIKE, and what this demo does not build.
+ *
+ * Measured over the 17 qualifying runs pooled across the source
+ * circuits. It is here because it is the SPEC FOR THE PIECE THAT IS
+ * MISSING, and it belongs next to the rule that piece would satisfy.
+ *
+ *   pieces per run     p10 3      median 5      p90 13      max 15
+ *   run length         p10 5.4W   median 6.5W   p90 22.6W   max 40.6W
+ *   spacing of pieces  p10 1.13W  median 2.59W  p90 2.93W   CV 0.37
+ *   residual off line  p10 0.008W median 0.063W p90 0.245W
+ *
+ * THE CV IS THE FINDING. 0.37, against C-1's 1.5-2.5 for scattered
+ * furniture. That gap is the assembly signature and it is what produces
+ * the tight residual the pooled test found: A BARRIER IS NOT FURNITURE
+ * PLACED DENSELY, IT IS A REGULAR RUN, and those are different
+ * primitives.
+ *
+ * ONE FIGURE IS CENSORED AND MUST NOT BE BUILT TO. A run is DEFINED by
+ * gaps under 3W, so the spacing p90 of 2.93W is the definition showing
+ * through rather than a measurement. The median and the CV are the usable
+ * numbers.
+ *
+ * WHY THIS DEMO ONLY AVOIDS THE FAILURE INSTEAD OF BUILDING THE THING.
+ * The generator draws every lateral independently from its asset's own
+ * distribution, which is exactly the null the pooled test was scored
+ * against — so it makes false edges at the null rate and the repair below
+ * earns its place. But it has no model of ASSEMBLY at all: it cannot
+ * produce a 0.063W residual, only decline to produce a diverging one.
+ * The missing primitive is a run placer — repeated pieces at a fixed
+ * offset over a stretch — which is the same shape as L-6's tiled cover in
+ * `tunnels.ts`. If those are one primitive, L-5 and L-6 are both
+ * satisfied by CONSTRUCTION by the same code, which would be a better
+ * outcome than two repairs. Nobody has compared them yet.
+ */
+export const BARRIER = {
+  piecesPerRun: { p10: 3, median: 5, p90: 13, max: 15 },
+  runLengthW: { p10: 5.4, median: 6.5, p90: 22.6, max: 40.6 },
+  /** `p90` is censored by the 3W run definition. Use the median and CV. */
+  spacingW: { p10: 1.13, median: 2.59, p90: 2.93, cv: 0.37 },
+  residualW: { p10: 0.008, median: 0.063, p90: 0.245 },
+  /** C-1's gap CV for scattered furniture, for the contrast. */
+  furnitureCv: [1.5, 2.5],
+} as const;
+
 /** Is this placement in the band where a line would be mistaken for the edge? */
 export function inEdgeBand(p: StationedPlacement): boolean {
   const a = Math.abs(p.t);
