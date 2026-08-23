@@ -123,8 +123,25 @@
   /* No rule of its own: the one under the buttons is drawn at the TEXT's
      width rather than the viewport's (see `.hero-actions`), and a
      full-width one here would sit a few pixels under it saying the same
-     thing twice. */
-  header { }
+     thing twice. Positioned for the corner link only. */
+  header { position: relative; }
+  .hero-open {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 1;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .hero-open:hover, .hero-open:focus-visible {
+    border-color: var(--ink);
+    color: var(--ink-hi);
+    background: var(--card);
+  }
   /* TWO BANDS, and the field is only behind the second one. The lockup
      gets plain ground and room around it; the sentence under it gets the
      field, because that sentence is what the field is evidence for.
@@ -531,6 +548,21 @@
 </style>
 
 <header>
+  <!-- TOP RIGHT OF THE WHOLE HEADER, outside the content column, because
+       it belongs to the band rather than to a line of it.
+
+       It says "in the editor" and not "the graph behind this", which
+       would not be true: the field above is drawn straight onto a canvas
+       by the script at the foot of this page — the same construction the
+       library uses, in forty lines, so the landing page ships no bundle.
+       What this opens is the corpus graph that builds the same picture
+       with the library: a scatter, a noise field written to `density`,
+       and a thinning pass. The seed travels with it, so whatever is in
+       the box below arrives in the editor as the scatter's own seed. -->
+  <a
+    class="hero-open"
+    href="./editor/?graph=basics-filter-by-density"
+    title="Open the editor on a graph that builds this kind of field with the library — a scatter thinned by a noise field — starting from the seed you set here.">open in the editor →</a>
   <!-- The logo stands on plain black. The field is a different statement —
        "this header is cooked from that seed" — and running it behind the
        lockup made both harder to read: the animation is already a moving
@@ -1010,7 +1042,19 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
     }
   }
 
-  input.addEventListener("input", draw);
+  // The corner link carries whatever seed is in the box, as a knob patch
+  // the editor already understands (`?p=` — see Editor.svelte). Rebuilt on
+  // every edit rather than read on click, so a middle-click or a copied
+  // link gets the same seed a plain click would.
+  const openLink = document.querySelector(".hero-open");
+  const GRAPH = "basics-filter-by-density";
+  function syncOpenLink() {
+    const seed = (parseInt(input.value, 10) || 0) >>> 0;
+    const patch = encodeURIComponent(JSON.stringify({ "scatter.seed": seed }));
+    openLink.href = `./editor/?graph=${GRAPH}&p=${patch}`;
+  }
+
+  input.addEventListener("input", () => { draw(); syncOpenLink(); });
 
   // The stepper's two buttons. `stepUp`/`stepDown` are the browser's own
   // arithmetic, and dispatching `input` leaves the listener above as the
@@ -1035,6 +1079,7 @@ console.<span class="n">log</span>(result.stats);  <span class="c">// { cooked: 
   window.addEventListener("resize", draw);
   // The theme-change redraws that used to live here are gone with the
   // themes: the palette no longer varies, so there is nothing to react to.
+  syncOpenLink();
   draw();
 })();
 </script>
