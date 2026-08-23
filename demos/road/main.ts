@@ -234,14 +234,14 @@ const chaseCamera = new PerspectiveCamera(65, 1, 0.1, 4000);
  */
 const car = new Mesh(
   new ConeGeometry(1.8, 5, 3),
-  new MeshBasicMaterial({ color: 0x00ff00, wireframe: true }),
+  new MeshBasicMaterial({ color: 0xffffff, wireframe: true }),
 );
 car.frustumCulled = false;
 scene.add(car);
 layers.push({
   obj: car,
   chase: car.material,
-  map: new MeshBasicMaterial({ color: 0x00ff00, wireframe: true }),
+  map: new MeshBasicMaterial({ color: 0xffffff, wireframe: true }),
 });
 
 // ------------------------------------------------------------------ //
@@ -300,7 +300,7 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
       up: pose.up,
     };
   });
-  return boxMesh(boxes, 0xffffff, 0.85);
+  return boxMesh(boxes, 0x999999, 0.85);
 }
 
 /**
@@ -315,7 +315,7 @@ function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressSta
   const d = dressLap(dressingKit(circuit.lap), circuit.lap, state.seed, {
     density: state.density,
   });
-  return { mesh: boxMesh(d.boxes, 0x999999, 0.95), stats: d.stats };
+  return { mesh: boxMesh(d.boxes, 0x666666, 0.95), stats: d.stats };
 }
 
 /** One instanced mesh from a list of world-space boxes. */
@@ -360,7 +360,7 @@ function buildCircuit(circuit: Circuit): void {
   // the map it is the circuit, and from the car it is the racing line.
   const spline = new LineSegments(
     toLineGeometry(circuit.frames),
-    new LineBasicMaterial({ color: 0x0000ff }),
+    new LineBasicMaterial({ color: 0x00ff00 }),
   );
   spline.frustumCulled = false;
   scene.add(spline);
@@ -368,7 +368,7 @@ function buildCircuit(circuit: Circuit): void {
   layers.push({
     obj: spline,
     chase: spline.material,
-    map: new LineBasicMaterial({ color: 0x0000ff }),
+    map: new LineBasicMaterial({ color: 0x00ff00 }),
   });
 
   // The road surface. Wireframe in both passes — from above, its
@@ -403,7 +403,7 @@ function buildCircuit(circuit: Circuit): void {
     layers.push({
       obj: dressed.mesh,
       chase: dressed.mesh.material as Material,
-      map: new MeshBasicMaterial({ color: 0x999999, wireframe: true }),
+      map: new MeshBasicMaterial({ color: 0x666666, wireframe: true }),
     });
     lastStats = dressed.stats;
   } else {
@@ -411,7 +411,7 @@ function buildCircuit(circuit: Circuit): void {
     const n = circuit.props.pointCount;
     const props = new InstancedMesh(
       PROP_BOX,
-      new MeshBasicMaterial({ color: 0x999999, wireframe: true }),
+      new MeshBasicMaterial({ color: 0x666666, wireframe: true }),
       n,
     );
     for (let i = 0; i < n; i++) {
@@ -426,7 +426,7 @@ function buildCircuit(circuit: Circuit): void {
     layers.push({
       obj: props,
       chase: props.material,
-      map: new MeshBasicMaterial({ color: 0x999999, wireframe: true }),
+      map: new MeshBasicMaterial({ color: 0x666666, wireframe: true }),
     });
     lastStats = undefined;
   }
@@ -441,7 +441,7 @@ function buildCircuit(circuit: Circuit): void {
       // Narrowed because InstancedMesh types its material as one OR an
       // array; this one is built above with a single material.
       chase: reference.material as Material,
-      map: new MeshBasicMaterial({ color: 0xffffff, wireframe: true }),
+      map: new MeshBasicMaterial({ color: 0x999999, wireframe: true }),
     });
     referenceMesh = reference;
     statReference(`${reference.count} boxes`);
