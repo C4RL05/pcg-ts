@@ -29,7 +29,12 @@
  */
 
 /** The hand-authored pages, relative to `docs/`. */
-export const SITE_PAGES = ["index.html", "architecture.html", "manual.html"] as const;
+export const SITE_PAGES = [
+  "index.html",
+  "architecture.html",
+  "roadmap.html",
+  "manual.html",
+] as const;
 
 /* ------------------------------------------------------------------ *
  * Version stamps
