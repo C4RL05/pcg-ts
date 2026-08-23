@@ -43,12 +43,11 @@ import {
 } from "pcg-ts";
 import { fbm, perlinNoise } from "pcg-ts";
 
-/** An axis-aligned box in the asset's own frame, as the kit ships them. */
-export interface KitBox {
-  readonly min: readonly [number, number, number];
-  readonly max: readonly [number, number, number];
-  readonly role?: string;
-}
+// The box type is `kit.ts`'s. It was redeclared here — structurally
+// assignable, so the two silently interoperated, which is exactly how a
+// reader ends up unable to say which is canonical.
+import type { KitBox } from "./kit.js";
+export type { KitBox };
 
 /** Where the fill writes what it computed, so a caller can read it back. */
 export const FILL_ATTRS = {

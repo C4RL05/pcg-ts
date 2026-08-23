@@ -33,7 +33,8 @@ import type { PlaceableAsset } from "./assets.js";
 import { rand } from "./assets.js";
 import { type Corner, SEVERITY, beforeEntryW } from "./corners.js";
 import type { StationedPlacement } from "./legibility.js";
-import { CORRIDOR } from "./zones.js";
+import type { EnclosureReport } from "./enclosure.js";
+import { CORRIDOR, OVERHEAD } from "./zones.js";
 
 export const ENCLOSE = {
   /** L-6's revised range, after the 32.3% figure was withdrawn. */
@@ -157,7 +158,7 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
  *
  * Draws until the target share is reached rather than to a fixed count,
  * because the length distribution is skewed enough that a fixed count
- * gives a wildly variable share — one 42W draw is a third of the budget.
+ * gives a wildly variable share — one 42W draw is a third of the budgetW.
  */
 export function planEnclosure(
   assets: readonly PlaceableAsset[],
@@ -187,27 +188,26 @@ export function planEnclosure(
     return { plans, attempted: 0, rejectedInCorner: 0, rejectedOverlap: 0 };
   }
 
-  const budget = budgetW;
   let covered = 0;
   let attempted = 0;
   let rejectedInCorner = 0;
   let rejectedOverlap = 0;
 
   // Bounded: a run of rejections cannot spin, and a lap that cannot fit
-  // its budget reports a short share rather than looping.
+  // its budgetW reports a short share rather than looping.
   const maxTries = 2000;
-  for (let k = 0; k < maxTries && covered < budget; k++) {
+  for (let k = 0; k < maxTries && covered < budgetW; k++) {
     attempted++;
     const uLen = minQuantile + rand(seed, k, 0x6c01) * (1 - minQuantile);
-    // CLAMPED TO WHAT IS LEFT. The budget is already capped by L-6's own
+    // CLAMPED TO WHAT IS LEFT. The budgetW is already capped by L-6's own
     // ceiling, but a single draw from the tail is 10 to 42W and will
-    // sail past a budget of twelve — and the lap then finishes
+    // sail past a budgetW of twelve — and the lap then finishes
     // over-enclosed with nothing able to fix it, because the reduction
     // never touches L-6's own runs. One overshooting draw was taking a
     // lap to 26.3% against a 25% ceiling.
     const lengthW = Math.min(
       Math.max(ENCLOSE.minLengthW, drawStretchLengthW(uLen)),
-      Math.max(ENCLOSE.minLengthW, budget - covered),
+      Math.max(ENCLOSE.minLengthW, budgetW - covered),
     );
     const startW = rand(seed, k, 0x6c02) * lapW;
 
@@ -334,7 +334,6 @@ export function coverPlacements(plan: EnclosurePlan, lapW: number, seed: number)
       });
     }
   }
-  void seed;
   return out;
 }
 
@@ -374,9 +373,9 @@ export function placeEnclosure(
  * be enclosed, and satisfying the shape by breaking the total is not
  * satisfying L-6.
  *
- * Returns zero when there is no room for even one long stretch. A budget
+ * Returns zero when there is no room for even one long stretch. A budgetW
  * of half a half-width cannot buy a 10W tunnel, and spending it anyway
- * would overshoot the ceiling by twenty times the budget.
+ * would overshoot the ceiling by twenty times the budgetW.
  */
 export function longCoverBudgetW(
   totalCoveredW: number,
@@ -387,8 +386,8 @@ export function longCoverBudgetW(
     Math.min(ENCLOSE.ruleShare[1], Math.max(ENCLOSE.sourceShare, totalCoveredW / lapW)) * lapW;
   const targetLongW = ENCLOSE.sourceLongShare * targetTotalW;
   const room = ENCLOSE.ruleShare[1] * lapW - totalCoveredW;
-  const budget = Math.min(targetLongW - longCoveredW, room);
-  return budget >= ENCLOSE.longW ? budget : 0;
+  const budgetW = Math.min(targetLongW - longCoveredW, room);
+  return budgetW >= ENCLOSE.longW ? budgetW : 0;
 }
 
 /**
@@ -487,8 +486,19 @@ export function reduceEnclosure<T extends StationedPlacement>(
    * needed.
    */
   keepOverhead: number,
-  ceiling = ENCLOSE.ruleShare[1],
-  maxPasses = 6,
+  /**
+   * The report for `placements` as handed in, when the caller has just
+   * measured it.
+   *
+   * Re-measuring costs a full rebuild of every box on the lap and a ray
+   * cast per frame, and the caller reaches this having usually done
+   * exactly that a moment earlier — on rounds where the cover top-up
+   * added nothing, the two are the same measurement of the same
+   * placements. Optional rather than required: the constructed cases in
+   * the suite have no earlier report to pass, and re-measuring is always
+   * correct, only wasteful.
+   */
+  already?: EnclosureReport,
 ): {
   placements: T[];
   moves: number;
@@ -497,8 +507,10 @@ export function reduceEnclosure<T extends StationedPlacement>(
   after: number;
   blockedByBandMix: boolean;
 } {
+  const ceiling = ENCLOSE.ruleShare[1];
+  const maxPasses = 6;
   let out = [...placements];
-  const first = reportOf(out);
+  const first = already ?? reportOf(out);
   const before = first.share;
   let moves = 0;
   let runsTrimmed = 0;
@@ -506,7 +518,10 @@ export function reduceEnclosure<T extends StationedPlacement>(
   let blockedByBandMix = false;
 
   const isTrimmable = (p: T): boolean =>
-    !p.cover && Math.abs(p.t) < ENCLOSE.coverW && p.h >= CORRIDOR.ceilingW && p.h < 6;
+    !p.cover &&
+    Math.abs(p.t) < ENCLOSE.coverW &&
+    p.h >= CORRIDOR.ceilingW &&
+    p.h < OVERHEAD.ceilingW;
 
   for (let pass = 0; pass < maxPasses && after > ceiling; pass++) {
     const report = pass === 0 ? first : reportOf(out);

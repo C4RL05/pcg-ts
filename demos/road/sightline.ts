@@ -145,12 +145,13 @@ export function occludes(
     (o.tall / 2) * halfWidth,
   ];
   const eye = frameAt(station, 0, SIGHTLINE.eyeW).p;
+  // `dir` IS the along axis: the frame calls it that because a camera
+  // reads it as a direction, and the box calls it `along` because the kit
+  // does. One vector, two names, mapped once here — HOISTED, because the
+  // occluder's own axes do not vary with the sample being tested.
+  const axes = { across: at.across, along: at.dir, up: at.up };
   for (let i = 1; i <= SIGHTLINE.samples; i++) {
     const target = frameAt(station + (SIGHTLINE.aheadW * i) / SIGHTLINE.samples, 0, 0).p;
-    // `dir` IS the along axis: the frame calls it that because a camera
-    // reads it as a direction, and the box calls it `along` because the
-    // kit does. One vector, two names, mapped once here.
-    const axes = { across: at.across, along: at.dir, up: at.up };
     if (segmentHitsBox(eye, target, centre, axes, half)) return true;
   }
   return false;

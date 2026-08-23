@@ -48,7 +48,7 @@ import {
 import { type Corner, cornersOf, radiusAtW } from "./corners.js";
 import type { Kit, PlacedBox } from "./kit.js";
 import type { Lap } from "./lap.js";
-import { placeAt, poseAt } from "./lap.js";
+import { placeAt } from "./lap.js";
 import {
   type MarkerKit,
   type StationedPlacement,
@@ -65,8 +65,6 @@ import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from
 import { measureEnclosure } from "./enclosure.js";
 import { FITTED, makeStationsDetailed, repairPlacementCoverage } from "./stations.js";
 import { resolveCorridor } from "./zones.js";
-
-export { radiusAtW };
 
 /**
  * How many times the tail may validate and feed back before giving up.
@@ -179,13 +177,12 @@ export interface Dressing {
 /** The lap's own frame lookup, shared by every stage that needs one. */
 export function frameLookup(lap: Lap): (s: number, t: number, h: number) => Frame {
   return (s, t, h) => {
-    const pose = poseAt(lap, s * lap.halfWidth);
-    return {
-      p: placeAt(lap, { station: s, lateral: t, height: h }).p,
-      dir: pose.dir,
-      up: pose.up,
-      across: pose.across,
-    };
+    // ONE lookup. This asked `poseAt` for the pose and then `placeAt` for
+    // the point — and `placeAt` derives its point from exactly that same
+    // `poseAt(lap, s * halfWidth)` and hands the pose back. Two binary
+    // searches over the lap where one does, on the demo's hottest path.
+    const { p, pose } = placeAt(lap, { station: s, lateral: t, height: h });
+    return { p, dir: pose.dir, up: pose.up, across: pose.across };
   };
 }
 
@@ -199,6 +196,61 @@ export function frameLookup(lap: Lap): (s: number, t: number, h: number) => Fram
  * placement is a point, and whether something spans the corridor is a
  * fact about its geometry.
  */
+type KitBoxes = { min: number[]; max: number[]; role?: string; thickness?: number }[];
+
+interface KitIndex {
+  /** Asset id -> every recorded pose of it. */
+  readonly poseOf: Map<number, KitBoxes[]>;
+  /** Asset id -> the catalogue entry, without a linear scan. */
+  readonly assetById: Map<number, { boxes?: KitBoxes; poses?: KitBoxes[] }>;
+}
+
+/**
+ * The kit's two lookups, built once per kit rather than per call.
+ *
+ * `buildBoxes` runs a dozen times a cook — the repair loop measures
+ * enclosure on every round — and it was rebuilding the pose map over all
+ * the kit's placements and then doing a LINEAR `assets.find` per
+ * placement, which is a few hundred times a few hundred comparisons for a
+ * table that never changes. Keyed on the kit object, so a page that
+ * switches vocabularies still gets the right one.
+ */
+const kitIndexCache = new WeakMap<Kit, KitIndex>();
+
+function kitIndex(kit: Kit): KitIndex {
+  const hit = kitIndexCache.get(kit);
+  if (hit) return hit;
+
+  // EVERY RECORDED POSE OF EACH ASSET, gathered from the kit's own
+  // instances. The format stores no rotation, so an asset has one
+  // representative box set and drawing every copy from it stamps the same
+  // object at the same yaw all the way round the lap. But each instance's
+  // boxes are correct, and on this kit 362 of them give 361 distinct
+  // sets — the yaw the format never stored, surviving in the shapes.
+  const poseOf = new Map<number, KitBoxes[]>();
+  for (const pl of (kit.placements ?? []) as unknown as {
+    asset: number;
+    boxes?: KitBoxes;
+  }[]) {
+    if (!pl.boxes?.length) continue;
+    const list = poseOf.get(pl.asset) ?? [];
+    list.push(pl.boxes);
+    poseOf.set(pl.asset, list);
+  }
+
+  const assetById = new Map<number, { boxes?: KitBoxes; poses?: KitBoxes[] }>();
+  for (const a of kit.assets as unknown as (PlaceableAsset & {
+    boxes?: KitBoxes;
+    poses?: KitBoxes[];
+  })[]) {
+    assetById.set(a.id, a);
+  }
+
+  const index: KitIndex = { poseOf, assetById };
+  kitIndexCache.set(kit, index);
+  return index;
+}
+
 function buildBoxes(
   kit: Kit,
   lap: Lap,
@@ -209,30 +261,10 @@ function buildBoxes(
   const frameAt = frameLookup(lap);
   const boxes: PlacedBox[] = [];
 
-  // EVERY RECORDED POSE OF EACH ASSET, gathered from the kit's own
-  // instances. The format stores no rotation, so an asset has one
-  // representative box set and drawing every copy from it stamps the same
-  // object at the same yaw all the way round the lap. But each instance's
-  // boxes are correct, and on this kit 362 of them give 361 distinct
-  // sets — the yaw the format never stored, surviving in the shapes.
-  const poseOf = new Map<number, { min: number[]; max: number[]; role?: string; thickness?: number }[][]>();
-  for (const pl of (kit.placements ?? []) as unknown as {
-    asset: number;
-    boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[];
-  }[]) {
-    if (!pl.boxes?.length) continue;
-    const list = poseOf.get(pl.asset) ?? [];
-    list.push(pl.boxes);
-    poseOf.set(pl.asset, list);
-  }
+  const { poseOf, assetById } = kitIndex(kit);
   for (const p of placements) {
     const frame = frameAt(p.station, p.t, p.h);
-    const kitAsset = kit.assets.find((a) => (a as unknown as PlaceableAsset).id === p.asset.id) as
-      | {
-          boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[];
-          poses?: { min: number[]; max: number[]; role?: string; thickness?: number }[][];
-        }
-      | undefined;
+    const kitAsset = assetById.get(p.asset.id);
 
     // A POSE PER COPY, NOT ONE POSE PER ASSET.
     //
@@ -504,6 +536,7 @@ export function dressLap(
     const coveredW = already.share * lap.lengthW;
     const budgetW = longCoverBudgetW(coveredW, already.heavyTailShare * coveredW, lap.lengthW);
     let addedCover = 0;
+    let coverChangedPlacements = false;
     if (budgetW > 0) {
       const add = placeEnclosure(
         all,
@@ -514,6 +547,7 @@ export function dressLap(
         budgetW,
         LONG_QUANTILE,
       );
+      coverChangedPlacements = add.placements.length > 0;
       placements = [...placements, ...add.placements.map((p) => ({ ...p, cover: true as const }))];
       coverStretches += add.plans.length;
       coverPieces += add.placements.length;
@@ -529,6 +563,11 @@ export function dressLap(
       placements,
       (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, seed)),
       Math.ceil(Z3.over.rule[0] * placements.length),
+      // `already` IS this measurement whenever the top-up added nothing,
+      // which is most rounds. Handing it over skips a rebuild of every
+      // box on the lap plus a ray cast per frame — the single most
+      // expensive thing this pipeline does.
+      coverChangedPlacements ? undefined : already,
     );
     placements = reduce.placements;
     enclosureTrims += reduce.moves;

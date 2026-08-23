@@ -23,6 +23,7 @@
  * piece IS: small art rises clear, large art stands off to the corridor
  * edge and no further, keeping the band it was drawn into.
  */
+import { rand } from "./rand.js";
 
 /** The bands, in |t| and h. Z1 is the corridor and holds nothing. */
 export const ZONES = {
@@ -190,23 +191,6 @@ export interface Lateral {
   readonly baseH: number;
 }
 
-/**
- * Deterministic uniform in [0, 1) for `(seed, index, salt)`.
- *
- * Hashed per element rather than drawn from a running stream, so a
- * placement's band does not depend on how many placements came before it
- * — which is what lets a caller assign one station's zone without
- * generating the others.
- */
-function rand(seed: number, index: number, salt: number): number {
-  let h = (seed * 0x9e3779b1 + index * 0x85ebca6b + salt * 0xc2b2ae35) >>> 0;
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x7feb352d) >>> 0;
-  h ^= h >>> 15;
-  h = Math.imul(h, 0x846ca68b) >>> 0;
-  h ^= h >>> 16;
-  return (h >>> 0) / 0x100000000;
-}
 
 /** The mix as a cumulative table over concrete zones, built once. */
 const ZONE_WEIGHTS: readonly (readonly [ZoneName, number])[] = (() => {

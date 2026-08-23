@@ -1,15 +1,16 @@
 /**
  * The graph: a given spline in, a road and its dressing out.
  *
- * WHAT IS SCAFFOLD AND WHAT IS NOT. The spline seam, the moving frame,
- * the road ribbon and the verge geometry are settled — they are what any
- * roadside rule has to be stated against, and every one of them reads a
- * REPORT off the resample rather than a build-time constant, so nothing
- * downstream has to be retyped when the sampling changes. The PLACEMENT
- * RULES are not settled: `dressVerges` below places one row per side at
- * an even spacing, which is the least interesting thing a roadside can
- * be, and is deliberately the one part written to be thrown away when the
- * spec lands.
+ * WHAT THIS GRAPH OWNS. The spline seam, the moving frame and the road
+ * ribbon — what any roadside rule has to be stated against. Every one of
+ * them reads a REPORT off the resample rather than a build-time constant,
+ * so nothing downstream has to be retyped when the sampling changes.
+ *
+ * WHAT IT DOES NOT OWN. The placement rules. They run as plain TypeScript
+ * over the cooked lap (`dress.ts`), reading the frame this graph writes.
+ * A row of evenly spaced verge points used to stand here as a placeholder
+ * for them; it outlived its purpose the moment the rules landed, and drew
+ * placeholder nodes into the graph picture the page puts on screen.
  *
  * THE SPLINE ARRIVES AS DATA, not as a generated loop. `dataInput` is the
  * seam: the host builds the centreline (`spline.ts`), wraps it in a
@@ -19,17 +20,14 @@
 import {
   Graph,
   type NodeHandle,
-  add,
   attribute,
   cross,
   dataInput,
   div,
   makeGeometryItem,
-  mergePoints,
   mul,
   normalize,
   pathResample,
-  position,
   promoteAttribute,
   setAttribute,
   sweepProfile,
@@ -45,17 +43,6 @@ export interface RoadOptions {
   readonly spline: Spline;
   /** Frames placed around the lap — the resolution every rule reads. */
   readonly frames?: number;
-  /** Prop stations per lap, per side. Placeholder until the spec lands. */
-  readonly propStations?: number;
-  /**
-   * Gap between the road edge and the first row of dressing, in HALF-WIDTHS.
-   *
-   * W, not world units, because that is the unit the kit's placement rules
-   * are written in — see {@link TRACK_FRAME}. A demo knob stated in metres
-   * would be the one quantity on the page that does not transfer to another
-   * spline.
-   */
-  readonly vergeW?: number;
   /** Seed for anything random. Nothing uses it yet. */
   readonly seed?: number;
 }
@@ -66,8 +53,6 @@ export const OUTPUTS = {
   frames: "frames",
   /** The road surface swept along it. */
   road: "road",
-  /** Roadside dressing — points today, instances once the spec lands. */
-  props: "props",
 } as const;
 
 /**
@@ -78,9 +63,9 @@ export const OUTPUTS = {
  * every track, which is the whole reason a kit measured off one circuit
  * can dress a spline that circuit never had. So the centreline publishes
  * the coordinate system rather than leaving each rule to derive it, and
- * every consumer — the verge placeholder here, the host's placement
- * lookup in `lap.ts`, and whatever reads the reference log — reads these
- * four columns instead of recomputing them from P and hoping.
+ * every consumer — the host's placement lookup in `lap.ts`, the rules in
+ * `dress.ts`, and whatever reads the reference log — reads these four
+ * columns instead of recomputing them from P and hoping.
  *
  * The axes are (across, along, up): across is RIGHT of travel, along is
  * the racing direction, up is the surface normal. `along` is not written
@@ -198,79 +183,10 @@ function writeTrackFrame(g: Graph, path: NodeHandle, halfWidth: number, tag: str
   return up;
 }
 
-/**
- * One row of dressing down one side of the road.
- *
- * PLACEHOLDER. Even spacing at a fixed offset is what you get before any
- * rule has an opinion — no reaction to corners, no variety, no clearance
- * check. It exists so the page has something to draw on the verge and so
- * the seam between "where the road is" and "what stands beside it" is
- * already cut when the real rules arrive.
- */
-function dressVerges(
-  g: Graph,
-  frames: NodeHandle,
-  opts: { stations: number; offset: number; halfWidth: number },
-): NodeHandle {
-  // 'count' rather than 'spacing': a closed path resampled by spacing
-  // closes on a REMAINDER segment, and a remainder at the start line is a
-  // visible double-up in every one of this page's passes.
-  const resampled = g.add(pathResample, { mode: "count", count: opts.stations }, "propRow");
-  g.connect(frames, "out", resampled, "in");
-  // The row is a NEW path and carries none of the centreline's point
-  // attributes, so it gets the frame written onto it rather than
-  // inheriting one it cannot have.
-  const row = writeTrackFrame(g, resampled, opts.halfWidth, "prop");
-
-  // The sign IS the kit's `lateral`: positive is right of travel, because
-  // ACROSS points right. `side` is written with that sign rather than a
-  // left/right word, so the placeholder already speaks the coordinate the
-  // real rules are stated in.
-  const sides: NodeHandle[] = [];
-  for (const [name, sign] of [
-    ["right", 1],
-    ["left", -1],
-  ] as const) {
-    const moved = g.add(
-      setAttribute,
-      {
-        name: "P",
-        tupleSize: 3,
-        // The PUBLISHED axis, not `ACROSS` again: one definition of
-        // "right of travel" for the road, the verges and the host, so
-        // they cannot drift apart in the way a mirrored axis already
-        // proved they can.
-        value: add(position(), mul(sign * opts.offset, attribute(TRACK_FRAME.across, 3))),
-      },
-      `prop_${name}_P`,
-    );
-    g.connect(row, "out", moved, "in");
-    // Which side a prop is on is a fact a rule will want to read (a sign
-    // that flips with the camera, a barrier that only faces the track),
-    // so it is written now rather than re-derived from the position.
-    const tagged = g.add(
-      setAttribute,
-      { name: "side", tupleSize: 1, value: sign },
-      `prop_${name}_side`,
-    );
-    g.connect(moved, "out", tagged, "in");
-    sides.push(tagged);
-  }
-
-  // `mergePoints` drops topology, which is correct here and worth saying
-  // out loud: these stop being a path the moment they are merged, and
-  // anything wanting per-side path order has to branch above this node.
-  const both = g.add(mergePoints, {}, "props");
-  for (const s of sides) g.connect(s, "out", both, "in");
-  return both;
-}
-
 /** Build the graph, with the host's spline already bound into it. */
 export function buildRoadGraph(opts: RoadOptions): Graph {
   const { spline } = opts;
   const frameCount = opts.frames ?? 900;
-  const stations = opts.propStations ?? 260;
-  const vergeW = opts.vergeW ?? 0.35;
   const g = new Graph(opts.seed ?? 1);
 
   // THE SEAM. The centreline is the caller's, handed in whole.
@@ -327,16 +243,7 @@ export function buildRoadGraph(opts: RoadOptions): Graph {
   );
   g.connect(up, "out", road, "in");
 
-  // Stated in W and converted once, here, at the edge of the graph: the
-  // rule is "one half-width to the road edge, plus the verge".
-  const props = dressVerges(g, up, {
-    stations,
-    offset: (1 + vergeW) * spline.halfWidth,
-    halfWidth: spline.halfWidth,
-  });
-
   g.output(up, "out", OUTPUTS.frames);
   g.output(road, "out", OUTPUTS.road);
-  g.output(props, "out", OUTPUTS.props);
   return g;
 }

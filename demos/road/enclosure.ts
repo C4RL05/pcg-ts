@@ -146,12 +146,26 @@ interface BoxIndex {
   /** Grid pitch in world units, `2 * rayReach`. */
   readonly cell: number;
   /** Cell key -> box indices, keyed on world x and z only. */
-  readonly bins: Map<string, number[]>;
+  readonly bins: Map<number, number[]>;
   /** Boxes too large to bin, tested at every frame. */
   readonly large: number[];
 }
 
-const cellKey = (ix: number, iz: number): string => `${ix}|${iz}`;
+/**
+ * A cell's key as a NUMBER, not a template string.
+ *
+ * The probe runs nine times per frame for every frame of the lap, and a
+ * string key allocated a fresh garbage string at each one — tens of
+ * thousands per measurement, on a path that runs a dozen times a cook.
+ * Cantor-style interleave of the two signed cell coordinates: folding
+ * each to a non-negative integer keeps the pair unique, and the counts
+ * here are far below the range where a double loses integer precision.
+ */
+const cellKey = (ix: number, iz: number): number => {
+  const a = ix >= 0 ? 2 * ix : -2 * ix - 1;
+  const b = iz >= 0 ? 2 * iz : -2 * iz - 1;
+  return a * 0x8000000 + b;
+};
 
 function buildIndex(lap: Lap, boxes: readonly PlacedBox[]): BoxIndex {
   const reach = new Float64Array(boxes.length);
@@ -160,7 +174,7 @@ function buildIndex(lap: Lap, boxes: readonly PlacedBox[]): BoxIndex {
   // infinite; the grid is only an accelerator, so fall back to a pitch
   // that puts everything in one cell rather than failing.
   const cell = Math.max(2 * D, 1e-6);
-  const bins = new Map<string, number[]>();
+  const bins = new Map<number, number[]>();
   const large: number[] = [];
 
   for (let b = 0; b < boxes.length; b++) {

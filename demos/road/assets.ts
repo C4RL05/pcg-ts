@@ -24,6 +24,7 @@
  */
 
 import { CORRIDOR, fitsOverhead, resolveCorridor } from "./zones.js";
+import { rand } from "./rand.js";
 
 /** The per-asset measurements this module places from. */
 export interface AssetWhere {
@@ -62,22 +63,8 @@ export function bucketOf(radiusW: number): CurvatureBucket {
   return "tight";
 }
 
-/** Deterministic uniform for `(seed, index, salt)`. */
-/**
- * The placement stream's hash. Exported because §7's rules draw from the
- * SAME stream — a second generator would make a marker's position depend
- * on which module asked for it, and the whole demo is a determinism
- * claim.
- */
-export function rand(seed: number, index: number, salt: number): number {
-  let h = (seed * 0x9e3779b1 + index * 0x85ebca6b + salt * 0xc2b2ae35) >>> 0;
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x7feb352d) >>> 0;
-  h ^= h >>> 15;
-  h = Math.imul(h, 0x846ca68b) >>> 0;
-  h ^= h >>> 16;
-  return (h >>> 0) / 0x100000000;
-}
+/** The one placement stream. Re-exported: see `./rand.js` for why. */
+export { rand } from "./rand.js";
 
 /**
  * Draw from a distribution given only its p10, median and p90.
@@ -228,8 +215,8 @@ export function bandOfPlacement(
   // `over` 3% against a true 10%, `verge` 13% against 6%. It was caught
   // by a second measurement of the same circuit disagreeing, not by
   // anything here.
-  if (a < 1) return "over";
-  if (a < 1.5 && (h > 1.2 || h < 0)) return "over";
+  if (a < CORRIDOR.halfWidthW) return "over";
+  if (a < 1.5 && (h > CORRIDOR.ceilingW || h < CORRIDOR.floorW)) return "over";
   if (a < 1.5) return "verge";
   if (a < 2.5) return "near";
   if (a < 5) return "mid";

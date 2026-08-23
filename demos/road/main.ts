@@ -44,18 +44,18 @@ import {
   type Object3D,
   OrthographicCamera,
   PerspectiveCamera,
-  Quaternion,
   Scene,
-  Vector3,
   WebGLRenderer,
 } from "three";
 import { createFpsMeter } from "../../shared/fps.js";
 import { createOverlay } from "../../shared/overlay.js";
+import { makeRecooker } from "../../shared/recook.js";
 import { attachGraphPanel, type GraphPanelHandle } from "../../shared/graph/panel.js";
 import { attachWordmark } from "../../shared/wordmark.js";
 import { BACKGROUND } from "../../shared/scene.js";
 import { OUTPUTS, buildRoadGraph } from "./graph.js";
 import { type DressStats, dressLap } from "./dress.js";
+import { DENSITY } from "./stations.js";
 import { type Kit, type PlacedBox, loadKit, placeKit } from "./kit.js";
 import { shippedVocabulary } from "./vocabulary.js";
 import { type Lap, placeAt, poseAt, readLap } from "./lap.js";
@@ -72,7 +72,6 @@ interface Circuit {
   readonly lap: Lap;
   readonly frames: Geometry;
   readonly road: Geometry;
-  readonly props: Geometry;
   readonly cookMs: number;
 }
 
@@ -94,7 +93,6 @@ async function cookCircuit(seed: number): Promise<Circuit> {
     lap: readLap(frames),
     frames,
     road: requireGeo(OUTPUTS.road, out[OUTPUTS.road]),
-    props: requireGeo(OUTPUTS.props, out[OUTPUTS.props]),
     cookMs: performance.now() - t0,
   };
 }
@@ -135,11 +133,13 @@ const CHASE_FOG = new Fog(BACKGROUND, 60, 420);
 /**
  * One drawable, and the two looks it has.
  *
- * The passes differ in HUE, not in geometry: the chase view is the warm
- * near reading and the map is the cool overview, so two wireframes on the
- * same pixels stay separable. Kept as a pair of materials rather than one
- * material re-coloured per pass, because the swap then costs a pointer
- * rather than a uniform upload twice a frame.
+ * The pair is kept because the two instanced layers need DIFFERENT
+ * transparency in the two passes; the other three layers hold the same
+ * colour in both and are a pair only for uniformity. (This comment used
+ * to claim the passes differ in hue — true of `demos/simple-road`, which
+ * it was copied from, and not of this file since the palette settled.)
+ * A pair of materials rather than one re-coloured per pass, because the
+ * swap then costs a pointer rather than a uniform upload twice a frame.
  */
 interface Layer {
   readonly obj: Object3D;
@@ -192,7 +192,7 @@ async function loadReference(): Promise<void> {
  * Which also makes the better point: a generator that only works on one
  * catalogue has demonstrated nothing.
  */
-function dressingKit(lap: { lengthW: number }): Kit {
+function dressingKit(): Kit {
   // THE MEASURED KIT WHEN THERE IS ONE. The generated vocabulary exists
   // so the PUBLISHED page has something to dress from; making it
   // unconditional was a mistake that confused what ships with what runs,
@@ -211,7 +211,6 @@ function dressingKit(lap: { lengthW: number }): Kit {
   // statistics, carrying no level layout and no source identifiers. It is
   // what every visitor to the published page dresses from.
   if (!vocabulary) vocabulary = shippedVocabulary();
-  void lap;
   return vocabulary;
 }
 
@@ -261,9 +260,20 @@ let vocabulary: Kit | undefined;
 let built: Object3D[] = [];
 
 function disposeBuilt(): void {
+  // WHAT THIS OWNS AND WHAT IT DOES NOT. `PROP_BOX` is the shared unit
+  // cube every instanced layer draws, so disposing "the geometry of
+  // everything built" threw it away twice per recook and forced a GPU
+  // re-upload of a buffer that never changes. The MATERIALS, meanwhile,
+  // are made fresh per cook — two per layer, chase and map — and were
+  // never disposed at all, which is the actual leak.
   for (const obj of built) {
     scene.remove(obj);
-    (obj as Mesh).geometry?.dispose();
+    const geo = (obj as Mesh).geometry;
+    if (geo && geo !== PROP_BOX) geo.dispose();
+  }
+  for (const l of layers.slice(1)) {
+    l.chase.dispose();
+    if (l.map !== l.chase) l.map.dispose();
   }
   built = [];
   // The car is layer 0 and survives every recook; everything after it
@@ -286,19 +296,18 @@ function disposeBuilt(): void {
  * replaced.
  */
 function buildReference(circuit: Circuit): InstancedMesh | undefined {
-  // The measured kit if this machine has one, otherwise the recorded
-  // instances that ship with the page — the same art either way.
-  const from = measuredKit ?? shippedVocabulary();
+  // Through `dressingKit`, so the choice of source is made in exactly one
+  // place and the shipped vocabulary is parsed once rather than re-wrapped
+  // on every cook.
+  const from = dressingKit();
   if (from.placements.length === 0) return undefined;
   const lap = circuit.lap;
   const boxes = placeKit(from, lap, (station, lateral, height) => {
-    const pose = poseAt(lap, station * lap.halfWidth);
-    return {
-      p: placeAt(lap, { station, lateral, height }).p,
-      across: pose.across,
-      along: pose.dir,
-      up: pose.up,
-    };
+    // ONE lookup: `placeAt` already returns the pose it used, so asking
+    // `poseAt` for it again is a second binary search over the same lap
+    // for a value that is already in hand.
+    const { p, pose } = placeAt(lap, { station, lateral, height });
+    return { p, across: pose.across, along: pose.dir, up: pose.up };
   });
   return boxMesh(boxes, 0x999999, 0.85);
 }
@@ -311,8 +320,8 @@ function buildReference(circuit: Circuit): InstancedMesh | undefined {
  * different material would be a different picture, and the whole question
  * is whether the generated one reads like the measured one.
  */
-function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressStats } | undefined {
-  const d = dressLap(dressingKit(circuit.lap), circuit.lap, state.seed, {
+function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressStats } {
+  const d = dressLap(dressingKit(), circuit.lap, state.seed, {
     density: state.density,
   });
   return { mesh: boxMesh(d.boxes, 0x404040, 0.95), stats: d.stats };
@@ -346,12 +355,8 @@ function boxMesh(boxes: readonly PlacedBox[], colour: number, opacity: number): 
   return mesh;
 }
 
-/** The placeholder prop, and the unit box every placed box is scaled from. */
+/** The unit box every placed box is scaled from. */
 const PROP_BOX = new BoxGeometry(1, 1, 1);
-const PROP_SIZE = new Vector3(1.6, 3.2, 1.6);
-const scratchMatrix = new Matrix4();
-const scratchPos = new Vector3();
-const scratchQuat = new Quaternion();
 
 function buildCircuit(circuit: Circuit): void {
   disposeBuilt();
@@ -391,45 +396,20 @@ function buildCircuit(circuit: Circuit): void {
   // measurements, wearing that kit's box decomposition — which is what
   // makes this a picture of the technique rather than of a placeholder.
   //
-  // Falls back to the graph's even verge rows when no kit is available,
-  // so the page still shows something to everyone who has not got the
-  // measured data. That fallback is a PLACEHOLDER and is labelled as one
-  // in the panel, because an evenly spaced row of identical boxes is
-  // exactly what this technique exists not to produce.
+  // THE RULES ALWAYS RUN. There was a fallback here to the graph's even
+  // verge rows, for a viewer with no measured kit — and once the demo
+  // began shipping its own vocabulary there is no such viewer, so the
+  // branch became unreachable and the placeholder it drew became dead
+  // weight in the node graph the panel puts on screen.
   const dressed = buildDressing(circuit);
-  if (dressed) {
-    scene.add(dressed.mesh);
-    built.push(dressed.mesh);
-    layers.push({
-      obj: dressed.mesh,
-      chase: dressed.mesh.material as Material,
-      map: new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
-    });
-    lastStats = dressed.stats;
-  } else {
-    const P = circuit.props.attrs.point.require("P");
-    const n = circuit.props.pointCount;
-    const props = new InstancedMesh(
-      PROP_BOX,
-      new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
-      n,
-    );
-    for (let i = 0; i < n; i++) {
-      scratchPos.set(P.data[i * 3], P.data[i * 3 + 1] + PROP_SIZE.y / 2, P.data[i * 3 + 2]);
-      scratchMatrix.compose(scratchPos, scratchQuat, PROP_SIZE);
-      props.setMatrixAt(i, scratchMatrix);
-    }
-    props.instanceMatrix.needsUpdate = true;
-    props.frustumCulled = false;
-    scene.add(props);
-    built.push(props);
-    layers.push({
-      obj: props,
-      chase: props.material,
-      map: new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
-    });
-    lastStats = undefined;
-  }
+  scene.add(dressed.mesh);
+  built.push(dressed.mesh);
+  layers.push({
+    obj: dressed.mesh,
+    chase: dressed.mesh.material as Material,
+    map: new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
+  });
+  lastStats = dressed.stats;
 
   const reference = buildReference(circuit);
   if (reference) {
@@ -518,7 +498,7 @@ let graphPanel: GraphPanelHandle | undefined;
 
 overlay.addSeed(state.seed, (seed) => {
   state.seed = seed;
-  void recook();
+  recook();
 });
 overlay.addSlider("speed", { min: 0, max: 160, step: 1, value: state.speed }, (v) => {
   state.speed = v;
@@ -533,7 +513,7 @@ overlay.addSlider(
   { min: 0.4, max: 3, step: 0.05, value: state.density, format: (v) => `x${v.toFixed(2)}` },
   (v) => {
     state.density = v;
-    void recook();
+    recook();
   },
 );
 overlay.addSlider("chase back", { min: 4, max: 60, step: 1, value: state.chaseBack }, (v) => {
@@ -577,12 +557,18 @@ attachWordmark();
 // The loop.
 // ------------------------------------------------------------------ //
 
-let recooking = false;
-
-async function recook(): Promise<void> {
-  if (recooking) return;
-  recooking = true;
-  try {
+/**
+ * A cook, and the trigger that serializes them.
+ *
+ * COALESCING, NOT DROPPING. This guarded itself with a plain `if (busy)
+ * return`, which silently DISCARDS a request made while a cook is in
+ * flight — so a seed typed or a slider dragged during the ~250 ms
+ * dressing pass was simply lost, and the page kept showing the previous
+ * lap with the new value on the panel. `makeRecooker` queues a trailing
+ * run instead, which is the behaviour the editor has always had.
+ */
+async function cookAndBuild(): Promise<void> {
+  {
     const next = await cookCircuit(state.seed);
     circuit = next;
     buildCircuit(next);
@@ -591,9 +577,20 @@ async function recook(): Promise<void> {
     if (lastStats) {
       const s = lastStats;
       // D-1 in its own units, with the verdict rather than just the
-      // number: 0.6-1.2 per W is the accepted band and under 0.6 means
-      // unfinished rather than sparse.
-      const band = s.perW < 0.6 ? " — under D-1" : s.perW > 1.2 ? " — over D-1" : " — inside D-1";
+      // number, READ FROM THE SPEC rather than restated here: this line
+      // carried 0.6-1.2 by hand while DENSITY says 0.71-1.54, so the
+      // verdict on screen was wrong at both edges. `unfinished` is a
+      // third verdict and not a synonym for the floor — below it a lap is
+      // unfinished rather than sparse, which is the word the spec asks
+      // for.
+      const band =
+        s.perW < DENSITY.unfinished
+          ? " — unfinished"
+          : s.perW < DENSITY.min
+            ? " — under D-1"
+            : s.perW > DENSITY.max
+              ? " — over D-1"
+              : " — inside D-1";
       statProps(
         `${s.placed} placements, ${s.perW.toFixed(2)}/W${band}, ${s.cookMs.toFixed(0)} ms`,
       );
@@ -624,25 +621,17 @@ async function recook(): Promise<void> {
           `landmarks ${s.landmarkFixes} · false edges ${s.falseEdges}/${s.edgeMoves} · ` +
           `mix ${s.mixMoves}`,
       );
-    } else {
-      statProps(`${next.props.pointCount} rows, no dressing`);
-      // Unreachable now that the dressing has its own vocabulary, and
-      // kept only so a cook that produced no dressing at all says so
-      // rather than leaving the last lap's numbers on screen.
-      statCover("no dressing");
-      statCorners("no dressing");
-      statRules("no dressing");
     }
     statCook(`${next.cookMs.toFixed(0)} ms`);
     // Called only when the graph CHANGED — it re-serializes and re-lays
     // out, which is not free and is wasted every frame.
-    const graphs = [{ name: "road + verges", graph: next.graph }];
+    const graphs = [{ name: "road", graph: next.graph }];
     if (graphPanel) graphPanel.set(graphs);
     else graphPanel = attachGraphPanel(graphs, { into: graphSlot, title: "graph" });
-  } finally {
-    recooking = false;
   }
 }
+
+const recook = makeRecooker(cookAndBuild);
 
 function resize(): void {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -712,7 +701,7 @@ function frame(): void {
 // appears a beat after the page does reads as a bug rather than as an
 // optional extra.
 void loadReference()
-  .then(() => recook())
+  .then(() => cookAndBuild())
   .then(() => {
     frame();
   });
