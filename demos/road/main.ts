@@ -551,7 +551,8 @@ async function recook(): Promise<void> {
       statRules(
         `gaps ${s.stationGapRepairs}+${s.coverageMoves} (worst ${s.worstGapW.toFixed(0)}W) · corridor ${s.corridorFixes} · ` +
           `sightline ${s.blocked} (${s.pushedOut} out, ${s.dropped} cut) · ` +
-          `landmarks ${s.landmarkFixes} · mix ${s.mixMoves}`,
+          `landmarks ${s.landmarkFixes} · false edges ${s.falseEdges}/${s.edgeMoves} · ` +
+          `mix ${s.mixMoves}`,
       );
     } else {
       statProps(`${next.props.pointCount} placeholder rows`);

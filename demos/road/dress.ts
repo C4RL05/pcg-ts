@@ -57,6 +57,7 @@ import {
   repairLandmarks,
   reserveMarkers,
 } from "./legibility.js";
+import { repairFalseEdges } from "./falseEdges.js";
 import { type Frame, cullSightlines, defaultEyeStations } from "./sightline.js";
 import { LONG_QUANTILE, longCoverBudgetW, placeEnclosure, reduceEnclosure } from "./tunnels.js";
 import { measureEnclosure } from "./enclosure.js";
@@ -104,6 +105,9 @@ export interface DressStats {
   readonly enclosureTrims: number;
   /** L-6 left unsatisfied because trimming further would break Z-3. */
   readonly enclosureBlocked: boolean;
+  /** L-5: lines in Z2-Z3 that a driver could mistake for the track edge. */
+  readonly falseEdges: number;
+  readonly edgeMoves: number;
   /** Enclosure the ORDINARY dressing already produced, before L-6 ran. */
   readonly enclosureBefore: number;
   /** And what the finished lap measures. L-6's only real claim. */
@@ -305,6 +309,8 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
   let enclosureBefore = -1;
   let enclosureTrims = 0;
   let enclosureBlocked = false;
+  let edgeMoves = 0;
+  let edgesFound = 0;
   let converged = false;
   while (rounds < MAX_REPAIR_ROUNDS) {
     rounds++;
@@ -440,6 +446,13 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
     placements = marks.placements;
     landmarkFixes += marks.moves;
 
+    // L-5, before the mix, because breaking an edge lowers a placement
+    // out of the verge band and Z-3 has to see the lap that leaves.
+    const edges = repairFalseEdges(placements, lap.lengthW);
+    placements = edges.placements;
+    edgeMoves += edges.moves;
+    edgesFound += edges.before;
+
     // Z-3 next, against the lap that actually exists.
     const mix = repairBandMix(
       placements,
@@ -457,6 +470,7 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
       cov.moves === 0 &&
       marks.moves === 0 &&
       mix.moves === 0 &&
+      edges.moves === 0 &&
       fixedThisRound === 0 &&
       addedCover === 0 &&
       reduce.moves === 0
@@ -499,6 +513,8 @@ export function dressLap(kit: Kit, lap: Lap, seed: number): Dressing {
       plannedEnclosure,
       enclosureTrims,
       enclosureBlocked,
+      falseEdges: edgesFound,
+      edgeMoves,
       enclosureBefore: Math.max(0, enclosureBefore),
       enclosureAfter: measureEnclosure(lap, boxes).share,
       landmarkFixes: marks.moves + landmarkFixes,
