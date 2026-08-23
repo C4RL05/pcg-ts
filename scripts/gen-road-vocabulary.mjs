@@ -40,12 +40,31 @@
  * have it — that is expected. The output is committed, so the demo needs
  * this script only when the vocabulary is regenerated.
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const src = process.argv[2] ?? "<kit-dir>/vegetation-kit.json";
+/**
+ * The kit to read: an explicit path, or the one `road-kits.local.json`
+ * names. No filename and no machine path is tracked here — see
+ * `tests/support/kits.ts` for why and for the manifest's shape.
+ */
+function sourceKit() {
+  if (process.argv[2]) return process.argv[2];
+  const at = process.env.ROAD_KITS ?? join(root, "road-kits.local.json");
+  if (!existsSync(at)) {
+    console.error(
+      "no kit to read. Pass a path, or write road-kits.local.json — see tests/support/kits.ts.",
+    );
+    process.exit(1);
+  }
+  const m = JSON.parse(readFileSync(at, "utf8"));
+  const file = m.vegetation;
+  return m.dir && !isAbsolute(file) ? join(m.dir, file) : file;
+}
+
+const src = sourceKit();
 const out = join(root, "demos", "road", "vocabulary.json");
 
 /** Round hard: four decimals of a half-width is a tenth of a millimetre. */
