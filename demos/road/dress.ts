@@ -41,6 +41,7 @@ import {
   type PlaceableAsset,
   bucketOf,
   placeAsset,
+  rand,
   Z3,
   repairBandMix,
 } from "./assets.js";
@@ -191,16 +192,43 @@ export function frameLookup(lap: Lap): (s: number, t: number, h: number) => Fram
  * placement is a point, and whether something spans the corridor is a
  * fact about its geometry.
  */
-function buildBoxes(kit: Kit, lap: Lap, placements: readonly StationedPlacement[]): PlacedBox[] {
+function buildBoxes(
+  kit: Kit,
+  lap: Lap,
+  placements: readonly StationedPlacement[],
+  seed = 1,
+): PlacedBox[] {
   const W = lap.halfWidth;
   const frameAt = frameLookup(lap);
   const boxes: PlacedBox[] = [];
   for (const p of placements) {
     const frame = frameAt(p.station, p.t, p.h);
     const kitAsset = kit.assets.find((a) => (a as unknown as PlaceableAsset).id === p.asset.id) as
-      | { boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[] }
+      | {
+          boxes?: { min: number[]; max: number[]; role?: string; thickness?: number }[];
+          poses?: { min: number[]; max: number[]; role?: string; thickness?: number }[][];
+        }
       | undefined;
-    for (const b of kitAsset?.boxes ?? []) {
+
+    // A POSE PER COPY, NOT ONE POSE PER ASSET.
+    //
+    // The source format stores no rotation, so an asset carries ONE
+    // representative box set — and drawing every copy from it stamps the
+    // same object at the same yaw all the way round the lap, which is
+    // what made the generated dressing read as wrongly placed beside the
+    // measured art. But every recorded INSTANCE carries its own correct
+    // boxes, and on this kit 362 instances give 361 distinct box sets:
+    // the yaw the format did not store is still there, in the shapes.
+    //
+    // So the vocabulary keeps them as `poses` and a placement draws one.
+    // It is the measured art being used as what it is — a library of real
+    // poses — rather than a layout, which is the part that stays behind.
+    const poses = kitAsset?.poses;
+    const pose =
+      poses && poses.length > 0
+        ? poses[Math.floor(rand(seed, Math.round(p.station * 97), 0x7053) * poses.length) % poses.length]
+        : (kitAsset?.boxes ?? []);
+    for (const b of pose) {
       const c = [
         ((b.min[0] + b.max[0]) / 2) * W,
         ((b.min[1] + b.max[1]) / 2) * W,
@@ -423,7 +451,7 @@ export function dressLap(
     // the source holds 39% of its covered length in the few longer than
     // 10W. The total can be right while the shape is wrong: what the
     // dressing never produces on its own is a tunnel.
-    const already = measureEnclosure(lap, buildBoxes(kit, lap, placements));
+    const already = measureEnclosure(lap, buildBoxes(kit, lap, placements, seed));
     if (enclosureBefore < 0) enclosureBefore = already.share;
     const coveredW = already.share * lap.lengthW;
     const budgetW = longCoverBudgetW(coveredW, already.heavyTailShare * coveredW, lap.lengthW);
@@ -451,7 +479,7 @@ export function dressLap(
     // amount of adding fixes a lap that already has too much roof.
     const reduce = reduceEnclosure(
       placements,
-      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps)),
+      (ps) => measureEnclosure(lap, buildBoxes(kit, lap, ps, seed)),
       Math.ceil(Z3.over.rule[0] * placements.length),
     );
     placements = reduce.placements;
@@ -518,7 +546,7 @@ export function dressLap(
 
   const after = legibilityHealth(placements, corners, markers, lap.lengthW);
 
-  const boxes = buildBoxes(kit, lap, placements);
+  const boxes = buildBoxes(kit, lap, placements, seed);
 
   return {
     boxes,

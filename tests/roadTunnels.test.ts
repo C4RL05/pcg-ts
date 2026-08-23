@@ -33,7 +33,9 @@ import type { Kit } from "../demos/road/kit.js";
 import { ENCLOSURE_KIT, KITS, kitPath } from "./support/kits.js";
 import { type Lap, readLap } from "../demos/road/lap.js";
 import { makeTrackSpline } from "../demos/road/spline.js";
+import type { PlaceableAsset } from "../demos/road/assets.js";
 import type { StationedPlacement } from "../demos/road/legibility.js";
+import { CORRIDOR } from "../demos/road/zones.js";
 import {
   ENCLOSE,
   coverCandidates,
@@ -128,6 +130,62 @@ describe.skipIf(!KIT)("enclosure, placed and then measured", () => {
     );
     expect(cover.length).toBeGreaterThan(10);
   });
+
+  /**
+   * COVER MUST HAVE BEEN COVER, and the test is on its BASE.
+   *
+   * The first candidate rule asked whether an asset's measured height
+   * MEDIAN cleared the corridor ceiling, which is the bounds-centre
+   * mistake this demo has now made three times. A grass bank 2.6W tall
+   * whose centre sat at 1.3W has its base on the ground — it is a
+   * landform beside the road, not a roof over it. It qualified, L-6 tiled
+   * a run with it, and because it is 5.9W wide the column arithmetic
+   * asked for a single column, which is placed dead centre. Two copies of
+   * a five-and-a-half-half-width slab ended up parked on the racing line
+   * at t = 0.00, base exactly 1.20W.
+   *
+   * Nothing caught it: Z-1 exempts cover as clear-by-construction, which
+   * is true vertically and says nothing about whether the thing was ever
+   * overhead art.
+   */
+  it("only offers pieces whose material sat above the corridor", () => {
+    const cover = coverCandidates(kit.assets as never);
+    for (const a of cover) {
+      const base = a.where!.height.median - a.size.tall / 2;
+      expect(
+        base,
+        `${a.shape} ${a.size.across.toFixed(1)}x${a.size.along.toFixed(1)}x${a.size.tall.toFixed(1)} sat with its base at ${base.toFixed(2)}W`,
+      ).toBeGreaterThanOrEqual(CORRIDOR.ceilingW);
+    }
+    // AND THE TEST MUST BITE. A rule that rejects nothing is not a rule,
+    // and this kit is full of wide roadside landforms that the old
+    // bounds-centre test waved through.
+    const byCentre = (kit.assets as unknown as PlaceableAsset[]).filter(
+      (a) =>
+        a.where !== undefined &&
+        a.where.height.median > CORRIDOR.ceilingW &&
+        Math.abs(a.where.lateral.median) - a.size.across / 2 < 1.5,
+    );
+    expect(byCentre.length, "the base test rejected nothing").toBeGreaterThan(cover.length);
+    console.log(
+      `cover candidates: ${cover.length} by base, ${byCentre.length} by the old centre test ` +
+        `— ${byCentre.length - cover.length} landforms rejected`,
+    );
+  });
+
+  it("puts no cover piece down into the corridor", async () => {
+    const l = await theLap();
+    for (const seed of [1, 2, 3, 4]) {
+      const d = dressLap(kit, l, seed);
+      const intruding = d.placements.filter(
+        (p) => p.cover && p.h - p.asset.size.tall / 2 < CORRIDOR.ceilingW - 1e-6,
+      );
+      expect(
+        intruding.length,
+        `seed ${seed}: ${intruding.length} cover pieces reach below the corridor ceiling`,
+      ).toBe(0);
+    }
+  }, 900_000);
 
   it("never starts a run inside a tight corner", async () => {
     const l = await theLap();

@@ -123,8 +123,24 @@ export function coverCandidates(assets: readonly PlaceableAsset[]): PlaceableAss
     .filter((a) => {
       const w = a.where;
       if (!w) return false;
-      if (w.height.median <= 1.2) return false;
-      // Its own half-width must bring it inside the span it has to cover.
+
+      // ITS BASE SAT ABOVE THE CORRIDOR, NOT ITS CENTRE.
+      //
+      // The first version asked whether the measured height MEDIAN
+      // cleared 1.2W, and that is the bounds-centre mistake for the third
+      // time in this demo. A grass bank 2.6W tall whose centre sat at
+      // 1.3W has its base on the ground: it is a landform beside the
+      // road, not a roof over it. It qualified, L-6 tiled with it, and
+      // two copies of a five-and-a-half-half-width slab ended up parked
+      // on the racing line.
+      //
+      // What makes something cover is that its MATERIAL was above the
+      // corridor. A gantry recorded at 2.03W and 0.42W thick has a base
+      // at 1.82W and passes; the grass bank has a base at 0.00W and does
+      // not.
+      if (w.height.median - a.size.tall / 2 < CORRIDOR.ceilingW) return false;
+
+      // And it has to reach the span it is meant to cover.
       return Math.abs(w.lateral.median) - a.size.across / 2 < ENCLOSE.coverW;
     })
     .sort((a, b) => a.id - b.id);
@@ -245,7 +261,12 @@ export function planEnclosure(
         break;
       }
     }
-    const columns = Math.max(1, Math.ceil((2 * ENCLOSE.coverW) / Math.max(0.2, asset.size.across)));
+      // One more column than the span strictly needs, for the same reason:
+    // pieces laid edge to edge across the corridor leave seams that the
+    // rays find.
+    const columns =
+      Math.max(1, Math.ceil((2 * ENCLOSE.coverW) / Math.max(0.2, asset.size.across))) +
+      (asset.size.across < 2 * ENCLOSE.coverW ? 1 : 0);
     plans.push({ startW: startW % lapW, lengthW, asset, columns });
     covered += lengthW;
   }
@@ -275,7 +296,13 @@ export function coverPlacements(plan: EnclosurePlan, lapW: number, seed: number)
   // it is exempt because it is already clear, not because it is special.
   const measured = plan.asset.where?.height.median ?? 2;
   const baseH = Math.max(measured, CORRIDOR.ceilingW + plan.asset.size.tall / 2);
-  const steps = Math.max(1, Math.round(plan.lengthW / alongW));
+  // ROUNDED UP, SO PIECES OVERLAP RATHER THAN ABUT. Rounding to nearest
+  // leaves a gap whenever the run is not a whole number of pieces long,
+  // and a gap is not a near-miss: the ray cast needs three of six rays
+  // blocked, so one missing piece cuts a covered stretch in two. A
+  // planned 15W run was closing 9.6W — under the 10W the rule counts as a
+  // long stretch, which is the whole reason enclosure is placed at all.
+  const steps = Math.max(1, Math.ceil(plan.lengthW / alongW) + 1);
 
   for (let i = 0; i < steps; i++) {
     const along = (i + 0.5) * (plan.lengthW / steps);
