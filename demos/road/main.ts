@@ -315,7 +315,7 @@ function buildDressing(circuit: Circuit): { mesh: InstancedMesh; stats: DressSta
   const d = dressLap(dressingKit(circuit.lap), circuit.lap, state.seed, {
     density: state.density,
   });
-  return { mesh: boxMesh(d.boxes, 0x666666, 0.95), stats: d.stats };
+  return { mesh: boxMesh(d.boxes, 0x404040, 0.95), stats: d.stats };
 }
 
 /** One instanced mesh from a list of world-space boxes. */
@@ -403,7 +403,7 @@ function buildCircuit(circuit: Circuit): void {
     layers.push({
       obj: dressed.mesh,
       chase: dressed.mesh.material as Material,
-      map: new MeshBasicMaterial({ color: 0x666666, wireframe: true }),
+      map: new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
     });
     lastStats = dressed.stats;
   } else {
@@ -411,7 +411,7 @@ function buildCircuit(circuit: Circuit): void {
     const n = circuit.props.pointCount;
     const props = new InstancedMesh(
       PROP_BOX,
-      new MeshBasicMaterial({ color: 0x666666, wireframe: true }),
+      new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
       n,
     );
     for (let i = 0; i < n; i++) {
@@ -426,7 +426,7 @@ function buildCircuit(circuit: Circuit): void {
     layers.push({
       obj: props,
       chase: props.material,
-      map: new MeshBasicMaterial({ color: 0x666666, wireframe: true }),
+      map: new MeshBasicMaterial({ color: 0x404040, wireframe: true }),
     });
     lastStats = undefined;
   }
