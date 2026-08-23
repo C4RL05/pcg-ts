@@ -1088,6 +1088,58 @@ them, and both are real work.
 
 ## Stretch — surveyed and NOT scheduled
 
+- **A lap-periodic density envelope for placement density along a
+  track.** Measured 2026-08-20 to 08-22 in the retired racetrack demo.
+  **Recommendation: do not schedule, and do not reach for it again.** It
+  reproduces the small-window clumping statistics and fails the shape of
+  them: read as an index of dispersion across window widths, one lap
+  uncorrected, at 2 / 4 / 8 / 16 / 32 / 64 / 128W --
+
+  ```
+    envelope  1.94 / 2.49 / 3.51 / 5.68 / 9.41 / 16.90 / 35.99
+    source    1.48 / 1.81 / 3.01 / 5.03 / 6.63 /  5.98 /  5.11
+    null      1.00 / 1.09 / 1.02 / 1.00 / 0.95 /  0.83 /  0.79
+  ```
+
+  The source climbs to 5 or 6 by 16-32W and STOPS, because clumps stop
+  being clumps above the size of the largest one; a lap-period swell keeps
+  climbing, because a swell puts its variance at the largest scales there
+  are. A single number cannot see this - the same envelope makes the
+  per-archetype gap CV read 1.80 against a measured 1.78, correct to two
+  decimal places by a mechanism the source does not use. `null` is a
+  Poisson process simulated through the identical pipeline rather than
+  assumed to be 1.0, which is why it drifts under 1 at the wide end.
+
+  Five replacements were tried and none shipped. Deleting the envelope
+  alone flattens the curve to about 1.9 at every window - the clustering
+  carries the small scales and nothing carries the middle. Super-clusters
+  on a REGULAR grid fall away to 0.27 at 128W, because regular spacing
+  suppresses large-scale variance rather than adding it. Modulating at the
+  super scale rather than the lap scale gives a PEAK, not a plateau; any
+  wave does, because a periodic rate averages out in windows wider than
+  its period, so only clumps of finite extent, scattered, plateau.
+  Duplicating each anchor into a super-cluster gives the right SHAPE and
+  inflates per-archetype cluster size from 1.5 to near 8, because an
+  archetype is chosen per anchor. A full rewrite with the archetype drawn
+  per PLACEMENT scored 15 of 18 and read 4.18 at 2W against a measured
+  1.36 - and the spec team rebuilt it independently and read 4.21, so it
+  is not an implementation slip.
+
+  The lap-scale variance is not the vocabulary at all: it is the profile
+  split, and the mechanism is monotone in concentration. Neutralised
+  (`cluster` = 1, `rate` equal) at 128W, a 6/6 split reads 12.32, the
+  shipped 9/3 reads 22.48, and forcing all twelve rows onto one profile
+  reads 44.86 (all `flat`) or 45.25 (all `built`). One lap-periodic
+  envelope is built per profile, each with its own phase, so concentrating
+  the mass puts more of it on one phase and the swells add instead of
+  partially cancelling. A change confined to the CROSS-SECTION therefore
+  moved a LONGITUDINAL statistic, which nothing about a kit should.
+
+  Superseded by the near-Poisson generator that reproduces both the
+  cluster tables and the curve. Full extraction, with the twelve-row
+  archetype table and 55 numbered findings, archived alongside the demo -
+  see the deletion commit for the refs.
+
 - **Lowering the fold's element threshold so a param-bearing graph pays
   for itself.** Measured 2026-08-15, right after `src/fields/fold.ts`
   learned to see through a bound `param` — it recovers each reference's
@@ -1252,6 +1304,95 @@ them, and both are real work.
 
 Full survey: `notes/research/v09-device-keys-survey.md` in the private
 repo.
+
+## What the retired racetrack established
+
+Five thousand lines of demo and two suites were deleted once the road work
+superseded them. What they COST to establish is kept here; the code itself
+is archived (see the deletion commit). These are findings rather than
+plans, which is why they are not in Stretch - nothing will act on them
+directly, and re-deriving any of them is a week.
+
+**Descriptive statistics are not a specification.** Cluster counts, mean
+sizes and size distributions obtained by grouping placements at a fixed
+threshold are VALIDATION statistics, and building a generator from them
+double-counts the clumping. At a 1.5W threshold and roughly one placement
+per W, that threshold chains most neighbours together whatever the process
+produced: a homogeneous Poisson null reads 21.3 clusters per 100W against
+a measured 19.3, mean 4.38 against 4.90, single-instance clusters 24%
+against 23%. The information in such a table is the EXCESS over the null,
+which is small and lives in the gaps rather than in the counts. The single
+most transferable thing the demo found.
+
+**A "is it clumped?" validator can be blind to clumping.** Per-archetype
+gap CV reads correlation in archetype IDENTITY, not whether placements
+cluster: shuffling labels while holding stations fixed takes the source
+from 2.12 to 1.17 and the generator from 2.05 to 1.24, and a 36-setting
+sweep upstream reaches 1.13 at best. An independently assigned archetype
+is a random thinning of the whole process, and random thinning drives any
+clustered process toward Poisson - so no cluster process can supply what
+the metric is reading. This invalidates a family of validators, not one.
+It survived only in a branch commit message; nothing in the shipped tree
+recorded it.
+
+**Clustering alone has a ceiling.** A cluster process with exponential
+gaps and a geometric cluster size gives `CV = sqrt(2m - 1)`, which at a
+measured mean cluster size near 1.5 caps at about 1.41 - short of the
+measured per-archetype median of 1.78. The formula is right; it describes
+a HOMOGENEOUS process, and the material is not homogeneous.
+
+**Marginals reproduce every marginal and no joint.** A corridor predicate
+is a statement about lateral offset and width TOGETHER. Drawing them
+independently puts about 24.9% of side placements over the corridor
+against a measured 14.8%. A Gaussian copula at each archetype's measured
+rank correlation buys back half a point on one kit and nothing on the
+other, because the median |r| is only 0.20 and 0.13. Three to four points
+of over-intrusion is the irreducible price of holding art as marginals;
+the fix is a boolean subtract against the swept corridor volume, which
+trims the art instead of moving the anchor.
+
+### How to measure a generator - rules that cost something to learn
+
+- **State the population before comparing anything against it.** Before
+  publishing a pooled statistic, fit it per member and check the members
+  look like the pool; when reporting a quantity NEARLY the published one,
+  recompute the published one from your own intermediates and assert it
+  reduces. Six method errors in one two-party loop were all this, and
+  every one was caught by the other party opening the artefact rather than
+  re-reading a summary. A per-archetype median of 1.78 and a per-family
+  2.21 are the same answer at different granularity, not a disagreement.
+- **A statistic with no null cannot be interpreted.** Prefer a curve with
+  a null at every point over a number with a reference at one. The
+  statistic this replaced lost three references in turn: a source range
+  read as a target, a decomposition that assumed independence when
+  clustering was the whole point, and a reshuffle that was a BIASED null
+  because it let clusters land on top of each other where the grouping
+  threshold forbids it.
+- **Simulate the null through the identical pipeline; never assume its
+  value.** The "obvious" 1.0 is wrong at both ends for different reasons.
+- **Never A/B two samplers through a correction loop.** The loop drags
+  both toward the same target - which is how an earlier A/B between two
+  bounded shapes read as a wash when one of them was eleven points out.
+  Sample the raw draw with the loop OFF before believing anything.
+- **Turn each pass off and require the metric that names it to FAIL.** A
+  suite that passes is worth nothing until it has been shown to fail: an
+  exemption that quietly matched everything, a count taken from the thing
+  it was meant to verify, a metric wired to a constant - all of those
+  pass. The subtler half is the exception: one metric was deliberately
+  EXCLUDED from that list because it passes with its own pass switched
+  off, so it does not OWN that pass and claiming otherwise would have been
+  a green assertion about nothing.
+- **Score a pass with a different algorithm than the pass uses.**
+- **Pin a number you believe is WRONG, two-sided.** It should fail if the
+  shortfall grows AND if someone fixes the mechanism; the second is the
+  point. The comment a set of these replaced had quietly drifted from the
+  code it described - a finding written into a comment rots, a two-sided
+  pin does not.
+- **A control that confirms the alternative hypothesis is not a control.**
+  Forcing full concentration and observing every configuration at or above
+  the mixed one was read as exonerating the profile assignment. Under a
+  mechanism monotone in concentration, that result is exactly what the
+  assignment being responsible looks like.
 
 ## Execution notes (unattended)
 - Phases run in order; no phase starts until the previous phase's exit
