@@ -53,6 +53,34 @@ function landingPageAtRoot(): Plugin {
 export default defineConfig({
   root: here("."),
   plugins: [svelte(), landingPageAtRoot()],
+  server: {
+    watch: {
+      /**
+       * WHAT THE DEV SERVER MUST NOT WATCH.
+       *
+       * The vite root is the repository root, so the watcher sees every
+       * file under it — including two kinds of directory that are not
+       * sources and whose churn arrives in bursts of hundreds:
+       *
+       *   - `.claude/worktrees/**` is where this project's own tooling
+       *     puts worktrees, so a second session working in one has its
+       *     every checkout, rebase and history rewrite land inside the
+       *     tree this server is watching. Measured: one history rewrite
+       *     in a sibling worktree produced 758 full page reloads, which
+       *     is a dev server nobody can use while anyone else works.
+       *   - the three directories `npm run examples:pages` writes (see
+       *     `scripts/clean-pages.mjs`, which owns the same list). The
+       *     dev server serves the SOURCE editor and demos, never these
+       *     built copies, so watching them buys nothing, and a rebuild
+       *     with the server up reloads the page dozens of times.
+       *
+       * `docs/` itself stays watched: the landing page, the manual and
+       * the gallery are hand-written and served from there, and editing
+       * one should still reload.
+       */
+      ignored: ["**/.claude/**", "**/docs/assets/**", "**/docs/editor/**", "**/docs/demos/**"],
+    },
+  },
   resolve: {
     // One entry per subpath in package.json#exports that a page can
     // import, longest first: these are prefix matches, so a bare "pcg-ts"
